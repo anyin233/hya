@@ -2370,7 +2370,7 @@ impl TurnBinding {
         // preset (read-only agents deny the write tools), and they carry no hooks.
         let (resource_view, hook_refs) = match bundle_id.as_deref() {
             None => (
-                crate::builtin_agents::builtin_agent(stable_id)
+                crate::builtin_agents::preset_agent(stable_id)
                     .map(|agent| agent.resource_view.clone())
                     .unwrap_or_default(),
                 Vec::new(),

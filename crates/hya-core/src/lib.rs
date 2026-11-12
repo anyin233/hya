@@ -88,8 +88,8 @@ mod test_support;
 
 pub use agent_catalog::{AgentCatalog, AgentDefinition, AgentOrigin};
 pub use builtin_agents::{
-    BuiltinAgent, CORE_AGENTS_PRESET_ID, CoreAgentsPreset, MAIN_AGENT_ID, SpawnScope,
-    TASK_AGENT_ID, builtin_agent, builtin_agents, core_agents_preset,
+    CORE_AGENTS_PRESET_ID, CoreAgentsPreset, MAIN_AGENT_ID, SpawnScope, TASK_AGENT_ID,
+    builtin_agent_ids, core_agents_preset, preset_agent,
 };
 pub use bundle_apis::{
     ApiMethod, ApiPathTemplate, ApiScope, BundleApiCall, BundleApiError, BundleApiOutcome,
@@ -101,16 +101,14 @@ pub use bus::EventBus;
 pub use catalog_scope::{CatalogScope, ScopeKey, ScopeOverlay};
 pub use category::{
     CategoryEntry, CategoryRegistry, ResolvedCategory, apply_agent_model_preference,
-    apply_spawn_model_policy, build_member_agent, eligible_agent_model_preference, inject_skills,
-    resolve_configured_agent_model, resolve_dispatch_model,
+    apply_spawn_model_policy, eligible_agent_model_preference, resolve_configured_agent_model,
+    resolve_dispatch_model,
 };
 pub use channel_policy::{AGENT_CHANNELS_PRESET_ID, ChannelPolicy};
 pub use compaction::{
     CompactionConfig, CompactionPlan, CompactionRung, MIN_RESOLVED_THRESHOLD, ModelSummarizer,
-    SummarizeOptions, Summarizer, UsageCollector, compact_with, estimate_tokens,
-    handoff_request_messages, measured_tokens, needs_compaction, needs_compaction_at,
-    parse_method_order, plan_compaction, plan_compaction_at, plan_handoff, resolved_threshold,
-    snapcompact_archive, tokens_in_use,
+    SummarizeOptions, Summarizer, UsageCollector, handoff_request_messages, parse_method_order,
+    plan_handoff, resolved_threshold, snapcompact_archive,
 };
 pub use completion::{GateOutcome, IterationGate, validate_goal_condition};
 pub use completion::{
@@ -139,7 +137,7 @@ pub use lifecycle::run_lifecycle_service;
 pub use loop_mode::{
     EvidenceQuality, HookLoopPlanner, HookLoopVerifier, LoopConfig, LoopGate, LoopPlanner,
     LoopPredicate, LoopPredicateOutcome, LoopVerifier, PlannerOutput, PredicateMode,
-    VerifierVerdict, cost_preflight, drive_loop, run_loop,
+    VerifierVerdict, drive_loop, run_loop, validate_budget,
 };
 pub use mailbox::run_mailbox_service;
 pub use orchestrator::{OperationReservation, SubagentGovernor, SubagentLimits, TeamBudget};

@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use hya_core::{
     AgentSpec, CategoryEntry, CategoryRegistry, CreateSession, EventBus, MemberSpec, MemberStatus,
-    SessionEngine, build_member_agent, inject_skills, run_team,
+    SessionEngine, run_team,
 };
 use hya_proto::{AgentName, Event, FinishReason, MemberId, ModelRef, Role};
 use hya_provider::{
@@ -95,31 +95,6 @@ fn category_failover_picks_first_servable_candidate() {
     assert_eq!(none.fallback_chain.len(), 2);
 }
 
-#[test]
-fn skills_and_prompt_append_are_injected_into_member_prompt() {
-    let base = AgentSpec {
-        name: AgentName::new("build"),
-        model: ModelRef::new("base"),
-        system_prompt: "base prompt".to_string(),
-        workdir: PathBuf::from("/tmp"),
-        reasoning: None,
-    };
-    let mut overrides = HashMap::new();
-    overrides.insert(
-        "deep".to_string(),
-        CategoryEntry::new("gw/deep-model", "Think deeply and thoroughly."),
-    );
-    let reg = CategoryRegistry::from_entries(overrides);
-    let resolved = reg.resolve("deep").unwrap();
-    let agent = build_member_agent(&base, &resolved, &["use-the-foo-skill".to_string()]);
-    assert_eq!(agent.model, ModelRef::new("gw/deep-model"));
-    assert!(agent.system_prompt.contains("base prompt"));
-    assert!(agent.system_prompt.contains("Think deeply"));
-    assert!(agent.system_prompt.contains("use-the-foo-skill"));
-
-    assert_eq!(inject_skills("p", &[]), "p");
-}
-
 struct RecordingProvider {
     models: Arc<Mutex<Vec<String>>>,
 }
@@ -198,7 +173,10 @@ async fn four_categories_drive_four_distinct_model_calls() {
             let resolved = reg.resolve(cat).unwrap();
             MemberSpec {
                 id: MemberId::new(),
-                agent: build_member_agent(&base, &resolved, &[]),
+                agent: AgentSpec {
+                    model: resolved.model.clone(),
+                    ..base.clone()
+                },
                 binding: binding.clone(),
                 agents: Arc::from([]),
                 resources: None,

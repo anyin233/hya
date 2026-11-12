@@ -77,8 +77,8 @@ fn calibrated_tokenizer_stays_within_twenty_percent_on_every_fixture() {
     }
 }
 
-/// The baseline being replaced is `hya_core::compaction::estimate_tokens`, which
-/// is `str::len() / 4` — that is *bytes* over four, not characters.
+/// The retired baseline was `str::len() / 4`, that is *bytes* over four, not
+/// characters.
 fn bytes_div_four(text: &str) -> usize {
     text.len() / 4
 }

@@ -72,8 +72,8 @@ Session todos live behind three namespaced tools sharing one plane
 
 Every write returns the full snapshot in `metadata.todos`, which is what
 the engine's replay fold consumes; the pre-0.36.53 `todowrite` spelling
-is removed from dispatch, but historical sessions still replay (their
-rows get synthesized `todo-{index}` ids and lenient status mapping).
+is removed from dispatch, and a session with no `TodosUpdated` event reads
+whatever its in-memory plane holds.
 The wire enum gained `TODO_STATUS_BLOCKED`.
 
 ### Task

@@ -1,7 +1,5 @@
-//! Todo lists are event-sourced: a todo tool call records `TodosUpdated`,
-//! the list survives a process restart (the next edit builds on it), and a
-//! session that predates the event still reads its list from the todo
-//! tools' results.
+//! Todo lists are event-sourced: a todo tool call records `TodosUpdated` and
+//! the list survives a process restart (the next edit builds on it).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -12,10 +10,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_core::{AgentSpec, CreateSession, EventBus, SessionEngine};
-use hya_proto::{
-    AgentName, Event, FinishReason, MessageId, ModelRef, PartId, SessionId, TodoItem, TodoStatus,
-    ToolCallId,
-};
+use hya_proto::{AgentName, Event, FinishReason, ModelRef, SessionId, TodoItem, TodoStatus};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_store::SessionStore;
 use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
@@ -145,61 +140,5 @@ async fn the_todo_list_survives_a_restart_and_the_next_edit_builds_on_it() {
         .filter(|envelope| matches!(envelope.event, Event::TodosUpdated { .. }))
         .count();
     assert_eq!(updates, 2);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[tokio::test]
-async fn a_session_without_todos_updated_reads_its_todo_tool_results() {
-    let store = SessionStore::connect_memory().await.unwrap();
-    let engine = engine(store.clone(), Vec::new());
-    let dir = tempdir();
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("fake"),
-            workdir: dir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    // A log written before `TodosUpdated` existed: only the tool result.
-    let (message, part, call) = (MessageId::new(), PartId::new(), ToolCallId::new());
-    for event in [
-        Event::ToolCallRequested {
-            session,
-            message,
-            part,
-            call,
-            name: "todo__update_content".into(),
-            input: json!({}),
-        },
-        Event::ToolResult {
-            session,
-            message,
-            part,
-            call,
-            output: json!({"metadata": {"todos": [
-                {"id": "1", "content": "legacy", "status": "in_progress"}
-            ]}}),
-            time_ms: 1,
-        },
-    ] {
-        store.append_event(session, &event).await.unwrap();
-    }
-    assert!(
-        store
-            .read_projection(session)
-            .await
-            .unwrap()
-            .session
-            .todos
-            .is_none()
-    );
-    assert_eq!(
-        engine.todos(session).await,
-        vec![item("1", "legacy", TodoStatus::InProgress)]
-    );
     let _ = std::fs::remove_dir_all(&dir);
 }

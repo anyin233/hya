@@ -179,24 +179,9 @@ pub struct CategoryEntry {
     pub model: ModelRef,
     /// Ordered failover models after `model`.
     pub fallback: Vec<ModelRef>,
-    /// Text appended into the agent system prompt for this category.
-    pub prompt_append: String,
-    /// Optional soft token budget hint for callers.
-    pub token_budget: Option<u64>,
 }
 
 impl CategoryEntry {
-    /// Build an entry with a single preferred model and prompt append.
-    #[must_use]
-    pub fn new(model: &str, prompt_append: &str) -> Self {
-        Self {
-            model: ModelRef::new(model),
-            fallback: Vec::new(),
-            prompt_append: prompt_append.to_string(),
-            token_budget: None,
-        }
-    }
-
     /// Build an entry from an ordered candidate list (first = preferred model,
     /// rest = failover chain). Returns `None` when the list is empty, since a
     /// category with no concrete refs cannot resolve to anything servable.
@@ -211,8 +196,6 @@ impl CategoryEntry {
         Some(Self {
             model,
             fallback: refs.collect(),
-            prompt_append: String::new(),
-            token_budget: None,
         })
     }
 }
@@ -226,10 +209,6 @@ pub struct ResolvedCategory {
     pub model: ModelRef,
     /// Full ordered failover chain including preferred.
     pub fallback_chain: Vec<ModelRef>,
-    /// Prompt append material.
-    pub prompt_append: String,
-    /// Optional token budget.
-    pub token_budget: Option<u64>,
 }
 
 /// A directory of logical categories → ordered candidate lists. Empty by
@@ -255,8 +234,7 @@ impl CategoryRegistry {
     }
 
     /// Return each category's exact ordered model candidates in canonical key
-    /// order. Prompt and token shaping are intentionally excluded because the
-    /// spawn resolver currently discards those fields.
+    /// order.
     #[must_use]
     pub fn resolution_candidates(&self) -> Vec<(String, Vec<ModelRef>)> {
         let mut entries = self
@@ -285,8 +263,6 @@ impl CategoryRegistry {
             category: category.to_string(),
             model: entry.model.clone(),
             fallback_chain,
-            prompt_append: entry.prompt_append.clone(),
-            token_budget: entry.token_budget,
         })
     }
 
@@ -313,41 +289,7 @@ impl CategoryRegistry {
             category: category.to_string(),
             model,
             fallback_chain,
-            prompt_append: entry.prompt_append.clone(),
-            token_budget: entry.token_budget,
         })
-    }
-}
-
-/// Append a skills section to a base system prompt when `skills` is non-empty.
-#[must_use]
-pub fn inject_skills(base_prompt: &str, skills: &[String]) -> String {
-    if skills.is_empty() {
-        return base_prompt.to_string();
-    }
-    let mut out = base_prompt.to_string();
-    out.push_str("\n\n## Skills\n");
-    for skill in skills {
-        out.push_str(skill);
-        out.push('\n');
-    }
-    out
-}
-
-/// Build a member [`AgentSpec`] from a base agent, resolved category, and skill blobs.
-#[must_use]
-pub fn build_member_agent(
-    base: &AgentSpec,
-    resolved: &ResolvedCategory,
-    skills: &[String],
-) -> AgentSpec {
-    let prompt = format!("{}\n\n{}", base.system_prompt, resolved.prompt_append);
-    AgentSpec {
-        name: base.name.clone(),
-        model: resolved.model.clone(),
-        system_prompt: inject_skills(&prompt, skills),
-        workdir: base.workdir.clone(),
-        reasoning: base.reasoning,
     }
 }
 

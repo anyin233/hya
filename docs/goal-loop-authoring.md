@@ -105,7 +105,7 @@ completion, and compliance with boundaries and stop conditions.
 
 | Invariant | Value |
 | --- | --- |
-| Hard iteration ceiling | 100 (`cost_preflight`) |
+| Hard iteration ceiling | 100 (`validate_budget`) |
 | Default safety caps | 50 iterations / 1800 s wall clock |
 | Loop defaults | budget 10, satisfaction threshold 90, no-progress 3 |
 | Stall guard (goal mode) | two identical consecutive activity fingerprints stop the run |

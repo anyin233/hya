@@ -31,8 +31,8 @@ use tokio_util::sync::CancellationToken;
 
 /// Compiled-in prompt for a reserved system agent.
 fn builtin_prompt(id: &str) -> &'static str {
-    hya_core::builtin_agent(id)
-        .and_then(|agent| agent.prompt)
+    hya_core::preset_agent(id)
+        .and_then(|agent| agent.prompt.as_deref())
         .unwrap_or_else(|| panic!("builtin `{id}` must carry a prompt"))
 }
 const ROOT_PROMPT: &str = "ROOT_AGENT_SYSTEM_PROMPT_MUST_NOT_BE_COMPACTION";
@@ -180,7 +180,7 @@ fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
     let bundles = agents
         .iter()
         // Built-in ids are compiled in; a fixture asking for one just gets it.
-        .filter(|agent| hya_core::builtin_agent(&agent.stable_id).is_none())
+        .filter(|agent| hya_core::preset_agent(&agent.stable_id).is_none())
         .map(|agent| {
             PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
                 check: None,

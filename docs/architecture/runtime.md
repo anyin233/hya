@@ -1385,7 +1385,7 @@ It is a lower-level planner/verifier loop:
 - `LoopVerifier` grades transcript evidence.
 - `LoopPlanner` proposes the next directive.
 - `LoopGate` is the only component allowed to stop for success.
-- `cost_preflight` rejects budgets outside the hard ceiling before workers run.
+- `validate_budget` rejects budgets outside the hard ceiling before workers run.
 
 Current guards include:
 

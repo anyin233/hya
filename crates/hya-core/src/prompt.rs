@@ -336,12 +336,14 @@ mod tests {
             member.contains("Finish your task with `report`"),
             "{member}"
         );
-        for agent in crate::builtin_agents::builtin_agents() {
-            let Some(prompt) = agent.prompt else { continue };
+        for agent in crate::builtin_agents::preset_agents() {
+            let Some(prompt) = agent.prompt.as_deref() else {
+                continue;
+            };
             assert!(
                 !prompt.contains("NEVER call `report`"),
                 "subagent prompt `{}` must not forbid report",
-                agent.id
+                agent.id.as_str()
             );
         }
     }

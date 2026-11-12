@@ -199,125 +199,6 @@ pub(crate) fn foldable_range(messages: &[Message], keep_recent: usize) -> Option
     (start < end).then_some((start, end))
 }
 
-fn message_text_len(m: &Message) -> usize {
-    match m {
-        Message::User { parts, .. } | Message::Assistant { parts, .. } => {
-            parts.iter().map(part_len).sum()
-        }
-        Message::System { content, .. } => content.len(),
-    }
-}
-
-/// Approximate serialized size of a part for compaction thresholds.
-///
-/// Tool-heavy turns historically never tripped compaction because only text
-/// was counted; include reasoning + tool I/O so subagent explore loops compact.
-fn part_len(part: &Part) -> usize {
-    match part {
-        Part::Text { text, .. } => text.len(),
-        Part::Reasoning {
-            text,
-            provider_data,
-            ..
-        } => {
-            text.len()
-                + provider_data
-                    .as_ref()
-                    .map(|v| v.to_string().len())
-                    .unwrap_or(0)
-        }
-        Part::Media { data, .. } => data.len(),
-        Part::Tool { name, state, .. } => {
-            name.as_str().len()
-                + match state {
-                    hya_proto::ToolPartState::Pending { input }
-                    | hya_proto::ToolPartState::Running { input } => input.to_string().len(),
-                    hya_proto::ToolPartState::Completed { input, output, .. } => {
-                        input.to_string().len() + value_text_len(output)
-                    }
-                    hya_proto::ToolPartState::Error {
-                        input,
-                        message,
-                        value,
-                        ..
-                    } => {
-                        input.to_string().len()
-                            + message.len()
-                            + value.as_ref().map(value_text_len).unwrap_or(0)
-                    }
-                }
-        }
-    }
-}
-
-fn value_text_len(value: &serde_json::Value) -> usize {
-    match value.as_str() {
-        Some(s) => s.len(),
-        None => value.to_string().len(),
-    }
-}
-
-/// Rough token estimate: total part character length / 4.
-#[must_use]
-pub fn estimate_tokens(messages: &[Message]) -> usize {
-    let chars: usize = messages.iter().map(message_text_len).sum();
-    chars / 4
-}
-
-/// Provider-reported prompt size, plus an estimate of everything appended since.
-///
-/// The most recent assistant message that reported usage tells us exactly how
-/// many tokens the provider counted for that request; only the messages after it
-/// still need estimating. Returns `None` when no usage was ever reported (for
-/// example a route with `usage_reporting: false`), so callers fall back to
-/// [`estimate_tokens`] over the whole transcript.
-///
-/// Window occupancy is the whole prompt, `input + cache_read + cache_write`
-/// ([`TokenUsage::prompt`]): decoders normalize `input` to exclude both cache
-/// counters, and cached or cache-written prompt tokens still take up the
-/// window. Legacy logs whose `input` already included cached tokens can only
-/// over-count, which fails safe — compacting slightly early rather than
-/// overflowing.
-#[must_use]
-pub fn measured_tokens(messages: &[Message]) -> Option<usize> {
-    let (index, usage) = messages
-        .iter()
-        .enumerate()
-        .rev()
-        .find_map(|(i, m)| match m {
-            Message::Assistant {
-                tokens: Some(usage),
-                ..
-            } if !usage.is_zero() => Some((i, usage)),
-            _ => None,
-        })?;
-    let measured = usize::try_from(usage.prompt()).unwrap_or(usize::MAX);
-    let appended = estimate_tokens(messages.get(index + 1..).unwrap_or(&[]));
-    Some(measured.saturating_add(appended))
-}
-
-/// Best available token count for `messages`: measured when the provider has
-/// reported usage, estimated otherwise.
-#[must_use]
-pub fn tokens_in_use(messages: &[Message]) -> usize {
-    measured_tokens(messages).unwrap_or_else(|| estimate_tokens(messages))
-}
-
-/// Whether `messages` exceeds keep_recent and the configured flat threshold.
-///
-/// Uses `cfg.token_threshold` directly. Callers that know the active model's
-/// window should prefer [`needs_compaction_at`] with [`resolved_threshold`].
-#[must_use]
-pub fn needs_compaction(messages: &[Message], cfg: &CompactionConfig) -> bool {
-    needs_compaction_at(messages, cfg, cfg.token_threshold)
-}
-
-/// Whether `messages` has a foldable prefix and exceeds an explicit token threshold.
-#[must_use]
-pub fn needs_compaction_at(messages: &[Message], cfg: &CompactionConfig, threshold: usize) -> bool {
-    foldable_range(messages, cfg.keep_recent).is_some() && tokens_in_use(messages) > threshold
-}
-
 /// One of the five built-in context-reduction mechanisms (oh-my-pi parity).
 ///
 /// The turn loop walks the configured order (see
@@ -625,20 +506,6 @@ pub fn apply_sticky_evictions(messages: &mut [Message], sticky: &StickyEvictions
     applied
 }
 
-/// Drop stale outputs using request-local sticky state.
-pub fn evict_stale_tool_outputs(
-    messages: &mut [Message],
-    keep_recent: usize,
-    sink: Option<&dyn EvictionSink>,
-) -> u32 {
-    evict_stale_tool_outputs_sticky(
-        messages,
-        keep_recent,
-        sink,
-        &mut std::collections::HashMap::new(),
-    )
-}
-
 /// Whether at least one completed tool output is stale enough to spill.
 pub(crate) fn has_spillable_tool_output(messages: &[Message], keep_recent: usize) -> bool {
     !stale_tool_outputs(messages, keep_recent).is_empty()
@@ -701,42 +568,6 @@ pub struct CompactionPlan {
     pub to_message: MessageId,
     /// Number of messages folded.
     pub folded_count: u32,
-}
-
-/// Summarize the foldable prefix of `messages`, or `None` when under threshold.
-///
-/// Folds `messages[..len - keep_recent]`, leaving the most recent `keep_recent`
-/// untouched. Callers persist the result; this function performs no store writes.
-///
-/// # Errors
-/// Propagates summarizer failures.
-pub async fn plan_compaction(
-    messages: &[Message],
-    cfg: &CompactionConfig,
-    summarizer: &dyn Summarizer,
-    options: SummarizeOptions,
-) -> Result<Option<CompactionPlan>, CoreError> {
-    plan_compaction_at(messages, cfg, cfg.token_threshold, summarizer, options).await
-}
-
-/// [`plan_compaction`] against an explicit token `threshold`.
-///
-/// The turn loop passes the window-scaled threshold so this cannot disagree with
-/// the decision that got us here.
-///
-/// # Errors
-/// Propagates summarizer failures.
-pub async fn plan_compaction_at(
-    messages: &[Message],
-    cfg: &CompactionConfig,
-    threshold: usize,
-    summarizer: &dyn Summarizer,
-    options: SummarizeOptions,
-) -> Result<Option<CompactionPlan>, CoreError> {
-    if !needs_compaction_at(messages, cfg, threshold) {
-        return Ok(None);
-    }
-    fold_prefix(messages, cfg, summarizer, options).await
 }
 
 /// Summarize the foldable prefix unconditionally, without re-checking a threshold.
@@ -1104,39 +935,6 @@ pub async fn plan_handoff(
     }))
 }
 
-/// Compact `messages` when thresholds are exceeded; otherwise return them unchanged.
-///
-/// Request-local: the returned transcript is not persisted. Callers that must
-/// record the compaction use [`plan_compaction`] and inject the summary
-/// themselves.
-///
-/// # Errors
-/// Propagates summarizer failures.
-pub async fn compact_with(
-    mut messages: Vec<Message>,
-    cfg: &CompactionConfig,
-    summarizer: &dyn Summarizer,
-    options: SummarizeOptions,
-) -> Result<Vec<Message>, CoreError> {
-    let Some(plan) = plan_compaction(&messages, cfg, summarizer, options).await? else {
-        return Ok(messages);
-    };
-    let Some((start, end)) = foldable_range(&messages, cfg.keep_recent) else {
-        return Ok(messages);
-    };
-    let recent = messages.split_off(end);
-    messages.truncate(start);
-    messages.push(Message::System {
-        id: MessageId::new(),
-        content: format!(
-            "Summary of {} earlier messages:\n{}",
-            plan.folded_count, plan.summary
-        ),
-    });
-    messages.extend(recent);
-    Ok(messages)
-}
-
 /// Bytes of any single rendered payload the summarizer is shown.
 ///
 /// One 50KB tool result must not crowd fifty turns of history out of the
@@ -1385,72 +1183,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn estimates_and_thresholds() {
-        let msgs = vec![user(&"x".repeat(40))];
-        assert_eq!(estimate_tokens(&msgs), 10);
-        let cfg = CompactionConfig {
-            token_threshold: 5,
-            keep_recent: 0,
-            context_fraction: 0.75,
-            ..CompactionConfig::default()
-        };
-        assert!(needs_compaction(&msgs, &cfg));
-    }
-
-    #[test]
-    fn estimate_tokens_counts_tool_output() {
-        use hya_proto::{PartId, ToolCallId, ToolName, ToolPartState};
-        let tool_body = "t".repeat(400);
-        let msgs = vec![Message::Assistant {
-            id: MessageId::new(),
-            agent: hya_proto::AgentName::new("build"),
-            model: ModelRef::new("m"),
-            parts: vec![Part::Tool {
-                id: PartId::new(),
-                call_id: ToolCallId::new(),
-                name: ToolName::new("find"),
-                state: ToolPartState::Completed {
-                    input: serde_json::json!({"pattern": "*"}),
-                    output: serde_json::Value::String(tool_body.clone()),
-                    time_ms: 1,
-                },
-            }],
-            finish: None,
-            tokens: None,
-            last_round: None,
-        }];
-        // Text-only estimator would be ~0; tool body alone is 100 tokens.
-        assert!(estimate_tokens(&msgs) >= tool_body.len() / 4);
-        let cfg = CompactionConfig {
-            token_threshold: 50,
-            keep_recent: 0,
-            context_fraction: 0.75,
-            ..CompactionConfig::default()
-        };
-        assert!(needs_compaction(&msgs, &cfg));
-    }
-
-    #[tokio::test]
-    async fn compacts_over_threshold_keeping_recent() {
-        let msgs: Vec<Message> = (0..6).map(|_| user(&"y".repeat(40))).collect();
-        let cfg = CompactionConfig {
-            token_threshold: 10,
-            keep_recent: 2,
-            context_fraction: 0.75,
-            ..CompactionConfig::default()
-        };
-        let out = compact_with(msgs, &cfg, &Fake, SummarizeOptions::default())
-            .await
-            .unwrap();
-        assert_eq!(out.len(), 3);
-        assert!(matches!(out[0], Message::System { .. }));
-        if let Message::System { content, .. } = &out[0] {
-            assert!(content.contains("CONDENSED"));
-            assert!(content.contains("4 earlier"));
-        }
-    }
-
     fn assistant_with_tool(output: &str) -> Message {
         use hya_proto::{ToolCallId, ToolName, ToolPartState};
         Message::Assistant {
@@ -1493,12 +1225,14 @@ mod tests {
             assistant_with_tool(&"OLD_OUTPUT_B".repeat(100)),
             assistant_with_tool(&"RECENT_OUTPUT".repeat(100)),
         ];
-        let before = estimate_tokens(&msgs);
+        let accounting = crate::tokens::TokenAccounting::default();
+        let before = accounting.estimate(&msgs);
 
-        let evicted = evict_stale_tool_outputs(&mut msgs, 1, None);
+        let evicted =
+            evict_stale_tool_outputs_sticky(&mut msgs, 1, None, &mut StickyEvictions::default());
         assert_eq!(evicted, 2, "only the two stale messages are evicted");
         assert!(
-            estimate_tokens(&msgs) < before,
+            accounting.estimate(&msgs) < before,
             "eviction must reduce the token count"
         );
 
@@ -1557,7 +1291,15 @@ mod tests {
             last_round: None,
         }];
 
-        assert_eq!(evict_stale_tool_outputs(&mut messages, 2, None), 2);
+        assert_eq!(
+            evict_stale_tool_outputs_sticky(
+                &mut messages,
+                2,
+                None,
+                &mut StickyEvictions::default()
+            ),
+            2
+        );
         let Message::Assistant { parts, .. } = &messages[0] else {
             panic!("expected assistant");
         };
@@ -1583,9 +1325,12 @@ mod tests {
             assistant_with_tool(&"OLD".repeat(200)),
             assistant_with_tool("recent"),
         ];
-        assert_eq!(evict_stale_tool_outputs(&mut msgs, 1, None), 1);
         assert_eq!(
-            evict_stale_tool_outputs(&mut msgs, 1, None),
+            evict_stale_tool_outputs_sticky(&mut msgs, 1, None, &mut StickyEvictions::default()),
+            1
+        );
+        assert_eq!(
+            evict_stale_tool_outputs_sticky(&mut msgs, 1, None, &mut StickyEvictions::default()),
             0,
             "a second pass has nothing left to evict"
         );
@@ -1843,7 +1588,15 @@ mod tests {
         let mut msgs = vec![assistant_with_tool(&body), assistant_with_tool("recent")];
         let sink = RecordingSink::new();
 
-        assert_eq!(evict_stale_tool_outputs(&mut msgs, 1, Some(&sink)), 1);
+        assert_eq!(
+            evict_stale_tool_outputs_sticky(
+                &mut msgs,
+                1,
+                Some(&sink),
+                &mut StickyEvictions::default()
+            ),
+            1
+        );
 
         let calls = sink.calls();
         assert_eq!(calls.len(), 1);
@@ -1872,9 +1625,22 @@ mod tests {
         ];
         let sink = RecordingSink::new();
 
-        assert_eq!(evict_stale_tool_outputs(&mut msgs, 1, Some(&sink)), 1);
         assert_eq!(
-            evict_stale_tool_outputs(&mut msgs, 1, Some(&sink)),
+            evict_stale_tool_outputs_sticky(
+                &mut msgs,
+                1,
+                Some(&sink),
+                &mut StickyEvictions::default()
+            ),
+            1
+        );
+        assert_eq!(
+            evict_stale_tool_outputs_sticky(
+                &mut msgs,
+                1,
+                Some(&sink),
+                &mut StickyEvictions::default()
+            ),
             0,
             "a second pass has nothing left to evict"
         );
@@ -1923,7 +1689,15 @@ mod tests {
             assistant_with_tool("recent"),
         ];
 
-        assert_eq!(evict_stale_tool_outputs(&mut msgs, 1, Some(&Declines)), 1);
+        assert_eq!(
+            evict_stale_tool_outputs_sticky(
+                &mut msgs,
+                1,
+                Some(&Declines),
+                &mut StickyEvictions::default()
+            ),
+            1
+        );
         assert_eq!(
             tool_output_of(&msgs[0]).as_deref(),
             Some(EVICTED_OUTPUT_NOTICE)
@@ -1999,92 +1773,8 @@ mod tests {
         assert_eq!(resolved_threshold(&cfg, None), 100_000);
     }
 
-    #[test]
-    fn needs_compaction_at_honours_an_explicit_threshold() {
-        let msgs: Vec<Message> = (0..8).map(|_| user(&"z".repeat(4000))).collect();
-        let cfg = CompactionConfig {
-            token_threshold: 100_000,
-            keep_recent: 2,
-            context_fraction: 0.75,
-            ..CompactionConfig::default()
-        };
-        // 8 * 1000 = 8000 estimated tokens: under the flat 100k, over a 5k window.
-        assert!(!needs_compaction(&msgs, &cfg));
-        assert!(needs_compaction_at(&msgs, &cfg, 5_000));
-    }
-
-    fn assistant_with_usage(usage: Option<hya_proto::TokenUsage>) -> Message {
-        Message::Assistant {
-            id: MessageId::new(),
-            agent: hya_proto::AgentName::new("build"),
-            model: ModelRef::new("m"),
-            parts: Vec::new(),
-            finish: None,
-            tokens: usage,
-            last_round: None,
-        }
-    }
-
-    #[test]
-    fn measured_tokens_uses_reported_usage_plus_the_delta_since() {
-        let usage = hya_proto::TokenUsage {
-            input: 1000,
-            output: 50,
-            reasoning: 0,
-            cache_read: 200,
-            cache_write: 7,
-            reasoning_unknown: false,
-        };
-        let msgs = vec![
-            user(&"a".repeat(4000)), // would estimate to 1000 on its own
-            assistant_with_usage(Some(usage)),
-            user(&"b".repeat(400)), // appended after: estimates to 100
-        ];
-        // 1000 input + 200 cache_read + 7 cache_write + 100 estimated delta.
-        assert_eq!(measured_tokens(&msgs), Some(1307));
-        assert_eq!(tokens_in_use(&msgs), 1307);
-    }
-
-    #[test]
-    fn measured_tokens_ignores_empty_usage_and_falls_back_to_the_estimator() {
-        // A route with usage_reporting: false never populates tokens; behaviour
-        // must be byte-identical to the pre-change estimator path.
-        let msgs = vec![user(&"a".repeat(4000)), assistant_with_usage(None)];
-        assert_eq!(measured_tokens(&msgs), None);
-        assert_eq!(tokens_in_use(&msgs), estimate_tokens(&msgs));
-
-        let zeroed = vec![
-            user(&"a".repeat(4000)),
-            assistant_with_usage(Some(hya_proto::TokenUsage::default())),
-        ];
-        assert_eq!(
-            measured_tokens(&zeroed),
-            None,
-            "all-zero usage is not a measurement"
-        );
-        assert_eq!(tokens_in_use(&zeroed), estimate_tokens(&zeroed));
-    }
-
-    #[test]
-    fn measured_tokens_prefers_the_most_recent_report() {
-        let old = hya_proto::TokenUsage {
-            input: 100,
-            ..Default::default()
-        };
-        let new = hya_proto::TokenUsage {
-            input: 900,
-            ..Default::default()
-        };
-        let msgs = vec![
-            assistant_with_usage(Some(old)),
-            user("x"),
-            assistant_with_usage(Some(new)),
-        ];
-        assert_eq!(measured_tokens(&msgs), Some(900));
-    }
-
     #[tokio::test]
-    async fn plan_reports_the_exact_folded_range() {
+    async fn fold_prefix_reports_the_exact_folded_range() {
         let msgs: Vec<Message> = (0..6).map(|_| user(&"y".repeat(40))).collect();
         let cfg = CompactionConfig {
             token_threshold: 10,
@@ -2092,10 +1782,10 @@ mod tests {
             context_fraction: 0.75,
             ..CompactionConfig::default()
         };
-        let plan = plan_compaction(&msgs, &cfg, &Fake, SummarizeOptions::default())
+        let plan = fold_prefix(&msgs, &cfg, &Fake, SummarizeOptions::default())
             .await
             .unwrap()
-            .expect("over threshold must produce a plan");
+            .expect("a foldable prefix must produce a plan");
         // Folds the prefix before the retained recent messages: 6 - 2 = 4.
         assert_eq!(plan.folded_count, 4);
         assert_eq!(plan.from_message, msgs[0].id());
@@ -2104,7 +1794,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn plan_is_none_under_threshold() {
+    async fn fold_prefix_is_none_without_a_foldable_range() {
         let msgs = vec![user("short")];
         let cfg = CompactionConfig {
             token_threshold: 1000,
@@ -2113,27 +1803,13 @@ mod tests {
             ..CompactionConfig::default()
         };
         assert!(
-            plan_compaction(&msgs, &cfg, &Fake, SummarizeOptions::default())
+            fold_prefix(&msgs, &cfg, &Fake, SummarizeOptions::default())
                 .await
                 .unwrap()
                 .is_none()
         );
     }
 
-    #[tokio::test]
-    async fn no_compaction_under_threshold() {
-        let msgs = vec![user("short")];
-        let cfg = CompactionConfig {
-            token_threshold: 1000,
-            keep_recent: 2,
-            context_fraction: 0.75,
-            ..CompactionConfig::default()
-        };
-        let out = compact_with(msgs, &cfg, &Fake, SummarizeOptions::default())
-            .await
-            .unwrap();
-        assert_eq!(out.len(), 1);
-    }
     /// A coding session is mostly tool activity. A summarizer shown only prose
     /// learns what the agent *said* and not what it *did*, so its summaries
     /// describe intentions and lose the commands, paths, and results that make

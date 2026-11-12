@@ -1,22 +1,17 @@
 //! Built-in agent definitions from the trusted `hya/core-agents` bundle.
 //!
 //! The AgentSetBundle is loaded from its first-party source or package when the
-//! process first needs it; nothing is compiled into the binary. The public
-//! `BuiltinAgent` roster is a compatibility view of that prepared preset; new
-//! catalog assembly reads the verified preset itself.
+//! process first needs it; nothing is compiled into the binary. Every lookup
+//! reads the verified prepared preset.
 
-use std::borrow::Cow;
 use std::sync::OnceLock;
 
-use hya_bundle::{AgentRole, ModelPolicy, ResourceView};
 use hya_bundle::{
     BundleError, PreparedAgent, PreparedAgentSetBundle, PreparedCatalog, PreparedInstallableBundle,
     first_party_bundle,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-
-use crate::agent_catalog::{AgentDefinition, AgentOrigin};
 
 /// Stable identity of the trusted core-agents preset.
 pub const CORE_AGENTS_PRESET_ID: &str = "hya/core-agents";
@@ -50,84 +45,11 @@ pub enum SpawnScope {
     None,
 }
 
-/// Const-constructible model routing overrides.
-///
-/// [`ModelPolicy`] holds `Option<String>`, which cannot appear in a `const`.
-/// This mirror uses `&'static str` and converts on demand.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct BuiltinModelPolicy {
-    /// Explicit model ref when set; otherwise the runtime default applies.
-    pub model: Option<&'static str>,
-    /// Optional model category hint for routing.
-    pub category: Option<&'static str>,
-    /// Optional reasoning effort string (provider-specific).
-    pub reasoning: Option<&'static str>,
-}
-
-impl BuiltinModelPolicy {
-    /// Policy with no overrides: the runtime default applies.
-    pub const DEFAULT: Self = Self {
-        model: None,
-        category: None,
-        reasoning: None,
-    };
-
-    /// Convert to the owned policy shape the runtime consumes.
-    #[must_use]
-    pub fn to_model_policy(self) -> ModelPolicy {
-        ModelPolicy {
-            model: self.model.map(str::to_string),
-            category: self.category.map(str::to_string),
-            reasoning: self.reasoning.map(str::to_string),
-        }
-    }
-}
-
-/// One built-in agent from the core-agents preset.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BuiltinAgent {
-    /// Stable agent id. Also the selector name and the spawn-graph key.
-    pub id: &'static str,
-    /// Human description for selectors. `None` only for reserved system agents.
-    pub description: Option<&'static str>,
-    /// Main vs subagent selector role.
-    pub role: AgentRole,
-    /// Preset prompt body, or `None` to keep the Harness base prompt.
-    pub prompt: Option<&'static str>,
-    /// Model/category/reasoning overrides.
-    pub model_policy: BuiltinModelPolicy,
-    /// What this agent may spawn.
-    pub spawn_scope: SpawnScope,
-    /// Reserved system agent: never selectable and never an ordinary spawn target.
-    pub system_reserved: bool,
-    /// Domain-tool view from the preset (`resource_view`), e.g. the write and
-    /// shell tools a read-only agent is denied.
-    pub resource_view: &'static ResourceView,
-}
-
-impl BuiltinAgent {
-    /// Borrowed, origin-tagged view used by every catalog call site.
-    #[must_use]
-    pub fn definition(&'static self) -> AgentDefinition<'static> {
-        AgentDefinition {
-            stable_id: self.id,
-            description: self.description,
-            role: self.role,
-            color: None,
-            prompt: self.prompt,
-            model_policy: Cow::Owned(self.model_policy.to_model_policy()),
-            workdir: None,
-            origin: AgentOrigin::Builtin,
-        }
-    }
-}
-
-/// Verified core-agents preset with its parsed policy and compatibility roster.
+/// Verified core-agents preset with its parsed reserved-id policy.
 struct LoadedCoreAgents {
     catalog: &'static PreparedCatalog,
     bundle: &'static PreparedAgentSetBundle,
     reserved_ids: Vec<&'static str>,
-    roster: Vec<BuiltinAgent>,
 }
 
 fn load_core_agents() -> Result<LoadedCoreAgents, BundleError> {
@@ -164,36 +86,10 @@ fn load_core_agents() -> Result<LoadedCoreAgents, BundleError> {
     }
     reserved_ids.sort_unstable();
     reserved_ids.dedup();
-    let roster = bundle
-        .agents
-        .iter()
-        .map(|agent| {
-            let reserved = reserved_ids.binary_search(&agent.id.as_str()).is_ok();
-            BuiltinAgent {
-                id: agent.id.as_str(),
-                description: agent.description.as_deref(),
-                role: agent.role,
-                prompt: agent.prompt.as_deref(),
-                model_policy: BuiltinModelPolicy {
-                    model: agent.model_policy.model.as_deref(),
-                    category: agent.model_policy.category.as_deref(),
-                    reasoning: agent.model_policy.reasoning.as_deref(),
-                },
-                spawn_scope: if reserved {
-                    SpawnScope::None
-                } else {
-                    SpawnScope::AllOrdinary
-                },
-                system_reserved: reserved,
-                resource_view: &agent.resource_view,
-            }
-        })
-        .collect();
     Ok(LoadedCoreAgents {
         catalog,
         bundle,
         reserved_ids,
-        roster,
     })
 }
 
@@ -207,16 +103,6 @@ fn loaded_core_agents() -> Result<&'static LoadedCoreAgents, BundleError> {
 
 fn required_core_agents() -> &'static LoadedCoreAgents {
     loaded_core_agents().unwrap_or_else(|error| panic!("load {CORE_AGENTS_PRESET_ID}: {error}"))
-}
-
-/// Built-in agents in stable-id order.
-///
-/// # Panics
-///
-/// Panics when the trusted core-agents bundle is missing or invalid.
-#[must_use]
-pub fn builtin_agents() -> &'static [BuiltinAgent] {
-    &required_core_agents().roster
 }
 
 /// Borrowed view of the verified core-agents preset.
@@ -282,14 +168,33 @@ pub fn core_agents_preset() -> Result<CoreAgentsPreset, BundleError> {
     loaded_core_agents().map(|loaded| CoreAgentsPreset { loaded })
 }
 
-/// Resolve a built-in by exact id.
+/// Prepared agents of the verified core-agents preset, in stable-id order.
+///
+/// # Panics
+///
+/// Panics when the trusted core-agents bundle is missing or invalid.
 #[must_use]
-pub fn builtin_agent(id: &str) -> Option<&'static BuiltinAgent> {
-    let roster = builtin_agents();
-    roster
-        .binary_search_by(|agent| agent.id.cmp(id))
+pub fn preset_agents() -> &'static [PreparedAgent] {
+    &required_core_agents().bundle.agents
+}
+
+/// Prepared agent from the verified core-agents preset, by exact id.
+#[must_use]
+pub fn preset_agent(id: &str) -> Option<&'static PreparedAgent> {
+    let agents = preset_agents();
+    agents
+        .binary_search_by(|agent| agent.id.as_str().cmp(id))
         .ok()
-        .map(|index| &roster[index])
+        .map(|index| &agents[index])
+}
+
+/// Every built-in agent id, sorted: an install refuses a bundle that claims one.
+#[must_use]
+pub fn builtin_agent_ids() -> Vec<&'static str> {
+    preset_agents()
+        .iter()
+        .map(|agent| agent.id.as_str())
+        .collect()
 }
 
 /// SHA-256 digest bytes of the loaded prepared preset.
