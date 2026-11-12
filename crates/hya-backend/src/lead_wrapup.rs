@@ -8,11 +8,11 @@
 //! and in the final window one ignored notice ends the run.
 
 use hya_core::{AgentSpec, CoreError, SessionEngine};
-use hya_tool::deadline::{RunDeadline, Stage};
 use hya_proto::{
     FinishReason, MessageId, PartProjection, Projection, Role, RosterEntry, RosterStatus,
     SessionId, TodoItem, TodoStatus, scope,
 };
+use hya_tool::deadline::{RunDeadline, Stage};
 use tokio_util::sync::CancellationToken;
 
 /// Notice turns in a row that may end with the same pending work and no tool
@@ -301,11 +301,11 @@ fn last_sentence(paragraph: &str) -> Option<&str> {
         }
     }
     sentences.push(&paragraph[start..]);
-    sentences
-        .into_iter()
-        .rev()
-        .map(str::trim)
-        .find(|sentence| !sentence.trim_end_matches(['.', '!', '?', '。', '！', '？']).is_empty())
+    sentences.into_iter().rev().map(str::trim).find(|sentence| {
+        !sentence
+            .trim_end_matches(['.', '!', '?', '。', '！', '？'])
+            .is_empty()
+    })
 }
 
 fn clauses(sentence: &str) -> impl Iterator<Item = &str> {
@@ -345,6 +345,7 @@ fn subagent_line(entry: &RosterEntry) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
     use hya_proto::{MessageProjection, PartId, ToolCallId, ToolName, ToolPartState};

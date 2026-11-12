@@ -21,9 +21,9 @@
 //! tools; this crate stays free of the session engine.
 
 mod agents;
+mod base_tools;
 /// Wall-clock budget of a headless run, its stages and notices.
 pub mod deadline;
-mod base_tools;
 mod formatter;
 mod formatter_catalog;
 mod formatter_command;

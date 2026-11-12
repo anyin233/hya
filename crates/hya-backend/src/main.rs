@@ -116,6 +116,7 @@ fn state_dir() -> std::path::PathBuf {
 /// `hya exec`/`run` on `db`, respecting the database lock
 /// ([`db_writer`]): through the server that owns a file database, else
 /// in process while holding its lock (in-memory stores are not locked).
+#[allow(clippy::too_many_arguments)]
 async fn exec_entry(
     command: &str,
     prompt: String,
@@ -158,8 +159,7 @@ async fn exec_entry(
         // The lock (if any) is held until the run returns; an early exit
         // (a stop signal) releases it with the process.
         db_writer::Writer::Direct(lock) => {
-            let result =
-                cmd_exec(prompt, model_override, db, yolo, json, pure, time_budget).await;
+            let result = cmd_exec(prompt, model_override, db, yolo, json, pure, time_budget).await;
             drop(lock);
             result
         }
