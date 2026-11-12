@@ -19,7 +19,8 @@ hya bundle install --claude ./my-plugin
 Select an entry from a local marketplace with
 `hya bundle install --claude './marketplace#code-review'`.
 
-The directory may contain either `plugin.json` or
+The plugin directory is explicit: the adapter does not scan project or home
+Claude plugin roots. The selected directory may contain either `plugin.json` or
 `.claude-plugin/plugin.json`. For example, a plugin named `Code Review` at
 version `1.2.3` imports as bundle `claude/code-review`, namespace
 `code-review`, publisher `claude`, and version `1.2.3`.

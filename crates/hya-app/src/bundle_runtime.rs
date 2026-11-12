@@ -410,7 +410,6 @@ pub(crate) async fn prepare_source(
                 command,
                 timeout_ms: None,
                 env,
-                posture_overrides: BTreeMap::new(),
                 plugin_dir: None,
             };
             let host = Arc::new(

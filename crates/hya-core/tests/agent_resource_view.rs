@@ -170,7 +170,7 @@ fn catalog() -> (Arc<AgentCatalog>, Vec<RuntimeSource>) {
         let skill_id = format!("bundle:{bundle_id}/skill/bundle-skill");
         PreparedAgentBundle {
             check: None,
-            format_version: 2,
+            format_version: 3,
             identity: BundleIdentity {
                 id: bundle_id.clone(),
                 version: "0.0.0".to_string(),
@@ -188,7 +188,6 @@ fn catalog() -> (Arc<AgentCatalog>, Vec<RuntimeSource>) {
                 prompt_digest: None,
                 model_policy: ModelPolicy::default(),
                 workdir: None,
-                legacy_spawn_lifecycle: None,
                 resource_view: if narrow {
                     ResourceView {
                         allow: vec![skill_id.clone()],
@@ -429,7 +428,7 @@ async fn canonical_allow_deny_and_alias_share_schema_and_dispatch() {
         .unwrap();
     let bundle = PreparedAgentBundle {
         check: None,
-        format_version: 2,
+        format_version: 3,
         identity: BundleIdentity {
             id: "hya/alias-test".to_string(),
             version: "0.0.0".to_string(),
@@ -447,7 +446,6 @@ async fn canonical_allow_deny_and_alias_share_schema_and_dispatch() {
             prompt_digest: None,
             model_policy: ModelPolicy::default(),
             workdir: None,
-            legacy_spawn_lifecycle: None,
             resource_view: ResourceView {
                 allow: vec![
                     "harness:tool/dynamic_marker".to_string(),
@@ -716,7 +714,7 @@ async fn a_bundle_agent_cannot_select_a_harness_mcp_export_or_skill() {
         let bundle_id = format!("hya/plane-refusal-{slug}");
         let bundle = PreparedAgentBundle {
             check: None,
-            format_version: 2,
+            format_version: 3,
             identity: BundleIdentity {
                 id: bundle_id.clone(),
                 version: "0.0.0".to_string(),
@@ -734,7 +732,6 @@ async fn a_bundle_agent_cannot_select_a_harness_mcp_export_or_skill() {
                 prompt_digest: None,
                 model_policy: ModelPolicy::default(),
                 workdir: None,
-                legacy_spawn_lifecycle: None,
                 resource_view: ResourceView {
                     allow: vec![reference.to_string()],
                     deny: Vec::new(),

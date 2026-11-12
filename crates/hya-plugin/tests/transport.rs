@@ -27,7 +27,7 @@ for line in sys.stdin:
         result = {
             "protocol_version": 1,
             "plugin": {"id": "fixture", "version": "0.1.0", "kind": "rust"},
-            "hooks": [{"name": "tool.execute.before", "posture": "safe"}, {"name": "event"}],
+            "hooks": [{"name": "tool.execute.before"}, {"name": "event"}],
             "tools": [{"name": "remember", "description": "", "inputSchema": {"type": "object"}}],
         }
         print(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": result}), flush=True)

@@ -222,7 +222,7 @@ cd bundles/extra/jev-model-router && bun test
 | Contract | Value |
 | --- | --- |
 | Bundle | `kind: Plugin`, `extensions.process: {kind: bun, command: [bun, run, '${BUNDLE_ROOT}/router.ts']}`. Only `router.ts` is packaged. |
-| Plugin id / hook | `jev-model-router`; one hook, `chat.params` (posture `open`). No tools or Skills. |
+| Plugin id / hook | `jev-model-router`; one hook, `chat.params`. No tools or Skills. |
 | Hook input used | `request.model` (the `from` filter), `root_session` / `session` (stickiness key), `agent`, `request.messages` (newest `role: user` message), `request.system`, and `request.tools` (count only). |
 | Hook output | `{"outcome": "continue", "request": <the same request with only model changed>}` |
 | Jev request | `POST <jev.endpoint>` with `Authorization: Bearer <key>` and body `{"model": <jev.model>, "state": {"agent", "latest_user_message" (first 4000 chars), "system_prompt_head" (first 1000 chars), "tool_count", "message_count"}, "questions": {"difficulty": {"type": "choice", "instructions": ..., "criteria": {<tier name>: <tier criteria>}}}}` |
@@ -340,7 +340,7 @@ cd bundles/extra/model-fallback && bun test
 | Contract | Value |
 | --- | --- |
 | Bundle | `kind: Plugin`, `extensions.process: {kind: bun, command: [bun, run, '${BUNDLE_ROOT}/fallback.ts']}`. Only `fallback.ts` is packaged (`fallback.test.ts` is undeclared and stays out). |
-| Plugin id / hook | `model-fallback`; one hook, `model.fallback` (posture `open`, fail-open by protocol default: an error, timeout, or malformed reply always reads as give-up). No tools or Skills. |
+| Plugin id / hook | `model-fallback`; one hook, `model.fallback` (fail-open: an error, timeout, or malformed reply always reads as give-up). No tools or Skills. |
 | Hook input used | `error.class`, `attempt`, `tried` (chain-walk key is `tried[0]`, the ORIGINAL failing model of the round — not the model that just failed, so `A -> B -> C` always walks `A`'s chain). `session`, `root_session`, `agent`, `message`, and `model` are accepted but not otherwise used. |
 | Hook output | `{"outcome": "retry", "model": "<provider/model>"}` or `{"outcome": "give_up"}` |
 

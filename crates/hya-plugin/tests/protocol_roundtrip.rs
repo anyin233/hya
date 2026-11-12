@@ -4,9 +4,9 @@
 
 use hya_plugin::PluginError;
 use hya_plugin::messages::{
-    EventNotificationParams, HookName, HookPosture, HookRegistration, InitializeResult,
-    PluginContributionSet, PluginInfo, PluginKindWire, SkillContribution, ToolCallParams,
-    ToolCallReply, ToolInfo, WorkspaceAdapterInfo,
+    EventNotificationParams, HookName, HookRegistration, InitializeResult, PluginContributionSet,
+    PluginInfo, PluginKindWire, SkillContribution, ToolCallParams, ToolCallReply, ToolInfo,
+    WorkspaceAdapterInfo,
 };
 use hya_plugin::protocol::{Frame, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use hya_proto::{Envelope, Event, EventSeq, MessageId, Role, SessionId, ToolCallId};
@@ -97,8 +97,6 @@ fn hook_name_uses_dotted_wire_form() {
         HookName::ToolExecuteBefore.method(),
         "hook/tool.execute.before"
     );
-    assert_eq!(HookName::PermissionAsk.default_posture(), HookPosture::Safe);
-    assert_eq!(HookName::ChatParams.default_posture(), HookPosture::Open);
 }
 
 #[test]
@@ -129,7 +127,6 @@ fn initialize_result_roundtrip() {
         contributions: PluginContributionSet {
             hooks: vec![HookRegistration {
                 name: HookName::Event,
-                posture: Some(HookPosture::Open),
             }],
             tools: vec![ToolInfo {
                 name: "t".into(),
@@ -295,4 +292,23 @@ fn event_notification_roundtrip() {
         },
     };
     assert_eq!(params, reparse(&params));
+}
+
+#[test]
+fn hook_registration_contains_only_a_name() {
+    let hook = HookRegistration {
+        name: HookName::ToolExecuteBefore,
+    };
+    assert_eq!(
+        serde_json::to_value(&hook).unwrap(),
+        serde_json::json!({"name":"tool.execute.before"})
+    );
+    for posture in ["safe", "open"] {
+        assert!(
+            serde_json::from_value::<HookRegistration>(serde_json::json!({
+                "name": "tool.execute.before", "posture": posture
+            }))
+            .is_err()
+        );
+    }
 }

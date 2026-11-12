@@ -13,10 +13,9 @@ use hya_core::hooks::{
 };
 use hya_plugin::PluginHost;
 use hya_plugin::config::PluginSpec;
-use hya_plugin::manifest::Manifest;
 use hya_plugin::messages::{
     AgentSpawnParams, CompactionAfterParams, CompactionBeforeOutcomeWire, CompactionBeforeParams,
-    CompactionTriggerWire, HookName, HookPosture, HostInfo, PluginKindWire, SessionLifecycleParams,
+    CompactionTriggerWire, HookName, HostInfo, PluginKindWire, SessionLifecycleParams,
 };
 use hya_proto::{AgentName, MessageId, ModelRef, SessionId};
 use serde_json::json;
@@ -35,16 +34,15 @@ fn spec(id: &str, script: &str) -> PluginSpec {
         command: vec!["python3".to_string(), "-c".to_string(), script.to_string()],
         timeout_ms: Some(4000),
         env: BTreeMap::new(),
-        posture_overrides: BTreeMap::new(),
         plugin_dir: None,
     }
 }
 
 /// Task 5.1: the five new hook names serialize to exactly the documented wire
-/// spellings, parse back, and default to the Open posture (they are
+/// spellings and parse back (they are
 /// enrichment/observation points, not guards).
 #[test]
-fn new_hook_names_round_trip_and_default_open() {
+fn new_hook_names_round_trip() {
     for (name, wire) in [
         (HookName::CompactionBefore, "compaction.before"),
         (HookName::CompactionAfter, "compaction.after"),
@@ -59,38 +57,9 @@ fn new_hook_names_round_trip_and_default_open() {
         );
         assert_eq!(HookName::from_wire(wire), Some(name));
         assert_eq!(name.method(), format!("hook/{wire}"));
-        assert_eq!(
-            name.default_posture(),
-            HookPosture::Open,
-            "{wire} is an observation/enrichment point and must default Open"
-        );
     }
     // Protocol stays at version 1: unknown names are not names at all.
     assert_eq!(HookName::from_wire("compaction.beforex"), None);
-}
-
-/// Task 5.1: an old host reading a new plugin's `plugin.toml` must drop the
-/// unknown hook declarations with a warning, not reject the manifest.
-#[test]
-fn manifest_resolved_hooks_drop_unknown_names_but_keep_new_known_ones() {
-    let manifest = Manifest::parse(
-        "id = \"future\"\ncommand = [\"x\"]\nhooks = [\n\
-         \x20 { name = \"compaction.before\" },\n\
-         \x20 { name = \"session.end\" },\n\
-         \x20 { name = \"time.travel\" },\n\
-         ]\n",
-    )
-    .unwrap();
-    let resolved: BTreeSet<HookName> = manifest
-        .resolved_hooks()
-        .into_iter()
-        .map(|(n, _)| n)
-        .collect();
-    assert_eq!(
-        resolved,
-        BTreeSet::from([HookName::CompactionBefore, HookName::SessionEnd]),
-        "known new names resolve; unknown names are dropped"
-    );
 }
 
 /// Task 5.2: a plugin registering `compaction.before` receives the call and a

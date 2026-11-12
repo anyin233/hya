@@ -9,8 +9,8 @@ use hya_core::hooks::{HookDispatcher, PermissionApproveInput};
 use hya_plugin::PluginHost;
 use hya_plugin::config::PluginSpec;
 use hya_plugin::messages::{
-    HookName, HookPosture, HostInfo, PermissionApproveParams, PermissionOutcomeWire,
-    PluginKindWire, WireResource,
+    HookName, HostInfo, PermissionApproveParams, PermissionOutcomeWire, PluginKindWire,
+    WireResource,
 };
 use hya_proto::{AgentName, SessionId};
 use hya_tool::{Action, Decision, Resource};
@@ -62,7 +62,6 @@ for line in sys.stdin:
         command: vec!["python3".to_string(), "-c".to_string(), script],
         timeout_ms: Some(4000),
         env: BTreeMap::new(),
-        posture_overrides: BTreeMap::new(),
         plugin_dir: None,
     }
 }
@@ -88,7 +87,6 @@ fn permission_approve_name_round_trips_and_defaults_safe() {
     assert_eq!(HookName::from_wire("permission.approve"), Some(name));
     assert_eq!(name.as_str(), "permission.approve");
     assert_eq!(name.method(), "hook/permission.approve");
-    assert_eq!(name.default_posture(), HookPosture::Safe);
 }
 
 #[test]

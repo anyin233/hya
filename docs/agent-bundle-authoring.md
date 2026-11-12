@@ -110,7 +110,7 @@ rejected even when empty. Use `bundle.yaml`; `bundle.hya.md` is only supported
 by AgentBundle. No synthetic Agent or Workflow is added to the catalog.
 
 The prepared interface is `PreparedInstallableBundle::Plugin`, tagged with
-`kind: "Plugin"` in canonical format-v2 JSON. `PreparedPluginBundle` contains
+`kind: "Plugin"` in canonical format-v3 JSON. `PreparedPluginBundle` contains
 `format_version: u32`, `identity: BundleIdentity`, `namespace: Option<String>`,
 `digest: String`, and `tools`, `skills`, `mcp`, `hooks`, `extensions` arrays of
 `PreparedResource`. Schema and process declarations remain in the existing
@@ -245,7 +245,7 @@ are rejected.
 - Required whenever the agent uses `prompt: path/to/file.md` instead of a body prompt.
 - Real example: [`crates/hya-bundle/tests/fixtures/directory/bundle.yaml`](../crates/hya-bundle/tests/fixtures/directory/bundle.yaml).
 
-A public archive contains the root manifest plus exactly the normalized source closure represented by its prepared payload, and nothing else. Undeclared directory files are ignored; unreferenced archive files are rejected. Missing declared files, wrapper directories, duplicate normalized paths, traversal, absolute paths, and non-regular files fail closed. Directory and archive forms of the same declared closure prepare to the same canonical format-v2 identity and digest.
+A public archive contains the root manifest plus exactly the normalized source closure represented by its prepared payload, and nothing else. Undeclared directory files are ignored; unreferenced archive files are rejected. Missing declared files, wrapper directories, duplicate normalized paths, traversal, absolute paths, and non-regular files fail closed. Directory and archive forms of the same declared closure prepare to the same canonical format-v3 identity and digest.
 
 The canonical package writer accepts a source directory and emits deterministic
 public `.hyabundle` bytes:
@@ -1007,12 +1007,12 @@ hya bundle remove <bundle-id>
 hya bundle disable <bundle-id>   # stays installed, publishes nothing; `enable` undoes it
 ```
 
-`hya bundle info -f` inspects without mutating the registry or publication. Content magic, not the suffix, selects public/private parsing after the exact lowercase command suffix check. Installed generations publish atomically, and new root turns bind the new catalog while existing turns and children retain their pinned binding. `bundle info` prints each bundle's declared schema extensions (`schema=… tool=… writable=…`), its `extensions.process` declaration (`process=<kind> command=…`), and its mcp entries when non-empty; `bundle schema <bundle-id>` lists the schemes one bundle declares.
+`hya bundle info -f` inspects without mutating the registry or publication. The public 7z magic selects the supported archive format after the exact lowercase command suffix check. Installed generations publish atomically, and new root turns bind the new catalog while existing turns and children retain their pinned binding. `bundle info` prints each bundle's declared schema extensions (`schema=… tool=… writable=…`), its `extensions.process` declaration (`process=<kind> command=…`), and its mcp entries when non-empty; `bundle schema <bundle-id>` lists the schemes one bundle declares.
 
-A bundle installed by an older binary cannot decode. Such a row is **skipped with a named warning** rather than wedging the runtime, and `hya bundle list` marks it `unreadable (reinstall)`. Reinstall it to restore the agent.
+An old prepared-format install record is rejected with a `please reinstall` error before runtime publication. Move the old registry aside and reinstall its bundles; see [Prepared install format](bundle-runtime.md#prepared-install-format).
 
 ---
 
 ## Trust and unsupported combinations
 
-Only public Bundles are supported for activation. Private inspection reports `authentication=unverified` and `payload=opaque`; private activation is unsupported and generation-preserving. Resource profiles without an enforceable current host mapping are unsupported. A native `extensions.rust` executable must accompany a `kind: rust` process declaration; it is launched out of process before publication. Bundle-declared MCP servers start through the same immutable runtime-source lifecycle. Structural and declared-digest checks do not establish publisher authenticity. There is no sandbox and no permission expansion. Bundle loading does not add decryption, signatures, compilation on activation, arbitrary environment access, a second permission plane, or legacy agent-file discovery. Claude marketplace import resolves a source before ordinary package validation; see [Claude import](claude-plugin-import.md). Legacy definitions are not parsed, migrated, or used as a fallback.
+Only public 7z Bundles are supported for inspection and activation; private envelopes fail with `invalid bundle package format`. Resource profiles without an enforceable current host mapping are unsupported. A native `extensions.rust` executable must accompany a `kind: rust` process declaration; it is launched out of process before publication. Bundle-declared MCP servers start through the same immutable runtime-source lifecycle. Structural and declared-digest checks do not establish publisher authenticity. There is no sandbox and no permission expansion. Bundle loading does not add decryption, signatures, compilation on activation, arbitrary environment access, a second permission plane, or legacy agent-file discovery. Claude marketplace import resolves a source before ordinary package validation; see [Claude import](claude-plugin-import.md). Legacy definitions are not parsed, migrated, or used as a fallback.

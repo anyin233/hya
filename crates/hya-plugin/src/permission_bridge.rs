@@ -11,8 +11,7 @@ use sha2::{Digest, Sha256};
 
 use crate::host::PluginHost;
 use crate::messages::{
-    HookName, HookPosture, PermissionApproveParams, PermissionAskParams, PermissionOutcomeWire,
-    WireResource,
+    HookName, PermissionApproveParams, PermissionAskParams, PermissionOutcomeWire, WireResource,
 };
 
 const PERMISSION_BRIDGE_SEMANTIC_IDENTITY_DOMAIN_V1: &[u8] =
@@ -58,10 +57,7 @@ impl PluginHost {
             .plugins()
             .iter()
             .zip(prepared.iter())
-            .filter_map(|(conn, plugin)| {
-                conn.posture(HookName::PermissionAsk)
-                    .map(|posture| (plugin, posture))
-            })
+            .filter_map(|(conn, plugin)| conn.has_hook(HookName::PermissionAsk).then_some(plugin))
             .collect::<Vec<_>>();
 
         let mut bytes = Vec::new();
@@ -69,17 +65,12 @@ impl PluginHost {
         bytes.push(1); // participant count field
         append_identity_count(&mut bytes, participants.len())?;
 
-        for (plugin, posture) in participants {
+        for plugin in participants {
             bytes.push(1); // participant record
             bytes.push(1); // stable plugin ID field
             append_identity_bytes(&mut bytes, plugin.id().as_bytes())?;
             bytes.push(2); // canonical declaration field
             append_identity_bytes(&mut bytes, plugin.canonical_declaration())?;
-            bytes.push(3); // effective permission.ask posture field
-            bytes.push(match posture {
-                HookPosture::Safe => 0,
-                HookPosture::Open => 1,
-            });
         }
 
         Some(Sha256::digest(bytes).into())
@@ -96,7 +87,7 @@ impl PluginHost {
         resource: &Resource,
     ) -> Option<Decision> {
         for conn in self.plugins() {
-            if conn.posture(HookName::PermissionAsk).is_none() {
+            if !conn.has_hook(HookName::PermissionAsk) {
                 continue;
             }
             let params = PermissionAskParams {
@@ -155,7 +146,7 @@ impl PluginHost {
             }
         };
         for conn in self.plugins() {
-            if conn.posture(HookName::PermissionApprove).is_none() {
+            if !conn.has_hook(HookName::PermissionApprove) {
                 continue;
             }
             let reply = match conn

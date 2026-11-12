@@ -25,7 +25,7 @@ for line in sys.stdin:
         result = {
             "protocol_version": 1,
             "plugin": {"id": "crasher", "version": "0.1.0", "kind": "rust"},
-            "hooks": [{"name": "tool.execute.before", "posture": "open"}],
+            "hooks": [{"name": "tool.execute.before"}],
             "tools": [],
         }
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
@@ -57,7 +57,6 @@ async fn crash_marks_dead_then_respawns_then_disables() {
         command: crashing_fixture(),
         timeout_ms: Some(2000),
         env: BTreeMap::new(),
-        posture_overrides: BTreeMap::new(),
         plugin_dir: None,
     };
     let host = PluginHost::connect_all(

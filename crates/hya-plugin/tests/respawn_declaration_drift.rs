@@ -39,7 +39,7 @@ for line in sys.stdin:
     method = msg.get("method")
     if method == "initialize":
         tool_name = "stable_tool" if incarnation == 1 else "drifted_tool"
-        hooks = [] if incarnation == 1 else [{"name":"tool.execute.before","posture":"open"}]
+        hooks = [] if incarnation == 1 else [{"name":"tool.execute.before"}]
         result = {
             "protocol_version": 1,
             "plugin": {"id":"drifter","version":"1","kind":"rust"},
@@ -131,7 +131,6 @@ async fn plugin_respawn_declaration_drift_closes_new_process_and_calls_fail_clos
             command: drift_fixture(),
             timeout_ms: Some(2_000),
             env,
-            posture_overrides: BTreeMap::new(),
             plugin_dir: None,
         }],
         HostInfo {

@@ -28,7 +28,7 @@ for line in sys.stdin:
         result = {
             "protocol_version": 1,
             "plugin": {"id": tag, "version": "0.1.0", "kind": "rust"},
-            "hooks": [{"name": "tool.execute.before", "posture": "open"}],
+            "hooks": [{"name": "tool.execute.before"}],
             "tools": [],
         }
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
@@ -55,7 +55,6 @@ fn spec(id: &str, tag: &str, delay_secs: &str) -> PluginSpec {
         command: tagging_fixture(tag, delay_secs),
         timeout_ms: Some(5000),
         env: BTreeMap::new(),
-        posture_overrides: BTreeMap::new(),
         plugin_dir: None,
     }
 }

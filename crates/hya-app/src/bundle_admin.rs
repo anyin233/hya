@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use hya_bundle::{
-    BundleCatalog, PackageInspection, PreparedCatalog, PreparedCheck, PreparedInstallableBundle,
+    BundleCatalog, PreparedCatalog, PreparedCheck, PreparedInstallableBundle,
     PublicPackageInspection, cleanup_orphaned_staging, stage_package,
 };
 use hya_server::{
@@ -48,7 +48,7 @@ fn failure(message: impl std::fmt::Display) -> BundleControlError {
 /// A registry or project failure, with the policy failures `overwrite` resolves explained.
 #[must_use]
 pub fn store_error(error: StoreError) -> BundleControlError {
-    match error {
+    match registry_read_error(error) {
         StoreError::NamespaceConflict {
             namespace,
             existing_bundle_id,
@@ -81,9 +81,19 @@ pub fn store_error(error: StoreError) -> BundleControlError {
         error @ StoreError::BundleNotFound { .. } => {
             BundleControlError::new(BUNDLE_NOT_FOUND, error.to_string())
         }
-        error @ (StoreError::BundleAgentIdReserved { .. }
-        | StoreError::PrivateActivationUnsupported) => invalid(error.to_string()),
+        error @ StoreError::BundleAgentIdReserved { .. } => invalid(error.to_string()),
         error => failure(error),
+    }
+}
+
+// The store classifies unreadable prepared rows as corrupt; retain a recovery
+// instruction at the app boundary without accepting or migrating the old format.
+pub(crate) fn registry_read_error(error: StoreError) -> StoreError {
+    match error {
+        error @ StoreError::BundleRegistryCorrupt { .. } => StoreError::BundleRegistryData(
+            format!("{error}; please reinstall the bundle with `hya bundle install`"),
+        ),
+        error => error,
     }
 }
 
@@ -168,7 +178,7 @@ pub fn validate_package_path(package: &Path) -> Result<(), BundleControlError> {
 ///
 /// # Errors
 /// The package cannot be read, staged, or decoded.
-pub fn inspect_package(package: &Path) -> Result<PackageInspection, BundleControlError> {
+pub fn inspect_package(package: &Path) -> Result<PublicPackageInspection, BundleControlError> {
     let registry_path = crate::bundle_registry_path();
     let staging_root = registry_path
         .parent()
@@ -200,12 +210,7 @@ pub fn inspect_package(package: &Path) -> Result<PackageInspection, BundleContro
 /// Any of those checks fails.
 pub fn inspect_installable(package: &Path) -> Result<PublicPackageInspection, BundleControlError> {
     validate_package_path(package)?;
-    let public = match inspect_package(package)? {
-        PackageInspection::Public(public) => public,
-        PackageInspection::Private(_) => {
-            return Err(store_error(StoreError::PrivateActivationUnsupported));
-        }
-    };
+    let public = inspect_package(package)?;
     let [incoming] = public.prepared.bundles() else {
         return Err(invalid("a public package must contain exactly one bundle"));
     };
@@ -534,8 +539,7 @@ pub fn decode_installed_catalog(
     let corrupt = || StoreError::BundleRegistryCorrupt {
         bundle_id: record.bundle_id.clone(),
     };
-    let prepared = PreparedCatalog::decode(&record.prepared_bytes, &record.prepared_digest)
-        .map_err(|_| corrupt())?;
+    let prepared = PreparedCatalog::decode(&record.prepared_bytes, &record.prepared_digest)?;
     let [bundle] = prepared.bundles() else {
         return Err(corrupt());
     };

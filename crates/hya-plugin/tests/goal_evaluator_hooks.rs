@@ -13,7 +13,7 @@ use hya_core::hooks::{GoalEvaluateReply, HookDispatcher};
 use hya_core::{CoreError, GoalEvaluator, Verdict};
 use hya_plugin::PluginHost;
 use hya_plugin::config::PluginSpec;
-use hya_plugin::messages::{HookName, HookPosture, HostInfo, PluginKindWire};
+use hya_plugin::messages::{HookName, HostInfo, PluginKindWire};
 
 fn host_info() -> HostInfo {
     HostInfo {
@@ -29,13 +29,12 @@ fn spec(id: &str, script: &str) -> PluginSpec {
         command: vec!["python3".to_string(), "-c".to_string(), script.to_string()],
         timeout_ms: Some(4000),
         env: BTreeMap::new(),
-        posture_overrides: BTreeMap::new(),
         plugin_dir: None,
     }
 }
 
 /// The three revived evaluator hook names use their documented wire spellings
-/// and default to the Open posture: evaluators are not guards.
+/// and round-trip through the wire representation.
 #[test]
 fn evaluator_hook_names_round_trip_and_default_open() {
     for (name, wire) in [
@@ -50,11 +49,6 @@ fn evaluator_hook_names_round_trip_and_default_open() {
         );
         assert_eq!(HookName::from_wire(wire), Some(name));
         assert_eq!(name.method(), format!("hook/{wire}"));
-        assert_eq!(
-            name.default_posture(),
-            HookPosture::Open,
-            "{wire} is an evaluator, not a guard, and must default Open"
-        );
     }
 }
 

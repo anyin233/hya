@@ -466,7 +466,7 @@ const SIDECAR_PERMISSION_TOOL: &str = "bundle:hya/sidecar-permission/tool/echo";
 fn sidecar_permission_bundle() -> PreparedAgentBundle {
     PreparedAgentBundle {
         check: None,
-        format_version: 2,
+        format_version: 3,
         identity: BundleIdentity {
             id: "hya/sidecar-permission".to_string(),
             version: "0.0.0".to_string(),
@@ -484,7 +484,6 @@ fn sidecar_permission_bundle() -> PreparedAgentBundle {
             prompt_digest: None,
             model_policy: ModelPolicy::default(),
             workdir: None,
-            legacy_spawn_lifecycle: None,
             resource_view: ResourceView::default(),
             can_spawn: Vec::new(),
             hook_refs: Vec::new(),

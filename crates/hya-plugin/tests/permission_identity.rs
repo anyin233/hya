@@ -23,7 +23,7 @@ for line in sys.stdin:
         result = {{
             "protocol_version": 1,
             "plugin": {{"id": "{id}", "version": "{version}", "kind": "rust"}},
-            "hooks": [{{"name": "permission.ask", "posture": "safe"}}],
+            "hooks": [{{"name": "permission.ask"}}],
             "tools": [],
         }}
         print(json.dumps({{"jsonrpc": "2.0", "id": msg["id"], "result": result}}), flush=True)
@@ -41,7 +41,6 @@ fn spec(id: &str, version: &str) -> PluginSpec {
         command: fixture(id, version),
         timeout_ms: Some(3_000),
         env: BTreeMap::new(),
-        posture_overrides: BTreeMap::new(),
         plugin_dir: None,
     }
 }

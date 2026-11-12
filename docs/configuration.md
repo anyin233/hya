@@ -1691,12 +1691,6 @@ command = ["python3", "memory.py"]
 enabled = true
 timeout_ms = 500
 
-[[hooks]]
-name = "tool.execute.before"
-posture = "safe"        # safe | open
-
-[[hooks]]
-name = "event"
 ```
 
 | Field | Meaning |
@@ -1706,12 +1700,10 @@ name = "event"
 | `command` | Required argv array. |
 | `enabled` | Default `true`. |
 | `timeout_ms` | Optional per-call override (ms). |
-| `[[hooks]]` | Repeated tables: `name` plus optional `posture` (`safe` \| `open`). |
 
-An **unknown** hook name is warned about and dropped; the manifest still loads
-and the plugin runs without that hook. Manifest posture entries act as posture
-overrides and survive the config/manifest merge; YAML config entries carry no
-posture overrides.
+Hooks are declared only in the initialize reply as `{ "name": "<hook>" }`.
+Manifest `[[hooks]]` overrides and registration `posture` are rejected. Error
+handling is fixed by hook class; see [Plugin protocol](plugin-protocol.md#hook-failure-behavior).
 
 ### Config-over-manifest merge
 
@@ -1755,31 +1747,15 @@ To install a Claude Code plugin permanently as a hya bundle, use
 
 A plugin may declare these hook names in its initialize handshake
 ([`crates/hya-plugin/src/messages.rs`](../crates/hya-plugin/src/messages.rs)).
-Default posture when the plugin omits one: **Safe** for `permission.ask`,
-`permission.approve`, and `tool.execute.before`; **Open** for all others.
+Failure behavior is fixed by hook class:
 
-| Hook name | Default posture |
+| Hook name | On failure |
 | --- | --- |
-| `event` | Open |
-| `command.execute.before` | Open |
-| `experimental.text.complete` | Open |
-| `message.user.before` | Open |
-| `chat.params` | Open |
-| `tool.execute.before` | Safe |
-| `tool.execute.after` | Open |
-| `permission.ask` | Safe |
-| `permission.approve` | Safe (failures defer to the user ask; only called on the bundle that declared the active [permission mode](#session-permission-modes)) |
-| `model.fallback` | Open (always fail-open) |
-
-These three names also parse and may appear in `plugin.toml` / initialize, but
-the host **never dispatches** them (dead hooks — see
-[Plugin protocol](plugin-protocol.md)):
-
-| Hook name | Default posture | Status |
-| --- | --- | --- |
-| `goal.evaluate` | Open | Dispatched before the bundle/model fallback evaluator |
-| `loop.verifier` | Open | Registered only; no dispatcher arm |
-| `loop.planner` | Open | Registered only; no dispatcher arm |
+| `tool.execute.before` | Veto (`guard failed safe`) |
+| `permission.ask`, `permission.approve` | Defer to the next interceptor or user |
+| `model.fallback` | Give up and continue the fallback chain |
+| `event`, command/message/text/chat hooks, `tool.execute.after` | Skip and preserve the previous input |
+| Compaction, lifecycle, and evaluator hooks | Continue with built-in behavior |
 
 **AgentBundle sidecars** may select only the three bundle-legal IDs: `event`,
 `tool.execute.before`, and `tool.execute.after`. The wider list applies to

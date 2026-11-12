@@ -1,5 +1,5 @@
 //! Integration tests for `hya-plugin`: the `loop.should_stop` wire hook
-//! (dev_plan 6.5) — round-trip + Open posture, dispatch to the registered
+//! (dev_plan 6.5) — round-trip, dispatch to the registered
 //! plugin chain, and fail-open tolerance for errors and malformed replies.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use hya_core::hooks::HookDispatcher;
 use hya_plugin::PluginHost;
 use hya_plugin::config::PluginSpec;
-use hya_plugin::messages::{HookName, HookPosture, HostInfo, PluginKindWire};
+use hya_plugin::messages::{HookName, HostInfo, PluginKindWire};
 
 fn host_info() -> HostInfo {
     HostInfo {
@@ -25,13 +25,12 @@ fn spec(id: &str, script: &str) -> PluginSpec {
         command: vec!["python3".to_string(), "-c".to_string(), script.to_string()],
         timeout_ms: Some(4000),
         env: BTreeMap::new(),
-        posture_overrides: BTreeMap::new(),
         plugin_dir: None,
     }
 }
 
 /// `loop.should_stop` uses its documented wire spelling, round-trips through
-/// serde, and defaults to the Open posture: it is a post-turn consult, not a
+/// serde. It is a post-turn consult, not a
 /// guard, so a broken hook must never decide the loop by itself.
 #[test]
 fn loop_should_stop_name_round_trips_and_defaults_open() {
@@ -44,11 +43,6 @@ fn loop_should_stop_name_round_trips_and_defaults_open() {
         Some(HookName::LoopShouldStop)
     );
     assert_eq!(HookName::LoopShouldStop.method(), "hook/loop.should_stop");
-    assert_eq!(
-        HookName::LoopShouldStop.default_posture(),
-        HookPosture::Open,
-        "loop.should_stop is a consult, not a guard, and must default Open"
-    );
 }
 
 /// dev_plan 6.5: a plugin registering `loop.should_stop` receives the target
@@ -132,7 +126,7 @@ async fn loop_should_stop_without_registration_defaults_to_none() {
     assert_eq!(host.loop_should_stop("target", "transcript").await, None);
 }
 
-/// Fail-open (Open posture): a registered provider whose reply is not a
+/// Fail-open: a registered provider whose reply is not a
 /// parseable `{stop, reason}` object, or whose transport fails, must degrade
 /// to `None` — a broken hook never forces or blocks a stop.
 #[tokio::test]

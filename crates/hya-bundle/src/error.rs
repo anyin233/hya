@@ -241,6 +241,12 @@ pub enum BundleError {
         /// Serializer detail.
         detail: String,
     },
+    /// Prepared format is obsolete or unsupported; installation must be repeated.
+    #[error("unsupported prepared bundle format {found}; please reinstall the bundle")]
+    UnsupportedPreparedFormat {
+        /// Format version stored in the install record.
+        found: u32,
+    },
     /// Deserializing prepared catalog bytes failed.
     #[error("prepared catalog decoding failed: {detail}")]
     PreparedDecode {
@@ -275,7 +281,7 @@ pub enum BundleError {
     /// Bundles/index not in the required deterministic order.
     #[error("prepared catalog is not canonically ordered")]
     NonCanonicalPreparedCatalog,
-    /// Bytes do not start with a known public or private package magic.
+    /// Bytes do not start with the supported public package magic.
     #[error("invalid bundle package format")]
     InvalidPackageFormat,
     /// Archive is truncated, invalid, or fails structural checks mid-read.
@@ -290,15 +296,6 @@ pub enum BundleError {
         /// Which limit fired (for example `archive bytes`).
         limit: &'static str,
     },
-    /// Private package version field is not the supported version.
-    #[error("unsupported bundle package version `{found}`")]
-    UnsupportedPackageVersion {
-        /// Version number found in the private header.
-        found: u16,
-    },
-    /// Private package ciphertext SHA-256 does not match the header digest.
-    #[error("private bundle ciphertext digest mismatch")]
-    PrivateCiphertextDigestMismatch,
     /// A trusted first-party bundle is unknown, missing, or has another identity.
     #[error("first-party bundle `{identity}`: {detail}")]
     FirstPartyBundle {

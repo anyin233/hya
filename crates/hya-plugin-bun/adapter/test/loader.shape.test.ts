@@ -42,17 +42,17 @@ test("rejects extension directories without package.json or index file", async (
   )
 })
 
-test("detects supported extension module shapes", () => {
+test("accepts explicit server exports and rejects implicit factories", () => {
   const server = () => ({})
 
   expect(
     detectServerModuleShape({ default: { id: "v1", server } }).kind,
   ).toBe("v1_server")
-  expect(detectServerModuleShape({ named: server }).kind).toBe(
-    "legacy_server",
+  expect(detectServerModuleShape({ default: server }).kind).toBe(
+    "error",
   )
   expect(detectServerModuleShape({ named: { server } }).kind).toBe(
-    "legacy_server",
+    "error",
   )
 })
 

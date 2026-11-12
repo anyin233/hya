@@ -9,9 +9,8 @@ use hya_core::hooks::{
 use hya_plugin::ActivationHookDispatcher;
 use hya_plugin::client::PluginClient;
 use hya_plugin::messages::{
-    EventNotificationParams, HookName, HookPosture, HookRegistration, METHOD_EVENT,
-    ToolAfterOutcomeWire, ToolBeforeOutcomeWire, ToolExecuteAfterParams, ToolExecuteBeforeParams,
-    WireToolResult,
+    EventNotificationParams, HookName, HookRegistration, METHOD_EVENT, ToolAfterOutcomeWire,
+    ToolBeforeOutcomeWire, ToolExecuteAfterParams, ToolExecuteBeforeParams, WireToolResult,
 };
 use hya_plugin::protocol::Frame;
 use hya_proto::{Envelope, Event, EventSeq, MessageId, SessionId, ToolCallId};
@@ -38,15 +37,12 @@ async fn activation_dispatcher_routes_declared_tool_hooks_and_exact_event() {
     let registrations = [
         HookRegistration {
             name: HookName::ToolExecuteBefore,
-            posture: Some(HookPosture::Safe),
         },
         HookRegistration {
             name: HookName::ToolExecuteAfter,
-            posture: Some(HookPosture::Open),
         },
         HookRegistration {
             name: HookName::Event,
-            posture: None,
         },
     ];
 
@@ -194,7 +190,6 @@ async fn activation_hook_transport_loss_reports_unhealthy() {
     let input = json!({"value": true});
     let registrations = [HookRegistration {
         name: HookName::ToolExecuteBefore,
-        posture: Some(HookPosture::Safe),
     }];
 
     let (client_io, server_io) = duplex(4096);

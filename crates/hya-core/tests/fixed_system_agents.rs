@@ -184,7 +184,7 @@ fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
         .map(|agent| {
             PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
                 check: None,
-                format_version: 2,
+                format_version: 3,
                 identity: BundleIdentity {
                     id: format!("hya/fixed-system-{}", agent.stable_id),
                     version: "0.0.0".to_string(),
@@ -206,7 +206,6 @@ fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
                         reasoning: agent.reasoning.clone(),
                     },
                     workdir: None,
-                    legacy_spawn_lifecycle: None,
                     resource_view: ResourceView::default(),
                     can_spawn: agent
                         .can_spawn

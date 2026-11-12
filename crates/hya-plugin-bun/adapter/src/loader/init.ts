@@ -123,9 +123,7 @@ async function loadOneExtension(
     const shape = detectServerModuleShape(imported)
     switch (shape.kind) {
       case "v1_server":
-        return initServers(spec, [shape.server], context)
-      case "legacy_server":
-        return initServers(spec, shape.servers, context)
+        return initServer(spec, shape.server, context)
       case "tui_only":
         return empty()
       case "error":
@@ -136,51 +134,37 @@ async function loadOneExtension(
   }
 }
 
-async function initServers(
+async function initServer(
   spec: string,
-  servers: readonly ExtensionFactory[],
+  server: ExtensionFactory,
   context: ExtensionContextInput,
 ): Promise<LoadedExtensionContributions> {
-  const hooks: ExtensionHooks[] = []
-  const skills: SkillContribution[] = []
-  const workspaceAdapters: WorkspaceAdapterContribution[] = []
-  const skillIds = new Set<string>()
-  for (const server of servers) {
-    try {
-      const result = await server(context)
-      if (!isRecord(result)) {
-        return error(spec, "extension server did not return a contribution object")
-      }
-      const parsedSkills = await skillContributionsFrom(result)
-      if (!parsedSkills.ok) {
-        return error(spec, parsedSkills.message, "declaration")
-      }
-      for (const skill of parsedSkills.skills) {
-        if (skillIds.has(skill.id)) {
-          return error(
-            spec,
-            `duplicate Skill contribution id: ${skill.id}`,
-            "declaration",
-          )
-        }
-        skillIds.add(skill.id)
-        skills.push(skill)
-      }
-      const parsedAdapters = workspaceAdapterContributionsFrom(result)
-      if (!parsedAdapters.ok) {
-        return error(spec, parsedAdapters.message, "declaration")
-      }
-      workspaceAdapters.push(...parsedAdapters.adapters)
-      hooks.push(result)
-    } catch (caught) {
-      return error(
-        spec,
-        errorMessage(caught),
-        caught instanceof ExtensionDeclarationError ? "declaration" : "load",
-      )
+  try {
+    const result = await server(context)
+    if (!isRecord(result)) {
+      return error(spec, "extension server did not return a contribution object")
     }
+    const parsedSkills = await skillContributionsFrom(result)
+    if (!parsedSkills.ok) {
+      return error(spec, parsedSkills.message, "declaration")
+    }
+    const parsedAdapters = workspaceAdapterContributionsFrom(result)
+    if (!parsedAdapters.ok) {
+      return error(spec, parsedAdapters.message, "declaration")
+    }
+    return {
+      hooks: [result],
+      skills: parsedSkills.skills,
+      workspaceAdapters: parsedAdapters.adapters,
+      errors: [],
+    }
+  } catch (caught) {
+    return error(
+      spec,
+      errorMessage(caught),
+      caught instanceof ExtensionDeclarationError ? "declaration" : "load",
+    )
   }
-  return { hooks, skills, workspaceAdapters, errors: [] }
 }
 
 function empty(): LoadedExtensionContributions {

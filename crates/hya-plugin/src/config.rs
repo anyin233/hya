@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 use crate::manifest::Manifest;
-use crate::messages::{HookName, HookPosture, PluginKindWire};
+use crate::messages::PluginKindWire;
 
 fn default_true() -> bool {
     true
@@ -49,8 +49,6 @@ pub struct PluginSpec {
     pub timeout_ms: Option<u64>,
     /// Child environment additions (config only; manifests start empty).
     pub env: BTreeMap<String, String>,
-    /// Hook posture overrides from the manifest (empty for pure config entries).
-    pub posture_overrides: BTreeMap<HookName, HookPosture>,
     /// Claude Code plugin source directory (`kind: claude` only).
     pub plugin_dir: Option<PathBuf>,
 }
@@ -58,8 +56,7 @@ pub struct PluginSpec {
 /// Merge config `plugins:` entries with directory-scanned manifests into host specs.
 ///
 /// Config wins for a given id: manifests with an id already present in `config`
-/// are skipped. Disabled entries/manifests are omitted. Manifest hooks with an
-/// explicit posture become [`PluginSpec::posture_overrides`].
+/// are skipped. Disabled entries/manifests are omitted.
 #[must_use]
 pub fn merge(config: BTreeMap<String, PluginEntry>, manifests: Vec<Manifest>) -> Vec<PluginSpec> {
     let mut specs = Vec::new();
@@ -76,7 +73,6 @@ pub fn merge(config: BTreeMap<String, PluginEntry>, manifests: Vec<Manifest>) ->
             command: entry.command,
             timeout_ms: entry.timeout_ms,
             env: entry.env,
-            posture_overrides: BTreeMap::new(),
             plugin_dir: entry.plugin_dir,
         });
     }
@@ -85,18 +81,12 @@ pub fn merge(config: BTreeMap<String, PluginEntry>, manifests: Vec<Manifest>) ->
         if seen.contains(&manifest.id) || !manifest.enabled {
             continue;
         }
-        let posture_overrides = manifest
-            .resolved_hooks()
-            .into_iter()
-            .filter_map(|(name, posture)| posture.map(|p| (name, p)))
-            .collect();
         specs.push(PluginSpec {
             id: manifest.id.clone(),
             kind: manifest.kind,
             command: manifest.command,
             timeout_ms: manifest.timeout_ms,
             env: BTreeMap::new(),
-            posture_overrides,
             plugin_dir: None,
         });
     }

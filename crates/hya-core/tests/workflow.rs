@@ -1891,7 +1891,7 @@ fn sidecar_probe_catalog() -> Arc<hya_core::AgentCatalog> {
             hya_bundle::PreparedInstallableBundle::Agent(Box::new(
                 hya_bundle::PreparedAgentBundle {
                     check: None,
-                    format_version: 2,
+                    format_version: 3,
                     identity: hya_bundle::BundleIdentity {
                         id: format!("hya/test-{stable_id}"),
                         version: "0.0.0".to_string(),
@@ -1909,7 +1909,6 @@ fn sidecar_probe_catalog() -> Arc<hya_core::AgentCatalog> {
                         prompt_digest: None,
                         model_policy: hya_bundle::ModelPolicy::default(),
                         workdir: None,
-                        legacy_spawn_lifecycle: None,
                         resource_view: hya_bundle::ResourceView::default(),
                         can_spawn: Vec::new(),
                         hook_refs: Vec::new(),

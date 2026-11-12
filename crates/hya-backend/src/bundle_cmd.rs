@@ -6,10 +6,7 @@ use anyhow::Context as _;
 use clap::{Args, Subcommand};
 use hya_app::bundle_admin::{self, InstallTarget, Removed, SelfCheck};
 use hya_app::project_bundles::{ProjectBundle, find_project_bundle, plan_project_install};
-use hya_bundle::{
-    PackageInspection, PreparedCatalog, PreparedInstallableBundle, PrivatePackageAuthentication,
-    PrivatePackagePayload, PublicPackageInspection,
-};
+use hya_bundle::{PreparedCatalog, PreparedInstallableBundle, PublicPackageInspection};
 use hya_server::BundleListing;
 use hya_store::{
     BundleInstallAction, BundleInstallPlan, BundleRegistry, BundleRegistryRecord,
@@ -697,54 +694,29 @@ fn project_dir() -> anyhow::Result<PathBuf> {
 
 fn info_file(package: &Path) -> anyhow::Result<()> {
     bundle_admin::validate_package_path(package)?;
-    match bundle_admin::inspect_package(package)? {
-        PackageInspection::Public(inspection) => {
-            let [bundle] = inspection.prepared.bundles() else {
-                anyhow::bail!("public package must contain exactly one bundle")
-            };
-            let identity = bundle.identity();
-            println!("format: public-v1");
-            println!("name: {}", identity.id);
-            println!("version: {}", identity.version);
-            println!("publisher: {}", identity.publisher);
-            println!("origin: package");
-            println!("state: inspected");
-            println!("immutable: false");
-            println!("source_digest: {}", hex_digest(&inspection.source_digest));
-            println!("prepared_digest: {}", inspection.prepared.digest());
-            print_static_info(
-                bundle,
-                ": ",
-                inspection.prepared.bundle_schemas(&identity.id),
-                inspection.prepared.bundle_process(&identity.id),
-                inspection.prepared.bundle_apis(&identity.id),
-                inspection.prepared.bundle_permission_modes(&identity.id),
-            );
-            Ok(())
-        }
-        PackageInspection::Private(inspection) => {
-            let authentication = match inspection.authentication {
-                PrivatePackageAuthentication::Unverified => "unverified",
-            };
-            let payload = match inspection.payload {
-                PrivatePackagePayload::Opaque => "opaque",
-            };
-
-            println!("format: private-v1");
-            println!("target: {}", inspection.target);
-            println!("protocol_minimum: {}", inspection.protocol_minimum);
-            println!("protocol_maximum: {}", inspection.protocol_maximum);
-            println!("ciphertext_length: {}", inspection.ciphertext_length);
-            println!(
-                "ciphertext_digest: {}",
-                hex_digest(&inspection.ciphertext_digest)
-            );
-            println!("authentication: {authentication}");
-            println!("payload: {payload}");
-            println!("activation: unsupported-in-{}", env!("CARGO_PKG_VERSION"));
-            Ok(())
-        }
-    }
+    let inspection = bundle_admin::inspect_package(package)?;
+    let [bundle] = inspection.prepared.bundles() else {
+        anyhow::bail!("public package must contain exactly one bundle")
+    };
+    let identity = bundle.identity();
+    println!("format: public-v1");
+    println!("name: {}", identity.id);
+    println!("version: {}", identity.version);
+    println!("publisher: {}", identity.publisher);
+    println!("origin: package");
+    println!("state: inspected");
+    println!("immutable: false");
+    println!("source_digest: {}", hex_digest(&inspection.source_digest));
+    println!("prepared_digest: {}", inspection.prepared.digest());
+    print_static_info(
+        bundle,
+        ": ",
+        inspection.prepared.bundle_schemas(&identity.id),
+        inspection.prepared.bundle_process(&identity.id),
+        inspection.prepared.bundle_apis(&identity.id),
+        inspection.prepared.bundle_permission_modes(&identity.id),
+    );
+    Ok(())
 }
 
 /// Every bundle across scopes as a `bundle list` row plus its search
@@ -1020,7 +992,7 @@ fn info_first_party(bundle_id: &str) -> anyhow::Result<()> {
         println!("publisher={}", identity.publisher);
         println!("origin=first-party");
         println!("scope={BUILTIN_SCOPE}");
-        println!("format=prepared-v2");
+        println!("format=prepared-v3");
         println!("state=active");
         println!("immutable=true");
         println!("prepared_digest={}", prepared.digest());
@@ -1093,9 +1065,7 @@ async fn schema(name: &str, filter: Option<Scope>) -> anyhow::Result<()> {
     let as_file = Path::new(name);
     if name.ends_with(".hyabundle") && as_file.is_file() {
         bundle_admin::validate_package_path(as_file)?;
-        let PackageInspection::Public(public) = bundle_admin::inspect_package(as_file)? else {
-            anyhow::bail!("private packages do not expose their schema declarations");
-        };
+        let public = bundle_admin::inspect_package(as_file)?;
         let [bundle] = public.prepared.bundles() else {
             anyhow::bail!("public package must contain exactly one bundle");
         };
@@ -1172,7 +1142,11 @@ fn print_schema_rows(schemas: &[hya_bundle::PreparedSchema]) {
 
 async fn installed_records_if_exists() -> anyhow::Result<Vec<BundleRegistryRecord>> {
     match bundle_admin::existing_registry().await? {
-        Some(registry) => Ok(registry.snapshot().await?.bundles),
+        Some(registry) => Ok(registry
+            .snapshot()
+            .await
+            .map_err(bundle_admin::store_error)?
+            .bundles),
         None => Ok(Vec::new()),
     }
 }

@@ -286,7 +286,7 @@ async function main(): Promise<void> {
       reply(id, {
         protocol_version: 1,
         plugin: { id: PLUGIN_ID, version: PLUGIN_VERSION, kind: "bun" },
-        hooks: [{ name: "model.fallback", posture: "open" }],
+        hooks: [{ name: "model.fallback" }],
         tools: [],
         skills: [],
       })

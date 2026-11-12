@@ -74,7 +74,7 @@ fn empty_prepared_catalog_is_accepted() {
 #[test]
 fn zero_bundle_prepared_document_yields_an_empty_catalog() {
     // Canonical empty prepared document: matching digest, valid shape, zero bundles.
-    let bytes = br#"{"format_version":2,"bundles":[],"index":[]}"#;
+    let bytes = br#"{"format_version":3,"bundles":[],"index":[]}"#;
     let expected_digest = digest(bytes);
     let prepared = PreparedCatalog::decode(bytes, &expected_digest);
     let Ok(prepared) = prepared else {

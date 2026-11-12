@@ -1,5 +1,5 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-//! Phase 5: an `open`-posture `chat.params` plugin that misses its deadline must
+//! Phase 5: a `chat.params` plugin that misses its deadline must
 //! fail open — the engine keeps the original `CompletionRequest`, no error.
 
 use std::collections::BTreeMap;
@@ -24,7 +24,7 @@ for line in sys.stdin:
         result = {
             "protocol_version": 1,
             "plugin": {"id": "slow", "version": "0.1.0", "kind": "rust"},
-            "hooks": [{"name": "chat.params", "posture": "open"}],
+            "hooks": [{"name": "chat.params"}],
             "tools": [],
         }
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
@@ -47,7 +47,6 @@ async fn chat_params_open_timeout_keeps_original_request() {
         command: slow_chat_params_fixture(),
         timeout_ms: Some(200),
         env: BTreeMap::new(),
-        posture_overrides: BTreeMap::new(),
         plugin_dir: None,
     };
     let host = PluginHost::connect_all(

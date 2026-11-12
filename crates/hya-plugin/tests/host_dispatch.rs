@@ -26,7 +26,7 @@ for line in sys.stdin:
         result = {
             "protocol_version": 1,
             "plugin": {"id": "fix", "version": "0.1.0", "kind": "rust"},
-            "hooks": [{"name": "tool.execute.before", "posture": "safe"}, {"name": "event"}],
+            "hooks": [{"name": "tool.execute.before"}, {"name": "event"}],
             "tools": [],
         }
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
@@ -76,7 +76,6 @@ async fn before_hook_mutates_input_and_event_reaches_plugin() {
         command: fixture(),
         timeout_ms: Some(3000),
         env,
-        posture_overrides: BTreeMap::new(),
         plugin_dir: None,
     };
 

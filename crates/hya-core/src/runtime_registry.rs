@@ -4953,7 +4953,7 @@ agent:
     ) -> PreparedAgentBundle {
         PreparedAgentBundle {
             check: None,
-            format_version: 2,
+            format_version: 3,
             identity: BundleIdentity {
                 id: bundle_id.to_string(),
                 version: "0.0.0".to_string(),
@@ -4982,7 +4982,6 @@ agent:
             prompt_digest: None,
             model_policy: ModelPolicy::default(),
             workdir: None,
-            legacy_spawn_lifecycle: None,
             resource_view,
             can_spawn: Vec::new(),
             hook_refs: Vec::new(),

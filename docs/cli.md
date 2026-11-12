@@ -280,7 +280,7 @@ Proceed? [y/N]
 Both scopes apply the same rules:
 
 - The package must be a public `.hyabundle` (exact lowercase suffix). Private
-  packages fail with `PRIVATE_ACTIVATION_UNSUPPORTED`.
+  packages fail with `invalid bundle package format`.
 - A bundle may not claim a trusted preset id or a built-in Agent id, and must
   form a valid catalog with the first-party bundles.
 - Reinstalling identical content is `unchanged`. A higher version replaces the
@@ -343,9 +343,9 @@ removes=<BUNDLE_ID>        # once per bundle a namespace takeover would remove
 `list` prints `NAME VERSION AGENT STATE KIND WORKFLOW SCOPE`, one row per
 bundle, sorted by name. SCOPE is `builtin`, `user`, or `project`. STATE is
 `active`, `shadowed` (a user bundle hidden by a project bundle with the same id
-or namespace), or `unreadable (reinstall)` (a registry row written by another
-hya version). A first-party bundle hidden by a user or project bundle is not
-listed, matching what the runtime loads.
+or namespace). A first-party bundle hidden by a user or project bundle is not
+listed, matching what the runtime loads. Old prepared-format registry records
+fail with `please reinstall`; see [Prepared install format](bundle-runtime.md#prepared-install-format).
 
 `info` prints `key=value` lines: `name`, `version`, `publisher`, `origin`
 (`preset`, `first-party`, `installed`, or `project`), `scope`, `format`, `state`,
@@ -377,9 +377,8 @@ case-insensitive substring match over bundle ids, agent ids, and skill ids
 `NAME VERSION AGENT STATE KIND WORKFLOW SCOPE` row per matching bundle, sorted by
 bundle id then scope. `<QUERY>` is a required positional argument: omitting it or passing
 only whitespace exits non-zero and prints the usage line. An unreadable
-installed row stays searchable by its bundle id and prints the same degraded
-`unreadable (reinstall)` row as `bundle list`. `search` is read-only and never
-creates the bundle registry. When no bundle metadata matches — for example a
+installed registry fails with `please reinstall`, as in `bundle list`.
+`search` is read-only and never creates the bundle registry. When no bundle metadata matches — for example a
 query naming another subcommand such as `schema` — it exits 0, prints every
 bundle in the searched scope on stdout, and explains the fallback on stderr.
 

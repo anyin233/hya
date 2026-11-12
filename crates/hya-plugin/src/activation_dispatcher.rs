@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 use async_trait::async_trait;
 use hya_core::hooks::{
@@ -8,14 +8,13 @@ use hya_core::hooks::{
     ToolExecuteBeforeOutcome,
 };
 use hya_proto::Envelope;
-use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::client::{DEFAULT_CALL_TIMEOUT, PluginClient};
 use crate::dispatcher::{outcome_to_wire, wire_to_outcome};
 use crate::messages::{
-    EventNotificationParams, HookName, HookPosture, HookRegistration, METHOD_EVENT,
-    ToolAfterOutcomeWire, ToolBeforeOutcomeWire, ToolExecuteAfterParams, ToolExecuteBeforeParams,
+    EventNotificationParams, HookName, HookRegistration, METHOD_EVENT, ToolAfterOutcomeWire,
+    ToolBeforeOutcomeWire, ToolExecuteAfterParams, ToolExecuteBeforeParams,
 };
 
 const EVENT_CHANNEL_CAP: usize = 256;
@@ -24,28 +23,23 @@ const GUARD_FAILED_SAFE: &str = "guard failed safe";
 /// Hook dispatcher bound to one already-initialized raw plugin client.
 pub struct ActivationHookDispatcher {
     client: PluginClient,
-    hooks: HashMap<HookName, HookPosture>,
+    hooks: HashSet<HookName>,
     event_tx: Option<mpsc::Sender<Envelope>>,
 }
 
 impl ActivationHookDispatcher {
     /// Bind a dispatcher to an already-initialized client and its hook registrations.
     ///
-    /// Builds the effective posture map and, if `event` is registered, starts a
+    /// Builds the registered hook set and, if `event` is registered, starts a
     /// background drain that notifies the plugin of envelopes.
     #[must_use]
     pub fn new(client: PluginClient, registrations: &[HookRegistration]) -> Self {
         let hooks = registrations
             .iter()
-            .map(|registration| {
-                (
-                    registration.name,
-                    resolved_posture(registration.name, registration.posture),
-                )
-            })
-            .collect::<HashMap<_, _>>();
+            .map(|registration| registration.name)
+            .collect::<HashSet<_>>();
         let event_tx = hooks
-            .contains_key(&HookName::Event)
+            .contains(&HookName::Event)
             .then(|| spawn_event_drain(client.clone()));
         Self {
             client,
@@ -54,16 +48,8 @@ impl ActivationHookDispatcher {
         }
     }
 
-    fn posture(&self, hook: HookName) -> Option<HookPosture> {
-        self.hooks.get(&hook).copied()
-    }
-}
-
-fn resolved_posture(hook: HookName, declared: Option<HookPosture>) -> HookPosture {
-    let default = hook.default_posture();
-    match (default, declared) {
-        (HookPosture::Safe, _) | (_, Some(HookPosture::Safe)) => HookPosture::Safe,
-        (_, Some(HookPosture::Open) | None) => HookPosture::Open,
+    fn has_hook(&self, hook: HookName) -> bool {
+        self.hooks.contains(&hook)
     }
 }
 
@@ -87,16 +73,9 @@ fn spawn_event_drain(client: PluginClient) -> mpsc::Sender<Envelope> {
     tx
 }
 
-fn before_failure(
-    posture: HookPosture,
-    input: Value,
-    error: impl std::fmt::Display,
-) -> ToolExecuteBeforeOutcome {
-    match posture {
-        HookPosture::Safe => ToolExecuteBeforeOutcome::Veto {
-            reason: format!("{GUARD_FAILED_SAFE}: {error}"),
-        },
-        HookPosture::Open => ToolExecuteBeforeOutcome::Continue { input },
+fn before_failure(error: impl std::fmt::Display) -> ToolExecuteBeforeOutcome {
+    ToolExecuteBeforeOutcome::Veto {
+        reason: format!("{GUARD_FAILED_SAFE}: {error}"),
     }
 }
 
@@ -137,9 +116,9 @@ impl HookDispatcher for ActivationHookDispatcher {
     }
 
     async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
-        let Some(posture) = self.posture(HookName::ToolExecuteBefore) else {
+        if !self.has_hook(HookName::ToolExecuteBefore) {
             return ToolExecuteBeforeOutcome::Continue { input: input.input };
-        };
+        }
         let original_input = input.input;
         let params = ToolExecuteBeforeParams {
             session: input.session,
@@ -150,7 +129,7 @@ impl HookDispatcher for ActivationHookDispatcher {
         };
         let params = match serde_json::to_value(params) {
             Ok(params) => params,
-            Err(error) => return before_failure(posture, original_input, error),
+            Err(error) => return before_failure(error),
         };
         match self
             .client
@@ -168,14 +147,14 @@ impl HookDispatcher for ActivationHookDispatcher {
                 Ok(ToolBeforeOutcomeWire::Veto { reason }) => {
                     ToolExecuteBeforeOutcome::Veto { reason }
                 }
-                Err(error) => before_failure(posture, original_input, error),
+                Err(error) => before_failure(error),
             },
-            Err(error) => before_failure(posture, original_input, error),
+            Err(error) => before_failure(error),
         }
     }
 
     async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
-        if self.posture(HookName::ToolExecuteAfter).is_none() {
+        if !self.has_hook(HookName::ToolExecuteAfter) {
             return ToolExecuteAfterOutcome::Continue {
                 result: input.result,
             };

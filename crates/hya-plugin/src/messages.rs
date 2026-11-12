@@ -164,36 +164,6 @@ impl HookName {
             _ => return None,
         })
     }
-
-    /// Default failure policy when the registration omits posture.
-    ///
-    /// `permission.ask`, `permission.approve`, and `tool.execute.before`
-    /// default to [`HookPosture::Safe`];
-    /// all other hooks default to [`HookPosture::Open`]. The five injection-point
-    /// hooks added for bundles (`compaction.before`/`compaction.after`,
-    /// `session.start`/`session.end`, `agent.spawn`) are enrichment/observation
-    /// points, not guards, so they default Open — and `compaction.before` is
-    /// additionally fail-open in the dispatcher even under a `safe` override,
-    /// because blocking overflow compaction risks context overflow.
-    #[must_use]
-    pub fn default_posture(self) -> HookPosture {
-        match self {
-            HookName::PermissionAsk | HookName::PermissionApprove | HookName::ToolExecuteBefore => {
-                HookPosture::Safe
-            }
-            _ => HookPosture::Open,
-        }
-    }
-}
-
-/// Per-hook failure policy on the wire (`safe` / `open`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HookPosture {
-    /// Treat hook failure/timeout as a veto of the guarded action.
-    Safe,
-    /// Log/skip hook failure; the pipeline continues with prior input.
-    Open,
 }
 
 /// Host→plugin `initialize` request params.
@@ -569,9 +539,6 @@ pub enum PluginKindWire {
 pub struct HookRegistration {
     /// Hook identity.
     pub name: HookName,
-    /// Optional posture override; omit to use [`HookName::default_posture`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub posture: Option<HookPosture>,
 }
 
 /// Tool declaration in the initialize reply (`inputSchema` is camelCase on the wire).

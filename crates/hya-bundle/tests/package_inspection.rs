@@ -1,23 +1,17 @@
-//! Package inspection: public copy archives and private v1 envelope detection.
+//! Package inspection: public archives and unsupported format rejection.
 
 use std::fs;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use hya_bundle::{
-    BundleError, BundleSource, PackageFormat, PrivatePackageAuthentication,
-    PrivatePackageInspection, PrivatePackagePayload, detect_package_format,
-    inspect_private_package, inspect_public_package, prepare_package,
+    BundleError, BundleSource, PackageFormat, detect_package_format, inspect_public_package,
+    prepare_package,
 };
 use sevenz_rust2::{
     ArchiveEntry, ArchiveReader, ArchiveReaderOptions, ArchiveWriter, EncoderConfiguration,
     EncoderMethod, Password,
 };
-
-const PRIVATE_V1_ZERO_CIPHERTEXT_DIGEST: [u8; 32] = [
-    0x6e, 0x34, 0x0b, 0x9c, 0xff, 0xb3, 0x7a, 0x98, 0x9c, 0xa5, 0x44, 0xe6, 0xbb, 0x78, 0x0a, 0x2c,
-    0x78, 0x90, 0x1d, 0x3f, 0xb3, 0x37, 0x38, 0x76, 0x85, 0x11, 0xa3, 0x06, 0x17, 0xaf, 0xa0, 0x1d,
-];
 
 static NEXT_DIRECTORY_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
@@ -105,39 +99,15 @@ fn public_copy_archive(entries: &[(&str, &[u8])]) -> Vec<u8> {
     }
 }
 
-fn private_v1_envelope(ciphertext: u8) -> Vec<u8> {
-    let target = "x86_64-unknown-linux-gnu";
-    let mut bytes = b"HYABNDL\0".to_vec();
-    bytes.extend_from_slice(&1_u16.to_le_bytes());
-    bytes.extend_from_slice(&1_u16.to_le_bytes());
-    bytes.extend_from_slice(&1_u16.to_le_bytes());
-    bytes.extend_from_slice(&24_u16.to_le_bytes());
-    bytes.extend_from_slice(&12_u16.to_le_bytes());
-    bytes.extend_from_slice(&16_u16.to_le_bytes());
-    bytes.extend_from_slice(&1_u64.to_le_bytes());
-    bytes.extend_from_slice(&PRIVATE_V1_ZERO_CIPHERTEXT_DIGEST);
-    bytes.extend_from_slice(target.as_bytes());
-    bytes.extend_from_slice(&[0; 12]);
-    bytes.push(ciphertext);
-    bytes.extend_from_slice(&[0; 16]);
-    bytes
-}
-
 #[test]
-fn private_v1_is_detected_by_magic_and_version() {
-    let mut bytes = b"HYABNDL\0".to_vec();
-    bytes.extend_from_slice(&1_u16.to_le_bytes());
-
-    assert_eq!(detect_package_format(&bytes), Ok(PackageFormat::PrivateV1));
-}
-
-#[test]
-fn private_v1_prefix_only_is_rejected_as_truncated_envelope() {
-    let mut bytes = b"HYABNDL\0".to_vec();
-    bytes.extend_from_slice(&1_u16.to_le_bytes());
-
+fn private_envelope_is_an_unsupported_package_format() {
+    let bytes = b"HYABNDL\0\x01\0";
+    assert_eq!(
+        detect_package_format(bytes),
+        Err(BundleError::InvalidPackageFormat)
+    );
     assert!(matches!(
-        inspect_private_package(&bytes),
+        inspect_public_package(bytes),
         Err(BundleError::InvalidPackageFormat)
     ));
 }
@@ -715,50 +685,6 @@ fn strict_encoded_header_verifies_single_substream_crc() {
         )
         .is_err()
     );
-}
-
-#[test]
-fn private_v1_structurally_valid_envelope_is_opaque_and_unverified() {
-    let target = "x86_64-unknown-linux-gnu";
-    let ciphertext_digest = PRIVATE_V1_ZERO_CIPHERTEXT_DIGEST;
-    let bytes = private_v1_envelope(0x00);
-
-    assert_eq!(bytes.len(), 113);
-    assert_eq!(
-        inspect_private_package(&bytes),
-        Ok(PrivatePackageInspection {
-            target: target.to_owned(),
-            protocol_minimum: 1,
-            protocol_maximum: 1,
-            authentication: PrivatePackageAuthentication::Unverified,
-            payload: PrivatePackagePayload::Opaque,
-            ciphertext_length: 1,
-            ciphertext_digest,
-        })
-    );
-}
-
-#[test]
-fn private_v1_empty_target_is_rejected() {
-    let mut bytes = private_v1_envelope(0x00);
-    bytes[14..16].copy_from_slice(&0_u16.to_le_bytes());
-    drop(bytes.drain(60..84));
-
-    assert_eq!(bytes.len(), 89);
-    assert!(matches!(
-        inspect_private_package(&bytes),
-        Err(BundleError::InvalidPackageFormat)
-    ));
-}
-
-#[test]
-fn private_v1_ciphertext_digest_mismatch_is_rejected() {
-    let bytes = private_v1_envelope(0x01);
-
-    assert!(matches!(
-        inspect_private_package(&bytes),
-        Err(BundleError::PrivateCiphertextDigestMismatch)
-    ));
 }
 
 /// Source of truth for the checked-in valid public package fixtures.

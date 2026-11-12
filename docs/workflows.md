@@ -228,7 +228,7 @@ provider response, credential, header, or raw error text. A Workflow without an
 explicit assignment keeps the existing Agent/category/global route path and
 does not add route fields or route-outcome Events.
 
-Prepared WorkflowBundles remain prepared format v2 because they already retain
+Prepared WorkflowBundles use prepared format v3 and retain
 the complete source and compiler revision. A route-bearing v2 source still
 requires a runtime with the model-routing compiler; unchanged no-assignment v2
 sources retain their existing revision. Client session sidebars do not render

@@ -21,6 +21,59 @@ The release asset stores each trusted family package under `bundles/` beside
 `bin/`. Installed third-party bundles do not gain in-process execution by
 declaring a library resource.
 
+## Prepared install format
+
+Prepared catalog envelopes and bundle payloads use `format_version: 3` (`u32`).
+The removed `spawn_lifecycle` field is no longer part of `PreparedAgent`.
+Older install records fail with a **please reinstall** diagnostic; they are
+never migrated or decoded through a compatibility path. Move the old registry
+(`$XDG_DATA_HOME/hya/bundles/registry.sqlite3`, default
+`~/.local/share/hya/bundles/registry.sqlite3`) aside before reinstalling its
+bundles from source packages, for example
+`hya bundle install ./my-plugin.hyabundle`. An unreadable registry row is
+rejected with the same reinstall instruction before publication.
+Only public 7z packages can be inspected and installed; private envelopes are
+unsupported.
+
+## Bun extension interface
+
+The Bun adapter loads a default object with a `server` factory. The factory
+receives one frozen empty context object and returns its tools and hooks. To
+load it directly, run:
+
+```sh
+bun run crates/hya-plugin-bun/adapter/src/main.ts --extension "$PWD/extension.ts"
+```
+
+For example, `extension.ts` can contain:
+
+```ts
+export default {
+  id: "checked-tool",
+  server: async () => ({
+    "tool.execute.before": async (params) => ({ input: params.input }),
+    "tool.execute.after": async (params) => params.result,
+  }),
+}
+```
+
+A default `{tui: function}` object is ignored by this backend adapter; mixing
+`server` and `tui` is rejected. Bare function exports and named factories are
+unsupported. Hook invocation always takes one argument, regardless of JavaScript
+function arity:
+
+| Hook | Argument | Return |
+| --- | --- | --- |
+| `tool.execute.before` | `{session: string, message: string, call: string, tool: string, input: unknown}` | `{input: unknown}`, `{outcome: "veto", reason: string}`, or no replacement |
+| `tool.execute.after` | The before fields plus `result: WireToolResult` | Replacement `WireToolResult` or no replacement |
+
+`WireToolResult` is `{status: "ok", output: unknown, time_ms?: number}` or
+`{status: "err", message: string}`. Replacements fold immediately in handler
+order. Before-hook exceptions veto; after-hook exceptions preserve the previous
+result, and error results remain errors. Hooks return replacements; there is no
+two-argument mutable output API. Process hook registrations are exactly `{name}`;
+see [fixed hook failure behavior](plugin-protocol.md#hook-failure-behavior).
+
 ## Self-proof and activation
 
 A bundle update goes live in four steps, each of which can refuse it:

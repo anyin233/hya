@@ -4349,7 +4349,6 @@ You are the installed resident agent.
             command: plugin_fixture("mixed-plugin"),
             timeout_ms: Some(1_000),
             env: BTreeMap::new(),
-            posture_overrides: BTreeMap::new(),
             plugin_dir: None,
         }];
         let (router, model) = offline_router(None);
@@ -4659,7 +4658,7 @@ You are the installed resident agent.
                 PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
                     check: None,
                     tui: None,
-                    format_version: 2,
+                    format_version: 3,
                     identity: BundleIdentity {
                         id: format!("hya/recovery-resolution-{stable_id}"),
                         version: "0.0.0".to_string(),
@@ -4677,7 +4676,6 @@ You are the installed resident agent.
                         prompt_digest: None,
                         model_policy: ModelPolicy::default(),
                         workdir: None,
-                        legacy_spawn_lifecycle: None,
                         resource_view: ResourceView::default(),
                         // Deliberately empty: recovery must not depend on can_spawn.
                         can_spawn: Vec::new(),
@@ -4824,7 +4822,6 @@ You are the installed resident agent.
                 prompt_digest: None,
                 model_policy: policy,
                 workdir: None,
-                legacy_spawn_lifecycle: None,
                 resource_view: ResourceView::default(),
                 can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
                 hook_refs: Vec::new(),
@@ -4832,7 +4829,7 @@ You are the installed resident agent.
             PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
                 check: None,
                 tui: None,
-                format_version: 2,
+                format_version: 3,
                 identity: BundleIdentity {
                     id: format!("hya/spawn-model-precedence-{stable_id}"),
                     version: "0.0.0".to_string(),
@@ -5310,8 +5307,8 @@ for line in sys.stdin:
         let staging_root = tempdir();
         let fixture = activation_sidecar_fixture(
             r#"[
-                {"name": "tool.execute.before", "posture": "safe"},
-                {"name": "tool.execute.after", "posture": "open"},
+                {"name": "tool.execute.before"},
+                {"name": "tool.execute.after"},
                 {"name": "event"}
             ]"#,
         );
@@ -6429,16 +6426,16 @@ export default {
       event: () => {
         eventCount += 1
       },
-      "tool.execute.before": async (_input, output) => {
-        if (eventCount <= 0 || output.args === null || typeof output.args !== "object") {
+      "tool.execute.before": async (params) => {
+        if (eventCount <= 0 || params.input === null || typeof params.input !== "object") {
           throw new Error("bundle hook received unexpected tool input")
         }
-        output.args.hooked = true
-        output.args.eventCount = eventCount
+        return { input: { ...params.input, hooked: true, eventCount } }
       },
-      "tool.execute.after": async (_input, output) => {
-        output.output = `${output.output}:after`
-      },
+      "tool.execute.after": async (params) => ({
+        ...params.result,
+        output: { ...params.result.output, output: `${params.result.output.output}:after` },
+      }),
       tool: {
         echo: {
           description: "bundle echo",
@@ -7669,8 +7666,7 @@ for line in sys.stdin:
             .bind_turn(&turn_dir)
             .expect("capture unsupported hook turn binding");
         let staging_root = tempdir();
-        let fixture =
-            activation_sidecar_fixture(r#"[{"name": "message.user.before", "posture": "open"}]"#);
+        let fixture = activation_sidecar_fixture(r#"[{"name": "message.user.before"}]"#);
         let environment = BundleSidecarEnvironment::from_command(
             vec!["python3".to_string(), "-c".to_string(), fixture],
             staging_root.clone(),
@@ -7714,11 +7710,9 @@ for line in sys.stdin:
         let registrations = [
             HookRegistration {
                 name: HookName::Event,
-                posture: None,
             },
             HookRegistration {
                 name: HookName::Event,
-                posture: None,
             },
         ];
         let result = declared_bundle_sidecar_hooks(&registrations);
@@ -7756,7 +7750,7 @@ for line in sys.stdin:
         PreparedAgentBundle {
             check: None,
             tui: None,
-            format_version: 2,
+            format_version: 3,
             identity: BundleIdentity {
                 id: "hya/materialized".to_string(),
                 version: "0.0.0".to_string(),
@@ -7774,7 +7768,6 @@ for line in sys.stdin:
                 prompt_digest: None,
                 model_policy: ModelPolicy::default(),
                 workdir: None,
-                legacy_spawn_lifecycle: None,
                 resource_view,
                 can_spawn: Vec::new(),
                 hook_refs: vec!["bundle:hya/materialized/hook/event".to_string()],
@@ -7860,7 +7853,7 @@ for line in sys.stdin:
         PreparedAgentBundle {
             check: None,
             tui: None,
-            format_version: 2,
+            format_version: 3,
             identity: BundleIdentity {
                 id: "hya/materialized".to_string(),
                 version: "0.0.0".to_string(),
@@ -7881,7 +7874,6 @@ for line in sys.stdin:
                 prompt_digest: None,
                 model_policy: ModelPolicy::default(),
                 workdir: None,
-                legacy_spawn_lifecycle: None,
                 resource_view: ResourceView {
                     allow: vec![alpha_tool.stable_id.clone()],
                     ..ResourceView::default()
@@ -8313,11 +8305,9 @@ export default {
         let registrations = [
             HookRegistration {
                 name: HookName::ToolExecuteBefore,
-                posture: None,
             },
             HookRegistration {
                 name: HookName::Event,
-                posture: None,
             },
         ];
 
@@ -8357,7 +8347,6 @@ export default {
             .expect("capture hook-only turn binding");
         let registrations = [HookRegistration {
             name: HookName::Event,
-            posture: None,
         }];
         assert!(super::validate_bundle_sidecar_hooks(&binding, "worker", &registrations).is_ok());
 
@@ -8489,7 +8478,6 @@ export default {
             prompt_digest: None,
             model_policy: ModelPolicy::default(),
             workdir: None,
-            legacy_spawn_lifecycle: None,
             resource_view: ResourceView::default(),
             can_spawn: vec![AgentName::new("worker")],
             hook_refs: Vec::new(),

@@ -23,7 +23,7 @@ for line in sys.stdin:
         result = {
             "protocol_version": 1,
             "plugin": {"id": "text-complete", "version": "0.1.0", "kind": "rust"},
-            "hooks": [{"name": "experimental.text.complete", "posture": "open"}],
+            "hooks": [{"name": "experimental.text.complete"}],
             "tools": [],
         }
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
@@ -46,7 +46,6 @@ async fn text_complete_dispatches_through_plugin_host() {
         command: text_complete_fixture(),
         timeout_ms: Some(3000),
         env: BTreeMap::new(),
-        posture_overrides: BTreeMap::new(),
         plugin_dir: None,
     };
     let host = PluginHost::connect_all(

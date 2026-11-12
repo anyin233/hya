@@ -14,18 +14,6 @@ use sevenz_rust2::{
 use sha2::{Digest, Sha256};
 
 const PUBLIC_MAGIC: &[u8; 6] = &[0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c];
-const PRIVATE_MAGIC: &[u8; 8] = b"HYABNDL\0";
-const PRIVATE_VERSION: u16 = 1;
-const PRIVATE_PROTOCOL_MINIMUM_OFFSET: usize = 10;
-const PRIVATE_PROTOCOL_MAXIMUM_OFFSET: usize = 12;
-const PRIVATE_TARGET_LENGTH_OFFSET: usize = 14;
-const PRIVATE_NONCE_LENGTH_OFFSET: usize = 16;
-const PRIVATE_TAG_LENGTH_OFFSET: usize = 18;
-const PRIVATE_CIPHERTEXT_LENGTH_OFFSET: usize = 20;
-const PRIVATE_CIPHERTEXT_DIGEST_OFFSET: usize = 28;
-const PRIVATE_FIXED_HEADER_LENGTH: usize = 60;
-const PRIVATE_NONCE_LENGTH: u16 = 12;
-const PRIVATE_TAG_LENGTH: u16 = 16;
 const PUBLIC_PACKAGE_MAX_BYTES: usize = 128 * 1024 * 1024;
 const PUBLIC_MANIFEST_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const PUBLIC_MANIFEST_MAX_BYTES_USIZE: usize = 64 * 1024 * 1024;
@@ -49,43 +37,6 @@ static NEXT_STAGED_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 pub enum PackageFormat {
     /// Public 7z archive (`PUBLIC_MAGIC`); expands to a prepareable source closure.
     PublicV1,
-    /// Private envelope (`HYABNDL\0`); ciphertext not decryptable in this crate path.
-    PrivateV1,
-}
-
-/// Authentication state for a private package header inspection.
-///
-/// This prepare path never verifies a signature; only structural/digest checks run.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PrivatePackageAuthentication {
-    /// Header parsed and ciphertext digest matched; no cryptographic auth performed.
-    Unverified,
-}
-
-/// Payload shape for a private package (opaque ciphertext blob).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PrivatePackagePayload {
-    /// Encrypted payload; not expanded by public prepare.
-    Opaque,
-}
-
-/// Result of inspecting a private package without decrypting it.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PrivatePackageInspection {
-    /// Target environment string from the private header.
-    pub target: String,
-    /// Minimum protocol version the package claims to need.
-    pub protocol_minimum: u16,
-    /// Maximum protocol version the package claims to support.
-    pub protocol_maximum: u16,
-    /// Auth state (always unverified on this path).
-    pub authentication: PrivatePackageAuthentication,
-    /// Payload kind (opaque ciphertext).
-    pub payload: PrivatePackagePayload,
-    /// Ciphertext byte length from the header.
-    pub ciphertext_length: u64,
-    /// SHA-256 of the ciphertext region (must match the embedded digest field).
-    pub ciphertext_digest: [u8; 32],
 }
 
 /// Result of expanding and preparing a public package archive.
@@ -98,15 +49,6 @@ pub struct PublicPackageInspection {
     pub files: Vec<SourceFile>,
     /// SHA-256 of the raw package bytes before expansion.
     pub source_digest: [u8; 32],
-}
-
-/// Outcome of [`StagedPackage::inspect`] / format-specific inspect helpers.
-#[derive(Debug)]
-pub enum PackageInspection {
-    /// Public archive prepared into a catalog.
-    Public(PublicPackageInspection),
-    /// Private envelope header/digest only (no prepare).
-    Private(PrivatePackageInspection),
 }
 
 /// Exclusive, locked copy of a package under a staging root for safe inspection.
@@ -222,25 +164,15 @@ pub fn stage_package(
 }
 
 impl StagedPackage {
-    /// Read staged bytes, detect format, and prepare (public) or parse header (private).
-    ///
-    /// Consumes `self` so the stage is dropped (and deleted) after inspection
-    /// whether the call succeeds or fails.
-    pub fn inspect(mut self) -> Result<PackageInspection, BundleError> {
+    /// Read and prepare a staged public package, deleting the stage on success or failure.
+    pub fn inspect(mut self) -> Result<PublicPackageInspection, BundleError> {
         let (bytes, source_digest) = self.read_staged_bytes()?;
-        match detect_package_format(&bytes)? {
-            PackageFormat::PublicV1 => {
-                let (prepared, files) = read_public_package(&bytes)?;
-                Ok(PackageInspection::Public(PublicPackageInspection {
-                    prepared,
-                    files,
-                    source_digest,
-                }))
-            }
-            PackageFormat::PrivateV1 => {
-                Ok(PackageInspection::Private(inspect_private_package(&bytes)?))
-            }
-        }
+        let (prepared, files) = read_public_package(&bytes)?;
+        Ok(PublicPackageInspection {
+            prepared,
+            files,
+            source_digest,
+        })
     }
 
     fn file_mut(&mut self) -> Result<&mut File, BundleError> {
@@ -340,99 +272,16 @@ impl Drop for StagedPackage {
     }
 }
 
-/// Classify package bytes by magic: public 7z vs private `HYABNDL` envelope.
+/// Recognize the supported public 7z package format.
 ///
-/// Returns [`BundleError::InvalidPackageFormat`] when neither magic matches, or
-/// [`BundleError::UnsupportedPackageVersion`] for a private header with a
-/// non-supported version field.
+/// # Errors
+/// Returns [`BundleError::InvalidPackageFormat`] for unsupported bytes.
 pub fn detect_package_format(bytes: &[u8]) -> Result<PackageFormat, BundleError> {
     if bytes.get(..PUBLIC_MAGIC.len()) == Some(PUBLIC_MAGIC.as_slice()) {
-        return Ok(PackageFormat::PublicV1);
+        Ok(PackageFormat::PublicV1)
+    } else {
+        Err(BundleError::InvalidPackageFormat)
     }
-    if bytes.get(..PRIVATE_MAGIC.len()) != Some(PRIVATE_MAGIC.as_slice()) {
-        return Err(BundleError::InvalidPackageFormat);
-    }
-
-    let Some(version_bytes) = bytes.get(PRIVATE_MAGIC.len()..PRIVATE_MAGIC.len() + 2) else {
-        return Err(BundleError::InvalidPackageFormat);
-    };
-    let version = u16::from_le_bytes(
-        version_bytes
-            .try_into()
-            .map_err(|_| BundleError::InvalidPackageFormat)?,
-    );
-    if version != PRIVATE_VERSION {
-        return Err(BundleError::UnsupportedPackageVersion { found: version });
-    }
-
-    Ok(PackageFormat::PrivateV1)
-}
-
-/// Parse and integrity-check a private package header without decrypting.
-///
-/// Verifies version, field lengths, envelope bounds, and that the ciphertext
-/// SHA-256 matches the header digest. Does not produce a [`PreparedCatalog`].
-pub fn inspect_private_package(bytes: &[u8]) -> Result<PrivatePackageInspection, BundleError> {
-    if !matches!(detect_package_format(bytes)?, PackageFormat::PrivateV1) {
-        return Err(BundleError::InvalidPackageFormat);
-    }
-
-    let protocol_minimum =
-        u16::from_le_bytes(private_bytes(bytes, PRIVATE_PROTOCOL_MINIMUM_OFFSET)?);
-    let protocol_maximum =
-        u16::from_le_bytes(private_bytes(bytes, PRIVATE_PROTOCOL_MAXIMUM_OFFSET)?);
-    let target_length = usize::from(u16::from_le_bytes(private_bytes(
-        bytes,
-        PRIVATE_TARGET_LENGTH_OFFSET,
-    )?));
-    let nonce_length = u16::from_le_bytes(private_bytes(bytes, PRIVATE_NONCE_LENGTH_OFFSET)?);
-    let tag_length = u16::from_le_bytes(private_bytes(bytes, PRIVATE_TAG_LENGTH_OFFSET)?);
-    let ciphertext_length =
-        u64::from_le_bytes(private_bytes(bytes, PRIVATE_CIPHERTEXT_LENGTH_OFFSET)?);
-    let ciphertext_length_usize =
-        usize::try_from(ciphertext_length).map_err(|_| BundleError::InvalidPackageFormat)?;
-    let ciphertext_digest = private_bytes(bytes, PRIVATE_CIPHERTEXT_DIGEST_OFFSET)?;
-
-    if target_length == 0
-        || nonce_length != PRIVATE_NONCE_LENGTH
-        || tag_length != PRIVATE_TAG_LENGTH
-        || protocol_minimum > protocol_maximum
-    {
-        return Err(BundleError::InvalidPackageFormat);
-    }
-
-    let target_end = private_end(PRIVATE_FIXED_HEADER_LENGTH, target_length)?;
-    let nonce_end = private_end(target_end, usize::from(nonce_length))?;
-    let ciphertext_end = private_end(nonce_end, ciphertext_length_usize)?;
-    let envelope_end = private_end(ciphertext_end, usize::from(tag_length))?;
-    if envelope_end != bytes.len() {
-        return Err(BundleError::InvalidPackageFormat);
-    }
-    let ciphertext = bytes
-        .get(nonce_end..ciphertext_end)
-        .ok_or(BundleError::InvalidPackageFormat)?;
-    let actual_ciphertext_digest: [u8; 32] = Sha256::digest(ciphertext).into();
-    if actual_ciphertext_digest != ciphertext_digest {
-        return Err(BundleError::PrivateCiphertextDigestMismatch);
-    }
-
-    let target = std::str::from_utf8(
-        bytes
-            .get(PRIVATE_FIXED_HEADER_LENGTH..target_end)
-            .ok_or(BundleError::InvalidPackageFormat)?,
-    )
-    .map_err(|_| BundleError::InvalidPackageFormat)?
-    .to_owned();
-
-    Ok(PrivatePackageInspection {
-        target,
-        protocol_minimum,
-        protocol_maximum,
-        authentication: PrivatePackageAuthentication::Unverified,
-        payload: PrivatePackagePayload::Opaque,
-        ciphertext_length,
-        ciphertext_digest,
-    })
 }
 
 /// Write a validated source tree as a deterministic public `.hyabundle` archive.
@@ -826,24 +675,6 @@ fn valid_public_archive_path(path: &str) -> bool {
         return false;
     }
     segments.all(|segment| !segment.is_empty() && segment != "." && segment != "..")
-}
-
-fn private_bytes<const LENGTH: usize>(
-    bytes: &[u8],
-    offset: usize,
-) -> Result<[u8; LENGTH], BundleError> {
-    let end = private_end(offset, LENGTH)?;
-    bytes
-        .get(offset..end)
-        .ok_or(BundleError::InvalidPackageFormat)?
-        .try_into()
-        .map_err(|_| BundleError::InvalidPackageFormat)
-}
-
-fn private_end(offset: usize, length: usize) -> Result<usize, BundleError> {
-    offset
-        .checked_add(length)
-        .ok_or(BundleError::InvalidPackageFormat)
 }
 
 fn create_staging_directories(staging_root: &Path) -> Result<(PathBuf, PathBuf), BundleError> {

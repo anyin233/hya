@@ -101,7 +101,6 @@ async fn connect_all_observed_in_spawns_relative_command_in_given_cwd_with_inher
         command: vec!["python3".to_string(), "script.py".to_string()],
         timeout_ms: Some(3000),
         env: BTreeMap::new(),
-        posture_overrides: BTreeMap::new(),
         plugin_dir: None,
     };
 
@@ -164,7 +163,6 @@ async fn a_respawned_plugin_keeps_its_given_cwd() {
         command: vec!["python3".to_string(), "script.py".to_string()],
         timeout_ms: Some(3000),
         env: BTreeMap::new(),
-        posture_overrides: BTreeMap::new(),
         plugin_dir: None,
     };
     let (host, failures) = PluginHost::connect_all_observed_in(

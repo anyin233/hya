@@ -36,7 +36,6 @@ async fn configured_plugin_id_must_match_handshake_id() {
         command: mismatched_plugin_command(),
         timeout_ms: Some(1_000),
         env: BTreeMap::new(),
-        posture_overrides: BTreeMap::new(),
         plugin_dir: None,
     };
     let host = PluginHost::connect_all(

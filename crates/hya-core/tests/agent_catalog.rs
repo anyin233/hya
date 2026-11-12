@@ -18,7 +18,7 @@ use hya_proto::AgentName;
 fn installed(bundle_id: &str, agent_id: &str, can_spawn: &[&str]) -> PreparedInstallableBundle {
     PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
         check: None,
-        format_version: 2,
+        format_version: 3,
         identity: BundleIdentity {
             id: bundle_id.to_string(),
             version: "1.0.0".to_string(),
@@ -36,7 +36,6 @@ fn installed(bundle_id: &str, agent_id: &str, can_spawn: &[&str]) -> PreparedIns
             prompt_digest: None,
             model_policy: ModelPolicy::default(),
             workdir: None,
-            legacy_spawn_lifecycle: None,
             resource_view: ResourceView::default(),
             can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
             hook_refs: Vec::new(),

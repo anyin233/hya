@@ -31,18 +31,7 @@ export type ToolAfterOutcome = {
   readonly result: WireToolResult
 }
 
-/**
- * Two hook calling conventions are supported, matching the previous adapter
- * generation while allowing the newer single-argument style:
- *
- * - Legacy (declared with two or more parameters): the handler receives
- *   `(input, output)` and mutates `output` in place — `output.args` for
- *   `tool.execute.before`, and the `{title, output, metadata}` record for
- *   `tool.execute.after`. A thrown error vetoes a before-hook.
- * - Single-argument: the handler receives the full wire params and may return
- *   a replacement (`{input}` / `{outcome:"veto", reason}` before, a
- *   `WireToolResult` after); results fold across handlers.
- */
+/** Single-argument wire hooks return replacements that fold across handlers. */
 export async function runToolExecuteBeforeHooks(
   hooks: readonly ExtensionHooks[],
   params: ToolExecuteBeforeParams,
@@ -54,15 +43,6 @@ export async function runToolExecuteBeforeHooks(
       continue
     }
     try {
-      if (candidate.length >= 2) {
-        const output = { args: current }
-        await candidate(
-          { tool: params.tool, sessionID: params.session, callID: params.call },
-          output,
-        )
-        current = output.args
-        continue
-      }
       const returned = await candidate({ ...params, input: current })
       if (isRecord(returned) && returned.outcome === "veto") {
         const reason = typeof returned.reason === "string" ? returned.reason : "vetoed"
@@ -83,28 +63,12 @@ export async function runToolExecuteAfterHooks(
   params: ToolExecuteAfterParams,
 ): Promise<ToolAfterOutcome> {
   let current = params.result
-  let legacyOutput: { title: string; output: string; metadata: Record<string, unknown> } | undefined
   for (const hook of hooks) {
     const candidate = hook["tool.execute.after"]
     if (!isHookFunction(candidate)) {
       continue
     }
     try {
-      if (candidate.length >= 2) {
-        if (legacyOutput === undefined) {
-          legacyOutput = compatOutputFromResult(current)
-        }
-        await candidate(
-          {
-            tool: params.tool,
-            sessionID: params.session,
-            callID: params.call,
-            args: params.input,
-          },
-          legacyOutput,
-        )
-        continue
-      }
       const returned = await candidate({ ...params, result: current })
       if (current.status !== "err" && isWireToolResult(returned)) {
         current = returned
@@ -113,15 +77,12 @@ export async function runToolExecuteAfterHooks(
       continue
     }
   }
-  if (legacyOutput !== undefined) {
-    current = wireResultFromOutput(current, legacyOutput)
-  }
   return { outcome: "continue", result: current }
 }
 
 function isHookFunction(
   value: unknown,
-): value is (...args: unknown[]) => unknown | Promise<unknown> {
+): value is (params: unknown) => unknown | Promise<unknown> {
   return typeof value === "function"
 }
 
@@ -136,52 +97,4 @@ function isWireToolResult(value: unknown): value is WireToolResult {
     return false
   }
   return value.time_ms === undefined || typeof value.time_ms === "number"
-}
-
-function compatOutputFromResult(result: WireToolResult): {
-  title: string
-  output: string
-  metadata: Record<string, unknown>
-} {
-  if (result.status === "err") {
-    return { title: "", output: result.message, metadata: {} }
-  }
-  const output = result.output
-  if (isRecord(output) && typeof output.output === "string") {
-    return {
-      title: typeof output.title === "string" ? output.title : "",
-      output: output.output,
-      metadata: isRecord(output.metadata) ? { ...output.metadata } : {},
-    }
-  }
-  return { title: "", output: stringifyOutput(output), metadata: {} }
-}
-
-function wireResultFromOutput(
-  original: WireToolResult,
-  output: { readonly title: string; readonly output: string; readonly metadata: unknown },
-): WireToolResult {
-  if (original.status === "err") {
-    return original
-  }
-  const timing = original.time_ms === undefined ? {} : { time_ms: original.time_ms }
-  return {
-    status: "ok",
-    output: {
-      title: output.title,
-      output: output.output,
-      metadata: isRecord(output.metadata) ? output.metadata : {},
-    },
-    ...timing,
-  }
-}
-
-function stringifyOutput(output: unknown): string {
-  if (typeof output === "string") {
-    return output
-  }
-  if (output === undefined) {
-    return ""
-  }
-  return JSON.stringify(output)
 }

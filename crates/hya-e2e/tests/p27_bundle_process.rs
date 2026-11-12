@@ -121,7 +121,7 @@ for line in sys.stdin:
  r=json.loads(line)
  method=r.get('method')
  if method == 'initialize':
-  result={'protocol_version':1,'plugin':{'id':'private-process','version':'1.0.0','kind':'rust'},'hooks':[{'name':'tool.execute.before','posture':'safe'}],'tools':[{'name':'echo','description':'echo input','inputSchema':{'type':'object'}}]}
+  result={'protocol_version':1,'plugin':{'id':'private-process','version':'1.0.0','kind':'rust'},'hooks':[{'name':'tool.execute.before'}],'tools':[{'name':'echo','description':'echo input','inputSchema':{'type':'object'}}]}
  elif method == 'hook/tool.execute.before':
   inp=r['params']['input']; inp['hook_marker']='OWNER_HOOK_EXECUTED'; result={'outcome':'continue','input':inp}
  elif method == 'tool/call': result={'ok':True,'output':r['params']['input']}

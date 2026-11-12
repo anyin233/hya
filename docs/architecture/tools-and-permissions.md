@@ -465,8 +465,8 @@ Headless `exec`, RPC, and goal flows answer residual asks with `Reject`.
 3. **Semantic identity (fingerprint, not a decision cache)**: the bridge's
    `PermissionInterceptor::semantic_identity_v1` is a domain-separated SHA-256
    over `b"hya.plugin.permission-bridge.semantic-identity/v1"` plus, per plugin
-   that registers `permission.ask`, its id, canonical initialize declaration,
-   and effective posture. That digest is mixed into
+   that registers `permission.ask`, its id and canonical initialize declaration.
+   That digest is mixed into
    `PermissionPlane::semantic_identity_v1` and then
    `TurnBinding::semantic_fingerprint_v1` so runtime refresh can detect that
    permission **policy** changed — it does not index or invalidate remembered

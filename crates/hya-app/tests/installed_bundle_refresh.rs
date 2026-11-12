@@ -848,7 +848,7 @@ resources:
         SourceFile::new("runtime.py", r#"import json,sys
 for line in sys.stdin:
  r=json.loads(line)
- if r.get('method') == 'initialize': result={'protocol_version':1,'plugin':{'id':'hook-files','version':'1.0.0','kind':'rust'},'hooks':[{'name':'tool.execute.before','posture':'safe'}],'tools':[]}
+ if r.get('method') == 'initialize': result={'protocol_version':1,'plugin':{'id':'hook-files','version':'1.0.0','kind':'rust'},'hooks':[{'name':'tool.execute.before'}],'tools':[]}
  elif r.get('method') == 'hook/tool.execute.before': result={'outcome':'continue','input':{'marker':open('payload.txt').read()}}
  else: result={}
  if 'id' in r: print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':result}),flush=True)
@@ -989,4 +989,60 @@ resources:
     assert!(!refresh.refresh_if_changed(&runtime).await.unwrap());
     drop(refresh);
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn old_install_record_fails_refresh_with_reinstall_instruction() {
+    use sha2::{Digest, Sha256};
+    use sqlx::Connection;
+
+    let registry_path = temp_path("old-format.db");
+    let registry = BundleRegistry::connect(registry_path.to_str().unwrap())
+        .await
+        .unwrap();
+    let prepared = prepare_package(installed_source()).unwrap();
+    registry
+        .install(
+            &[],
+            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            BundleInstallCandidate {
+                source_digest: [0x42; 32],
+                prepared_digest: prepared.digest().to_owned(),
+                prepared_bytes: prepared.bytes().to_vec(),
+                installed_at: 1,
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut old: serde_json::Value = serde_json::from_slice(prepared.bytes()).unwrap();
+    old["format_version"] = serde_json::json!(2);
+    old["bundles"][0]["format_version"] = serde_json::json!(2);
+    old["bundles"][0]["agent"]["spawn_lifecycle"] = serde_json::json!("transient");
+    let bytes = serde_json::to_vec(&old).unwrap();
+    let digest = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let mut connection = sqlx::SqliteConnection::connect(registry_path.to_str().unwrap())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE installed_bundle SET prepared_bytes = ?, prepared_digest = ?")
+        .bind(&bytes)
+        .bind(&digest)
+        .execute(&mut connection)
+        .await
+        .unwrap();
+    connection.close().await.unwrap();
+
+    let error = hya_app::bundle_admin::store_error(registry.snapshot().await.unwrap_err());
+    assert!(error.to_string().contains("please reinstall"), "{error}");
+    let runtime = RuntimeRegistry::new(
+        ToolRegistry::builtins(),
+        hya_app::builtin_agent_catalog().unwrap(),
+    );
+    let refresh = hya_app::InstalledBundleRefresh::new(registry_path);
+    let error = refresh.refresh_if_changed(&runtime).await.unwrap_err();
+    assert!(error.to_string().contains("please reinstall"), "{error}");
+    assert!(error.to_string().contains("hya/installed-test"), "{error}");
 }

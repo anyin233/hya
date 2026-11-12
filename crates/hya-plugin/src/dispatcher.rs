@@ -1,6 +1,6 @@
 //! `impl HookDispatcher for PluginHost`: converts the engine's native payloads
 //! to wire frames, folds each interception hook through the plugins in load
-//! order, and applies per-hook posture on failure (guards fail safe, enrichment
+//! order, and applies fixed failure behavior (guards fail safe, enrichment
 //! fails open).
 
 use async_trait::async_trait;
@@ -24,11 +24,11 @@ use crate::host::{PluginConn, PluginHost};
 use crate::messages::{
     AgentSpawnParams, ChatParamsOutcomeWire, ChatParamsParams, CommandBeforeOutcomeWire,
     CommandExecuteBeforeParams, CompactionAfterParams, CompactionBeforeOutcomeWire,
-    CompactionBeforeParams, HookName, HookPosture, MessageUserBeforeOutcomeWire,
-    MessageUserBeforeParams, ModelFailureClassWire, ModelFallbackErrorWire,
-    ModelFallbackOutcomeWire, ModelFallbackParams, SessionLifecycleParams, TextCompleteOutcomeWire,
-    TextCompleteParams, ToolAfterOutcomeWire, ToolBeforeOutcomeWire, ToolExecuteAfterParams,
-    ToolExecuteBeforeParams, WireCompletionRequest, WireToolResult,
+    CompactionBeforeParams, HookName, MessageUserBeforeOutcomeWire, MessageUserBeforeParams,
+    ModelFailureClassWire, ModelFallbackErrorWire, ModelFallbackOutcomeWire, ModelFallbackParams,
+    SessionLifecycleParams, TextCompleteOutcomeWire, TextCompleteParams, ToolAfterOutcomeWire,
+    ToolBeforeOutcomeWire, ToolExecuteAfterParams, ToolExecuteBeforeParams, WireCompletionRequest,
+    WireToolResult,
 };
 
 const GUARD_FAILED_SAFE: &str = "guard failed safe";
@@ -65,7 +65,7 @@ impl HookDispatcher for PluginHost {
     ) -> CommandExecuteBeforeOutcome {
         let mut text = input.text;
         for conn in self.plugins() {
-            if conn.posture(HookName::CommandExecuteBefore).is_none() {
+            if !conn.has_hook(HookName::CommandExecuteBefore) {
                 continue;
             }
             let params = CommandExecuteBeforeParams {
@@ -86,7 +86,7 @@ impl HookDispatcher for PluginHost {
     async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
         let mut text = input.text;
         for conn in self.plugins() {
-            if conn.posture(HookName::TextComplete).is_none() {
+            if !conn.has_hook(HookName::TextComplete) {
                 continue;
             }
             let params = TextCompleteParams {
@@ -107,7 +107,7 @@ impl HookDispatcher for PluginHost {
     async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
         let mut text = input.text;
         for conn in self.plugins() {
-            if conn.posture(HookName::MessageUserBefore).is_none() {
+            if !conn.has_hook(HookName::MessageUserBefore) {
                 continue;
             }
             let params = MessageUserBeforeParams {
@@ -126,7 +126,7 @@ impl HookDispatcher for PluginHost {
     async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome {
         let mut request = input.request;
         for conn in self.plugins() {
-            if conn.posture(HookName::ChatParams).is_none() {
+            if !conn.has_hook(HookName::ChatParams) {
                 continue;
             }
             let params = ChatParamsParams {
@@ -148,9 +148,9 @@ impl HookDispatcher for PluginHost {
     async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
         let mut current = input.input;
         for conn in self.plugins() {
-            let Some(posture) = conn.posture(HookName::ToolExecuteBefore) else {
+            if !conn.has_hook(HookName::ToolExecuteBefore) {
                 continue;
-            };
+            }
             let params = ToolExecuteBeforeParams {
                 session: input.session,
                 message: input.message,
@@ -166,11 +166,9 @@ impl HookDispatcher for PluginHost {
                     return ToolExecuteBeforeOutcome::Veto { reason };
                 }
                 Err(failed) => {
-                    if posture == HookPosture::Safe {
-                        return ToolExecuteBeforeOutcome::Veto {
-                            reason: format!("{GUARD_FAILED_SAFE}: {} ({failed})", conn.id),
-                        };
-                    }
+                    return ToolExecuteBeforeOutcome::Veto {
+                        reason: format!("{GUARD_FAILED_SAFE}: {} ({failed})", conn.id),
+                    };
                 }
             }
         }
@@ -180,7 +178,7 @@ impl HookDispatcher for PluginHost {
     async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
         let mut result = outcome_to_wire(input.result);
         for conn in self.plugins() {
-            if conn.posture(HookName::ToolExecuteAfter).is_none() {
+            if !conn.has_hook(HookName::ToolExecuteAfter) {
                 continue;
             }
             let params = ToolExecuteAfterParams {
@@ -217,7 +215,7 @@ impl HookDispatcher for PluginHost {
             tried: input.tried,
         };
         for conn in self.plugins() {
-            if conn.posture(HookName::ModelFallback).is_none() {
+            if !conn.has_hook(HookName::ModelFallback) {
                 continue;
             }
             match call_outcome::<ModelFallbackOutcomeWire>(conn, HookName::ModelFallback, &params)
@@ -237,7 +235,7 @@ impl HookDispatcher for PluginHost {
                 }
                 Ok(ModelFallbackOutcomeWire::GiveUp) => {}
                 Err(failed) => {
-                    // Fail-open, posture notwithstanding: a broken hook reads
+                    // Fail-open: a broken hook reads
                     // as give_up and the next plugin still gets the consult.
                     tracing::warn!(
                         plugin = %conn.id,
@@ -256,7 +254,7 @@ impl HookDispatcher for PluginHost {
             CompactionTrigger::Proactive => crate::messages::CompactionTriggerWire::Proactive,
         };
         for conn in self.plugins() {
-            if conn.posture(HookName::CompactionBefore).is_none() {
+            if !conn.has_hook(HookName::CompactionBefore) {
                 continue;
             }
             let params = CompactionBeforeParams {
@@ -280,7 +278,7 @@ impl HookDispatcher for PluginHost {
                     return CompactionDecision::Replace { instructions };
                 }
                 Err(failed) => {
-                    // Unconditionally fail-open, posture notwithstanding:
+                    // Fail-open:
                     // compaction guards against context overflow, so a broken
                     // hook must never block it.
                     tracing::warn!(
@@ -296,7 +294,7 @@ impl HookDispatcher for PluginHost {
 
     async fn compaction_after(&self, input: CompactionAfterInput) {
         for conn in self.plugins() {
-            if conn.posture(HookName::CompactionAfter).is_none() {
+            if !conn.has_hook(HookName::CompactionAfter) {
                 continue;
             }
             let params = CompactionAfterParams {
@@ -312,7 +310,7 @@ impl HookDispatcher for PluginHost {
             session: input.session,
         };
         for conn in self.plugins() {
-            if conn.posture(HookName::SessionStart).is_none() {
+            if !conn.has_hook(HookName::SessionStart) {
                 continue;
             }
             notify(conn, HookName::SessionStart, &params).await;
@@ -324,7 +322,7 @@ impl HookDispatcher for PluginHost {
             session: input.session,
         };
         for conn in self.plugins() {
-            if conn.posture(HookName::SessionEnd).is_none() {
+            if !conn.has_hook(HookName::SessionEnd) {
                 continue;
             }
             notify(conn, HookName::SessionEnd, &params).await;
@@ -337,7 +335,7 @@ impl HookDispatcher for PluginHost {
             child: input.child,
         };
         for conn in self.plugins() {
-            if conn.posture(HookName::AgentSpawn).is_none() {
+            if !conn.has_hook(HookName::AgentSpawn) {
                 continue;
             }
             notify(conn, HookName::AgentSpawn, &params).await;
@@ -347,7 +345,7 @@ impl HookDispatcher for PluginHost {
     fn has_goal_evaluate(&self) -> bool {
         self.plugins()
             .iter()
-            .any(|conn| conn.posture(HookName::GoalEvaluate).is_some())
+            .any(|conn| conn.has_hook(HookName::GoalEvaluate))
     }
 
     async fn goal_evaluate(
@@ -362,7 +360,7 @@ impl HookDispatcher for PluginHost {
         .map_err(|error| CoreError::Invalid(error.to_string()))?;
         let mut last_failure: Option<String> = None;
         for conn in self.plugins() {
-            if conn.posture(HookName::GoalEvaluate).is_none() {
+            if !conn.has_hook(HookName::GoalEvaluate) {
                 continue;
             }
             match conn.call_hook(HookName::GoalEvaluate, value.clone()).await {
@@ -404,7 +402,7 @@ impl HookDispatcher for PluginHost {
         let params = LoopVerifyParams { target, transcript };
         let mut last_failure: Option<String> = None;
         for conn in self.plugins() {
-            if conn.posture(HookName::LoopVerifier).is_none() {
+            if !conn.has_hook(HookName::LoopVerifier) {
                 continue;
             }
             match call_outcome::<VerifierVerdictWire>(conn, HookName::LoopVerifier, &params).await {
@@ -439,7 +437,7 @@ impl HookDispatcher for PluginHost {
         };
         let mut last_failure: Option<String> = None;
         for conn in self.plugins() {
-            if conn.posture(HookName::LoopPlanner).is_none() {
+            if !conn.has_hook(HookName::LoopPlanner) {
                 continue;
             }
             match call_outcome::<PlannerOutputWire>(conn, HookName::LoopPlanner, &params).await {
@@ -462,7 +460,7 @@ impl HookDispatcher for PluginHost {
     async fn loop_should_stop(&self, target: &str, transcript: &str) -> Option<String> {
         let params = LoopShouldStopParams { target, transcript };
         for conn in self.plugins() {
-            if conn.posture(HookName::LoopShouldStop).is_none() {
+            if !conn.has_hook(HookName::LoopShouldStop) {
                 continue;
             }
             match call_outcome::<LoopShouldStopWire>(conn, HookName::LoopShouldStop, &params).await
@@ -479,7 +477,7 @@ impl HookDispatcher for PluginHost {
                 // provider may still force the stop.
                 Ok(_) => {}
                 Err(failed) => {
-                    // Open posture: the consult never decides by failing. A
+                    // Fail-open: the consult never decides by failing. A
                     // broken hook logs and yields to the next provider (and
                     // ultimately to the verifier).
                     tracing::warn!(
