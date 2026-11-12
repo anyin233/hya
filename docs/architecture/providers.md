@@ -148,23 +148,10 @@ leaves `reasoning_request` false.
 [`router.rs`](../../crates/hya-provider/src/router.rs) keeps an **ordered** list of
 providers (insertion order via `with`).
 
-**Resolution.** `resolve` returns the **first** provider whose
-`capabilities(&model)` is `Some`. `stream` also starts with that route. When two
-configured routes both serve the same bare model id, registration order is the
-failover order: an earlier route wins unless it returns a retryable pre-stream
-failure after exhausting its own request retries.
-
-Transport failures, HTTP 429, and HTTP 5xx can advance to the next matching
-route. Other errors fail immediately. Once any provider returns an
-`EventStream`, the router never replays the request; later SSE errors stay on
-that stream. This no-replay boundary prevents duplicated event output and tool
-side effects. If no route supports the model, `stream` returns `UnknownModel`.
-
-**Reasoning strip.** Before dispatch, if the resolved route's capabilities do
-**not** set `reasoning_request`, the router clears
-`CompletionRequest.reasoning`. A configured `reasoning.default` is therefore
-**silently dropped** (not an error) on routes that cannot accept a reasoning
-parameter, so no unsupported field is sent upstream.
+**Resolution.** `resolve` and `stream` use the first provider whose
+`capabilities(&model)` is `Some`. Registration order determines the selected
+route. All errors return directly without consulting later matching providers.
+Preflight and reasoning stripping apply to that selected route.
 
 ### Per-model reasoning metadata and Workflow routes
 
@@ -224,8 +211,7 @@ empty identity (fail closed). See [Configured Identity](#configured-identity).
 
 ## Cross-Model Chain Failover (hya-core)
 
-Same-model route failover above is the first of two recovery levels. The second
-lives in the session engine (`hya-core`): `SessionEngine::with_model_fallbacks`
+Model selection and round recovery live in the session engine (`hya-core`): `SessionEngine::with_model_fallbacks`
 installs a plane mapping each preferred `ModelRef` to its ordered candidate
 chain, populated from configured `categories:` entries when the app runtime
 builds the engine. Members resolved onto a category candidate — including a
@@ -257,14 +243,29 @@ replayed, or failed over onto another model.
 
 ### Provider-level replay versus engine round retry
 
-Provider HTTP retry is a zero-event replay: before the caller receives an event,
-the provider may reopen a request for transient transport or HTTP 429/5xx
-failures. Once an event stream has delivered an event, that no-replay boundary
-protects against duplicated output and tool side effects. The engine has a
-separate, bounded round retry for a stream that fails before any text or tool
-call: it records the failed step, then opens a fresh stream for the same round
-with the next step number. See the runtime retry policy for the exact decode
-diagnostics and cancellation behavior.
+The provider has one bounded HTTP attempt loop before successful response headers.
+Transport errors, HTTP 429/5xx and a single auth refresh consume the same
+`RetryConfig { max_attempts: usize, backoff_base: Duration, backoff_max: Duration }`
+budget (default: three attempts). Once headers establish the stream, body failures
+surface once, even before the first event. The router never tries another provider.
+The engine owns any subsequent model selection or round retry.
+
+In-stream errors use numeric HTTP status or recognized protocol error labels;
+free-form messages such as `retry later` do not make an error retryable.
+For example, an HTTP 503 can consume three attempts; an HTTP 200 SSE body
+containing `overloaded_error` returns one stream error without reopening HTTP.
+
+All per-model HTTP metadata lives in one ordered routing table. Existing
+`with_model_*` builders replace their respective attributes without registering
+additional served model IDs. Catalog output, request limits and configured
+identity read that table. Identity bytes change with this consolidation; their
+ordering remains deterministic.
+
+Protocol encoders share the user text/media walk, while preserving each wire
+shape. Chat and Anthropic share tool-boundary cluster splitting with their own
+reasoning admission rules. Google retains its whole-message model block and
+Responses retains its item ordering. Streaming tool decoders share tool IDs,
+argument storage and delta construction; terminal and usage rules stay local.
 
 ## HTTP Provider
 
@@ -356,24 +357,9 @@ Five auth styles: **Bearer**, **CodexSession**, **GrokSession**, **Anthropic**,
   at 2 seconds so an error body cannot prevent the next retry. The budget is
   configurable per route — see the `provider_retry:` block in the
   [configuration reference](../configuration.md).
-- **Zero-event replay window:** a response that dies before delivering any
-  event to the consumer is treated as if no stream existed, and the whole
-  request is re-issued inside the same shared attempt budget, with the same
-  backoff and `Retry-After` handling as pre-stream retries. Link-level
-  failures qualify (byte-stream decode errors such as truncated bodies,
-  connection resets, and idle stalls before the first frame), and so do
-  in-stream error frames classified as transient (rate limit, overload, 5xx —
-  see [In-stream error frames](#in-stream-error-frames)). Deterministic
-  provider-decided failures — invalid-request/auth error frames, unclassified
-  error frames, malformed payloads, missing terminal frames — surface
-  immediately even at zero events. The first delivered event closes the
-  window permanently: a later error frame of any class surfaces exactly once
-  on the stream and is never replayed or failed over.
-- **SSE frame-idle timeout: five minutes.** The window starts when response
-  headers arrive and resets after every frame. Missing the deadline before the
-  first frame joins the zero-event replay window; after any delivered frame it
-  ends the established stream once and is never retried or failed over because
-  stream ownership has already crossed the no-replay boundary.
+- **Established streams are never replayed**, including zero-event failures.
+- **SSE frame-idle timeout: five minutes.** Starts at response headers and resets
+  after every frame. A missed deadline ends the stream with one error.
 - **No total completion lifetime timeout.** A completion that keeps delivering
   frames may run indefinitely.
 - Auth header values are marked **sensitive** on `HeaderValue` so reqwest/tracing
@@ -391,10 +377,9 @@ Gemini `{"error":{"code":429,"status":"RESOURCE_EXHAUSTED",…}}`, Responses a
 the error object into the `HttpStatus` its out-of-band response would have
 carried, so `is_retryable_before_stream()`, `model.fallback` classes, and
 Workflow route failure classes apply unchanged. Precedence: a known
-`type`/`code`/`status` label, then a numeric `code`/`status` in 400–599, then
-a transient-sounding message; anything else stays `Http(message)`.
+`type`/`code`/`status` label, then a numeric `code`/`status` in 400–599, anything else stays `Http(message)`.
 
-| Error label / signal | Status | Retryable at zero events |
+| Error label / signal | Status | Transient status class |
 | --- | --- | --- |
 | `rate_limit_error`, `rate_limit_exceeded`, `rate_limited`, `too_many_requests`, `RESOURCE_EXHAUSTED` | 429 | yes |
 | `overloaded_error`, `overloaded` | 529 | yes |
@@ -407,17 +392,11 @@ a transient-sounding message; anything else stays `Http(message)`.
 | `not_found_error`, `NOT_FOUND`, `model_not_found` | 404 | no |
 | `request_too_large` | 413 | no |
 | numeric `code`/`status` 400–599 (no known label) | that status | 429/5xx only |
-| unlabeled message containing `overloaded` | 529 | yes |
-| unlabeled message containing `rate limit`, `too many requests`, `concurrency limit`, `retry later`, `try again later` | 429 | yes |
-| unlabeled message containing `temporarily unavailable`, `service unavailable` | 503 | yes |
 | anything else (e.g. `quota exhausted`) | `Http(message)` | no |
 
 Classified messages read `in-stream error (<label>): <upstream message>`. A
-numeric `retry_after` (seconds) on the error object or frame is honored like
-`Retry-After`, capped at 30 s and at `backoff_max`. Retrying still obeys STRICT
-NO-REPLAY: only while no event has reached the consumer, inside the shared
-`provider_retry` budget; once the budget is spent the last error surfaces on
-the stream (the router and `model.fallback` only act on pre-stream failures).
+numeric `retry_after` (seconds) on the error object or frame is retained for
+callers, capped at 30 s. Classification never reopens an established stream.
 - Anthropic routes hardcode `anthropic-version: **2023-06-01**`. That value is
   **not** configurable through `config.yaml`; changing it requires a code change
   at `crates/hya-provider/src/http.rs` (Anthropic `AuthStyle` construction).

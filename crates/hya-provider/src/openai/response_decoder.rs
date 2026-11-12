@@ -1,8 +1,6 @@
 use std::collections::BTreeMap;
 
-use hya_proto::{
-    Event, FinishReason, MessageId, PartId, Role, SessionId, TokenUsage, ToolCallId, ToolName,
-};
+use hya_proto::{Event, FinishReason, MessageId, PartId, Role, SessionId, TokenUsage, ToolName};
 use serde_json::Value;
 
 use crate::{Decoder, ProviderError, ReasoningEffort, stream_error::classify_error_frame};
@@ -30,27 +28,7 @@ impl PartAsm {
     }
 }
 
-struct ToolAsm {
-    part: PartId,
-    call: ToolCallId,
-    name: String,
-    args: String,
-    started: bool,
-    requested: bool,
-}
-
-impl ToolAsm {
-    fn new() -> Self {
-        Self {
-            part: PartId::new(),
-            call: ToolCallId::new(),
-            name: String::new(),
-            args: String::new(),
-            started: false,
-            requested: false,
-        }
-    }
-}
+use crate::wire::ToolAsm;
 
 /// Stateful decoder for OpenAI Responses (and Grok typed-terminal) SSE events.
 pub struct OpenAiResponsesDecoder {
@@ -123,7 +101,7 @@ impl OpenAiResponsesDecoder {
                     part: entry.part,
                     call: entry.call,
                     name: ToolName::new(&entry.name),
-                    input: serde_json::from_str(&entry.args).unwrap_or(Value::Null),
+                    input: entry.input(),
                 });
             }
         }
@@ -247,18 +225,11 @@ impl OpenAiResponsesDecoder {
     fn tool_delta(&mut self, index: usize, delta: &str) -> Vec<Event> {
         let (session, message) = (self.session, self.message);
         let entry = self.tools.entry(index).or_insert_with(ToolAsm::new);
-        entry.args.push_str(delta);
+        let event = entry.delta(session, message, delta);
         if !entry.started || delta.is_empty() {
             return Vec::new();
         }
-        vec![Event::ToolInputDelta {
-            session,
-            message,
-            part: entry.part,
-            call: entry.call,
-            name: ToolName::new(&entry.name),
-            delta: delta.to_string(),
-        }]
+        vec![event]
     }
 
     fn tool_done(&mut self, index: usize, item: &Value) -> Vec<Event> {
@@ -279,7 +250,7 @@ impl OpenAiResponsesDecoder {
                 part: entry.part,
                 call: entry.call,
                 name: ToolName::new(&entry.name),
-                input: serde_json::from_str(&entry.args).unwrap_or(Value::Null),
+                input: entry.input(),
             });
         }
         out

@@ -108,7 +108,7 @@ async fn http_provider_retries_a_route_that_never_sends_response_headers() {
 }
 
 #[tokio::test]
-async fn http_provider_idle_stall_before_any_frame_replays_within_the_attempt_budget() {
+async fn http_provider_idle_stall_before_any_frame_surfaces_once() {
     let (base_url, connections) = start_stalled_mid_stream_server().await;
     let provider = HttpProvider::new(
         "openai",
@@ -141,14 +141,7 @@ async fn http_provider_idle_stall_before_any_frame_replays_within_the_attempt_bu
     .await
     .expect("post-header idle stall should end the stream within the guard");
 
-    // A stall before any frame has delivered nothing to the consumer, so the
-    // zero-event replay window applies: the full default budget is spent
-    // re-issuing before the error surfaces exactly once.
-    assert_eq!(
-        connections.load(Ordering::SeqCst),
-        3,
-        "zero-event stalls replay within the default attempt budget"
-    );
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
     assert_eq!(events.len(), 1);
     match &events[0] {
         Err(ProviderError::Http(message)) => {
@@ -162,7 +155,7 @@ async fn http_provider_idle_stall_before_any_frame_replays_within_the_attempt_bu
 }
 
 #[tokio::test]
-async fn zero_event_body_failure_replays_within_budget_and_succeeds() {
+async fn zero_event_body_failure_surfaces_without_replay() {
     // Attempt one: 200 headers, a body shorter than content-length (reqwest
     // decode failure), zero SSE frames delivered. Attempt two: a valid stream.
     let truncated = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: 500\r\nconnection: close\r\n\r\n";
@@ -197,14 +190,13 @@ async fn zero_event_body_failure_replays_within_budget_and_succeeds() {
             .await
     })
     .await
-    .expect("zero-event decode failure should replay within the guard");
+    .expect("zero-event decode failure should surface");
 
-    assert!(events.iter().all(Result::is_ok), "events: {events:?}");
-    assert_eq!(
-        connections.load(Ordering::SeqCst),
-        2,
-        "the truncated body must be replayed once and then succeed"
+    assert!(
+        matches!(events.as_slice(), [Err(ProviderError::Http(_))]),
+        "{events:?}"
     );
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
