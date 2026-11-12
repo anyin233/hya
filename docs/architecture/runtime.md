@@ -713,10 +713,13 @@ and their next bind recomposes against the new base. Live turn bindings retain
 their captured snapshot across this invalidation.
 
 `RuntimeSnapshot` owns exactly one `BundleCatalog`. At root admission, new turn
-binding, subsequent root model-round boundaries, and catalog refresh, `hya-app` merges project, installed, and
+binding, subsequent root model-round boundaries, and catalog refresh, `hya-app` merges cached project, installed, and
 first-party payloads. It prepares static Skills, native/Bun/Claude process
 contributions, and bundled MCP servers before publishing catalog and Bundle
-sources atomically. A failed project source retains its previous publication;
+sources atomically. Project source bytes are scanned on first binding, root changes,
+eviction, and explicit bundle refresh; ordinary bindings reuse the prepared inputs.
+Skill discovery runs before the registry publication mutex is acquired.
+A failed project source retains its previous publication;
 independent sources can still advance. Automatic binds remember failed inputs
 and continue using the retained catalog. Explicit refresh retries failures even
 when declarations are unchanged.

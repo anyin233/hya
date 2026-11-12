@@ -385,7 +385,7 @@ async fn editing_plugin_toml_respawns_the_projects_plugins_at_the_next_bind() {
     let before = echo(&first, "alpha__echo").pid;
     drop(first);
 
-    // A project bundle change republishes the Project but keeps its plugins.
+    // Explicitly refreshing a project bundle keeps unchanged plugins.
     let bundle = root.join(".hya/bundles/tools");
     std::fs::create_dir_all(&bundle).unwrap();
     std::fs::write(
@@ -393,7 +393,12 @@ async fn editing_plugin_toml_respawns_the_projects_plugins_at_the_next_bind() {
         "---\nkind: Bundle\nidentity:\n  id: hya/tools\n  version: 1.0.0\n  publisher: hya\nagents:\n  - id: tools-agent\n    role: main\n---\nTools.\n",
     )
     .unwrap();
-    let with_bundle = harness.bind(&scope).await;
+    let with_bundle = harness
+        .engine
+        .refresh_bundles(&scope, &root)
+        .await
+        .unwrap()
+        .binding;
     assert!(with_bundle.resolve_agent("tools-agent").is_some());
     assert_eq!(echo(&with_bundle, "alpha__echo").pid, before, "no respawn");
     drop(with_bundle);

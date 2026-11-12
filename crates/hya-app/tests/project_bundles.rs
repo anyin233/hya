@@ -510,7 +510,12 @@ async fn editing_a_bundle_republishes_only_its_project() {
     let second_b = harness.bind(&scope_b).await;
     assert_eq!(second_b.generation(), first_b.generation());
 
-    let second_a = harness.bind(&scope_a).await;
+    let second_a = harness
+        .engine
+        .refresh_bundles(&scope_a, &root_a)
+        .await
+        .unwrap()
+        .binding;
     assert_ne!(second_a.generation(), first_a.generation());
     assert!(prompt_of(&second_a, "live-agent").contains("Version two"));
     assert!(
@@ -742,9 +747,14 @@ async fn a_project_bundle_config_model_applies_only_in_its_project() {
     assert!(b.resolve_agent("tools-agent").is_some());
     assert_eq!(b.configured_agent_model("tools-agent"), None);
 
-    // A config.yml edit republishes that Project at its next bind.
+    // An explicit refresh publishes edits to the Project config.yml.
     std::fs::write(&config_a, "agents:\n  tools-agent:\n    model: p/edited\n").unwrap();
-    let edited = harness.bind(&scope_a).await;
+    let edited = harness
+        .engine
+        .refresh_bundles(&scope_a, &root_a)
+        .await
+        .unwrap()
+        .binding;
     assert_eq!(
         edited.configured_agent_model("tools-agent"),
         Some(&ModelRef::new("p/edited"))
@@ -796,13 +806,16 @@ async fn saving_a_project_bundle_model_writes_only_that_projects_file() {
         .expect("claim runtime owner");
     let router = Arc::new(ProviderRouter::new().with(Arc::new(hya_provider::DevProvider::new())));
     let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
-    let engine = Arc::new(SessionEngine::new(
-        store.clone(),
-        router,
-        harness.runtime.clone(),
-        permission,
-        EventBus::default(),
-    ));
+    let engine = Arc::new(
+        SessionEngine::new(
+            store.clone(),
+            router,
+            harness.runtime.clone(),
+            permission,
+            EventBus::default(),
+        )
+        .with_catalog_refresh(harness.refresh.clone()),
+    );
     let config_file = state.join("config-home/hya/config.yaml");
     let control = hya_app::PersistentAgentModelControl::load(
         store,
@@ -890,17 +903,37 @@ async fn hot_reload_invalid_project_bundle_keeps_published_catalog() {
     )
     .unwrap();
     write_project_bundle(&root, "other", "acme/other", "AFTER");
-    assert!(h.refresh.refresh_scope(&h.runtime, &scope).await.is_err());
-    let after = h.bind(&scope).await;
+    assert!(
+        h.refresh
+            .refresh_scope_explicit(&h.runtime, &scope)
+            .await
+            .is_err()
+    );
+    let after = h
+        .engine
+        .refresh_bundles(&scope, scope.roots().first().unwrap())
+        .await
+        .unwrap()
+        .binding;
     assert!(prompt_of(&after, "other-agent").contains("AFTER"));
     assert_eq!(
         prompt_of(&after, "kept-agent"),
         prompt_of(&before, "kept-agent")
     );
     std::fs::remove_file(root.join(".hya/bundles/kept/bundle.hya.md")).unwrap();
-    assert!(h.refresh.refresh_scope(&h.runtime, &scope).await.is_err());
+    assert!(
+        h.refresh
+            .refresh_scope_explicit(&h.runtime, &scope)
+            .await
+            .is_err()
+    );
     std::fs::remove_dir_all(root.join(".hya/bundles/kept")).unwrap();
-    assert!(h.refresh.refresh_scope(&h.runtime, &scope).await.unwrap());
+    assert!(
+        h.refresh
+            .refresh_scope_explicit(&h.runtime, &scope)
+            .await
+            .unwrap()
+    );
     assert!(
         h.runtime
             .bind_scoped(&scope, &root)
@@ -924,7 +957,12 @@ async fn hot_reload_unreadable_bundle_config_does_not_block_other_sources() {
     // on hosts whose user can bypass ordinary file permission bits.
     std::fs::create_dir(root.join(".hya/bundles/kept/config.yml")).unwrap();
     write_project_bundle(&root, "other", "acme/other", "AFTER");
-    let after = h.bind(&scope).await;
+    let after = h
+        .engine
+        .refresh_bundles(&scope, scope.roots().first().unwrap())
+        .await
+        .unwrap()
+        .binding;
     assert_eq!(
         prompt_of(&after, "kept-agent"),
         prompt_of(&before, "kept-agent")
@@ -944,7 +982,12 @@ async fn hot_reload_unreadable_project_root_keeps_sources_and_other_roots_update
     std::fs::rename(bad.join(".hya/bundles"), bad.join(".hya/saved-bundles")).unwrap();
     std::fs::write(bad.join(".hya/bundles"), "not a directory").unwrap();
     write_project_bundle(&good, "other", "acme/other", "AFTER");
-    let after = h.bind(&scope).await;
+    let after = h
+        .engine
+        .refresh_bundles(&scope, scope.roots().first().unwrap())
+        .await
+        .unwrap()
+        .binding;
     assert_eq!(
         prompt_of(&after, "kept-agent"),
         prompt_of(&before, "kept-agent")
@@ -980,20 +1023,28 @@ async fn hot_reload_failed_bundle_process_keeps_source_and_explicit_refresh_retr
         process_manifest("acme/proj-proc").replace("1.0.0", "1.0.1"),
     )
     .unwrap();
-    assert_eq!(tool_pid(&h.bind(&scope).await, "proj-proc__echo"), original);
+    let failed = h.engine.refresh_bundles(&scope, &root).await.unwrap();
+    assert!(!failed.errors.is_empty());
+    assert_eq!(tool_pid(&failed.binding, "proj-proc__echo"), original);
+    drop(failed);
     write_project_bundle(&root, "other", "acme/other", "AFTER");
-    let partial = h.bind(&scope).await;
+    let partial = h
+        .engine
+        .refresh_bundles(&scope, &root)
+        .await
+        .unwrap()
+        .binding;
     assert_eq!(tool_pid(&partial, "proj-proc__echo"), original);
     assert!(prompt_of(&partial, "other-agent").contains("AFTER"));
     drop(partial);
-    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 2);
+    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 3);
     // Repair the external input without changing any bundle bytes.
     std::fs::write(&gate, "ready").unwrap();
     let refreshed = h.engine.refresh_bundles(&scope, &root).await.unwrap();
     assert!(refreshed.errors.is_empty(), "{:?}", refreshed.errors);
     assert!(refreshed.changed);
     assert_ne!(tool_pid(&refreshed.binding, "proj-proc__echo"), original);
-    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 3);
+    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 4);
 }
 
 #[tokio::test]
@@ -1151,4 +1202,77 @@ async fn project_model_and_effort_reach_the_actual_request() {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].model.as_str(), "p/project");
     assert_eq!(requests[0].reasoning, Some(ReasoningEffort::High));
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn unchanged_binding_reads_zero_bundle_files() {
+    use std::ffi::CString;
+    use std::io::Read;
+    use std::os::fd::{FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    let state = temp_path("no-reads-state");
+    let root = temp_path("no-reads-root");
+    write_project_bundle(&root, "alpha", "acme/alpha", "BEFORE");
+    std::fs::write(root.join(".hya/bundles/alpha/config.yml"), "agents: {}\n").unwrap();
+    let h = harness(&state).await;
+    let scope = project(&[&root]);
+    let before = h.bind(&scope).await;
+    let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+    assert!(fd >= 0);
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    use std::os::fd::AsRawFd;
+    for relative in [
+        "bundle.hya.md",
+        "resources/skills/alpha-skill.md",
+        "config.yml",
+    ] {
+        let path = CString::new(
+            root.join(".hya/bundles/alpha")
+                .join(relative)
+                .as_os_str()
+                .as_bytes(),
+        )
+        .unwrap();
+        assert!(
+            unsafe { libc::inotify_add_watch(fd.as_raw_fd(), path.as_ptr(), libc::IN_ACCESS) } >= 0
+        );
+    }
+    for _ in 0..3 {
+        assert_eq!(h.bind(&scope).await.generation(), before.generation());
+    }
+    let mut events = std::fs::File::from(fd);
+    let error = events
+        .read(&mut [0u8; 4096])
+        .expect_err("unchanged binding must perform zero bundle reads");
+    assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+
+    write_project_bundle(&root, "alpha", "acme/alpha", "AFTER");
+    assert_eq!(prompt_of(&h.bind(&scope).await, "alpha-agent"), "BEFORE");
+    let refreshed = h.engine.refresh_bundles(&scope, &root).await.unwrap();
+    assert!(refreshed.errors.is_empty());
+    assert_eq!(prompt_of(&refreshed.binding, "alpha-agent"), "AFTER");
+    drop(h);
+    std::fs::remove_dir_all(root).unwrap();
+    std::fs::remove_dir_all(state).unwrap();
+}
+
+#[tokio::test]
+async fn binding_an_empty_project_does_not_discover_source_edits() {
+    let state = temp_path("empty-cache-state");
+    let root = temp_path("empty-cache-project");
+    let h = harness(&state).await;
+    let scope = project(&[&root]);
+    let before = h.bind(&scope).await;
+    write_project_bundle(&root, "alpha", "acme/alpha", "EXPLICIT_ONLY");
+    let unchanged = h.bind(&scope).await;
+    assert_eq!(unchanged.generation(), before.generation());
+    assert!(unchanged.resolve_agent("alpha-agent").is_none());
+    let refreshed = h.engine.refresh_bundles(&scope, &root).await.unwrap();
+    assert!(refreshed.errors.is_empty());
+    assert!(refreshed.binding.resolve_agent("alpha-agent").is_some());
+    drop(h);
+    std::fs::remove_dir_all(root).unwrap();
+    std::fs::remove_dir_all(state).unwrap();
 }

@@ -420,12 +420,20 @@ impl InstalledBundleRefresh {
         )
     }
 
-    /// Publish a new installed catalog generation when the registry advanced
-    /// or a spawning bundle's `config.yml` changed.
+    /// Publish a new installed catalog generation when the registry advances.
+    /// Bundle configuration files are inspected by explicit refresh.
     ///
     /// Returns `Ok(true)` if the runtime registry was updated, `Ok(false)` when
     /// nothing changed.
     pub async fn refresh_if_changed(&self, runtime: &RuntimeRegistry) -> Result<bool, CoreError> {
+        self.refresh(runtime, false).await
+    }
+
+    async fn refresh(
+        &self,
+        runtime: &RuntimeRegistry,
+        inspect_configs: bool,
+    ) -> Result<bool, CoreError> {
         let config_resolver = BundleConfigResolver::new(self.config_file.clone(), BTreeMap::new());
         let mut watched_configs = self.watched_configs.lock().await;
         let registry_generation = if self.registry.get().is_none()
@@ -446,12 +454,13 @@ impl InstalledBundleRefresh {
         let mut applied_generation = self.applied_generation.lock().await;
         let registry_changed = !self.initialized.load(Ordering::Acquire)
             || registry_generation.unwrap_or(0) != *applied_generation;
-        let config_changed = watched_configs.iter().any(|(file, digest)| {
-            std::fs::read(file)
-                .ok()
-                .map(|bytes| <[u8; 32]>::from(sha2::Sha256::digest(bytes)))
-                != *digest
-        });
+        let config_changed = inspect_configs
+            && watched_configs.iter().any(|(file, digest)| {
+                std::fs::read(file)
+                    .ok()
+                    .map(|bytes| <[u8; 32]>::from(sha2::Sha256::digest(bytes)))
+                    != *digest
+            });
         if !registry_changed && !config_changed {
             return Ok(false);
         }
@@ -698,7 +707,7 @@ impl RuntimeCatalogRefresh for InstalledBundleRefresh {
         if !self.base_catalogs().unreadable_errors.is_empty() {
             self.initialized.store(false, Ordering::Release);
         }
-        let changed = self.refresh_if_changed(runtime).await?;
+        let changed = self.refresh(runtime, true).await?;
         let base = self.base_catalogs();
         if base.unreadable_errors.is_empty() {
             Ok(changed)

@@ -333,7 +333,7 @@ settings = config.read_text() if config.exists() else ""
 | Receivers | `extensions.process` providers (Rust, Bun, and Claude kinds, and the implicit Bun process of a JavaScript Plugin), bundle-declared stdio MCP servers (`resources.mcp`), and Agent activation Bun sidecars. |
 | Expansion tokens | `${BUNDLE_CONFIG_DIR}` and `${BUNDLE_CONFIG_FILE}` expand in process argv, MCP argv, and MCP `env` values, like `${BUNDLE_ROOT}`. |
 | MCP precedence | Inherited `PATH` < `HYA_BUNDLE_CONFIG_*` < declared MCP `env` keys < `HYA_BUNDLE_ROOT` (host-owned). |
-| Restart rule | At each root binding, Hya compares the content digest of every loaded process/MCP bundle's `config.yml` (or its absence) with the digest the bundle's providers started with. On a mismatch, that bundle's providers restart, as they do when the bundle changes. Bundles without a process or MCP server aren't restarted. Sidecars read the file on each activation. Agent model defaults load at startup. |
+| Restart rule | Explicit `POST /v1/bundles:refresh` compares each loaded process/MCP bundle's `config.yml` digest (or its absence) with the digest used at startup. Changed providers restart. Ordinary bindings reuse prepared bundle inputs and do not read these files. Bundle management and Agent model saves request refresh automatically. Bundles without a process or MCP server aren't restarted. Sidecars read the file on each activation. Agent model defaults load at startup. |
 | Format | YAML mapping. Only `agents.<id>.model` is interpreted by Hya; other keys belong to the bundle. |
 
 ## Sample `config.yaml`

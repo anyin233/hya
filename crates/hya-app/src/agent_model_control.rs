@@ -550,9 +550,10 @@ impl hya_server::AgentModelControl for PersistentAgentModelControl {
                 AgentModelIdentity::new(identity.provider_id, identity.model_id).model_ref()
             });
             let bundle_id = definition.origin.bundle_id().map(str::to_string);
+            let bundle_configuration = bundle_id.is_some();
             // A bundle of the binding's Project owns its file in the project
             // source directory; its leaves reach only that Project's bindings
-            // (the Project scope republishes at its next bind), never the
+            // (explicitly refreshed after the write), never the
             // process-wide configuration.
             let project_dirs = binding.project_bundle_dirs().clone();
             let project_bundle = bundle_id
@@ -609,6 +610,16 @@ impl hya_server::AgentModelControl for PersistentAgentModelControl {
                 definition,
             );
             row.configuration_path = Some(path.to_string_lossy().into_owned());
+            drop(configuration);
+            drop(_mutation);
+            if bundle_configuration {
+                self.engine
+                    .refresh_bundles(binding.scope(), binding.workdir())
+                    .await
+                    .map_err(|error| {
+                        server_control_error(AgentModelControlError::Configuration(error.into()))
+                    })?;
+            }
             Ok(row)
         })
     }
