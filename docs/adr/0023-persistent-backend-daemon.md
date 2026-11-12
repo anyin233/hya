@@ -3,6 +3,10 @@
 > **Superseded in part by [ADR-0024](0024-project-model-and-client-chosen-workspace.md):**
 > the daemon's working directory is no longer the starter's (see
 > Consequences).
+>
+> **Superseded in part by [ADR-0031](0031-hot-reload-and-stop-start-restart.md):**
+> a restart is `stop` then `start`; interrupted sessions receive a restore
+> prompt and nothing is handed over between processes.
 
 ADR-0022 made one server own a database and let other frontends attach to
 it. The server still belonged to whichever frontend started it: bare `hya`
