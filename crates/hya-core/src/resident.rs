@@ -2232,6 +2232,10 @@ pub(crate) async fn archive_reported_agent(
             "the team lead is never archived".to_string(),
         ));
     }
+    let _lease = engine
+        .begin_turn(child, &CancellationToken::new())
+        .await?
+        .ok_or(CoreError::Cancelled)?;
     let projection = engine.read_projection(root).await?;
 
     // 1. Terminal handoff (never fails; degrades deterministically). Force-
@@ -2239,7 +2243,7 @@ pub(crate) async fn archive_reported_agent(
     let handoff = if force_degraded {
         engine.degraded_terminal_handoff(child).await
     } else {
-        engine.terminal_handoff(child).await
+        engine.terminal_handoff_claimed(child).await
     };
     engine
         .emit_for_actor(
