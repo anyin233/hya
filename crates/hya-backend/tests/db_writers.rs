@@ -346,11 +346,10 @@ fn direct_writers_record_themselves_in_owner_metadata() -> TestResult {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let pid = child.id().to_string();
     let output = child.wait_with_output()?;
     assert!(output.status.success(), "{}", text(&output));
     let metadata = std::fs::read_to_string(scratch.lock())?;
-    assert!(metadata.trim().is_empty() || metadata.trim() == pid);
+    assert!(metadata.trim().is_empty(), "{metadata}");
 
     let child = scratch
         .hya()
@@ -360,11 +359,10 @@ fn direct_writers_record_themselves_in_owner_metadata() -> TestResult {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let pid = child.id().to_string();
     let output = child.wait_with_output()?;
     assert!(output.status.success(), "{}", text(&output));
     let metadata = std::fs::read_to_string(scratch.lock())?;
-    assert!(metadata.trim().is_empty() || metadata.trim() == pid);
+    assert!(metadata.trim().is_empty(), "{metadata}");
     Ok(())
 }
 

@@ -255,10 +255,11 @@ fn exec_fails_clearly_when_default_agent_is_unselectable() -> Result<(), Box<dyn
     Ok(())
 }
 
-#[test]
-fn sessions_empty_db_prints_no_sessions_found() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::test]
+async fn sessions_empty_db_prints_no_sessions_found() -> Result<(), Box<dyn std::error::Error>> {
     let env = IsolatedEnv::new("hya-empty-sessions-db")?;
     let db = env.root.join("empty.db");
+    drop(SessionStore::connect(db.to_str().ok_or("non-UTF-8 db path")?).await?);
     let expected = format!("no sessions found in {}\n", db.display());
 
     let sessions = hya_command(&env)

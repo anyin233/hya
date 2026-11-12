@@ -55,9 +55,9 @@ pub(crate) async fn run(
 async fn list(db: &str, listing: Listing) -> anyhow::Result<()> {
     // A read never persists projection snapshots: another process (the
     // database's server) may own it.
-    let store = hya_app::open_store(db)
-        .await?
-        .with_projection_snapshot_interval(u64::MAX);
+    let store = hya_store::SessionStore::connect_read_only(db)
+        .await
+        .with_context(|| format!("open existing database read-only at {db}"))?;
     let sessions = store.list_sessions().await.context("list sessions")?;
     let mut shown = 0usize;
     for row in sessions {
@@ -96,12 +96,11 @@ async fn set_archived(db: &str, id: &str, archived: bool) -> anyhow::Result<()> 
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid session id: {id}"))?;
     let verb = if archived { "archived" } else { "unarchived" };
-    match db_writer::claim(db, "sessions")? {
+    match db_writer::claim(db, "sessions").await? {
         Writer::Server(server) => {
             update_through_server(&server.url, session, archived).await?;
         }
-        Writer::Direct => {
-            let store = hya_app::open_store(db).await?;
+        Writer::Direct(store) => {
             store.claim_runtime_owner(hya_store::OwnerRunId::new())?;
             let projection = store.read_projection(session).await?;
             let now = std::time::SystemTime::now()

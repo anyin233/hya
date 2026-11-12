@@ -421,11 +421,10 @@ fn cli_read_only_commands_and_duplicate_inputs_leave_the_database_unchanged()
     );
     assert!(combined_text(&duplicate).contains("duplicate --input key `v`"));
 
-    let sessions = workflow_command(&env)
-        .args(["sessions", "--db"])
-        .arg(&db)
-        .output()?;
-    assert!(String::from_utf8(sessions.stdout)?.contains("no sessions found"));
+    assert!(
+        !db.exists(),
+        "catalog reads or rejected input created a database"
+    );
     Ok(())
 }
 
@@ -452,12 +451,8 @@ fn cli_run_without_name_or_session_fails_before_creating_state()
         "missing binding error was unclear: {}",
         combined_text(&output)
     );
-    let sessions = workflow_command(&env)
-        .args(["sessions", "--db"])
-        .arg(&db)
-        .output()?;
     assert!(
-        String::from_utf8(sessions.stdout)?.contains("no sessions found"),
+        !db.exists(),
         "rejected nameless run created durable Session state"
     );
     Ok(())
