@@ -861,6 +861,7 @@ for line in sys.stdin: threading.Thread(target=handle,args=(json.loads(line),),d
             timeout_ms: Some(30_000),
             env: BTreeMap::new(),
             plugin_dir: None,
+            launch: hya_plugin::config::ProcessLaunch::default(),
         };
         Self {
             gate,
