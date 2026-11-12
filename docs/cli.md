@@ -719,8 +719,18 @@ back to `hya-main`. `hya run`, `hya -p` goal mode, `hya loop`, `hya rpc`, and
 `hya workflow run` (when it creates a new Session) all resolve the root Agent
 the same way.
 
+**Live subagents at the end of a lead turn.** When the lead's turn ends on its
+own (not cancelled, not failed) while subagents it started are still on the
+roster, the run does not end. The harness appends a system message to the lead
+that starts with `HEADLESS RUN`, lists those subagents (handle, status, current
+task), and says that they are stopped when the run ends, then runs the lead
+again so it can `wait` for them or `archive` them. The run ends when a lead turn
+ends with no live subagent, or after two such notice turns in a row in which the
+lead called neither `wait` nor `archive`. `run` behaves the same; an `exec`
+routed through a server does not (see above).
+
 **Stopping and end of run.** Nothing keeps streaming after `exec` returns.
-When the lead's turn ends, `exec` drains every other in-flight turn — team
+When the run ends, `exec` drains every other in-flight turn — team
 members, subagents, and a quiescence-synthesis turn that may have started on
 the lead — before it flushes the trajectory, so the log (and `--json` stdout)
 ends on terminal events: each open assistant message gets `message_finished

@@ -23,6 +23,7 @@ mod db_writer;
 mod exec_stream;
 mod frontend;
 mod generation_pin;
+mod lead_wrapup;
 mod models_cmd;
 mod prompt;
 mod provider_cmd;
@@ -283,13 +284,14 @@ async fn cmd_exec(
     let (turn, stop) = run_until_stopped(
         &built,
         &cancel,
-        engine.run_turn(session, &agent, cancel.clone()),
+        lead_wrapup::run_lead(&engine, session, &agent, cancel.clone()),
     )
     .await?;
     // End of the run: nothing may keep streaming after `exec` returns. Every
     // other in-flight turn (members, a deferred synthesis turn on the lead)
     // is drained before the trajectory is flushed, so stdout and the log end
-    // on terminal events.
+    // on terminal events. `run_lead` already gave the lead its turns to
+    // collect or archive live subagents.
     if stop.is_none() {
         built
             .drain(if turn.is_err() {
