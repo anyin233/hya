@@ -112,14 +112,9 @@ fn parse_project_id(raw: &str) -> Result<ProjectId, StoreError> {
 }
 
 /// `FROM … WHERE` clause selecting the root sessions of the Project named by
-/// the SQL expression `project` that still have an event log.
-/// `delete_session` keeps the materialized `session` row, so the log decides
-/// whether a session still exists.
+/// the SQL expression `project`. Deleted sessions have no materialized row.
 fn live_root_sessions(project: &str) -> String {
-    format!(
-        "FROM session s WHERE s.project_id = {project} AND s.parent_id IS NULL \
-         AND EXISTS (SELECT 1 FROM event_log e WHERE e.session_id = s.id)"
-    )
+    format!("FROM session s WHERE s.project_id = {project} AND s.parent_id IS NULL")
 }
 
 impl SessionStore {
