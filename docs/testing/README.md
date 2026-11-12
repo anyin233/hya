@@ -25,6 +25,22 @@ Machine registry of PR-matrix IDs: [`../../crates/hya-e2e/matrix.toml`](../../cr
 
 ## Local gate: affected components only
 
+`hya-app` unit tests share one process environment/cwd gate in
+`src/test_env.rs`. Hold `StableEnvGuard::new()` for the whole test when calling
+code that reads environment or cwd, including engine construction, runtime
+bindings, config/provider resolution, and subprocess setup. Readers can run
+concurrently. A test that changes this state instead holds `EnvGuard::new()`
+before its first read; `set(name, value)` and `remove(name)` restore the original
+values on drop. `EnvGuard::with_home(home, cwd)` additionally creates the two
+directories, sets `HOME`, `XDG_CONFIG_HOME`, and `XDG_DATA_HOME` to `home`, and
+restores cwd on drop. Acquire only one guard per test.
+
+For example, an engine fixture with a temporary home starts with
+`let _env = crate::test_env::EnvGuard::with_home(&home, &workdir);` and retains
+it until its engine is dropped. Separate module locks cannot isolate
+process-global state: an unguarded engine can capture another test's registry
+path and contend with its install while opening/migrating that database.
+
 Locally, run the checks for the components a change touches (and the direct
 dependents of a changed public contract), not the whole workspace. How to pick
 them: [Development](../development.md#choosing-the-affected-components).

@@ -591,6 +591,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+    use crate::test_env::StableEnvGuard;
     use hya_bundle::{BundleSource, SourceFile, prepare_package};
 
     fn test_config(bundle_id: &str) -> BundleConfigLocation {
@@ -606,6 +607,7 @@ mod tests {
 
     #[tokio::test]
     async fn bundle_mcp_server_sees_path_root_and_config_location() {
+        let _env = StableEnvGuard::new();
         let report = std::env::temp_dir().join(format!(
             "hya-bundle-mcp-env-{}.txt",
             hya_proto::SessionId::new()
@@ -680,6 +682,7 @@ for line in sys.stdin:
 
     #[test]
     fn config_content_is_folded_into_spawning_bundle_fingerprints_only() {
+        let _env = StableEnvGuard::new();
         let spawning = prepare_package(BundleSource::new(
             "spawning",
             vec![
@@ -721,6 +724,7 @@ for line in sys.stdin:
 
     #[test]
     fn process_environment_carries_root_path_and_config_location() {
+        let _env = StableEnvGuard::new();
         let config = test_config("acme/process-env");
         let env = process_env(Path::new("/materialized"), &config);
         assert_eq!(
@@ -753,6 +757,7 @@ for line in sys.stdin:
     #[cfg(unix)]
     #[test]
     fn materialized_native_bundle_executable_can_run() {
+        let _env = StableEnvGuard::new();
         let prepared = prepare_package(BundleSource::new(
             "native-executable",
             vec![
@@ -771,6 +776,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn bundle_process_rejects_unrepresentable_workspace_adapter_contribution() {
+        let _env = StableEnvGuard::new();
         let script = r#"import json,sys
 for line in sys.stdin:
  r=json.loads(line)
@@ -852,6 +858,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn bundle_process_apis_must_equal_the_declared_apis() {
+        let _env = StableEnvGuard::new();
         let declared = "apis: [{ id: usage, method: GET, scope: session, path: /usage, description: Token usage, response_schema: usage.json }]\n";
         let published = prepare_api_bundle(declared, "[{'name':'usage'}]")
             .await
@@ -890,6 +897,7 @@ for line in sys.stdin:
     /// without modes keeps the pre-modes runtime fingerprint.
     #[tokio::test]
     async fn bundle_permission_modes_publish_on_the_runtime_source() {
+        let _env = StableEnvGuard::new();
         let script = r#"import json,sys
 for line in sys.stdin:
  r=json.loads(line)

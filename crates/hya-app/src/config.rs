@@ -2649,17 +2649,18 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+    use crate::test_env::{EnvGuard, StableEnvGuard};
     use hya_tool::{Invocation, Mode};
 
     #[tokio::test]
     async fn hot_reload_disabled_mcp_does_not_resolve_missing_secret() {
+        let mut env = EnvGuard::new();
         let root =
             std::env::temp_dir().join(format!("hya-disabled-mcp-{}", hya_proto::SessionId::new()));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::create_dir_all(root.join("hya")).unwrap();
         let path = root.join("hya/config.yaml");
         std::fs::write(&path, "mcp:\n  disabled:\n    command: [missing]\n    enabled: false\n    env:\n      TOKEN: '{env:HYA_DEFINITELY_UNSET_HOT_RELOAD_TEST}'\n").unwrap();
-        let mut env = EnvGuard::new();
         env.set("XDG_CONFIG_HOME", root.to_str().unwrap());
         let loaded = load().await.unwrap().unwrap();
         assert_eq!(loaded.mcp["disabled"].enabled, Some(false));
@@ -2668,12 +2669,14 @@ mod tests {
 
     #[test]
     fn hot_reload_mcp_retains_remote_and_disabled_declarations() {
+        let _env = StableEnvGuard::new();
         let file: FileConfig = parse_config("mcp:\n  remote:\n    url: https://example.com/mcp\n    transport: sse\n    enabled: false\n").unwrap();
         assert_eq!(resolve_mcp(&file).unwrap(), file.mcp);
     }
 
     #[test]
     fn permission_yaml_compiles_documented_rules_defaults_and_validation() {
+        let _env = StableEnvGuard::new();
         let file = parse_config(
             r#"
 permission:
@@ -2737,6 +2740,7 @@ permission:
 
     #[test]
     fn catalog_scope_cache_keys_parse_and_default() {
+        let _env = StableEnvGuard::new();
         let file =
             parse_config("default_model: x\ncatalog_scopes:\n  max: 4\n  idle_ttl_secs: 90\n")
                 .unwrap();
@@ -2763,6 +2767,7 @@ permission:
 
     #[test]
     fn subagent_limits_parse_from_file_and_env_wins() {
+        let mut env = EnvGuard::new();
         // File block sets every field; a partial block keeps defaults elsewhere.
         // A legacy `max_depth` key parses but is ignored: depth is the hardcoded
         // engine constant (ADR-0015), not a config knob.
@@ -2782,7 +2787,6 @@ permission:
         assert_eq!(defaults.per_run_budget, 1024);
 
         // The new per-team budgets honor their env overrides too.
-        let mut env = EnvGuard::new();
         env.set("HYA_SUBAGENT_MESSAGE_BUDGET", "5");
         let msg = resolve_subagent_limits(file.subagents.as_ref());
         env.remove("HYA_SUBAGENT_MESSAGE_BUDGET");
@@ -2805,6 +2809,7 @@ permission:
 
     #[test]
     fn compaction_settings_parse_from_file_and_env_wins() {
+        let mut env = EnvGuard::new();
         let file = parse_config(
             "default_model: x\ncompaction:\n  token_threshold: 40000\n  keep_recent: 12\n  context_fraction: 0.6\n  reserve_tokens: 32768\n  summary_max_tokens: 8192\n  token_accounting: estimate\n",
         )
@@ -2823,7 +2828,6 @@ permission:
         assert_eq!(defaults.token_accounting, TokenAccountingMode::Auto);
 
         // Env wins over the file value.
-        let mut env = EnvGuard::new();
         env.set("HYA_COMPACTION_RESERVE_TOKENS", "4096");
         env.set("HYA_TOKEN_ACCOUNTING", "provider");
         let overridden = resolve_context_settings(file.compaction.as_ref());
@@ -2844,6 +2848,7 @@ permission:
 
     #[test]
     fn goal_evaluator_model_parses_and_precedence_is_cli_over_config_over_worker() {
+        let _env = StableEnvGuard::new();
         // The `goal:` block parses; absent blocks stay absent.
         let file =
             parse_config("default_model: x\ngoal:\n  evaluator_model: deep/o3-mini\n").unwrap();
@@ -2891,6 +2896,7 @@ permission:
 
     #[test]
     fn compaction_method_order_parses_from_file_and_env_wins() {
+        let mut env = EnvGuard::new();
         // oh-my-pi's own default order, spelled as an omp user would.
         let file = parse_config(
             "default_model: x\ncompaction:\n  method_order: [remote, snapcompact, handoff, shake, soft]\n",
@@ -2907,7 +2913,6 @@ permission:
         // Env wins over the file order; a partial list is completed with the
         // unmentioned methods in default order (omp filter-and-drop, but the
         // ladder never loses a mechanism).
-        let mut env = EnvGuard::new();
         env.set("HYA_COMPACTION_METHOD_ORDER", "handoff, soft, shake");
         let overridden = resolve_context_settings(file.compaction.as_ref());
         assert_eq!(
@@ -2969,6 +2974,7 @@ providers:
 
     #[test]
     fn parses_websearch_tool_config() {
+        let _env = StableEnvGuard::new();
         let file = parse_config(
             "tools:\n  websearch:\n    provider: parallel\n    endpoint: https://search.example.test/mcp\n    key: secret\n    enabled: false\n",
         )
@@ -2986,6 +2992,7 @@ providers:
 
     #[test]
     fn parses_categories_into_ordered_registry() {
+        let _env = StableEnvGuard::new();
         let file = parse_config(
             "default_model: x\ncategories:\n  deep: [primary/opus, backup/sonnet]\n  quick: [gw/haiku]\n  empty: []\n",
         )
@@ -3008,6 +3015,7 @@ providers:
 
     #[test]
     fn parses_providers_kinds_and_models() {
+        let _env = StableEnvGuard::new();
         let parsed = parse_providers(FIXTURE).unwrap();
         assert_eq!(
             parsed.len(),
@@ -3027,9 +3035,9 @@ providers:
 
     #[test]
     fn provider_retry_defaults_without_config() {
+        let _env = EnvGuard::new();
         // Env-sensitive assertions take the same gate as env writers, so a
         // concurrent override test can never leak a value into this read.
-        let _env = EnvGuard::new();
         let parsed = parse_providers(FIXTURE).unwrap();
         for provider in &parsed {
             assert_eq!(provider.retry, hya_provider::RetryConfig::default());
@@ -3080,11 +3088,13 @@ providers:
 
     #[test]
     fn empty_config_yields_no_providers() {
+        let _env = StableEnvGuard::new();
         assert!(parse_providers("{}").unwrap().is_empty());
     }
 
     #[test]
     fn parsed_models_keep_provider_reasoning_variants() {
+        let _env = StableEnvGuard::new();
         let parsed = parse_providers(FIXTURE).unwrap();
 
         let openai = parsed.iter().find(|entry| entry.id == "gw-oai").unwrap();
@@ -3103,6 +3113,7 @@ providers:
 
     #[test]
     fn response_model_config_resolves_default_and_all_variants() {
+        let _env = StableEnvGuard::new();
         let parsed = parse_providers(
             r#"
 providers:
@@ -3131,6 +3142,7 @@ providers:
 
     #[test]
     fn reasoning_variants_keep_configured_order() {
+        let _env = StableEnvGuard::new();
         let parsed = parse_providers(
             r#"
 providers:
@@ -3153,6 +3165,7 @@ providers:
 
     #[test]
     fn grok_build_config_has_capabilities_without_default_effort() {
+        let _env = StableEnvGuard::new();
         let parsed = parse_providers(
             r#"
 providers:
@@ -3173,6 +3186,7 @@ providers:
 
     #[test]
     fn grok_build_uses_login_token_with_session_headers() {
+        let _env = StableEnvGuard::new();
         let cred = resolve_provider_credential_with(
             ProviderKind::GrokBuild,
             Some("oauth-jwt"),
@@ -3186,6 +3200,7 @@ providers:
 
     #[test]
     fn grok_build_falls_back_to_inline_api_key_with_session_headers() {
+        let _env = StableEnvGuard::new();
         let cred =
             resolve_provider_credential_with(ProviderKind::GrokBuild, None, Some("inline-oauth"))
                 .unwrap();
@@ -3195,6 +3210,7 @@ providers:
 
     #[test]
     fn non_grok_provider_uses_bearer_without_session_headers() {
+        let _env = StableEnvGuard::new();
         let cred = resolve_provider_credential_with(
             ProviderKind::OpenAiResponse,
             Some("login-sk"),
@@ -3208,6 +3224,7 @@ providers:
 
     #[test]
     fn openai_codex_kind_parses_and_enables_codex_session() {
+        let _env = StableEnvGuard::new();
         let parsed = parse_providers(
             r#"
 providers:
@@ -3228,6 +3245,7 @@ providers:
 
     #[test]
     fn upsert_oauth_provider_keeps_empty_or_explicit_models_untouched() {
+        let _env = StableEnvGuard::new();
         let dir = {
             use std::sync::atomic::{AtomicU64, Ordering};
             use std::time::{SystemTime, UNIX_EPOCH};
@@ -3282,6 +3300,7 @@ providers:
 
     #[test]
     fn rejects_unknown_provider_kind_and_reasoning_efforts() {
+        let _env = StableEnvGuard::new();
         let unknown_kind = parse_config(
             "providers:\n  gateway:\n    kind: openai-responses\n    base_url: https://example.test/v1\n    api_key: test\n    models: [gpt-5.6-sol]\n",
         )
@@ -3313,6 +3332,7 @@ providers:
 
     #[test]
     fn legacy_string_models_keep_chat_aliases_without_default_effort() {
+        let _env = StableEnvGuard::new();
         for kind in ["openai", "openai-compatible", "openai-completion"] {
             let yaml = format!(
                 "providers:\n  gw:\n    kind: {kind}\n    base_url: https://gw.example/v1\n    models: [m1]\n"
@@ -3326,8 +3346,8 @@ providers:
 
     #[test]
     fn resolves_env_template_key() {
-        // SAFETY: single-threaded test; sets then reads a unique env var.
         let mut env = EnvGuard::new();
+        // SAFETY: single-threaded test; sets then reads a unique env var.
         env.set("HYA_TEST_KEY_XYZ", "resolved-secret");
         assert_eq!(
             resolve_secret("{env:HYA_TEST_KEY_XYZ}").unwrap(),
@@ -3338,6 +3358,7 @@ providers:
 
     #[test]
     fn parses_provider_without_apikey() {
+        let _env = StableEnvGuard::new();
         let yaml = "
 providers:
   12th:
@@ -3353,6 +3374,7 @@ providers:
 
     #[test]
     fn parses_mcp_and_keeps_disabled_servers() {
+        let _env = StableEnvGuard::new();
         let yaml = "
 mcp:
   echo:
@@ -3380,58 +3402,9 @@ mcp:
         assert_eq!(echo.timeout_ms, Some(250));
     }
 
-    /// Serialize tests that mutate process-global environment variables and
-    /// restore the previous values on drop, so concurrent tests never observe
-    /// leaked `HYA_*` state (a race that otherwise fires as flaky failures).
-    ///
-    static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    struct EnvGuard {
-        _lock: std::sync::MutexGuard<'static, ()>,
-        saved: Vec<(String, Option<std::ffi::OsString>)>,
-    }
-
-    impl EnvGuard {
-        /// Take the env gate. A test must call this **once** — re-entering
-        /// while an earlier guard is still alive would wait on itself.
-        fn new() -> Self {
-            let lock = ENV_TEST_LOCK
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            Self {
-                _lock: lock,
-                saved: Vec::new(),
-            }
-        }
-
-        fn set(&mut self, name: &str, value: &str) {
-            if !self.saved.iter().any(|(n, _)| n == name) {
-                self.saved.push((name.to_string(), std::env::var_os(name)));
-            }
-            unsafe { std::env::set_var(name, value) };
-        }
-
-        fn remove(&mut self, name: &str) {
-            if !self.saved.iter().any(|(n, _)| n == name) {
-                self.saved.push((name.to_string(), std::env::var_os(name)));
-            }
-            unsafe { std::env::remove_var(name) };
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for (name, previous) in self.saved.iter().rev() {
-                match previous {
-                    Some(value) => unsafe { std::env::set_var(name, value) },
-                    None => unsafe { std::env::remove_var(name) },
-                }
-            }
-        }
-    }
-
     #[test]
     fn mcp_server_keys_must_be_valid_namespace_tokens() {
+        let _env = StableEnvGuard::new();
         let yaml = "mcp:\n  bad__key:\n    command: [echo]\n";
         let file = parse_config(yaml).unwrap();
         assert!(
@@ -3451,6 +3424,7 @@ mcp:
 
     #[test]
     fn parses_plugins_section() {
+        let _env = StableEnvGuard::new();
         let yaml = "
 plugins:
   memory:
@@ -3492,6 +3466,7 @@ plugins:
 
     #[test]
     fn ensure_config_file_at_creates_parent_dir_and_minimal_config() {
+        let _env = StableEnvGuard::new();
         let dir = std::env::temp_dir().join(format!("hya-config-first-run-{}", std::process::id()));
         let path = dir.join("nested/hya/config.yaml");
         let _ = std::fs::remove_dir_all(&dir);
@@ -3514,6 +3489,7 @@ plugins:
 
     #[test]
     fn object_models_parse_context_and_output_limits() {
+        let _env = StableEnvGuard::new();
         let parsed = parse_providers(GLM_LIMIT_YAML).unwrap();
         let models = &parsed[0].models;
         assert_eq!(models[0].id, "glm-5.3");
@@ -3537,6 +3513,7 @@ plugins:
 
     #[test]
     fn rejects_invalid_model_limits() {
+        let _env = StableEnvGuard::new();
         let limit_yaml = |limit: &str| {
             format!(
                 "providers:\n  12th:\n    kind: anthropic\n    base_url: https://api.12th.day/v1\n    models:\n      - id: glm-5.3-flash\n        limit: {limit}\n"
@@ -3575,6 +3552,7 @@ plugins:
 
     #[tokio::test]
     async fn configured_model_modalities_reach_route_image_input() {
+        let _env = StableEnvGuard::new();
         let yaml = "providers:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n      - id: vision\n        modalities:\n          input: [text, image]\n      - id: text-only\n        modalities:\n          input: [text]\n      - plain\n";
         let provider = parse_providers(yaml).unwrap().into_iter().next().unwrap();
         let credential = ProviderCredential {
@@ -3607,6 +3585,7 @@ plugins:
 
     #[test]
     fn model_entry_kind_overrides_the_effective_protocol_menu() {
+        let _env = StableEnvGuard::new();
         let yaml = "providers:\n  12th:\n    kind: openai\n    base_url: https://api.12th.day/v1\n    models:\n      - gpt-6-astra\n      - id: claude-opus-5\n        kind: anthropic\n      - id: glm-exp\n        kind: anthropic\n        reasoning:\n          variants: [low, high]\n";
         let provider = parse_providers(yaml).unwrap().into_iter().next().unwrap();
         let models = &provider.models;
@@ -3630,6 +3609,7 @@ plugins:
 
     #[test]
     fn model_entry_kind_rejects_unknown_labels() {
+        let _env = StableEnvGuard::new();
         let bad = "providers:\n  12th:\n    kind: openai\n    base_url: https://api.12th.day/v1\n    models:\n      - id: m\n        kind: anthropic-msgs\n";
         let error = parse_providers(bad).err().unwrap();
         let message = format!("{error:#}");
@@ -3654,6 +3634,7 @@ plugins:
 
     #[test]
     fn model_kind_override_partitions_one_route_per_protocol() {
+        let _env = StableEnvGuard::new();
         let yaml = "providers:\n  12th:\n    kind: openai-response\n    base_url: https://api.12th.day/v1\n    models:\n      - gpt-6-astra\n      - id: claude-opus-5\n        kind: anthropic\n      - id: glm-exp\n        kind: anthropic\n";
         let provider = parse_providers(yaml).unwrap().into_iter().next().unwrap();
         let plan = plan_for_provider(&provider, &no_key(), &[], None).unwrap();
@@ -3705,6 +3686,7 @@ plugins:
 
     #[test]
     fn model_kind_override_applies_effective_kind_to_cached_rows() {
+        let _env = StableEnvGuard::new();
         let yaml = "providers:\n  12th:\n    kind: anthropic\n    base_url: https://api.12th.day/v1\n    models:\n      - id: gpt-6-astra\n        kind: openai\n";
         let provider = parse_providers(yaml).unwrap().into_iter().next().unwrap();
         // A cached row without effort metadata: the merged row's fallback menu
@@ -3727,6 +3709,7 @@ plugins:
 
     #[test]
     fn set_model_entry_preserves_an_entry_kind_override() {
+        let _env = StableEnvGuard::new();
         let path = temp_config(
             "model-kind-keep",
             "providers:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n      - id: m\n        kind: anthropic\n        name: Mine\n",
@@ -3750,6 +3733,7 @@ plugins:
 
     #[tokio::test]
     async fn configured_model_limits_reach_route_capabilities() {
+        let _env = StableEnvGuard::new();
         let provider = parse_providers(GLM_LIMIT_YAML)
             .unwrap()
             .into_iter()
@@ -3812,6 +3796,7 @@ plugins:
 
     #[test]
     fn effective_models_merge_cache_and_config_per_id_with_field_level_override() {
+        let _env = StableEnvGuard::new();
         let provider = parse_providers(
             r#"
 providers:
@@ -3887,6 +3872,7 @@ providers:
     /// runtime fallbacks (context window and the kind's effort menu).
     #[test]
     fn catalog_rows_report_unknown_metadata_as_unknown() {
+        let _env = StableEnvGuard::new();
         let provider = parse_providers(
             r#"
 providers:
@@ -3941,6 +3927,7 @@ providers:
 
     #[test]
     fn cached_output_limit_never_contradicts_a_configured_context() {
+        let _env = StableEnvGuard::new();
         let provider = parse_providers(
             "providers:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n      - id: m\n        limit:\n          context: 1000\n",
         )
@@ -3957,6 +3944,7 @@ providers:
     /// request effort: only the explicit configured default does.
     #[test]
     fn cached_variants_never_override_an_explicit_configured_default() {
+        let _env = StableEnvGuard::new();
         let provider = parse_providers(
             r#"
 providers:
@@ -4000,6 +3988,7 @@ providers:
 
     #[test]
     fn upsert_provider_entry_preserves_other_keys_and_creates_discovery_providers() {
+        let _env = StableEnvGuard::new();
         let path = temp_config(
             "upsert",
             "default_model: gw/m\nprovider_retry:\n  max_attempts: 5\nproviders:\n  gw:\n    kind: openai\n    base_url: https://old.example/v1\n    api_key: \"{env:GW_KEY}\"\n    models: [m]\n    retry:\n      max_attempts: 2\n",
@@ -4028,6 +4017,7 @@ providers:
 
     #[test]
     fn set_and_remove_model_entries_round_trip_string_and_mapping_forms() {
+        let _env = StableEnvGuard::new();
         let path = temp_config(
             "models",
             "providers:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n      - plain\n      - id: detailed\n        reasoning:\n          variants: [low, high]\n",
@@ -4133,6 +4123,7 @@ providers:
 
     #[test]
     fn set_model_entry_patches_only_the_fields_present() {
+        let _env = StableEnvGuard::new();
         let path = temp_config(
             "model-patch",
             "providers:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n      - id: m\n        name: Mine\n        limit:\n          context: 1000\n          output: 100\n        reasoning: true\n      - plain\n",
@@ -4240,6 +4231,7 @@ providers:
 
     #[test]
     fn detailed_model_entries_accept_name_and_boolean_reasoning() {
+        let _env = StableEnvGuard::new();
         let parsed = parse_providers(
             "providers:\n  gw:\n    kind: anthropic\n    base_url: https://gw.example/v1\n    models:\n      - id: a\n        name: Model A\n        reasoning: true\n      - id: b\n        reasoning: false\n",
         )

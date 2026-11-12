@@ -1373,6 +1373,8 @@ fn update_bytes(digest: &mut Sha256, value: &[u8]) {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_env::StableEnvGuard;
+
     use std::collections::BTreeMap;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1497,6 +1499,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn hot_reload_failed_config_does_not_block_or_repeat_on_bind() -> anyhow::Result<()> {
+        let _env = StableEnvGuard::new();
         let h = RefreshHarness::new().await?;
         h.script("bad", false)?;
         h.script("good", true)?;
@@ -1514,6 +1517,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn hot_reload_explicit_refresh_retries_identical_failed_config() -> anyhow::Result<()> {
+        let _env = StableEnvGuard::new();
         let h = RefreshHarness::new().await?;
         h.script("retry", false)?;
         h.config(&["retry"])?;
@@ -1548,6 +1552,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn hot_reload_config_edit_does_not_retry_unrelated_failed_mcp() -> anyhow::Result<()> {
+        let _env = StableEnvGuard::new();
         use hya_server::McpControl as _;
         let h = RefreshHarness::new().await?;
         let log = h.root.join("mcp.starts");
@@ -1590,6 +1595,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn hot_reload_connect_compares_mcp_defaults_semantically() -> anyhow::Result<()> {
+        let _env = StableEnvGuard::new();
         use hya_server::McpControl as _;
         let h = RefreshHarness::new().await?;
         let script = r#"import json,sys
@@ -1643,6 +1649,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn hot_reload_global_events_survive_scope_eviction() -> anyhow::Result<()> {
+        let _env = StableEnvGuard::new();
         let h = RefreshHarness::new().await?;
         let events = h.root.join("events.log");
         let script = format!(
@@ -1945,16 +1952,19 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn hot_reload_global_events_include_subagent_sidecar_preturn() -> anyhow::Result<()> {
+        let _env = StableEnvGuard::new();
         assert_global_events_with_child_sidecar(false).await
     }
 
     #[tokio::test]
     async fn hot_reload_global_events_include_resident_sidecar_preturn() -> anyhow::Result<()> {
+        let _env = StableEnvGuard::new();
         assert_global_events_with_child_sidecar(true).await
     }
 
     #[tokio::test]
     async fn hot_reload_removed_global_plugin_stops_despite_idle_sessions() -> anyhow::Result<()> {
+        let _env = StableEnvGuard::new();
         let h = RefreshHarness::new().await?;
         h.script("global", true)?;
         h.config(&["global"])?;
@@ -2031,6 +2041,7 @@ for line in sys.stdin:
     #[tokio::test]
     async fn hot_reload_http_refresh_reports_partial_publication_and_retries() -> anyhow::Result<()>
     {
+        let _env = StableEnvGuard::new();
         use axum::body::Body;
         use http_body_util::BodyExt as _;
         use tower::ServiceExt as _;
@@ -2084,6 +2095,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn hot_reload_enabling_disabled_mcp_resolves_its_secret() -> anyhow::Result<()> {
+        let _env = StableEnvGuard::new();
         use hya_server::McpControl as _;
         let h = RefreshHarness::new().await?;
         let script = r#"import json,os,sys
@@ -2213,6 +2225,7 @@ for line in sys.stdin:
     /// server is stored without connecting.
     #[test]
     fn hot_reload_unrelated_source_does_not_invalidate_pending_preparation() -> anyhow::Result<()> {
+        let _env = StableEnvGuard::new();
         let registry = Arc::new(RuntimeRegistry::new(
             ToolRegistry::builtins(),
             crate::runtime::builtin_agent_catalog()?,
@@ -2243,6 +2256,7 @@ for line in sys.stdin:
 
     #[test]
     fn hot_reload_identical_failed_source_can_retry() -> anyhow::Result<()> {
+        let _env = StableEnvGuard::new();
         let registry = Arc::new(RuntimeRegistry::new(
             ToolRegistry::builtins(),
             crate::runtime::builtin_agent_catalog()?,
@@ -2278,6 +2292,7 @@ for line in sys.stdin:
 
     #[test]
     fn hot_reload_mcp_compares_remote_endpoint_and_transport() -> anyhow::Result<()> {
+        let _env = StableEnvGuard::new();
         let registry = Arc::new(RuntimeRegistry::new(
             ToolRegistry::builtins(),
             crate::runtime::builtin_agent_catalog()?,
@@ -2310,6 +2325,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn mcp_add_keeps_failed_servers_and_never_connects_disabled() -> anyhow::Result<()> {
+        let _env = StableEnvGuard::new();
         use hya_mcp::McpStatus;
         use hya_server::McpControl as _;
 
@@ -2363,6 +2379,7 @@ for line in sys.stdin:
 
     #[test]
     fn stale_success_is_closed_and_cannot_publish_over_newer_ticket() -> anyhow::Result<()> {
+        let _env = StableEnvGuard::new();
         let registry = Arc::new(RuntimeRegistry::new(
             ToolRegistry::builtins(),
             crate::runtime::builtin_agent_catalog()?,
@@ -2411,6 +2428,7 @@ for line in sys.stdin:
     #[test]
     fn explicit_removal_publishes_drop_only_despite_unrelated_connect_failure() -> anyhow::Result<()>
     {
+        let _env = StableEnvGuard::new();
         let registry = Arc::new(RuntimeRegistry::new(
             ToolRegistry::builtins(),
             crate::runtime::builtin_agent_catalog()?,
@@ -2459,6 +2477,7 @@ for line in sys.stdin:
 
     #[test]
     fn source_failure_preserves_independent_successes() -> anyhow::Result<()> {
+        let _env = StableEnvGuard::new();
         let registry = Arc::new(RuntimeRegistry::new(
             ToolRegistry::builtins(),
             crate::runtime::builtin_agent_catalog()?,
@@ -2513,6 +2532,7 @@ for line in sys.stdin:
 
     #[test]
     fn candidate_rejection_records_failure_and_invalidates_attempt() -> anyhow::Result<()> {
+        let _env = StableEnvGuard::new();
         let registry = Arc::new(RuntimeRegistry::new(
             ToolRegistry::builtins(),
             crate::runtime::builtin_agent_catalog()?,
@@ -2566,6 +2586,7 @@ for line in sys.stdin:
 
     #[test]
     fn mixed_mcp_plugin_plan_publishes_each_complete_source() -> anyhow::Result<()> {
+        let _env = StableEnvGuard::new();
         let registry = Arc::new(RuntimeRegistry::new(
             ToolRegistry::builtins(),
             crate::runtime::builtin_agent_catalog()?,
@@ -2672,6 +2693,7 @@ for line in sys.stdin:
     #[test]
     fn prepared_static_bundle_skills_require_exact_contributions_and_preserve_metadata()
     -> anyhow::Result<()> {
+        let _env = StableEnvGuard::new();
         use hya_bundle::PreparedResource;
         use hya_plugin::messages::{PluginContributionSet, SkillContribution};
 
