@@ -6,7 +6,6 @@ use hya_tool::Tool;
 
 mod agents;
 mod archive;
-mod invalid;
 mod lsp;
 mod lsp_path;
 mod plan;
@@ -42,8 +41,7 @@ pub unsafe extern "C" fn hya_tool_bundle_abi_v1(out: *mut u8) {
 pub unsafe extern "C" fn hya_tool_bundle_register_v1(out: *mut Vec<Arc<dyn Tool>>) {
     // SAFETY: the host calls this only after the ABI digest matches.
     if let Some(out) = unsafe { out.as_mut() } {
-        let tools: [Arc<dyn Tool>; 11] = [
-            Arc::new(invalid::InvalidTool),
+        let tools: [Arc<dyn Tool>; 10] = [
             Arc::new(lsp::LspTool),
             Arc::new(skill::SkillTool),
             Arc::new(agents::ListAgentsTool),

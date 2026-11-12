@@ -18,7 +18,7 @@ mod reference;
 mod registry;
 mod router;
 
-pub use artifact::{ArtifactHook, ArtifactId, ArtifactMeta, ArtifactStore};
+pub use artifact::{ArtifactId, ArtifactMeta, ArtifactStore};
 pub use plane::ArtifactPlane;
 pub use reference::{HandleRef, HandleScheme, Projection};
 pub use registry::{
@@ -55,14 +55,6 @@ pub enum HandleError {
     /// The resource does not exist.
     #[error("handle not found: {0}")]
     NotFound(String),
-    /// A hook in the chain failed.
-    #[error("artifact hook {hook} failed: {message}")]
-    Hook {
-        /// Hook name, for locating the offending registration.
-        hook: String,
-        /// Bounded diagnostic.
-        message: String,
-    },
     /// The scheme is known, but its resources are not writable.
     ///
     /// Distinct from [`HandleError::UnknownScheme`]: `artifact://` is a real

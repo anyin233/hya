@@ -21,7 +21,7 @@ pub struct SendTool;
 struct SendInput {
     /// Channel address: `#channel`, a bare channel id (`DM-…`/`announce-…`),
     /// a vertical peer handle, or `^parent`. Omit to use the default channel.
-    #[serde(default, alias = "to")]
+    #[serde(default)]
     channel: String,
     body: String,
 }

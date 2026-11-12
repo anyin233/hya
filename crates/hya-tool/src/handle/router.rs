@@ -1,10 +1,7 @@
 //! Resolution of internal resource URLs to bodies.
 //!
 //! The router owns the scheme table. A [`HandleRef`] names a family and a
-//! resource; the router turns that into bytes, runs any `artifact://` hook
-//! chain, and finally applies the caller's projection — in that order, so a
-//! hook always sees the whole body and `?head=40` always means the first forty
-//! lines of what the caller will actually receive.
+//! resource; the router reads its bytes and applies the caller's projection.
 
 use std::path::PathBuf;
 
@@ -25,7 +22,7 @@ const VIEW_DIR: &str = ".views";
 /// A resolved handle body and what produced it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HandleContent {
-    /// Body after hooks and projection.
+    /// Body after projection.
     pub body: String,
     /// Family that resolved it.
     pub scheme: HandleScheme,
@@ -67,7 +64,7 @@ impl HandleRouter {
         }
     }
 
-    /// Replace the artifact store, carrying whatever hook chain it holds.
+    /// Replace the artifact store.
     #[must_use]
     pub fn with_artifacts(mut self, artifacts: ArtifactStore) -> Self {
         self.artifacts = artifacts;
@@ -91,8 +88,8 @@ impl HandleRouter {
     ///
     /// # Errors
     /// Returns [`HandleError::NotFound`] when the resource does not exist,
-    /// [`HandleError::Io`] when it cannot be read, [`HandleError::Hook`] when an
-    /// `artifact://` hook fails, and [`HandleError::MalformedQuery`] when the
+    /// [`HandleError::Io`] when it cannot be read, and
+    /// [`HandleError::MalformedQuery`] when the
     /// projection cannot be applied to the body.
     pub fn resolve(&self, reference: &HandleRef) -> Result<HandleContent, HandleError> {
         let (body, media_type) = match reference.scheme() {
@@ -119,7 +116,7 @@ impl HandleRouter {
     /// Resolve `reference` to a file holding the body a reader should present.
     ///
     /// A handle needing no transformation resolves to the stored bytes
-    /// themselves. A hook chain or a projection produces *different* bytes, so
+    /// themselves. A projection produces *different* bytes, so
     /// those are materialized once into a content-addressed view beside the
     /// store and reused on the next identical request.
     ///
@@ -150,20 +147,20 @@ impl HandleRouter {
             return None;
         }
         match reference.scheme() {
-            HandleScheme::Artifact if !self.artifacts.has_hooks() => {
+            HandleScheme::Artifact => {
                 let id = ArtifactId::parse(reference.path()).ok()?;
                 let path = self.artifacts.body_path_of(&id);
                 path.exists().then_some(path)
             }
             HandleScheme::Local => self.local_path(reference.path()).ok(),
-            HandleScheme::Artifact | HandleScheme::Skill => None,
+            HandleScheme::Skill => None,
         }
     }
 
     /// Write `body` to a content-addressed view and return its path.
     ///
     /// Keyed by both the handle text and the body digest, so an identical
-    /// request reuses the file while a hook whose result changed never reads a
+    /// request reuses the file while changed projected content never reads a
     /// stale one.
     fn materialize(&self, reference: &HandleRef, body: &str) -> Result<PathBuf, HandleError> {
         let mut digest = Sha256::new();

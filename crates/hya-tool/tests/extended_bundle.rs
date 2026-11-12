@@ -7,7 +7,6 @@ use hya_tool::ToolRegistry;
 fn extended_tools_are_registered_from_their_native_bundle() {
     let registry = ToolRegistry::builtins();
     for name in [
-        "invalid",
         "lsp",
         "skill",
         "list_agents",

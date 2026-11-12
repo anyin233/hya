@@ -33,7 +33,6 @@ impl Tool for ArchiveTool {
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
         let target = input
             .get("target")
-            .or_else(|| input.get("handle"))
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|text| !text.is_empty())

@@ -143,8 +143,7 @@ async fn send_handles_and_the_parent_sentinel_route_to_direct_mail() {
         "{captured:?}"
     );
 
-    // The legacy `to` field spelling still parses.
-    let (_, captured) = run_send(json!({ "to": "main/worker-2", "body": "hi" })).await;
+    let (_, captured) = run_send(json!({ "channel": "main/worker-2", "body": "hi" })).await;
     assert!(
         matches!(
             &captured,
@@ -201,5 +200,5 @@ fn send_replaces_dm_and_broadcast_in_the_registry() {
         .collect();
     assert!(!canonical.contains(&"dm".to_string()));
     assert!(!canonical.contains(&"broadcast".to_string()));
-    assert_eq!(canonical.len(), 29);
+    assert_eq!(canonical.len(), 28);
 }

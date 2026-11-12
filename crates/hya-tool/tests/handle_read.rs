@@ -8,11 +8,10 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hya_tool::handle::{ArtifactHook, ArtifactMeta, ArtifactPlane, ArtifactStore, HandleError};
+use hya_tool::handle::{ArtifactPlane, ArtifactStore};
 use hya_tool::{
     Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
     SpawnerPlane, TodoPlane, ToolCtx, ToolRegistry, WebSearchPlane,
@@ -133,100 +132,6 @@ async fn read_applies_a_handle_projection() {
     assert!(
         !output.contains("four"),
         "head=2 must not reach the fourth line: {output}"
-    );
-}
-
-/// Hooks run in registration order, each transforming the previous result, which
-/// is what lets independent hooks compose into one retrieval.
-#[tokio::test]
-async fn read_runs_the_artifact_hook_chain_in_order() {
-    struct Replace {
-        name: &'static str,
-        from: &'static str,
-        to: &'static str,
-    }
-
-    impl ArtifactHook for Replace {
-        fn name(&self) -> &str {
-            self.name
-        }
-
-        fn post_process(
-            &self,
-            _meta: &ArtifactMeta,
-            body: String,
-        ) -> Result<Option<String>, HandleError> {
-            Ok(Some(body.replace(self.from, self.to)))
-        }
-    }
-
-    // Given
-    let workdir = tempdir();
-    let handle = spill(&workdir, "noise\nkeep\n");
-    let plane = ArtifactPlane::new(vec![
-        Arc::new(Replace {
-            name: "strip-noise",
-            from: "noise",
-            to: "quiet",
-        }),
-        Arc::new(Replace {
-            name: "shout",
-            from: "quiet",
-            to: "SILENT",
-        }),
-    ]);
-    let ctx = ctx_with(workdir, plane);
-
-    // When
-    let result = read(&ctx, &handle).await.unwrap();
-
-    // Then
-    let output = output_text(&result);
-    assert!(
-        output.contains("SILENT"),
-        "the second hook must see the first hook's output: {output}"
-    );
-    assert!(output.contains("keep"), "{output}");
-}
-
-/// A hook must never change what was captured. It runs on retrieval so that a
-/// hook which turns out to be wrong has not already destroyed the output.
-#[tokio::test]
-async fn hooks_do_not_alter_the_stored_artifact() {
-    struct Truncates;
-
-    impl ArtifactHook for Truncates {
-        fn name(&self) -> &str {
-            "truncates"
-        }
-
-        fn post_process(
-            &self,
-            _meta: &ArtifactMeta,
-            _body: String,
-        ) -> Result<Option<String>, HandleError> {
-            Ok(Some("gone".to_string()))
-        }
-    }
-
-    // Given
-    let workdir = tempdir();
-    let handle = spill(&workdir, "original body\n");
-    let ctx = ctx_with(
-        workdir.clone(),
-        ArtifactPlane::new(vec![Arc::new(Truncates)]),
-    );
-
-    // When
-    let result = read(&ctx, &handle).await.unwrap();
-
-    // Then
-    assert!(output_text(&result).contains("gone"));
-    let id = handle.strip_prefix("artifact://").unwrap();
-    let stored = std::fs::read_to_string(workdir.join(ARTIFACT_DIR).join(id)).unwrap();
-    assert_eq!(
-        stored, "original body\n",
-        "the captured bytes must survive any hook"
     );
 }
 
