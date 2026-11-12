@@ -41,8 +41,8 @@ export interface RevertControllerOptions {
   openPicker(spec: PickerSpec): void
 }
 
-/** Status when `/undo`, `/redo`, or `/fork` runs in a subagent's read-only view. */
-export const revertReadOnlyStatus = "Read-only: this is a subagent's session · Esc returns to the parent"
+/** Status when execution edits run in a subagent's read-only view. */
+export const revertReadOnlyStatus = "Read-only: this is a subagent's session · send mail to steer this subagent · Esc returns to the parent"
 
 const busyText = "a turn is running · wait for it to finish or press Esc to cancel it"
 

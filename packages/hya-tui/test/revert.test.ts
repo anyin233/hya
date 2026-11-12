@@ -236,8 +236,9 @@ test("/fork opens a picker of the prompts; choosing one forks before it, switche
   expect(store.state.status).toBe("Forked before “second prompt” · the prompt is in the input")
 })
 
-test("/fork at the head copies everything and leaves the input alone", async () => {
+test("/fork at the head of a child copies everything and leaves the input alone", async () => {
   const { store, calls, pickers, revert, input } = harness()
+  store.setSelected({ ...store.state.selected!, parent: "root" })
   revert.fork()
   await pickers[0]!.onSelect(pickers[0]!.rows[0]!)
   expect(calls).toEqual(["fork s head", "refresh", "open hysec_fork"])

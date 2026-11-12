@@ -117,7 +117,7 @@ import { createModeSwitcher } from "./modes"
 import { setExtensionTrust } from "../commands/native"
 import { createProviderController } from "./providers"
 import { answerPrompt } from "./prompts"
-import { createRevertController } from "./revert"
+import { revertReadOnlyStatus as readOnlyStatus, createRevertController } from "./revert"
 import { createRulesController } from "./rules"
 import type { AppStore } from "../state/store"
 import { errorLine } from "../state/projectCommands"
@@ -1908,4 +1908,4 @@ export const bridgeDownPromptStatus = "Not sent · the relay bridge exited · /c
 export const stoppedPromptStatus = "Not sent · the backend is stopped (hya serve stop) · /reconnect starts it again"
 
 /** Status shown when a prompt is submitted in a subagent's read-only view. */
-export const readOnlyStatus = "Read-only: this is a subagent's session · Esc returns to the parent"
+export { revertReadOnlyStatus as readOnlyStatus } from "./revert"
