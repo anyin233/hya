@@ -3842,7 +3842,7 @@ You are the runtime-installed agent.
             .commit_resident_mutation(
                 &queued_claim,
                 queued_root,
-                &[Event::AgentRegistered {
+                vec![Event::AgentRegistered {
                     session: queued_root,
                     agent_session: queued_actor,
                     handle: "queued-1".to_string(),
@@ -3875,7 +3875,7 @@ You are the runtime-installed agent.
             .commit_resident_mutation(
                 &running_claim,
                 running_root,
-                &[
+                vec![
                     Event::AgentRegistered {
                         session: running_root,
                         agent_session: running_actor,
@@ -4059,7 +4059,7 @@ You are the installed resident agent.
             .commit_resident_mutation(
                 &claim,
                 root,
-                &[Event::AgentRegistered {
+                vec![Event::AgentRegistered {
                     session: root,
                     agent_session: actor,
                     handle: "installed-resident-1".to_string(),

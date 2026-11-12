@@ -89,7 +89,50 @@ mod tests {
     use hya_proto::{AgentName, Event, ModelRef, SubagentMode};
     use sqlx::Row;
 
-    /// Only `session_created` creates placement rows; registration creates no stubs.
+    #[tokio::test]
+    async fn failed_batch_rolls_back_events_and_materialization() {
+        let store = SessionStore::connect_memory().await.unwrap();
+        let session = SessionId::new();
+        let message = MessageId::new();
+        sqlx::query(
+            "CREATE TRIGGER reject_finish BEFORE INSERT ON event_log \
+            WHEN json_extract(NEW.payload, '$.type') = 'message_finished' \
+            BEGIN SELECT RAISE(ABORT, 'test failure'); END",
+        )
+        .execute(&store.pool)
+        .await
+        .unwrap();
+        let result = store
+            .append_events(
+                session,
+                vec![
+                    Event::MessageStarted {
+                        session,
+                        message,
+                        role: Role::Assistant,
+                        agent: None,
+                        model: None,
+                    },
+                    Event::MessageFinished {
+                        session,
+                        message,
+                        role: Role::Assistant,
+                        finish: hya_proto::FinishReason::Stop,
+                        tokens: None,
+                        cause: None,
+                    },
+                ],
+            )
+            .await;
+        assert!(result.is_err());
+        assert!(store.replay(session).await.unwrap().is_empty());
+        let open: i64 = sqlx::query_scalar("SELECT count(*) FROM open_assistant_message")
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+        assert_eq!(open, 0);
+    }
+
     #[tokio::test]
     async fn session_created_materializes_project_and_kind() {
         let store = SessionStore::connect_memory().await.unwrap();

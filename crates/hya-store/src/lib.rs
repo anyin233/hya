@@ -393,6 +393,14 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Begin a writer transaction for composing event appends with auxiliary rows.
+    /// Publish appended envelopes only after committing the returned transaction.
+    pub async fn begin_transaction(
+        &self,
+    ) -> Result<sqlx::Transaction<'_, sqlx::Sqlite>, StoreError> {
+        Ok(self.pool.begin().await?)
+    }
+
     /// Append one domain event to the session log; returns the assigned sequence.
     pub async fn append_event(
         &self,
@@ -403,6 +411,21 @@ impl SessionStore {
         let envelope = append_event_in_transaction(&mut tx, session, event.clone()).await?;
         tx.commit().await?;
         Ok((envelope.seq, envelope.ts_millis))
+    }
+
+    /// Append an owned batch in order, returning envelopes only after commit.
+    pub async fn append_events(
+        &self,
+        session: SessionId,
+        events: Vec<Event>,
+    ) -> Result<Vec<Envelope>, StoreError> {
+        let mut tx = self.begin_transaction().await?;
+        let mut envelopes = Vec::with_capacity(events.len());
+        for event in events {
+            envelopes.push(append_event_in_transaction(&mut tx, session, event).await?);
+        }
+        tx.commit().await?;
+        Ok(envelopes)
     }
 
     /// Load all envelopes for a session in sequence order (payload JSON decoded to `Event`).
@@ -770,7 +793,7 @@ impl SessionStore {
 }
 
 /// Append one event inside an existing writer transaction.
-pub(crate) async fn append_event_in_transaction(
+pub async fn append_event_in_transaction(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     session: SessionId,
     event: Event,

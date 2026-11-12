@@ -667,7 +667,7 @@ impl SessionEngine {
         ];
         let envelopes = self
             .store
-            .append_events_with_blobs(session, &blobs, &events)
+            .append_events_with_blobs(session, &blobs, events)
             .await?;
         for envelope in envelopes {
             self.publish_envelope(envelope);
@@ -689,55 +689,42 @@ impl SessionEngine {
             .user_text_after_hooks(binding, stable_id, session, text)
             .await;
         let part = PartId::new();
-        self.emit(
+        self.emit_batch_for_actor(
+            None,
             session,
-            Event::MessageStarted {
-                session,
-                message,
-                role: Role::User,
-                agent: None,
-                model: None,
-            },
-        )
-        .await?;
-        self.emit(
-            session,
-            Event::TextStart {
-                session,
-                message,
-                part,
-            },
-        )
-        .await?;
-        self.emit(
-            session,
-            Event::TextDelta {
-                session,
-                message,
-                part,
-                delta: text,
-            },
-        )
-        .await?;
-        self.emit(
-            session,
-            Event::TextEnd {
-                session,
-                message,
-                part,
-            },
-        )
-        .await?;
-        self.emit(
-            session,
-            Event::MessageFinished {
-                session,
-                message,
-                role: Role::User,
-                finish: FinishReason::Stop,
-                tokens: None,
-                cause: None,
-            },
+            vec![
+                Event::MessageStarted {
+                    session,
+                    message,
+                    role: Role::User,
+                    agent: None,
+                    model: None,
+                },
+                Event::TextStart {
+                    session,
+                    message,
+                    part,
+                },
+                Event::TextDelta {
+                    session,
+                    message,
+                    part,
+                    delta: text,
+                },
+                Event::TextEnd {
+                    session,
+                    message,
+                    part,
+                },
+                Event::MessageFinished {
+                    session,
+                    message,
+                    role: Role::User,
+                    finish: FinishReason::Stop,
+                    tokens: None,
+                    cause: None,
+                },
+            ],
         )
         .await?;
         self.update_session_channel_policy(session, channel_policy);
@@ -911,6 +898,63 @@ mod tests {
 
     use super::*;
     use crate::{CreateSession, EventBus, SubagentGovernor, SubagentLimits};
+
+    #[tokio::test]
+    async fn ordinary_user_message_commits_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let store = hya_store::SessionStore::connect_memory().await.unwrap();
+        let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
+        let engine = SessionEngine::new(
+            store.clone(),
+            Arc::new(ProviderRouter::new()),
+            crate::test_support::runtime(ToolRegistry::builtins()),
+            permission,
+            EventBus::default(),
+        );
+        let session = engine
+            .create(CreateSession {
+                parent: None,
+                agent: AgentName::new("build"),
+                model: ModelRef::new("fake"),
+                workdir: "/tmp".into(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
+            })
+            .await
+            .unwrap();
+        let commits = Arc::new(AtomicUsize::new(0));
+        let mut tx = store.begin_transaction().await.unwrap();
+        let counter = commits.clone();
+        tx.lock_handle().await.unwrap().set_commit_hook(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            true
+        });
+        tx.rollback().await.unwrap();
+        engine
+            .admit_user_prompt(session, "hello".into())
+            .await
+            .unwrap();
+        assert_eq!(commits.load(Ordering::SeqCst), 1);
+        let events = store.replay(session).await.unwrap();
+        let tail = &events[events.len() - 5..];
+        assert!(matches!(
+            tail[0].event,
+            Event::MessageStarted {
+                role: Role::User,
+                ..
+            }
+        ));
+        assert!(matches!(tail[1].event, Event::TextStart { .. }));
+        assert!(matches!(&tail[2].event, Event::TextDelta { delta, .. } if delta == "hello"));
+        assert!(matches!(tail[3].event, Event::TextEnd { .. }));
+        assert!(matches!(
+            tail[4].event,
+            Event::MessageFinished {
+                role: Role::User,
+                ..
+            }
+        ));
+    }
 
     #[tokio::test]
     async fn root_cleanup_cancels_and_finalizes_started_operation_once() {

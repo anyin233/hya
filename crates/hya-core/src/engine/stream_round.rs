@@ -274,26 +274,23 @@ impl SessionEngine {
         text: String,
         provider_data: Option<serde_json::Value>,
     ) -> Result<(), CoreError> {
-        self.emit_for_actor(
+        self.emit_batch_for_actor(
             actor_claim,
             session,
-            Event::ReasoningReplace {
-                session,
-                message,
-                part,
-                text,
-            },
-        )
-        .await?;
-        self.emit_for_actor(
-            actor_claim,
-            session,
-            Event::ReasoningEnd {
-                session,
-                message,
-                part,
-                provider_data,
-            },
+            vec![
+                Event::ReasoningReplace {
+                    session,
+                    message,
+                    part,
+                    text,
+                },
+                Event::ReasoningEnd {
+                    session,
+                    message,
+                    part,
+                    provider_data,
+                },
+            ],
         )
         .await
     }
@@ -306,35 +303,27 @@ impl SessionEngine {
         part: PartId,
         text: String,
     ) -> Result<(), CoreError> {
-        self.emit_for_actor(
+        self.emit_batch_for_actor(
             actor_claim,
             session,
-            Event::TextStart {
-                session,
-                message,
-                part,
-            },
-        )
-        .await?;
-        self.emit_for_actor(
-            actor_claim,
-            session,
-            Event::TextReplace {
-                session,
-                message,
-                part,
-                text,
-            },
-        )
-        .await?;
-        self.emit_for_actor(
-            actor_claim,
-            session,
-            Event::TextEnd {
-                session,
-                message,
-                part,
-            },
+            vec![
+                Event::TextStart {
+                    session,
+                    message,
+                    part,
+                },
+                Event::TextReplace {
+                    session,
+                    message,
+                    part,
+                    text,
+                },
+                Event::TextEnd {
+                    session,
+                    message,
+                    part,
+                },
+            ],
         )
         .await
     }
