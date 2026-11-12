@@ -520,7 +520,7 @@ impl SessionStore {
     pub async fn begin_transaction(
         &self,
     ) -> Result<sqlx::Transaction<'_, sqlx::Sqlite>, StoreError> {
-        Ok(self.pool.begin().await?)
+        Ok(self.pool.begin_with("BEGIN IMMEDIATE").await?)
     }
 
     /// Append one domain event to the session log; returns the assigned sequence.

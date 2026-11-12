@@ -267,3 +267,24 @@ parent member relation, roster/channels, actor claim, and initial user message
 commit together. Failed registration leaves none of these rows/events behind.
 Publication uses only the returned committed envelopes; recovery identifies the
 persisted user message as queued work before `ResidentWorkStarted`.
+
+`SessionStore::begin_transaction()` acquires SQLite's writer reservation with
+`BEGIN IMMEDIATE`, before any read. Registration resolves an existing group
+channel for the same root/unit inside that transaction, so concurrent siblings
+join one broadcast channel.
+
+Stopping an actor whose last message is an unanswered user directive writes a
+nonempty assistant cancellation answer in the existing stop/failure transaction,
+alongside terminal activity, member closure and claim release. This prevents
+revival from presenting an unrun, cancelled task as an open directive. The text
+is required because model requests omit empty assistant messages. Existing open
+turn cleanup remains unchanged.
+
+`finalize_resident_stop_with_cause(claim: &ActorClaim, root: SessionId,
+handle: &str, cause: FinishCause)` returns
+`Result<(Vec<Envelope>, Vec<AdmissionRecord>), StoreError>`. It is the stop
+contract with an explicit cause for an unstarted task: `UserCancel` for ordinary
+stop, `Archived` for parent archive, and `Shutdown` for graceful drain. Failure
+uses `Other`; takeover recovery uses `Interrupted`. Returned envelopes are
+published after commit. Archive/revive's other transaction boundaries remain
+separate.
