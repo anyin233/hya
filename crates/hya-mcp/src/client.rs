@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use thiserror::Error;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncRead, AsyncWrite, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, oneshot};
 
@@ -23,7 +23,6 @@ use crate::protocol::{JsonRpcRequest, JsonRpcResponse};
 pub const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// Shorter timeout used only for the `initialize` handshake.
 pub const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_LINE_BYTES: usize = 1024 * 1024;
 
 pub(crate) type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, McpError>>>>>;
 
@@ -72,6 +71,16 @@ pub enum McpError {
     },
 }
 
+impl From<crate::codec::FrameError> for McpError {
+    fn from(error: crate::codec::FrameError) -> Self {
+        match error {
+            crate::codec::FrameError::Io(message) => Self::Io(message),
+            crate::codec::FrameError::Json(message) => Self::Json(message),
+            crate::codec::FrameError::OversizedLine => Self::OversizedLine,
+        }
+    }
+}
+
 /// Cloneable JSON-RPC client over one MCP transport (child stdio, Streamable
 /// HTTP, or classic HTTP+SSE). Method behavior (initialize, call, notify) is
 /// transport-independent.
@@ -93,7 +102,7 @@ struct ClientInner {
     pending: Pending,
 }
 
-/// Owns a spawned MCP child process; on drop, SIGTERM (Unix) then kill and wait.
+/// Owns a spawned MCP child process; on drop, kill through its process handle and wait.
 ///
 /// Keep this guard alive for as long as the paired [`McpClient`] should talk to
 /// the process. Dropping it tears down the server even if client clones remain.
@@ -123,15 +132,6 @@ impl Drop for ChildGuard {
 }
 
 async fn terminate_child(child: &mut Child) {
-    #[cfg(unix)]
-    if let Some(id) = child.id() {
-        let _ = Command::new("kill")
-            .arg("-TERM")
-            .arg(id.to_string())
-            .status()
-            .await;
-    }
-    tokio::time::sleep(Duration::from_secs(1)).await;
     let _ = child.start_kill();
     let _ = child.wait().await;
 }
@@ -247,21 +247,7 @@ impl McpClient {
         match &self.transport {
             Transport::Stdio(inner) => {
                 let message = json!({ "jsonrpc": "2.0", "method": method, "params": params });
-                let line =
-                    serde_json::to_vec(&message).map_err(|e| McpError::Json(e.to_string()))?;
-                let mut writer = inner.writer.lock().await;
-                writer
-                    .write_all(&line)
-                    .await
-                    .map_err(|e| McpError::Io(e.to_string()))?;
-                writer
-                    .write_all(b"\n")
-                    .await
-                    .map_err(|e| McpError::Io(e.to_string()))?;
-                writer
-                    .flush()
-                    .await
-                    .map_err(|e| McpError::Io(e.to_string()))?;
+                crate::codec::write_frame(&mut *inner.writer.lock().await, &message).await?;
                 Ok(())
             }
             Transport::StreamableHttp(transport) => transport.notify(method, params).await,
@@ -287,24 +273,11 @@ impl McpClient {
                     method: method.to_string(),
                     params,
                 };
-                let line =
-                    serde_json::to_vec(&request).map_err(|e| McpError::Json(e.to_string()))?;
                 let (tx, rx) = oneshot::channel();
                 inner.pending.lock().await.insert(id, tx);
                 {
                     let mut writer = inner.writer.lock().await;
-                    writer
-                        .write_all(&line)
-                        .await
-                        .map_err(|e| McpError::Io(e.to_string()))?;
-                    writer
-                        .write_all(b"\n")
-                        .await
-                        .map_err(|e| McpError::Io(e.to_string()))?;
-                    writer
-                        .flush()
-                        .await
-                        .map_err(|e| McpError::Io(e.to_string()))?;
+                    crate::codec::write_frame(&mut *writer, &request).await?;
                 }
                 match tokio::time::timeout(timeout, rx).await {
                     Ok(Ok(result)) => result,
@@ -331,20 +304,25 @@ where
         let mut reader = BufReader::new(reader);
         let mut buf = Vec::new();
         loop {
-            buf.clear();
-            let read = match reader.read_until(b'\n', &mut buf).await {
+            match crate::codec::read_bounded_line(&mut reader, &mut buf).await {
                 Ok(0) => break,
-                Ok(n) => n,
-                Err(e) => {
-                    close_pending(&pending, McpError::Io(e.to_string())).await;
+                Ok(_) => {}
+                Err(error) => {
+                    close_pending(&pending, error.into()).await;
+                    return;
+                }
+            }
+            let value: Value = match serde_json::from_slice(buf.trim_ascii_end()) {
+                Ok(value) => value,
+                Err(error) => {
+                    close_pending(&pending, McpError::Json(error.to_string())).await;
                     return;
                 }
             };
-            if read > MAX_LINE_BYTES || buf.len() > MAX_LINE_BYTES {
-                close_pending(&pending, McpError::OversizedLine).await;
-                return;
+            if value.get("method").is_some() && value.get("id").is_none() {
+                continue;
             }
-            let parsed = serde_json::from_slice::<JsonRpcResponse>(buf.trim_ascii_end())
+            let parsed = serde_json::from_value::<JsonRpcResponse>(value)
                 .map_err(|e| McpError::Json(e.to_string()));
             let response = match parsed {
                 Ok(response) => response,
@@ -383,6 +361,80 @@ pub(crate) async fn close_pending(pending: &Pending, error: McpError) {
 mod tests {
     use super::*;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, duplex};
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dropping_guard_closes_child_stdout() {
+        use tokio::io::AsyncReadExt;
+        let mut child = Command::new("sh")
+            .args(["-c", "exec sleep 60"])
+            .stdout(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let mut stdout = child.stdout.take().unwrap();
+        let guard = ChildGuard {
+            child: StdMutex::new(Some(child)),
+        };
+        drop(guard);
+        let mut output = Vec::new();
+        tokio::time::timeout(Duration::from_secs(3), stdout.read_to_end(&mut output))
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn notifications_do_not_disconnect() {
+        let (client_io, server_io) = duplex(4096);
+        let (r, w) = tokio::io::split(client_io);
+        let (sr, mut sw) = tokio::io::split(server_io);
+        let client = McpClient::new(r, w);
+        let server = tokio::spawn(async move {
+            let mut lines = BufReader::new(sr).lines();
+            for _ in 0..2 {
+                let request: JsonRpcRequest =
+                    serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+                sw.write_all(
+                    format!(
+                        "{}\n{}\n",
+                        json!({"jsonrpc":"2.0","method":"notifications/tools/list_changed"}),
+                        json!({"jsonrpc":"2.0","id":request.id,"result":true})
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            }
+        });
+        for _ in 0..2 {
+            assert_eq!(
+                client
+                    .call("test", json!({}), Duration::from_secs(1))
+                    .await
+                    .unwrap(),
+                json!(true)
+            );
+        }
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn oversized_unterminated_frame_fails_without_eof() {
+        let (client_io, server_io) = duplex(8192);
+        let (r, w) = tokio::io::split(client_io);
+        let (sr, mut sw) = tokio::io::split(server_io);
+        let client = McpClient::new(r, w);
+        let server = tokio::spawn(async move {
+            BufReader::new(sr).lines().next_line().await.unwrap();
+            let _ = sw.write_all(&vec![b'x'; 1024 * 1024 + 1]).await;
+            std::future::pending::<()>().await;
+        });
+        let result = client.call("test", json!({}), Duration::from_secs(1)).await;
+        server.abort();
+        let _ = server.await;
+        assert!(matches!(result, Err(McpError::OversizedLine)), "{result:?}");
+    }
 
     #[tokio::test]
     async fn demuxes_responses_by_id() {

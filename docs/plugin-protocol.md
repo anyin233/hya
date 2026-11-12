@@ -767,6 +767,31 @@ for line in sys.stdin:
 
 ---
 
+## Shared stdio framing
+
+Native plugins and MCP stdio clients use `hya-mcp::codec` for NDJSON reads
+and writes. This keeps the 1 MiB input limit consistent: the limit includes
+any newline and is enforced before extending the frame buffer, even when the
+peer never sends a newline. Exceeding it fails the connection and its pending
+calls with an explicit oversized-line error.
+
+For example, an MCP server may send
+`{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}` followed by
+a response on a separate line. MCP clients ignore these one-way notifications
+and continue matching responses by numeric `id`; notifications do not refresh
+the catalog automatically. Plugin notification dispatch is unchanged.
+
+The shared Rust interface is `MAX_LINE_BYTES: usize = 1048576`,
+`read_bounded_line<R: AsyncRead + Unpin>(&mut BufReader<R>, &mut Vec<u8>)
+-> Result<usize, FrameError>` (zero bytes at EOF), and
+`write_frame<W: AsyncWrite + Unpin, T: Serialize>(&mut W, &T)
+-> Result<(), FrameError>` (JSON, newline, flush).
+`FrameError` is `Io(String) | Json(String) | OversizedLine`.
+MCP maps these to `McpError`; plugins retain `PluginError`.
+Dropping an MCP child guard terminates through `Child::start_kill` and reaps
+with `Child::wait` on the active runtime, without spawning a kill utility.
+
+
 ## Related
 
 - [Configuration](configuration.md) — `plugins:` YAML and `plugin.toml`
