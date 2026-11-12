@@ -47,5 +47,7 @@ sqlx = { workspace = true }
 futures = { workspace = true }
 
 [dev-dependencies]
+hya-api = { workspace = true }
+tonic = { workspace = true }
 http-body-util = { workspace = true }
 tower = { workspace = true }

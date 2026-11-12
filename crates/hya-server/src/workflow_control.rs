@@ -99,6 +99,13 @@ pub trait WorkflowControl: Send + Sync {
         None
     }
 
+    /// Wait until the active local run has appended its terminal event and
+    /// released execution ownership. Cancellation alone does not settle writes.
+    /// Controls exposing an `active_run` must override this completion seam.
+    fn wait_idle(&self, _session: SessionId) -> BoxFuture<'_, Result<(), WorkflowControlError>> {
+        Box::pin(async { Ok(()) })
+    }
+
     /// Request cooperative cancellation of one active Workflow run.
     fn cancel(&self, _session: SessionId) -> bool {
         false

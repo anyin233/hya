@@ -94,6 +94,7 @@ async fn admit(
     turn: &PreparedTurn,
 ) -> Result<Option<MessageId>, V1Error> {
     refuse_if_stopping(st)?;
+    ensure_session(st, session).await?;
     let message = match admission {
         Admission::Restore => return Ok(st.engine.inject_restart_prompt(session).await?),
         Admission::Prompt {
@@ -123,7 +124,6 @@ async fn admit(
                 .await?
         }
     };
-    spawn_auto_title(st, session, &turn.agent.model);
     Ok(Some(message))
 }
 
@@ -148,6 +148,13 @@ async fn spawn_turn_run(
     let (admitted, admission_result) = tokio::sync::oneshot::channel();
     let st = st.clone();
     tokio::spawn(async move {
+        if run.admission_closed() {
+            let _ = admitted.send(Err(V1Error::unavailable(
+                "the session run was cancelled before admission",
+            )));
+            return;
+        }
+        let title_after_admission = !matches!(&admission, Admission::Restore);
         let prompt = match admit(&st, session, admission, &turn).await {
             Ok(Some(prompt)) => prompt,
             result => {
@@ -156,19 +163,22 @@ async fn spawn_turn_run(
             }
         };
         let _ = admitted.send(Ok(true));
-        if let Err(error) = st
-            .engine
-            .run_turn_with_external_dirs_and_guidance(
-                session,
-                &turn.agent,
-                run.token(),
-                &turn.external_dirs,
-                turn.guidance,
-                turn.explicit_model,
-                Some(prompt),
-            )
-            .await
-        {
+        let execution = st.engine.run_turn_with_external_dirs_and_guidance(
+            session,
+            &turn.agent,
+            run.token(),
+            &turn.external_dirs,
+            turn.guidance,
+            turn.explicit_model,
+            Some(prompt),
+        );
+        let title = async {
+            if title_after_admission {
+                auto_title(&st, session, &turn.agent.model, run.token()).await;
+            }
+        };
+        let (result, ()) = tokio::join!(execution, title);
+        if let Err(error) = result {
             tracing::error!(%session, %error, "server turn failed");
         }
         drop(run);
@@ -309,20 +319,26 @@ pub(crate) fn turn_info(
 }
 
 /// Title the session in the background after a prompt was admitted, when
-/// enabled. `auto_title_session` decides (first prompt of an untitled root
-/// session only) and a failure is logged and dropped: titling never blocks
-/// or fails the turn.
-fn spawn_auto_title(st: &ServerState, session: hya_proto::SessionId, model: &hya_proto::ModelRef) {
+/// enabled. The run owns both this call and its turn, so deletion cancels
+/// and joins every writer. A title failure never fails the turn.
+async fn auto_title(
+    st: &ServerState,
+    session: SessionId,
+    model: &ModelRef,
+    cancel: tokio_util::sync::CancellationToken,
+) {
     if !st.auto_title {
         return;
     }
-    let engine = st.engine.clone();
-    let model = model.clone();
-    tokio::spawn(async move {
-        if let Err(error) = engine.auto_title_session(session, &model).await {
-            tracing::warn!(%session, "automatic session title failed: {error}");
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => {},
+        result = st.engine.auto_title_session(session, model) => {
+            if let Err(error) = result {
+                tracing::warn!(%session, "automatic session title failed: {error}");
+            }
         }
-    });
+    }
 }
 
 async fn create_turn(

@@ -1646,6 +1646,17 @@ impl hya_server::WorkflowControl for crate::WorkflowControl {
             .flatten()
     }
 
+    fn wait_idle(
+        &self,
+        session: SessionId,
+    ) -> futures::future::BoxFuture<'_, Result<(), hya_server::WorkflowControlError>> {
+        Box::pin(async move {
+            self.wait_run_idle(session).await.map_err(|error| {
+                hya_server::WorkflowControlError::new(error.code(), error.to_string())
+            })
+        })
+    }
+
     fn cancel(&self, session: SessionId) -> bool {
         self.cancel_run(session)
     }

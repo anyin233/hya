@@ -236,6 +236,14 @@ impl SessionEngine {
         true
     }
 
+    /// Wait for a session's turn owner to leave, without synthesizing terminal
+    /// events or treating a still-running writer as settled.
+    pub async fn wait_turn_idle(&self, session: SessionId, deadline: Duration) -> bool {
+        self.turn_gate
+            .wait_released(session, tokio::time::Instant::now() + deadline)
+            .await
+    }
+
     /// Whether a drain has begun (new turns are refused), and with which cause.
     #[must_use]
     pub fn draining(&self) -> Option<FinishCause> {

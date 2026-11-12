@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -15,7 +15,7 @@ pub(crate) struct RunRegistry {
 
 struct RunRegistryInner {
     next: AtomicU64,
-    runs: Mutex<HashMap<SessionId, ActiveRun>>,
+    state: Mutex<RegistryState>,
     draining: AtomicBool,
     released: Notify,
     /// The session of every run that started or ended (busy re-check signal).
@@ -27,7 +27,7 @@ impl Default for RunRegistryInner {
         let (changes, _) = broadcast::channel(256);
         Self {
             next: AtomicU64::default(),
-            runs: Mutex::default(),
+            state: Mutex::default(),
             draining: AtomicBool::default(),
             released: Notify::default(),
             changes,
@@ -35,9 +35,21 @@ impl Default for RunRegistryInner {
     }
 }
 
+#[derive(Default)]
+struct RegistryState {
+    runs: HashMap<SessionId, ActiveRun>,
+    deleting: HashSet<SessionId>,
+}
+
+pub(crate) struct DeleteGuard {
+    registry: RunRegistry,
+    sessions: Vec<SessionId>,
+}
+
 struct ActiveRun {
     id: u64,
     token: CancellationToken,
+    admission_closed: Arc<AtomicBool>,
 }
 
 pub(crate) struct RunGuard {
@@ -45,6 +57,7 @@ pub(crate) struct RunGuard {
     session: SessionId,
     id: u64,
     token: CancellationToken,
+    admission_closed: Arc<AtomicBool>,
     /// No change signal on start or end (no busy notice).
     quiet: bool,
 }
@@ -61,20 +74,25 @@ impl RunRegistry {
     }
 
     fn start_with(&self, session: SessionId, quiet: bool) -> Option<RunGuard> {
-        let mut runs = self.lock_runs();
-        if self.inner.draining.load(Ordering::Acquire) || runs.contains_key(&session) {
+        let mut state = self.lock_state();
+        if self.inner.draining.load(Ordering::Acquire)
+            || state.deleting.contains(&session)
+            || state.runs.contains_key(&session)
+        {
             return None;
         }
         let id = self.inner.next.fetch_add(1, Ordering::Relaxed);
         let token = CancellationToken::new();
-        runs.insert(
+        let admission_closed = Arc::new(AtomicBool::new(false));
+        state.runs.insert(
             session,
             ActiveRun {
                 id,
                 token: token.clone(),
+                admission_closed: admission_closed.clone(),
             },
         );
-        drop(runs);
+        drop(state);
         if !quiet {
             let _ = self.inner.changes.send(session);
         }
@@ -83,14 +101,15 @@ impl RunRegistry {
             session,
             id,
             token,
+            admission_closed,
             quiet,
         })
     }
 
     pub(crate) fn cancel(&self, session: SessionId) -> bool {
         let token = {
-            let runs = self.lock_runs();
-            runs.get(&session).map(|run| run.token.clone())
+            let state = self.lock_state();
+            state.runs.get(&session).map(|run| run.token.clone())
         };
         if let Some(token) = token {
             token.cancel();
@@ -106,7 +125,46 @@ impl RunRegistry {
     }
 
     pub(crate) fn is_busy(&self, session: SessionId) -> bool {
-        self.lock_runs().contains_key(&session)
+        self.lock_state().runs.contains_key(&session)
+    }
+
+    /// Fence admission while existing writers settle and their rows are deleted.
+    pub(crate) fn begin_delete(&self, sessions: Vec<SessionId>) -> Option<DeleteGuard> {
+        let mut state = self.lock_state();
+        if sessions
+            .iter()
+            .any(|session| state.deleting.contains(session))
+        {
+            return None;
+        }
+        for session in &sessions {
+            if let Some(run) = state.runs.get(session) {
+                run.admission_closed.store(true, Ordering::Release);
+            }
+        }
+        state.deleting.extend(sessions.iter().copied());
+        Some(DeleteGuard {
+            registry: self.clone(),
+            sessions,
+        })
+    }
+
+    pub(crate) async fn wait_sessions_idle(&self, sessions: &[SessionId]) {
+        loop {
+            let released = self.inner.released.notified();
+            tokio::pin!(released);
+            released.as_mut().enable();
+            let idle = {
+                let state = self.lock_state();
+                sessions
+                    .iter()
+                    .all(|session| !state.runs.contains_key(session))
+            };
+            if idle {
+                return;
+            }
+            released.await;
+        }
     }
 
     /// Refuse every new run from now on (`start` returns `None`).
@@ -124,17 +182,17 @@ impl RunRegistry {
             let released = self.inner.released.notified();
             tokio::pin!(released);
             released.as_mut().enable();
-            if self.lock_runs().is_empty() {
+            if self.lock_state().runs.is_empty() {
                 return true;
             }
             if tokio::time::timeout_at(deadline, released).await.is_err() {
-                return self.lock_runs().is_empty();
+                return self.lock_state().runs.is_empty();
             }
         }
     }
 
-    fn lock_runs(&self) -> MutexGuard<'_, HashMap<SessionId, ActiveRun>> {
-        match self.inner.runs.lock() {
+    fn lock_state(&self) -> MutexGuard<'_, RegistryState> {
+        match self.inner.state.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         }
@@ -142,6 +200,12 @@ impl RunRegistry {
 }
 
 impl RunGuard {
+    /// Delete discards a not-yet-admitted prompt; user cancellation still
+    /// admits and answers it with UserCancel. Keep this after a delete timeout.
+    pub(crate) fn admission_closed(&self) -> bool {
+        self.admission_closed.load(Ordering::Acquire)
+    }
+
     pub(crate) fn token(&self) -> CancellationToken {
         self.token.clone()
     }
@@ -150,9 +214,9 @@ impl RunGuard {
 impl Drop for RunGuard {
     fn drop(&mut self) {
         let removed = {
-            let mut runs = self.registry.lock_runs();
-            if matches!(runs.get(&self.session), Some(active) if active.id == self.id) {
-                runs.remove(&self.session);
+            let mut state = self.registry.lock_state();
+            if matches!(state.runs.get(&self.session), Some(active) if active.id == self.id) {
+                state.runs.remove(&self.session);
                 true
             } else {
                 false
@@ -163,6 +227,15 @@ impl Drop for RunGuard {
             if !self.quiet {
                 let _ = self.registry.inner.changes.send(self.session);
             }
+        }
+    }
+}
+
+impl Drop for DeleteGuard {
+    fn drop(&mut self) {
+        let mut state = self.registry.lock_state();
+        for session in &self.sessions {
+            state.deleting.remove(session);
         }
     }
 }
