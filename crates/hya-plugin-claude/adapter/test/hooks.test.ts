@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 
 import { cleanupTempDirs } from "./helpers"
 import {
+  runClaudeHookCommand,
   claudeHookPayload,
   claudeToolName,
   firstJsonObject,
@@ -111,3 +112,11 @@ describe("firstJsonObject", () => {
     expect(firstJsonObject("no json here")).toBeUndefined()
   })
 })
+
+ test("hook process failure surfaces diagnostics", async () => {
+   await expect(runClaudeHookCommand({ command: "echo guard-broke >&2; exit 7", timeoutSeconds: 5 }, {})).rejects.toThrow("guard-broke")
+ })
+ test("chatty stderr is drained alongside stdout", async () => {
+   const result = await runClaudeHookCommand({ command: "head -c 1048576 /dev/zero >&2; printf ok", timeoutSeconds: 5 }, {})
+   expect(result.stdout).toBe("ok")
+ })
