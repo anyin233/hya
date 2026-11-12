@@ -113,7 +113,7 @@ impl WorkflowRuntime {
                 &agent,
                 runtime.mcp,
                 runtime.plugins,
-                (runtime.websearch, runtime.permission),
+                (runtime.websearch, runtime.permission, runtime.settings),
             )
             .await?
         } else {
@@ -123,7 +123,7 @@ impl WorkflowRuntime {
                 &agent,
                 runtime.mcp,
                 runtime.plugins,
-                (runtime.websearch, runtime.permission),
+                (runtime.websearch, runtime.permission, runtime.settings),
             )
             .await?
         };

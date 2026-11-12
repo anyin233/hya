@@ -766,17 +766,21 @@ impl SessionEngine {
         &self,
         agent_id: &str,
         authored: Option<ReasoningEffort>,
+        binding: Option<&TurnBinding>,
     ) -> Result<Option<(ReasoningEffort, crate::AgentEffortSource)>, CoreError> {
         let preference = self
             .store
             .get_agent_effort_preference(agent_id)
             .await?
             .and_then(|row| ReasoningEffort::parse(&row.effort));
-        let configured = self
-            .runtime
-            .agent_effort_configuration()
-            .get(agent_id)
-            .copied();
+        let configured = binding
+            .and_then(|binding| binding.project_agent_effort(agent_id))
+            .unwrap_or_else(|| {
+                self.runtime
+                    .agent_effort_configuration()
+                    .get(agent_id)
+                    .copied()
+            });
         Ok(crate::agent_effort(preference, configured, authored))
     }
 
@@ -790,6 +794,7 @@ impl SessionEngine {
     pub async fn annotate_agent_efforts(
         &self,
         agents: Arc<[AgentDef]>,
+        binding: Option<&TurnBinding>,
     ) -> Result<Arc<[AgentDef]>, CoreError> {
         let preferences: BTreeMap<String, ReasoningEffort> = self
             .store
@@ -799,7 +804,7 @@ impl SessionEngine {
             .filter_map(|row| Some((row.agent_id, ReasoningEffort::parse(&row.effort)?)))
             .collect();
         let configured = self.runtime.agent_effort_configuration();
-        if preferences.is_empty() && configured.is_empty() {
+        if preferences.is_empty() && configured.is_empty() && binding.is_none() {
             return Ok(agents);
         }
         Ok(agents
@@ -809,7 +814,9 @@ impl SessionEngine {
                 let mut agent = agent.clone();
                 if let Some((effort, source)) = crate::agent_effort(
                     preferences.get(&agent.name).copied(),
-                    configured.get(&agent.name).copied(),
+                    binding
+                        .and_then(|binding| binding.project_agent_effort(&agent.name))
+                        .unwrap_or_else(|| configured.get(&agent.name).copied()),
                     authored,
                 ) {
                     agent.effort = Some(effort.as_str().to_string());
@@ -843,10 +850,11 @@ impl SessionEngine {
         model: &ModelRef,
         agent_id: Option<&str>,
         authored: Option<ReasoningEffort>,
+        binding: Option<&TurnBinding>,
     ) -> Result<crate::EffectiveEffort, CoreError> {
         let agent = match agent_id {
             Some(agent_id) => self
-                .agent_effort(agent_id, authored)
+                .agent_effort(agent_id, authored, binding)
                 .await?
                 .map(|(effort, _)| effort),
             None => authored,

@@ -138,7 +138,11 @@ async fn list_info_select_state_and_stale_revision_share_one_catalog_contract() 
         &agent,
         BTreeMap::new(),
         Vec::new(),
-        (WebSearchConfig::default(), InvocationPolicy::default()),
+        (
+            WebSearchConfig::default(),
+            InvocationPolicy::default(),
+            hya_app::config::EngineSettings::default(),
+        ),
     )
     .await
     .expect("build engine");
@@ -388,7 +392,11 @@ async fn selected_run_rejects_same_name_source_substitution() {
         &agent,
         BTreeMap::new(),
         Vec::new(),
-        (WebSearchConfig::default(), InvocationPolicy::default()),
+        (
+            WebSearchConfig::default(),
+            InvocationPolicy::default(),
+            hya_app::config::EngineSettings::default(),
+        ),
     )
     .await
     .expect("build engine");
@@ -474,7 +482,11 @@ async fn run_is_idempotent_by_tool_operation_and_rejects_changed_inputs() {
         &agent,
         BTreeMap::new(),
         Vec::new(),
-        (WebSearchConfig::default(), InvocationPolicy::default()),
+        (
+            WebSearchConfig::default(),
+            InvocationPolicy::default(),
+            hya_app::config::EngineSettings::default(),
+        ),
     )
     .await
     .expect("build engine");
@@ -889,7 +901,11 @@ async fn workflow_catalog_precedence_revision_and_binding_contract() {
         &agent,
         BTreeMap::new(),
         Vec::new(),
-        (WebSearchConfig::default(), InvocationPolicy::default()),
+        (
+            WebSearchConfig::default(),
+            InvocationPolicy::default(),
+            hya_app::config::EngineSettings::default(),
+        ),
     )
     .await
     .expect("build first-party control engine");
@@ -1025,7 +1041,11 @@ async fn list_answers_each_directorys_own_catalog_and_falls_back_to_global() {
         &agent,
         BTreeMap::new(),
         Vec::new(),
-        (WebSearchConfig::default(), InvocationPolicy::default()),
+        (
+            WebSearchConfig::default(),
+            InvocationPolicy::default(),
+            hya_app::config::EngineSettings::default(),
+        ),
     )
     .await
     .expect("build engine");
@@ -1153,7 +1173,11 @@ async fn project_scope_session_lists_every_root_and_keeps_the_primary_selection_
         &agent,
         BTreeMap::new(),
         Vec::new(),
-        (WebSearchConfig::default(), InvocationPolicy::default()),
+        (
+            WebSearchConfig::default(),
+            InvocationPolicy::default(),
+            hya_app::config::EngineSettings::default(),
+        ),
     )
     .await
     .expect("build engine");

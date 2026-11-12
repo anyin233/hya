@@ -1,5 +1,5 @@
 //! App-owned language-server lifecycle behind the existing tool LSP plane.
-mod config;
+pub(crate) mod config;
 mod transport;
 
 use std::collections::BTreeMap;
@@ -16,8 +16,8 @@ use transport::{Client, file_uri};
 
 type ClientSlot = Arc<OnceCell<Result<Arc<Client>, String>>>;
 
-pub(crate) fn load_plane() -> anyhow::Result<LspPlane> {
-    let servers = config::load()?;
+pub(crate) fn from_selection(selection: Option<config::Selection>) -> anyhow::Result<LspPlane> {
+    let servers = config::resolve(selection)?;
     if servers.is_empty() {
         return Ok(LspPlane::default());
     }

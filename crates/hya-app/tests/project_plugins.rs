@@ -316,7 +316,11 @@ async fn hot_reload_project_sessions_bind_their_projects_plugins_and_config_plug
             env: BTreeMap::new(),
             plugin_dir: None,
         }],
-        (WebSearchConfig::default(), InvocationPolicy::default()),
+        (
+            WebSearchConfig::default(),
+            InvocationPolicy::default(),
+            hya_app::config::EngineSettings::default(),
+        ),
     )
     .await
     .expect("build engine");

@@ -960,3 +960,106 @@ async fn hot_reload_disabled_project_bundle_stops_and_does_not_start_until_enabl
         "disabled source must release its process"
     );
 }
+
+#[tokio::test]
+async fn project_model_and_effort_reach_the_actual_request() {
+    use hya_provider::{
+        Capabilities, CompletionRequest, EventStream, Provider, ProviderError, ReasoningEffort,
+    };
+    struct Recording(std::sync::Mutex<Vec<CompletionRequest>>);
+    #[async_trait::async_trait]
+    impl Provider for Recording {
+        fn id(&self) -> &str {
+            "p"
+        }
+        fn capabilities(&self, _: &ModelRef) -> Option<Capabilities> {
+            Some(Capabilities {
+                reasoning_request: true,
+                streaming_tool_calls: true,
+                max_context: 200_000,
+                ..Capabilities::default()
+            })
+        }
+        async fn stream(
+            &self,
+            request: CompletionRequest,
+            session: hya_proto::SessionId,
+            message: hya_proto::MessageId,
+        ) -> Result<EventStream, ProviderError> {
+            self.0.lock().unwrap().push(request);
+            Provider::stream(
+                &hya_provider::FakeProvider::scripted(vec![hya_provider::FakeStep::Text(
+                    "done".into(),
+                )]),
+                CompletionRequest {
+                    model: ModelRef::new("unused"),
+                    system: None,
+                    messages: vec![],
+                    tools: vec![],
+                    temperature: None,
+                    max_output_tokens: None,
+                    reasoning: None,
+                    headers: Default::default(),
+                },
+                session,
+                message,
+            )
+            .await
+        }
+    }
+    let state = temp_path("effort-state");
+    let root = temp_path("effort-project");
+    write_project_bundle(&root, "tools", "acme/tools", "Reply briefly.");
+    std::fs::write(
+        root.join(".hya/bundles/tools/config.yml"),
+        "agents:\n  tools-agent:\n    model: p/project\n    reasoning: high\n",
+    )
+    .unwrap();
+    let fixture = harness(&state).await;
+    let provider = Arc::new(Recording(Default::default()));
+    let store = SessionStore::connect_memory().await.unwrap();
+    let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
+    let engine = SessionEngine::new(
+        store.clone(),
+        Arc::new(ProviderRouter::new().with(provider.clone())),
+        fixture.runtime.clone(),
+        permission,
+        EventBus::default(),
+    )
+    .with_catalog_refresh(fixture.refresh.clone());
+    // A same-id user default must lose to the project owning file.
+    fixture
+        .runtime
+        .publish_agent_effort_configuration(std::collections::BTreeMap::from([(
+            "tools-agent".into(),
+            ReasoningEffort::Low,
+        )]));
+    let project = store
+        .create_project("effort", &[root.display().to_string()])
+        .await
+        .unwrap();
+    let agent = hya_app::agent_base_with_model("p/fallback", None);
+    let session = engine
+        .create(hya_core::CreateSession {
+            parent: None,
+            agent: hya_proto::AgentName::new("tools-agent"),
+            model: ModelRef::new("p/fallback"),
+            workdir: root.display().to_string(),
+            project: Some(project.id),
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    engine
+        .admit_user_prompt(session, "hello".into())
+        .await
+        .unwrap();
+    engine
+        .run_turn(session, &agent, Default::default())
+        .await
+        .unwrap();
+    let requests = provider.0.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].model.as_str(), "p/project");
+    assert_eq!(requests[0].reasoning, Some(ReasoningEffort::High));
+}

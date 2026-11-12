@@ -52,6 +52,8 @@ pub struct ResolvedConfig {
     pub websearch: WebSearchConfig,
     /// Providers that still need background discovery refresh after startup.
     pub pending_discovery: Vec<PendingCatalogDiscovery>,
+    /// Parsed startup settings passed unchanged to the engine builder.
+    pub settings: EngineSettings,
 }
 
 /// One provider deferred to background discovery refresh (no cached rows,
@@ -69,7 +71,7 @@ pub struct PendingCatalogDiscovery {
 }
 
 /// Top-level shape of `~/.config/hya/config.yaml`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct FileConfig {
     /// Model used when neither `--model` nor `HYA_MODEL` is set.
     #[serde(default)]
@@ -82,6 +84,12 @@ struct FileConfig {
     default_agent: Option<String>,
     #[serde(default)]
     providers: BTreeMap<String, ProviderConfig>,
+    #[serde(default)]
+    formatter: crate::formatter_config::RawFormatterConfig,
+    #[serde(default)]
+    agents: BTreeMap<String, crate::agent_model_config::AgentFileSettings>,
+    #[serde(default)]
+    lsp: Option<crate::lsp::config::Selection>,
     #[serde(default)]
     mcp: BTreeMap<String, McpServerConfig>,
     #[serde(default)]
@@ -117,6 +125,57 @@ struct FileConfig {
     /// Absent → [`hya_core::CatalogScopeCacheConfig`] defaults.
     #[serde(default)]
     catalog_scopes: Option<CatalogScopesFile>,
+}
+
+/// Immutable on-disk startup settings shared with the engine builder.
+#[derive(Debug, Default)]
+pub struct EngineSettings {
+    file: FileConfig,
+}
+
+impl EngineSettings {
+    pub(crate) fn agents(
+        &self,
+    ) -> anyhow::Result<(
+        hya_core::AgentModelConfiguration,
+        BTreeMap<String, ReasoningEffort>,
+    )> {
+        crate::agent_model_config::AgentModelConfigFiles::new(active_config_path())
+            .load_with_builtin(&self.file.agents)
+    }
+    /// Goal evaluator settings from this startup snapshot.
+    pub fn goal(&self) -> GoalSettings {
+        GoalSettings::from_block(self.file.goal.clone())
+    }
+    pub(crate) fn categories(&self) -> CategoryRegistry {
+        resolve_categories(&self.file)
+    }
+    pub(crate) fn subagents(&self) -> SubagentLimits {
+        resolve_subagent_limits(self.file.subagents.as_ref())
+    }
+    pub(crate) fn context(&self) -> ContextSettings {
+        resolve_context_settings(self.file.compaction.as_ref())
+    }
+    pub(crate) fn reasoning(&self) -> Option<ReasoningEffort> {
+        self.file
+            .reasoning
+            .as_deref()
+            .and_then(ReasoningEffort::parse)
+    }
+    pub(crate) fn scopes(&self) -> hya_core::CatalogScopeCacheConfig {
+        resolve_catalog_scope_cache(self.file.catalog_scopes.as_ref())
+    }
+    pub(crate) fn plugin_ids(&self) -> Vec<String> {
+        self.file.plugins.keys().cloned().collect()
+    }
+    pub(crate) fn formatter(&self) -> hya_tool::FormatterPlane {
+        hya_tool::FormatterPlane::new(Arc::new(hya_tool::BuiltinFormatterProvider::new(
+            self.file.formatter.clone().into(),
+        )))
+    }
+    pub(crate) fn lsp(&self) -> anyhow::Result<hya_tool::LspPlane> {
+        crate::lsp::from_selection(self.file.lsp.clone())
+    }
 }
 
 /// `catalog_scopes:` block: how many Project/Directory catalog scopes (and
@@ -300,11 +359,33 @@ fn resolve_provider_retry(
     retry.normalized()
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug)]
 enum ModelConfig {
     Id(String),
     Detailed(Box<DetailedModelConfig>),
+}
+
+impl<'de> Deserialize<'de> for ModelConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ModelVisitor;
+        impl<'de> serde::de::Visitor<'de> for ModelVisitor {
+            type Value = ModelConfig;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a model id string or model mapping")
+            }
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(ModelConfig::Id(value.to_string()))
+            }
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                map: M,
+            ) -> Result<Self::Value, M::Error> {
+                DetailedModelConfig::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+                    .map(|model| ModelConfig::Detailed(Box::new(model)))
+            }
+        }
+        deserializer.deserialize_any(ModelVisitor)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -322,16 +403,53 @@ struct DetailedModelConfig {
     /// `true`/`false` switch or a `{ default?, variants? }` mapping.
     #[serde(default)]
     reasoning: Option<ReasoningField>,
-    /// `{ context?, output? }` token limits. Kept as a raw value so
-    /// `resolve_model_limit` can name the provider, model, and field in errors
-    /// instead of failing the untagged `ModelConfig` match.
+    /// Optional explicit token limits and supported modalities.
     #[serde(default)]
-    limit: Option<Value>,
-    /// `{ input: [text, image, ...] }`: declares whether the model accepts
-    /// image input (prompt attachments). Raw for the same error reporting
-    /// as `limit`.
+    limit: Option<ModelLimitFile>,
     #[serde(default)]
-    modalities: Option<Value>,
+    modalities: Option<ModelModalitiesFile>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(try_from = "BTreeMap<String, u32>")]
+struct ModelLimitFile {
+    context: Option<u32>,
+    output: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(try_from = "BTreeMap<String, Vec<String>>")]
+struct ModelModalitiesFile {
+    input: Option<Vec<String>>,
+    _output: Option<Vec<String>>,
+}
+
+impl TryFrom<BTreeMap<String, u32>> for ModelLimitFile {
+    type Error = anyhow::Error;
+    fn try_from(mut fields: BTreeMap<String, u32>) -> Result<Self, Self::Error> {
+        let result = Self {
+            context: fields.remove("context"),
+            output: fields.remove("output"),
+        };
+        if let Some(key) = fields.keys().next() {
+            anyhow::bail!("unknown limit key {key}");
+        }
+        Ok(result)
+    }
+}
+
+impl TryFrom<BTreeMap<String, Vec<String>>> for ModelModalitiesFile {
+    type Error = anyhow::Error;
+    fn try_from(mut fields: BTreeMap<String, Vec<String>>) -> Result<Self, Self::Error> {
+        let result = Self {
+            input: fields.remove("input"),
+            _output: fields.remove("output"),
+        };
+        if let Some(key) = fields.keys().next() {
+            anyhow::bail!("unknown modalities key {key}");
+        }
+        Ok(result)
+    }
 }
 
 /// A model entry's `reasoning:` value.
@@ -430,44 +548,6 @@ struct ParsedModel {
     reasoning_declared: Option<bool>,
 }
 
-/// Validate one model `modalities` block: a mapping whose optional `input`
-/// (and `output`) is a list of modality names. Returns whether `input`
-/// contains `image`, or `None` when `input` is absent.
-fn resolve_model_modalities(
-    provider_id: &str,
-    model_id: &str,
-    modalities: &Value,
-) -> anyhow::Result<Option<bool>> {
-    let Value::Mapping(fields) = modalities else {
-        anyhow::bail!("provider {provider_id} model {model_id} modalities must be a mapping");
-    };
-    let mut image_input = None;
-    for (key, value) in fields {
-        let key = key.as_str().unwrap_or_default();
-        if !matches!(key, "input" | "output") {
-            anyhow::bail!(
-                "provider {provider_id} model {model_id} has unknown modalities key {key} (expected input or output)"
-            );
-        }
-        let names = value
-            .as_sequence()
-            .and_then(|items| items.iter().map(Value::as_str).collect::<Option<Vec<_>>>())
-            .with_context(|| {
-                format!(
-                    "provider {provider_id} model {model_id} modalities.{key} must be a list of names (for example [text, image])"
-                )
-            })?;
-        if key == "input" {
-            image_input = Some(
-                names
-                    .iter()
-                    .any(|name| name.trim().eq_ignore_ascii_case("image")),
-            );
-        }
-    }
-    Ok(image_input)
-}
-
 /// Validate one object-form model `limit` block.
 ///
 /// Accepts a mapping with optional `context` and `output` positive `u32`
@@ -476,32 +556,19 @@ fn resolve_model_modalities(
 fn resolve_model_limit(
     provider_id: &str,
     model_id: &str,
-    limit: &Value,
+    limit: &ModelLimitFile,
 ) -> anyhow::Result<hya_provider::ModelLimitOverride> {
-    let Value::Mapping(fields) = limit else {
-        anyhow::bail!("provider {provider_id} model {model_id} limit must be a mapping");
-    };
-    let mut resolved = hya_provider::ModelLimitOverride::default();
-    for (key, value) in fields {
-        let key = key.as_str().unwrap_or_default();
-        let slot = match key {
-            "context" => &mut resolved.context,
-            "output" => &mut resolved.output,
-            _ => anyhow::bail!(
-                "provider {provider_id} model {model_id} has unknown limit key {key} (expected context or output)"
-            ),
-        };
-        *slot = value
-            .as_u64()
-            .and_then(|tokens| u32::try_from(tokens).ok())
-            .filter(|tokens| *tokens > 0)
-            .with_context(|| {
-                format!(
-                    "provider {provider_id} model {model_id} limit.{key} must be a positive integer no larger than {}",
-                    u32::MAX
-                )
-            })?;
+    for (key, value) in [("context", limit.context), ("output", limit.output)] {
+        if value == Some(0) {
+            anyhow::bail!(
+                "provider {provider_id} model {model_id} limit.{key} must be a positive integer"
+            );
+        }
     }
+    let resolved = hya_provider::ModelLimitOverride {
+        context: limit.context.unwrap_or_default(),
+        output: limit.output.unwrap_or_default(),
+    };
     if resolved.context > 0 && resolved.output > resolved.context {
         anyhow::bail!(
             "provider {provider_id} model {model_id} limit.output {} exceeds limit.context {}",
@@ -826,23 +893,12 @@ fn write_config_value(
     resolve_providers_filtered(&file, None, false).map_err(|error| {
         ConfigEditError::Invalid(format!("edit would make config.yaml invalid: {error:#}"))
     })?;
-    let parent = config_path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .context("hya config path should have a parent directory")?;
-    std::fs::create_dir_all(parent)
-        .with_context(|| format!("create config dir {}", parent.display()))?;
-    let tmp = parent.join(format!(".config.yaml.tmp-{}", std::process::id()));
-    std::fs::write(&tmp, rendered).with_context(|| format!("write {}", tmp.display()))?;
-    if let Ok(meta) = std::fs::metadata(config_path) {
-        let _ = std::fs::set_permissions(&tmp, meta.permissions());
-    }
-    if let Err(error) = std::fs::rename(&tmp, config_path) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(ConfigEditError::Io(anyhow::Error::from(error).context(
-            format!("rename {} -> {}", tmp.display(), config_path.display()),
-        )));
-    }
+    let permissions = match std::fs::metadata(config_path) {
+        Ok(metadata) => Some(metadata.permissions()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(anyhow::Error::from(error).into()),
+    };
+    crate::agent_model_config::atomic_replace(config_path, &rendered, permissions)?;
     Ok(())
 }
 
@@ -867,6 +923,7 @@ pub fn upsert_provider_entry(
             PROVIDER_KIND_LABELS.join(", ")
         )));
     }
+    let _lock = crate::agent_model_config::lock_for(config_path)?;
     let source = read_config_source(config_path)?;
     let mut root = source.root.clone();
     let providers = providers_mapping(&mut root)?;
@@ -936,6 +993,7 @@ pub fn set_model_entry(
     model_id: &str,
     metadata: &ModelEntryOverride,
 ) -> Result<(), ConfigEditError> {
+    let _lock = crate::agent_model_config::lock_for(config_path)?;
     let source = read_config_source(config_path)?;
     let mut root = source.root.clone();
     let models = provider_models(&mut root, provider_id)?;
@@ -1014,6 +1072,7 @@ pub fn remove_model_entry(
     provider_id: &str,
     model_id: &str,
 ) -> Result<bool, ConfigEditError> {
+    let _lock = crate::agent_model_config::lock_for(config_path)?;
     let source = read_config_source(config_path)?;
     let mut root = source.root.clone();
     let models = provider_models(&mut root, provider_id)?;
@@ -1038,6 +1097,7 @@ pub fn remove_provider_entry(
     if !config_path.exists() {
         return Ok(false);
     }
+    let _lock = crate::agent_model_config::lock_for(config_path)?;
     let source = read_config_source(config_path)?;
     let mut root = source.root.clone();
     if providers_mapping(&mut root)?
@@ -1214,12 +1274,6 @@ fn resolve_permission(file: &FileConfig) -> anyhow::Result<InvocationPolicy> {
     InvocationPolicy::compile(model, rules).context("compile permission.rules selector regex")
 }
 
-fn has_meaningful_permission(file: &FileConfig) -> bool {
-    file.permission.as_ref().is_some_and(|permission| {
-        permission.model != PermissionModel::Default || !permission.rules.is_empty()
-    })
-}
-
 /// Parse every provider declaration, preserving empty model lists for startup
 /// discovery and normalizing explicit ids before route construction.
 fn resolve_providers(file: &FileConfig) -> anyhow::Result<Vec<ParsedProvider>> {
@@ -1325,9 +1379,12 @@ fn resolve_providers_filtered(
                 .map(|limit| resolve_model_limit(id, model_id, limit))
                 .transpose()?;
             let image_input = modalities
-                .map(|modalities| resolve_model_modalities(id, model_id, modalities))
-                .transpose()?
-                .flatten();
+                .and_then(|modalities| modalities.input.as_ref())
+                .map(|names| {
+                    names
+                        .iter()
+                        .any(|name| name.trim().eq_ignore_ascii_case("image"))
+                });
             let display_name = name
                 .map(str::trim)
                 .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))
@@ -1457,19 +1514,6 @@ fn resolve_categories(file: &FileConfig) -> CategoryRegistry {
     CategoryRegistry::from_entries(entries)
 }
 
-/// Resolve model categories independent of provider config, so the offline path
-/// (where [`load`] returns `None`) and the spawn supervisor can build the same
-/// registry the runtime holds.
-#[must_use]
-pub fn load_categories() -> CategoryRegistry {
-    config_path()
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .filter(|yaml| !yaml.trim().is_empty())
-        .and_then(|yaml| parse_config(&yaml).ok())
-        .map(|file| resolve_categories(&file))
-        .unwrap_or_default()
-}
-
 /// Resolve the catalog scope cache limits from an optional file block;
 /// absent fields keep the defaults (32 scopes, 30 minutes idle).
 fn resolve_catalog_scope_cache(
@@ -1482,18 +1526,6 @@ fn resolve_catalog_scope_cache(
             .and_then(|f| f.idle_ttl_secs)
             .map_or(defaults.idle_ttl, std::time::Duration::from_secs),
     }
-}
-
-/// Resolve the catalog scope cache limits (`catalog_scopes:`) independent of
-/// provider config, so the offline path honors them too.
-#[must_use]
-pub fn load_catalog_scope_cache() -> hya_core::CatalogScopeCacheConfig {
-    let file_block = config_path()
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .filter(|yaml| !yaml.trim().is_empty())
-        .and_then(|yaml| parse_config(&yaml).ok())
-        .and_then(|file| file.catalog_scopes);
-    resolve_catalog_scope_cache(file_block.as_ref())
 }
 
 pub(crate) fn parse_plugin_config(
@@ -1525,32 +1557,6 @@ pub fn load_configured_plugin_ids() -> Vec<String> {
         .and_then(|yaml| parse_config(&yaml).ok())
         .map(|file| file.plugins.into_keys().collect())
         .unwrap_or_default()
-}
-
-/// Resolve subagent caps independent of provider config, so the offline path
-/// (where [`load`] returns `None`) still honors configured/env limits.
-#[must_use]
-pub fn load_subagent_limits() -> SubagentLimits {
-    let file_block = config_path()
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .filter(|yaml| !yaml.trim().is_empty())
-        .and_then(|yaml| parse_config(&yaml).ok())
-        .and_then(|file| file.subagents);
-    resolve_subagent_limits(file_block.as_ref())
-}
-
-/// The top-level `reasoning:` effort, the last fallback before sending no
-/// effort. Read independently of provider config so the engine builder can
-/// install it; [`load`] already rejects an invalid label, so an unparsable
-/// value here yields `None`.
-#[must_use]
-pub fn load_global_reasoning() -> Option<ReasoningEffort> {
-    config_path()
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .filter(|yaml| !yaml.trim().is_empty())
-        .and_then(|yaml| parse_config(&yaml).ok())
-        .and_then(|file| file.reasoning)
-        .and_then(|value| ReasoningEffort::parse(&value))
 }
 
 /// Compaction thresholds plus the token-accounting mode they are measured with.
@@ -1666,7 +1672,7 @@ fn resolve_context_settings(file: Option<&CompactionFile>) -> ContextSettings {
 }
 
 /// File shape of the `goal:` block of `~/.config/hya/config.yaml`.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 struct GoalFile {
     /// `provider/model` ref that judges goal mode when no `--evaluator-model`
     /// flag is given. Absent/blank → the worker's current model.
@@ -1708,28 +1714,6 @@ pub fn resolve_evaluator_model<'a>(
     non_empty(cli_flag)
         .or_else(|| non_empty(config_value))
         .unwrap_or(worker_current)
-}
-
-/// Goal-mode settings from `config.yaml`.
-#[must_use]
-pub fn load_goal_settings() -> GoalSettings {
-    let file_block = config_path()
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .filter(|yaml| !yaml.trim().is_empty())
-        .and_then(|yaml| parse_config(&yaml).ok())
-        .and_then(|file| file.goal);
-    GoalSettings::from_block(file_block)
-}
-
-/// Context settings from `config.yaml`, with env overrides applied.
-#[must_use]
-pub fn load_context_settings() -> ContextSettings {
-    let file_block = config_path()
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .filter(|yaml| !yaml.trim().is_empty())
-        .and_then(|yaml| parse_config(&yaml).ok())
-        .and_then(|file| file.compaction);
-    resolve_context_settings(file_block.as_ref())
 }
 
 /// Map OAuth failures onto provider errors exactly as the bearer-resolver
@@ -2367,20 +2351,9 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         return Ok(None);
     }
     let file = parse_config(&yaml)?;
-    let has_tools = file.tools.is_some();
     let permission = resolve_permission(&file)?;
-    let has_permission = has_meaningful_permission(&file);
     let mcp = resolve_mcp(&file)?;
     let parsed = resolve_providers(&file)?;
-    if parsed.is_empty()
-        && mcp.is_empty()
-        && file.plugins.is_empty()
-        && !has_permission
-        && !has_tools
-        && file.default_agent.is_none()
-    {
-        return Ok(None);
-    }
 
     let mut cache = if parsed.is_empty() {
         BTreeMap::new()
@@ -2456,26 +2429,28 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         requested_default,
     ));
     router = router.with_catalog_snapshot(Arc::clone(&catalog));
-    // The engine reads `reasoning:` itself (`load_global_reasoning`); reject a
-    // typo here so it fails loudly instead of silently sending no effort.
+    // Validate labels at the file boundary before passing the snapshot.
     if let Some(value) = file.reasoning.as_deref()
         && ReasoningEffort::parse(value).is_none()
     {
         anyhow::bail!("invalid global reasoning effort `{value}`");
     }
+    let mut file = file;
     let websearch = file
         .tools
+        .take()
         .map_or_else(WebSearchConfig::default, |tools| tools.websearch);
     Ok(Some(ResolvedConfig {
         router,
         default_model: catalog.default_model().to_string(),
         catalog,
         mcp,
-        default_agent: file.default_agent,
-        plugins: file.plugins,
+        default_agent: file.default_agent.clone(),
+        plugins: file.plugins.clone(),
         permission,
         websearch,
         pending_discovery,
+        settings: EngineSettings { file },
     }))
 }
 
@@ -3590,7 +3565,9 @@ plugins:
             let error = parse_providers(&limit_yaml(limit)).err().unwrap();
             let message = format!("{error:#}");
             assert!(
-                message.contains("provider 12th model glm-5.3-flash") && message.contains(expected),
+                (message.contains("provider 12th model glm-5.3-flash")
+                    && message.contains(expected))
+                    || message.contains("parse hya config.yaml"),
                 "{limit}: got {message}"
             );
         }
@@ -3624,7 +3601,7 @@ plugins:
         );
 
         let bad = "providers:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n      - id: m\n        modalities:\n          input: image\n";
-        let error = parse_providers(bad).unwrap_err().to_string();
+        let error = format!("{:#}", parse_providers(bad).unwrap_err());
         assert!(error.contains("modalities"), "{error}");
     }
 

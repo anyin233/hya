@@ -57,9 +57,9 @@ use cli_args::{Cli, Command};
 
 pub use hya_app::{
     InvocationPolicy, RuntimeConfig, WebSearchConfig, agent_base_with_model, agent_with_model,
-    agent_with_model_pure, build_session_engine, build_session_engine_pure, compaction_config,
-    discover_context_files, host_info, offline_router, open_store, resolve_headless_agent_name,
-    resolve_runtime, spawn_team_supervisor, today,
+    agent_with_model_pure, build_session_engine, build_session_engine_pure, discover_context_files,
+    host_info, offline_router, open_store, resolve_headless_agent_name, resolve_runtime,
+    spawn_team_supervisor, today,
 };
 
 pub(crate) fn first_run_config_bootstrap(interactive: bool) -> anyhow::Result<()> {
@@ -192,7 +192,7 @@ async fn cmd_exec(
             &agent,
             runtime.mcp,
             runtime.plugins,
-            (runtime.websearch, runtime.permission),
+            (runtime.websearch, runtime.permission, runtime.settings),
         )
         .await?
     } else {
@@ -202,7 +202,7 @@ async fn cmd_exec(
             &agent,
             runtime.mcp,
             runtime.plugins,
-            (runtime.websearch, runtime.permission),
+            (runtime.websearch, runtime.permission, runtime.settings),
         )
         .await?
     };
@@ -429,7 +429,7 @@ async fn cmd_goal(
     // with neither, the worker's current model judges.
     let evaluator_model = config::resolve_evaluator_model(
         evaluator_model_flag.as_deref(),
-        config::load_goal_settings().evaluator_model.as_deref(),
+        runtime.settings.goal().evaluator_model.as_deref(),
         &runtime.model,
     )
     .to_string();
@@ -445,7 +445,7 @@ async fn cmd_goal(
             &agent,
             runtime.mcp,
             runtime.plugins,
-            (runtime.websearch, runtime.permission),
+            (runtime.websearch, runtime.permission, runtime.settings),
         )
         .await?
     } else {
@@ -455,7 +455,7 @@ async fn cmd_goal(
             &agent,
             runtime.mcp,
             runtime.plugins,
-            (runtime.websearch, runtime.permission),
+            (runtime.websearch, runtime.permission, runtime.settings),
         )
         .await?
     };
@@ -588,7 +588,7 @@ async fn cmd_loop(
     // config `goal.evaluator_model`; with neither, the worker's model judges.
     let evaluator_model = config::resolve_evaluator_model(
         evaluator_model_flag.as_deref(),
-        config::load_goal_settings().evaluator_model.as_deref(),
+        runtime.settings.goal().evaluator_model.as_deref(),
         &runtime.model,
     )
     .to_string();
@@ -604,7 +604,7 @@ async fn cmd_loop(
             &agent,
             runtime.mcp,
             runtime.plugins,
-            (runtime.websearch, runtime.permission),
+            (runtime.websearch, runtime.permission, runtime.settings),
         )
         .await?
     } else {
@@ -614,7 +614,7 @@ async fn cmd_loop(
             &agent,
             runtime.mcp,
             runtime.plugins,
-            (runtime.websearch, runtime.permission),
+            (runtime.websearch, runtime.permission, runtime.settings),
         )
         .await?
     };
