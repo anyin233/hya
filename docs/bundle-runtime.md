@@ -286,10 +286,15 @@ Build the binary for the target operating system and architecture before
 packaging. `extensions.rust` accepts raw bytes; preparation stores canonical
 Base64 in the prepared catalog, verifies the SHA-256 digest of the original
 bytes, and includes the executable in the exact archive closure. Runtime
-materialization writes those bytes into a private directory with executable
-permission. The first process command argument must refer to one declared
-native executable. A failed launch rejects the new generation while old
-bindings retain their previous process and files. The executable must speak
+materialization sends those bytes through a pipe to the POSIX `tee` utility
+(required on the backend's `PATH`), waits for that writer to exit, then sets
+executable permission in a private directory. The backend never opens the
+executable for writing: concurrent plugin, MCP, or shell spawns cannot inherit
+a writable descriptor and make its launch fail with `ETXTBSY` (text file busy).
+Writer failures reject preparation before any provider starts. This requires no
+bundle configuration changes. The first process command argument must refer to
+one declared native executable. A failed launch rejects the new generation while
+old bindings retain their previous process and files. The executable must speak
 the [native plugin protocol](plugin-protocol.md); declaring a binary alone
 does not register any tools or grant extra host capabilities.
 
