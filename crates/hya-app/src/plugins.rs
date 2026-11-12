@@ -354,6 +354,8 @@ pub(crate) fn project_plugins_digest(root: &Path, hasher: &mut sha2::Sha256) -> 
 
 #[cfg(test)]
 mod tests {
+    use crate::test_env::StableEnvGuard;
+
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
@@ -373,6 +375,7 @@ mod tests {
 
     #[test]
     fn specs_from_config_filters_disabled_plugins() {
+        let _env = StableEnvGuard::new();
         let mut config = BTreeMap::new();
         config.insert(
             "enabled".to_string(),
@@ -394,6 +397,7 @@ mod tests {
     /// `PATH`; `BUN` still overrides both.
     #[test]
     fn bun_resolution_prefers_env_then_installed_then_path() {
+        let _env = StableEnvGuard::new();
         let root = std::env::temp_dir().join(format!("hya-find-bun-{}", std::process::id()));
         let write = |relative: &str| {
             let path = root.join(relative);
@@ -425,6 +429,7 @@ mod tests {
 
     #[test]
     fn bun_entry_without_command_resolves_to_bundled_adapter() {
+        let _env = StableEnvGuard::new();
         let mut config = BTreeMap::new();
         config.insert(
             "ext".to_string(),
@@ -461,6 +466,7 @@ mod tests {
     #[test]
     fn bun_adapter_resolution_prefers_override_then_installed_then_workspace()
     -> Result<(), Box<dyn std::error::Error>> {
+        let _env = StableEnvGuard::new();
         let root =
             std::env::temp_dir().join(format!("hya-bun-adapter-resolution-{}", std::process::id()));
         let executable = root.join("prefix/bin/hya");
@@ -489,6 +495,7 @@ mod tests {
 
     #[test]
     fn bun_entry_without_bun_is_skipped() {
+        let _env = StableEnvGuard::new();
         let mut config = BTreeMap::new();
         config.insert(
             "ext".to_string(),
@@ -509,6 +516,7 @@ mod tests {
 
     #[test]
     fn rust_plugins_never_invoke_bun() {
+        let _env = StableEnvGuard::new();
         // The pure-Rust plugin path must not depend on Bun: resolving a `rust`
         // plugin must never call the bun locator.
         let mut config = BTreeMap::new();
@@ -530,6 +538,7 @@ mod tests {
 
     #[test]
     fn bun_entry_with_explicit_command_is_preserved() {
+        let _env = StableEnvGuard::new();
         let mut config = BTreeMap::new();
         config.insert(
             "ext".to_string(),
@@ -562,6 +571,7 @@ mod tests {
 
     #[test]
     fn claude_entry_with_plugin_dir_resolves_to_bundled_adapter() {
+        let _env = StableEnvGuard::new();
         let mut config = BTreeMap::new();
         config.insert(
             "cc".to_string(),
@@ -599,6 +609,7 @@ mod tests {
 
     #[test]
     fn claude_entry_without_plugin_dir_is_skipped_with_a_notice() {
+        let _env = StableEnvGuard::new();
         let mut config = BTreeMap::new();
         config.insert("cc".to_string(), claude_entry(None));
 
@@ -612,6 +623,7 @@ mod tests {
 
     #[test]
     fn claude_entry_without_bun_is_skipped() {
+        let _env = StableEnvGuard::new();
         let mut config = BTreeMap::new();
         config.insert(
             "cc".to_string(),
@@ -625,6 +637,7 @@ mod tests {
 
     #[test]
     fn claude_entry_with_explicit_command_is_preserved() {
+        let _env = StableEnvGuard::new();
         let mut config = BTreeMap::new();
         config.insert(
             "cc".to_string(),
@@ -649,6 +662,7 @@ mod tests {
     #[test]
     fn claude_adapter_resolution_prefers_override_then_installed_then_workspace()
     -> Result<(), Box<dyn std::error::Error>> {
+        let _env = StableEnvGuard::new();
         let root = std::env::temp_dir().join(format!(
             "hya-claude-adapter-resolution-{}",
             std::process::id()
@@ -685,6 +699,7 @@ mod tests {
 
     #[test]
     fn config_plugin_dir_flows_into_merged_specs() {
+        let _env = StableEnvGuard::new();
         let mut config = BTreeMap::new();
         config.insert(
             "cc".to_string(),
