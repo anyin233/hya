@@ -1373,7 +1373,6 @@ hya honors `HOME` and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 | `HYA_SUBAGENT_MESSAGE_BUDGET` | Overrides `subagents.per_team_message_budget`. Env wins. | `1024` | same |
 | `HYA_EVENT_BUS_CAPACITY` | Live EventBus broadcast ring capacity. Must parse as `usize` **> 0** or ignored. **Env-only** (no config.yaml key). Raising it trades memory for tolerance of slow SSE consumers. | `8192` (`DEFAULT_BUS_CAPACITY`) | `crates/hya-app/src/config.rs`, `crates/hya-core/src/bus.rs` |
 | `HYA_DEFER_SIDEPLANES` | When deferred (default), MCP connect runs after the engine is built so the HTTP listener comes up without waiting on MCP handshakes — MCP tools may not be registered for the very first prompt. Set to `0`, `false`, `off`, or `no` (case-insensitive, trimmed) for await-MCP-before-listen. Any other value, empty, or unset means deferred. | deferred (on) | `crates/hya-app/src/runtime.rs` |
-| `HYA_MCP_BACKGROUND_AFTER_MS` | Foreground budget in milliseconds for `mcp__` tool calls. A call still running past the budget moves to the background: the turn gets a `[backgrounded]` tool result immediately, the real result is delivered later as a steered `[background job …]` user prompt, and `hya serve` runs the reclaim turn when the session is idle. Unset, `0`, or unparsable disables backgrounding (every call stays synchronous). | unset | `crates/hya-app/src/runtime.rs`, `crates/hya-core/src/engine/turn.rs` |
 | `HYA_BUN_ADAPTER_DIR` | Path to an alternate Bun extension adapter checkout (`kind: bun` plugins). | Resolution order: this env override, executable-adjacent `../lib/hya/bun-adapter`, then workspace `crates/hya-plugin-bun/adapter`. | `crates/hya-app/src/plugins.rs` |
 | `HYA_CLAUDE_ADAPTER_DIR` | Path to an alternate Claude Code adapter checkout (`kind: claude` plugins and `bundle install --claude`). | Resolution order: this env override, executable-adjacent `../lib/hya/claude-adapter`, then workspace `crates/hya-plugin-claude/adapter`. | `crates/hya-app/src/plugins.rs` |
 | `HYA_BACKEND_BIN` | Binary under test for the `startup-bench` xtask; overrides the default `hya serve` target. | workspace `target/{profile}` binary | `crates/xtask/src/startup_bench.rs` |
@@ -1461,28 +1460,9 @@ When connecting an enabled server, hya:
 
 Only steps 1–4 are mandatory for a successful connection.
 
-### Long calls: auto-background and reclaim
-
-MCP tools can be slow. With `HYA_MCP_BACKGROUND_AFTER_MS` set, any `mcp__` tool
-call still running after the budget moves to the background instead of blocking
-the turn:
-
-1. The turn immediately receives a synthetic tool result marked
-   `[backgrounded]` (metadata `{"backgrounded": true, "job": "mcpbg-N"}`), so
-   the model knows the call continues out of band and can do other work.
-2. When the call settles, the real outcome is recorded durably on the same
-   tool part (`ToolResult` with metadata `background_result`, or `ToolError`
-   with value `background_failed` on failure) and a steered user prompt
-   `[background job mcpbg-N completed|failed: <tool>] … Reclaim this result`
-   is appended to the session carrying the result text.
-3. `hya serve` watches for that marker: if the session is idle it
-   starts a follow-up turn right away so the agent reclaims the result; a busy
-   session simply sees the prompt on its next round. In `exec`/goal mode the
-   prompt stays durable for the next turn.
-
-Cancellation is honored: a backgrounded call cancelled with its session never
-invents a result. Without the variable set, every MCP call stays synchronous
-with only `timeout_ms` bounding it.
+MCP tool calls remain in the originating turn until they finish, are cancelled,
+or reach the configured `timeout_ms`. Long calls do not automatically move to
+the background or start a reclaim turn.
 
 Enabled servers are prepared during runtime composition. Their tools keep the
 external name `mcp__<server>__<tool>` and use the existing permission plane.
