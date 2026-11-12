@@ -10,7 +10,7 @@ import { createAppStore, type AppStore } from "../src/state/store"
 import { modelReference } from "../src/state/format"
 import { defaultPaneLayout, closePane, paneRects, paneNodes, paneLeaves, type Rect } from "../src/state/panes"
 import { sidebarTooNarrowNotice } from "../src/state/layout"
-import type { PickerSpec } from "../src/state/picker"
+import { createPicker, pickerKey, type PickerSpec } from "../src/state/picker"
 import { colors, defaultThemeName, setTheme, themeName, themes } from "../src/theme"
 afterEach(() => setCustomKeybindings({}))
 
@@ -1037,4 +1037,30 @@ test("a model picker opened on a root cannot switch a subsequently viewed child"
   await h.pickers[0]!.onSelect(h.pickers[0]!.rows[0]!)
   expect(h.store.state.status).toBe(revertReadOnlyStatus)
   expect(h.calls).toEqual([])
+})
+
+
+test("/sessions disables deletion of subagents before confirmation", async () => {
+  const deleteCalls: string[] = []
+  const { store, pickers, run } = harness({ deleteSession: async (id) => { deleteCalls.push(id) } })
+  store.setSessions([
+    { id: "root", agent: "hya-main", workdir: "/w" },
+    { id: "child", parent: "root", agent: "hya-task", workdir: "/w" },
+  ])
+  await run("/sessions")
+  const spec = pickers.at(-1)!
+  const picker = createPicker(spec)
+  picker.index = picker.rows.findIndex((row) => row.id === "child")
+  const outcome = pickerKey(picker, { name: "d", ctrl: true, meta: false, shift: false, sequence: "\x04" })
+  expect(outcome.type).toBe("update")
+  if (outcome.type === "update") {
+    expect(outcome.state.mode).toBe("list")
+    expect(outcome.state.hint).toBe("Archive the subagent or delete the root")
+  }
+  await spec.onAction?.("delete", picker.rows[picker.index]!)
+  expect(deleteCalls).toEqual([])
+  picker.index = picker.rows.findIndex((row) => row.id === "root")
+  const rootOutcome = pickerKey(picker, { name: "d", ctrl: true, meta: false, shift: false, sequence: "\x04" })
+  expect(rootOutcome.type).toBe("update")
+  if (rootOutcome.type === "update") expect(rootOutcome.state.mode).toBe("confirm")
 })
