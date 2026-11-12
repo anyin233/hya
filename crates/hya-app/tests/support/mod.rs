@@ -1,5 +1,7 @@
 #![allow(dead_code, clippy::expect_used)]
 
+pub mod lifecycle;
+
 use std::sync::Arc;
 
 use hya_bundle::{AgentRole, BundleCatalog, BundleSource, SourceFile};
