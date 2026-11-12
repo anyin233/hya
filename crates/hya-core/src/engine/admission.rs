@@ -371,7 +371,7 @@ impl SessionEngine {
         Ok(())
     }
 
-    fn publish_resident_finalization(
+    pub(crate) fn publish_resident_finalization(
         &self,
         (envelopes, admissions): (Vec<Envelope>, Vec<AdmissionRecord>),
     ) {
@@ -563,7 +563,7 @@ impl SessionEngine {
 
     /// The user text after the `message.user.before` hooks (global, then
     /// the agent's bundle hooks).
-    async fn user_text_after_hooks(
+    pub(crate) async fn user_text_after_hooks(
         &self,
         binding: &TurnBinding,
         stable_id: &str,
@@ -731,19 +731,14 @@ impl SessionEngine {
         Ok(message)
     }
 
-    pub(crate) async fn prepare_initial_resident_prompt(
+    pub(crate) fn prepare_initial_resident_prompt(
         &self,
         session: SessionId,
         text: String,
-        binding: &TurnBinding,
-        stable_id: &str,
-    ) -> Result<Vec<Event>, CoreError> {
-        let text = self
-            .user_text_after_hooks(binding, stable_id, session, text)
-            .await;
+    ) -> Vec<Event> {
         let message = MessageId::new();
         let part = PartId::new();
-        Ok(vec![
+        vec![
             Event::MessageStarted {
                 session,
                 message,
@@ -775,7 +770,7 @@ impl SessionEngine {
                 tokens: None,
                 cause: None,
             },
-        ])
+        ]
     }
 
     pub(crate) async fn admit_user_prompt_for_actor_with_binding(

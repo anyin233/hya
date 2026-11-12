@@ -906,3 +906,30 @@ async fn registration_rolls_back_claim_and_all_sessions_on_prompt_failure() {
         .unwrap();
     assert_eq!(count, 0);
 }
+
+#[tokio::test]
+async fn registration_writer_reserves_sqlite_before_any_read() {
+    let db = TempDb::new("immediate-registration");
+    let store = SessionStore::connect(db.path()).await.unwrap();
+    let mut writer = SqliteConnection::connect(&format!("sqlite://{}", db.path()))
+        .await
+        .unwrap();
+    let held = writer.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    let waiting = tokio::time::timeout(
+        std::time::Duration::from_millis(100),
+        store.begin_transaction(),
+    )
+    .await;
+    assert!(
+        waiting.is_err(),
+        "begin_transaction returned without acquiring SQLite's writer reservation"
+    );
+    held.rollback().await.unwrap();
+    store
+        .begin_transaction()
+        .await
+        .unwrap()
+        .rollback()
+        .await
+        .unwrap();
+}

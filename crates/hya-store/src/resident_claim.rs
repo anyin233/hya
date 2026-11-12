@@ -88,7 +88,23 @@ impl SessionStore {
         }
         let claim = Self::try_claim_new_in_transaction(&mut tx, actor_id, owner_run_id).await?;
         let mut envelopes = Vec::with_capacity(events.len());
-        for event in events {
+        for mut event in events {
+            if let Event::ChannelCreated {
+                session,
+                channel,
+                kind: hya_proto::ChannelKind::Group,
+                unit,
+                ..
+            } = &mut event
+            {
+                let projection =
+                    crate::replay_projection(&self.projections, &mut tx, *session).await?;
+                if let Some((existing, _)) = projection.team.channels.iter().find(|(_, entry)| {
+                    entry.kind == hya_proto::ChannelKind::Group && entry.unit == *unit
+                }) {
+                    channel.clone_from(existing);
+                }
+            }
             let session = event.session().ok_or_else(|| {
                 StoreError::ActorClaimData("registration event has no session".into())
             })?;
