@@ -1369,9 +1369,6 @@ fn resolve_providers_filtered(
 fn resolve_mcp(file: &FileConfig) -> anyhow::Result<BTreeMap<String, McpServerConfig>> {
     let mut out = BTreeMap::new();
     for (id, server) in &file.mcp {
-        if server.enabled == Some(false) {
-            continue;
-        }
         // The server key is the namespace segment of `mcp__{server}__{tool}`;
         // a malformed key would compose ambiguous or unusable tool names.
         let key_valid = !id.is_empty()
@@ -1398,12 +1395,8 @@ fn resolve_mcp(file: &FileConfig) -> anyhow::Result<BTreeMap<String, McpServerCo
         out.insert(
             id.clone(),
             McpServerConfig {
-                command: server.command.clone(),
                 env,
-                url: None,
-                transport: None,
-                enabled: server.enabled,
-                timeout_ms: server.timeout_ms,
+                ..server.clone()
             },
         );
     }
@@ -1516,6 +1509,13 @@ pub fn load_catalog_scope_cache() -> hya_core::CatalogScopeCacheConfig {
         .and_then(|yaml| parse_config(&yaml).ok())
         .and_then(|file| file.catalog_scopes);
     resolve_catalog_scope_cache(file_block.as_ref())
+}
+
+pub(crate) fn parse_plugin_config(
+    yaml: &str,
+) -> anyhow::Result<Vec<hya_plugin::config::PluginSpec>> {
+    let file = parse_config(yaml)?;
+    Ok(crate::plugins::resolve(file.plugins))
 }
 
 /// Every plugin id declared under `plugins:` (enabled or not). A project
@@ -2680,6 +2680,12 @@ mod tests {
     use hya_tool::{Invocation, Mode};
 
     #[test]
+    fn hot_reload_mcp_retains_remote_and_disabled_declarations() {
+        let file: FileConfig = parse_config("mcp:\n  remote:\n    url: https://example.com/mcp\n    transport: sse\n    enabled: false\n").unwrap();
+        assert_eq!(resolve_mcp(&file).unwrap(), file.mcp);
+    }
+
+    #[test]
     fn permission_yaml_compiles_documented_rules_defaults_and_validation() {
         let file = parse_config(
             r#"
@@ -3359,7 +3365,7 @@ providers:
     }
 
     #[test]
-    fn parses_mcp_and_skips_disabled_servers() {
+    fn parses_mcp_and_keeps_disabled_servers() {
         let yaml = "
 mcp:
   echo:
@@ -3373,7 +3379,8 @@ mcp:
 ";
         let file = parse_config(yaml).unwrap();
         let mcp = resolve_mcp(&file).unwrap();
-        assert_eq!(mcp.len(), 1);
+        assert_eq!(mcp.len(), 2);
+        assert_eq!(mcp["off"].enabled, Some(false));
         let echo = mcp.get("echo").unwrap();
         assert_eq!(
             echo.command,

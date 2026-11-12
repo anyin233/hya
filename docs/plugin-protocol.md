@@ -646,6 +646,29 @@ variants: `hya-app` starts each one in the Project root that holds its
 
 ---
 
+## Atomic source publication and config reload
+
+A configured plugin and a Project plugin use the same publication boundary:
+one runtime source owns the connected process, qualified tools, Skills, and
+hook dispatcher. The host does not install a second process-wide hook or
+permission interceptor. Only a successfully published source can participate
+in model, tool, permission, message, and session hooks. Rejected replacements
+leave the previous source effective; an unrelated failed plugin does not
+prevent a ready source from publishing.
+
+To reload a configured plugin, edit its `plugins.<id>` entry in `config.yaml`
+and start another turn, or call `POST /v1/bundles:refresh` with
+`{"directory":""}` (`hya.v1.Catalog/RefreshBundles`). For example, changing
+`command: [python3, /absolute/path/plugin.py]` to a new command prepares that
+plugin and atomically replaces its tools and hooks. Removing the entry or
+setting its boolean `enabled` field to `false` removes the source. The daemon
+PID stays the same. Captured bindings retain the old process until released.
+The existing initialize and hook request/response schemas are unchanged;
+refresh failures appear in the refresh response's `errors` array (see
+[Bundle runtime](bundle-runtime.md)).
+
+---
+
 ## Supervision and restart budget
 
 | Constant | Value |

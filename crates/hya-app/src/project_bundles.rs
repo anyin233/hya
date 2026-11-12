@@ -35,64 +35,60 @@ struct LoadedProjectBundle {
 /// Load every project bundle under `dir` (one immediate subdirectory per
 /// bundle, containing `bundle.yaml` or `bundle.hya.md`).
 ///
-/// Unreadable or invalid bundles are skipped with a `tracing::warn!` so one
-/// broken directory never wedges the whole catalog. Returns the prepared
-/// catalogs sorted by bundle id plus a fingerprint that changes whenever any
-/// project bundle file's contents change. Each bundle directory's own
-/// `config.yml` (see [`crate::bundle_config`]) is not bundle content: it never
-/// enters the prepared sources or this fingerprint.
-#[must_use]
-pub fn load_project_bundles(dir: &Path) -> (Vec<PreparedCatalog>, u64) {
-    let (loaded, fingerprint) = load_project_bundle_dirs(dir);
-    (
+/// Invalid or unreadable sources reject the replacement catalog. A missing
+/// root directory is an empty tier; deleting a bundle directory removes it.
+///
+/// # Errors
+/// An invalid or unreadable source rejects the replacement catalog.
+pub fn load_project_bundles(dir: &Path) -> Result<(Vec<PreparedCatalog>, u64), ProjectBundleError> {
+    let (loaded, fingerprint) = load_project_bundle_dirs(dir)?;
+    Ok((
         loaded.into_iter().map(|(prepared, _)| prepared).collect(),
         fingerprint,
-    )
+    ))
 }
 
 /// [`load_project_bundles`] that also returns each bundle's source directory.
-pub(crate) fn load_project_bundle_dirs(dir: &Path) -> (Vec<(PreparedCatalog, PathBuf)>, u64) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return (Vec::new(), 0);
+pub(crate) fn load_project_bundle_dirs(
+    dir: &Path,
+) -> Result<(Vec<(PreparedCatalog, PathBuf)>, u64), ProjectBundleError> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
+        Err(error) => return Err(io_error(dir, &error)),
     };
     let mut loaded: BTreeMap<String, LoadedProjectBundle> = BTreeMap::new();
-    for entry in entries.flatten() {
-        let bundle_dir = entry.path();
+    for entry in entries {
+        let bundle_dir = entry.map_err(|error| io_error(dir, &error))?.path();
         if !bundle_dir.is_dir() {
             continue;
         }
-        let Some(source) = directory_source(&bundle_dir) else {
-            continue;
+        let source = directory_source(&bundle_dir)?.ok_or_else(|| {
+            StoreError::BundleRegistryData(format!(
+                "project bundle {} has no bundle.yaml or bundle.hya.md",
+                bundle_dir.display()
+            ))
+        })?;
+        let prepared = hya_bundle::prepare_package(source)?;
+        let [bundle] = prepared.bundles() else {
+            return Err(StoreError::BundleRegistryData(format!(
+                "project bundle {} must prepare to exactly one bundle",
+                bundle_dir.display()
+            ))
+            .into());
         };
-        match hya_bundle::prepare_package(source) {
-            Ok(prepared) => {
-                let [bundle] = prepared.bundles() else {
-                    tracing::warn!(
-                        dir = %bundle_dir.display(),
-                        "project bundle must prepare to exactly one bundle; skipped"
-                    );
-                    continue;
-                };
-                let identity = format!("{}@{}", bundle.identity().id, bundle.identity().version);
-                let content_digest = directory_digest(&bundle_dir);
-                loaded.insert(
-                    identity,
-                    LoadedProjectBundle {
-                        prepared,
-                        dir: bundle_dir,
-                        content_digest,
-                    },
-                );
-            }
-            Err(error) => {
-                tracing::warn!(
-                    dir = %bundle_dir.display(),
-                    error = %error,
-                    "skipping invalid project bundle"
-                );
-            }
-        }
+        let identity = format!("{}@{}", bundle.identity().id, bundle.identity().version);
+        let content_digest = directory_digest(&bundle_dir)?;
+        loaded.insert(
+            identity,
+            LoadedProjectBundle {
+                prepared,
+                dir: bundle_dir,
+                content_digest,
+            },
+        );
     }
+
     let mut fingerprint = std::collections::hash_map::DefaultHasher::new();
     let mut catalogs = Vec::with_capacity(loaded.len());
     for (identity, bundle) in &loaded {
@@ -106,7 +102,7 @@ pub(crate) fn load_project_bundle_dirs(dir: &Path) -> (Vec<(PreparedCatalog, Pat
     if fingerprint == 0 {
         fingerprint = 1;
     }
-    (catalogs, fingerprint)
+    Ok((catalogs, fingerprint))
 }
 
 /// The project bundle directory of one Project root: `<root>/.hya/bundles`.
@@ -123,26 +119,29 @@ pub fn root_bundles_dir(root: &Path) -> PathBuf {
 /// the result never carries two bundles with one id or one namespace. The
 /// fingerprint changes whenever any root's bundle content or the root list
 /// changes.
-#[must_use]
-pub fn load_project_bundles_for_roots(roots: &[PathBuf]) -> (Vec<PreparedCatalog>, u64) {
-    let (loaded, fingerprint) = load_project_bundle_dirs_for_roots(roots);
-    (
+/// # Errors
+/// An invalid or unreadable source rejects the replacement catalog.
+pub fn load_project_bundles_for_roots(
+    roots: &[PathBuf],
+) -> Result<(Vec<PreparedCatalog>, u64), ProjectBundleError> {
+    let (loaded, fingerprint) = load_project_bundle_dirs_for_roots(roots)?;
+    Ok((
         loaded.into_iter().map(|(prepared, _)| prepared).collect(),
         fingerprint,
-    )
+    ))
 }
 
 /// [`load_project_bundles_for_roots`] that also returns each bundle's source
 /// directory.
 pub(crate) fn load_project_bundle_dirs_for_roots(
     roots: &[PathBuf],
-) -> (Vec<(PreparedCatalog, PathBuf)>, u64) {
+) -> Result<(Vec<(PreparedCatalog, PathBuf)>, u64), ProjectBundleError> {
     let mut kept: Vec<(PreparedCatalog, PathBuf)> = Vec::new();
     let mut ids = std::collections::BTreeSet::new();
     let mut namespaces = std::collections::BTreeSet::new();
     let mut fingerprint = std::collections::hash_map::DefaultHasher::new();
     for root in roots {
-        let (loaded, root_fingerprint) = load_project_bundle_dirs(&root_bundles_dir(root));
+        let (loaded, root_fingerprint) = load_project_bundle_dirs(&root_bundles_dir(root))?;
         root.hash(&mut fingerprint);
         root_fingerprint.hash(&mut fingerprint);
         for (prepared, dir) in loaded {
@@ -169,7 +168,7 @@ pub(crate) fn load_project_bundle_dirs_for_roots(
     if fingerprint == 0 {
         fingerprint = 1;
     }
-    (kept, fingerprint)
+    Ok((kept, fingerprint))
 }
 
 /// Cheap change detector for the project bundles of `roots`: the root list,
@@ -180,18 +179,26 @@ pub(crate) fn load_project_bundle_dirs_for_roots(
 ///
 /// Folds everything into `hasher`; returns whether any root has a bundle
 /// directory.
-pub(crate) fn project_roots_digest(roots: &[PathBuf], hasher: &mut sha2::Sha256) -> bool {
+pub(crate) fn project_roots_digest(
+    roots: &[PathBuf],
+    hasher: &mut sha2::Sha256,
+) -> Result<bool, ProjectBundleError> {
     use sha2::Digest as _;
     let mut any = false;
     for root in roots {
         hasher.update(b"root\0");
         hasher.update(root.as_os_str().as_encoded_bytes());
-        let Ok(entries) = std::fs::read_dir(root_bundles_dir(root)) else {
-            continue;
+        let bundle_root = root_bundles_dir(root);
+        let entries = match std::fs::read_dir(&bundle_root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(io_error(&bundle_root, &error)),
         };
         let mut dirs = entries
-            .flatten()
-            .map(|entry| entry.path())
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| io_error(&bundle_root, &error))?
+            .into_iter()
             .filter(|path| path.is_dir())
             .collect::<Vec<_>>();
         dirs.sort();
@@ -199,50 +206,60 @@ pub(crate) fn project_roots_digest(roots: &[PathBuf], hasher: &mut sha2::Sha256)
             any = true;
             hasher.update(b"bundle\0");
             hasher.update(dir.as_os_str().as_encoded_bytes());
-            hasher.update(directory_digest(&dir).to_le_bytes());
+            hasher.update(directory_digest(&dir)?.to_le_bytes());
             match std::fs::read(dir.join(crate::bundle_config::BUNDLE_CONFIG_FILE_NAME)) {
                 Ok(bytes) => {
                     hasher.update(b"config\0");
                     hasher.update(sha2::Sha256::digest(bytes));
                 }
-                Err(_) => hasher.update(b"no-config\0"),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    hasher.update(b"no-config\0")
+                }
+                Err(error) => {
+                    return Err(io_error(
+                        &dir.join(crate::bundle_config::BUNDLE_CONFIG_FILE_NAME),
+                        &error,
+                    ));
+                }
             }
         }
     }
-    any
+    Ok(any)
 }
 
 /// Build a [`BundleSource`] from a directory: every regular file below it,
 /// keyed by its path relative to the directory (forward slashes), except the
 /// user-owned `config.yml` and its lock/temporary siblings. Returns `None`
 /// when the directory carries no manifest at its root.
-fn directory_source(dir: &Path) -> Option<BundleSource> {
+fn directory_source(dir: &Path) -> Result<Option<BundleSource>, ProjectBundleError> {
     let mut files = Vec::new();
-    collect_files(dir, dir, &mut files);
+    collect_files(dir, dir, &mut files)?;
     let has_manifest = files
         .iter()
         .any(|(path, _)| path == "bundle.yaml" || path == "bundle.hya.md");
     if !has_manifest {
-        return None;
+        return Ok(None);
     }
     files.sort_by(|left, right| left.0.cmp(&right.0));
-    Some(BundleSource::new(
+    Ok(Some(BundleSource::new(
         dir.to_string_lossy().into_owned(),
         files
             .into_iter()
             .map(|(path, bytes)| SourceFile::new(path, bytes))
             .collect(),
-    ))
+    )))
 }
 
-fn collect_files(root: &Path, dir: &Path, files: &mut Vec<(String, Vec<u8>)>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
+fn collect_files(
+    root: &Path,
+    dir: &Path,
+    files: &mut Vec<(String, Vec<u8>)>,
+) -> Result<(), ProjectBundleError> {
+    let entries = std::fs::read_dir(dir).map_err(|error| io_error(dir, &error))?;
+    for entry in entries {
+        let path = entry.map_err(|error| io_error(dir, &error))?.path();
         if path.is_dir() {
-            collect_files(root, &path, files);
+            collect_files(root, &path, files)?;
         } else if path.is_file()
             && let Ok(relative) = path.strip_prefix(root)
         {
@@ -254,25 +271,25 @@ fn collect_files(root: &Path, dir: &Path, files: &mut Vec<(String, Vec<u8>)>) {
             if crate::bundle_config::is_bundle_config_entry(&keyed) {
                 continue;
             }
-            if let Ok(bytes) = std::fs::read(&path) {
-                files.push((keyed, bytes));
-            }
+            let bytes = std::fs::read(&path).map_err(|error| io_error(&path, &error))?;
+            files.push((keyed, bytes));
         }
     }
+    Ok(())
 }
 
 /// Stable digest of every bundle file below `dir` (sorted relative path +
 /// bytes); the bundle's `config.yml` is excluded like in [`directory_source`].
-fn directory_digest(dir: &Path) -> u64 {
+fn directory_digest(dir: &Path) -> Result<u64, ProjectBundleError> {
     let mut files = Vec::new();
-    collect_files(dir, dir, &mut files);
+    collect_files(dir, dir, &mut files)?;
     files.sort_by(|left, right| left.0.cmp(&right.0));
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for (path, bytes) in &files {
         path.hash(&mut hasher);
         bytes.hash(&mut hasher);
     }
-    hasher.finish()
+    Ok(hasher.finish())
 }
 
 /// Failure managing a project-scope bundle.
@@ -374,7 +391,7 @@ fn prepare_project_bundle(
 
 /// Every valid project bundle under `dir`, sorted by bundle id then
 /// directory. Directories without a manifest or that fail to prepare are
-/// skipped, as [`load_project_bundles`] skips them at runtime.
+/// skipped for this management listing; runtime loading rejects invalid sources.
 #[must_use]
 pub fn project_bundles(dir: &Path) -> Vec<ProjectBundle> {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -385,7 +402,7 @@ pub fn project_bundles(dir: &Path) -> Vec<ProjectBundle> {
         .map(|entry| entry.path())
         .filter(|path| path.is_dir())
         .filter_map(|path| {
-            let source = directory_source(&path)?;
+            let source = directory_source(&path).ok()??;
             prepare_project_bundle(path, source).ok()
         })
         .collect::<Vec<_>>();
