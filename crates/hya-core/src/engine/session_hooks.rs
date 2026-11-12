@@ -127,7 +127,7 @@ impl SessionEngine {
         binding: &TurnBinding,
         stable_agent_id: &str,
     ) {
-        let hooks = binding.bound_hooks_for_agent(stable_agent_id);
+        let hooks = binding.scope_hooks_for_agent(stable_agent_id);
         let scope = binding.scope().key();
         let generation = binding.generation();
         let (retired, fresh) = {
@@ -200,7 +200,7 @@ impl SessionEngine {
                 {
                     continue;
                 }
-                let hooks = binding.bound_hooks_for_agent(&captured.agent);
+                let hooks = binding.scope_hooks_for_agent(&captured.agent);
                 if same_members(&captured.members, &hooks) {
                     captured.generation = generation;
                 } else {

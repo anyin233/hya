@@ -662,8 +662,17 @@ and start another turn, or call `POST /v1/bundles:refresh` with
 `command: [python3, /absolute/path/plugin.py]` to a new command prepares that
 plugin and atomically replaces its tools and hooks. Removing the entry or
 setting its boolean `enabled` field to `false` removes the source. The daemon
-PID stays the same. Captured bindings retain the old process until released.
-The existing initialize and hook request/response schemas are unchanged;
+PID stays the same. Active turn bindings retain the old process until released;
+idle sessions do not pin removed global plugins. Global event and lifecycle
+hooks use the current published global sources independently of Project cache
+eviction. Hook and `permission.ask` order is user-global config plugins,
+installed plugin bundles, then project plugins.
+
+Automatic binds do not retry unchanged failed declarations. Explicit refresh
+retries failures, including a repaired plugin executable with unchanged
+`plugin.toml` or `config.yaml`. Project plugins keep their last published tools
+and hooks after malformed manifests or failed initialization, while independent
+sources can publish. The existing initialize and hook request/response schemas are unchanged;
 refresh failures appear in the refresh response's `errors` array (see
 [Bundle runtime](bundle-runtime.md)).
 

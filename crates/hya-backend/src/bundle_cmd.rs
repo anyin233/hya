@@ -218,7 +218,7 @@ async fn set_enabled(bundle_id: &str, enabled: bool, db: &str) -> anyhow::Result
 /// Ask the running backend to refresh the base and the current Project now.
 async fn refresh_daemon(db: &str) -> anyhow::Result<()> {
     if let Some(found) = crate::daemon::running(db).await {
-        reqwest::Client::new()
+        let refreshed = reqwest::Client::new()
             .post(format!("{}/v1/bundles:refresh", found.url))
             .json(&serde_json::json!({ "directory": std::env::current_dir()
                 .context("read the current directory")?.to_string_lossy() }))
@@ -226,7 +226,24 @@ async fn refresh_daemon(db: &str) -> anyhow::Result<()> {
             .await
             .context("ask the backend to refresh its bundles")?
             .error_for_status()
-            .context("backend rejected the bundle refresh")?;
+            .context("backend rejected the bundle refresh")?
+            .json::<hya_api::v1::RefreshBundlesResponse>()
+            .await
+            .context("read the backend bundle refresh response")?;
+        anyhow::ensure!(
+            refreshed.errors.is_empty(),
+            "backend bundle refresh failed: {}",
+            refreshed
+                .errors
+                .iter()
+                .map(|error| if error.bundle_id.is_empty() {
+                    error.message.clone()
+                } else {
+                    format!("{}: {}", error.bundle_id, error.message)
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
     }
     Ok(())
 }
@@ -1246,4 +1263,57 @@ fn hex_digest(digest: &[u8; 32]) -> String {
         encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
     encoded
+}
+
+#[cfg(test)]
+mod refresh_tests {
+    #![allow(clippy::unwrap_used)]
+
+    #[tokio::test]
+    async fn hot_reload_cli_reports_refresh_response_errors() {
+        let root =
+            std::env::temp_dir().join(format!("hya-cli-refresh-{}", hya_proto::SessionId::new()));
+        std::fs::create_dir_all(&root).unwrap();
+        let db = root.join("hya.db");
+        let paths = crate::db_lock::paths(db.to_str().unwrap()).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let app = axum::Router::new()
+            .route(
+                "/v1/health",
+                axum::routing::get(|| async { axum::Json(serde_json::json!({"ok":true})) }),
+            )
+            .route(
+                "/v1/bundles:refresh",
+                axum::routing::post(|| async {
+                    axum::Json(hya_api::v1::RefreshBundlesResponse {
+                        scope: "global".into(),
+                        generation: 1,
+                        bundles: Vec::new(),
+                        errors: vec![hya_api::v1::BundleRefreshError {
+                            bundle_id: "alpha".into(),
+                            message: "alpha failed to initialize".into(),
+                        }],
+                    })
+                }),
+            );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        std::fs::write(&paths.discovery, serde_json::to_vec(&serde_json::json!({"url":url,"pid":std::process::id(),"version":"test","startedAt":0})).unwrap()).unwrap();
+        let result = super::refresh_daemon(db.to_str().unwrap()).await;
+        server.abort();
+        let _ = server.await;
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(
+            result.is_err(),
+            "HTTP 200 with errors must fail the CLI refresh"
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("alpha failed to initialize")
+        );
+    }
 }
