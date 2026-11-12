@@ -1,20 +1,7 @@
 import type { ExtensionHooks } from "./loader/init"
-import { isRecord } from "./validate"
 
-export type ChatParams = {
-  readonly session: string
-  /** Root of the session's spawn tree; equals `session` for a root. */
-  readonly root_session?: string
-  /** Stable id of the agent bound to `session`. */
-  readonly agent?: string
-  readonly message: string
-  readonly request: Readonly<Record<string, unknown>>
-}
-
-export type ChatParamsOutcome = {
-  readonly outcome: "continue"
-  readonly request: Readonly<Record<string, unknown>>
-}
+import { isWireCompletionRequest, type WireCompletionRequest, type ChatParamsParams as ChatParams, type ChatParamsOutcomeWire as ChatParamsOutcome } from "./wire.gen"
+export type { ChatParamsParams as ChatParams, ChatParamsOutcomeWire as ChatParamsOutcome } from "./wire.gen"
 
 /**
  * `chat.params` handlers receive the hya wire params (`session`,
@@ -26,7 +13,7 @@ export async function runChatParamsHooks(
   hooks: readonly ExtensionHooks[],
   params: ChatParams,
 ): Promise<ChatParamsOutcome> {
-  let current: Readonly<Record<string, unknown>> = params.request
+  let current: WireCompletionRequest = params.request
   for (const hook of hooks) {
     const candidate = hook["chat.params"]
     if (!isChatParamsHook(candidate)) {
@@ -34,7 +21,7 @@ export async function runChatParamsHooks(
     }
     try {
       const returned = await candidate({ ...params, request: current })
-      if (isRecord(returned)) {
+      if (isWireCompletionRequest(returned)) {
         current = returned
       }
     } catch {

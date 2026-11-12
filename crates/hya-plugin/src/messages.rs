@@ -36,134 +36,85 @@ pub const METHOD_API_REQUEST: &str = "api/request";
 /// Prefix for hook method names on the wire (`hook/` + [`HookName::as_str`]).
 pub const HOOK_METHOD_PREFIX: &str = "hook/";
 
-/// Named hooks a plugin may register during initialize.
-///
-/// Wire names use dotted snake-style strings (serde `rename`). Only hooks listed
-/// in the initialize reply are ever dispatched to that plugin.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum HookName {
-    /// Fan-out of canonical session [`Envelope`]s (notification, no reply).
-    #[serde(rename = "event")]
-    Event,
-    /// Runs before a slash/command prompt is admitted.
-    #[serde(rename = "command.execute.before")]
-    CommandExecuteBefore,
-    /// Experimental: rewrite completed assistant text before it is finalized.
-    #[serde(rename = "experimental.text.complete")]
-    TextComplete,
-    /// Runs before a user message is admitted (may rewrite text).
-    #[serde(rename = "message.user.before")]
-    MessageUserBefore,
-    /// Adjust completion request parameters (model, temperature, headers, …).
-    #[serde(rename = "chat.params")]
-    ChatParams,
-    /// Guard before a tool runs; may continue with new input or veto.
-    #[serde(rename = "tool.execute.before")]
-    ToolExecuteBefore,
-    /// Observe/adjust tool result after execution.
-    #[serde(rename = "tool.execute.after")]
-    ToolExecuteAfter,
-    /// Intercept a permission ask; may allow, reject, or defer to the user.
-    #[serde(rename = "permission.ask")]
-    PermissionAsk,
-    /// Approver of a bundle-declared session permission mode; called only on
-    /// the declaring bundle, after every `permission.ask` hook deferred.
-    #[serde(rename = "permission.approve")]
-    PermissionApprove,
-    /// Goal-mode evaluator hook.
-    #[serde(rename = "goal.evaluate")]
-    GoalEvaluate,
-    /// Loop-mode verifier hook.
-    #[serde(rename = "loop.verifier")]
-    LoopVerifier,
-    /// Loop-mode planner hook.
-    #[serde(rename = "loop.planner")]
-    LoopPlanner,
-    /// Post-turn loop stop consult: `{"stop": true, "reason": …}` forces the
-    /// loop to stop with that reason before the verifier judges.
-    #[serde(rename = "loop.should_stop")]
-    LoopShouldStop,
-    /// Consulted before the engine compacts context; may skip or replace the
-    /// summarizer instructions.
-    #[serde(rename = "compaction.before")]
-    CompactionBefore,
-    /// Notified after a compaction committed its summary (no decisive reply).
-    #[serde(rename = "compaction.after")]
-    CompactionAfter,
-    /// Notified when a session is created.
-    #[serde(rename = "session.start")]
-    SessionStart,
-    /// Notified when a session is closed (archived or deleted).
-    #[serde(rename = "session.end")]
-    SessionEnd,
-    /// Notified when a subagent is registered under its parent.
-    #[serde(rename = "agent.spawn")]
-    AgentSpawn,
-    /// Choose the next model after a provider failed before any stream
-    /// existed: `retry{model}` or `give_up`. First `retry` wins; fail-open.
-    #[serde(rename = "model.fallback")]
-    ModelFallback,
+/// Define each native hook's name and parameter/reply association once.
+macro_rules! plugin_hooks {
+    ($($(#[$doc:meta])* $variant:ident: $wire:literal => $params:ty => $reply:ty,)*) => {
+        /// Named hooks a plugin may register during initialize.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        pub enum HookName {
+            $($(#[$doc])* #[serde(rename = $wire)] $variant,)*
+        }
+
+        impl HookName {
+            /// All native hook names, in declaration order.
+            pub const ALL: &'static [Self] = &[$(Self::$variant,)*];
+
+            /// Wire name without the `hook/` prefix.
+            #[must_use]
+            pub fn as_str(self) -> &'static str {
+                match self { $(Self::$variant => $wire,)* }
+            }
+
+            /// Full JSON-RPC hook method.
+            #[must_use]
+            pub fn method(self) -> String {
+                format!("{HOOK_METHOD_PREFIX}{}", self.as_str())
+            }
+
+            /// Parse a wire hook name without `hook/`.
+            #[must_use]
+            pub fn from_wire(s: &str) -> Option<Self> {
+                match s { $($wire => Some(Self::$variant),)* _ => None }
+            }
+        }
+    };
 }
 
-impl HookName {
-    /// Wire name without the `hook/` prefix (for example `"tool.execute.before"`).
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            HookName::Event => "event",
-            HookName::CommandExecuteBefore => "command.execute.before",
-            HookName::TextComplete => "experimental.text.complete",
-            HookName::MessageUserBefore => "message.user.before",
-            HookName::ChatParams => "chat.params",
-            HookName::ToolExecuteBefore => "tool.execute.before",
-            HookName::ToolExecuteAfter => "tool.execute.after",
-            HookName::PermissionAsk => "permission.ask",
-            HookName::PermissionApprove => "permission.approve",
-            HookName::GoalEvaluate => "goal.evaluate",
-            HookName::LoopVerifier => "loop.verifier",
-            HookName::LoopPlanner => "loop.planner",
-            HookName::LoopShouldStop => "loop.should_stop",
-            HookName::CompactionBefore => "compaction.before",
-            HookName::CompactionAfter => "compaction.after",
-            HookName::SessionStart => "session.start",
-            HookName::SessionEnd => "session.end",
-            HookName::AgentSpawn => "agent.spawn",
-            HookName::ModelFallback => "model.fallback",
-        }
-    }
-
-    /// Full JSON-RPC method string (`hook/<wire-name>`).
-    #[must_use]
-    pub fn method(self) -> String {
-        format!("{HOOK_METHOD_PREFIX}{}", self.as_str())
-    }
-
-    /// Parse a wire hook name (without `hook/`). Unknown strings return `None`.
-    #[must_use]
-    pub fn from_wire(s: &str) -> Option<Self> {
-        Some(match s {
-            "event" => HookName::Event,
-            "command.execute.before" => HookName::CommandExecuteBefore,
-            "experimental.text.complete" => HookName::TextComplete,
-            "message.user.before" => HookName::MessageUserBefore,
-            "chat.params" => HookName::ChatParams,
-            "tool.execute.before" => HookName::ToolExecuteBefore,
-            "tool.execute.after" => HookName::ToolExecuteAfter,
-            "permission.ask" => HookName::PermissionAsk,
-            "permission.approve" => HookName::PermissionApprove,
-            "goal.evaluate" => HookName::GoalEvaluate,
-            "loop.verifier" => HookName::LoopVerifier,
-            "loop.planner" => HookName::LoopPlanner,
-            "loop.should_stop" => HookName::LoopShouldStop,
-            "compaction.before" => HookName::CompactionBefore,
-            "compaction.after" => HookName::CompactionAfter,
-            "session.start" => HookName::SessionStart,
-            "session.end" => HookName::SessionEnd,
-            "agent.spawn" => HookName::AgentSpawn,
-            "model.fallback" => HookName::ModelFallback,
-            _ => return None,
-        })
-    }
+// Rust expands names and helpers together, so adding a hook never blocks xtask
+// on stale generated Rust. gen-plugin reads this same schema for TypeScript.
+plugin_hooks! {
+    /// Fan-out of canonical session [`Envelope`]s (notification, no reply).
+    Event: "event" => EventNotificationParams => (),
+    /// Runs before a slash/command prompt is admitted.
+    CommandExecuteBefore: "command.execute.before" => CommandExecuteBeforeParams => CommandBeforeOutcomeWire,
+    /// Experimental: rewrite completed assistant text before it is finalized.
+    TextComplete: "experimental.text.complete" => TextCompleteParams => TextCompleteOutcomeWire,
+    /// Runs before a user message is admitted (may rewrite text).
+    MessageUserBefore: "message.user.before" => MessageUserBeforeParams => MessageUserBeforeOutcomeWire,
+    /// Adjust completion request parameters (model, temperature, headers, …).
+    ChatParams: "chat.params" => ChatParamsParams => ChatParamsOutcomeWire,
+    /// Guard before a tool runs; may continue with new input or veto.
+    ToolExecuteBefore: "tool.execute.before" => ToolExecuteBeforeParams => ToolBeforeOutcomeWire,
+    /// Observe/adjust tool result after execution.
+    ToolExecuteAfter: "tool.execute.after" => ToolExecuteAfterParams => ToolAfterOutcomeWire,
+    /// Intercept a permission ask; may allow, reject, or defer to the user.
+    PermissionAsk: "permission.ask" => PermissionAskParams => PermissionOutcomeWire,
+    /// Approver of a bundle-declared session permission mode; called only on
+    /// the declaring bundle, after every `permission.ask` hook deferred.
+    PermissionApprove: "permission.approve" => PermissionApproveParams => PermissionOutcomeWire,
+    /// Goal-mode evaluator hook.
+    GoalEvaluate: "goal.evaluate" => GoalEvaluateParams => GoalVerdictWire,
+    /// Loop-mode verifier hook.
+    LoopVerifier: "loop.verifier" => LoopVerifyParams => VerifierVerdictWire,
+    /// Loop-mode planner hook.
+    LoopPlanner: "loop.planner" => LoopPlanParams => PlannerOutputWire,
+    /// Post-turn loop stop consult: `{"stop": true, "reason": …}` forces the
+    /// loop to stop with that reason before the verifier judges.
+    LoopShouldStop: "loop.should_stop" => LoopShouldStopParams => LoopShouldStopWire,
+    /// Consulted before the engine compacts context; may skip or replace the
+    /// summarizer instructions.
+    CompactionBefore: "compaction.before" => CompactionBeforeParams => CompactionBeforeOutcomeWire,
+    /// Notified after a compaction committed its summary (no decisive reply).
+    CompactionAfter: "compaction.after" => CompactionAfterParams => (),
+    /// Notified when a session is created.
+    SessionStart: "session.start" => SessionLifecycleParams => (),
+    /// Notified when a session is closed (archived or deleted).
+    SessionEnd: "session.end" => SessionLifecycleParams => (),
+    /// Notified when a subagent is registered under its parent.
+    AgentSpawn: "agent.spawn" => AgentSpawnParams => (),
+    /// Choose the next model after a provider failed before any stream
+    /// existed: `retry{model}` or `give_up`. First `retry` wins; fail-open.
+    ModelFallback: "model.fallback" => ModelFallbackParams => ModelFallbackOutcomeWire,
 }
 
 /// Host→plugin `initialize` request params.
@@ -1096,4 +1047,91 @@ pub enum ModelFallbackOutcomeWire {
     },
     /// No opinion: the next plugin decides, or the failure surfaces.
     GiveUp,
+}
+
+/// Wire params for `goal.evaluate`.
+#[derive(Serialize)]
+pub(crate) struct GoalEvaluateParams<'a> {
+    pub(crate) condition: &'a str,
+    pub(crate) transcript: &'a str,
+}
+
+/// Wire verdict for `goal.evaluate`: tolerant `{"met": bool, "reason": str}` —
+/// `reason` may be omitted, anything else is a malformed reply.
+#[derive(Deserialize)]
+pub(crate) struct GoalVerdictWire {
+    pub(crate) met: bool,
+    #[serde(default)]
+    pub(crate) reason: String,
+}
+
+/// Wire params for `loop.verifier`.
+#[derive(Serialize)]
+pub(crate) struct LoopVerifyParams<'a> {
+    pub(crate) target: &'a str,
+    pub(crate) transcript: &'a str,
+}
+
+/// Wire params for `loop.planner`.
+#[derive(Serialize)]
+pub(crate) struct LoopPlanParams<'a> {
+    pub(crate) target: &'a str,
+    pub(crate) history: &'a [String],
+    pub(crate) last: VerifierVerdictWire,
+    pub(crate) planner_notes: &'a str,
+}
+
+/// Wire params for `loop.should_stop`.
+#[derive(Serialize)]
+pub(crate) struct LoopShouldStopParams<'a> {
+    pub(crate) target: &'a str,
+    pub(crate) transcript: &'a str,
+}
+
+/// Wire reply for `loop.should_stop`: `{"stop": bool, "reason": str}` —
+/// `reason` may be omitted (it reads as "no reason given"), anything else is
+/// a malformed reply and fails open to "keep going".
+#[derive(Deserialize)]
+pub(crate) struct LoopShouldStopWire {
+    pub(crate) stop: bool,
+    #[serde(default)]
+    pub(crate) reason: String,
+}
+
+/// Wire mirror of [`EvidenceQuality`] (`missing`/`claim_only`/`supported`/`verified`).
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum EvidenceQualityWire {
+    Missing,
+    ClaimOnly,
+    Supported,
+    Verified,
+}
+
+/// Wire mirror of [`VerifierVerdict`]. Free-text fields may be omitted.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct VerifierVerdictWire {
+    pub(crate) score: u8,
+    pub(crate) satisfied: bool,
+    pub(crate) evidence_quality: EvidenceQualityWire,
+    #[serde(default)]
+    pub(crate) critical_gaps: Vec<String>,
+    #[serde(default)]
+    pub(crate) iteration_summary: String,
+    #[serde(default)]
+    pub(crate) reason: String,
+}
+
+/// Wire mirror of [`PlannerOutput`]. Only `directive` is required.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct PlannerOutputWire {
+    pub(crate) directive: String,
+    #[serde(default)]
+    pub(crate) continuity_brief: String,
+    #[serde(default)]
+    pub(crate) planner_notes: String,
+    #[serde(default)]
+    pub(crate) strategy_change: bool,
+    #[serde(default)]
+    pub(crate) change_note: String,
 }

@@ -6,9 +6,8 @@ import type { TranslatedSkill, Translation } from "./translate"
 import type { ClaudeHookGroup, HookName } from "./hooks"
 
 /** Minimal text sink for stdout/stderr writes. */
-export type TextSink = {
-  readonly write: (data: string) => unknown
-}
+export type { TextSink } from "./stdio"
+import type { TextSink } from "./stdio"
 
 /** Adapter environment (injectable for tests). */
 export type RuntimeEnv = Readonly<Record<string, string | undefined>>
@@ -29,10 +28,7 @@ export type RuntimeOptions = {
 }
 
 /** One handled request: the serialized reply (or "") and whether to exit. */
-export type HandledRequest = {
-  readonly response: string
-  readonly shouldExit: boolean
-}
+export type { HandledRequest } from "./stdio"
 
 /** Mutable per-process request context. */
 export type RequestContext = {

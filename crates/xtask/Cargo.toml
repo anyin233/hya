@@ -34,3 +34,4 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 toml = { workspace = true }
 tonic-build = { workspace = true }
+syn = { version = "2.0.119", features = ["full", "parsing"] }

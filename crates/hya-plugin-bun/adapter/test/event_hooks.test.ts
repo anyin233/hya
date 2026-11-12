@@ -45,9 +45,8 @@ test("event notifications pass the raw hya envelope to event handlers", async ()
     seq: 9,
     ts_millis: 12,
     event: {
-      type: "tool_called",
+      type: "session_unarchived",
       session: "session-1",
-      tool: "read",
     },
   }
 
