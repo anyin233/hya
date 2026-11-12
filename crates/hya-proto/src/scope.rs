@@ -1,28 +1,4 @@
-//! Hierarchy-scoped mailbox addressing: canonical agent paths, the scope rule,
-//! and unit-qualified channel keys (task 08-07).
-//!
-//! # The model
-//!
-//! A **unit** is one leader plus the agents it directly leads. An agent's
-//! canonical handle is its path from the team root:
-//!
-//! ```text
-//! main                     the team root
-//! main/lead-1              a child of the root
-//! main/lead-1/worker-2     a child of lead-1
-//! ```
-//!
-//! An agent may address only its **parent**, its **same-parent siblings**, and
-//! its **direct reports**. Everything else is out of scope; the only cross-unit
-//! route is a relay through the common ancestor.
-//!
-//! # Why this module is pure string arithmetic
-//!
-//! [`relation`] and [`in_scope`] decide the rule from two path strings alone —
-//! no roster walk, no store access, no lineage query. That is what lets the same
-//! definition serve all three enforcement sites (the `hya-store` write gate, the
-//! `hya-core` read filter, and the `hya-proto` reducer) without any of them
-//! re-deriving the rule and drifting from the others.
+//! Canonical agent paths and unit-qualified channel keys.
 
 /// Canonical handle of a team's root agent. Every path starts with this segment.
 pub const ROOT_HANDLE: &str = "main";
@@ -46,33 +22,6 @@ pub const CHANNEL_SEPARATOR: char = '#';
 /// which is what makes announce one-way. It is hidden from channel listings and
 /// cannot be joined or left explicitly.
 pub const ANNOUNCE_CHANNEL: &str = "announce";
-
-/// How `to` stands in relation to `from`, or `None` when they are unrelated.
-///
-/// The three in-scope relations are exactly the addressable set; [`Relation::Own`]
-/// is reported separately because an agent may not mail itself.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Relation {
-    /// `to` and `from` are the same agent.
-    Own,
-    /// `to` is `from`'s parent.
-    Parent,
-    /// `to` shares `from`'s parent — a sibling in the same unit.
-    Peer,
-    /// `to` is a direct child of `from`.
-    Report,
-}
-
-impl Relation {
-    /// Whether an agent may address someone standing in this relation to it.
-    ///
-    /// [`Relation::Own`] is excluded: self-mail would wake an agent with its own
-    /// message, which the resident supervisor already refuses.
-    #[must_use]
-    pub fn is_addressable(self) -> bool {
-        matches!(self, Relation::Parent | Relation::Peer | Relation::Report)
-    }
-}
 
 /// The parent of a canonical path, or `None` for a root (a path with no
 /// separator).
@@ -127,41 +76,6 @@ pub fn is_valid_channel_name(name: &str) -> bool {
     is_valid_leaf(name)
 }
 
-/// How `to` stands in relation to `from`. `None` means out of scope.
-///
-/// Pure path arithmetic — see the module docs for why that matters.
-///
-/// Two roots are never peers. Only one root exists per team log, so this cannot
-/// arise in practice; refusing it keeps a malformed log from silently making
-/// unrelated agents addressable.
-#[must_use]
-pub fn relation(from: &str, to: &str) -> Option<Relation> {
-    if from == to {
-        return Some(Relation::Own);
-    }
-    let from_parent = parent_path(from);
-    if from_parent == Some(to) {
-        return Some(Relation::Parent);
-    }
-    if parent_path(to) == Some(from) {
-        return Some(Relation::Report);
-    }
-    // Both must actually HAVE a parent; `None == None` would make two roots peers.
-    match (from_parent, parent_path(to)) {
-        (Some(left), Some(right)) if left == right => Some(Relation::Peer),
-        _ => None,
-    }
-}
-
-/// Whether `from` may address `to` under the unit rule.
-///
-/// This is the single definition of the feature's rule. Every enforcement site
-/// calls it rather than re-deriving the comparison.
-#[must_use]
-pub fn in_scope(from: &str, to: &str) -> bool {
-    relation(from, to).is_some_and(Relation::is_addressable)
-}
-
 /// The unit an agent belongs to as a member: its parent's unit.
 ///
 /// `None` for the root, which has no home unit — it leads one but belongs to
@@ -188,8 +102,7 @@ pub fn qualify_channel(unit: &str, name: &str) -> String {
 
 /// Split a qualified channel key back into `(unit, name)`.
 ///
-/// `None` when the key carries no qualifier, which happens only for a channel
-/// name read straight out of a pre-scoping log.
+/// `None` for an unqualified key, including minted channel ids.
 #[must_use]
 pub fn split_channel_key(key: &str) -> Option<(&str, &str)> {
     key.rsplit_once(CHANNEL_SEPARATOR)
@@ -217,8 +130,6 @@ mod tests {
     /// ```
     const ROOT: &str = "main";
     const LEAD_1: &str = "main/lead-1";
-    const LEAD_2: &str = "main/lead-2";
-    const WORKER_1: &str = "main/lead-1/worker-1";
     const WORKER_2: &str = "main/lead-1/worker-2";
     const WORKER_7: &str = "main/lead-2/worker-7";
 
@@ -235,62 +146,6 @@ mod tests {
         assert_eq!(join_path(LEAD_1, "worker-2"), WORKER_2);
         assert_eq!(parent_path(WORKER_2), Some(LEAD_1));
         assert_eq!(leaf(WORKER_2), "worker-2");
-    }
-
-    #[test]
-    fn an_agent_may_not_address_itself() {
-        assert_eq!(relation(WORKER_2, WORKER_2), Some(Relation::Own));
-        assert!(!Relation::Own.is_addressable());
-        assert!(!in_scope(WORKER_2, WORKER_2));
-    }
-
-    #[test]
-    fn parent_sibling_and_report_are_in_scope() {
-        assert_eq!(relation(WORKER_2, LEAD_1), Some(Relation::Parent));
-        assert_eq!(relation(WORKER_2, WORKER_1), Some(Relation::Peer));
-        assert_eq!(relation(LEAD_1, WORKER_2), Some(Relation::Report));
-        for (from, to) in [(WORKER_2, LEAD_1), (WORKER_2, WORKER_1), (LEAD_1, WORKER_2)] {
-            assert!(in_scope(from, to), "{from} -> {to}");
-        }
-    }
-
-    /// The four ways to be out of scope. Each of these is a path the flat
-    /// mailbox allowed and this design closes.
-    #[test]
-    fn everything_outside_the_unit_is_out_of_scope() {
-        // Grandparent: skip-level is closed.
-        assert_eq!(relation(WORKER_2, ROOT), None);
-        // Grandchild: a leader does not reach past its direct reports.
-        assert_eq!(relation(ROOT, WORKER_2), None);
-        // Uncle: the parent's sibling.
-        assert_eq!(relation(WORKER_2, LEAD_2), None);
-        // Cousin: another unit's worker — the case that made large swarms a mess.
-        assert_eq!(relation(WORKER_2, WORKER_7), None);
-        for (from, to) in [
-            (WORKER_2, ROOT),
-            (ROOT, WORKER_2),
-            (WORKER_2, LEAD_2),
-            (WORKER_2, WORKER_7),
-        ] {
-            assert!(!in_scope(from, to), "{from} -> {to} must be refused");
-        }
-    }
-
-    #[test]
-    fn scope_is_symmetric_for_peers_and_paired_for_parent_report() {
-        // Peers see each other identically.
-        assert!(in_scope(WORKER_1, WORKER_2) && in_scope(WORKER_2, WORKER_1));
-        // A parent/child pair is mutually addressable, by two different relations.
-        assert_eq!(relation(LEAD_1, WORKER_1), Some(Relation::Report));
-        assert_eq!(relation(WORKER_1, LEAD_1), Some(Relation::Parent));
-    }
-
-    /// Two roots must not be peers. `parent_path` returns `None` for both, and a
-    /// naive equality check would make every root addressable from every other.
-    #[test]
-    fn two_roots_are_not_peers() {
-        assert_eq!(relation("main", "other"), None);
-        assert!(!in_scope("main", "other"));
     }
 
     /// A leaf that carries a separator would make a stored path ambiguous.

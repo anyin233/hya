@@ -298,11 +298,11 @@ impl SessionStore {
         .fetch_all(&self.pool)
         .await?
         .into_iter()
-        .filter_map(|row| {
-            let key = row.try_get::<Vec<u8>, _>("session_id").ok()?;
+        .map(|row| {
+            let key = row.try_get::<Vec<u8>, _>("session_id")?;
             decode_session_key(&key)
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, StoreError>>()?;
         let mut running = Vec::new();
         for session in rows {
             let projection = self.read_projection(session).await?;
@@ -327,8 +327,7 @@ fn decode_pending_resume(row: &sqlx::sqlite::SqliteRow) -> Result<PendingResume,
         .map(ResumeId::from_uuid)
         .map_err(|_| StoreError::ResumeData(format!("invalid resume id {id}")))?;
     let session_key: Vec<u8> = row.try_get("session_id")?;
-    let session = decode_session_key(&session_key)
-        .ok_or_else(|| StoreError::ResumeData("invalid session key".to_string()))?;
+    let session = decode_session_key(&session_key)?;
     let owner_run: Vec<u8> = row.try_get("owner_run")?;
     let owner = decode_owner_run(&owner_run)?;
     let generation: i64 = row.try_get("generation")?;

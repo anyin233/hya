@@ -24,6 +24,20 @@ pub enum StoreError {
     /// JSON (de)serialization of event payloads.
     #[error("json: {0}")]
     Json(#[source] Arc<serde_json::Error>),
+    /// An event-log row cannot be decoded under the current event contract.
+    #[error("event log decode failed for session {session} at sequence {seq}: {source}")]
+    EventDecode {
+        /// Owning session of the stored row.
+        session: SessionId,
+        /// Global event-log sequence.
+        seq: i64,
+        /// JSON error, including an unrecognized event tag when applicable.
+        #[source]
+        source: Arc<serde_json::Error>,
+    },
+    /// A stored session key is not a current `hysec_` text key.
+    #[error("session key data: {0}")]
+    SessionKeyData(String),
     /// Prepared-bundle / catalog validation failure from `hya-bundle`.
     #[error("bundle: {0}")]
     Bundle(#[from] hya_bundle::BundleError),
@@ -79,9 +93,6 @@ pub enum StoreError {
         /// Lower incoming version.
         incoming_version: String,
     },
-    /// Private package inspection cannot be activated through the registry.
-    #[error("PRIVATE_ACTIVATION_UNSUPPORTED")]
-    PrivateActivationUnsupported,
     /// An install candidate claims an agent id reserved by a built-in agent.
     #[error(
         "BUNDLE_AGENT_ID_RESERVED: bundle {bundle_id} declares agent {agent_id}, \

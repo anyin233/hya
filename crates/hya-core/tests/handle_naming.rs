@@ -206,7 +206,10 @@ async fn the_subagent_type_names_the_handle() {
     let projection = team.engine.read_projection(team.root).await.unwrap();
     assert_eq!(projection.team.roster[&handle].session, child);
     assert_eq!(
-        projection.team.canonical_member(scope::leaf(&handle)),
+        projection
+            .team
+            .resolve_in_scope("main", scope::leaf(&handle))
+            .unwrap(),
         handle,
         "the bare leaf resolves to the canonical handle"
     );
@@ -338,7 +341,10 @@ async fn old_counter_handles_keep_resolving_next_to_new_names() {
     assert!(replayed.team.roster.contains_key(&new_handle));
     assert_eq!(replayed.team.roster["main/scout-1"].session, old);
     let projection = team.engine.read_projection(team.root).await.unwrap();
-    assert_eq!(projection.team.canonical_member("scout-1"), "main/scout-1");
+    assert_eq!(
+        projection.team.resolve_in_scope("main", "scout-1").unwrap(),
+        "main/scout-1"
+    );
     // The bare old leaf still resolves to its canonical handle for mail (this
     // registration has no live resident in this process, so delivery is
     // refused — naming the resolved handle).

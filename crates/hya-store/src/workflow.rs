@@ -172,9 +172,7 @@ impl SessionStore {
         let mut recovered = Vec::new();
         for row in rows {
             let key: Vec<u8> = row.try_get("session_id")?;
-            let Some(session) = decode_session_key(&key) else {
-                continue;
-            };
+            let session = decode_session_key(&key)?;
             let projection = replay_projection(&self.projections, &mut tx, session).await?;
             let Some(run) = projection
                 .session
@@ -223,7 +221,7 @@ async fn replay_workflow_events(
         envelopes.push(Envelope {
             seq: hya_proto::EventSeq(seq.max(0) as u64),
             ts_millis,
-            event: serde_json::from_str(&payload)?,
+            event: crate::decode_event(&payload, session, seq)?,
         });
     }
     Ok(envelopes)

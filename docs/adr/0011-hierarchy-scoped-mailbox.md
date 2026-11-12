@@ -1,5 +1,8 @@
 # Hierarchy-scoped mailbox
 
+> The addressing policy below is historical; ADR-0016 supersedes sibling access.
+> The current log compatibility boundary is documented at the end.
+
 An agent may address only its **parent**, its **same-parent siblings**, and its
 **direct reports**. Everything else is out of scope. We chose this over the flat
 team mailbox of ADR-0001 because that mailbox collapsed every agent in a team
@@ -82,31 +85,19 @@ a deliberate act by that level's leader.
 It is implemented as a reserved `{unit}#announce` channel that every agent
 auto-joins at registration, **not** as a new `MailEndpoint` variant. The variant
 was the first design and it is not wire-safe: `MailEndpoint` is adjacently tagged,
-and `Event`'s `#[serde(other)] Unknown` catches only unknown event *types* — a
-`MailSent` carrying an unknown *endpoint* is a known type with an unparseable
-field, so an older binary would hard-error on replay instead of degrading. With
-the reserved channel, an older binary parses the log and even delivers the
-announcement correctly, because the `ChannelJoined` events are in the log too.
+and a `MailSent` carrying an unknown endpoint cannot be decoded. The reserved
+channel keeps membership and delivery expressible with the existing channel
+events.
 
 Only the unit's leader may post to it, which is what makes it one-way; replies
 are ordinary direct mail to the parent, which the scope rule already permits. It
 is hidden from channel listings and cannot be joined or left explicitly.
 
-## Compatibility
+## Current compatibility boundary
 
-`Event::AgentRegistered` gained `parent: Option<String>`, both
-`#[serde(default)]` and `skip_serializing_if`, so a root registration is
-byte-identical on the wire and a pre-scoping log — which has no `parent`
-anywhere — folds as **one flat unit under `main`**: the same agents, the same
-inbox contents in the same order, and every agent still able to address every
-other. Map keys are re-canonicalized (`reviewer-1` → `main/reviewer-1`, channel
-`build` → `main#build`); delivery behavior is unchanged.
-
-`crates/hya-proto/tests/legacy_flat_mailbox.rs` pins this against a fixture
-captured from the pre-scoping build. That fixture is the oracle and must never be
-edited to accommodate a code change.
-
-`hya_sdk::TeamProjection` mirrors the reducer for the TUI and does not depend on
-`hya-proto` at runtime. `crates/hya-sdk/tests/team_mirror_conformance.rs` folds
-one event stream through both and asserts they agree, which is what keeps a
-hand-written mirror from drifting.
+The harness cleanup rejects old databases and logs. The pre-scoping fixture and
+replay normalization were removed: stored member paths and channel keys must
+already be canonical. Unknown event tags are decode errors. The sibling policy
+above was superseded by ADR-0016's vertical parent/direct-report addressing;
+`scope::relation` and `scope::in_scope` are removed. Current command leaf aliases
+are resolved at admission rather than during replay.

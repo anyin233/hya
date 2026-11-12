@@ -59,7 +59,7 @@ pub(crate) async fn materialize_event_side_tables(
             .execute(&mut **tx)
             .await?;
         }
-        Event::MessageFinished { message, .. } | Event::MessageDeleted { message, .. } => {
+        Event::MessageFinished { message, .. } => {
             sqlx::query(
                 "DELETE FROM open_assistant_message WHERE session_id = ? AND message_id = ?",
             )

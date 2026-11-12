@@ -197,18 +197,23 @@ async fn render_reference_guidance(st: &ServerState, workdir: &Path) -> Option<S
 pub(crate) async fn shell_agent(
     st: &crate::ServerState,
     session: SessionId,
-    req: &hya_proto::api::ShellRequest,
+    req: &hya_api::v1::ShellTurn,
 ) -> Result<hya_core::AgentSpec, crate::ApiError> {
-    if let Some(model) = req.model_ref() {
-        st.engine.switch_model(session, model).await?;
+    if let Some(model) = &req.model {
+        let provider = model.provider_id.trim();
+        let model_id = model.model_id.trim();
+        if !provider.is_empty() && !model_id.is_empty() {
+            st.engine
+                .switch_model(
+                    session,
+                    hya_proto::ModelRef::new(format!("{provider}/{model_id}")),
+                )
+                .await?;
+        }
     }
     let mut turn = session_agent_with_guidance(st, session).await?;
-    if let Some(agent) = req
-        .agent
-        .as_deref()
-        .map(str::trim)
-        .filter(|agent| !agent.is_empty())
-    {
+    let agent = req.agent.trim();
+    if !agent.is_empty() {
         turn.agent.name = AgentName::new(agent);
     }
     Ok(turn.agent)

@@ -205,24 +205,9 @@ async fn create_turn(
             Ok(Json(running_turn(session, &message.to_string())))
         }
         Some(Kind::Command(command)) => {
-            let native_request = hya_proto::api::CommandRequest {
-                command: command.command.clone(),
-                arguments: command.arguments.clone(),
-                text: if command.text.is_empty() {
-                    None
-                } else {
-                    Some(command.text.clone())
-                },
-                model: if command.model.is_empty() {
-                    None
-                } else {
-                    Some(command.model.clone())
-                },
-                variant: None,
-            };
             // Slash interception (workflow and other built-ins) runs
             // synchronously like the native command route.
-            if crate::workflow::intercept_slash(&st, session, &native_request)
+            if crate::workflow::intercept_slash(&st, session, &command)
                 .await
                 .map_err(V1Error::from)?
                 .is_some()
@@ -243,32 +228,31 @@ async fn create_turn(
             super::session::unarchive_for_turn(&st, session).await?;
             // The user acts on the team again: lift a cancel's stop.
             st.engine.resume_after_user_stop(session);
-            let explicit_model = native_request.model_ref();
+            let explicit_model =
+                (!command.model.trim().is_empty()).then(|| ModelRef::new(command.model.trim()));
             if let Some(model) = &explicit_model {
                 st.engine.switch_model(session, model.clone()).await?;
             }
             // Custom slash commands from the session's catalog (its workdir,
             // then its Project's roots) expand server-side; unknown commands
             // keep the literal slash.
-            let text = match native_request.text.clone() {
-                Some(text) => text,
-                None => {
-                    let place =
-                        crate::support::catalog_place::CatalogPlace::for_session(&st, session)
-                            .await?;
-                    crate::support::command_catalog::expand_prompt(
-                        &place,
-                        &command.command,
-                        &command.arguments,
-                    )
-                    .unwrap_or_else(|| {
-                        if command.arguments.trim().is_empty() {
-                            format!("/{}", command.command)
-                        } else {
-                            format!("/{} {}", command.command, command.arguments)
-                        }
-                    })
-                }
+            let text = if !command.text.is_empty() {
+                command.text.clone()
+            } else {
+                let place =
+                    crate::support::catalog_place::CatalogPlace::for_session(&st, session).await?;
+                crate::support::command_catalog::expand_prompt(
+                    &place,
+                    &command.command,
+                    &command.arguments,
+                )
+                .unwrap_or_else(|| {
+                    if command.arguments.trim().is_empty() {
+                        format!("/{}", command.command)
+                    } else {
+                        format!("/{} {}", command.command, command.arguments)
+                    }
+                })
             };
             let message = st
                 .engine
@@ -295,19 +279,7 @@ async fn create_turn(
             Ok(Json(running_turn(session, &message.to_string())))
         }
         Some(Kind::Shell(shell)) => {
-            let native_request = hya_proto::api::ShellRequest {
-                command: shell.command.clone(),
-                agent: if shell.agent.is_empty() {
-                    None
-                } else {
-                    Some(shell.agent.clone())
-                },
-                model: shell.model.map(|model| hya_proto::api::ShellModelRequest {
-                    provider_id: model.provider_id.clone(),
-                    model_id: model.model_id.clone(),
-                }),
-            };
-            let agent = crate::support::reference::shell_agent(&st, session, &native_request)
+            let agent = crate::support::reference::shell_agent(&st, session, &shell)
                 .await
                 .map_err(|error| {
                     V1Error::new(hya_api::error::Code::Internal, error.text().to_owned())
@@ -316,7 +288,7 @@ async fn create_turn(
             // A new turn brings an archived session back.
             super::session::unarchive_for_turn(&st, session).await?;
             let engine = st.engine.clone();
-            let command = native_request.command.clone();
+            let command = shell.command;
             let (message, _finish) = engine
                 .run_shell(session, &agent, command, run.token())
                 .await?;

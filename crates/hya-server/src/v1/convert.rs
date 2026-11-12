@@ -539,10 +539,7 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             archived: None,
             busy: None,
         }),
-        // A legacy zero stamp cleared the archive.
-        Event::SessionArchived { archived, .. } => {
-            archived_update(archived.as_f64().is_some_and(|stamp| stamp != 0.0))
-        }
+        Event::SessionArchived { .. } => archived_update(true),
         Event::SessionUnarchived { .. } => archived_update(false),
         Event::MessageStarted {
             message,

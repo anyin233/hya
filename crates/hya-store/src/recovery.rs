@@ -145,13 +145,7 @@ impl SessionStore {
             .collect::<Result<Vec<_>, _>>()?;
         let mut report = InterruptedTurnRecovery::default();
         for key in keys {
-            let Some(session) = crate::decode_session_key(&key) else {
-                sqlx::query("DELETE FROM open_assistant_message WHERE session_id = ?")
-                    .bind(key)
-                    .execute(&self.pool)
-                    .await?;
-                continue;
-            };
+            let session = crate::decode_session_key(&key)?;
             let envelopes = self
                 .close_open_turns(session, FinishCause::Interrupted, INTERRUPTED_REASON)
                 .await?;

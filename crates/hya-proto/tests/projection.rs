@@ -327,15 +327,6 @@ fn session_permission_mode_is_omitted_from_the_wire_until_set() {
     assert_eq!(decoded, projection);
 }
 
-/// An older binary folds the new variant as `Unknown` (a no-op), so a log
-/// written by a newer binary still replays.
-#[test]
-fn permission_mode_event_is_opaque_to_the_unknown_fallback() {
-    let json = r#"{"type":"session_permission_mode_set_v2","session":"ses_00000000000000000000000000000001","mode":"yolo"}"#;
-    let event: Event = serde_json::from_str(json).expect("unknown future variant decodes");
-    assert_eq!(event, Event::Unknown);
-}
-
 fn env_at(seq: u64, ts_millis: i64, event: Event) -> Envelope {
     Envelope {
         seq: EventSeq(seq),
@@ -379,7 +370,6 @@ fn assistant_messages_keep_their_own_agent_and_model_across_switches() {
             3,
             Event::ModelSwitched {
                 session,
-                message: None,
                 model: ModelRef::new("fake/beta"),
             },
         ),
@@ -387,7 +377,6 @@ fn assistant_messages_keep_their_own_agent_and_model_across_switches() {
             4,
             Event::AgentSwitched {
                 session,
-                message: None,
                 agent: AgentName::new("plan"),
             },
         ),
@@ -461,7 +450,7 @@ fn served_model_prefers_the_usage_record_over_the_requested_model() {
 /// their messages simply have none.
 #[test]
 fn legacy_message_started_without_attribution_still_decodes() {
-    let json = r#"{"type":"message_started","session":"ses_00000000000000000000000000000001","message":"00000000-0000-0000-0000-000000000002","role":"assistant"}"#;
+    let json = r#"{"type":"message_started","session":"hysec_ABCDEFGHIJKLMNOPQRST","message":"00000000-0000-0000-0000-000000000002","role":"assistant"}"#;
     let event: Event = serde_json::from_str(json).expect("legacy message_started decodes");
     let Event::MessageStarted { agent, model, .. } = &event else {
         panic!("expected MessageStarted, got {event:?}");

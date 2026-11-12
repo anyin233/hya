@@ -210,43 +210,6 @@ async fn hysec_usage_projection_resumes_after_reconnect() {
 }
 
 #[tokio::test]
-async fn legacy_uuid_session_resumes_after_reconnect() {
-    let path = temp_db();
-    let session: SessionId = "ses_018f032a3d2f7a21a05c2e61fc57dced".parse().unwrap();
-    {
-        let store = SessionStore::connect(&path).await.unwrap();
-        store
-            .append_event(
-                session,
-                &Event::SessionCreated {
-                    session,
-                    parent: None,
-                    agent: "build".into(),
-                    model: "fake".into(),
-                    workdir: "/tmp".into(),
-                    project: None,
-                    kind: hya_proto::SessionKind::Project,
-                },
-            )
-            .await
-            .unwrap();
-    }
-
-    let reopened = SessionStore::connect(&path).await.unwrap();
-    let envelopes = reopened.replay(session).await.unwrap();
-    let sessions = reopened.list_sessions().await.unwrap();
-
-    assert_eq!(envelopes.len(), 1);
-    assert_eq!(
-        sessions
-            .iter()
-            .filter(|info| info.session == session)
-            .count(),
-        1
-    );
-}
-
-#[tokio::test]
 async fn saved_permission_resumes_after_reconnect() {
     let path = temp_db();
     let entry = SavedPermission {

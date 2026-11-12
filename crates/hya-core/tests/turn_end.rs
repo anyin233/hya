@@ -381,14 +381,15 @@ async fn roster_status(
 ) -> Option<RosterStatus> {
     let team = engine.read_projection(root).await.unwrap().team;
     team.roster
-        .get(&team.canonical_member(leaf))
+        .values()
+        .find(|entry| hya_proto::scope::leaf(&entry.handle) == leaf)
         .map(|entry| entry.status)
 }
 
 async fn harness_mail_to(engine: &SessionEngine, root: SessionId, leaf: &str) -> Vec<String> {
     let team = engine.read_projection(root).await.unwrap().team;
     team.inboxes
-        .get(&team.canonical_member(leaf))
+        .get(&format!("main/{leaf}"))
         .map(|inbox| {
             inbox
                 .iter()

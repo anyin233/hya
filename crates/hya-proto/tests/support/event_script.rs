@@ -1,9 +1,9 @@
 //! Deterministic event-script generator for projection equivalence tests.
 //!
 //! `script(seed, ...)` produces a plausible single-session event log mixing
-//! transcript streaming, usage records (per-round and legacy), message/part
+//! transcript streaming, usage records (per-round and legacy), part
 //! deletion (revert, compaction), file changes, transcript revert/unrevert/
-//! commit, archive/unarchive (including legacy zero stamps), ephemeral
+//! commit, archive/unarchive, ephemeral
 //! marks, Project and temporary session kinds (and legacy sessions with
 //! neither), compaction
 //! markers, todo lists, forks, Workflow runs
@@ -211,15 +211,7 @@ impl Script {
                     tokens: self.tokens(),
                 }
             }
-            12 => {
-                // Revert / compaction removal of a whole message.
-                if self.messages.is_empty() {
-                    return self.title();
-                }
-                let index = self.rng.below(self.messages.len());
-                let (message, _) = self.messages.remove(index);
-                Event::MessageDeleted { session, message }
-            }
+            12 => self.title(),
             13 => {
                 let Some((message, parts)) = self.message() else {
                     return self.title();
@@ -296,12 +288,12 @@ impl Script {
             }
             17 => {
                 let handle = format!("worker-{}", self.handles.len() + 1);
-                self.handles.push(handle.clone());
+                self.handles.push(format!("main/{handle}"));
                 Event::AgentRegistered {
                     session,
-                    agent_session: SessionId::from_uuid(self.uuid()),
+                    agent_session: format!("hysec_{:020}", self.rng.next()).parse().unwrap(),
                     handle,
-                    parent: None,
+                    parent: Some("main".to_string()),
                     agent_type: AgentName::new("hya-worker"),
                     mode: SubagentMode::Resident,
                 }
@@ -327,7 +319,7 @@ impl Script {
                     Event::MemberSpawned {
                         session,
                         member,
-                        child: Some(SessionId::from_uuid(self.uuid())),
+                        child: Some(format!("hysec_{:020}", self.rng.next()).parse().unwrap()),
                         subagent_type: AgentName::new("hya-worker"),
                         description: "scripted member".to_string(),
                         depth: 1,
@@ -420,12 +412,9 @@ impl Script {
                 if self.rng.chance(60) {
                     Event::SessionArchived {
                         session,
-                        // Mostly real stamps, sometimes the legacy zero.
-                        archived: serde_json::Number::from(if self.rng.chance(80) {
-                            1_700_000_000_000 + self.rng.below(1_000) as u64
-                        } else {
-                            0
-                        }),
+                        archived: serde_json::Number::from(
+                            1_700_000_000_000 + self.rng.below(1_000) as u64,
+                        ),
                     }
                 } else {
                     Event::SessionUnarchived { session }

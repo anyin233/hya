@@ -4,8 +4,6 @@
 //! a newtype per id. This crate is dependency-light (serde / uuid only) so the
 //! TUI can share types without pulling sqlx/tokio into its build graph.
 
-/// Native HTTP request/response DTOs for session create, prompt, shell, and event queries.
-pub mod api;
 /// Canonical streaming `Event` enum and ordered `Envelope` unit for the log and bus.
 pub mod event;
 /// Strong id newtypes (`SessionId`, message/part/tool ids, claim epochs, etc.).
@@ -18,11 +16,9 @@ pub mod message;
 pub mod model;
 /// Idempotent event-log reducer: `Projection` and session/team view structs.
 pub mod projection;
-/// Pure run-tree assembler over reduced session projections (no I/O).
-pub mod projection_tree;
 /// File snapshot and revert value types (`FilesChanged`, `SessionReverted`).
 pub mod revert;
-/// Canonical agent paths, the parent/sibling/report scope rule, and
+/// Canonical agent paths and
 /// unit-qualified channel keys (task 08-07).
 pub mod scope;
 /// Session todo rows (`TodosUpdated` event and projection).
@@ -59,9 +55,8 @@ pub use projection::{
     PROJECTION_REDUCER_VERSION, PartProjection, Projection, ResidentWorkProjection, RosterEntry,
     SessionArchiveError, SessionProjection, TeamProjection, session_archive_event,
 };
-pub use projection_tree::{RunTreeNode, build_run_tree};
 pub use revert::{FileChange, FileChangeRecord, FileRestore, FileState, RevertProjection};
-pub use scope::{ANNOUNCE_CHANNEL, HARNESS_HANDLE, ROOT_HANDLE, Relation, in_scope, relation};
+pub use scope::{ANNOUNCE_CHANNEL, HARNESS_HANDLE, ROOT_HANDLE};
 pub use todo::{TodoItem, TodoStatus};
 pub use usage::{MessageUsage, OutputSplit, SessionUsage, UNATTRIBUTED_MODEL, UsageTotals};
 pub use workflow::{

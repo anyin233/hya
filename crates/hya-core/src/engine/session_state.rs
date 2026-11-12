@@ -10,28 +10,14 @@ impl SessionEngine {
         session: SessionId,
         agent: AgentName,
     ) -> Result<(), CoreError> {
-        self.emit(
-            session,
-            Event::AgentSwitched {
-                session,
-                message: Some(MessageId::new()),
-                agent,
-            },
-        )
-        .await
+        self.emit(session, Event::AgentSwitched { session, agent })
+            .await
     }
 
     /// Record a model switch event for the session.
     pub async fn switch_model(&self, session: SessionId, model: ModelRef) -> Result<(), CoreError> {
-        self.emit(
-            session,
-            Event::ModelSwitched {
-                session,
-                message: Some(MessageId::new()),
-                model,
-            },
-        )
-        .await
+        self.emit(session, Event::ModelSwitched { session, model })
+            .await
     }
 
     /// Set the session title.

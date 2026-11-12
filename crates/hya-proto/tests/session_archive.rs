@@ -1,6 +1,5 @@
 //! Root-session archive state: `SessionArchived` (epoch-millis stamp) and
-//! `SessionUnarchived` fold into `SessionProjection.archived`; logs written
-//! before archiving existed (and legacy zero stamps) replay as not archived.
+//! `SessionUnarchived` fold into `SessionProjection.archived`.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -53,34 +52,6 @@ fn archive_then_unarchive_folds_the_flag_and_stamp() {
     assert!(!restored.session.is_archived());
     assert_eq!(restored.session.archived_at_millis(), None);
     assert_eq!(restored.session.archived, None);
-}
-
-#[test]
-fn logs_without_archive_events_and_legacy_zero_stamps_are_not_archived() {
-    let session = SessionId::new();
-    let old = Projection::from_events(&[env(1, created(session, None))]);
-    assert!(!old.session.is_archived());
-
-    // The deleted Compat surface cleared the archive with a zero stamp.
-    let legacy: Event = serde_json::from_value(serde_json::json!({
-        "type": "session_archived",
-        "session": session.to_string(),
-        "archived": 0,
-    }))
-    .unwrap();
-    let cleared = Projection::from_events(&[
-        env(1, created(session, None)),
-        env(
-            2,
-            Event::SessionArchived {
-                session,
-                archived: serde_json::Number::from(5),
-            },
-        ),
-        env(3, legacy),
-    ]);
-    assert!(!cleared.session.is_archived());
-    assert_eq!(cleared.session.archived, None);
 }
 
 #[test]

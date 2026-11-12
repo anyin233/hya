@@ -543,8 +543,7 @@ pub(crate) fn decode_record(row: sqlx::sqlite::SqliteRow) -> Result<AdmissionRec
     let fingerprint: [u8; 32] = request_fingerprint.try_into().map_err(|_| {
         StoreError::AdmissionData("request fingerprint must contain 32 bytes".to_string())
     })?;
-    let root_session = decode_session_key(&root_session_id)
-        .ok_or_else(|| StoreError::AdmissionData("invalid root session key".to_string()))?;
+    let root_session = decode_session_key(&root_session_id)?;
     let operation_uuid = uuid::Uuid::from_slice(&operation_id)
         .map_err(|error| StoreError::AdmissionData(format!("invalid operation id: {error}")))?;
     let source_tool_call_uuid = uuid::Uuid::from_slice(&source_tool_call_id)
@@ -552,9 +551,7 @@ pub(crate) fn decode_record(row: sqlx::sqlite::SqliteRow) -> Result<AdmissionRec
     let actor = match (actor_id, actor_epoch) {
         (None, None) => None,
         (Some(actor_id), Some(actor_epoch)) => {
-            let actor_id = decode_session_key(&actor_id).ok_or_else(|| {
-                StoreError::AdmissionData("invalid actor session key".to_string())
-            })?;
+            let actor_id = decode_session_key(&actor_id)?;
             let actor_epoch = u64::try_from(actor_epoch)
                 .ok()
                 .filter(|value| *value > 0)

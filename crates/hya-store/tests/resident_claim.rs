@@ -55,6 +55,7 @@ async fn stop_fixture(path: &str) -> StopFixture {
     let root = SessionId::new();
     let actor = SessionId::new();
     let handle = "resident-1".to_string();
+    let path = format!("main/{handle}");
     store
         .append_event(
             root,
@@ -62,7 +63,7 @@ async fn stop_fixture(path: &str) -> StopFixture {
                 session: root,
                 agent_session: actor,
                 handle: handle.clone(),
-                parent: None,
+                parent: Some("main".to_string()),
                 agent_type: AgentName::new("resident"),
                 mode: SubagentMode::Resident,
             },
@@ -75,7 +76,7 @@ async fn stop_fixture(path: &str) -> StopFixture {
             &Event::MailSent {
                 session: root,
                 from: "main".to_string(),
-                to: MailEndpoint::Handle(handle.clone()),
+                to: MailEndpoint::Handle(path.clone()),
                 kind: MailKind::Message,
                 body: "accepted before stop".to_string(),
             },
@@ -146,10 +147,7 @@ async fn stop_fixture(path: &str) -> StopFixture {
         store,
         root,
         actor,
-        // The fixture carries the CANONICAL path: `AgentRegistered` above records
-        // the leaf, but every emitted event and projection key uses the path, and
-        // `finalize_resident_stop` accepts either form.
-        handle: format!("main/{handle}"),
+        handle: path,
         claim,
         operation,
     }
@@ -245,7 +243,7 @@ async fn resident_stop_finalization_commits_mail_admission_and_claim_release_tog
                 session: root,
                 agent_session: actor,
                 handle: handle.to_string(),
-                parent: None,
+                parent: Some("main".to_string()),
                 agent_type: AgentName::new("resident"),
                 mode: SubagentMode::Resident,
             },
@@ -258,7 +256,7 @@ async fn resident_stop_finalization_commits_mail_admission_and_claim_release_tog
             &Event::MailSent {
                 session: root,
                 from: "main".to_string(),
-                to: MailEndpoint::Handle(handle.to_string()),
+                to: MailEndpoint::Handle(path.to_string()),
                 kind: MailKind::Message,
                 body: "accepted before stop".to_string(),
             },
@@ -323,7 +321,7 @@ async fn resident_stop_finalization_commits_mail_admission_and_claim_release_tog
     }
 
     let (events, admissions) = store
-        .finalize_resident_stop(&actor_claim, root, handle)
+        .finalize_resident_stop(&actor_claim, root, path)
         .await
         .unwrap();
 
@@ -459,7 +457,7 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
                 session: root,
                 agent_session: actor,
                 handle: handle.to_string(),
-                parent: None,
+                parent: Some("main".to_string()),
                 agent_type: AgentName::new("resident"),
                 mode: SubagentMode::Resident,
             },
@@ -506,7 +504,7 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
     assert_eq!(projection.team.roster.get(path).unwrap().resident_cursor, 0);
 
     let (events, admissions) = store
-        .finalize_resident_stop(&recovered.claim, root, handle)
+        .finalize_resident_stop(&recovered.claim, root, path)
         .await
         .unwrap();
     assert!(admissions.is_empty());
@@ -538,7 +536,7 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
     assert_eq!(projection.team.roster.get(path).unwrap().resident_cursor, 1);
 
     let (events, admissions) = store
-        .finalize_resident_stop(&recovered.claim, root, handle)
+        .finalize_resident_stop(&recovered.claim, root, path)
         .await
         .unwrap();
     assert!(events.is_empty());
@@ -781,7 +779,7 @@ async fn resident_finalization_closes_its_member_row_on_the_parent_log() {
                 session: root,
                 agent_session: actor,
                 handle: "resident-1".to_string(),
-                parent: None,
+                parent: Some("main".to_string()),
                 agent_type: AgentName::new("resident"),
                 mode: SubagentMode::Resident,
             },
@@ -807,12 +805,12 @@ async fn resident_finalization_closes_its_member_row_on_the_parent_log() {
 
         let (events, _) = if stop {
             store
-                .finalize_resident_stop(&claim, root, "resident-1")
+                .finalize_resident_stop(&claim, root, "main/resident-1")
                 .await
                 .unwrap()
         } else {
             store
-                .finalize_resident_failure(&claim, root, "resident-1", "team budget exceeded")
+                .finalize_resident_failure(&claim, root, "main/resident-1", "team budget exceeded")
                 .await
                 .unwrap()
         };

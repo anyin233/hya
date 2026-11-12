@@ -33,7 +33,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures::TryStreamExt as _;
-use hya_proto::{Envelope, Event, EventSeq, PROJECTION_REDUCER_VERSION, Projection, SessionId};
+use hya_proto::{Envelope, EventSeq, PROJECTION_REDUCER_VERSION, Projection, SessionId};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row as _, SqliteConnection};
 
@@ -178,10 +178,10 @@ fn row_seq(row: &SqliteRow) -> Result<u64, StoreError> {
     Ok(seq.max(0) as u64)
 }
 
-fn decode_row(row: &SqliteRow) -> Result<Envelope, StoreError> {
+fn decode_row(row: &SqliteRow, session: SessionId) -> Result<Envelope, StoreError> {
     let ts_millis: i64 = row.try_get("ts")?;
     let payload: &str = row.try_get("payload")?;
-    let event: Event = serde_json::from_str(payload)?;
+    let event = crate::decode_event(payload, session, row_seq(row)? as i64)?;
     Ok(Envelope {
         seq: EventSeq(row_seq(row)?),
         ts_millis,
@@ -249,7 +249,7 @@ pub(crate) async fn fold(
                     anchored = true;
                     continue;
                 }
-                let envelope = decode_row(&row)?;
+                let envelope = decode_row(&row, session)?;
                 next.get_or_insert_with(|| Projection::clone(&base))
                     .apply(&envelope);
                 applied += 1;
@@ -271,7 +271,7 @@ pub(crate) async fn fold(
                 .bind(&key)
                 .fetch(&mut *conn);
         while let Some(row) = rows.try_next().await? {
-            projection.apply(&decode_row(&row)?);
+            projection.apply(&decode_row(&row, session)?);
             applied += 1;
         }
     }

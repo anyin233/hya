@@ -252,7 +252,7 @@ async fn roster_status(
 ) -> Option<RosterStatus> {
     let team = engine.read_projection(root).await.unwrap().team;
     team.roster
-        .get(&team.canonical_member(leaf))
+        .get(&format!("main/{leaf}"))
         .map(|entry| entry.status)
 }
 

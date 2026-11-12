@@ -1467,16 +1467,9 @@ impl TeamActor {
         let Ok(projection) = self.engine.read_projection(self.root).await else {
             return Vec::new();
         };
-        // Resolve the address the same way the reducer did when it folded this
-        // event. A live envelope already carries canonical addresses, so this is
-        // the identity; a replayed pre-scoping envelope carries bare names, and
-        // without this the roster lookup below would miss and the recipient would
-        // never wake.
-        let from = projection.team.canonical_member(from);
-        let from = from.as_str();
         let handles: Vec<String> = match to {
             MailEndpoint::Handle(handle) => {
-                let handle = projection.team.canonical_member(handle);
+                let handle = handle.to_string();
                 if handle == from {
                     Vec::new() // a self-addressed direct mail never self-wakes
                 } else {
@@ -1486,7 +1479,7 @@ impl TeamActor {
             MailEndpoint::Channel(channel) => projection
                 .team
                 .channels
-                .get(&projection.team.canonical_channel(channel))
+                .get(channel)
                 .map(|ch| {
                     ch.members
                         .iter()
@@ -2330,9 +2323,7 @@ pub(crate) async fn archive_reported_agent(
         .find(|(_, channel)| {
             channel.kind == ChannelKind::Dm
                 && channel.members.contains(canonical)
-                && channel
-                    .members
-                    .contains(projection.team.canonical_member(parent_path).as_str())
+                && channel.members.contains(parent_path)
         })
         .map(|(key, _)| key.clone())
         .unwrap_or_else(|| parent_path.to_string());
@@ -3209,8 +3200,7 @@ impl ResidentSupervisor {
     /// # Errors
     /// Returns [`CoreError::Invalid`] for each gate failure.
     pub async fn report_gate(&self, root: SessionId, handle: &str) -> Result<String, CoreError> {
-        let projection = self.engine.read_projection(root).await?;
-        let canonical = projection.team.canonical_member(handle);
+        let canonical = handle.to_string();
         self.report_gate_state(root, &canonical).await?;
         Ok(canonical)
     }
@@ -3533,7 +3523,7 @@ impl ResidentSupervisor {
         body: String,
     ) -> Result<(), CoreError> {
         let projection = self.engine.read_projection(root).await?;
-        let canonical = projection.team.canonical_member(child_handle);
+        let canonical = child_handle.to_string();
         let entry = projection.team.archived.get(&canonical).ok_or_else(|| {
             CoreError::Invalid(format!("`{child_handle}` is not an archived agent"))
         })?;

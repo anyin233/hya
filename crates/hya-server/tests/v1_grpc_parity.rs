@@ -448,7 +448,7 @@ async fn http_and_grpc_answers_match_across_representative_calls() {
     assert_eq!(body["error"]["code"], json!("unavailable"));
 
     // Error parity: unknown session maps to the same code on both.
-    let missing = "00000000-0000-0000-0000-000000000000".to_owned();
+    let missing = "hysec_00000000000000000000".to_owned();
     let grpc_error = session
         .get_session(tonic::Request::new(pb::GetSessionRequest {
             session: missing.clone(),

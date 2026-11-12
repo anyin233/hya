@@ -12,7 +12,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_proto::{Event, PROJECTION_REDUCER_VERSION, Projection, SessionId};
 use hya_store::SessionStore;
-use uuid::Uuid;
 
 struct TempDb(String);
 
@@ -65,8 +64,12 @@ async fn cached_reads_equal_full_replay_across_appends_and_restarts() {
             .await
             .unwrap()
             .with_projection_snapshot_interval(1 + seed % 7);
-        let source = SessionId::from_uuid(Uuid::from_u128(u128::from(seed) + 1_000));
-        let session = SessionId::from_uuid(Uuid::from_u128(u128::from(seed) + 2_000));
+        let source = format!("hysec_{:020}", u128::from(seed) + 1_000)
+            .parse::<SessionId>()
+            .unwrap();
+        let session = format!("hysec_{:020}", u128::from(seed) + 2_000)
+            .parse::<SessionId>()
+            .unwrap();
         let fork_of = (seed % 3 == 0).then_some(source);
         let events = event_script::script(seed, session, fork_of, 160);
         let mut rng = event_script::Rng::new(seed ^ 0xABCD);

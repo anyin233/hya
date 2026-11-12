@@ -119,7 +119,7 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
                 session: queued_root,
                 agent_session: queued_actor,
                 handle: "queued-1".to_string(),
-                parent: None,
+                parent: Some("main".to_string()),
                 agent_type: AgentName::new("queued"),
                 mode: SubagentMode::Resident,
             },
@@ -132,7 +132,7 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
             &Event::MailSent {
                 session: queued_root,
                 from: "main".to_string(),
-                to: MailEndpoint::Handle("queued-1".to_string()),
+                to: MailEndpoint::Handle("main/queued-1".to_string()),
                 kind: MailKind::Message,
                 body: "queued".to_string(),
             },
@@ -146,7 +146,7 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
 
     assert_eq!(
         engine
-            .recover_resident_actor(&queued_recovered, queued_root, "queued-1")
+            .recover_resident_actor(&queued_recovered, queued_root, "main/queued-1")
             .await
             .unwrap()
             .work,
@@ -206,7 +206,7 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
                 session: running_root,
                 agent_session: running_actor,
                 handle: "running-1".to_string(),
-                parent: None,
+                parent: Some("main".to_string()),
                 agent_type: AgentName::new("running"),
                 mode: SubagentMode::Resident,
             },
@@ -219,7 +219,7 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
             &Event::MailSent {
                 session: running_root,
                 from: "main".to_string(),
-                to: MailEndpoint::Handle("running-1".to_string()),
+                to: MailEndpoint::Handle("main/running-1".to_string()),
                 kind: MailKind::Message,
                 body: "running".to_string(),
             },
@@ -234,13 +234,13 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
                 Event::ResidentWorkStarted {
                     session: running_root,
                     actor_session: running_actor,
-                    handle: "running-1".to_string(),
+                    handle: "main/running-1".to_string(),
                     epoch: running_claim.epoch,
                     inbox_through: 1,
                 },
                 Event::AgentActivityChanged {
                     session: running_root,
-                    handle: "running-1".to_string(),
+                    handle: "main/running-1".to_string(),
                     status: RosterStatus::Busy,
                     current_task: Some("mail from main".to_string()),
                 },
@@ -254,7 +254,7 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
             &Event::MailSent {
                 session: running_root,
                 from: "main".to_string(),
-                to: MailEndpoint::Handle("running-1".to_string()),
+                to: MailEndpoint::Handle("main/running-1".to_string()),
                 kind: MailKind::Message,
                 body: "queued after running".to_string(),
             },
@@ -268,7 +268,7 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
 
     assert_eq!(
         engine
-            .recover_resident_actor(&running_recovered, running_root, "running-1")
+            .recover_resident_actor(&running_recovered, running_root, "main/running-1")
             .await
             .unwrap()
             .work,
@@ -307,7 +307,7 @@ async fn resident_recovery_rolls_back_actor_admission_and_root_failure_atomicall
     let engine = engine(store.clone()).await;
     let root = SessionId::new();
     let actor = SessionId::new();
-    let handle = "recovery-atomic-1";
+    let handle = "main/recovery-atomic-1";
 
     let old_claim = store.try_claim_new(actor, OwnerRunId::new()).await.unwrap();
     store
@@ -316,8 +316,8 @@ async fn resident_recovery_rolls_back_actor_admission_and_root_failure_atomicall
             &Event::AgentRegistered {
                 session: root,
                 agent_session: actor,
-                handle: handle.to_string(),
-                parent: None,
+                handle: hya_proto::scope::leaf(handle).to_string(),
+                parent: Some("main".to_string()),
                 agent_type: AgentName::new("resident"),
                 mode: SubagentMode::Resident,
             },
@@ -438,7 +438,7 @@ async fn repeated_startup_recovery_produces_identical_projection_and_no_duplicat
                 session: root,
                 agent_session: actor,
                 handle: "repeat-1".to_string(),
-                parent: None,
+                parent: Some("main".to_string()),
                 agent_type: AgentName::new("repeat"),
                 mode: SubagentMode::Resident,
             },
@@ -489,7 +489,7 @@ async fn repeated_startup_recovery_produces_identical_projection_and_no_duplicat
             vec![Event::ResidentWorkStarted {
                 session: root,
                 actor_session: actor,
-                handle: "repeat-1".to_string(),
+                handle: "main/repeat-1".to_string(),
                 epoch: old_claim.epoch,
                 inbox_through: 0,
             }],
@@ -515,7 +515,7 @@ async fn repeated_startup_recovery_produces_identical_projection_and_no_duplicat
     let _first_claim = store.recover_claim(actor, OwnerRunId::new()).await.unwrap();
     let second_claim = store.recover_claim(actor, OwnerRunId::new()).await.unwrap();
     let first = engine
-        .recover_resident_actor(&second_claim, root, "repeat-1")
+        .recover_resident_actor(&second_claim, root, "main/repeat-1")
         .await
         .unwrap();
     assert_eq!(
@@ -530,7 +530,7 @@ async fn repeated_startup_recovery_produces_identical_projection_and_no_duplicat
 
     let third_claim = store.recover_claim(actor, OwnerRunId::new()).await.unwrap();
     let second = engine
-        .recover_resident_actor(&third_claim, root, "repeat-1")
+        .recover_resident_actor(&third_claim, root, "main/repeat-1")
         .await
         .unwrap();
     assert_eq!(second.work, ResidentRecovery::Idle);

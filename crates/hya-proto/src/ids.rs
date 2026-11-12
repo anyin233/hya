@@ -57,21 +57,9 @@ macro_rules! uuid_id {
     };
 }
 
-/// Primary hya session id. New sessions use the `hysec_` grammar; legacy
-/// UUID-backed ids (parsed from `ses_<uuid-simple>`, raw hyphenated UUIDs, or
-/// UUID-simple strings) are preserved for read/decode compatibility.
-///
-/// `as_uuid()` returns `Option<Uuid>` (`None` for `hysec_` ids) so callers that
-/// still assume a UUID are forced by the compiler — not a runtime panic — to
-/// migrate to `storage_key()` / `Display` during the session-naming rollout.
+/// Primary hya session id: `hysec_` followed by 20 ASCII alphanumeric characters.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct SessionId(SessionIdRepr);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-enum SessionIdRepr {
-    Hysec([u8; HYSEC_SUFFIX_LEN]),
-    Uuid(Uuid),
-}
+pub struct SessionId([u8; HYSEC_SUFFIX_LEN]);
 
 /// Display/storage prefix for new session ids (`hysec_` + 20 alphanumeric chars).
 pub const HYSEC_PREFIX: &str = "hysec_";
@@ -85,41 +73,16 @@ impl SessionId {
     /// sampling.
     #[must_use]
     pub fn new() -> Self {
-        Self(SessionIdRepr::Hysec(generate_hysec_suffix()))
+        Self(generate_hysec_suffix())
     }
 
-    /// Construct a legacy UUID-backed session id. Kept for compatibility with
-    /// existing callers; new sessions should go through [`SessionId::new`].
-    #[must_use]
-    pub fn from_uuid(u: Uuid) -> Self {
-        Self(SessionIdRepr::Uuid(u))
-    }
-
-    /// Legacy UUID accessor. Returns `None` for `hysec_` ids because they have
-    /// no UUID representation. Migrate call sites to `storage_key()` or
-    /// `to_string()` instead of assuming a UUID is always present.
-    #[must_use]
-    pub fn as_uuid(&self) -> Option<Uuid> {
-        match self.0 {
-            SessionIdRepr::Uuid(u) => Some(u),
-            SessionIdRepr::Hysec(_) => None,
-        }
-    }
-
-    /// Durable storage key for the session. `hysec_` ids encode as their ASCII
-    /// display bytes (including the prefix); legacy ids keep the 16 UUID bytes
-    /// so existing SQLite rows remain addressable.
+    /// Durable storage key: the ASCII display bytes, including `hysec_`.
     #[must_use]
     pub fn storage_key(&self) -> Vec<u8> {
-        match self.0 {
-            SessionIdRepr::Hysec(suffix) => {
-                let mut key = Vec::with_capacity(HYSEC_PREFIX.len() + HYSEC_SUFFIX_LEN);
-                key.extend_from_slice(HYSEC_PREFIX.as_bytes());
-                key.extend_from_slice(&suffix);
-                key
-            }
-            SessionIdRepr::Uuid(u) => u.as_bytes().to_vec(),
-        }
+        let mut key = Vec::with_capacity(HYSEC_PREFIX.len() + HYSEC_SUFFIX_LEN);
+        key.extend_from_slice(HYSEC_PREFIX.as_bytes());
+        key.extend_from_slice(&self.0);
+        key
     }
 }
 
@@ -131,17 +94,11 @@ impl Default for SessionId {
 
 impl std::fmt::Display for SessionId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
-            SessionIdRepr::Hysec(suffix) => {
-                f.write_str(HYSEC_PREFIX)?;
-                // Suffix bytes are validated ASCII-alphanumeric at construction.
-                for &byte in &suffix {
-                    write!(f, "{}", char::from(byte))?;
-                }
-                Ok(())
-            }
-            SessionIdRepr::Uuid(u) => write!(f, "ses_{}", u.simple()),
+        f.write_str(HYSEC_PREFIX)?;
+        for &byte in &self.0 {
+            write!(f, "{}", char::from(byte))?;
         }
+        Ok(())
     }
 }
 
@@ -163,15 +120,11 @@ impl std::str::FromStr for SessionId {
             }
             let mut buf = [0u8; HYSEC_SUFFIX_LEN];
             buf.copy_from_slice(suffix.as_bytes());
-            Ok(Self(SessionIdRepr::Hysec(buf)))
-        } else if let Some(rest) = s.strip_prefix("ses_") {
-            let u = Uuid::parse_str(rest)
-                .map_err(|e| SessionIdParseError(format!("invalid legacy session id: {e}")))?;
-            Ok(Self(SessionIdRepr::Uuid(u)))
+            Ok(Self(buf))
         } else {
-            let u = Uuid::parse_str(s)
-                .map_err(|e| SessionIdParseError(format!("invalid session id: {e}")))?;
-            Ok(Self(SessionIdRepr::Uuid(u)))
+            Err(SessionIdParseError(
+                "session id must start with hysec_".to_string(),
+            ))
         }
     }
 }
@@ -482,16 +435,14 @@ mod tests {
     }
 
     #[test]
-    fn session_id_parses_hysec_and_legacy_formats() {
-        let parsed: SessionId = "hysec_ABCDEFGHIJKLMNOPQRST".parse().unwrap();
-        assert_eq!(parsed.to_string(), "hysec_ABCDEFGHIJKLMNOPQRST");
-
-        let uuid = Uuid::parse_str("018f032a-3d2f-7a21-a05c-2e61fc57dced").unwrap();
-        let prefixed: SessionId = "ses_018f032a3d2f7a21a05c2e61fc57dced".parse().unwrap();
-        let raw: SessionId = "018f032a-3d2f-7a21-a05c-2e61fc57dced".parse().unwrap();
-
-        assert_eq!(prefixed, SessionId::from_uuid(uuid));
-        assert_eq!(raw, SessionId::from_uuid(uuid));
+    fn session_id_rejects_legacy_uuid_formats() {
+        for raw in [
+            "ses_018f032a3d2f7a21a05c2e61fc57dced",
+            "018f032a-3d2f-7a21-a05c-2e61fc57dced",
+            "018f032a3d2f7a21a05c2e61fc57dced",
+        ] {
+            assert!(raw.parse::<SessionId>().is_err(), "{raw}");
+        }
     }
 
     #[test]

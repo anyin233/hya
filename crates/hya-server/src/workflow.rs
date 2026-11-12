@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use hya_proto::api::CommandRequest;
+use hya_api::v1::CommandTurn;
 use hya_proto::{SessionId, WorkflowCommand, WorkflowCommandResult, WorkflowDelivery};
 
 use crate::workflow_control::WorkflowControlError;
@@ -24,7 +24,7 @@ use crate::{ApiError, ServerState};
 pub(crate) async fn intercept_slash(
     st: &ServerState,
     session: SessionId,
-    request: &CommandRequest,
+    request: &CommandTurn,
 ) -> Result<Option<WorkflowCommandResult>, ApiError> {
     let Some(command) = parse_slash(&request.command, &request.arguments)? else {
         return Ok(None);
@@ -38,7 +38,9 @@ pub(crate) async fn intercept_slash(
     let _reservation = reserve_workflow_command(st, session, &command)?;
     let arguments = request.arguments.clone();
     let place = crate::support::catalog_place::CatalogPlace::for_session(st, session).await?;
-    let text = request.text.clone().unwrap_or_else(|| {
+    let text = if !request.text.is_empty() {
+        request.text.clone()
+    } else {
         crate::support::command_catalog::expand_prompt(&place, &request.command, &arguments)
             .unwrap_or_else(|| {
                 if arguments.trim().is_empty() {
@@ -47,7 +49,7 @@ pub(crate) async fn intercept_slash(
                     format!("/{} {}", request.command, arguments)
                 }
             })
-    });
+    };
     st.engine
         .admit_command_prompt(session, request.command.clone(), arguments, text)
         .await?;
