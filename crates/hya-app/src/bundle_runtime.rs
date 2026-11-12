@@ -120,6 +120,12 @@ fn materialize(bundle: &Bundle) -> Result<MaterializedRoot, CoreError> {
         .create(&root)
         .map_err(|error| invalid("create private bundle directory", error))?;
     let guard = MaterializedRoot(root);
+    let executable_paths = bundle
+        .extensions()
+        .iter()
+        .filter(|resource| resource.binary_base64.is_some())
+        .map(|resource| resource.source_path.as_str())
+        .collect::<BTreeSet<_>>();
     let mut paths = BTreeMap::new();
     for resource in bundle
         .tools()
@@ -151,32 +157,57 @@ fn materialize(bundle: &Bundle) -> Result<MaterializedRoot, CoreError> {
                     resource.source_path
                 )));
             }
-            if resource.binary_base64.is_some() {
-                mark_executable(&path)?;
-            }
             continue;
         }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|error| invalid("create bundle resource parent", error))?;
         }
-        std::fs::write(&path, bytes).map_err(|error| invalid("write bundle resource", error))?;
-        if resource.binary_base64.is_some() {
-            mark_executable(&path)?;
+        if executable_paths.contains(resource.source_path.as_str()) {
+            write_executable(&path, &bytes)?;
+        } else {
+            std::fs::write(&path, bytes)
+                .map_err(|error| invalid("write bundle resource", error))?;
         }
     }
     Ok(guard)
 }
 
-fn mark_executable(path: &Path) -> Result<(), CoreError> {
+fn write_executable(path: &Path, bytes: &[u8]) -> Result<(), CoreError> {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    // Only the writer child opens the destination. Waiting for its exit prevents
+    // unrelated concurrent spawns from inheriting a writer and causing ETXTBSY.
+    let mut child = Command::new("tee")
+        .arg(path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .map_err(|error| invalid("start bundle executable writer", error))?;
+    let written = child
+        .stdin
+        .take()
+        .ok_or_else(|| CoreError::Invalid("bundle executable writer has no stdin".into()))
+        .and_then(|mut stdin| {
+            stdin
+                .write_all(bytes)
+                .map_err(|error| invalid("write bundle executable", error))
+        });
+    // Reap the writer even if feeding its stdin failed.
+    let status = child
+        .wait()
+        .map_err(|error| invalid("wait for bundle executable writer", error))?;
+    written?;
+    if !status.success() {
+        return Err(invalid("bundle executable writer failed", status));
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
             .map_err(|error| invalid("mark bundle executable", error))?;
     }
-    #[cfg(not(unix))]
-    let _ = path;
     Ok(())
 }
 
@@ -761,7 +792,7 @@ for line in sys.stdin:
         let prepared = prepare_package(BundleSource::new(
             "native-executable",
             vec![
-                SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: acme/native-run, version: 1.0.0, publisher: acme }\nextensions:\n  rust: [{ id: provider, path: bin/provider }]\n  process: { kind: rust, command: ['${BUNDLE_ROOT}/bin/provider'] }\n"),
+                SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: acme/native-run, version: 1.0.0, publisher: acme }\nextensions:\n  files: [{ id: a-shared-source, path: bin/provider }]\n  rust: [{ id: provider, path: bin/provider }]\n  process: { kind: rust, command: ['${BUNDLE_ROOT}/bin/provider'] }\n"),
                 SourceFile::new("bin/provider", b"#!/bin/sh\nprintf native-ok\n"),
             ],
         ))
