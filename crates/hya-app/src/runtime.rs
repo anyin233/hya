@@ -1782,7 +1782,6 @@ pub fn spawn_team_supervisor(
     rx: tokio::sync::mpsc::Receiver<BoundSpawnRequest>,
     engine: Arc<SessionEngine>,
     base: AgentSpec,
-    router: Arc<ProviderRouter>,
     categories: Arc<CategoryRegistry>,
     resident_supervisor: Arc<ResidentSupervisor>,
 ) {
@@ -1790,7 +1789,6 @@ pub fn spawn_team_supervisor(
         rx,
         engine,
         base,
-        router,
         categories,
         resident_supervisor,
         Arc::new(BundleSidecarEnvironment::production()),
@@ -1874,7 +1872,6 @@ fn spawn_team_supervisor_with_environment(
     mut rx: tokio::sync::mpsc::Receiver<BoundSpawnRequest>,
     engine: Arc<SessionEngine>,
     base: AgentSpec,
-    router: Arc<ProviderRouter>,
     categories: Arc<CategoryRegistry>,
     resident_supervisor: Arc<ResidentSupervisor>,
     sidecar_environment: Arc<BundleSidecarEnvironment>,
@@ -1904,6 +1901,7 @@ fn spawn_team_supervisor_with_environment(
                 let _ = req.reply.send(Err(SpawnError::Unavailable));
                 continue;
             };
+            let router = engine.provider_router();
             let is_servable = |model: &ModelRef| router.resolve(model).is_some();
             // Guidance is request-scoped: one Arc cloned to every resolved member.
             let request_guidance = req.guidance.clone();
@@ -2330,20 +2328,6 @@ async fn build_session_engine_with_mcp_defer(
         })?;
     }
     let categories = Arc::new(crate::config::load_categories());
-    let agent_model_control = PersistentAgentModelControl::load(
-        store.clone(),
-        owner_run_id,
-        runtime.clone(),
-        router.clone(),
-    )
-    .await
-    .context("load Agent model preferences before engine readiness")?
-    .with_categories(categories.clone())
-    .with_configuration(crate::agent_model_config::AgentModelConfigFiles::new(
-        crate::config::active_config_path(),
-    ))
-    .await
-    .context("load Agent model configuration before engine readiness")?;
     let reconciler = Arc::new(RuntimeReconciler::new(runtime.clone()));
     let mcp_control = Arc::new(RuntimeMcpControl::new(reconciler.clone()));
     let catalog_refresh = Arc::new(RuntimeExtensionsRefresh::new(
@@ -2375,9 +2359,6 @@ async fn build_session_engine_with_mcp_defer(
         Arc::new(ModelSummarizer::new(router.clone(), agent.model.clone()));
     let bus = EventBus::new(crate::config::resolve_event_bus_capacity());
     let governor = SubagentGovernor::new(subagent_limits);
-    // Clone the router before it is moved into the engine so the team supervisor
-    // can test category-candidate servability against the same live providers.
-    let spawn_router = router.clone();
     let sidecar_environment = Arc::new(BundleSidecarEnvironment::production());
     let context_settings = crate::config::load_context_settings();
     let mut engine_builder = SessionEngine::new(store, router, runtime, permission, bus)
@@ -2429,9 +2410,20 @@ async fn build_session_engine_with_mcp_defer(
         engine_builder = engine_builder.with_mcp_background_after(budget);
     }
     let engine = Arc::new(engine_builder);
-    // Providers added or refreshed at runtime replace the engine's router;
-    // model saves must accept their models too.
-    agent_model_control.follow_engine_router(&engine);
+    let agent_model_control = PersistentAgentModelControl::load(
+        engine.store().clone(),
+        owner_run_id,
+        engine.runtime_registry(),
+        engine.clone(),
+    )
+    .await
+    .context("load Agent model preferences before engine readiness")?
+    .with_categories(categories.clone())
+    .with_configuration(crate::agent_model_config::AgentModelConfigFiles::new(
+        crate::config::active_config_path(),
+    ))
+    .await
+    .context("load Agent model configuration before engine readiness")?;
     // `agents.<id>.reasoning` defaults load at startup, like model leaves.
     engine
         .runtime_registry()
@@ -2590,13 +2582,11 @@ async fn build_session_engine_with_mcp_defer(
         resident_supervisor.clone(),
         owner_run_id,
         categories.clone(),
-        spawn_router.clone(),
     );
     let mut lifecycle = spawn_team_supervisor_with_environment(
         spawn_rx,
         engine.clone(),
         agent.clone(),
-        spawn_router,
         categories,
         resident_supervisor.clone(),
         sidecar_environment,
@@ -3242,7 +3232,6 @@ flowchart TD
             resident_supervisor,
             owner,
             Arc::new(CategoryRegistry::default()),
-            router,
         );
         let supervisor = spawn_workflow_supervisor(workflow_rx, control, stop.clone());
         let (interaction, _interaction_rx) = InteractionPlane::new();
