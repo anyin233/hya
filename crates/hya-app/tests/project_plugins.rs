@@ -315,6 +315,7 @@ async fn hot_reload_project_sessions_bind_their_projects_plugins_and_config_plug
             timeout_ms: Some(5_000),
             env: BTreeMap::new(),
             plugin_dir: None,
+            launch: Default::default(),
         }],
         (
             WebSearchConfig::default(),

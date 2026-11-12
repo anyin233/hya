@@ -829,7 +829,15 @@ cargo run -p xtask -- package-bundle docs/examples/bun-disjoint bun-disjoint.hya
 
 Each selected Tool or Hook source path must exact-path match exactly one JavaScript Extension resource in the referenced resource's owning bundle; cross-bundle selection joins in the owner. Never basename/prefix/digest/alias inference. The activation rule is: only selected Tool/Hook resources determine a deduplicated deterministic entrypoint list; staged does not mean activated.
 
-Tool and Hook initialize declarations independently equal the selected expected sets regardless of order; missing, extra, duplicate, or unselected declarations reject. The contract is: tool-only reports zero hooks and hook-only reports zero tools. When authoring, generic superset modules are rejected and must be split; authors may instead select the complete set.
+Tool and Hook initialize declarations independently equal the complete prepared
+declarations of the loaded modules, regardless of order. Missing, undeclared, or
+duplicate exports reject initialization. Selection is a view: a module may export
+two tools while two agents each select a different one. Tools outside
+`resource_view` and hooks outside `hook_refs` are neither advertised nor dispatched
+for that agent, even when its loaded module exports them. A tool-only consumer
+may therefore initialize a module that also declares hooks, and vice versa.
+Skill declarations, when present in an activation, are likewise checked against
+the complete packaged Skill set, independently of the agent's Skill selection.
 
 The activation-scoped JS profile admits only self-contained selected Extension entrypoints; it does not load inert support files or discover transitive JS imports. Use external single-file bundling before packaging; activation never executes the authoring tree. Only selected captured PreparedResource bytes are rematerialized for activation. A missing relative helper import fails before ACK, with existing cleanup handling the failure before model or dispatch.
 
@@ -851,7 +859,8 @@ and declarations match the prepared Bundle.
 2. Materializes each selected bundle tool/hook resource plus its unique
    exact-path-matching JS extension with `create_new`. Multi-owner activations
    use **`owner-0000/`-style** path slots (`owner-{index:04}`).
-3. Spawns the Bun extension adapter via `PluginClient::spawn_bundle` in that
+3. Connects a private `PluginSpec` through the same `PluginHost` connection owner
+   used for config plugins, Project plugins and bundle processes, in that
    directory with **`env_clear()`**, appending  
    `-- --bundle-extension <absolute path>` once per resolved entrypoint.
 4. Initialize reply must report **`protocol_version` 1** and plugin **`kind:

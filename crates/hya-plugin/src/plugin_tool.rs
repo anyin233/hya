@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use hya_proto::{ToolCallId, ToolName, ToolSchema};
-use hya_tool::{Tool, ToolCtx, ToolError};
+use hya_tool::{Action, Resource, Tool, ToolCtx, ToolError};
 use serde_json::Value;
 
 use crate::host::PluginConn;
@@ -15,20 +15,22 @@ pub(crate) struct PluginTool {
 }
 
 impl PluginTool {
-    pub(crate) fn try_new(conn: Arc<PluginConn>, info: ToolInfo) -> Option<Arc<dyn Tool>> {
-        if info.input_schema.get("type").and_then(Value::as_str) != Some("object") {
-            return None;
-        }
-        Some(Arc::new(Self {
+    pub(crate) fn bind(conn: Arc<PluginConn>, info: ToolInfo) -> Arc<dyn Tool> {
+        let name = info.name.clone();
+        Self::named(conn, info, &name)
+    }
+
+    pub(crate) fn named(conn: Arc<PluginConn>, info: ToolInfo, name: &str) -> Arc<dyn Tool> {
+        Arc::new(Self {
             conn,
             tool: info.name.clone(),
             schema: ToolSchema {
-                name: ToolName::new(info.name),
+                name: ToolName::new(name),
                 description: info.description,
                 input_schema: info.input_schema,
                 output_schema: None,
             },
-        }))
+        })
     }
 }
 
@@ -43,14 +45,46 @@ impl Tool for PluginTool {
     }
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
-        let session = ctx
-            .session
-            .ok_or_else(|| ToolError::Other("plugin tool requires a session".to_string()))?;
-        let reply = self
-            .conn
-            .call_tool(ctx, &self.tool, session, ToolCallId::new(), input)
-            .await
-            .map_err(|error| ToolError::Other(error.to_string()))?;
+        let activation = self.conn.is_activation();
+        if activation && ctx.cancel.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
+        let session = ctx.session.ok_or_else(|| {
+            ToolError::Other(if activation {
+                "bundle sidecar tool requires a session".to_string()
+            } else {
+                "plugin tool requires a session".to_string()
+            })
+        })?;
+        if activation {
+            ctx.permission
+                .assert(Action::Tool, Resource::Tool(self.name().to_string()))
+                .await?;
+        }
+        let call = if activation {
+            ctx.operation.source_tool_call_id()
+        } else {
+            ToolCallId::new()
+        };
+        let request = self.conn.call_tool(ctx, &self.tool, session, call, input);
+        let reply = if activation {
+            tokio::select! {
+                _ = ctx.cancel.cancelled() => return Err(ToolError::Cancelled),
+                result = request => result,
+            }
+        } else {
+            request.await
+        };
+        let reply = reply.map_err(|error| {
+            if activation && self.conn.activation_is_lost() {
+                ctx.cancel.cancel();
+                ToolError::Cancelled
+            } else if activation {
+                ToolError::Other(format!("bundle sidecar tool call: {error}"))
+            } else {
+                ToolError::Other(error.to_string())
+            }
+        })?;
         if !reply.ok {
             return Err(ToolError::Other(reply.output.to_string()));
         }

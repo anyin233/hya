@@ -5,11 +5,10 @@ JSON-RPC 2.0 ABI used by AgentBundle sidecars; the framing here is the contract 
 plugin author implements.
 
 This document defines the process-plugin wire surface only. The package-level
-contribution inventory is broader: `Plugin` carries agentless resources;
-`AgentBundle`, `AgentSetBundle`, and `WorkflowBundle` additionally carry agents
-and, for WorkflowBundle, Workflow source. Tools, Skills, MCP declarations, hooks,
-and extensions use prepared payloads. The package kind `Plugin` does not by
-itself imply a running process. See [AgentBundle authoring](agent-bundle-authoring.md)
+contribution inventory is broader: one `Bundle` carries optional agents and
+Workflow source, tools, Skills, MCP declarations, hooks, and extensions as
+prepared payloads. A bundle does not by itself imply a running process.
+See [Bundle authoring](agent-bundle-authoring.md)
 and [Workflows](workflows.md); those package resources are not additional JSON-RPC
 methods.
 
@@ -278,13 +277,13 @@ After `initialize`, the plugin must reply with an `InitializeResult`:
 
 ## Plugin tools
 
-- **`inputSchema.type` must be exactly `"object"`.** `PluginTool::try_new`
-  **silently drops** any declared tool whose `inputSchema.type` is not the
-  string `"object"`. The tool never reaches the model and no error is raised —
-  authors only see a missing tool.
+- **`inputSchema.type` must be exactly `"object"`.** Initialization validates
+  the complete contribution set and rejects an invalid tool declaration,
+  including one outside a consumer's selected view.
 - A plugin tool invoked without `ToolCtx.session` fails with
   `plugin tool requires a session`.
-- The host mints a fresh `ToolCallId` for every `tool/call`.
+- Shared processes receive a fresh `ToolCallId` for every `tool/call`;
+  private activations retain the originating tool-call id.
 - A reply with `ok: false` becomes a `ToolError` carrying the returned `output`
   stringified.
 
@@ -614,28 +613,66 @@ bounded tail readable via `ChildGuard::stderr_tail()`.
 - `stderr` piped into the bounded tail
 - Strict transport: any timeout **permanently taints** the connection closed
 
-### Plugins spawned in a Project root — `PluginClient::spawn_in` /
-### `PluginHost::connect_all_observed_in`
+### Plugins spawned in a Project root
 
 `PluginClient::spawn_in(command, cwd, env)` spawns a plugin with the same
 environment handling as `PluginClient::spawn` (the host's environment,
 overlaid with any explicit config `env`) but with `cwd` as the child's
 current directory instead of the host process's own working directory.
-`PluginHost::connect_all_observed_in(specs, cwd, host)` mirrors
-`connect_all_observed`, connecting every spec in parallel with that `cwd`.
+The Project loader resolves that directory into each `PluginSpec` before
+`PluginHost::connect_all_observed` connects the descriptors in parallel.
 
 This lets a plugin declare a relative `command` (for example a script under
 `<project root>/.hya/plugins/<id>/`) that resolves against the Project root
 holding it, rather than requiring an absolute path or the server's cwd. A
 plugin that crashes and is respawned within its restart budget starts in the
-same directory again. `spawn`/`spawn_bundle`/`connect_all`/
-`connect_all_observed` keep spawning in the host's own working directory.
+same directory again. Config descriptors retain the host's directory; bundle
+descriptors retain their private materialized directory.
 
 Project plugins (`<root>/.hya/plugins/<name>/plugin.toml`) use the `_in`
 variants: `hya-app` starts each one in the Project root that holds its
 `.hya/plugins` directory, at the Project's first bind (see
 [Configuration: Plugins](configuration.md#plugins)). Plugins declared in
 `config.yaml` are spawned in the server's working directory as before.
+
+### One descriptor and connection owner
+
+Config plugins, Project plugins, installed/Project `extensions.process`, and
+private JavaScript activations all normalize to `hya_plugin::config::PluginSpec`.
+`PluginHost` owns initialization, connection state, restart checks, shutdown and
+termination through `PluginConn`. Tools and hook chains are views of its complete
+initialized declaration; changing a view never changes the handshake.
+
+The Rust descriptor fields are `id: String`, `kind: PluginKindWire`,
+`command: Vec<String>`, `timeout_ms: Option<u64>`,
+`env: BTreeMap<String, String>`, `plugin_dir: Option<PathBuf>` (resolved by the
+Claude launcher), and `launch: ProcessLaunch`:
+
+| Launch | Directory and environment | Loss policy |
+| --- | --- | --- |
+| `Config` | Host cwd, inherited environment plus `env` | Lazy restart within the existing budget |
+| `Project(PathBuf)` | Project root, inherited environment plus `env` | Same restart policy, same root |
+| `Bundle { root: PathBuf, activation: None }` | Private root, cleared environment plus `env`, bounded stderr, strict timeouts | Same restart budget and complete-declaration drift check |
+| `Bundle { root, activation: Some(ActivationMetadata) }` | Private activation directory, same isolation | Report loss to the session supervisor; never transparently respawn session state |
+
+`PluginHost::connect(spec, host: HostInfo, reads: Option<Arc<dyn HostSessionReads>>)`
+returns `Result<PluginHost, PluginError>`. `connect_all_observed(specs, host)`
+returns the ordered host and a per-id failure map. `PreparedPlugin::tool(local,
+canonical)` returns `Option<Arc<dyn Tool>>` for an exported tool under a view's
+canonical name. `PluginHost::shutdown()` and `terminate()` return
+`Result<(), PluginError>` after reaping; retained views cannot restart a stopped
+owner. Dropping the last owner retains the existing child-guard cleanup.
+`TurnBinding::sidecar_hook_view(agent: &str, dispatcher: Arc<dyn HookDispatcher>)`
+returns `Result<Option<Arc<dyn HookDispatcher>>, BundleError>`: no selected hooks
+produce `None`; otherwise the retained dispatcher is filtered by `hook_refs`.
+`PreparedPlugin::loss_token() -> Option<CancellationToken>` supplies the private
+activation's transport-loss signal to its session supervisor.
+
+These are host interfaces, with no new manifest/config fields or wire methods.
+Private activations still send the existing `activation_id: String` and
+`lifecycle: transient | resident` initialize fields, keep session-local state,
+and expose only the agent's selected tools and hooks. Shared processes continue
+to initialize and validate every package export before publishing their source.
 
 ---
 

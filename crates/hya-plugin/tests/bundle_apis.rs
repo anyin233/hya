@@ -90,6 +90,7 @@ fn spec(kind: PluginKindWire, apis: &str) -> PluginSpec {
         timeout_ms: Some(5000),
         env,
         plugin_dir: None,
+        launch: Default::default(),
     }
 }
 
@@ -154,10 +155,9 @@ fn ctx_with(session: SessionId) -> ToolCtx {
 }
 
 async fn bundle_host(kind: PluginKindWire, reads: Arc<FakeReads>) -> PluginHost {
-    PluginHost::connect_bundle_with_reads(
-        spec(kind, APIS),
+    PluginHost::connect(
+        spec(kind, APIS).in_bundle(std::env::temp_dir()),
         host_info(),
-        std::env::temp_dir(),
         Some(reads),
     )
     .await
@@ -316,10 +316,10 @@ async fn undeclared_api_is_refused_by_the_host() {
 
 #[tokio::test]
 async fn duplicate_initialize_apis_are_rejected() {
-    let result = PluginHost::connect_bundle_with_reads(
-        spec(PluginKindWire::Bun, "[{'name':'usage'},{'name':'usage'}]"),
+    let result = PluginHost::connect(
+        spec(PluginKindWire::Bun, "[{'name':'usage'},{'name':'usage'}]")
+            .in_bundle(std::env::temp_dir()),
         host_info(),
-        std::env::temp_dir(),
         None,
     )
     .await;
