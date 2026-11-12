@@ -905,13 +905,12 @@ visible and fail closed.
 ### 2. Contracts
 
 - **A measured token count describes the transcript at the moment it was
-  measured.** `tokens_in_use` prefers the provider-reported usage on the most
+  measured.** `TokenAccounting::tokens_in_use` prefers the provider-reported usage on the most
   recent assistant message. After any request-local edit (tool-output eviction,
   message rewriting) that number is stale: re-measuring reports no saving.
   Carry one running count and apply each reduction as a delta instead.
-- A function that re-derives the compaction decision must not be called after
-  such an edit. `fold_prefix` exists for callers that already decided;
-  `plan_compaction_at` is the guarded wrapper.
+- The turn loop measures the request first and then calls `fold_prefix`, which
+  never re-derives the decision from a transcript it has already edited.
 - Request-local reductions must never write the store. The event log stays a
   sufficient statistic for offline reconstruction (see 0.34.15).
 - Thresholds scale to `Capabilities::max_context` when advertised; a route with

@@ -123,12 +123,11 @@ fn remembered_model_is_only_an_unconfigured_servable_default() {
 fn configured_model_resolution_prefers_direct_then_first_servable_category_candidate() {
     let categories = CategoryRegistry::from_entries(HashMap::from([(
         "deep".to_string(),
-        CategoryEntry {
-            model: ModelRef::new("missing/primary"),
-            fallback: vec![ModelRef::new("openai/fallback")],
-            prompt_append: String::new(),
-            token_budget: None,
-        },
+        CategoryEntry::from_candidates(&[
+            "missing/primary".to_string(),
+            "openai/fallback".to_string(),
+        ])
+        .expect("two candidates"),
     )]));
     let is_servable = |model: &ModelRef| model.as_str() == "openai/fallback";
 

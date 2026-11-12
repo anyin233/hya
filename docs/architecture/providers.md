@@ -728,7 +728,7 @@ round's usage as `UsageRecorded` with the model that served the round (see
 [runtime.md](runtime.md#usage-attribution)), which folds into
 `SessionProjection.usage`. Calls without reported usage add no estimated
 billing record. Window occupancy
-(`measured_tokens`/`tokens_in_use`) uses the whole prompt,
+(`TokenAccounting::tokens_in_use`) uses the whole prompt,
 `input + cache_read + cache_write`.
 
 ## Configured Identity

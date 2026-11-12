@@ -24,8 +24,6 @@ pub struct SafetyCaps {
     pub max_iterations: u32,
     /// Wall-clock budget for the whole run.
     pub max_wall_clock: Duration,
-    /// Reserved token budget field (driver may use for future preflight).
-    pub max_tokens: u64,
 }
 
 impl Default for SafetyCaps {
@@ -33,7 +31,6 @@ impl Default for SafetyCaps {
         Self {
             max_iterations: 50,
             max_wall_clock: Duration::from_secs(1800),
-            max_tokens: 2_000_000,
         }
     }
 }
