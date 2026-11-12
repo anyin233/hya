@@ -40,23 +40,18 @@ async fn list_events(
 ) -> Result<Json<pb::ListEventsResponse>, V1Error> {
     let request: pb::ListEventsRequest = super::query_request(&[("session", id.as_str())], &query)?;
     let session = parse_session(&request.session)?;
-    let envelopes = st.engine.replay(session).await?;
-    if envelopes.is_empty() {
+    if !st.engine.session_exists(session).await? {
         return Err(V1Error::session_not_found(&request.session));
     }
-    let limit = if request.limit == 0 {
-        usize::MAX
-    } else {
-        request.limit as usize
-    };
+    let envelopes = st
+        .engine
+        .store()
+        .replay_page(session, request.since_seq, request.limit)
+        .await?;
     let mut events = Vec::new();
     let mut raw_envelopes = Vec::new();
     let mut next_seq = request.since_seq;
-    for envelope in envelopes
-        .into_iter()
-        .filter(|envelope| envelope.seq.0 > request.since_seq)
-        .take(limit)
-    {
+    for envelope in envelopes {
         next_seq = next_seq.max(envelope.seq.0);
         if let Some(event) = stream_event(&envelope) {
             events.push(event);

@@ -15,6 +15,26 @@ use std::fmt;
 pub enum Code {
     /// Request body or parameters are invalid.
     InvalidArgument,
+    /// Workflow command syntax is invalid.
+    WorkflowSyntax,
+    /// Workflow inputs or source fail validation.
+    WorkflowInvalidInput,
+    /// Workflow source fails validation.
+    WorkflowInvalidSource,
+    /// Requested Workflow is missing.
+    WorkflowNotFound,
+    /// No Workflow is selected.
+    WorkflowNotSelected,
+    /// Workflow access is denied.
+    WorkflowUnauthorized,
+    /// Workflow admission is busy.
+    WorkflowBusy,
+    /// Workflow operation conflicts with a prior operation.
+    WorkflowOperationConflict,
+    /// Workflow revision is stale.
+    WorkflowStaleRevision,
+    /// Workflow runtime is unavailable.
+    WorkflowRuntimeUnavailable,
     /// Requested resource does not exist.
     NotFound,
     /// Session id does not exist (or was deleted).
@@ -55,6 +75,17 @@ impl Code {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::InvalidArgument => "invalid_argument",
+            Self::WorkflowSyntax => "WORKFLOW_SYNTAX",
+            Self::WorkflowInvalidInput => "WORKFLOW_INVALID_INPUT",
+            Self::WorkflowInvalidSource => "WORKFLOW_INVALID_SOURCE",
+            Self::WorkflowNotFound => "WORKFLOW_NOT_FOUND",
+            Self::WorkflowNotSelected => "WORKFLOW_NOT_SELECTED",
+            Self::WorkflowUnauthorized => "WORKFLOW_UNAUTHORIZED",
+            Self::WorkflowBusy => "WORKFLOW_BUSY",
+            Self::WorkflowOperationConflict => "WORKFLOW_OPERATION_CONFLICT",
+            Self::WorkflowStaleRevision => "WORKFLOW_STALE_REVISION",
+            Self::WorkflowRuntimeUnavailable => "WORKFLOW_RUNTIME_UNAVAILABLE",
+
             Self::NotFound => "not_found",
             Self::SessionNotFound => "session_not_found",
             Self::PermissionDenied => "permission_denied",
@@ -70,10 +101,50 @@ impl Code {
         }
     }
 
+    /// Look up a stable wire code shared by transport adapters.
+    #[must_use]
+    pub fn from_wire(value: &str) -> Option<Self> {
+        match value {
+            "invalid_argument" => Some(Self::InvalidArgument),
+            "WORKFLOW_SYNTAX" => Some(Self::WorkflowSyntax),
+            "WORKFLOW_INVALID_INPUT" => Some(Self::WorkflowInvalidInput),
+            "WORKFLOW_INVALID_SOURCE" => Some(Self::WorkflowInvalidSource),
+            "WORKFLOW_NOT_FOUND" => Some(Self::WorkflowNotFound),
+            "WORKFLOW_NOT_SELECTED" => Some(Self::WorkflowNotSelected),
+            "WORKFLOW_UNAUTHORIZED" => Some(Self::WorkflowUnauthorized),
+            "WORKFLOW_BUSY" => Some(Self::WorkflowBusy),
+            "WORKFLOW_OPERATION_CONFLICT" => Some(Self::WorkflowOperationConflict),
+            "WORKFLOW_STALE_REVISION" => Some(Self::WorkflowStaleRevision),
+            "WORKFLOW_RUNTIME_UNAVAILABLE" => Some(Self::WorkflowRuntimeUnavailable),
+            "not_found" => Some(Self::NotFound),
+            "session_not_found" => Some(Self::SessionNotFound),
+            "permission_denied" => Some(Self::PermissionDenied),
+            "session_busy" => Some(Self::SessionBusy),
+            "failed_precondition" => Some(Self::FailedPrecondition),
+            "conflict" => Some(Self::Conflict),
+            "unavailable" => Some(Self::Unavailable),
+            "internal" => Some(Self::Internal),
+            "bundle_api_not_found" => Some(Self::BundleApiNotFound),
+            "bundle_api_method_not_allowed" => Some(Self::BundleApiMethodNotAllowed),
+            "bundle_api_bad_request" => Some(Self::BundleApiBadRequest),
+            "bundle_api_failed" => Some(Self::BundleApiFailed),
+            _ => None,
+        }
+    }
+
     /// Canonical HTTP status for the code.
     #[must_use]
     pub fn http_status(&self) -> u16 {
         match self {
+            Self::WorkflowSyntax => 400,
+            Self::WorkflowInvalidInput | Self::WorkflowInvalidSource => 422,
+            Self::WorkflowNotFound | Self::WorkflowNotSelected => 404,
+            Self::WorkflowUnauthorized => 403,
+            Self::WorkflowBusy | Self::WorkflowOperationConflict | Self::WorkflowStaleRevision => {
+                409
+            }
+            Self::WorkflowRuntimeUnavailable => 503,
+
             Self::InvalidArgument | Self::BundleApiBadRequest => 400,
             Self::NotFound | Self::SessionNotFound | Self::BundleApiNotFound => 404,
             Self::BundleApiMethodNotAllowed => 405,
@@ -89,6 +160,16 @@ impl Code {
     #[must_use]
     pub fn grpc_code(&self) -> tonic::Code {
         match self {
+            Self::WorkflowSyntax | Self::WorkflowInvalidInput | Self::WorkflowInvalidSource => {
+                tonic::Code::InvalidArgument
+            }
+            Self::WorkflowNotFound | Self::WorkflowNotSelected => tonic::Code::NotFound,
+            Self::WorkflowUnauthorized => tonic::Code::PermissionDenied,
+            Self::WorkflowBusy | Self::WorkflowOperationConflict | Self::WorkflowStaleRevision => {
+                tonic::Code::FailedPrecondition
+            }
+            Self::WorkflowRuntimeUnavailable => tonic::Code::Unavailable,
+
             Self::InvalidArgument | Self::BundleApiBadRequest => tonic::Code::InvalidArgument,
             Self::NotFound | Self::SessionNotFound | Self::BundleApiNotFound => {
                 tonic::Code::NotFound
@@ -109,50 +190,6 @@ impl fmt::Display for Code {
         f.write_str(self.as_str())
     }
 }
-
-/// One failed v1 call: stable code plus human-readable message.
-#[derive(Clone, Debug)]
-pub struct ApiError {
-    code: Code,
-    message: String,
-}
-
-impl ApiError {
-    /// Create an error from a stable code and message.
-    #[must_use]
-    pub fn new(code: Code, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-        }
-    }
-
-    /// Stable code for the error.
-    #[must_use]
-    pub fn code(&self) -> Code {
-        self.code
-    }
-
-    /// Human-readable message for the error.
-    #[must_use]
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-
-    /// Render the canonical gRPC status for the error.
-    #[must_use]
-    pub fn grpc_status(&self) -> tonic::Status {
-        tonic::Status::new(self.code.grpc_code(), self.message.clone())
-    }
-}
-
-impl fmt::Display for ApiError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {}", self.code, self.message)
-    }
-}
-
-impl std::error::Error for ApiError {}
 
 #[cfg(test)]
 mod tests {
@@ -205,12 +242,28 @@ mod tests {
             assert_eq!(code.grpc_code(), grpc);
         }
     }
+}
+
+#[cfg(test)]
+mod workflow_codes {
+    use super::Code;
 
     #[test]
-    fn grpc_status_carries_code_and_message() {
-        let error = super::ApiError::new(Code::Unavailable, "no summarizer configured");
-        let status = error.grpc_status();
-        assert_eq!(status.code(), tonic::Code::Unavailable);
-        assert_eq!(status.message(), "no summarizer configured");
+    fn workflow_errors_keep_their_intended_status() {
+        for (code, status) in [
+            (Code::WorkflowSyntax, 400),
+            (Code::WorkflowInvalidInput, 422),
+            (Code::WorkflowInvalidSource, 422),
+            (Code::WorkflowNotFound, 404),
+            (Code::WorkflowNotSelected, 404),
+            (Code::WorkflowUnauthorized, 403),
+            (Code::WorkflowBusy, 409),
+            (Code::WorkflowOperationConflict, 409),
+            (Code::WorkflowStaleRevision, 409),
+            (Code::WorkflowRuntimeUnavailable, 503),
+        ] {
+            assert_eq!(code.http_status(), status);
+            assert_ne!(code.grpc_code(), tonic::Code::Internal);
+        }
     }
 }

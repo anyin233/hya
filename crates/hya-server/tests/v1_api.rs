@@ -799,3 +799,132 @@ async fn v1_list_workflows_forwards_the_named_directory_scope() {
     let seen = control.seen.lock().unwrap().clone();
     assert_eq!(seen, vec![None, Some(field_dir)]);
 }
+
+#[tokio::test]
+async fn pagination_preserves_contents_and_cursors() {
+    let st = state().await;
+    let app = router(st);
+    let mut session = String::new();
+    for _ in 0..5 {
+        session = create_session(&app).await;
+    }
+    for _ in 0..3 {
+        let (status, body) = send(
+            app.clone(),
+            Method::POST,
+            &format!("/v1/sessions/{session}/turns"),
+            json!({"prompt": {"text": "hello"}}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let turn = body["turn"]["id"].as_str().unwrap();
+        let (status, _) = send(
+            app.clone(),
+            Method::POST,
+            &format!("/v1/sessions/{session}/turns/{turn}/wait"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    for (path, field) in [
+        ("/v1/sessions".to_string(), "sessions"),
+        (format!("/v1/sessions/{session}/messages"), "messages"),
+    ] {
+        let (_, all) = send(app.clone(), Method::GET, &path, Value::Null).await;
+        let rows = all[field].as_array().unwrap();
+        for offset in [0, 2, 4, rows.len()] {
+            let cursor = hya_api::cursor::encode_offset(offset as u64);
+            let (status, page) = send(
+                app.clone(),
+                Method::GET,
+                &format!("{path}?page.limit=2&page.cursor={cursor}"),
+                Value::Null,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            let expected: Vec<_> = rows.iter().skip(offset).take(2).cloned().collect();
+            assert_eq!(
+                page[field],
+                if expected.is_empty() {
+                    Value::Null
+                } else {
+                    json!(expected)
+                }
+            );
+            let next = offset + expected.len();
+            let more = next < rows.len();
+            assert_eq!(page["page"]["hasMore"].as_bool().unwrap_or(false), more);
+            assert_eq!(
+                page["page"]["nextCursor"].as_str().unwrap_or(""),
+                if more {
+                    hya_api::cursor::encode_offset(next as u64)
+                } else {
+                    String::new()
+                }
+            );
+        }
+    }
+    let path = format!("/v1/sessions/{session}/events");
+    let (_, all) = send(
+        app.clone(),
+        Method::GET,
+        &format!("{path}?includeRaw=true"),
+        Value::Null,
+    )
+    .await;
+    let raw = all["rawEnvelopes"].as_array().unwrap();
+    for offset in [0, raw.len() / 2, raw.len().saturating_sub(1), raw.len()] {
+        let since = if offset == 0 {
+            0
+        } else {
+            serde_json::from_str::<Value>(raw[offset - 1].as_str().unwrap()).unwrap()["seq"]
+                .as_u64()
+                .unwrap()
+        };
+        let (status, page) = send(
+            app.clone(),
+            Method::GET,
+            &format!("{path}?includeRaw=true&limit=1&sinceSeq={since}"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let expected: Vec<_> = raw.iter().skip(offset).take(1).cloned().collect();
+        assert_eq!(
+            page["rawEnvelopes"],
+            if expected.is_empty() {
+                Value::Null
+            } else {
+                json!(expected)
+            }
+        );
+        let next = expected.first().map_or(since, |line| {
+            serde_json::from_str::<Value>(line.as_str().unwrap()).unwrap()["seq"]
+                .as_u64()
+                .unwrap()
+        });
+        let expected_events: Vec<_> = all["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| {
+                let seq = event["seq"].as_str().unwrap().parse::<u64>().unwrap();
+                seq > since && seq <= next
+            })
+            .cloned()
+            .collect();
+        assert_eq!(
+            page["events"],
+            if expected_events.is_empty() {
+                Value::Null
+            } else {
+                json!(expected_events)
+            }
+        );
+        assert_eq!(
+            page["nextSeq"].as_str().unwrap().parse::<u64>().unwrap(),
+            next
+        );
+    }
+}

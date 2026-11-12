@@ -82,7 +82,7 @@ impl crate::AppState {
                 Ok(true) => resumed.push(session),
                 Ok(false) => {}
                 Err(error) => {
-                    tracing::error!(%session, error = %error.0, "cannot restore interrupted turn")
+                    tracing::error!(%session, error = %error.message, "cannot restore interrupted turn")
                 }
             }
         }
@@ -268,8 +268,7 @@ async fn create_turn(
             // Slash interception (workflow and other built-ins) runs
             // synchronously like the native command route.
             if crate::workflow::intercept_slash(&st, session, &command)
-                .await
-                .map_err(V1Error::from)?
+                .await?
                 .is_some()
             {
                 return Ok(Json(pb::CreateTurnResponse {

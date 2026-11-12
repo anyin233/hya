@@ -39,8 +39,7 @@ async fn list_workflows(
         .workflow_control
         .list(scope)
         .await
-        .map_err(ApiError::workflow)
-        .map_err(V1Error::from)?;
+        .map_err(ApiError::workflow)?;
     let workflows = rows
         .iter()
         .map(|row| {
@@ -73,8 +72,7 @@ async fn get_state(
         WorkflowCommand::State,
         hya_proto::WorkflowDelivery::Started,
     )
-    .await
-    .map_err(V1Error::from)?;
+    .await?;
     Ok(Json(map_state(&result)))
 }
 
@@ -113,8 +111,7 @@ async fn submit_command(
     };
     let result =
         crate::workflow::execute(&st, session, command, hya_proto::WorkflowDelivery::Started)
-            .await
-            .map_err(V1Error::from)?;
+            .await?;
     let response = match result {
         WorkflowCommandResult::List { .. } => {
             pb::submit_workflow_command_response::Result::List(pb::ListWorkflowsResponse {

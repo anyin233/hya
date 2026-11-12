@@ -35,21 +35,20 @@ async fn list_messages(
     let request: pb::ListMessagesRequest =
         super::query_request(&[("session", id.as_str())], &query)?;
     let session = parse_session(&request.session)?;
-    let projection = st.engine.read_projection(session).await?;
+    let projection = st.engine.read_projection_shared(session).await?;
     if projection.session.id.is_none() {
         return Err(V1Error::session_not_found(&request.session));
     }
-    let messages = projection
-        .session
-        .messages
-        .iter()
+    let (messages, page) =
+        super::catalog::paginate(projection.session.messages.iter().collect(), &request.page);
+    let messages = messages
+        .into_iter()
         .map(|message| {
             let mut info = message_info(message);
             info.session = session.to_string();
             info
         })
         .collect();
-    let (messages, page) = super::catalog::paginate(messages, &request.page);
     Ok(Json(pb::ListMessagesResponse {
         messages,
         page: Some(page),
@@ -61,7 +60,7 @@ async fn get_message(
     AxumPath((id, message)): AxumPath<(String, String)>,
 ) -> Result<Json<pb::MessageInfo>, V1Error> {
     let session = parse_session(&id)?;
-    let projection = st.engine.read_projection(session).await?;
+    let projection = st.engine.read_projection_shared(session).await?;
     let found = projection
         .session
         .messages
@@ -103,7 +102,7 @@ async fn get_session_todo(
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<pb::TodoList>, V1Error> {
     let session = parse_session(&id)?;
-    let projection = st.engine.read_projection(session).await?;
+    let projection = st.engine.read_projection_shared(session).await?;
     if projection.session.id.is_none() {
         return Err(V1Error::session_not_found(&id));
     }

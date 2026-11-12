@@ -1417,3 +1417,35 @@ unchanged; the response still waits for the complete snapshot.
 `openapi.json`, and the Rust contract crate from `proto/hya/v1`. The task
 fails when any rpc lacks its `// hya.http:` mapping or two rpcs claim the
 same route, so documentation cannot drift from the IDL.
+
+### List read bounds and Workflow errors
+
+`ListSessions` and `ListMessages` select the requested page before converting
+rows to wire messages. Their `page.limit: uint32` (default 50, maximum 500)
+and `page.cursor: string` retain the existing offset cursor contract, including
+an empty `nextCursor` on the final or empty page. For example,
+`GET /v1/sessions?page.limit=2` returns two sessions and a cursor usable as
+`page.cursor` on the next request.
+
+`ListEvents` reads only the requested sequence interval from SQLite:
+`sinceSeq: uint64` is exclusive, `limit: uint32` limits envelopes (zero means
+all remaining), and `includeRaw: bool` includes their serialized envelopes.
+`nextSeq: uint64` is the last selected envelope's sequence, or `sinceSeq` for
+an empty page. The bound counts envelopes even when an envelope has no public
+stream event. HTTP and gRPC use the same handlers and preserve their ordering.
+
+Workflow failures use the shared stable error table, preserving structured
+`error.code: string` and `error.message: string`:
+
+| Code | HTTP status |
+| --- | --- |
+| `WORKFLOW_SYNTAX` | 400 |
+| `WORKFLOW_INVALID_INPUT`, `WORKFLOW_INVALID_SOURCE` | 422 |
+| `WORKFLOW_NOT_FOUND`, `WORKFLOW_NOT_SELECTED`, `session_not_found` | 404 |
+| `WORKFLOW_UNAUTHORIZED` | 403 |
+| `WORKFLOW_BUSY`, `WORKFLOW_OPERATION_CONFLICT`, `WORKFLOW_STALE_REVISION` | 409 |
+| `WORKFLOW_RUNTIME_UNAVAILABLE` | 503 |
+
+For example, a malformed `/workflow` command returns `WORKFLOW_SYNTAX` with
+HTTP 400. gRPC maps these respectively to InvalidArgument, NotFound,
+PermissionDenied, FailedPrecondition, or Unavailable through that same table.

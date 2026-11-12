@@ -40,7 +40,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::ServerState;
-use hya_api::error::{ApiError, Code};
+use hya_api::error::Code;
 
 /// The removed directory scope header. The scope comes only from the
 /// request's `directory` field; a request (or gRPC call) that still sends
@@ -136,12 +136,51 @@ impl<T: Serialize> IntoResponse for Json<T> {
 
 /// One failed v1 call rendered as `{"error": {"code", "message"}}` with the
 /// canonical HTTP status from the stable error table.
-pub(crate) struct V1Error(ApiError);
+pub struct ApiError {
+    pub(crate) code: Code,
+    pub(crate) message: String,
+}
 
-impl V1Error {
+pub(crate) type V1Error = ApiError;
+
+impl ApiError {
+    pub(crate) fn structured(
+        status: StatusCode,
+        code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        let code = match code.into().as_str() {
+            "WORKFLOW_SYNTAX" => Code::WorkflowSyntax,
+            "WORKFLOW_INVALID_INPUT" => Code::WorkflowInvalidInput,
+            "WORKFLOW_INVALID_SOURCE" => Code::WorkflowInvalidSource,
+            "WORKFLOW_NOT_FOUND" => Code::WorkflowNotFound,
+            "WORKFLOW_NOT_SELECTED" => Code::WorkflowNotSelected,
+            "WORKFLOW_UNAUTHORIZED" => Code::WorkflowUnauthorized,
+            "WORKFLOW_BUSY" => Code::WorkflowBusy,
+            "WORKFLOW_OPERATION_CONFLICT" => Code::WorkflowOperationConflict,
+            "WORKFLOW_STALE_REVISION" => Code::WorkflowStaleRevision,
+            "WORKFLOW_RUNTIME_UNAVAILABLE" => Code::WorkflowRuntimeUnavailable,
+            "SESSION_NOT_FOUND" => Code::SessionNotFound,
+            _ if status == StatusCode::SERVICE_UNAVAILABLE => Code::Unavailable,
+            _ => Code::Internal,
+        };
+        Self::new(code, message)
+    }
+
+    pub(crate) fn workflow(error: crate::WorkflowControlError) -> Self {
+        Self::structured(StatusCode::INTERNAL_SERVER_ERROR, error.code, error.message)
+    }
+
+    pub(crate) fn text(&self) -> &str {
+        &self.message
+    }
+
     /// Build an error from a stable code and message.
     pub(crate) fn new(code: Code, message: impl Into<String>) -> Self {
-        Self(ApiError::new(code, message))
+        Self {
+            code,
+            message: message.into(),
+        }
     }
 
     /// The request body or parameters are invalid.
@@ -179,21 +218,7 @@ impl V1Error {
 
     /// The same failure as a gRPC status (stable code table mapping).
     pub(crate) fn grpc_status(&self) -> tonic::Status {
-        self.0.grpc_status()
-    }
-}
-
-impl From<crate::ApiError> for V1Error {
-    fn from(error: crate::ApiError) -> Self {
-        let code = match error.code() {
-            Some("invalid_argument") | Some("bad_request") => Code::InvalidArgument,
-            Some("session_not_found") | Some("not_found") => Code::SessionNotFound,
-            Some("session_busy") | Some("conflict") => Code::SessionBusy,
-            Some("forbidden") | Some("permission_denied") => Code::PermissionDenied,
-            Some("unavailable") | Some("service_unavailable") => Code::Unavailable,
-            _ => Code::Internal,
-        };
-        Self::new(code, error.text().to_owned())
+        tonic::Status::new(self.code.grpc_code(), self.message.clone())
     }
 }
 
@@ -225,14 +250,14 @@ impl From<hya_store::StoreError> for V1Error {
 
 impl IntoResponse for V1Error {
     fn into_response(self) -> Response {
-        let status = StatusCode::from_u16(self.0.code().http_status())
+        let status = StatusCode::from_u16(self.code.http_status())
             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         (
             status,
             Json(json!({
                 "error": {
-                    "code": self.0.code().as_str(),
-                    "message": self.0.message(),
+                    "code": self.code.as_str(),
+                    "message": self.message,
                 }
             })),
         )
@@ -393,5 +418,32 @@ mod tests {
         let page = request.page;
         assert_eq!(page.as_ref().map(|page| page.cursor.as_str()), Some("next"));
         assert_eq!(page.as_ref().map(|page| page.limit), Some(2));
+    }
+}
+
+#[cfg(test)]
+mod workflow_error_regression {
+    use super::*;
+
+    #[test]
+    fn workflow_failures_use_the_shared_transport_table() {
+        for (code, status) in [
+            ("WORKFLOW_SYNTAX", 400),
+            ("WORKFLOW_INVALID_INPUT", 422),
+            ("WORKFLOW_INVALID_SOURCE", 422),
+            ("WORKFLOW_NOT_FOUND", 404),
+            ("WORKFLOW_NOT_SELECTED", 404),
+            ("SESSION_NOT_FOUND", 404),
+            ("WORKFLOW_UNAUTHORIZED", 403),
+            ("WORKFLOW_BUSY", 409),
+            ("WORKFLOW_OPERATION_CONFLICT", 409),
+            ("WORKFLOW_STALE_REVISION", 409),
+            ("WORKFLOW_RUNTIME_UNAVAILABLE", 503),
+            ("WORKFLOW_INTERNAL", 500),
+        ] {
+            let error = ApiError::workflow(crate::WorkflowControlError::new(code, "failure"));
+            assert_eq!(error.grpc_status().code(), error.code.grpc_code());
+            assert_eq!(error.into_response().status().as_u16(), status, "{code}");
+        }
     }
 }
