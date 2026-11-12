@@ -1,8 +1,7 @@
 //! Bare `hya update`: reinstall the running prefix from the published GitHub
 //! releases with the same installer `curl … | sh` runs.
 //!
-//! This path is separate from the signed-metadata TCB in the rest of this
-//! crate: it trusts HTTPS to the release host and each release's `SHA256SUMS`
+//! It trusts HTTPS to the release host and each release's `SHA256SUMS`
 //! (docs/install.md).
 use clap::Args;
 use std::io::Write as _;
@@ -54,8 +53,19 @@ pub fn install_prefix(executable: &Path) -> Result<PathBuf, String> {
     }
 }
 
-/// Run the embedded installer with `sh` for the selected sides.
-pub fn run_release_install(args: &ReleaseInstallArgs) -> Result<(), String> {
+/// Content changes installed by a successful release installation.
+#[derive(Debug)]
+pub struct InstalledChanges {
+    /// Installed backend path, used to start the new daemon image.
+    pub executable: PathBuf,
+    /// Whether `bin/hya` contents changed.
+    pub binary_changed: bool,
+    /// Whether the installed bundle tree changed.
+    pub bundles_changed: bool,
+}
+
+/// Run the embedded installer and compare installed backend and bundle contents.
+pub fn run_release_install(args: &ReleaseInstallArgs) -> Result<InstalledChanges, String> {
     let prefix = match &args.prefix {
         Some(prefix) => prefix.clone(),
         None => {
@@ -64,6 +74,9 @@ pub fn run_release_install(args: &ReleaseInstallArgs) -> Result<(), String> {
             install_prefix(&executable)?
         }
     };
+    let executable = prefix.join("bin/hya");
+    let binary_before = fingerprint(&executable)?;
+    let bundles_before = fingerprint(&prefix.join("bundles"))?;
     let mut command = Command::new("sh");
     command.args(["-s", "--", "--prefix"]).arg(&prefix);
     if let Some(version) = &args.version {
@@ -96,10 +109,49 @@ pub fn run_release_install(args: &ReleaseInstallArgs) -> Result<(), String> {
         .map_err(|error| format!("installer did not finish: {error}"))?;
     written?;
     if status.success() {
-        Ok(())
+        Ok(InstalledChanges {
+            binary_changed: binary_before != fingerprint(&executable)?,
+            bundles_changed: bundles_before != fingerprint(&prefix.join("bundles"))?,
+            executable,
+        })
     } else {
         Err(format!("the installer failed ({status})"))
     }
+}
+
+// Hash sorted paths and file contents, so additions/removals and replacements count.
+fn fingerprint(path: &Path) -> Result<Vec<u8>, String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    fn visit(path: &Path, hash: &mut Sha256) -> std::io::Result<()> {
+        if path.is_dir() {
+            let mut entries = std::fs::read_dir(path)?.collect::<Result<Vec<_>, _>>()?;
+            entries.sort_by_key(|entry| entry.file_name());
+            for entry in entries {
+                let name = entry.file_name();
+                hash.update(name.as_encoded_bytes().len().to_le_bytes());
+                hash.update(name.as_encoded_bytes());
+                visit(&entry.path(), hash)?;
+            }
+        } else {
+            let mut file = std::fs::File::open(path)?;
+            hash.update(file.metadata()?.len().to_le_bytes());
+            let mut buffer = [0; 65536];
+            loop {
+                let count = file.read(&mut buffer)?;
+                if count == 0 {
+                    break;
+                }
+                hash.update(&buffer[..count]);
+            }
+        }
+        Ok(())
+    }
+    let mut hash = Sha256::new();
+    if path.exists() {
+        visit(path, &mut hash).map_err(|error| format!("read {}: {error}", path.display()))?;
+    }
+    Ok(hash.finalize().to_vec())
 }
 
 #[cfg(test)]
@@ -133,6 +185,36 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn fingerprints_detect_replacements_additions_and_removals() {
+        let scratch = Scratch::new("fingerprint");
+        let root = scratch.0.join("bundles");
+        let missing = super::fingerprint(&root)
+            .unwrap_or_else(|error| panic!("fingerprint fixture: {error}"));
+        let file = scratch.file("bundles/a.hyabundle");
+        fs::write(&file, "first").unwrap_or_else(|error| panic!("fingerprint fixture: {error}"));
+        let first = super::fingerprint(&root)
+            .unwrap_or_else(|error| panic!("fingerprint fixture: {error}"));
+        assert_ne!(missing, first);
+        assert_eq!(
+            first,
+            super::fingerprint(&root)
+                .unwrap_or_else(|error| panic!("fingerprint fixture: {error}"))
+        );
+        fs::write(&file, "other").unwrap_or_else(|error| panic!("fingerprint fixture: {error}"));
+        assert_ne!(
+            first,
+            super::fingerprint(&root)
+                .unwrap_or_else(|error| panic!("fingerprint fixture: {error}"))
+        );
+        fs::remove_file(file).unwrap_or_else(|error| panic!("fingerprint fixture: {error}"));
+        assert_eq!(
+            missing,
+            super::fingerprint(&root)
+                .unwrap_or_else(|error| panic!("fingerprint fixture: {error}"))
+        );
     }
 
     #[test]

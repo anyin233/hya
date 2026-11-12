@@ -108,6 +108,14 @@ same meaning. Without `--prefix` the prefix is the real `<prefix>` of the
 running `<prefix>/bin/hya` beside `<prefix>/lib/hya`; a build-tree `hya` is
 refused. `hya update version` prints the updater's package version.
 
+After a successful `hya update`, the running daemon for `--db` (the default
+session database when omitted) reloads its bundles if only bundle contents
+changed. A changed backend executable runs the installed `hya --db <db> serve
+restart`: stop drains interrupted turns, start restores them with a restore
+prompt, and connected TUIs automatically discover the new URL and reconnect.
+No running daemon is started solely by an update. Unchanged installs and
+frontend-only updates leave the daemon running.
+
 ## Release package
 
 Backend and frontend release tags and archives are independent:
