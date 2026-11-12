@@ -89,7 +89,7 @@ struct WorkflowRuntime {
 impl WorkflowRuntime {
     async fn start(
         model_override: Option<String>,
-        db: &str,
+        store: hya_store::SessionStore,
         yolo: bool,
         pure: bool,
         session: Option<SessionId>,
@@ -97,7 +97,6 @@ impl WorkflowRuntime {
         let workdir = std::env::current_dir().context("resolve current directory")?;
         let has_explicit_model = model_override.is_some();
         crate::first_run_config_bootstrap(false)?;
-        let store = open_store(db).await?;
         let runtime = resolve_runtime(model_override)
             .await
             .with_yolo(yolo)
@@ -208,7 +207,15 @@ impl WorkflowRuntime {
     async fn shutdown(self) -> anyhow::Result<()> {
         self.responder.abort();
         let mut built = self.built;
-        built.shutdown().await.context("shutdown Workflow runtime")
+        built
+            .shutdown()
+            .await
+            .context("shutdown Workflow runtime")?;
+        let engine = built.engine();
+        engine
+            .store()
+            .release_runtime_owner(engine.runtime_owner())?;
+        Ok(())
     }
 }
 
@@ -274,9 +281,9 @@ pub(crate) async fn run(
     // `list`/`info` never open the database. Every other command writes it
     // (a Session, a selection, a run, crash recovery on open), so it holds
     // the database lock, or goes through the server that owns the database.
-    if !read_only {
-        match crate::db_writer::claim(db, "workflow")? {
-            Writer::Direct => {}
+    let store = if !read_only {
+        match crate::db_writer::claim(db, "workflow").await? {
+            Writer::Direct(store) => store,
             Writer::Server(server) => {
                 let route = match command {
                     ControlCommand::Select {
@@ -314,15 +321,10 @@ pub(crate) async fn run(
                 return finish(&result, json_output, is_run);
             }
         }
+    } else {
+        open_store("").await?
     };
-    let runtime = WorkflowRuntime::start(
-        model_override,
-        if read_only { "" } else { db },
-        yolo,
-        pure,
-        session,
-    )
-    .await?;
+    let runtime = WorkflowRuntime::start(model_override, store, yolo, pure, session).await?;
     let result = runtime.execute(command).await;
     let shutdown = runtime.shutdown().await;
     let result = result.map_err(control_error)?;

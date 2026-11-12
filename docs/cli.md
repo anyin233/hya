@@ -846,13 +846,15 @@ same file a second time ([ADR-0022](adr/0022-one-writer-per-database.md)).
 
 | File | Contract |
 | --- | --- |
-| `<db>.runtime-owner.lock` | Exclusive advisory lock (`flock`), reserved without waiting before daemon store initialization, then held by the runtime owner and held until the process exits; the OS releases it on a crash or SIGKILL. Contents: the owner's decimal PID and newline, cleared before release. Never deleted. |
+| `<db>.runtime-owner.lock` | Exclusive advisory lock (`flock`), acquired before any writer opens SQLite. Acquisition allows up to 200 ms for a transient discovery probe; a competing owner still causes exit 75. Held until the writer shuts down; the OS releases it on a crash or SIGKILL. Contents: the owner's decimal PID and newline, written immediately on acquisition and cleared before release. Only the held kernel lock proves ownership. Never deleted. |
 | `<db>.server.stop` | Written atomically by `hya serve stop` / `restart` just before their SIGTERM: `{"pid": <lock holder>, "reason": "stop" \| "restart"}`. The server reads it when a termination signal arrives, uses it only when `pid` is its own, and deletes it; the reason becomes the last frame of every client stream (`serverStopping`, see below). Deleted by whoever takes the lock. |
 | `<db>.server.json` | Written atomically after the listener is bound: `{"url": "http://127.0.0.1:<port>", "pid": <u32>, "version": "<hya version>", "startedAt": <unix ms>}`. While the server is joined to a relay it also has `"relay": {"proxyUrl", "transport", "ephemeral", "ca"?, "heartbeatSecs"?}` (public settings only, never the link; read by `hya serve restart`), and with `--allow-host` names `"allowHosts": ["<host>", …]` (normalized; kept by `hya serve restart`). An unspecified bind address (`0.0.0.0`, `::`) is published as loopback. Removed on a clean shutdown (after the drain); a file left by a crash is ignored and replaced by the next owner. |
 | `<db>.relay-identity.json` | The relay identity (room key, Noise static key, link PSK), mode 0600, created on the first relay join and kept across restarts; see [relay.md](relay.md#hosting-a-backend-on-a-relay). |
 
-`<db>` is the `--db` path with its directory resolved (symlinks and `..`), so
-different spellings of one file share one lock. An in-memory store (`--db ""`,
+`<db>` is the resolved `--db` path, including directory and database symlinks
+and `..`. A symlink to a database that does not exist yet resolves to the same
+lock before and after creation. Different spellings of one file therefore
+share one lock. An in-memory store (`--db ""`,
 the default for `serve`) takes no lock. A second `serve` on a database that
 another process holds fails before it starts, with exit status **75**
 (`EX_TEMPFAIL`) and one line on stderr:
@@ -902,15 +904,26 @@ after the action. The path is made absolute.
 | --- | --- | --- | --- |
 | `start [--json]` | If a server of the database answers (discovery file, live pid, healthy), report it. Else run `hya serve --bind 127.0.0.1:0 --db <db>` (plus this command's `--model`, `--yolo`, `--pure`, `--allow-host`, and relay flags) **detached**: its own session (`setsid`), working directory your home directory (`$HOME` when it exists, else `/`; never the caller's, since the backend serves every client wherever it runs), stdin `/dev/null`, stdout and stderr appended to `<db>.server.log` (rotated to `.1` above 4 MiB). Wait up to 60 s until it answers. If its start exits 75 (another client's daemon won the race, or the last one is still shutting down), wait for that server, or start again once the lock is free. | `started hya server pid <pid> at <url> (db <db>, log <log>)` or `hya server pid <pid> already running at <url> (hya <version>, db <db>)`. `--json`: `{"url", "pid", "version", "startedAt", "db", "log", "started"}` (`started` is true only when this call started it). A server of another hya version adds `note: the running server is hya X, this is hya Y; run `hya serve restart` to switch` on stderr. | **0**; **1** when the daemon exits with an error (its log tail is printed) or does not answer in 60 s |
 | `status [--json]` | Read the discovery file and probe the server. | `hya server pid <pid> running at <url>` and `version`, `db`, `uptime`, `log` lines. `--json`: `{"url", "pid", "version", "startedAt", "uptimeMs", "db", "log", "relay"?, "allowHosts"?}` (text: `relay` and `hosts` lines when set). | **0** running; **1** with `no hya server is running on <db>` (or `hya server pid <pid> holds <db> but does not answer (starting or stopping)`) on stderr |
-| `stop [--force] [--timeout <s>]` | Write the stop request (`<db>.server.stop`, reason `stop`), SIGTERM to the lock holder (pid from `<db>.runtime-owner.lock`, else the discovery file), then wait until the lock is free. The server drains turns (5 s) and ends every client stream with `serverStopping {reason: "stop"}`. `--force`: SIGKILL when it has not stopped within `--timeout` (default 30). | `stopped hya server pid <pid> (db <db>)` and `connected TUIs stay disconnected until /reconnect, or until a new hya client starts the next server`; `killed …` with `--force`; or `no hya server is running on <db>`. | **0** (also when nothing ran); **1** when it did not stop in time without `--force` |
+| `stop [--force] [--timeout <s>]` | Write the stop request (`<db>.server.stop`, reason `stop`), verify ownership and send SIGTERM to the PID published under the held kernel lock, then wait until the lock is free. The server drains turns (5 s) and ends every client stream with `serverStopping {reason: "stop"}`. `--force`: verify that the same PID still owns the lock before SIGKILL when it has not stopped within `--timeout` (default 30). | `stopped hya server pid <pid> (db <db>)` and `connected TUIs stay disconnected until /reconnect, or until a new hya client starts the next server`; `killed …` with `--force`; or `no hya server is running on <db>`. | **0** (also when nothing ran); **1** when it did not stop in time without `--force` |
 | `restart [--json] [--force] [--timeout <s>]` | Stop the old daemon with reason `restart`, wait for it to release the database, then start this binary as a fresh daemon. Preserve the old relay and allowed hosts unless overridden. | A new ready line, or the `start --json` shape plus `restarted: true`; old streams end with `serverStopping {reason: "restart"}`. | **0** once the new daemon is healthy; **1** if stop or start fails |
 | `relay connect\|disconnect\|status\|link\|rotate` | Control the running backend's relay connector over its loopback-only `RelayControl` rpcs; see [the command table](relay.md#hosting-a-backend-on-a-relay). | `status`: `relay <state>` plus detail lines (`--json`: `RelayStatus`); `link`: the link alone; `connect`/`rotate`: `hya relay link: <link>`. | **0**; **1** when no server runs or the rpc fails (not joined for `link`, a bad URL for `connect`) |
 
-Daemon discovery reads the PID metadata written by the store's runtime-owner
-lock holder and checks process liveness and HTTP health. It never takes a lock.
+Daemon discovery probes the existing kernel lock before trusting the PID and
+matching URL metadata written by its owner, then checks HTTP health. An unlocked
+file is stale even when its PID names a live process. Discovery creates no lock
+file; starters briefly retry acquisition if a discovery probe collides with them.
 Concurrent `start` commands report the same writer; a losing daemon child may
 exit **75**, while its starter attaches to the winner. A stopped owner's PID is
-cleared before the single lock is released.
+cleared before the single lock is released. Stop and force-stop signal only a
+PID verified against a held lock. Stale stop notices are cleared on acquisition,
+before the new PID is published, so a stop/restart request during startup keeps
+its reason.
+
+Read-only commands (`hya sessions --db sessions.db` and
+`hya tail-session <id> --db sessions.db`) open SQLite read-only. They do not
+create a database, run migrations, or take a write/owner lock; a missing database
+is an error. Every direct writer reserves ownership before SQLite opens. A
+writer losing a concurrent start routes to the winner's server or exits 75.
 
 A restart has a short period with no listener. The new daemon binds its own
 port and publishes a fresh URL, PID, and `startedAt`; clients rediscover it.
