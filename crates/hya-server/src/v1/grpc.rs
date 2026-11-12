@@ -98,15 +98,8 @@ impl V1Grpc {
                     .map(str::to_owned)
             })
             .unwrap_or_else(|| String::from_utf8_lossy(body).into_owned());
-        let tonic_code = match code.as_str() {
-            "invalid_argument" | "bundle_api_bad_request" => tonic::Code::InvalidArgument,
-            "not_found" | "session_not_found" | "bundle_api_not_found" => tonic::Code::NotFound,
-            "bundle_api_method_not_allowed" => tonic::Code::Unimplemented,
-            "permission_denied" => tonic::Code::PermissionDenied,
-            "session_busy" | "conflict" | "failed_precondition" => tonic::Code::FailedPrecondition,
-            "unavailable" | "bundle_api_failed" => tonic::Code::Unavailable,
-            _ => tonic::Code::Internal,
-        };
+        let tonic_code = hya_api::error::Code::from_wire(&code)
+            .map_or(tonic::Code::Internal, |code| code.grpc_code());
         let _ = status;
         Status::new(tonic_code, message)
     }

@@ -883,3 +883,34 @@ async fn delete_saved_rule(
         .map_err(V1Error::from)?;
     Ok(Json(pb::DeleteSavedRuleResponse {}))
 }
+
+#[cfg(test)]
+mod pagination_regression {
+    use super::*;
+
+    #[test]
+    fn pins_page_contents_and_cursor() {
+        for (offset, expected, more) in [
+            (0, vec![0, 1], true),
+            (2, vec![2, 3], true),
+            (4, vec![4], false),
+            (5, vec![], false),
+        ] {
+            let request = Some(pb::PageRequest {
+                cursor: hya_api::cursor::encode_offset(offset),
+                limit: 2,
+            });
+            let (rows, page) = paginate((0..5).collect(), &request);
+            assert_eq!(rows, expected);
+            assert_eq!(page.has_more, more);
+            assert_eq!(
+                page.next_cursor,
+                if more {
+                    hya_api::cursor::encode_offset(offset + 2)
+                } else {
+                    String::new()
+                }
+            );
+        }
+    }
+}

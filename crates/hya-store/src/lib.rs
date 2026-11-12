@@ -573,6 +573,35 @@ impl SessionStore {
         Ok(out)
     }
 
+    /// Read a sequence page without decoding the preceding event log.
+    /// A zero limit requests the entire remaining tail.
+    pub async fn replay_page(
+        &self,
+        session: SessionId,
+        after: u64,
+        limit: u32,
+    ) -> Result<Vec<Envelope>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT seq, ts, payload FROM event_log WHERE session_id = ? AND seq > ? ORDER BY seq LIMIT ?",
+        )
+        .bind(session.storage_key())
+        .bind(i64::try_from(after).unwrap_or(i64::MAX))
+        .bind(if limit == 0 { -1 } else { i64::from(limit) })
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let seq: i64 = row.try_get("seq")?;
+                let payload: String = row.try_get("payload")?;
+                Ok(Envelope {
+                    seq: EventSeq(seq.max(0) as u64),
+                    ts_millis: row.try_get("ts")?,
+                    event: decode_event(&payload, session, seq)?,
+                })
+            })
+            .collect()
+    }
+
     /// Return whether the event log contains a Session without replaying it.
     ///
     /// # Errors
@@ -1059,6 +1088,66 @@ pub(crate) fn decode_event(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod event_contract_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn replay_page_decodes_only_the_sql_interval() {
+        let store = SessionStore::connect_memory().await.unwrap();
+        let session = SessionId::new();
+        let event = Event::SessionCreated {
+            session,
+            parent: None,
+            agent: "build".into(),
+            model: "fake".into(),
+            workdir: "/tmp".into(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        };
+        for _ in 0..5 {
+            store.append_event(session, &event).await.unwrap();
+        }
+        let all = store.replay(session).await.unwrap();
+        for (offset, limit) in [(0, 2), (2, 2), (4, 2), (5, 2), (2, 0)] {
+            let since = if offset == 0 {
+                0
+            } else {
+                all[offset - 1].seq.0
+            };
+            let page = store.replay_page(session, since, limit).await.unwrap();
+            let expected: Vec<_> = all
+                .iter()
+                .skip(offset)
+                .take(if limit == 0 {
+                    usize::MAX
+                } else {
+                    limit as usize
+                })
+                .collect();
+            assert_eq!(
+                serde_json::to_value(page).unwrap(),
+                serde_json::to_value(expected).unwrap()
+            );
+        }
+        sqlx::query("UPDATE event_log SET payload = 'invalid' WHERE seq = ?")
+            .bind(all[0].seq.0 as i64)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .replay_page(session, all[0].seq.0, 1)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            store
+                .replay_page(session, u64::MAX, 1)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     #[tokio::test]
     async fn deletion_removes_every_session_owned_table() {
