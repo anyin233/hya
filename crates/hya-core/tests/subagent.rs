@@ -422,8 +422,8 @@ struct ImmediateSidecarHandle {
 
 const SIDECAR_PERMISSION_TOOL: &str = "bundle:hya/sidecar-permission/tool/echo";
 
-// Episode ending: five seconds for the turn, five for its sidecar, one for commit.
-const RESIDENT_END_BOUND: std::time::Duration = std::time::Duration::from_secs(11);
+// Cooperative cancellation/termination must finish before the five-second drain.
+const COOPERATIVE_END_BOUND: std::time::Duration = std::time::Duration::from_secs(3);
 
 fn sidecar_permission_bundle() -> Bundle {
     Bundle {
@@ -3627,11 +3627,11 @@ async fn assert_prework_loss_reports_failure(initial: bool) {
             .await
             .unwrap();
     }
-    tokio::time::timeout(RESIDENT_END_BOUND, terminated.notified())
+    tokio::time::timeout(COOPERATIVE_END_BOUND, terminated.notified())
         .await
         .expect("first prework sidecar loss must terminate deterministically");
 
-    tokio::time::timeout(RESIDENT_END_BOUND, async {
+    tokio::time::timeout(COOPERATIVE_END_BOUND, async {
         loop {
             let envelope = events.recv().await.unwrap();
             if matches!(&envelope.event, Event::AgentArchived { child: archived, .. } if *archived == child) {
@@ -3740,7 +3740,7 @@ async fn running_resident_sidecar_loss_aborts_before_provider_release() {
         .expect("provider must enter first turn");
     loss.cancel();
 
-    let observed = tokio::time::timeout(RESIDENT_END_BOUND, async {
+    let observed = tokio::time::timeout(COOPERATIVE_END_BOUND, async {
         let mut terminated_seen = false;
         let mut failure_seen = false;
         while !(terminated_seen && failure_seen) {
@@ -3905,7 +3905,7 @@ async fn resident_running_loss_never_takes_over_its_claim() {
     .unwrap();
     loss.cancel();
 
-    let observed = tokio::time::timeout(RESIDENT_END_BOUND, async {
+    let observed = tokio::time::timeout(COOPERATIVE_END_BOUND, async {
         let mut terminated_seen = false;
         let mut failure_seen = false;
         while !(terminated_seen && failure_seen) {
@@ -4090,7 +4090,7 @@ async fn resident_running_loss_never_runs_recovery_transaction() {
         .unwrap();
     loss.cancel();
 
-    let observed = tokio::time::timeout(RESIDENT_END_BOUND, async {
+    let observed = tokio::time::timeout(COOPERATIVE_END_BOUND, async {
         let mut terminated_seen = false;
         let mut failure_seen = false;
         while !(terminated_seen && failure_seen) {
@@ -4245,7 +4245,7 @@ async fn resident_running_loss_terminate_failure_disables_and_releases_claim() {
         .expect("provider must enter first turn");
     loss.cancel();
 
-    let observed = tokio::time::timeout(RESIDENT_END_BOUND, async {
+    let observed = tokio::time::timeout(COOPERATIVE_END_BOUND, async {
         terminated.notified().await;
         loop {
             let envelope = events.recv().await.unwrap();

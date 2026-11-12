@@ -345,15 +345,16 @@ impl SessionEngine {
     }
 
     /// Close this episode's straggler before its owner drops the turn future.
-    pub(crate) async fn close_resident_turn(
+    pub(crate) async fn close_harness_turn(
         &self,
-        claim: &ActorClaim,
+        claim: Option<&ActorClaim>,
+        session: SessionId,
         cause: hya_proto::FinishCause,
     ) -> Result<(), CoreError> {
-        if let Some(message) = self.turn_gate.message(claim.actor_id) {
+        if let Some(message) = self.turn_gate.message(session) {
             self.close_turn_message(
-                Some(claim),
-                claim.actor_id,
+                claim,
+                session,
                 message,
                 FinishReason::Cancelled,
                 Some(cause),

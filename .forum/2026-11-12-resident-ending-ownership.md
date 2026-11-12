@@ -88,3 +88,21 @@ loss and unhealthy-handle replacement. Failure reports retain stop diagnostics.
 `take_episode` removes the slot/index before archive publication and completion;
 the old direct `archive_stopped_agent`, claim replacement and `remove_slot`
 paths are gone. Startup recovery and orphan `Takeover` remain separate.
+
+## When does sidecar loss become an ending?
+
+Only after the owned turn and sidecar stop finish, and only if loss interrupted
+an actually cancelled turn. `run_one_turn` returns NotStarted/Finished/Cancelled;
+loss after Stop or during an empty wake drops the handle and retains any report.
+A forced ending requested during drain or sidecar stop wins. Main's straggler
+message is closed unfenced before dropping its future, just as member messages
+are closed under the claim. Default sidecar health derives from its loss token.
+
+## What keeps a terminal report's parent wake from disappearing?
+
+Before taking the episode, hold the team's committed terminal MailSent sequence
+numbers in `routing_mail`. Retirement refuses those holds. The bus listener
+releases each hold after on_mail routes it; lag recovery releases only holds
+covered by its projection snapshot after re-arming that inbox. This keeps the
+slot-removed-before-archive and slot-removed-before-done properties without
+retiring/cancelling main in the publication-to-routing interval.

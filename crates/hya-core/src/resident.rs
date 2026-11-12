@@ -37,15 +37,15 @@
 //! "no pending work", quiescence can never fire while a turn is running or mail is
 //! queued, and it can never hang (the last resident to idle always runs the check).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use hya_bundle::{ChannelCapability, ChannelParticipantRole, ChannelTemplateKind};
 use hya_proto::{
-    ActorClaim, ActorEpoch, ArchiveReason, ChannelKind, Event, FinishCause, MailEndpoint, MemberId,
-    MemberRunStatus, ModelRef, OwnerRunId, ReportOutcome, RosterStatus, SessionId, SubagentMode,
-    ToolCallId, scope,
+    ActorClaim, ActorEpoch, ArchiveReason, ChannelKind, Event, FinishCause, FinishReason,
+    MailEndpoint, MemberId, MemberRunStatus, ModelRef, OwnerRunId, ReportOutcome, RosterStatus,
+    SessionId, SubagentMode, ToolCallId, scope,
 };
 use hya_tool::{AgentDef, ArchiveReceipt, ResolvedTool};
 use tokio::sync::{Notify, oneshot, watch};
@@ -320,6 +320,8 @@ struct TeamState {
     /// Number of non-idle residents (incl. main). Quiescence = this is 0.
     busy: usize,
     registrations: usize,
+    // Terminal mail keeps main alive between episode removal and bus routing.
+    routing_mail: HashSet<u64>,
     workflow_runs: usize,
     main_autonomous: bool,
     phase: TeamPhase,
@@ -370,6 +372,13 @@ struct RunPlan {
     /// The session's single-active-turn claim, taken atomically with the
     /// decision to run and held until the turn ends.
     lease: TurnLease,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TurnOutcome {
+    NotStarted,
+    Finished,
+    Cancelled,
 }
 
 enum ResidentRuntimeContext {
@@ -521,6 +530,7 @@ impl TeamActor {
                 residents: HashMap::new(),
                 busy: 0,
                 registrations: 0,
+                routing_mail: HashSet::new(),
                 workflow_runs: 0,
                 main_autonomous: true,
                 phase: TeamPhase::Live,
@@ -1178,15 +1188,15 @@ impl TeamActor {
     /// cursor, then advance the cursor and stream one turn. All of this is coalesced
     /// into a single turn — many queued messages produce one turn, never several.
     ///
-    /// Returns `Ok(false)` without running when a main-actor wake has nothing
-    /// left to deliver: mail that arrived during the lead's own turn and was
+    /// Returns `NotStarted` when a wake has nothing left to deliver:
+    /// mail that arrived during the lead's own turn and was
     /// already steered into it needs no follow-up turn.
     async fn run_one_turn(
         &self,
         session: SessionId,
         plan: RunPlan,
         sidecar_tools: Arc<[ResolvedTool]>,
-    ) -> Result<bool, CoreError> {
+    ) -> Result<TurnOutcome, CoreError> {
         let RunPlan {
             agent,
             binding,
@@ -1212,10 +1222,7 @@ impl TeamActor {
         // this sync, so it advances here too.
         let projection = self.engine.read_projection(self.root).await?;
         if !self.owns_slot(session, claim.as_ref()) {
-            return Ok(false);
-        }
-        if cancel.is_cancelled() {
-            return Err(CoreError::Cancelled);
+            return Ok(TurnOutcome::NotStarted);
         }
         let mut cursor = cursor;
         if let Some(entry) = projection.team.roster.get(&handle) {
@@ -1262,6 +1269,10 @@ impl TeamActor {
             .unwrap_or_default();
 
         if initial_prompt.is_none() && !synth && new_mail.is_empty() {
+            if cancel.is_cancelled() {
+                return Ok(TurnOutcome::NotStarted);
+            }
+
             let mut st = self.lock();
             if let Some(slot) = st
                 .residents
@@ -1270,7 +1281,11 @@ impl TeamActor {
             {
                 slot.cursor = slot.cursor.max(inbox_len);
             }
-            return Ok(false);
+            return Ok(TurnOutcome::NotStarted);
+        }
+
+        if cancel.is_cancelled() {
+            return Err(CoreError::Cancelled);
         }
 
         // An empty notification is not a turn and consumes no team budget.
@@ -1321,7 +1336,7 @@ impl TeamActor {
                 .await?;
         }
         if !self.owns_slot(session, claim.as_ref()) {
-            return Ok(false);
+            return Ok(TurnOutcome::NotStarted);
         }
         if !is_main {
             self.mark_member_running(session, claim.as_ref()).await;
@@ -1351,7 +1366,7 @@ impl TeamActor {
         let mut admitted_prompt = initial_prompt;
         for (from, body) in &new_mail {
             if !self.owns_slot(session, claim.as_ref()) {
-                return Ok(false);
+                return Ok(TurnOutcome::NotStarted);
             }
             let prompt = format!("[mail from {from}] {body}");
             admitted_prompt = Some(match claim.as_ref() {
@@ -1386,13 +1401,13 @@ impl TeamActor {
                 .get_mut(&session)
                 .filter(|slot| slot.claim == claim)
             else {
-                return Ok(false);
+                return Ok(TurnOutcome::NotStarted);
             };
             slot.cursor = slot.cursor.max(inbox_len);
             slot.initial_prompt = None;
         }
         // Exactly one turn, under the team-wide cancel so a budget kill stops it.
-        match (claim.as_ref(), agents, resources) {
+        let finish = match (claim.as_ref(), agents, resources) {
             (Some(claim), Some(agents), Some(resources)) => {
                 self.engine
                     .run_resolved_turn_with_sidecar_tools_for_actor_and_workflow_route(
@@ -1403,7 +1418,7 @@ impl TeamActor {
                             .with_admitted_prompt(admitted_prompt)
                             .with_lease(lease),
                     )
-                    .await?;
+                    .await?
             }
             (None, Some(agents), Some(resources)) => {
                 self.engine
@@ -1415,7 +1430,7 @@ impl TeamActor {
                             .with_admitted_prompt(admitted_prompt)
                             .with_lease(lease),
                     )
-                    .await?;
+                    .await?
             }
             (Some(claim), _, _) => {
                 self.engine
@@ -1427,7 +1442,7 @@ impl TeamActor {
                             .with_admitted_prompt(admitted_prompt)
                             .with_lease(lease),
                     )
-                    .await?;
+                    .await?
             }
             (None, _, _) => {
                 self.engine
@@ -1439,14 +1454,18 @@ impl TeamActor {
                             .with_admitted_prompt(admitted_prompt)
                             .with_lease(lease),
                     )
-                    .await?;
+                    .await?
             }
-        }
+        };
         // Turn finished: a fresh boundary heartbeat closes the window even
         // when the turn's own engine events never tripped the throttle.
         self.heartbeat_turn_finish(session, claim.as_ref(), &handle)
             .await;
-        Ok(true)
+        Ok(if finish == FinishReason::Cancelled {
+            TurnOutcome::Cancelled
+        } else {
+            TurnOutcome::Finished
+        })
     }
 
     /// Resolve a `MailSent`'s recipient sessions, EXCLUDING the sender's own handle
@@ -1658,6 +1677,7 @@ impl TeamActor {
             if st.phase.killed() {
                 return;
             }
+            st.routing_mail.retain(|seq| *seq > projection.last_seq);
             for slot in st.residents.values_mut() {
                 let inbox = projection
                     .team
@@ -1712,6 +1732,9 @@ impl TeamActor {
             {
                 slot.cursor = slot.cursor.max(through);
             }
+        }
+        if let Some(supervisor) = self.supervisor.upgrade() {
+            supervisor.retire_team(self);
         }
     }
 }
@@ -2079,9 +2102,6 @@ async fn episode_task(
                         () = loss => {
                             sidecar_lost = true;
                             turn_cancel.cancel();
-                            if let Some(slot) = team.lock().residents.get_mut(&session).filter(|slot| slot.claim == task_claim) {
-                                slot.request_end(&team.engine, session, Ending::Failed("activation sidecar lost".into()));
-                            }
                             None
                         }
                         _ = cancel.cancelled() => None,
@@ -2090,21 +2110,25 @@ async fn episode_task(
                     let turn_result = match result {
                         Some(result) => result,
                         None => {
-                            let cause = team
-                                .lock()
-                                .residents
-                                .get(&session)
-                                .and_then(|slot| slot.ending.as_ref().map(Ending::cause))
-                                .unwrap_or(FinishCause::Shutdown);
                             // Poll the own turn before any ending writes: it can
                             // hold the connection those writes would need.
                             match tokio::time::timeout(DRAIN_DEADLINE, &mut run).await {
                                 Ok(result) => result,
                                 Err(_) => {
+                                    let cause = team
+                                        .lock()
+                                        .residents
+                                        .get(&session)
+                                        .and_then(|slot| slot.ending.as_ref().map(Ending::cause))
+                                        .unwrap_or(if sidecar_lost {
+                                            FinishCause::Other
+                                        } else {
+                                            FinishCause::Shutdown
+                                        });
                                     let close = async {
-                                        if let Some(claim) = claim.as_ref() {
-                                            team.engine.close_resident_turn(claim, cause).await?;
-                                        }
+                                        team.engine
+                                            .close_harness_turn(claim.as_ref(), session, cause)
+                                            .await?;
                                         Ok::<(), CoreError>(())
                                     };
                                     // Closing shares the turn's message lock. Keep
@@ -2136,33 +2160,58 @@ async fn episode_task(
                         .as_ref()
                         .is_some_and(|cached| !cached.is_healthy());
                     if sidecar_lost {
-                        let Some(claim) = claim.as_ref() else {
-                            unreachable!("only member episodes have sidecars");
-                        };
-                        finish_episode(
-                            &team,
-                            claim,
-                            Ending::Failed("activation sidecar lost".into()),
-                            &mut sidecar_handle,
-                            None,
-                        )
-                        .await;
-                        return;
+                        sidecar_tools = Arc::from([]);
+                        sidecar_hooks = None;
+                        if matches!(
+                            turn_result,
+                            Ok(TurnOutcome::Cancelled) | Err(CoreError::Cancelled)
+                        ) {
+                            let Some(claim) = claim.as_ref() else {
+                                unreachable!("only member episodes have sidecars");
+                            };
+                            finish_episode(
+                                &team,
+                                claim,
+                                Ending::Failed("activation sidecar lost".into()),
+                                &mut sidecar_handle,
+                                None,
+                            )
+                            .await;
+                            return;
+                        }
+                        if let Some(error) = stop_sidecar(&mut sidecar_handle).await {
+                            tracing::warn!(%session, %error, "idle sidecar did not stop");
+                        }
                     }
                     // Flip the slot idle BEFORE recording the roster activity:
                     // observers gate on "roster says idle" (the report gate),
                     // so that observation must imply the slot is idle too.
                     team.finish_run(session, task_claim.as_ref());
                     match turn_result {
-                        Ok(false) => {}
-                        Ok(true) => {
+                        Ok(TurnOutcome::NotStarted) => {}
+                        Ok(TurnOutcome::Finished) => {
                             let _ = team
                                 .record_activity(claim.as_ref(), handle, RosterStatus::Idle, None)
                                 .await;
                         }
-                        Err(CoreError::Cancelled) => {
-                            // Cancellation alone is not terminal. The owning
-                            // stop/kill/archive path commits terminal effects.
+                        Ok(TurnOutcome::Cancelled) | Err(CoreError::Cancelled) => {
+                            // A user-stopped episode stays live and durably idle;
+                            // a forced ending owns its terminal activity instead.
+                            let ending = team
+                                .lock()
+                                .residents
+                                .get(&session)
+                                .is_some_and(|slot| slot.ending.is_some());
+                            if !ending {
+                                let _ = team
+                                    .record_activity(
+                                        claim.as_ref(),
+                                        handle,
+                                        RosterStatus::Idle,
+                                        None,
+                                    )
+                                    .await;
+                            }
                         }
                         Err(err) if is_main => {
                             // The lead is never archived: a failed lead turn
@@ -2361,6 +2410,12 @@ async fn finish_episode(
     sidecar: &mut Option<Box<dyn SidecarHandle>>,
     committed: Option<Result<EpisodeFinalization, CoreError>>,
 ) {
+    let sidecar_error = stop_sidecar(sidecar).await;
+    if committed.is_some()
+        && let Some(error) = &sidecar_error
+    {
+        tracing::error!(session = %claim.actor_id, %error, "reported episode sidecar did not stop");
+    }
     if committed.is_none() {
         let mut state = team.lock();
         if let Some(slot) = state
@@ -2370,12 +2425,6 @@ async fn finish_episode(
         {
             ending = slot.ending.get_or_insert(ending).clone();
         }
-    }
-    let sidecar_error = stop_sidecar(sidecar).await;
-    if committed.is_some()
-        && let Some(error) = &sidecar_error
-    {
-        tracing::error!(session = %claim.actor_id, %error, "reported episode sidecar did not stop");
     }
     let result = match committed {
         Some(result) => result,
@@ -2394,6 +2443,13 @@ async fn finish_episode(
         Some(supervisor) => Some(supervisor.claim_writes.lock().await),
         None => None,
     };
+    if let Ok((envelopes, _)) = &result {
+        team.lock()
+            .routing_mail
+            .extend(envelopes.iter().filter_map(|envelope| {
+                matches!(envelope.event, Event::MailSent { .. }).then_some(envelope.seq.0)
+            }));
+    }
     if let Some(done) = team.take_episode(claim.actor_id, Some(claim)) {
         let result =
             result.map(|finalization| team.engine.publish_resident_finalization(finalization));
@@ -2913,6 +2969,8 @@ impl ResidentSupervisor {
                         let team = self.teams().get(root).cloned();
                         if let Some(team) = team {
                             team.on_mail(from, to).await;
+                            team.lock().routing_mail.remove(&envelope.seq.0);
+                            self.retire_team(&team);
                         }
                     }
                     if !matches!(envelope.event, Event::AgentHeartbeat { .. })
@@ -3034,6 +3092,7 @@ impl ResidentSupervisor {
         if state.phase.killed()
             || state.busy != 0
             || state.registrations != 0
+            || !state.routing_mail.is_empty()
             || self.engine.turn_active(team.root)
             || state
                 .residents
