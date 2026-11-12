@@ -145,8 +145,8 @@ describe("hook dispatch", () => {
       { argv: ["--plugin-dir", dir] },
     )
     expect(responses).toHaveLength(4)
-    expect(responses[1]?.result).toEqual({ outcome: "veto", reason: "denied by policy" })
-    expect(responses[2]?.result).toEqual({ outcome: "continue", input: { path: "x" } })
+    expect(responses.find((reply) => reply.id === 2)?.result).toEqual({ outcome: "veto", reason: "denied by policy" })
+    expect(responses.find((reply) => reply.id === 3)?.result).toEqual({ outcome: "continue", input: { path: "x" } })
   })
 
   test("tool/call is not served in v1", async () => {

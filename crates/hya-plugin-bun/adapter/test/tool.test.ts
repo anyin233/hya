@@ -83,7 +83,6 @@ test("executes string tool results", async () => {
   const reply = await callRegisteredTool(
     registry.tools,
     { tool: "echo", session: "s", call: "c", input: {} },
-    { directory: "/tmp", worktree: "/tmp" },
   )
 
   expect(reply.ok).toBe(true)
@@ -107,33 +106,24 @@ test("returns tool errors without throwing out of the adapter", async () => {
   const reply = await callRegisteredTool(
     registry.tools,
     { tool: "fail", session: "s", call: "c", input: {} },
-    { directory: "/tmp", worktree: "/tmp" },
   )
 
   expect(reply.ok).toBe(false)
   expect(reply.output).toBe("boom")
 })
 
-test("surfaces unsupported context ask calls as tool errors", async () => {
-  const registry = buildToolRegistry([
-    {
-      tool: {
-        ask: {
-          description: "Ask",
-          execute: async (_args: unknown, context: ToolContext) => context.ask(),
-        },
-      },
+test("tool context exposes only real session identity and output metadata", async () => {
+  const registry = buildToolRegistry([{ tool: { inspect: {
+    description: "Inspect context",
+    execute: (_args: unknown, context: ToolContext) => {
+      expect(Object.keys(context).sort()).toEqual(["metadata", "sessionID"])
+      expect(context.sessionID).toBe("real-session")
+      context.metadata({ title: "Real title", metadata: { checked: true } })
+      return "done"
     },
-  ])
-
-  const reply = await callRegisteredTool(
-    registry.tools,
-    { tool: "ask", session: "s", call: "c", input: {} },
-    { directory: "/tmp", worktree: "/tmp" },
-  )
-
-  expect(reply.ok).toBe(false)
-  expect(String(reply.output)).toContain("ask() is not supported")
+  } } }])
+  const reply = await callRegisteredTool(registry.tools, { tool: "inspect", session: "real-session", call: "c", input: {} })
+  expect(reply.output).toEqual({ title: "Real title", output: "done", metadata: { checked: true } })
 })
 
 test("reports duplicate and malformed tool declarations", () => {

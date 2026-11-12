@@ -1,35 +1,9 @@
+import { isWireToolResult } from "./wire.gen"
 import { errorMessage, type ExtensionHooks } from "./loader/init"
 import { isRecord } from "./validate"
 
-export type ToolExecuteBeforeParams = {
-  readonly session: string
-  readonly message: string
-  readonly call: string
-  readonly tool: string
-  readonly input: unknown
-}
-
-export type ToolBeforeOutcome =
-  | { readonly outcome: "continue"; readonly input: unknown }
-  | { readonly outcome: "veto"; readonly reason: string }
-
-export type WireToolResult =
-  | { readonly status: "ok"; readonly output: unknown; readonly time_ms?: number }
-  | { readonly status: "err"; readonly message: string }
-
-export type ToolExecuteAfterParams = {
-  readonly session: string
-  readonly message: string
-  readonly call: string
-  readonly tool: string
-  readonly input: unknown
-  readonly result: WireToolResult
-}
-
-export type ToolAfterOutcome = {
-  readonly outcome: "continue"
-  readonly result: WireToolResult
-}
+import type { ToolExecuteBeforeParams, ToolExecuteAfterParams, ToolBeforeOutcomeWire as ToolBeforeOutcome, ToolAfterOutcomeWire as ToolAfterOutcome } from "./wire.gen"
+export type { ToolExecuteBeforeParams, ToolExecuteAfterParams, ToolBeforeOutcomeWire as ToolBeforeOutcome, ToolAfterOutcomeWire as ToolAfterOutcome, WireToolResult } from "./wire.gen"
 
 /** Single-argument wire hooks return replacements that fold across handlers. */
 export async function runToolExecuteBeforeHooks(
@@ -84,17 +58,4 @@ function isHookFunction(
   value: unknown,
 ): value is (params: unknown) => unknown | Promise<unknown> {
   return typeof value === "function"
-}
-
-function isWireToolResult(value: unknown): value is WireToolResult {
-  if (!isRecord(value)) {
-    return false
-  }
-  if (value.status === "err") {
-    return typeof value.message === "string"
-  }
-  if (value.status !== "ok") {
-    return false
-  }
-  return value.time_ms === undefined || typeof value.time_ms === "number"
 }

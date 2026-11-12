@@ -1,369 +1,41 @@
-import { runChatParamsHooks, type ChatParams } from "./chat_params_hooks"
-import {
-  runToolExecuteAfterHooks,
-  runToolExecuteBeforeHooks,
-  type ToolAfterOutcome,
-  type ToolBeforeOutcome,
-  type WireToolResult,
-} from "./hooks"
-import {
-  runModelFallbackHooks,
-  type ModelFallbackOutcome,
-  type ModelFallbackParams,
-} from "./model_fallback_hooks"
-import { runPermissionApproveHooks, type PermissionApproveParams } from "./permission_approve"
-import { runPermissionAskHooks, type PermissionAskParams, type PermissionOutcome } from "./permission_hooks"
+import { runChatParamsHooks } from "./chat_params_hooks"
+import { runToolExecuteAfterHooks, runToolExecuteBeforeHooks } from "./hooks"
+import { runModelFallbackHooks } from "./model_fallback_hooks"
+import { runPermissionApproveHooks } from "./permission_approve"
+import { runPermissionAskHooks } from "./permission_hooks"
 import { ERROR_CODES, errorResponse, okResponse, type JsonRpcRequest } from "./protocol"
-import { runTextHooks, type TextOutcome } from "./text_hooks"
+import { runTextHooks } from "./text_hooks"
+import type { ExtensionHooks } from "./loader/init"
 import type { HandledRequest, RequestContext } from "./runtime_types"
-import {
-  isInt,
-  isNonEmptyString,
-  isRecord,
-  isRecordMutable,
-  ok,
-  recordWithStrings,
-  type ValidationResult,
-} from "./validate"
+import { isHookParams, type HookName, type HookParams } from "./wire.gen"
 
-export async function handleMessageUserBefore(
+async function invoke<K extends HookName>(
   request: JsonRpcRequest,
   context: RequestContext,
+  name: K,
+  run: (hooks: readonly ExtensionHooks[], params: HookParams[K]) => Promise<unknown>,
 ): Promise<HandledRequest> {
-  return handleTextHook(request, context, "message.user.before", ["session", "text"])
+  if (!isHookParams(name, request.params)) {
+    return { response: errorResponse(request.id, ERROR_CODES.INVALID_PARAMS, `invalid ${name} params`), shouldExit: false }
+  }
+  return { response: okResponse(request.id, await run(context.hooks, request.params)), shouldExit: false }
 }
 
-export async function handleCommandExecuteBefore(
-  request: JsonRpcRequest,
-  context: RequestContext,
-): Promise<HandledRequest> {
-  return handleTextHook(request, context, "command.execute.before", [
-    "session",
-    "command",
-    "arguments",
-    "text",
-  ])
-}
-
-export async function handleTextComplete(
-  request: JsonRpcRequest,
-  context: RequestContext,
-): Promise<HandledRequest> {
-  return handleTextHook(request, context, "experimental.text.complete", [
-    "session",
-    "message",
-    "part",
-    "text",
-  ])
-}
-
-async function handleTextHook(
-  request: JsonRpcRequest,
-  context: RequestContext,
-  hookName: Parameters<typeof runTextHooks>[1],
-  required: readonly string[],
-): Promise<HandledRequest> {
-  const params = recordWithStrings(request.params, required)
-  if (!params.ok) {
-    return invalidParams(request.id, params.message)
-  }
-  const text = params.value.text
-  if (typeof text !== "string") {
-    return invalidParams(request.id, "params.text is invalid")
-  }
-  const outcome: TextOutcome = await runTextHooks(
-    context.hooks,
-    hookName,
-    params.value as Readonly<Record<string, unknown>> & { readonly text: string },
-  )
-  return {
-    response: okResponse(request.id, outcome),
-    shouldExit: false,
-  }
-}
-
-export async function handleChatParams(
-  request: JsonRpcRequest,
-  context: RequestContext,
-): Promise<HandledRequest> {
-  const params = validateChatParams(request.params)
-  if (!params.ok) {
-    return invalidParams(request.id, params.message)
-  }
-  const outcome = await runChatParamsHooks(context.hooks, params.value)
-  return {
-    response: okResponse(request.id, outcome),
-    shouldExit: false,
-  }
-}
-
-export async function handlePermissionAsk(
-  request: JsonRpcRequest,
-  context: RequestContext,
-): Promise<HandledRequest> {
-  const params = validatePermissionParams(request.params)
-  if (!params.ok) {
-    return invalidParams(request.id, params.message)
-  }
-  const outcome: PermissionOutcome = await runPermissionAskHooks(context.hooks, params.value)
-  return {
-    response: okResponse(request.id, outcome),
-    shouldExit: false,
-  }
-}
-
-export async function handlePermissionApprove(
-  request: JsonRpcRequest,
-  context: RequestContext,
-): Promise<HandledRequest> {
-  const params = validatePermissionApproveParams(request.params)
-  if (!params.ok) {
-    return invalidParams(request.id, params.message)
-  }
-  const outcome: PermissionOutcome = await runPermissionApproveHooks(context.hooks, params.value)
-  return {
-    response: okResponse(request.id, outcome),
-    shouldExit: false,
-  }
-}
-
-export async function handleModelFallback(
-  request: JsonRpcRequest,
-  context: RequestContext,
-): Promise<HandledRequest> {
-  const params = validateModelFallbackParams(request.params)
-  if (!params.ok) {
-    return invalidParams(request.id, params.message)
-  }
-  const outcome: ModelFallbackOutcome = await runModelFallbackHooks(context.hooks, params.value)
-  return {
-    response: okResponse(request.id, outcome),
-    shouldExit: false,
-  }
-}
-
-export async function handleToolExecuteBefore(
-  request: JsonRpcRequest,
-  context: RequestContext,
-): Promise<HandledRequest> {
-  const params = validateToolExecuteBeforeParams(request.params)
-  if (!params.ok) {
-    return invalidParams(request.id, params.message)
-  }
-  const outcome: ToolBeforeOutcome = await runToolExecuteBeforeHooks(
-    context.hooks,
-    params.value,
-  )
-  return {
-    response: okResponse(request.id, outcome),
-    shouldExit: false,
-  }
-}
-
-export async function handleToolExecuteAfter(
-  request: JsonRpcRequest,
-  context: RequestContext,
-): Promise<HandledRequest> {
-  const params = validateToolExecuteAfterParams(request.params)
-  if (!params.ok) {
-    return invalidParams(request.id, params.message)
-  }
-  const outcome: ToolAfterOutcome = await runToolExecuteAfterHooks(context.hooks, params.value)
-  return {
-    response: okResponse(request.id, outcome),
-    shouldExit: false,
-  }
-}
-
-function invalidParams(id: number, message: string): HandledRequest {
-  return {
-    response: errorResponse(id, ERROR_CODES.INVALID_PARAMS, message),
-    shouldExit: false,
-  }
-}
-
-function validateChatParams(value: unknown): ValidationResult<ChatParams> {
-  const params = recordWithStrings(value, ["session", "message"], ["root_session", "agent"])
-  if (!params.ok) {
-    return params
-  }
-  if (!isRecord(params.value.request)) {
-    return { ok: false, message: "params.request must be an object" }
-  }
-  return ok({
-    session: params.value.session as string,
-    ...optionalStrings(params.value, ["root_session", "agent"]),
-    message: params.value.message as string,
-    request: params.value.request,
-  })
-}
-
-/** Copy the present (already validated) optional string fields. */
-function optionalStrings(
-  record: Readonly<Record<string, unknown>>,
-  keys: readonly string[],
-): Record<string, string> {
-  const present: Record<string, string> = {}
-  for (const key of keys) {
-    const value = record[key]
-    if (typeof value === "string") {
-      present[key] = value
-    }
-  }
-  return present
-}
-
-function validateModelFallbackParams(value: unknown): ValidationResult<ModelFallbackParams> {
-  const params = recordWithStrings(value, ["session", "root_session", "message", "model"], ["agent"])
-  if (!params.ok) {
-    return params
-  }
-  const error = params.value.error
-  if (!isRecord(error) || !isNonEmptyString(error.class) || typeof error.message !== "string") {
-    return { ok: false, message: "params.error must be an object with a class and message" }
-  }
-  if (!isInt(params.value.attempt) || params.value.attempt < 1) {
-    return { ok: false, message: "params.attempt must be a positive integer" }
-  }
-  const tried = params.value.tried
-  if (!Array.isArray(tried) || !tried.every((model) => typeof model === "string")) {
-    return { ok: false, message: "params.tried must be an array of strings" }
-  }
-  return ok({
-    session: params.value.session as string,
-    root_session: params.value.root_session as string,
-    ...optionalStrings(params.value, ["agent"]),
-    message: params.value.message as string,
-    model: params.value.model as string,
-    error: { class: error.class, message: error.message },
-    attempt: params.value.attempt,
-    tried: tried as string[],
-  })
-}
-
-function validatePermissionParams(
-  value: unknown,
-): ValidationResult<PermissionAskParams> {
-  const params = recordWithStrings(value, ["action"], ["session"])
-  if (!params.ok) {
-    return params
-  }
-  const resource = params.value.resource
-  if (!isRecord(resource) || !isNonEmptyString(resource.type)) {
-    return { ok: false, message: "params.resource must be an object with a type" }
-  }
-  if (resource.value !== undefined && typeof resource.value !== "string") {
-    return { ok: false, message: "params.resource.value must be a string" }
-  }
-  const wireResource: PermissionAskParams["resource"] =
-    resource.value === undefined
-      ? { type: resource.type }
-      : { type: resource.type, value: resource.value }
-  const outcome: PermissionAskParams = {
-    action: params.value.action as string,
-    resource: wireResource,
-  }
-  if (params.value.session !== undefined) {
-    return ok({ ...outcome, session: params.value.session as string })
-  }
-  return ok(outcome)
-}
-
-function validatePermissionApproveParams(
-  value: unknown,
-): ValidationResult<PermissionApproveParams> {
-  const params = recordWithStrings(value, ["session", "root_session", "mode", "action"], ["agent"])
-  if (!params.ok) {
-    return params
-  }
-  const resource = params.value.resource
-  if (!isRecord(resource) || !isNonEmptyString(resource.type)) {
-    return { ok: false, message: "params.resource must be an object with a type" }
-  }
-  if (resource.value !== undefined && typeof resource.value !== "string") {
-    return { ok: false, message: "params.resource.value must be a string" }
-  }
-  const approve: PermissionApproveParams = {
-    session: params.value.session as string,
-    root_session: params.value.root_session as string,
-    mode: params.value.mode as string,
-    action: params.value.action as string,
-    resource:
-      resource.value === undefined
-        ? { type: resource.type }
-        : { type: resource.type, value: resource.value },
-  }
-  if (params.value.agent !== undefined) {
-    return ok({ ...approve, agent: params.value.agent as string })
-  }
-  return ok(approve)
-}
-
-function validateToolExecuteBeforeParams(
-  value: unknown,
-): ValidationResult<Parameters<typeof runToolExecuteBeforeHooks>[1]> {
-  const params = recordWithStrings(value, ["session", "message", "call", "tool"])
-  if (!params.ok) {
-    return params
-  }
-  if (!("input" in params.value)) {
-    return { ok: false, message: "params.input is required" }
-  }
-  return ok({
-    session: params.value.session as string,
-    message: params.value.message as string,
-    call: params.value.call as string,
-    tool: params.value.tool as string,
-    input: params.value.input,
-  })
-}
-
-function validateToolExecuteAfterParams(
-  value: unknown,
-): ValidationResult<Parameters<typeof runToolExecuteAfterHooks>[1]> {
-  const params = recordWithStrings(value, ["session", "message", "call", "tool"])
-  if (!params.ok) {
-    return params
-  }
-  if (!("input" in params.value)) {
-    return { ok: false, message: "params.input is required" }
-  }
-  const result = validateWireToolResult(params.value.result)
-  if (!result.ok) {
-    return result
-  }
-  return ok({
-    session: params.value.session as string,
-    message: params.value.message as string,
-    call: params.value.call as string,
-    tool: params.value.tool as string,
-    input: params.value.input,
-    result: result.value,
-  })
-}
-
-function validateWireToolResult(value: unknown): ValidationResult<WireToolResult> {
-  if (!isRecordMutable(value)) {
-    return { ok: false, message: "params.result must be an object" }
-  }
-  if (value.status === "err") {
-    if (!isNonEmptyString(value.message)) {
-      return { ok: false, message: "params.result.message must be a non-empty string" }
-    }
-    return ok({ status: "err", message: value.message })
-  }
-  if (value.status !== "ok") {
-    return { ok: false, message: "params.result.status must be \"ok\" or \"err\"" }
-  }
-  if (!("output" in value)) {
-    return { ok: false, message: "params.result.output is required" }
-  }
-  if (value.time_ms !== undefined && !isInt(value.time_ms)) {
-    return { ok: false, message: "params.result.time_ms must be an integer" }
-  }
-  const result: WireToolResult = { status: "ok", output: value.output }
-  if (value.time_ms !== undefined) {
-    return ok({ ...result, time_ms: value.time_ms })
-  }
-  return ok(result)
-}
+export const handleMessageUserBefore = (request: JsonRpcRequest, context: RequestContext) =>
+  invoke(request, context, "message.user.before", (hooks, params) => runTextHooks(hooks, "message.user.before", params))
+export const handleCommandExecuteBefore = (request: JsonRpcRequest, context: RequestContext) =>
+  invoke(request, context, "command.execute.before", (hooks, params) => runTextHooks(hooks, "command.execute.before", params))
+export const handleTextComplete = (request: JsonRpcRequest, context: RequestContext) =>
+  invoke(request, context, "experimental.text.complete", (hooks, params) => runTextHooks(hooks, "experimental.text.complete", params))
+export const handleChatParams = (request: JsonRpcRequest, context: RequestContext) =>
+  invoke(request, context, "chat.params", runChatParamsHooks)
+export const handlePermissionAsk = (request: JsonRpcRequest, context: RequestContext) =>
+  invoke(request, context, "permission.ask", runPermissionAskHooks)
+export const handlePermissionApprove = (request: JsonRpcRequest, context: RequestContext) =>
+  invoke(request, context, "permission.approve", runPermissionApproveHooks)
+export const handleModelFallback = (request: JsonRpcRequest, context: RequestContext) =>
+  invoke(request, context, "model.fallback", runModelFallbackHooks)
+export const handleToolExecuteBefore = (request: JsonRpcRequest, context: RequestContext) =>
+  invoke(request, context, "tool.execute.before", runToolExecuteBeforeHooks)
+export const handleToolExecuteAfter = (request: JsonRpcRequest, context: RequestContext) =>
+  invoke(request, context, "tool.execute.after", runToolExecuteAfterHooks)

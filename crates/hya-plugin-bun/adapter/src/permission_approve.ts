@@ -1,16 +1,8 @@
 import { type ExtensionHooks } from "./loader/init"
-import { outcomeFrom, type PermissionOutcome, type WireResource } from "./permission_hooks"
+import { outcomeFrom, type PermissionOutcome } from "./permission_hooks"
 
-/** hya's `hook/permission.approve` params (a bundle permission mode's ask). */
-export type PermissionApproveParams = {
-  readonly session: string
-  readonly root_session: string
-  readonly agent?: string
-  /** Bundle-local id of the active `permission_modes:` entry. */
-  readonly mode: string
-  readonly action: string
-  readonly resource: WireResource
-}
+import type { PermissionApproveParams } from "./wire.gen"
+export type { PermissionApproveParams } from "./wire.gen"
 
 /**
  * `permission.approve` handlers receive the hya-shaped params as-is and
