@@ -315,7 +315,7 @@ async fn evaluate(
             let busy = !entry.mode.is_resident()
                 || supervisor
                     .member_busy(root, target.session)
-                    .unwrap_or(entry.status == RosterStatus::Busy);
+                    .unwrap_or(false);
             // A member idle while its own subagents run is waiting on them.
             let leads_live = projection
                 .team

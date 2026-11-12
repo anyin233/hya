@@ -486,9 +486,10 @@ Forced endings use the shared projection-derived handoff template, retaining a
 previous handoff's document when one exists. Its numbered goal and pending-task
 sections remain searchable through `search_agent`.
 
-An explicit resident stop records `reason: killed` and member status `cancelled`;
-a budget or activation failure records `killed` / `failed`. Parent archive,
-root teardown and graceful shutdown retain their explicit reasons. `wait`
+Parent, user and Workflow archives record `archived_by_parent` / `cancelled`
+without report mail. Turn errors and sidecar startup failures record `reported`
+with a failed parent report and DM mail. Budget kill, root teardown and graceful
+shutdown retain their explicit reasons. `wait`
 returns the current episode's terminal member status and reason, including a
 failure before a revived member's first turn; it never returns an older report
 for a forced ending. A failed terminal transaction rolls back every effect and
@@ -519,11 +520,11 @@ existing transcript; bounded episode context is separate work.
 
 Root teardown obtains its owned capability through
 `ArchiveReviver::resident_claim(root: SessionId, child: SessionId) -> Option<ActorClaim>`.
-The supervisor returns the slot's claim; an unsupervised, already-claimed actor
-is refused rather than taken over by an ordinary archive.
+The supervisor returns the slot's claim. Orphan reconciliation takes the
+registration lock and verifies that no episode exists before Takeover.
 Forced teardown holds further resident wakes and cancels each member's turn
-before acquiring its handoff lease. A claim-less archive checks ownership only
-inside the terminal transaction.
+before acquiring its handoff lease. The orphan finalizer uses the runtime-owning
+store, never a gate-checked voluntary report.
 
 ### Mail during a running turn
 
@@ -540,3 +541,19 @@ string `steer` field. Other JSON results become `{ "result": <original JSON>,
 "steer": <notice string> }`, preserving the tool value and the notice. Results
 without a notice keep their original JSON shape. No new command or configuration
 is required.
+
+### Episode completion and client turns
+
+The episode task performs report, turn/start failure and requested archive
+endings; requesters only set the first ending and await its completion.
+`ResidentSupervisor::end_member(root: SessionId, handle: &str) -> Result<(), CoreError>`
+is the Workflow cancellation entry. Parent/user archive retain the tool and API
+schemas above. A dropped caller never cancels the ending. A failed terminal write
+removes the episode, returns its error to archive waiters and leaves an orphan;
+a later archive reconciles it with Takeover under the registration lock.
+
+Direct user prompts and turns on a live resident return `CoreError::Invalid`
+telling the caller to steer the subagent with mail. For example, send new work
+with `send({"to":"main/hya-task-scout","body":"review the tests"})` instead of
+starting a turn on its child session id. Empty or duplicate mail notifications
+never cause a provider request without a directive, unread mail or synthesis.

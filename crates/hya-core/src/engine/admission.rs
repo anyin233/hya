@@ -1,6 +1,4 @@
-use hya_proto::{
-    Envelope, Event, FinishReason, MemberRunStatus, MessageId, OperationId, PartId, Role, SessionId,
-};
+use hya_proto::{Envelope, Event, FinishReason, MessageId, OperationId, PartId, Role, SessionId};
 use hya_store::{
     ActorClaim, AdmissionClaim, AdmissionClaimOutcome, AdmissionRecord, AdmissionStartOutcome,
     AdmissionState, AdmissionTerminal, RecoveredActorClaim,
@@ -352,51 +350,6 @@ impl SessionEngine {
         Ok(())
     }
 
-    /// Stop a resident (reason `resident stopped`; its member row closes
-    /// `cancelled`) and publish the committed effects.
-    pub(crate) async fn finalize_resident_stop(
-        &self,
-        claim: &ActorClaim,
-        root: SessionId,
-        handle: &str,
-    ) -> Result<(), CoreError> {
-        crate::resident::archive_stopped_agent(
-            self,
-            root,
-            handle,
-            claim.actor_id,
-            Some(claim),
-            hya_proto::ArchiveReason::Killed,
-            MemberRunStatus::Cancelled,
-            hya_proto::FinishCause::UserCancel,
-            "resident stopped",
-        )
-        .await
-    }
-
-    /// Fail a resident with `reason` (its member row closes `failed`) and
-    /// publish the committed effects.
-    pub(crate) async fn finalize_resident_failure(
-        &self,
-        claim: &ActorClaim,
-        root: SessionId,
-        handle: &str,
-        reason: &str,
-    ) -> Result<(), CoreError> {
-        crate::resident::archive_stopped_agent(
-            self,
-            root,
-            handle,
-            claim.actor_id,
-            Some(claim),
-            hya_proto::ArchiveReason::Killed,
-            MemberRunStatus::Failed,
-            hya_proto::FinishCause::Other,
-            reason,
-        )
-        .await
-    }
-
     pub(crate) fn publish_resident_finalization(
         &self,
         (envelopes, admissions): (Vec<Envelope>, Vec<AdmissionRecord>),
@@ -411,6 +364,55 @@ impl SessionEngine {
                 }
             }
         }
+    }
+
+    /// Close this episode's straggler before its owner drops the turn future.
+    pub(crate) async fn close_resident_turn(
+        &self,
+        claim: &ActorClaim,
+        cause: hya_proto::FinishCause,
+    ) -> Result<(), CoreError> {
+        if let Some(message) = self.turn_gate.message(claim.actor_id) {
+            self.close_turn_message(
+                Some(claim),
+                claim.actor_id,
+                message,
+                FinishReason::Cancelled,
+                Some(cause),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn ensure_external_turn_allowed(
+        &self,
+        session: SessionId,
+    ) -> Result<(), CoreError> {
+        let in_memory = self
+            .archive_reviver()
+            .is_some_and(|supervisor| supervisor.has_episode(session));
+        let live = if in_memory {
+            true
+        } else {
+            let (root, depth) = self.session_lineage(session).await?;
+            depth > 0
+                && self
+                    .read_projection(root)
+                    .await?
+                    .team
+                    .roster
+                    .values()
+                    .any(|entry| {
+                        entry.session == session && entry.mode == hya_proto::SubagentMode::Resident
+                    })
+        };
+        if live {
+            return Err(CoreError::Invalid(
+                "this subagent's live episode owns its turns; steer this subagent with mail".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Append a system message to the session transcript.
@@ -582,6 +584,7 @@ impl SessionEngine {
         message: MessageId,
         text: String,
     ) -> Result<MessageId, CoreError> {
+        self.ensure_external_turn_allowed(session).await?;
         let (binding, stable_id) = self.admission_binding(session).await?;
         self.admit_user_prompt_with_id_and_binding(session, message, text, &binding, &stable_id)
             .await
@@ -631,6 +634,7 @@ impl SessionEngine {
         text: String,
         mut attachments: Vec<crate::attachments::PromptAttachment>,
     ) -> Result<MessageId, CoreError> {
+        self.ensure_external_turn_allowed(session).await?;
         if attachments.is_empty() {
             return self.admit_user_prompt_with_id(session, message, text).await;
         }
@@ -910,6 +914,7 @@ impl SessionEngine {
         arguments: String,
         text: String,
     ) -> Result<MessageId, CoreError> {
+        self.ensure_external_turn_allowed(session).await?;
         let (binding, stable_id) = self.admission_binding(session).await?;
         let text = if let Some(hooks) = &self.hooks {
             match hooks

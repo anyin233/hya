@@ -531,6 +531,26 @@ pub trait ArchiveReviver: Send + Sync {
     /// before this is called.
     async fn teardown_root(&self, root: SessionId) -> Result<(), CoreError>;
 
+    /// Whether an episode owns this member's turns. Clients steer it with mail.
+    fn has_episode(&self, _session: SessionId) -> bool {
+        false
+    }
+
+    /// Serialize an orphan terminal write with registration and revival.
+    /// A live episode must run its own ending instead.
+    async fn reconcile_orphan(
+        &self,
+        root: SessionId,
+        handle: &str,
+        archive: hya_store::ResidentArchive,
+        cause: hya_proto::FinishCause,
+    ) -> Result<hya_store::ResidentArchiveOutcome, CoreError> {
+        let _ = (root, handle, archive, cause);
+        Err(CoreError::Invalid(
+            "resident orphan has no supervisor".into(),
+        ))
+    }
+
     /// Current capability for a resident owned by this supervisor.
     fn resident_claim(&self, _root: SessionId, _child: SessionId) -> Option<ActorClaim> {
         None

@@ -404,10 +404,10 @@ peers' DM channels are excluded (archive discovery is `search_agent`).
 `archive(target, reason?)` (0.41.0; replaces `kill`): stop and archive a live
 descendant. The target is a handle, a caller-relative leaf, or a session id;
 its live descendants archive first (deepest first). An in-flight turn is
-cancelled with `cause: archived` via `SessionEngine::stop_turn` (waits up to
-`DRAIN_DEADLINE`, then closes a straggler's message), the slot owes no more
-turns, and `archive_stopped_agent` commits degraded handoff → member row
-`cancelled` → claim release → `AgentArchived { archived_by_parent }`. No
+cancelled with `cause: archived` by its episode owner. The owner awaits its
+turn up to `DRAIN_DEADLINE`, closes and drops a straggler, stops its sidecar,
+then commits degraded handoff → member row `cancelled` → claim release →
+`AgentArchived { archived_by_parent }`. No
 report mail is sent (the archiver knows). The lead is never archivable; an
 unknown target lists the caller's live subagents. This is the parent's answer
 to a child that blocks its report gate or is no longer needed.
@@ -552,7 +552,7 @@ decisions are unchanged.
 4. Revival is only via downward DM from the direct parent; it bumps the claim
    epoch, re-debits budget, and never replays transcripts into model context.
 5. Every terminal path produces a handoff (model-written or degraded). Reports
-   additionally commit a parent report and mail; explicit stops and failures
+   and turn/start failures commit a parent report and mail; parent archives
    close the parent member row without sending report mail. The lead has no terminal path:
    it is never reported, handed off, or archived (§3.3).
 6. Journal claim precedes governor debit; refund is exactly-once via
@@ -696,3 +696,55 @@ gRPC `FAILED_PRECONDITION`). For example,
 `POST /v1/sessions/<child>/steer` with `{"text":"continue"}` returns 403 for a
 transient child or a resident without an active claim, with sender and address
 in the diagnostic.
+
+### Episode-owned report and archive
+
+A resident episode has one task from registration through its ending. The task
+initializes hooks, runs its mail-driven turns, and owns its sidecar and claim.
+An `archive` request sets the first ending reason and cancels the episode; callers
+wait on its completion watch. Dropping that wait leaves the ending running.
+The task flushes its current turn before archiving. Startup and turn errors end
+with `SubagentReported { outcome: failed }`, parent DM mail, a degraded handoff,
+and `AgentArchived { reason: reported }`. Parent/user/Workflow archives instead
+write `MemberFinished { status: cancelled }` and reason `archived_by_parent`,
+without report mail. Team kill, teardown and shutdown retain their separate
+internal finalizer pending their lifecycle conversion.
+
+For example, `archive({"target":"main/hya-task-scout","reason":"stop review"})`
+requests that member's ending; `send` to its DM can revive it afterward. A refused
+`report` clears only the submitted report and delivers the committed harness
+notice on the next wake. Every member skips a wake with no new input.
+
+A terminal write failure resolves the completion with the store error and removes
+the in-memory episode. It leaves the durable claim active, as after a crash.
+The next archive takes over that orphan under the same lock held across
+registration/revival's claim commit and episode installation. Takeover is never
+used for a live episode. This lock is not held across initialization hooks.
+
+Direct prompt admission or turn execution on a live resident is refused with
+`invalid: this subagent's live episode owns its turns; steer this subagent with mail`.
+Use `send` or the user steer API; the TUI's child view remains read-only.
+The internal completion contract is `watch<Option<Result<(), CoreError>>>`:
+`None` while the episode exists, then its one terminal result after removal.
+`ResidentSupervisor::end_member(root, handle)` requests an archive with note
+`Workflow run cancelled`; the lifecycle `archive` tool keeps its existing
+`{target: string, reason?: string}` schema and `ArchiveReceipt` result.
+
+`ResidentSupervisor::episode_count() -> usize` counts in-memory member episodes,
+excluding the lead. `ArchiveReviver::has_episode(session: SessionId) -> bool`
+backs client-turn admission. Its internal
+`reconcile_orphan(root: SessionId, handle: &str, archive: ResidentArchive,
+cause: FinishCause) -> Result<ResidentArchiveOutcome, CoreError>` takes the
+registration lock, refuses an existing episode, then calls the store finalizer
+with `Takeover`. `ResidentArchive` retains the store contract above; orphan
+archives always use `check_gate: false` and the runtime-owning store.
+
+The client refusal is enforced by public prompt, model-turn and shell-turn
+entry points. The legacy internal Workflow executor retains its bound resume
+path until Workflow moves to episode activations; it is not a client entry.
+Startup recovery treats an unanswered initial user directive as owed input and
+passes that admitted prompt into the recovered episode's first turn.
+
+The client guard also checks the durable live roster, so it covers an orphan
+and the interval between registration commit and in-memory installation.
+Public command-prompt admission uses the same guard as text prompts.

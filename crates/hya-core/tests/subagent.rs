@@ -5,7 +5,7 @@
 mod support;
 
 use async_trait::async_trait;
-use futures::{FutureExt as _, stream};
+use futures::stream;
 use hya_bundle::{
     AgentRole, Bundle, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedResource,
     ResourceView,
@@ -340,47 +340,6 @@ impl SidecarHandle for AckFailureHandle {
     }
 }
 
-struct AckFailureRaceFactory {
-    entered: Arc<Notify>,
-    release: Arc<Notify>,
-    terminates: Arc<AtomicUsize>,
-}
-
-struct AckFailureRaceHandle {
-    entered: Arc<Notify>,
-    release: Arc<Notify>,
-    terminates: Arc<AtomicUsize>,
-}
-
-#[async_trait]
-impl BoundSidecarFactory for AckFailureRaceFactory {
-    async fn start(&self, _start: SidecarStart) -> Result<Box<dyn SidecarHandle>, CoreError> {
-        Ok(Box::new(AckFailureRaceHandle {
-            entered: self.entered.clone(),
-            release: self.release.clone(),
-            terminates: self.terminates.clone(),
-        }))
-    }
-}
-
-#[async_trait]
-impl SidecarHandle for AckFailureRaceHandle {
-    async fn ready(&mut self) -> Result<(), CoreError> {
-        Err(CoreError::Invalid("sidecar ACK rejected".to_string()))
-    }
-
-    async fn shutdown(&mut self) -> Result<(), CoreError> {
-        Ok(())
-    }
-
-    async fn terminate(&mut self) -> Result<(), CoreError> {
-        self.terminates.fetch_add(1, Ordering::SeqCst);
-        self.entered.notify_one();
-        self.release.notified().await;
-        Ok(())
-    }
-}
-
 struct SidecarPermissionProvider {
     requests: Arc<Mutex<Vec<CompletionRequest>>>,
     turn: AtomicUsize,
@@ -646,49 +605,6 @@ impl SidecarHandle for ResidentTerminateFailureHandle {
     }
 }
 
-struct ResidentBudgetTerminateRetryFactory {
-    terminated: Arc<Notify>,
-    terminates: Arc<AtomicUsize>,
-}
-
-struct ResidentBudgetTerminateRetryHandle {
-    terminated: Arc<Notify>,
-    terminates: Arc<AtomicUsize>,
-}
-
-#[async_trait]
-impl BoundSidecarFactory for ResidentBudgetTerminateRetryFactory {
-    async fn start(&self, _start: SidecarStart) -> Result<Box<dyn SidecarHandle>, CoreError> {
-        Ok(Box::new(ResidentBudgetTerminateRetryHandle {
-            terminated: self.terminated.clone(),
-            terminates: self.terminates.clone(),
-        }))
-    }
-}
-
-#[async_trait]
-impl SidecarHandle for ResidentBudgetTerminateRetryHandle {
-    async fn ready(&mut self) -> Result<(), CoreError> {
-        Ok(())
-    }
-
-    async fn shutdown(&mut self) -> Result<(), CoreError> {
-        Ok(())
-    }
-
-    async fn terminate(&mut self) -> Result<(), CoreError> {
-        let attempt = self.terminates.fetch_add(1, Ordering::SeqCst) + 1;
-        self.terminated.notify_one();
-        if attempt == 1 {
-            Err(CoreError::Invalid(
-                "test resident terminate failure".to_string(),
-            ))
-        } else {
-            Ok(())
-        }
-    }
-}
-
 struct ResidentPreworkLossFactory {
     starts: Arc<AtomicUsize>,
     terminates: Arc<AtomicUsize>,
@@ -735,62 +651,6 @@ impl SidecarHandle for ResidentPreworkLossHandle {
     async fn terminate(&mut self) -> Result<(), CoreError> {
         self.terminates.fetch_add(1, Ordering::SeqCst);
         self.terminated.notify_one();
-        Ok(())
-    }
-}
-
-struct CleanupRetryFactory {
-    entered: Arc<Notify>,
-    release: Arc<Notify>,
-    loss: CancellationToken,
-    shutdown_calls: Arc<AtomicUsize>,
-    terminate_calls: Arc<AtomicUsize>,
-}
-
-struct CleanupRetryHandle {
-    entered: Arc<Notify>,
-    release: Arc<Notify>,
-    loss: CancellationToken,
-    shutdown_calls: Arc<AtomicUsize>,
-    terminate_calls: Arc<AtomicUsize>,
-}
-
-#[async_trait]
-impl BoundSidecarFactory for CleanupRetryFactory {
-    async fn start(&self, _start: SidecarStart) -> Result<Box<dyn SidecarHandle>, CoreError> {
-        Ok(Box::new(CleanupRetryHandle {
-            entered: self.entered.clone(),
-            release: self.release.clone(),
-            loss: self.loss.clone(),
-            shutdown_calls: self.shutdown_calls.clone(),
-            terminate_calls: self.terminate_calls.clone(),
-        }))
-    }
-}
-
-#[async_trait]
-impl SidecarHandle for CleanupRetryHandle {
-    async fn ready(&mut self) -> Result<(), CoreError> {
-        Ok(())
-    }
-
-    async fn shutdown(&mut self) -> Result<(), CoreError> {
-        let attempt = self.shutdown_calls.fetch_add(1, Ordering::SeqCst) + 1;
-        if attempt == 1 {
-            self.entered.notify_one();
-            self.release.notified().await;
-            Err(CoreError::Invalid("stop cleanup failed".to_string()))
-        } else {
-            Ok(())
-        }
-    }
-
-    fn loss_token(&self) -> Option<CancellationToken> {
-        Some(self.loss.clone())
-    }
-
-    async fn terminate(&mut self) -> Result<(), CoreError> {
-        self.terminate_calls.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }
@@ -2417,10 +2277,10 @@ async fn explicit_idle_resident_stop_is_final_idempotent_and_releases_claim() {
     assert_eq!(ready.load(Ordering::SeqCst), 1);
     assert!(healthy.load(Ordering::SeqCst));
 
-    supervisor.stop_resident(root, &handle).await.unwrap();
-    supervisor.stop_resident(root, &handle).await.unwrap();
-    assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
-    assert_eq!(terminates.load(Ordering::SeqCst), 0);
+    supervisor.end_member(root, &handle).await.unwrap();
+    supervisor.end_member(root, &handle).await.unwrap();
+    assert_eq!(shutdowns.load(Ordering::SeqCst), 0);
+    assert_eq!(terminates.load(Ordering::SeqCst), 1);
     assert!(
         !engine
             .store()
@@ -2436,496 +2296,6 @@ async fn explicit_idle_resident_stop_is_final_idempotent_and_releases_claim() {
     assert!(supervisor.team_cancel(root).is_none());
 
     assert_stopped_member_revives(&engine, root, child, &handle, "after stop").await;
-}
-
-#[tokio::test]
-async fn duplicate_stop_shares_cleanup_failure_and_later_retries_cleanup_without_reterminalizing() {
-    let (engine, agent) = engine().await;
-    let root = engine
-        .create(CreateSession {
-            parent: None,
-            agent: agent.name.clone(),
-            model: agent.model.clone(),
-            workdir: agent.workdir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let binding = engine.bind_runtime(&agent.workdir).unwrap();
-    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
-    let entered = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    let loss = CancellationToken::new();
-    let shutdown_calls = Arc::new(AtomicUsize::new(0));
-    let terminate_calls = Arc::new(AtomicUsize::new(0));
-    let factory: Arc<dyn BoundSidecarFactory> = Arc::new(CleanupRetryFactory {
-        entered: entered.clone(),
-        release: release.clone(),
-        loss: loss.clone(),
-        shutdown_calls: shutdown_calls.clone(),
-        terminate_calls: terminate_calls.clone(),
-    });
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let (child, handle) = supervisor
-        .spawn_resident(
-            root,
-            agent,
-            (binding, Arc::from([]), resources, Some(factory)),
-            String::new(),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-
-    let mut events = engine.bus().subscribe();
-    engine
-        .mail_send(
-            root,
-            MailEndpoint::Handle(handle.clone()),
-            MailKind::Message,
-            "activate cleanup retry sidecar".to_string(),
-        )
-        .await
-        .unwrap();
-    loop {
-        let envelope = events.recv().await.unwrap();
-        if matches!(
-            &envelope.event,
-            Event::AgentActivityChanged {
-                session,
-                handle: event_handle,
-                status: RosterStatus::Idle,
-                ..
-            } if *session == root && event_handle == &handle
-        ) {
-            break;
-        }
-    }
-
-    let first_supervisor = supervisor.clone();
-    let first_handle = handle.clone();
-    let first_stop =
-        tokio::spawn(async move { first_supervisor.stop_resident(root, &first_handle).await });
-    entered.notified().await;
-
-    let mut duplicate_stop = Box::pin(supervisor.stop_resident(root, &handle));
-    assert!(
-        duplicate_stop.as_mut().now_or_never().is_none(),
-        "duplicate stop must remain pending until cleanup completes"
-    );
-    release.notify_one();
-
-    let first_result = first_stop.await.unwrap();
-    let duplicate_result = duplicate_stop.await;
-    loss.cancel();
-    let retry_result = supervisor.stop_resident(root, &handle).await;
-    assert_eq!(shutdown_calls.load(Ordering::SeqCst), 2);
-    assert_eq!(terminate_calls.load(Ordering::SeqCst), 0);
-    assert!(
-        retry_result.is_ok(),
-        "cleanup retry must succeed: {retry_result:?}"
-    );
-    assert!(first_result.is_err());
-    assert!(duplicate_result.is_err());
-
-    let first_error = first_result.expect_err("first stop must report cleanup failure");
-    let duplicate_error = duplicate_result.expect_err("duplicate stop must report cleanup failure");
-    assert!(matches!(
-        &first_error,
-        CoreError::Invalid(message) if message == "stop cleanup failed"
-    ));
-    assert!(matches!(
-        &duplicate_error,
-        CoreError::Invalid(message) if message == "stop cleanup failed"
-    ));
-    assert_eq!(first_error.to_string(), duplicate_error.to_string());
-
-    let stop_events = engine
-        .store()
-        .replay(root)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|envelope| {
-            matches!(
-                &envelope.event,
-                Event::AgentActivityChanged {
-                    session,
-                    handle: event_handle,
-                    status: RosterStatus::Failed,
-                    current_task: Some(task),
-                } if *session == root
-                    && event_handle == &handle
-                    && task == "resident stopped"
-            )
-        })
-        .count();
-    assert_eq!(stop_events, 1);
-    assert!(
-        !engine
-            .store()
-            .active_actor_ids()
-            .await
-            .unwrap()
-            .contains(&child)
-    );
-    assert!(supervisor.team_cancel(root).is_none());
-}
-
-#[tokio::test]
-async fn failed_running_stop_cleanup_cannot_become_ok_after_team_kill() {
-    let polls = Arc::new(AtomicUsize::new(0));
-    let (entered_tx, mut entered_rx) = mpsc::unbounded_channel();
-    let release = Arc::new(Notify::new());
-    let provider = Arc::new(ResidentStopBarrierProvider {
-        polls,
-        entered: entered_tx,
-        release: release.clone(),
-    });
-    let (engine, agent) = governed_engine(
-        SubagentLimits {
-            per_team_message_budget: 1,
-            ..SubagentLimits::default()
-        },
-        provider,
-    )
-    .await;
-    let root = engine
-        .create(CreateSession {
-            parent: None,
-            agent: agent.name.clone(),
-            model: agent.model.clone(),
-            workdir: agent.workdir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let binding = engine.bind_runtime(&agent.workdir).unwrap();
-    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
-    let loss = CancellationToken::new();
-    let terminated = Arc::new(Notify::new());
-    let terminates = Arc::new(AtomicUsize::new(0));
-    let factory: Arc<dyn BoundSidecarFactory> = Arc::new(ResidentTerminateFailureFactory {
-        loss,
-        terminated: terminated.clone(),
-        terminates: terminates.clone(),
-    });
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let (child, handle) = supervisor
-        .spawn_resident(
-            root,
-            agent,
-            (binding, Arc::from([]), resources, Some(factory)),
-            String::new(),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-
-    let mut events = engine.bus().subscribe();
-    engine
-        .mail_send(
-            root,
-            MailEndpoint::Handle(handle.clone()),
-            MailKind::Message,
-            "running stop cleanup".to_string(),
-        )
-        .await
-        .unwrap();
-    entered_rx
-        .recv()
-        .await
-        .expect("provider must enter first turn");
-
-    let first_supervisor = supervisor.clone();
-    let first_handle = handle.clone();
-    let first_stop =
-        tokio::spawn(async move { first_supervisor.stop_resident(root, &first_handle).await });
-    loop {
-        let envelope = events.recv().await.unwrap();
-        if matches!(
-            &envelope.event,
-            Event::AgentActivityChanged {
-                session,
-                handle: event_handle,
-                status: RosterStatus::Failed,
-                current_task: Some(task),
-            } if *session == root
-                && event_handle == &handle
-                && task == "resident stopped"
-        ) {
-            break;
-        }
-    }
-
-    release.notify_one();
-    terminated.notified().await;
-    let first_result = first_stop.await.unwrap();
-    assert!(matches!(
-        &first_result,
-        Err(CoreError::Invalid(message)) if message == "test resident terminate failure"
-    ));
-
-    engine
-        .mail_announce(root, "budget trip".to_string())
-        .await
-        .unwrap();
-    terminated.notified().await;
-    tokio::task::yield_now().await;
-
-    assert!(supervisor.team_cancel(root).is_some());
-    let second_result = supervisor.stop_resident(root, &handle).await;
-    assert!(matches!(
-        &second_result,
-        Err(CoreError::Invalid(message)) if message == "test resident terminate failure"
-    ));
-    assert_eq!(terminates.load(Ordering::SeqCst), 3);
-    assert!(supervisor.team_cancel(root).is_some());
-
-    assert!(
-        !engine
-            .store()
-            .active_actor_ids()
-            .await
-            .unwrap()
-            .contains(&child)
-    );
-    let projection = engine.read_projection(root).await.unwrap();
-    assert!(!projection.team.roster.contains_key(handle.as_str()));
-    assert_eq!(projection.team.archived[handle.as_str()].session, child);
-    let stop_events = engine
-        .store()
-        .replay(root)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|envelope| {
-            matches!(
-                &envelope.event,
-                Event::AgentActivityChanged {
-                    session,
-                    handle: event_handle,
-                    status: RosterStatus::Failed,
-                    current_task: Some(task),
-                } if *session == root
-                    && event_handle == &handle
-                    && task == "resident stopped"
-            )
-        })
-        .count();
-    assert_eq!(stop_events, 1);
-}
-
-#[tokio::test]
-async fn resident_stop_durable_failure_defers_cleanup_and_allows_retry() {
-    let db_dir = support::TestDir::new("resident-stop-durable-failure");
-    let db_path = db_dir.path().join("sessions.db");
-    let db_path = db_path.to_string_lossy().into_owned();
-    let router = Arc::new(ProviderRouter::new().with(Arc::new(SelectiveFakeProvider)));
-    let tools = Arc::new(ToolRegistry::builtins());
-    let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
-    let engine = Arc::new(SessionEngine::new(
-        SessionStore::connect(&db_path).await.unwrap(),
-        router,
-        support::test_runtime(tools),
-        permission,
-        EventBus::default(),
-    ));
-    let agent = AgentSpec {
-        name: AgentName::new("hya-main"),
-        model: ModelRef::new("fake"),
-        system_prompt: "x".to_string(),
-        workdir: PathBuf::from("/tmp"),
-        reasoning: None,
-    };
-    let root = engine
-        .create(CreateSession {
-            parent: None,
-            agent: agent.name.clone(),
-            model: agent.model.clone(),
-            workdir: agent.workdir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let binding = engine.bind_runtime(&agent.workdir).unwrap();
-    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
-    let ready = Arc::new(AtomicUsize::new(0));
-    let healthy = Arc::new(AtomicBool::new(false));
-    let shutdowns = Arc::new(AtomicUsize::new(0));
-    let terminates = Arc::new(AtomicUsize::new(0));
-    let factory: Arc<dyn BoundSidecarFactory> = Arc::new(ResidentStopProbeFactory {
-        ready: ready.clone(),
-        healthy: healthy.clone(),
-        shutdowns: shutdowns.clone(),
-        terminates: terminates.clone(),
-        terminated: None,
-        loss: None,
-    });
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let (child, handle) = supervisor
-        .spawn_resident(
-            root,
-            agent,
-            (binding, Arc::from([]), resources, Some(factory)),
-            String::new(),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-
-    let mut events = engine.bus().subscribe();
-    engine
-        .mail_send(
-            root,
-            MailEndpoint::Handle(handle.clone()),
-            MailKind::Message,
-            "resident stop durable failure".to_string(),
-        )
-        .await
-        .unwrap();
-    loop {
-        let envelope = events.recv().await.unwrap();
-        if matches!(
-            &envelope.event,
-            Event::AgentActivityChanged {
-                session,
-                handle: event_handle,
-                status: RosterStatus::Idle,
-                ..
-            } if *session == root && event_handle == &handle
-        ) {
-            break;
-        }
-    }
-    assert_eq!(ready.load(Ordering::SeqCst), 1);
-    assert!(healthy.load(Ordering::SeqCst));
-
-    let mut connection = SqliteConnection::connect(&format!("sqlite://{db_path}"))
-        .await
-        .unwrap();
-    sqlx::query(
-        "CREATE TRIGGER test_resident_stop_durable_failure \
-         BEFORE UPDATE OF state ON resident_actor_claim \
-         WHEN NEW.state = 'released' AND OLD.state = 'active' \
-         BEGIN SELECT RAISE(ABORT, 'test stop boundary'); END;",
-    )
-    .execute(&mut connection)
-    .await
-    .unwrap();
-
-    sqlx::query("BEGIN IMMEDIATE")
-        .execute(&mut connection)
-        .await
-        .unwrap();
-    let first_supervisor = supervisor.clone();
-    let first_handle = handle.clone();
-    let mut first_stop = Box::pin(first_supervisor.stop_resident(root, &first_handle));
-    assert!(
-        first_stop.as_mut().now_or_never().is_none(),
-        "leader stop must remain pending behind the writer"
-    );
-    let duplicate_supervisor = supervisor.clone();
-    let duplicate_handle = handle.clone();
-    let mut duplicate_stop = Box::pin(duplicate_supervisor.stop_resident(root, &duplicate_handle));
-    assert!(
-        duplicate_stop.as_mut().now_or_never().is_none(),
-        "duplicate stop must await the shared completion"
-    );
-    sqlx::query("ROLLBACK")
-        .execute(&mut connection)
-        .await
-        .unwrap();
-    let first_result = first_stop.await;
-    let duplicate_result = duplicate_stop.await;
-    let first_error = first_result.expect_err("leader stop must report the SQLx failure");
-    let duplicate_error =
-        duplicate_result.expect_err("duplicate stop must report the SQLx failure");
-    assert!(matches!(
-        &first_error,
-        CoreError::Store(hya_store::StoreError::Sqlite(_))
-    ));
-    assert!(matches!(
-        &duplicate_error,
-        CoreError::Store(hya_store::StoreError::Sqlite(_))
-    ));
-    assert_eq!(first_error.to_string(), duplicate_error.to_string());
-    assert_eq!(shutdowns.load(Ordering::SeqCst), 0);
-    assert_eq!(terminates.load(Ordering::SeqCst), 0);
-    assert!(supervisor.team_cancel(root).is_some());
-    assert!(
-        engine
-            .store()
-            .active_actor_ids()
-            .await
-            .unwrap()
-            .contains(&child)
-    );
-    let stop_events = engine
-        .store()
-        .replay(root)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|envelope| {
-            matches!(
-                &envelope.event,
-                Event::AgentActivityChanged {
-                    session,
-                    handle: event_handle,
-                    status: RosterStatus::Failed,
-                    current_task: Some(task),
-                } if *session == root
-                    && event_handle == &handle
-                    && task == "resident stopped"
-            )
-        })
-        .count();
-    assert_eq!(stop_events, 0);
-
-    sqlx::query("DROP TRIGGER test_resident_stop_durable_failure")
-        .execute(&mut connection)
-        .await
-        .unwrap();
-    let second_result = supervisor.stop_resident(root, &handle).await;
-    assert!(second_result.is_ok());
-    assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
-    assert_eq!(terminates.load(Ordering::SeqCst), 0);
-    assert!(
-        !engine
-            .store()
-            .active_actor_ids()
-            .await
-            .unwrap()
-            .contains(&child)
-    );
-    let stop_events = engine
-        .store()
-        .replay(root)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|envelope| {
-            matches!(
-                &envelope.event,
-                Event::AgentActivityChanged {
-                    session,
-                    handle: event_handle,
-                    status: RosterStatus::Failed,
-                    current_task: Some(task),
-                } if *session == root
-                    && event_handle == &handle
-                    && task == "resident stopped"
-            )
-        })
-        .count();
-    assert_eq!(stop_events, 1);
 }
 
 #[tokio::test]
@@ -3070,7 +2440,7 @@ async fn explicit_stop_fails_closed_instead_of_taking_over_a_newer_resident_clai
         .recover_claim(child, hya_proto::OwnerRunId::new())
         .await
         .unwrap();
-    let result = supervisor.stop_resident(root, &handle).await;
+    let result = supervisor.end_member(root, &handle).await;
     assert!(matches!(
         result,
         Err(CoreError::Store(hya_store::StoreError::StaleActorClaim { actor_id }))
@@ -3198,7 +2568,7 @@ async fn resident_direct_send_committed_before_stop_remains_unread() {
         .expect("direct mail must commit");
     assert_eq!(receipt.recipients, 1);
 
-    let stop_result = supervisor.stop_resident(root, &handle).await;
+    let stop_result = supervisor.end_member(root, &handle).await;
     sender_task.await.unwrap();
     assert!(
         stop_result.is_ok(),
@@ -3387,419 +2757,6 @@ async fn message_budget_kill_terminates_sidecar_and_removes_resident_slot() {
 }
 
 #[tokio::test]
-async fn message_budget_kill_terminate_failure_allows_explicit_cleanup_retry() {
-    let (engine, agent) = governed_engine(
-        SubagentLimits {
-            per_team_message_budget: 1,
-            ..SubagentLimits::default()
-        },
-        Arc::new(SelectiveFakeProvider),
-    )
-    .await;
-    let root = engine
-        .create(CreateSession {
-            parent: None,
-            agent: agent.name.clone(),
-            model: agent.model.clone(),
-            workdir: agent.workdir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let binding = engine.bind_runtime(&agent.workdir).unwrap();
-    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
-    let terminated = Arc::new(Notify::new());
-    let terminates = Arc::new(AtomicUsize::new(0));
-    let factory: Arc<dyn BoundSidecarFactory> = Arc::new(ResidentBudgetTerminateRetryFactory {
-        terminated: terminated.clone(),
-        terminates: terminates.clone(),
-    });
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let (child, handle) = supervisor
-        .spawn_resident(
-            root,
-            agent,
-            (binding, Arc::from([]), resources, Some(factory)),
-            String::new(),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-
-    let mut events = engine.bus().subscribe();
-    engine
-        .mail_send(
-            root,
-            MailEndpoint::Handle(handle.clone()),
-            MailKind::Message,
-            "first message".to_string(),
-        )
-        .await
-        .unwrap();
-    loop {
-        let envelope = events.recv().await.unwrap();
-        if matches!(
-            &envelope.event,
-            Event::AgentActivityChanged {
-                session,
-                handle: event_handle,
-                status: RosterStatus::Idle,
-                ..
-            } if *session == root && event_handle == &handle
-        ) {
-            break;
-        }
-    }
-
-    engine
-        .mail_send(
-            root,
-            MailEndpoint::Handle(handle.clone()),
-            MailKind::Message,
-            "budget trip".to_string(),
-        )
-        .await
-        .unwrap();
-    tokio::time::timeout(std::time::Duration::from_millis(250), async {
-        loop {
-            let envelope = events.recv().await.unwrap();
-            if matches!(
-                &envelope.event,
-                Event::AgentActivityChanged {
-                    session,
-                    handle: event_handle,
-                    status: RosterStatus::Failed,
-                    current_task: Some(task),
-                } if *session == root
-                    && event_handle == &handle
-                    && task.contains("message budget exceeded")
-            ) {
-                break;
-            }
-        }
-    })
-    .await
-    .expect("message budget failure event must be emitted");
-    tokio::time::timeout(std::time::Duration::from_millis(250), terminated.notified())
-        .await
-        .expect("resident sidecar termination must be attempted after team kill");
-
-    assert_eq!(terminates.load(Ordering::SeqCst), 1);
-    assert!(
-        !engine
-            .store()
-            .active_actor_ids()
-            .await
-            .unwrap()
-            .contains(&child)
-    );
-    assert!(supervisor.team_cancel(root).is_some());
-    let budget_failed_before = engine
-        .store()
-        .replay(root)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|envelope| {
-            matches!(
-                &envelope.event,
-                Event::AgentActivityChanged {
-                    session,
-                    handle: event_handle,
-                    status: RosterStatus::Failed,
-                    current_task: Some(task),
-                } if *session == root
-                    && event_handle == &handle
-                    && task.contains("message budget exceeded")
-            )
-        })
-        .count();
-    assert_eq!(budget_failed_before, 1);
-
-    let stop_result = supervisor.stop_resident(root, &handle).await;
-    assert!(
-        stop_result.is_ok(),
-        "explicit cleanup retry must succeed: {stop_result:?}"
-    );
-    assert_eq!(terminates.load(Ordering::SeqCst), 2);
-    assert!(supervisor.team_cancel(root).is_none());
-    let events_after_stop = engine.store().replay(root).await.unwrap();
-    let budget_failed_after = events_after_stop
-        .iter()
-        .filter(|envelope| {
-            matches!(
-                &envelope.event,
-                Event::AgentActivityChanged {
-                    session,
-                    handle: event_handle,
-                    status: RosterStatus::Failed,
-                    current_task: Some(task),
-                } if *session == root
-                    && event_handle == &handle
-                    && task.contains("message budget exceeded")
-            )
-        })
-        .count();
-    assert_eq!(budget_failed_after, 1);
-    let failed_terminal_count = events_after_stop
-        .iter()
-        .filter(|envelope| {
-            matches!(
-                &envelope.event,
-                Event::AgentActivityChanged {
-                    session,
-                    handle: event_handle,
-                    status: RosterStatus::Failed,
-                    ..
-                } if *session == root && event_handle == &handle
-            )
-        })
-        .count();
-    assert_eq!(failed_terminal_count, 1);
-
-    let repeat_result = supervisor.stop_resident(root, &handle).await;
-    assert!(repeat_result.is_ok(), "repeat stop must remain idempotent");
-    assert_eq!(terminates.load(Ordering::SeqCst), 2);
-}
-
-#[tokio::test]
-async fn message_budget_kill_store_failure_preserves_claim_and_slot_for_retry() {
-    let db_dir = support::TestDir::new("message-budget-kill-store-failure");
-    let db_path = db_dir.path().join("sessions.db");
-    let db_path = db_path.to_string_lossy().into_owned();
-    let router = Arc::new(ProviderRouter::new().with(Arc::new(SelectiveFakeProvider)));
-    let tools = Arc::new(ToolRegistry::builtins());
-    let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
-    let engine = Arc::new(
-        SessionEngine::new(
-            SessionStore::connect(&db_path).await.unwrap(),
-            router,
-            support::test_runtime(tools),
-            permission,
-            EventBus::default(),
-        )
-        .with_governor(SubagentGovernor::new(SubagentLimits {
-            per_team_message_budget: 1,
-            ..SubagentLimits::default()
-        })),
-    );
-    let agent = AgentSpec {
-        name: AgentName::new("hya-main"),
-        model: ModelRef::new("fake"),
-        system_prompt: "x".to_string(),
-        workdir: PathBuf::from("/tmp"),
-        reasoning: None,
-    };
-    let root_a = engine
-        .create(CreateSession {
-            parent: None,
-            agent: agent.name.clone(),
-            model: agent.model.clone(),
-            workdir: agent.workdir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let root_b = engine
-        .create(CreateSession {
-            parent: None,
-            agent: agent.name.clone(),
-            model: agent.model.clone(),
-            workdir: agent.workdir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let binding_a = engine.bind_runtime(&agent.workdir).unwrap();
-    let resources_a = binding_a
-        .agent_resource_policy(agent.name.as_str())
-        .unwrap();
-    let (child_a, handle_a) = supervisor
-        .spawn_resident(
-            root_a,
-            agent.clone(),
-            (binding_a, Arc::from([]), resources_a, None),
-            String::new(),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-    let binding_b = engine.bind_runtime(&agent.workdir).unwrap();
-    let resources_b = binding_b
-        .agent_resource_policy(agent.name.as_str())
-        .unwrap();
-    let (child_b, handle_b) = supervisor
-        .spawn_resident(
-            root_b,
-            agent,
-            (binding_b, Arc::from([]), resources_b, None),
-            String::new(),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-
-    let mut events = engine.bus().subscribe();
-    engine
-        .mail_send(
-            root_a,
-            MailEndpoint::Handle(handle_a.clone()),
-            MailKind::Message,
-            "first message".to_string(),
-        )
-        .await
-        .unwrap();
-    loop {
-        let envelope = events.recv().await.unwrap();
-        if matches!(
-            &envelope.event,
-            Event::AgentActivityChanged {
-                session,
-                handle,
-                status: RosterStatus::Idle,
-                ..
-            } if *session == root_a && handle == &handle_a
-        ) {
-            break;
-        }
-    }
-
-    let root_a_cancel = supervisor
-        .team_cancel(root_a)
-        .expect("resident team must have a cancellation token");
-    let mut connection = SqliteConnection::connect(&format!("sqlite://{db_path}"))
-        .await
-        .unwrap();
-    sqlx::query(
-        "CREATE TRIGGER test_message_budget_kill_store_failure \
-         BEFORE UPDATE OF state ON resident_actor_claim \
-         WHEN NEW.state = 'released' AND OLD.state = 'active' \
-         BEGIN SELECT RAISE(ABORT, 'test message budget kill release failure'); END;",
-    )
-    .execute(&mut connection)
-    .await
-    .unwrap();
-
-    engine
-        .mail_send(
-            root_a,
-            MailEndpoint::Handle(handle_a.clone()),
-            MailKind::Message,
-            "budget trip".to_string(),
-        )
-        .await
-        .unwrap();
-    root_a_cancel.cancelled().await;
-
-    engine
-        .mail_send(
-            root_b,
-            MailEndpoint::Handle(handle_b.clone()),
-            MailKind::Message,
-            "first message".to_string(),
-        )
-        .await
-        .unwrap();
-    loop {
-        let envelope = events.recv().await.unwrap();
-        if matches!(
-            &envelope.event,
-            Event::AgentActivityChanged {
-                session,
-                handle,
-                status: RosterStatus::Idle,
-                ..
-            } if *session == root_b && handle == &handle_b
-        ) {
-            break;
-        }
-    }
-
-    let budget_failed_before_retry = engine
-        .store()
-        .replay(root_a)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|envelope| {
-            matches!(
-                &envelope.event,
-                Event::AgentActivityChanged {
-                    session,
-                    handle,
-                    status: RosterStatus::Failed,
-                    current_task: Some(task),
-                } if *session == root_a
-                    && handle == &handle_a
-                    && task.contains("message budget exceeded")
-            )
-        })
-        .count();
-    assert_eq!(budget_failed_before_retry, 0);
-    assert!(
-        engine
-            .store()
-            .active_actor_ids()
-            .await
-            .unwrap()
-            .contains(&child_a)
-    );
-    assert!(supervisor.team_cancel(root_a).is_some());
-
-    sqlx::query("DROP TRIGGER test_message_budget_kill_store_failure")
-        .execute(&mut connection)
-        .await
-        .unwrap();
-    let stop_result = supervisor.stop_resident(root_a, &handle_a).await;
-    assert!(
-        stop_result.is_ok(),
-        "explicit cleanup retry must succeed: {stop_result:?}"
-    );
-    assert!(
-        !engine
-            .store()
-            .active_actor_ids()
-            .await
-            .unwrap()
-            .contains(&child_a)
-    );
-    assert!(supervisor.team_cancel(root_a).is_none());
-    let events_after_stop = engine.store().replay(root_a).await.unwrap();
-    let failed_terminal_count = events_after_stop
-        .iter()
-        .filter(|envelope| {
-            matches!(
-                &envelope.event,
-                Event::AgentActivityChanged {
-                    session,
-                    handle,
-                    status: RosterStatus::Failed,
-                    ..
-                } if *session == root_a && handle == &handle_a
-            )
-        })
-        .count();
-    assert_eq!(failed_terminal_count, 1);
-
-    supervisor.stop_resident(root_b, &handle_b).await.unwrap();
-    assert!(
-        !engine
-            .store()
-            .active_actor_ids()
-            .await
-            .unwrap()
-            .contains(&child_b)
-    );
-}
-
-#[tokio::test]
 async fn explicit_running_resident_stop_is_idempotent_fences_and_drops_queued_mail() {
     let polls = Arc::new(AtomicUsize::new(0));
     let (entered_tx, mut entered_rx) = mpsc::unbounded_channel();
@@ -3875,30 +2832,15 @@ async fn explicit_running_resident_stop_is_idempotent_fences_and_drops_queued_ma
     let first_supervisor = supervisor.clone();
     let first_handle = handle.clone();
     let first_stop =
-        tokio::spawn(async move { first_supervisor.stop_resident(root, &first_handle).await });
+        tokio::spawn(async move { first_supervisor.end_member(root, &first_handle).await });
     loop {
         let envelope = events.recv().await.unwrap();
-        if matches!(
-            &envelope.event,
-            Event::AgentActivityChanged {
-                session,
-                handle: event_handle,
-                status: RosterStatus::Failed,
-                current_task: Some(task),
-            } if *session == root
-                && event_handle == &handle
-                && task == "resident stopped"
-        ) {
+        if matches!(envelope.event, Event::MessageFinished { session, cause: Some(hya_proto::FinishCause::Archived), .. } if session == child)
+        {
             break;
         }
     }
-
-    let mut second_stop = Box::pin(supervisor.stop_resident(root, &handle));
-    assert!(
-        second_stop.as_mut().now_or_never().is_none(),
-        "duplicate stop must remain pending until the leader's durable finalization plus cleanup completes"
-    );
-    let replay_at_recovery = engine.store().replay(child).await.unwrap().len();
+    let second_stop = supervisor.end_member(root, &handle);
     release.notify_one();
     let first_result = first_stop.await.unwrap();
     let second_result = second_stop.await;
@@ -3936,10 +2878,7 @@ async fn explicit_running_resident_stop_is_idempotent_fences_and_drops_queued_ma
             )
         })
     }));
-    assert_eq!(
-        engine.store().replay(child).await.unwrap().len(),
-        replay_at_recovery
-    );
+    assert!(!child_projection.session.messages.iter().any(|message| message.parts.iter().any(|part| matches!(part, PartProjection::Text { text, .. } if text.contains("RESIDENT_STOP_TEXT")))));
 
     assert_stopped_member_revives(&engine, root, child, &handle, "after stop").await;
 }
@@ -4249,17 +3188,6 @@ async fn resident_mailbox_message_waits_for_sidecar_ack_before_running() {
         })
         .await
         .unwrap();
-    let child = engine
-        .create(CreateSession {
-            parent: Some(root),
-            agent: AgentName::new("hya-main"),
-            model: ModelRef::new("fake"),
-            workdir: "/tmp".to_string(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
     let supervisor = ResidentSupervisor::start(engine.clone());
 
     let (start_tx, mut start_rx) = mpsc::unbounded_channel();
@@ -4268,14 +3196,16 @@ async fn resident_mailbox_message_waits_for_sidecar_ack_before_running() {
         starts: start_tx,
         ready: ready.clone(),
     });
-    supervisor
-        .register_existing_resident_with_sidecar(
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
+    let (child, member_handle, _) = supervisor
+        .spawn_resident_parked(
             root,
-            child,
-            "worker-1".to_string(),
             agent.clone(),
+            (binding, Arc::from([]), resources, Some(factory)),
+            "sidecar test".into(),
             None,
-            factory,
+            None,
         )
         .await
         .unwrap();
@@ -4289,7 +3219,7 @@ async fn resident_mailbox_message_waits_for_sidecar_ack_before_running() {
     engine
         .mail_send(
             root,
-            MailEndpoint::Handle("worker-1".to_string()),
+            MailEndpoint::Handle(member_handle.clone()),
             MailKind::Message,
             "resident task".to_string(),
         )
@@ -4313,7 +3243,7 @@ async fn resident_mailbox_message_waits_for_sidecar_ack_before_running() {
             .any(|message| matches!(message.role, Role::User))
     );
     let root_projection = engine.read_projection(root).await.unwrap();
-    let worker = root_projection.team.roster.get("main/worker-1").unwrap();
+    let worker = root_projection.team.roster.get(&member_handle).unwrap();
     assert_eq!(worker.status, RosterStatus::Idle);
     assert!(!matches!(worker.status, RosterStatus::Busy));
 
@@ -4423,17 +3353,6 @@ async fn resident_sidecar_ready_failure_terminates_handle_once_and_removes_slot(
         })
         .await
         .unwrap();
-    let child = engine
-        .create(CreateSession {
-            parent: Some(root),
-            agent: agent.name.clone(),
-            model: agent.model.clone(),
-            workdir: agent.workdir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
     let supervisor = ResidentSupervisor::start(engine.clone());
     let ready = Arc::new(AtomicUsize::new(0));
     let terminates = Arc::new(AtomicUsize::new(0));
@@ -4443,14 +3362,16 @@ async fn resident_sidecar_ready_failure_terminates_handle_once_and_removes_slot(
         terminates: terminates.clone(),
         shutdowns: shutdowns.clone(),
     });
-    supervisor
-        .register_existing_resident_with_sidecar(
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
+    let (child, member_handle, _) = supervisor
+        .spawn_resident_parked(
             root,
-            child,
-            "worker-1".to_string(),
-            agent,
+            agent.clone(),
+            (binding, Arc::from([]), resources, Some(factory)),
+            "sidecar test".into(),
             None,
-            factory,
+            None,
         )
         .await
         .unwrap();
@@ -4459,7 +3380,7 @@ async fn resident_sidecar_ready_failure_terminates_handle_once_and_removes_slot(
     engine
         .mail_send(
             root,
-            MailEndpoint::Handle("worker-1".to_string()),
+            MailEndpoint::Handle(member_handle.clone()),
             MailKind::Message,
             "resident task".to_string(),
         )
@@ -4477,7 +3398,7 @@ async fn resident_sidecar_ready_failure_terminates_handle_once_and_removes_slot(
             } if *session == root
                 // Activity events carry the canonical path; only
                 // `AgentRegistered.handle` is still the bare leaf.
-                && handle == "main/worker-1"
+                && handle == &member_handle
                 && task.contains("sidecar ACK rejected")
         ) {
             break;
@@ -4496,309 +3417,6 @@ async fn resident_sidecar_ready_failure_terminates_handle_once_and_removes_slot(
             .contains(&child)
     );
     assert!(supervisor.team_cancel(root).is_none());
-}
-
-#[tokio::test]
-async fn resident_sidecar_ready_failure_finalize_rollback_keeps_slot_for_retry() {
-    let db_dir = support::TestDir::new("resident-sidecar-ready-failure-finalize-rollback");
-    let db_path = db_dir.path().join("sessions.db");
-    let db_path = db_path.to_string_lossy().into_owned();
-    let router = Arc::new(ProviderRouter::new().with(Arc::new(SelectiveFakeProvider)));
-    let tools = Arc::new(ToolRegistry::builtins());
-    let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
-    let engine = Arc::new(SessionEngine::new(
-        SessionStore::connect(&db_path).await.unwrap(),
-        router,
-        support::test_runtime(tools),
-        permission,
-        EventBus::default(),
-    ));
-    let agent = AgentSpec {
-        name: AgentName::new("hya-main"),
-        model: ModelRef::new("fake"),
-        system_prompt: "x".to_string(),
-        workdir: PathBuf::from("/tmp"),
-        reasoning: None,
-    };
-    let root = engine
-        .create(CreateSession {
-            parent: None,
-            agent: agent.name.clone(),
-            model: agent.model.clone(),
-            workdir: agent.workdir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let child = engine
-        .create(CreateSession {
-            parent: Some(root),
-            agent: agent.name.clone(),
-            model: agent.model.clone(),
-            workdir: agent.workdir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let ready = Arc::new(AtomicUsize::new(0));
-    let terminates = Arc::new(AtomicUsize::new(0));
-    let shutdowns = Arc::new(AtomicUsize::new(0));
-    let factory: Arc<dyn BoundSidecarFactory> = Arc::new(AckFailureFactory {
-        ready: ready.clone(),
-        terminates: terminates.clone(),
-        shutdowns: shutdowns.clone(),
-    });
-    // Canonical path: registration accepts either form, and every event and
-    // roster key now carries the path (task 08-07).
-    let handle = "main/worker-1".to_string();
-    supervisor
-        .register_existing_resident_with_sidecar(root, child, handle.clone(), agent, None, factory)
-        .await
-        .unwrap();
-
-    let mut connection = SqliteConnection::connect(&format!("sqlite://{db_path}"))
-        .await
-        .unwrap();
-    sqlx::query(
-        "CREATE TRIGGER test_resident_sidecar_ready_failure_finalize_rollback \
-         BEFORE UPDATE OF state ON resident_actor_claim \
-         WHEN NEW.state = 'released' AND OLD.state = 'active' \
-         BEGIN SELECT RAISE(ABORT, 'test sidecar finalize boundary'); END;",
-    )
-    .execute(&mut connection)
-    .await
-    .unwrap();
-
-    engine
-        .mail_send(
-            root,
-            MailEndpoint::Handle(handle.clone()),
-            MailKind::Message,
-            "resident task".to_string(),
-        )
-        .await
-        .unwrap();
-    let activation_attempt = tokio::time::timeout(std::time::Duration::from_millis(250), async {
-        while ready.load(Ordering::SeqCst) != 1 || terminates.load(Ordering::SeqCst) != 1 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await;
-    assert!(
-        activation_attempt.is_ok(),
-        "resident sidecar ACK failure attempt must complete"
-    );
-
-    assert_eq!(ready.load(Ordering::SeqCst), 1);
-    assert_eq!(terminates.load(Ordering::SeqCst), 1);
-    assert_eq!(shutdowns.load(Ordering::SeqCst), 0);
-    assert!(
-        engine
-            .store()
-            .active_actor_ids()
-            .await
-            .unwrap()
-            .contains(&child)
-    );
-    assert!(supervisor.team_cancel(root).is_some());
-    let failed_before_retry = engine
-        .store()
-        .replay(root)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|envelope| {
-            matches!(
-                &envelope.event,
-                Event::AgentActivityChanged {
-                    session,
-                    handle: event_handle,
-                    status: RosterStatus::Failed,
-                    ..
-                } if *session == root && event_handle == &handle
-            )
-        })
-        .count();
-    assert_eq!(failed_before_retry, 0);
-
-    sqlx::query("DROP TRIGGER test_resident_sidecar_ready_failure_finalize_rollback")
-        .execute(&mut connection)
-        .await
-        .unwrap();
-    let stop_result = supervisor.stop_resident(root, &handle).await;
-    assert!(
-        stop_result.is_ok(),
-        "resident stop must retry: {stop_result:?}"
-    );
-    assert!(
-        !engine
-            .store()
-            .active_actor_ids()
-            .await
-            .unwrap()
-            .contains(&child)
-    );
-    assert!(supervisor.team_cancel(root).is_none());
-    let failed_after_retry = engine
-        .store()
-        .replay(root)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|envelope| {
-            matches!(
-                &envelope.event,
-                Event::AgentActivityChanged {
-                    session,
-                    handle: event_handle,
-                    status: RosterStatus::Failed,
-                    ..
-                } if *session == root && event_handle == &handle
-            )
-        })
-        .count();
-    assert_eq!(failed_after_retry, 1);
-}
-
-#[tokio::test]
-async fn resident_stop_concurrent_with_ready_failure_cleanup_completes_idempotently() {
-    let db_dir = support::TestDir::new("resident-sidecar-ready-failure-stop-race");
-    let db_path = db_dir.path().join("sessions.db");
-    let db_path = db_path.to_string_lossy().into_owned();
-    let router = Arc::new(ProviderRouter::new().with(Arc::new(SelectiveFakeProvider)));
-    let tools = Arc::new(ToolRegistry::builtins());
-    let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
-    let engine = Arc::new(SessionEngine::new(
-        SessionStore::connect(&db_path).await.unwrap(),
-        router,
-        support::test_runtime(tools),
-        permission,
-        EventBus::default(),
-    ));
-    let agent = AgentSpec {
-        name: AgentName::new("hya-main"),
-        model: ModelRef::new("fake"),
-        system_prompt: "x".to_string(),
-        workdir: PathBuf::from("/tmp"),
-        reasoning: None,
-    };
-    let root = engine
-        .create(CreateSession {
-            parent: None,
-            agent: agent.name.clone(),
-            model: agent.model.clone(),
-            workdir: agent.workdir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let child = engine
-        .create(CreateSession {
-            parent: Some(root),
-            agent: agent.name.clone(),
-            model: agent.model.clone(),
-            workdir: agent.workdir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let entered = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    let terminates = Arc::new(AtomicUsize::new(0));
-    let factory: Arc<dyn BoundSidecarFactory> = Arc::new(AckFailureRaceFactory {
-        entered: entered.clone(),
-        release: release.clone(),
-        terminates: terminates.clone(),
-    });
-    // Canonical path: registration accepts either form, and every event and
-    // roster key now carries the path (task 08-07).
-    let handle = "main/worker-1".to_string();
-    supervisor
-        .register_existing_resident_with_sidecar(root, child, handle.clone(), agent, None, factory)
-        .await
-        .unwrap();
-
-    engine
-        .mail_send(
-            root,
-            MailEndpoint::Handle(handle.clone()),
-            MailKind::Message,
-            "resident task".to_string(),
-        )
-        .await
-        .unwrap();
-    tokio::time::timeout(std::time::Duration::from_millis(250), entered.notified())
-        .await
-        .expect("resident sidecar ACK failure must enter termination");
-    assert_eq!(terminates.load(Ordering::SeqCst), 1);
-
-    let stop_supervisor = supervisor.clone();
-    let stop_handle = handle.clone();
-    let stop_task =
-        tokio::spawn(async move { stop_supervisor.stop_resident(root, &stop_handle).await });
-    tokio::time::timeout(std::time::Duration::from_millis(250), async {
-        loop {
-            if !engine
-                .store()
-                .active_actor_ids()
-                .await
-                .unwrap()
-                .contains(&child)
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("stop writer transaction must release the resident claim");
-    assert!(
-        supervisor.team_cancel(root).is_some(),
-        "resident slot must remain while activation cleanup is blocked"
-    );
-
-    release.notify_one();
-    let stop_result = stop_task.await.unwrap();
-    assert!(
-        stop_result.is_ok(),
-        "concurrent stop must complete after activation cleanup: {stop_result:?}"
-    );
-    assert_eq!(terminates.load(Ordering::SeqCst), 1);
-    assert!(
-        !engine
-            .store()
-            .active_actor_ids()
-            .await
-            .unwrap()
-            .contains(&child)
-    );
-    assert!(supervisor.team_cancel(root).is_none());
-
-    let failed = engine
-        .store()
-        .replay(root)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|envelope| {
-            matches!(
-                &envelope.event,
-                Event::AgentActivityChanged {
-                    session,
-                    handle: event_handle,
-                    status: RosterStatus::Failed,
-                    ..
-                } if *session == root && event_handle == &handle
-            )
-        })
-        .count();
-    assert_eq!(failed, 1);
 }
 
 #[tokio::test]
@@ -4896,6 +3514,15 @@ async fn idle_resident_sidecar_loss_is_reaped_before_next_mail() {
 
 #[tokio::test]
 async fn resident_prework_sidecar_loss_rearms_queued_mail_under_recovered_claim() {
+    assert_prework_loss_preserves_input(false).await;
+}
+
+#[tokio::test]
+async fn resident_initial_directive_survives_prework_sidecar_loss() {
+    assert_prework_loss_preserves_input(true).await;
+}
+
+async fn assert_prework_loss_preserves_input(initial: bool) {
     let polls = Arc::new(AtomicUsize::new(0));
     let polled = Arc::new(Notify::new());
     let provider = Arc::new(AckProbeProvider {
@@ -4930,28 +3557,34 @@ async fn resident_prework_sidecar_loss_rearms_queued_mail_under_recovered_claim(
         first_loss,
     });
     let supervisor = ResidentSupervisor::start(engine.clone());
+    let mut events = engine.bus().subscribe();
     let (child, handle) = supervisor
         .spawn_resident(
             root,
             agent,
             (binding, Arc::from([]), resources, Some(factory)),
-            String::new(),
+            if initial {
+                "initial directive survives".into()
+            } else {
+                String::new()
+            },
             None,
             None,
         )
         .await
         .unwrap();
 
-    let mut events = engine.bus().subscribe();
-    engine
-        .mail_send(
-            root,
-            MailEndpoint::Handle(handle.clone()),
-            MailKind::Message,
-            "rearm after prework loss".to_string(),
-        )
-        .await
-        .unwrap();
+    if !initial {
+        engine
+            .mail_send(
+                root,
+                MailEndpoint::Handle(handle.clone()),
+                MailKind::Message,
+                "rearm after prework loss".to_string(),
+            )
+            .await
+            .unwrap();
+    }
     tokio::time::timeout(std::time::Duration::from_millis(250), terminated.notified())
         .await
         .expect("first prework sidecar loss must terminate deterministically");
@@ -4960,7 +3593,7 @@ async fn resident_prework_sidecar_loss_rearms_queued_mail_under_recovered_claim(
         tokio::time::timeout(std::time::Duration::from_millis(250), polled.notified()).await;
     assert!(
         polled_result.is_ok(),
-        "queued mail must re-arm a fresh sidecar and poll the provider"
+        "owed input must re-arm a fresh sidecar and poll the provider"
     );
     tokio::time::timeout(std::time::Duration::from_millis(250), async {
         loop {
@@ -4993,8 +3626,19 @@ async fn resident_prework_sidecar_loss_rearms_queued_mail_under_recovered_claim(
     );
     assert!(supervisor.team_cancel(root).is_some());
 
-    supervisor.stop_resident(root, &handle).await.unwrap();
-    assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
+    let child_projection = engine.read_projection(child).await.unwrap();
+    assert_eq!(
+        child_projection
+            .session
+            .messages
+            .iter()
+            .filter(|message| message.role == Role::User)
+            .count(),
+        1
+    );
+    supervisor.end_member(root, &handle).await.unwrap();
+    assert_eq!(shutdowns.load(Ordering::SeqCst), 0);
+    assert_eq!(terminates.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
@@ -5100,7 +3744,7 @@ async fn running_resident_sidecar_loss_aborts_before_provider_release() {
         .contains(&child);
 
     release.notify_one();
-    let _ = supervisor.stop_resident(root, &handle).await;
+    let _ = supervisor.end_member(root, &handle).await;
     let child_events = engine.store().replay(child).await.unwrap();
     let successful_provider_output = child_events.iter().any(|envelope| {
         matches!(
