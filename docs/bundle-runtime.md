@@ -116,7 +116,7 @@ turn/catalog bind); see [Configuration](configuration.md#reloading-configured-pl
 | request `directory` | string | Scope: its Project's bundles are refreshed too; empty for global. |
 | `generation` | uint64 | Runtime generation now bound for the scope. |
 | `bundles[]` | `{id, version, preparedDigest, scope}` | Every published bundle; `scope` is `user` (registry, first-party included) or `project`. |
-| `errors[]` | `{bundleId, message}` | Refresh failures, each of which kept the previous generation. `bundleId` names the bundle whose runtime could not be prepared (process start, declarations, configuration); it is empty for failures that belong to no single bundle (registry or Project scan). `install` prints them as `  <bundleId>: <message>`. |
+| `errors[]` | `{bundleId, message}` | Refresh failures, each of which kept that source’s previous publication. Independent successes can advance the generation. `bundleId` names the bundle whose runtime could not be prepared (process start, declarations, configuration); it is empty for failures that belong to no single bundle (registry or Project scan). The CLI reports these messages and exits with an error. |
 | `scope` | string | `global`, `directory` (not in a registered Project), or `project`. |
 
 `catalog.updated` is emitted when the refresh published a new generation.
@@ -295,11 +295,12 @@ Project bundles (`.hya/bundles/<dir>/`, written by `hya bundle install
   project bundle's `config.yml` models (`agents.<id>.model`) apply only in its
   Project, and saving a model for one of its Agents writes that file.
 - An invalid or unreadable project bundle, including malformed model config,
-  rejects the replacement overlay. The published catalog and its processes
-  remain intact; Hya reports the error instead of exposing a reduced tier or
-  a lower-priority bundle with the same identity. Fix the source and refresh
-  again. Removing the bundle directory is an explicit removal and can publish
-  an overlay without it.
+  keeps that bundle's published catalog and process; unrelated project bundles
+  and plugins can still update. The retained bundle keeps its precedence over
+  lower-priority bundles with the same identity. Binds continue without
+  repeatedly preparing unchanged failed sources. Fix its inputs or explicitly
+  call `POST /v1/bundles:refresh` to retry. Removing the bundle directory is an
+  explicit removal and publishes an overlay without it.
 - Runtime sources are shared by content: an installed bundle's process is one
   process for the global scope and every Project. A project bundle's process
   belongs to the Project that loads it. It stops once that Project no longer

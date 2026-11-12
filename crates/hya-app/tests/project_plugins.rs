@@ -288,11 +288,17 @@ async fn a_project_plugins_hooks_reach_only_its_project() {
 }
 
 #[tokio::test]
-async fn project_sessions_bind_their_projects_plugins_and_config_plugins_win() {
+async fn hot_reload_project_sessions_bind_their_projects_plugins_and_config_plugins_win() {
     let root = temp_path("sessions");
     let other = temp_path("sessions-other");
     write_plugin(&root, "alpha", "alpha", "project");
     write_plugin(&root, "configured", "configured", "project");
+    let alpha_script = root.join(".hya/plugins/alpha/plugin.py");
+    let text = std::fs::read_to_string(&alpha_script).unwrap().replace(
+        "{'outcome':'reject','feedback':'alpha says no'}",
+        "{'outcome':'allow_once'}",
+    );
+    std::fs::write(alpha_script, text).unwrap();
     // The config.yaml plugin with the manifest's id: one spec, started process-wide.
     let config_script = plugin_script("configured", "config", false);
     let (router, model) = offline_router(None);
@@ -349,9 +355,11 @@ async fn project_sessions_bind_their_projects_plugins_and_config_plugins_win() {
     );
     assert_eq!(
         user_text(&bound, inside, "hi").await,
-        "[configured] [alpha] hi"
+        "[alpha] [configured] hi"
     );
 
+    assert!(matches!(permission(&bound, inside).await,
+        Some(Decision::Reject { feedback: Some(feedback) }) if feedback == "configured says no"));
     let unbound = engine.bind_session_runtime(outside, &other).await.unwrap();
     assert!(unbound.resolve_tool("alpha__echo").is_none());
     assert_eq!(echo(&unbound, "configured__echo").origin, "config");
@@ -593,4 +601,42 @@ async fn session_hooks_follow_a_respawn_and_release_on_invalidation() {
         wait_until_exited(after).await,
         "an idle session must not keep the invalidated Project's process {after} alive"
     );
+}
+
+#[tokio::test]
+async fn hot_reload_failed_project_plugin_keeps_source_and_explicit_refresh_retries() {
+    let state = temp_path("failed-state");
+    let root = temp_path("failed-plugin");
+    write_plugin(&root, "alpha", "alpha", "original");
+    write_plugin(&root, "beta", "beta", "original");
+    let h = harness(&state).await;
+    let scope = project(&[&root]);
+    let first = h.bind(&scope).await;
+    let original = echo(&first, "alpha__echo").pid;
+    drop(first);
+    std::fs::write(root.join(".hya/plugins/alpha/plugin.toml"), "id = [invalid").unwrap();
+    write_manifest(&root, "beta", "beta", "timeout_ms = 4500");
+    let binding = h.bind(&scope).await;
+    assert_eq!(echo(&binding, "alpha__echo").pid, original);
+    assert!(binding.resolve_tool("beta__echo").is_some());
+    drop(binding);
+    write_manifest(&root, "alpha", "alpha", "timeout_ms = 900");
+    std::fs::write(
+        root.join(".hya/plugins/alpha/plugin.py"),
+        "raise SystemExit(1)",
+    )
+    .unwrap();
+    assert_eq!(echo(&h.bind(&scope).await, "alpha__echo").pid, original);
+    std::fs::write(
+        root.join(".hya/plugins/alpha/plugin.py"),
+        plugin_script("alpha", "repaired", true),
+    )
+    .unwrap();
+    let result = h.engine.refresh_bundles(&scope, &root).await.unwrap();
+    assert!(
+        result.changed,
+        "a project source publication must notify catalog clients"
+    );
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert_eq!(echo(&result.binding, "alpha__echo").origin, "repaired");
 }

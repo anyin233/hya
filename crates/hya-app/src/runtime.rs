@@ -4216,6 +4216,63 @@ You are the installed resident agent.
     }
 
     #[tokio::test]
+    async fn hot_reload_deferred_mcp_does_not_retry_failed_startup_plugin() {
+        let root = std::env::temp_dir().join(format!("hya-boot-failure-{}", SessionId::new()));
+        std::fs::create_dir_all(&root).unwrap();
+        let log = root.join("starts");
+        let (router, model) = offline_router(None);
+        let agent = agent_with_model(&model, None);
+        let mut built = build_session_engine_with_mcp_defer(
+            SessionStore::connect_memory().await.unwrap(),
+            router,
+            &agent,
+            BTreeMap::from([(
+                "ready".into(),
+                McpServerConfig {
+                    command: mcp_fixture(),
+                    ..Default::default()
+                },
+            )]),
+            vec![PluginSpec {
+                id: "bad".into(),
+                kind: hya_plugin::messages::PluginKindWire::Rust,
+                command: vec![
+                    "python3".into(),
+                    "-c".into(),
+                    format!(
+                        "with open({}, 'a') as f: f.write('start\\n')",
+                        serde_json::to_string(&log).unwrap()
+                    ),
+                ],
+                timeout_ms: Some(1_000),
+                env: BTreeMap::new(),
+                plugin_dir: None,
+            }],
+            (WebSearchConfig::default(), InvocationPolicy::default()),
+            EngineBuildOptions {
+                defer_mcp: true,
+                pure: false,
+            },
+        )
+        .await
+        .unwrap();
+        let control = built.mcp_control();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if control.status().await.get("ready") == Some(&hya_mcp::McpStatus::Connected) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
+        built.shutdown().await.unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn startup_mixed_mcp_plugin_publishes_complete_sources() {
         let mut mcp = BTreeMap::new();
         mcp.insert(

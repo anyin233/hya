@@ -708,6 +708,7 @@ async fn saving_a_project_bundle_model_writes_only_that_projects_file() {
 async fn hot_reload_invalid_project_bundle_keeps_published_catalog() {
     let root = temp_path("invalid-edit");
     write_project_bundle(&root, "kept", "acme/kept", "ORIGINAL");
+    write_project_bundle(&root, "other", "acme/other", "BEFORE");
     let h = harness(&root.join("registry.sqlite")).await;
     let scope = project(&[&root]);
     let before = h.bind(&scope).await;
@@ -716,8 +717,10 @@ async fn hot_reload_invalid_project_bundle_keeps_published_catalog() {
         "---\nkind: invalid\n---\n",
     )
     .unwrap();
+    write_project_bundle(&root, "other", "acme/other", "AFTER");
     assert!(h.refresh.refresh_scope(&h.runtime, &scope).await.is_err());
-    let after = h.runtime.bind_scoped(&scope, &root).unwrap();
+    let after = h.bind(&scope).await;
+    assert!(prompt_of(&after, "other-agent").contains("AFTER"));
     assert_eq!(
         prompt_of(&after, "kept-agent"),
         prompt_of(&before, "kept-agent")
@@ -735,4 +738,142 @@ async fn hot_reload_invalid_project_bundle_keeps_published_catalog() {
     );
     drop(h);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn hot_reload_unreadable_bundle_config_does_not_block_other_sources() {
+    let root = temp_path("unreadable-config");
+    write_project_bundle(&root, "kept", "acme/kept", "ORIGINAL");
+    write_project_bundle(&root, "other", "acme/other", "BEFORE");
+    let h = harness(&root.join("registry.sqlite")).await;
+    let scope = project(&[&root]);
+    let before = h.bind(&scope).await;
+    // A directory in place of the file fails read() consistently, including
+    // on hosts whose user can bypass ordinary file permission bits.
+    std::fs::create_dir(root.join(".hya/bundles/kept/config.yml")).unwrap();
+    write_project_bundle(&root, "other", "acme/other", "AFTER");
+    let after = h.bind(&scope).await;
+    assert_eq!(
+        prompt_of(&after, "kept-agent"),
+        prompt_of(&before, "kept-agent")
+    );
+    assert!(prompt_of(&after, "other-agent").contains("AFTER"));
+}
+
+#[tokio::test]
+async fn hot_reload_unreadable_project_root_keeps_sources_and_other_roots_update() {
+    let bad = temp_path("unreadable-bundle-root");
+    let good = temp_path("readable-bundle-root");
+    write_project_bundle(&bad, "kept", "acme/kept", "ORIGINAL");
+    write_project_bundle(&good, "other", "acme/other", "BEFORE");
+    let h = harness(&good.join("registry.sqlite")).await;
+    let scope = project(&[&bad, &good]);
+    let before = h.bind(&scope).await;
+    std::fs::rename(bad.join(".hya/bundles"), bad.join(".hya/saved-bundles")).unwrap();
+    std::fs::write(bad.join(".hya/bundles"), "not a directory").unwrap();
+    write_project_bundle(&good, "other", "acme/other", "AFTER");
+    let after = h.bind(&scope).await;
+    assert_eq!(
+        prompt_of(&after, "kept-agent"),
+        prompt_of(&before, "kept-agent")
+    );
+    assert!(prompt_of(&after, "other-agent").contains("AFTER"));
+}
+
+#[tokio::test]
+async fn hot_reload_failed_bundle_process_keeps_source_and_explicit_refresh_retries() {
+    let state = temp_path("failed-bundle-state");
+    let root = temp_path("failed-bundle-process");
+    write_project_process(&root, "proc", "acme/proj-proc");
+    write_project_bundle(&root, "other", "acme/other", "BEFORE");
+    let gate = root.join("ready");
+    let log = root.join("starts");
+    std::fs::write(&gate, "ready").unwrap();
+    let script = format!(
+        "import os\nwith open({}, 'a') as f: f.write('start\\n')\nif not os.path.exists({}): raise SystemExit(1)\n{}",
+        serde_json::to_string(&log).unwrap(),
+        serde_json::to_string(&gate).unwrap(),
+        pid_script("proj-proc")
+    );
+    std::fs::write(root.join(".hya/bundles/proc/runtime.py"), script).unwrap();
+    let h = harness(&state).await;
+    let scope = project(&[&root]);
+    let first = h.bind(&scope).await;
+    let original = tool_pid(&first, "proj-proc__echo");
+    drop(first);
+    std::fs::remove_file(&gate).unwrap();
+    let manifest = root.join(".hya/bundles/proc/bundle.yaml");
+    std::fs::write(
+        &manifest,
+        process_manifest("acme/proj-proc").replace("1.0.0", "1.0.1"),
+    )
+    .unwrap();
+    assert_eq!(tool_pid(&h.bind(&scope).await, "proj-proc__echo"), original);
+    write_project_bundle(&root, "other", "acme/other", "AFTER");
+    let partial = h.bind(&scope).await;
+    assert_eq!(tool_pid(&partial, "proj-proc__echo"), original);
+    assert!(prompt_of(&partial, "other-agent").contains("AFTER"));
+    drop(partial);
+    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 2);
+    // Repair the external input without changing any bundle bytes.
+    std::fs::write(&gate, "ready").unwrap();
+    let refreshed = h.engine.refresh_bundles(&scope, &root).await.unwrap();
+    assert!(refreshed.errors.is_empty(), "{:?}", refreshed.errors);
+    assert!(refreshed.changed);
+    assert_ne!(tool_pid(&refreshed.binding, "proj-proc__echo"), original);
+    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 3);
+}
+
+#[tokio::test]
+async fn hot_reload_disabled_project_bundle_stops_and_does_not_start_until_enabled() {
+    let state = temp_path("disabled-bundle-state");
+    let root = temp_path("disabled-bundle-root");
+    write_project_process(&root, "proc", "acme/proj-proc");
+    let starts = root.join("starts");
+    std::fs::write(
+        root.join(".hya/bundles/proc/runtime.py"),
+        format!(
+            "with open({}, 'a') as f: f.write('start\\n')\n{}",
+            serde_json::to_string(&starts).unwrap(),
+            pid_script("proj-proc")
+        ),
+    )
+    .unwrap();
+    let registry = BundleRegistry::connect(state.join("registry.db").to_str().unwrap())
+        .await
+        .unwrap();
+    registry
+        .set_bundle_enabled("acme/proj-proc", false)
+        .await
+        .unwrap();
+    let h = harness(&state).await;
+    let scope = project(&[&root]);
+    assert!(
+        h.bind(&scope)
+            .await
+            .resolve_tool("proj-proc__echo")
+            .is_none()
+    );
+    assert!(!starts.exists(), "disabled source must never start");
+    registry
+        .set_bundle_enabled("acme/proj-proc", true)
+        .await
+        .unwrap();
+    let binding = h.bind(&scope).await;
+    let pid = tool_pid(&binding, "proj-proc__echo");
+    drop(binding);
+    registry
+        .set_bundle_enabled("acme/proj-proc", false)
+        .await
+        .unwrap();
+    assert!(
+        h.bind(&scope)
+            .await
+            .resolve_tool("proj-proc__echo")
+            .is_none()
+    );
+    assert!(
+        wait_until_exited(pid).await,
+        "disabled source must release its process"
+    );
 }
