@@ -2337,10 +2337,20 @@ impl SessionEngine {
                         // Not once a report was accepted: this turn takes no
                         // further round, so mail arriving now stays unread
                         // and wakes the member for a new episode instead.
-                        if !report_latch.is_set()
-                            && let Some(notice) = steer.drain(self).await?
-                        {
-                            append_steer_notice(&mut output, &notice);
+                        // A budgeted run's deadline notice rides the same
+                        // tail, once per stage, so it reaches the model
+                        // mid-turn without changing any earlier byte.
+                        if !report_latch.is_set() {
+                            if let Some(notice) = steer.drain(self).await? {
+                                append_steer_notice(&mut output, &notice);
+                            }
+                            if let Some(deadline) = hya_tool::deadline::current()
+                                && let Some(stage) = deadline.take_notice(session)
+                            {
+                                let notice =
+                                    deadline.notice(stage, projection.session.parent.is_some());
+                                append_steer_notice(&mut output, &format!("\n\n{notice}"));
+                            }
                         }
                         let retains_artifact = artifact_guard.retained_by(&output);
                         (
@@ -2478,15 +2488,12 @@ fn append_steer_notice(output: &mut serde_json::Value, notice: &str) {
     let Some(object) = output.as_object_mut() else {
         return;
     };
-    if let Some(serde_json::Value::String(text)) = object.get("output") {
-        let updated = format!("{text}{notice}");
-        object.insert("output".to_string(), serde_json::Value::String(updated));
-    } else {
-        object.insert(
-            "steer".to_string(),
-            serde_json::Value::String(notice.trim_start().to_string()),
-        );
-    }
+    let (key, updated) = match (object.get("output"), object.get("steer")) {
+        (Some(serde_json::Value::String(text)), _) => ("output", format!("{text}{notice}")),
+        (_, Some(serde_json::Value::String(text))) => ("steer", format!("{text}{notice}")),
+        _ => ("steer", notice.trim_start().to_string()),
+    };
+    object.insert(key.to_string(), serde_json::Value::String(updated));
 }
 
 /// Execute one tool call, moving long-running `mcp__` calls to the background
@@ -2692,4 +2699,21 @@ fn backgrounded_marker(
         ),
         "metadata": { "backgrounded": true, "job": job, "tool": tool_name },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::append_steer_notice;
+
+    #[test]
+    fn steer_notices_on_one_result_accumulate() {
+        let mut output = serde_json::json!({ "output": "ok" });
+        append_steer_notice(&mut output, "\n\nmail");
+        append_steer_notice(&mut output, "\n\ntime");
+        assert_eq!(output["output"], "ok\n\nmail\n\ntime");
+        let mut structured = serde_json::json!({ "title": "t" });
+        append_steer_notice(&mut structured, "\n\nmail");
+        append_steer_notice(&mut structured, "\n\ntime");
+        assert_eq!(structured["steer"], "mail\n\ntime");
+    }
 }

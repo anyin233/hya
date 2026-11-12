@@ -4,8 +4,11 @@
 //! and lost when the run ends), unfinished todos, or a last message that
 //! announces a next step it did not take, the run gives it another turn with
 //! a harness notice naming what is left, until a turn ends with none of them.
+//! In a budgeted run the deadline bounds this: past the grace no turn starts,
+//! and in the final window one ignored notice ends the run.
 
 use hya_core::{AgentSpec, CoreError, SessionEngine};
+use hya_tool::deadline::{RunDeadline, Stage};
 use hya_proto::{
     FinishReason, MessageId, PartProjection, Projection, Role, RosterEntry, RosterStatus,
     SessionId, TodoItem, TodoStatus, scope,
@@ -15,29 +18,34 @@ use tokio_util::sync::CancellationToken;
 /// Notice turns in a row that may end with the same pending work and no tool
 /// call before the run ends anyway: a model can ignore the notice.
 const MAX_IGNORED_NOTICES: u32 = 2;
-/// Notices one run may inject: a lead that keeps doing a little and stopping
-/// again is otherwise unbounded.
-const MAX_NOTICES: u32 = 12;
+/// Notices a run without a time budget may inject: a lead that keeps doing a
+/// little and stopping again is otherwise unbounded. A budget bounds it.
+const MAX_NOTICES_WITHOUT_BUDGET: u32 = 12;
 /// Longest final paragraph the narration rule still reads as an announcement.
 const MAX_ANNOUNCEMENT_CHARS: usize = 400;
 /// Characters of the announcing paragraph quoted back in the notice.
 const QUOTE_CHARS: usize = 200;
 
 /// Run the lead's turn, then one more turn per notice while it ends with
-/// [`Pending`] work (bounded by [`MAX_IGNORED_NOTICES`] and [`MAX_NOTICES`]).
-/// Returns the last turn's finish; a cancelled or failed turn ends the run
-/// at once.
+/// [`Pending`] work (bounded by [`MAX_IGNORED_NOTICES`], and by `deadline`
+/// or else [`MAX_NOTICES_WITHOUT_BUDGET`]). Returns the last turn's finish;
+/// a cancelled or failed turn ends the run at once.
 pub(crate) async fn run_lead(
     engine: &SessionEngine,
     session: SessionId,
     agent: &AgentSpec,
     cancel: CancellationToken,
+    deadline: Option<&RunDeadline>,
 ) -> Result<FinishReason, CoreError> {
     let (mut ignored, mut notices) = (0u32, 0u32);
     let mut last_notice: Option<MessageId> = None;
     loop {
         let finish = engine.run_turn(session, agent, cancel.clone()).await?;
         if !matches!(finish, FinishReason::Stop | FinishReason::Length) {
+            return Ok(finish);
+        }
+        let stage = deadline.map_or(Stage::Normal, RunDeadline::stage);
+        if stage == Stage::Over {
             return Ok(finish);
         }
         let projection = engine.read_projection(session).await?;
@@ -51,15 +59,26 @@ pub(crate) async fn run_lead(
             } else {
                 ignored += 1;
             }
-            if ignored >= MAX_IGNORED_NOTICES {
+            let allowed = if stage == Stage::Final {
+                1
+            } else {
+                MAX_IGNORED_NOTICES
+            };
+            if ignored >= allowed {
                 return Ok(finish);
             }
         }
-        if notices >= MAX_NOTICES {
+        if deadline.is_none() && notices >= MAX_NOTICES_WITHOUT_BUDGET {
             return Ok(finish);
         }
         notices += 1;
-        last_notice = Some(engine.inject_system_message(session, pending.notice()).await?);
+        // A late stage leads the notice, so no in-turn notice repeats it.
+        let time = deadline.filter(|_| stage >= Stage::WrapUp).map(|deadline| {
+            deadline.mark_notified(session, stage);
+            deadline.notice(stage, false)
+        });
+        let notice = pending.notice(time.as_deref());
+        last_notice = Some(engine.inject_system_message(session, notice).await?);
     }
 }
 
@@ -92,10 +111,15 @@ impl<'a> Pending<'a> {
         self.subagents.is_empty() && self.todos.is_empty() && self.narration.is_none()
     }
 
-    /// One notice listing every reason, most costly to leave first.
-    fn notice(&self) -> String {
-        let mut notice =
-            String::from("HEADLESS RUN — your turn ended, but the run is not finished:\n");
+    /// One notice listing every reason, most costly to leave first, after
+    /// the deadline notice `time` of a late stage.
+    fn notice(&self, time: Option<&str>) -> String {
+        let mut notice = String::new();
+        if let Some(time) = time {
+            notice.push_str(time);
+            notice.push_str("\n\n");
+        }
+        notice.push_str("HEADLESS RUN — your turn ended, but the run is not finished:\n");
         if !self.subagents.is_empty() {
             notice.push_str(
                 "Subagents you started are still live (stopped and their work lost when the run ends):\n",
@@ -104,9 +128,11 @@ impl<'a> Pending<'a> {
                 notice.push_str(&subagent_line(entry));
                 notice.push('\n');
             }
-            notice.push_str(
-                "  → call `wait` to collect their reports and integrate the results, or `archive` the ones you no longer need.\n",
-            );
+            notice.push_str(if time.is_some() {
+                "  → `archive` the subagents whose work you cannot integrate in the time left; `wait` briefly for the rest.\n"
+            } else {
+                "  → call `wait` to collect their reports and integrate the results, or `archive` the ones you no longer need.\n"
+            });
         }
         if !self.todos.is_empty() {
             notice.push_str("Your todo list has unfinished items:\n");
@@ -528,7 +554,7 @@ mod tests {
             todo("3", TodoStatus::Pending),
             todo("4", TodoStatus::Completed),
         ]);
-        let notice = Pending::of(&projection, FinishReason::Stop).notice();
+        let notice = Pending::of(&projection, FinishReason::Stop).notice(None);
         assert!(notice.starts_with("HEADLESS RUN"));
         let todos = notice.find("#3 [pending] item 3").expect("todo listed");
         let narration = notice.find("\"Now let me run it:\"").expect("quoted");
