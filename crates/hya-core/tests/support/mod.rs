@@ -65,7 +65,7 @@ pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> 
             permission_modes: vec![],
         })
         .collect::<Vec<_>>();
-    let bundles = bundles.into_iter().map(|bundle| bundle).collect::<Vec<_>>();
+    let bundles = bundles.into_iter().collect::<Vec<_>>();
     let catalog = BundleCatalog::from_prepared(&bundles);
     let Ok(catalog) = catalog else {
         panic!("test catalog must be valid: {catalog:?}");

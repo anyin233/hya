@@ -2078,7 +2078,7 @@ async fn root_wake_stopped_during_binding(mail: bool) {
         "wake-bind",
         vec![hya_bundle::SourceFile::new(
             "bundle.yaml",
-            "kind: Plugin\nidentity: { id: test/wake-bind, version: 1.0.0, publisher: test }\n",
+            "kind: Bundle\nidentity: { id: test/wake-bind, version: 1.0.0, publisher: test }\n",
         )],
     ))
     .unwrap();

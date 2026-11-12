@@ -228,7 +228,7 @@ fn catalog() -> (Arc<AgentCatalog>, Vec<RuntimeSource>) {
     })
     .collect::<Vec<_>>();
     let sources = bundles.iter().map(bundle_skill_source).collect::<Vec<_>>();
-    let bundles = bundles.into_iter().map(|bundle| bundle).collect::<Vec<_>>();
+    let bundles = bundles.into_iter().collect::<Vec<_>>();
     let bundles = BundleCatalog::from_prepared(&bundles).expect("valid bundle catalog");
     (
         Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("valid agent catalog")),
