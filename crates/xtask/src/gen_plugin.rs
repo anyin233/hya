@@ -269,7 +269,7 @@ impl Generator {
                     if attrs.skip {
                         continue;
                     }
-                    let mut ty = self.ty(&field.ty)?;
+                    let ty = self.ty(&field.ty)?;
                     if attrs.flatten {
                         flattened.push(ty);
                         continue;
@@ -280,12 +280,7 @@ impl Generator {
                         .context("named wire field")?
                         .to_string();
                     let name = attrs.rename.unwrap_or(renamed(&ident, rule)?);
-                    // Optional omitted fields have no serialized null; other Options do.
-                    if attrs.omit
-                        && let Some(inner) = ty.strip_suffix(" | null")
-                    {
-                        ty = inner.to_owned();
-                    }
+                    // Serde accepts explicit null for Option, including omitted-on-output fields.
                     let optional = if attrs.default || attrs.omit { "?" } else { "" };
                     writeln!(body, "  readonly {name}{optional}: {ty}")?;
                 }

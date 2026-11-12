@@ -127,8 +127,8 @@ export type ChatParamsOutcomeWire = ({ readonly outcome: "continue" } & {
 
 export type ChatParamsParams = {
   readonly session: SessionId
-  readonly root_session?: SessionId
-  readonly agent?: AgentName
+  readonly root_session?: SessionId | null
+  readonly agent?: AgentName | null
   readonly message: MessageId
   readonly request: WireCompletionRequest
 }
@@ -282,14 +282,14 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly session: SessionId
   readonly run: WorkflowRunId
   readonly status: WorkflowRunStatus
-  readonly error?: string
+  readonly error?: string | null
 }) |
 ({ readonly type: "message_started" } & {
   readonly session: SessionId
   readonly message: MessageId
   readonly role: Role
-  readonly agent?: AgentName
-  readonly model?: ModelRef
+  readonly agent?: AgentName | null
+  readonly model?: ModelRef | null
 }) |
 ({ readonly type: "turn_binding_recorded" } & {
   readonly session: SessionId
@@ -307,8 +307,8 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly message: MessageId
   readonly role: Role
   readonly finish: FinishReason
-  readonly tokens?: TokenUsage
-  readonly cause?: FinishCause
+  readonly tokens?: TokenUsage | null
+  readonly cause?: FinishCause | null
 }) |
 ({ readonly type: "part_deleted" } & {
   readonly session: SessionId
@@ -352,7 +352,7 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly session: SessionId
   readonly message: MessageId
   readonly part: PartId
-  readonly reason?: string
+  readonly reason?: string | null
 }) |
 ({ readonly type: "reasoning_delta" } & {
   readonly session: SessionId
@@ -364,7 +364,7 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly session: SessionId
   readonly message: MessageId
   readonly part: PartId
-  readonly provider_data?: unknown
+  readonly provider_data?: unknown | null
 }) |
 ({ readonly type: "reasoning_replace" } & {
   readonly session: SessionId
@@ -409,7 +409,7 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly part: PartId
   readonly call: ToolCallId
   readonly message_text: string
-  readonly value?: unknown
+  readonly value?: unknown | null
 }) |
 ({ readonly type: "tool_part_updated" } & {
   readonly session: SessionId
@@ -420,12 +420,12 @@ export type Event = ({ readonly type: "session_created" } & {
 ({ readonly type: "member_spawned" } & {
   readonly session: SessionId
   readonly member: MemberId
-  readonly child?: SessionId
+  readonly child?: SessionId | null
   readonly subagent_type: AgentName
   readonly description: string
   readonly depth: number
   readonly directive?: string
-  readonly tool_call?: ToolCallId
+  readonly tool_call?: ToolCallId | null
 }) |
 ({ readonly type: "member_status_changed" } & {
   readonly session: SessionId
@@ -437,13 +437,13 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly member: MemberId
   readonly status: MemberRunStatus
   readonly summary: string
-  readonly child?: SessionId
+  readonly child?: SessionId | null
 }) |
 ({ readonly type: "agent_registered" } & {
   readonly session: SessionId
   readonly agent_session: SessionId
   readonly handle: string
-  readonly parent?: string
+  readonly parent?: string | null
   readonly agent_type?: AgentName
   readonly mode?: SubagentMode
 }) |
@@ -451,7 +451,7 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly session: SessionId
   readonly handle: string
   readonly status: RosterStatus
-  readonly current_task?: string
+  readonly current_task?: string | null
 }) |
 ({ readonly type: "resident_work_started" } & {
   readonly session: SessionId
@@ -481,7 +481,7 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly session: SessionId
   readonly channel: string
   readonly kind?: ChannelKind
-  readonly unit?: string
+  readonly unit?: string | null
   readonly members?: ReadonlyArray<string>
 }) |
 ({ readonly type: "subagent_reported" } & {
@@ -529,7 +529,7 @@ export type Event = ({ readonly type: "session_created" } & {
 ({ readonly type: "session_forked" } & {
   readonly session: SessionId
   readonly source: SessionId
-  readonly before_message?: MessageId
+  readonly before_message?: MessageId | null
 }) |
 ({ readonly type: "context_evicted" } & {
   readonly session: SessionId
@@ -547,8 +547,8 @@ export type Event = ({ readonly type: "session_created" } & {
 }) |
 ({ readonly type: "usage_recorded" } & {
   readonly session: SessionId
-  readonly message?: MessageId
-  readonly step?: number
+  readonly message?: MessageId | null
+  readonly step?: number | null
   readonly model: ModelRef
   readonly purpose: UsagePurpose
   readonly tokens: TokenUsage
@@ -560,7 +560,7 @@ export type Event = ({ readonly type: "session_created" } & {
 ({ readonly type: "files_changed" } & {
   readonly session: SessionId
   readonly message: MessageId
-  readonly call?: ToolCallId
+  readonly call?: ToolCallId | null
   readonly files: ReadonlyArray<FileChange>
 }) |
 ({ readonly type: "session_reverted" } & {
@@ -576,7 +576,7 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly session: SessionId | null
   readonly code: string
   readonly message: string
-  readonly failed_message?: MessageId
+  readonly failed_message?: MessageId | null
 })
 
 export type EventNotificationParams = {
@@ -601,7 +601,7 @@ export type FileRestore = {
   readonly restored: FileState
   readonly saved: FileState
   readonly observed?: boolean
-  readonly error?: string
+  readonly error?: string | null
 }
 
 export type FileState = ({ readonly kind: "absent" }) |
@@ -692,9 +692,9 @@ export type Message = ({ readonly role: "user" } & {
   readonly agent: AgentName
   readonly model: ModelRef
   readonly parts: ReadonlyArray<Part>
-  readonly last_round?: TokenUsage
-  readonly finish?: FinishReason
-  readonly tokens?: TokenUsage
+  readonly last_round?: TokenUsage | null
+  readonly finish?: FinishReason | null
+  readonly tokens?: TokenUsage | null
 }) |
 ({ readonly role: "system" } & {
   readonly id: MessageId
@@ -731,7 +731,7 @@ export type ModelFallbackOutcomeWire = ({ readonly outcome: "retry" } & {
 export type ModelFallbackParams = {
   readonly session: SessionId
   readonly root_session: SessionId
-  readonly agent?: AgentName
+  readonly agent?: AgentName | null
   readonly message: MessageId
   readonly model: ModelRef
   readonly error: ModelFallbackErrorWire
@@ -750,13 +750,13 @@ export type Part = ({ readonly type: "text" } & {
 ({ readonly type: "reasoning" } & {
   readonly id: PartId
   readonly text: string
-  readonly provider_data?: unknown
+  readonly provider_data?: unknown | null
 }) |
 ({ readonly type: "media" } & {
   readonly id: PartId
   readonly media_type: string
   readonly data: string
-  readonly filename?: string
+  readonly filename?: string | null
 }) |
 ({ readonly type: "tool" } & {
   readonly id: PartId
@@ -770,14 +770,14 @@ export type PartId = string
 export type PermissionApproveParams = {
   readonly session: SessionId
   readonly root_session: SessionId
-  readonly agent?: AgentName
+  readonly agent?: AgentName | null
   readonly mode: string
   readonly action: Action
   readonly resource: WireResource
 }
 
 export type PermissionAskParams = {
-  readonly session?: SessionId
+  readonly session?: SessionId | null
   readonly action: Action
   readonly resource: WireResource
 }
@@ -785,7 +785,7 @@ export type PermissionAskParams = {
 export type PermissionOutcomeWire = ({ readonly outcome: "allow_once" }) |
 ({ readonly outcome: "allow_always" }) |
 ({ readonly outcome: "reject" } & {
-  readonly feedback?: string
+  readonly feedback?: string | null
 }) |
 ({ readonly outcome: "defer" })
 
@@ -885,7 +885,7 @@ export type ToolCallParams = {
   readonly session: SessionId
   readonly call: ToolCallId
   readonly input: unknown
-  readonly host_capability?: string
+  readonly host_capability?: string | null
 }
 
 export type ToolExecuteAfterParams = {
@@ -921,14 +921,14 @@ export type ToolPartState = ({ readonly phase: "pending" } & {
 ({ readonly phase: "error" } & {
   readonly input: unknown
   readonly message: string
-  readonly value?: unknown
+  readonly value?: unknown | null
 })
 
 export type ToolSchema = {
   readonly name: ToolName
   readonly description: string
   readonly input_schema: unknown
-  readonly output_schema?: unknown
+  readonly output_schema?: unknown | null
 }
 
 export type UsagePurpose = ("turn") |
@@ -947,12 +947,12 @@ export type VerifierVerdictWire = {
 
 export type WireCompletionRequest = {
   readonly model: ModelRef
-  readonly system?: string
+  readonly system?: string | null
   readonly messages: ReadonlyArray<Message>
   readonly tools: ReadonlyArray<ToolSchema>
-  readonly temperature?: number
-  readonly max_output_tokens?: number
-  readonly reasoning?: string
+  readonly temperature?: number | null
+  readonly max_output_tokens?: number | null
+  readonly reasoning?: string | null
   readonly headers?: Readonly<Record<string, string>>
 }
 
@@ -1001,13 +1001,13 @@ export type WorkflowMemberRole = ("worker") |
 
 export type WorkflowModelAssignment = {
   readonly id: string
-  readonly reasoning?: string
+  readonly reasoning?: string | null
   readonly fallback?: ReadonlyArray<WorkflowModelCandidate>
 }
 
 export type WorkflowModelCandidate = {
   readonly id: string
-  readonly reasoning?: string
+  readonly reasoning?: string | null
 }
 
 export type WorkflowModelResolvedCandidate = {
@@ -1043,14 +1043,14 @@ export type WorkflowSourceId = string
 
 export type WorkflowStagePlan = {
   readonly id: string
-  readonly title?: string
+  readonly title?: string | null
   readonly agent: AgentName
   readonly mode: string
   readonly level: number
-  readonly worker_model?: WorkflowModelAssignment
-  readonly selected_worker_model?: WorkflowModelResolvedCandidate
-  readonly verifier_model?: WorkflowModelAssignment
-  readonly selected_verifier_model?: WorkflowModelResolvedCandidate
+  readonly worker_model?: WorkflowModelAssignment | null
+  readonly selected_worker_model?: WorkflowModelResolvedCandidate | null
+  readonly verifier_model?: WorkflowModelAssignment | null
+  readonly selected_verifier_model?: WorkflowModelResolvedCandidate | null
 }
 
 export type WorkflowStageStatus = ("pending") |

@@ -113,6 +113,10 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: crates/hya-plugin-bun/adapter
         run: bun install --frozen-lockfile
+      - name: claude adapter install
+        if: ${{ !cancelled() }}
+        working-directory: crates/hya-plugin-claude/adapter
+        run: bun install --frozen-lockfile
       - name: hya-tui-sdk install
         if: ${{ !cancelled() }}
         working-directory: packages/hya-tui-sdk
@@ -128,6 +132,10 @@ jobs:
       - name: bun adapter typecheck and unit tests
         if: ${{ !cancelled() }}
         working-directory: crates/hya-plugin-bun/adapter
+        run: bun run typecheck && bun test
+      - name: claude adapter typecheck and unit tests
+        if: ${{ !cancelled() }}
+        working-directory: crates/hya-plugin-claude/adapter
         run: bun run typecheck && bun test
       - name: hya-tui-sdk typecheck and unit tests
         if: ${{ !cancelled() }}

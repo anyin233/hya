@@ -1310,16 +1310,12 @@ fn smoke_bun_adapter(bun_adapter: &Path, scratch: &ScratchDirectory) -> Result<(
     fs::create_dir_all(&probe).with_context(|| format!("create {}", probe.display()))?;
     let script = bun_adapter.join("src/main.ts");
     let args = vec!["run".to_owned(), script.display().to_string()];
-    let envs = [
-        ("HYA_DIRECTORY", probe.as_os_str().to_os_string()),
-        ("HYA_WORKTREE", probe.as_os_str().to_os_string()),
-    ];
     let input = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocol_version\":1,\"host\":{\"name\":\"hya\",\"version\":\"release\"}}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\",\"params\":{}}\n";
     let output = run_process_with_input(
         OsStr::new("bun"),
         &args,
         &probe,
-        &envs,
+        &[],
         &["HYA_BUN_ADAPTER_DIR"],
         input,
     )

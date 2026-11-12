@@ -1,5 +1,5 @@
 import { isWireToolResult } from "./wire.gen"
-import { errorMessage, type ExtensionHooks } from "./loader/init"
+import { extensionSpec, errorMessage, type ExtensionHooks } from "./loader/init"
 import { isRecord } from "./validate"
 
 import type { ToolExecuteBeforeParams, ToolExecuteAfterParams, ToolBeforeOutcomeWire as ToolBeforeOutcome, ToolAfterOutcomeWire as ToolAfterOutcome } from "./wire.gen"
@@ -44,8 +44,10 @@ export async function runToolExecuteAfterHooks(
     }
     try {
       const returned = await candidate({ ...params, result: current })
-      if (current.status !== "err" && isWireToolResult(returned)) {
-        current = returned
+      if (isWireToolResult(returned)) {
+        if (current.status !== "err") current = returned
+      } else if (returned !== undefined) {
+        console.error(`tool.execute.after: invalid return from extension ${extensionSpec(hook)}`)
       }
     } catch {
       continue

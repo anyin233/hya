@@ -25,7 +25,7 @@ export async function runStdio(
   options: { readonly input: ReadableStream<Uint8Array>; readonly stdout: TextSink; readonly stderr: TextSink },
   handle: (request: JsonRpcMessage) => HandledRequest | Promise<HandledRequest>,
 ): Promise<void> {
-  const active = new Set<Promise<void>>()
+  const active = new Set<Promise<boolean>>()
   const ids = new Set<number>()
   let initialized = false
   let output = Promise.resolve()
@@ -44,9 +44,10 @@ export async function runStdio(
       } else {
         await options.stderr.write(`notification ${request.method}: ${message}\n`)
       }
-      return
+      return false
     }
     await write(handled.response)
+    return handled.response.length > 0 && !Object.hasOwn(JSON.parse(handled.response), "error")
   }
   for await (const line of readLines(options.input)) {
     if (line.length === 0) continue
@@ -61,14 +62,21 @@ export async function runStdio(
         await write(errorResponse(request.id, ERROR_CODES.INVALID_PARAMS, "adapter already initialized"))
         continue
       }
-      initialized = true
-      await dispatch(request)
+      initialized = await dispatch(request)
       continue
     }
     if (request.id !== undefined && request.method === "shutdown") {
       await Promise.all(active)
       await dispatch(request)
       break
+    }
+    if (!initialized) {
+      if (request.id === undefined) {
+        await options.stderr.write(`notification ${request.method}: adapter not initialized; ignored\n`)
+      } else {
+        await write(errorResponse(request.id, ERROR_CODES.INVALID_PARAMS, "adapter not initialized"))
+      }
+      continue
     }
     if (request.id !== undefined && ids.has(request.id)) {
       await write(errorResponse(request.id, ERROR_CODES.INVALID_PARAMS, "duplicate active request id"))

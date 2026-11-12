@@ -462,14 +462,15 @@ test("initialize declares tools with declared JSON-Schema args and executes them
 
 test("unknown methods return JSON-RPC method-not-found errors", async () => {
   const responses = await runAdapterProcess([
+    initializeRequest(20),
     { jsonrpc: "2.0", id: 21, method: "missing", params: {} },
     shutdownRequest(22),
   ])
 
-  expect(responses).toHaveLength(2)
-  expect(responses[0]?.id).toBe(21)
-  expect(responses[0]?.error?.code).toBe(-32601)
-  expect(responses[1]?.result).toEqual({})
+  expect(responses).toHaveLength(3)
+  expect(responses[1]?.id).toBe(21)
+  expect(responses[1]?.error?.code).toBe(-32601)
+  expect(responses[2]?.result).toEqual({})
 })
 
 test("file:// URLs are accepted as extension flags", async () => {
