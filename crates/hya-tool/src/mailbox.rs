@@ -14,18 +14,7 @@ use hya_proto::{ActorClaim, ChannelKind, MailEndpoint, MailKind, SessionId};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 
-/// Actor-specific channel capability snapshot captured from an admitted turn binding.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ChannelPolicySnapshot {
-    /// Unit leader capability bits.
-    pub unit_leader: u8,
-    /// Unit direct-report capability bits.
-    pub unit_member: u8,
-    /// Parent endpoint capability bits.
-    pub dm_parent: u8,
-    /// Child endpoint capability bits.
-    pub dm_child: u8,
-}
+pub use hya_proto::mail::ChannelPolicySnapshot;
 
 /// Outcome of a delivered send: the resolved sender handle, the address, and how
 /// many inboxes it reached (1 for a handle, the subscriber count for a channel).
