@@ -1861,6 +1861,7 @@ struct EpisodeInit {
     agent: hya_proto::AgentName,
     parent: SessionId,
     envelopes: Vec<hya_proto::Envelope>,
+    initial_prompt: Option<hya_proto::MessageId>,
     ready: oneshot::Sender<Result<(), CoreError>>,
 }
 
@@ -1875,6 +1876,7 @@ async fn initialize_episode(
         agent,
         parent,
         envelopes,
+        initial_prompt,
         ready,
     } = init;
     let session = claim.actor_id;
@@ -1891,7 +1893,9 @@ async fn initialize_episode(
                 message,
                 part,
                 delta,
-            } if *id == session => Some((*message, *part, delta.clone())),
+            } if *id == session && Some(*message) == initial_prompt => {
+                Some((*message, *part, delta.clone()))
+            }
             _ => None,
         });
     let hooks = async {
@@ -1936,7 +1940,7 @@ async fn initialize_episode(
                     .await?;
             }
         }
-        if let Some(hooks) = team.engine.session_hook_dispatcher(parent) {
+        if created && let Some(hooks) = team.engine.session_hook_dispatcher(parent) {
             hooks
                 .agent_spawn(AgentSpawnInput {
                     parent: team.root,
@@ -3335,7 +3339,7 @@ impl ResidentSupervisor {
             name: session.agent.clone().ok_or_else(invalid)?,
             model: session.model.clone().ok_or_else(invalid)?,
             workdir: session.workdir.clone().ok_or_else(invalid)?.into(),
-            system_prompt: String::new(),
+            system_prompt: self.engine.base_system_prompt().into(),
             reasoning: None,
         };
         let binding = self
@@ -3855,7 +3859,7 @@ impl ResidentSupervisor {
                 .model
                 .clone()
                 .ok_or_else(|| CoreError::Invalid("resident has no model".into()))?,
-            system_prompt: String::new(),
+            system_prompt: self.engine.base_system_prompt().into(),
             workdir,
             reasoning: None,
         };
@@ -3934,6 +3938,7 @@ impl ResidentSupervisor {
             agent: agent.name.clone(),
             parent: parent_session,
             envelopes,
+            initial_prompt: None,
             ready,
         };
         team.install_episode(
@@ -4435,6 +4440,7 @@ impl ResidentSupervisor {
             agent: agent.name.clone(),
             parent: parent_session,
             envelopes,
+            initial_prompt,
             ready,
         };
         team.install_episode(

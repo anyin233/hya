@@ -22,6 +22,8 @@ type Pause = Option<(Arc<Notify>, Arc<Notify>)>;
 #[derive(Default)]
 struct Hooks {
     seen: Mutex<Vec<(SessionId, &'static str)>>,
+    user_texts: Mutex<Vec<String>>,
+    prepend: bool,
     pause_start: Mutex<Pause>,
     pause_spawn: Mutex<Pause>,
     pause_request: Arc<Mutex<Pause>>,
@@ -84,8 +86,13 @@ impl HookDispatcher for Hooks {
     }
     async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
         self.seen.lock().unwrap().push((input.session, "user"));
+        self.user_texts.lock().unwrap().push(input.text.clone());
         MessageUserBeforeOutcome::Continue {
-            text: format!("{} [rewritten]", input.text),
+            text: if self.prepend {
+                format!("HOOK_PREFIX {}", input.text)
+            } else {
+                format!("{} [rewritten]", input.text)
+            },
         }
     }
     async fn command_execute_before(
@@ -1139,24 +1146,15 @@ async fn wait_after_a_revived_member_is_killed_before_its_first_turn_uses_this_e
     )
     .await
     .unwrap();
-    let entered = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    *hooks.pause_spawn.lock().unwrap() = Some((entered.clone(), release.clone()));
-    let reviving = tokio::spawn({
-        let engine = engine.clone();
-        let handle = handle.clone();
-        async move {
-            engine
-                .mail_send(
-                    root,
-                    hya_proto::MailEndpoint::parse(&handle),
-                    hya_proto::MailKind::Message,
-                    "next task".into(),
-                )
-                .await
-        }
-    });
-    tokio::time::timeout(Duration::from_secs(5), entered.notified())
+    // Hold a real turn lease so the revived episode cannot begin its first wake.
+    let child_turn = engine.try_begin_turn(child).unwrap();
+    engine
+        .mail_send(
+            root,
+            hya_proto::MailEndpoint::parse(&handle),
+            hya_proto::MailKind::Message,
+            "next task".into(),
+        )
         .await
         .unwrap();
     engine
@@ -1207,13 +1205,7 @@ async fn wait_after_a_revived_member_is_killed_before_its_first_turn_uses_this_e
         member.report.as_deref(),
         Some("per-team message budget exceeded")
     );
-    *hooks.pause_spawn.lock().unwrap() = None;
-    release.notify_waiters();
-    let result = tokio::time::timeout(Duration::from_secs(5), reviving)
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(matches!(result, Err(crate::CoreError::Cancelled)));
+    drop(child_turn);
 }
 
 #[tokio::test]
@@ -1298,4 +1290,151 @@ async fn submit_and_wait(
     })
     .await
     .map_err(|_| crate::CoreError::Invalid("report did not archive".into()))?
+}
+
+async fn review_wait_idle(
+    engine: &SessionEngine,
+    supervisor: &ResidentSupervisor,
+    root: SessionId,
+    child: SessionId,
+) {
+    let mut events = engine.bus().subscribe();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let projection = engine.read_projection(child).await.unwrap();
+            if supervisor.member_busy(root, child) == Some(false)
+                && projection.session.messages.last().is_some_and(|m| {
+                    m.role == Role::Assistant && m.finish == Some(FinishReason::Stop)
+                })
+            {
+                break;
+            }
+            events.recv().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn m46_review_s4_revive_boundary_bypasses_user_hooks_and_keeps_latest_context() {
+    let hooks = Arc::new(Hooks {
+        prepend: true,
+        ..Hooks::default()
+    });
+    let (engine, supervisor, agent, root) =
+        fixture(SubagentLimits::default(), Some(hooks.clone())).await;
+    let _root_turn = engine.try_begin_turn(root).unwrap();
+    let (child, handle) = spawn(&supervisor, &engine, &agent, root, None)
+        .await
+        .unwrap();
+    review_wait_idle(&engine, &supervisor, root, child).await;
+    let mut prior_ids = Vec::new();
+    for directive in ["second episode", "third episode"] {
+        prior_ids.extend(
+            engine
+                .read_projection(child)
+                .await
+                .unwrap()
+                .session
+                .messages
+                .iter()
+                .map(|m| m.id),
+        );
+        supervisor
+            .archive_member(root, &handle, "next episode")
+            .await
+            .unwrap();
+        engine
+            .mail_send(
+                root,
+                hya_proto::MailEndpoint::Handle(handle.clone()),
+                hya_proto::MailKind::Message,
+                directive.into(),
+            )
+            .await
+            .unwrap();
+        review_wait_idle(&engine, &supervisor, root, child).await;
+    }
+    let texts = hooks.user_texts.lock().unwrap().clone();
+    let request = hooks.requests.lock().unwrap().last().unwrap().clone();
+    let projection = engine.read_projection(child).await.unwrap();
+    drop(_root_turn);
+    supervisor
+        .drain(FinishCause::Shutdown, crate::DRAIN_DEADLINE)
+        .await;
+    assert!(
+        texts.iter().all(|text| !text.contains("PRIOR HANDOFF")),
+        "user hook saw system boundary: {texts:?}"
+    );
+    let boundaries = projection
+        .session
+        .messages
+        .iter()
+        .filter(|m| m.role == Role::System)
+        .collect::<Vec<_>>();
+    let boundary_ids = boundaries
+        .iter()
+        .map(|message| message.id)
+        .collect::<Vec<_>>();
+    assert!(!engine.replay(child).await.unwrap().iter().any(|envelope| matches!(envelope.event, hya_proto::Event::TextReplace { message, .. } if boundary_ids.contains(&message))), "initialization rewrote a system boundary");
+    assert_eq!(boundaries.len(), 2);
+    for boundary in boundaries {
+        assert!(boundary.parts.iter().any(|part| matches!(part, hya_proto::PartProjection::Text { text, .. } if text.starts_with(hya_provider::COMPACT_CONTEXT_MARKER))));
+    }
+    assert!(
+        request
+            .messages
+            .iter()
+            .all(|message| !prior_ids.contains(&message.id())),
+        "prior episode messages leaked: {:?}",
+        request.messages
+    );
+    assert_eq!(request.messages.iter().filter(|m| matches!(m, hya_proto::Message::System { content, .. } if content.starts_with(hya_provider::COMPACT_CONTEXT_MARKER))).count(), 1);
+}
+
+#[tokio::test]
+async fn m46_review_s5_agent_spawn_fires_for_creation_only() {
+    let hooks = Arc::new(Hooks::default());
+    let (engine, supervisor, agent, root) =
+        fixture(SubagentLimits::default(), Some(hooks.clone())).await;
+    let _root_turn = engine.try_begin_turn(root).unwrap();
+    let (child, handle) = spawn(&supervisor, &engine, &agent, root, None)
+        .await
+        .unwrap();
+    review_wait_idle(&engine, &supervisor, root, child).await;
+    let spawned = hooks
+        .seen
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(session, kind)| *session == child && *kind == "spawn")
+        .count();
+    assert!(spawned > 0);
+    supervisor
+        .archive_member(root, &handle, "revive later")
+        .await
+        .unwrap();
+    engine
+        .mail_send(
+            root,
+            hya_proto::MailEndpoint::Handle(handle),
+            hya_proto::MailKind::Message,
+            "next episode".into(),
+        )
+        .await
+        .unwrap();
+    review_wait_idle(&engine, &supervisor, root, child).await;
+    let after = hooks
+        .seen
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(session, kind)| *session == child && *kind == "spawn")
+        .count();
+    drop(_root_turn);
+    supervisor
+        .drain(FinishCause::Shutdown, crate::DRAIN_DEADLINE)
+        .await;
+    assert_eq!(after, spawned, "revival repeated creation hooks");
 }

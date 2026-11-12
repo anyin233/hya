@@ -294,6 +294,21 @@ impl Harness {
         root: Option<SessionId>,
         plugins: Vec<hya_plugin::config::PluginSpec>,
     ) -> Self {
+        Self::open_with_base_prompt(dir, root, plugins, String::new()).await
+    }
+
+    pub async fn with_base_prompt(prompt: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("hya-m4-{}", SessionId::new()));
+        std::fs::create_dir(&dir).unwrap();
+        Self::open_with_base_prompt(dir, None, Vec::new(), prompt.into()).await
+    }
+
+    async fn open_with_base_prompt(
+        dir: PathBuf,
+        root: Option<SessionId>,
+        plugins: Vec<hya_plugin::config::PluginSpec>,
+        system_prompt: String,
+    ) -> Self {
         let store = SessionStore::connect(dir.join("events.db").to_str().unwrap())
             .await
             .unwrap();
@@ -301,7 +316,7 @@ impl Harness {
         let agent = AgentSpec {
             name: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
-            system_prompt: String::new(),
+            system_prompt,
             workdir: dir.clone(),
             reasoning: None,
         };

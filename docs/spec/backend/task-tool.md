@@ -662,3 +662,23 @@ that same rule before another turn, including before the idle-loss branch runs.
 Terminal report mail holds the team against retirement until the bus listener
 routes it (or recovers its durable inbox after lag); archive envelopes still
 publish after the episode is removed and before its completion is resolved.
+
+### Creation hooks and revival boundaries
+
+`EpisodeInit.initial_prompt: Option<MessageId>` identifies only the registered
+User directive to process with `message.user.before`. Registration supplies that
+ID; revival supplies `None`. Its System handoff boundary is never passed to user
+text hooks or rewritten by initialization, so the context marker keeps its
+prefix and the next request includes only the latest handoff and current episode.
+The reviving mail still passes through the normal user-text hook at work admission.
+
+`agent.spawn` describes member creation and runs once for each registered hook
+when `SessionCreated` belongs to the initializer. Revival reattaches session
+hooks but does not emit another creation callback. For example, task → archive →
+mail runs one member creation callback and two episodes.
+
+`SessionEngine::with_base_system_prompt(prompt: String) -> Self` retains the
+host's base prompt for reconstructing resident and autonomous main agents. App
+composition supplies its host `AgentSpec.system_prompt`; core embedders with a
+nonempty host prompt supply it through this builder. A catalog `prompt: None`
+keeps that base after revival, while `Some(prompt)` still replaces it.

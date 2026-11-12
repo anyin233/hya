@@ -1598,3 +1598,16 @@ gRPC `Internal`) via the v1 error table (see
 [Server and Client](server-client.md)); only Workflow control keeps its own
 structured failure codes. `Cancelled` and `AgentDefinitionMissing` are
 therefore **not** distinguishable through the generic mapping today.
+
+## Episode initialization
+
+A member's creation runs `agent.spawn` once for each registered hook. Revival
+reattaches its session hooks and delivers new mail, preserving the System handoff
+boundary without passing it through `message.user.before`. This keeps the
+latest handoff as the model context cut even when user hooks prepend text.
+
+App composition retains the host prompt through
+`SessionEngine::with_base_system_prompt(prompt: String) -> Self`; core embedders
+use the same builder with their host `AgentSpec.system_prompt.clone()`. Agents
+with no catalog prompt keep that base when revived or reconstructed as main.
+See [initialization inputs and hook usage](../spec/backend/task-tool.md#creation-hooks-and-revival-boundaries).

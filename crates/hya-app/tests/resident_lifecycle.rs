@@ -3322,3 +3322,66 @@ async fn m46_in_episode_compaction_does_not_replace_the_handoff_goal() {
             .contains("2. Current state - latest episode state")
     );
 }
+
+#[tokio::test]
+async fn m46_review_s6_promptless_catalog_agent_keeps_host_base_after_revive() {
+    const BASE: &str = "HOST_BASE_PROMPT_MUST_SURVIVE_REVIVE";
+    let mut h = Harness::with_base_prompt(BASE).await;
+    let package = hya_bundle::prepare_package(hya_bundle::BundleSource::new(
+        "review-promptless",
+        vec![hya_bundle::SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: test/review-promptless, version: 1.0.0, publisher: test }\nagents:\n  - id: review-worker\n    role: subagent\n")],
+    )).unwrap();
+    let catalog = hya_core::AgentCatalog::new(Arc::new(
+        hya_bundle::BundleCatalog::from_verified_catalogs(&[&package]).unwrap(),
+    ))
+    .unwrap();
+    h.engine
+        .runtime_registry()
+        .publish_catalog(Arc::new(catalog))
+        .unwrap();
+    assert!(
+        h.engine
+            .bind_runtime(&h.dir)
+            .unwrap()
+            .resolve_agent("review-worker")
+            .unwrap()
+            .prompt
+            .is_none()
+    );
+    let (child, handle) = h
+        .spawn_agent("review-worker", vec![Round::text("first episode")])
+        .await;
+    h.idle(child, &handle).await;
+    let first = h
+        .provider
+        .captured
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|r| r.session == child)
+        .unwrap()
+        .completion
+        .system
+        .clone()
+        .unwrap_or_default();
+    output(&h.tool("archive", json!({"target": handle})).await);
+    let second = h.provider.script(vec![Round::text("revived episode")]);
+    h.mail(&handle, second).await.unwrap();
+    h.idle(child, &handle).await;
+    let revived = h
+        .provider
+        .captured
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|r| r.session == child)
+        .unwrap()
+        .completion
+        .system
+        .clone()
+        .unwrap_or_default();
+    h.shutdown().await;
+    assert!(first.contains(BASE), "spawn lost host base: {first}");
+    assert!(revived.contains(BASE), "revive lost host base: {revived}");
+}
