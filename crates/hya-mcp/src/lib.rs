@@ -16,6 +16,8 @@
 pub mod bridge;
 /// JSON-RPC client over stdio/HTTP transports, child process guard, and errors.
 pub mod client;
+/// Bounded NDJSON framing shared with native plugins.
+pub mod codec;
 /// Streamable HTTP and classic HTTP+SSE transports.
 mod http;
 /// Multi-server manager, config, prepare entry, and status snapshots.

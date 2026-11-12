@@ -11,6 +11,7 @@ version-reference = "backend"
 workspace = true
 
 [dependencies]
+hya-mcp = { workspace = true }
 hya-proto = { workspace = true }
 hya-provider = { workspace = true }
 hya-core = { workspace = true }

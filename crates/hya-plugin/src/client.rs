@@ -14,7 +14,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::{Value, json};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, oneshot};
 use tokio::task::JoinHandle;
@@ -539,12 +539,11 @@ impl PluginClient {
             return Err(PluginError::Closed);
         }
         let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
-        let line = serde_json::to_vec(&JsonRpcRequest::new(id, method, params))
-            .map_err(|e| PluginError::Json(e.to_string()))?;
+        let request = JsonRpcRequest::new(id, method, params);
         let (tx, rx) = oneshot::channel();
         let _pending_registration = PendingRegistration::insert(self.inner.pending.clone(), id, tx);
         let operation = async {
-            if let Err(error) = self.write_line(&line).await {
+            if let Err(error) = self.write_frame(&request).await {
                 self.mark_closed(error.clone()).await;
                 return Err(error);
             }
@@ -728,9 +727,8 @@ impl PluginClient {
         if self.is_closed() {
             return Err(PluginError::Closed);
         }
-        let line = serde_json::to_vec(&JsonRpcNotification::new(method, params))
-            .map_err(|e| PluginError::Json(e.to_string()))?;
-        match self.write_line(&line).await {
+        let notification = JsonRpcNotification::new(method, params);
+        match self.write_frame(&notification).await {
             Ok(()) => Ok(()),
             Err(error) => {
                 self.mark_closed(error.clone()).await;
@@ -739,23 +737,14 @@ impl PluginClient {
         }
     }
 
-    async fn write_line(&self, line: &[u8]) -> Result<(), PluginError> {
+    async fn write_frame<T: serde::Serialize>(&self, frame: &T) -> Result<(), PluginError> {
         if self.is_closed() {
             return Err(PluginError::Closed);
         }
         let mut writer = self.inner.writer.lock().await;
-        writer
-            .write_all(line)
+        hya_mcp::codec::write_frame(&mut *writer, frame)
             .await
-            .map_err(|e| PluginError::Io(e.to_string()))?;
-        writer
-            .write_all(b"\n")
-            .await
-            .map_err(|e| PluginError::Io(e.to_string()))?;
-        writer
-            .flush()
-            .await
-            .map_err(|e| PluginError::Io(e.to_string()))
+            .map_err(crate::codec::framing_error)
     }
 
     /// Whether this client has been marked closed (EOF, crash, or explicit mark).
@@ -952,21 +941,9 @@ async fn write_host_response(
     writer: &Writer,
     response: JsonRpcResponse,
 ) -> Result<(), PluginError> {
-    let line =
-        serde_json::to_vec(&response).map_err(|error| PluginError::Json(error.to_string()))?;
-    let mut writer = writer.lock().await;
-    writer
-        .write_all(&line)
+    hya_mcp::codec::write_frame(&mut *writer.lock().await, &response)
         .await
-        .map_err(|error| PluginError::Io(error.to_string()))?;
-    writer
-        .write_all(b"\n")
-        .await
-        .map_err(|error| PluginError::Io(error.to_string()))?;
-    writer
-        .flush()
-        .await
-        .map_err(|error| PluginError::Io(error.to_string()))
+        .map_err(crate::codec::framing_error)
 }
 
 fn spawn_stderr_reader<R>(mut reader: R, tail: StderrTail) -> StderrTask
