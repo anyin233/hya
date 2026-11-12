@@ -114,15 +114,11 @@ async fn while_exit_one_stops() {
 async fn broken_condition_stops_without_success() {
     let gate = gate("exit 127", PredicateMode::Until, false);
     match gate.judge("transcript").await.unwrap() {
-        GateOutcome::Stop { reason } => {
+        GateOutcome::InvalidCondition { reason } => {
             assert!(reason.contains("broken condition"), "reason: {reason}");
         }
         _other => panic!("expected stop"),
     }
-    assert!(
-        gate.broken_condition().is_some(),
-        "broken state must be observable for the entry point"
-    );
 }
 
 #[tokio::test]
@@ -142,27 +138,27 @@ async fn condition_timeout_is_broken_not_continue() {
         },
     );
     match gate.judge("transcript").await.unwrap() {
-        GateOutcome::Stop { reason } => {
+        GateOutcome::InvalidCondition { reason } => {
             assert!(reason.contains("broken condition"), "reason: {reason}");
         }
         _other => panic!("expected stop"),
     }
 }
 
-#[test]
-fn predicate_evaluation_unit_levels() {
+#[tokio::test]
+async fn predicate_evaluation_unit_levels() {
     let pred = predicate("true", PredicateMode::Until);
     assert!(matches!(
-        pred.evaluate(),
+        pred.evaluate().await,
         hya_core::loop_mode::LoopPredicateOutcome::Satisfied { .. }
     ));
     let pred = predicate("false", PredicateMode::Until);
     assert!(matches!(
-        pred.evaluate(),
+        pred.evaluate().await,
         hya_core::loop_mode::LoopPredicateOutcome::Continue
     ));
     let pred = predicate("exit 42", PredicateMode::Until);
-    match pred.evaluate() {
+    match pred.evaluate().await {
         hya_core::loop_mode::LoopPredicateOutcome::Broken { detail } => {
             assert!(detail.contains("42"), "detail: {detail}");
         }
