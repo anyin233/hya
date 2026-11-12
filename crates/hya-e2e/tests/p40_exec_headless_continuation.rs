@@ -164,3 +164,49 @@ async fn e4_two_ignored_notices_end_the_run() {
     );
     assert_eq!(env.fake.route_remaining(ROOT).unwrap(), Some(1));
 }
+
+/// With a 40 s budget the run starts inside the final window (90 s): the
+/// opening names the budget and the first tool result carries the FINAL
+/// notice, once.
+#[tokio::test]
+async fn e5_a_budgeted_run_gets_its_deadline_notice_in_turn() {
+    let (env, _, requests) = run_lead(
+        vec![
+            bash("sleep 1"),
+            bash("echo again"),
+            text_step("FINAL_ANSWER"),
+            text_step("ROOT_EXTRA"),
+        ],
+        &["--time-budget", "40"],
+    )
+    .await;
+    assert_eq!(requests.len(), 3, "{}", env.diagnostics());
+    assert!(
+        requests[0].contains("HEADLESS RUN — time budget: 40s"),
+        "opening missing: {}",
+        requests[0]
+    );
+    assert!(
+        requests[1].contains("HEADLESS RUN — FINAL"),
+        "in-turn notice missing: {}",
+        requests[1]
+    );
+    assert_eq!(
+        requests[2].matches("HEADLESS RUN — FINAL").count(),
+        1,
+        "told once per stage"
+    );
+    assert_eq!(env.fake.route_remaining(ROOT).unwrap(), Some(1));
+}
+
+/// Within the grace (30 s for a 30 s budget) no continuation turn starts.
+#[tokio::test]
+async fn e7_no_continuation_past_the_grace() {
+    let (env, _, requests) = run_lead(
+        vec![text_step("Now let me:"), text_step("ROOT_EXTRA")],
+        &["--time-budget", "30"],
+    )
+    .await;
+    assert_eq!(requests.len(), 1, "{}", env.diagnostics());
+    assert_eq!(env.fake.route_remaining(ROOT).unwrap(), Some(1));
+}

@@ -124,6 +124,7 @@ async fn exec_entry(
     yolo: bool,
     json: bool,
     pure: bool,
+    time_budget: Option<u64>,
 ) -> anyhow::Result<()> {
     match db_writer::claim(db, command)? {
         db_writer::Writer::Server(server) => {
@@ -133,6 +134,14 @@ async fn exec_entry(
                     db,
                     &server,
                     "--pure cannot apply to a running server (it loaded its own context)",
+                );
+            }
+            if time_budget.is_some() {
+                db_writer::exit_unroutable(
+                    command,
+                    db,
+                    &server,
+                    "--time-budget cannot apply to a running server (its clock is not this run's)",
                 );
             }
             routed::exec(
@@ -149,7 +158,8 @@ async fn exec_entry(
         // The lock (if any) is held until the run returns; an early exit
         // (a stop signal) releases it with the process.
         db_writer::Writer::Direct(lock) => {
-            let result = cmd_exec(prompt, model_override, db, yolo, json, pure).await;
+            let result =
+                cmd_exec(prompt, model_override, db, yolo, json, pure, time_budget).await;
             drop(lock);
             result
         }
@@ -181,7 +191,11 @@ async fn cmd_exec(
     yolo: bool,
     json: bool,
     pure: bool,
+    time_budget: Option<u64>,
 ) -> anyhow::Result<()> {
+    if let Some(seconds) = time_budget {
+        hya_tool::deadline::install(std::time::Duration::from_secs(seconds));
+    }
     first_run_config_bootstrap(false)?;
     let has_explicit_model = model_override.is_some();
     let store = open_store(db).await?;
@@ -280,11 +294,18 @@ async fn cmd_exec(
         .admit_user_prompt(session, prompt)
         .await
         .context("admit prompt")?;
+    let deadline = hya_tool::deadline::current();
+    if let Some(deadline) = deadline {
+        engine
+            .inject_system_message(session, deadline.opening())
+            .await
+            .context("announce the time budget")?;
+    }
     let cancel = CancellationToken::new();
     let (turn, stop) = run_until_stopped(
         &built,
         &cancel,
-        lead_wrapup::run_lead(&engine, session, &agent, cancel.clone()),
+        lead_wrapup::run_lead(&engine, session, &agent, cancel.clone(), deadline),
     )
     .await?;
     // End of the run: nothing may keep streaming after `exec` returns. Every
@@ -1052,12 +1073,15 @@ async fn run(
                 yolo,
                 json || format == "json",
                 pure,
+                None,
             )
             .await
         }
-        Some(Command::Exec { prompt, json }) => {
-            exec_entry("exec", prompt, model, &db, yolo, json, pure).await
-        }
+        Some(Command::Exec {
+            prompt,
+            json,
+            time_budget,
+        }) => exec_entry("exec", prompt, model, &db, yolo, json, pure, time_budget).await,
         Some(Command::Serve {
             action: Some(action),
             db: command_db,
