@@ -14,7 +14,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::engine::SessionEngine;
 
-/// Run the mailbox service until the plane (and all its clones) are dropped.
+/// Run the mailbox service until cancellation or the request channel closes; joins all handlers.
 ///
 /// Typed engine errors are flattened to strings on the reply channel so the tool
 /// plane — which lives in `hya-tool` and cannot see `CoreError` — can surface a
@@ -22,12 +22,28 @@ use crate::engine::SessionEngine;
 pub async fn run_mailbox_service(
     engine: Arc<SessionEngine>,
     mut rx: UnboundedReceiver<MailboxRequest>,
+    stop: tokio_util::sync::CancellationToken,
 ) {
-    while let Some(req) = rx.recv().await {
+    let mut requests = tokio::task::JoinSet::new();
+    loop {
+        let req = tokio::select! {
+            biased;
+            () = stop.cancelled() => break,
+            joined = requests.join_next(), if !requests.is_empty() => {
+                if let Some(Err(error)) = joined {
+                    tracing::error!(%error, "mailbox request task failed");
+                }
+                continue;
+            }
+            request = rx.recv() => match request {
+                Some(request) => request,
+                None => break,
+            },
+        };
         let engine = engine.clone();
         // Handle each request on its own task so one slow store read cannot head-of-
         // line block the others (sends/reads are independent per session).
-        tokio::spawn(async move {
+        requests.spawn(async move {
             match req {
                 MailboxRequest::ListChannels { session, reply } => {
                     let result = engine
@@ -124,5 +140,13 @@ pub async fn run_mailbox_service(
                 }
             }
         });
+    }
+    requests.abort_all();
+    while let Some(joined) = requests.join_next().await {
+        if let Err(error) = joined
+            && !error.is_cancelled()
+        {
+            tracing::error!(%error, "request task failed during shutdown");
+        }
     }
 }
