@@ -59,7 +59,6 @@ fn write_hya_config(root: &Path, config_yaml: &str) -> PathBuf {
 /// Isolated XDG config + cache + HOME for one test.
 struct Isolated {
     root: PathBuf,
-    config_home: PathBuf,
     cache_home: PathBuf,
     _guards: Vec<EnvGuard>,
 }
@@ -77,7 +76,6 @@ fn isolated(label: &str, config_yaml: &str) -> Isolated {
     ];
     Isolated {
         root,
-        config_home,
         cache_home,
         _guards: guards,
     }
