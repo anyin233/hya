@@ -19,7 +19,7 @@ import {
 export { api, hyaTui, fakeModelRef, hyaBin, mcpToolsServer, tuiMain, type Backend, type BundleFiles, type McpServerOption, type PermissionModel } from "./backend"
 
 /**
- * A `kind: Plugin` bundle that declares `permission_modes:` and answers
+ * A `kind: Bundle` package that declares `permission_modes:` and answers
  * `permission.approve` from a Bun process (the repository's Bun adapter
  * loading `approver.ts` as a bundle extension). `approve` is the JS source
  * of the hook handler, called with `{ session, root_session, agent, mode,
@@ -34,7 +34,7 @@ export function approverBundle(options: { id: string; modes: { id: string; title
     .join("")
   return {
     "bundle.yaml":
-      "kind: Plugin\n" +
+      "kind: Bundle\n" +
       `identity: { id: ${options.id}, version: 1.0.0, publisher: e2e }\n` +
       "extensions:\n" +
       `  process: { kind: bun, command: [bun, run, ${JSON.stringify(bunAdapterMain)}, --plugin-id, ${namespace}, --bundle-extension, '\${BUNDLE_ROOT}/approver.ts'] }\n` +

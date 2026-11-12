@@ -992,7 +992,7 @@ resources:
 }
 
 #[tokio::test]
-async fn old_install_record_fails_refresh_with_reinstall_instruction() {
+async fn old_install_record_is_reported_after_publishing_readable_sources() {
     use sha2::{Digest, Sha256};
     use sqlx::Connection;
 
@@ -1034,8 +1034,9 @@ async fn old_install_record_fails_refresh_with_reinstall_instruction() {
         .unwrap();
     connection.close().await.unwrap();
 
-    let error = hya_app::bundle_admin::store_error(registry.snapshot().await.unwrap_err());
-    assert!(error.to_string().contains("please reinstall"), "{error}");
+    let snapshot = registry.snapshot().await.unwrap();
+    assert!(snapshot.bundles.is_empty());
+    assert_eq!(snapshot.unreadable[0].bundle_id, "hya/installed-test");
     let runtime = RuntimeRegistry::new(
         ToolRegistry::builtins(),
         hya_app::builtin_agent_catalog().unwrap(),
@@ -1044,4 +1045,8 @@ async fn old_install_record_fails_refresh_with_reinstall_instruction() {
     let error = refresh.refresh_if_changed(&runtime).await.unwrap_err();
     assert!(error.to_string().contains("please reinstall"), "{error}");
     assert!(error.to_string().contains("hya/installed-test"), "{error}");
+    let binding = runtime.bind_turn(&std::env::temp_dir()).unwrap();
+    assert!(binding.resolve_agent("hya-goal-guide").is_some());
+    assert!(binding.resolve_agent("installed-agent").is_none());
+    assert!(!refresh.refresh_if_changed(&runtime).await.unwrap());
 }

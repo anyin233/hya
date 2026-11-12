@@ -104,10 +104,16 @@ impl ProjectScopeRefresh {
     ) -> Result<bool, CoreError> {
         let state = self.scope_state(&key);
         let mut state = state.lock().await;
-        if self.installed.base_catalogs().revision == 0 {
-            self.installed.refresh_if_changed(runtime).await?;
-        }
+        let base_error = if self.installed.base_catalogs().revision == 0 {
+            self.installed.refresh_if_changed(runtime).await.err()
+        } else {
+            None
+        };
         let base = self.installed.base_catalogs();
+        let base_error = match (base.revision, base_error) {
+            (0, Some(error)) => return Err(error),
+            (_, error) => error,
+        };
         let inputs = ScopeInputs::scan(&base, roots.to_vec(), self.plugins.enabled()).await?;
         if !explicit
             && state.attempted == Some(inputs.fingerprint)
@@ -133,6 +139,7 @@ impl ProjectScopeRefresh {
             .plugins
             .refresh(roots, &self.plugins, &retained_plugins, explicit)
             .await;
+        errors.extend(base_error.map(|error| error.to_string()));
         changed |= plugins_changed;
         let dirs = project_bundle_dirs(roots, &state.bundles, &mut errors);
         let present = dirs.iter().cloned().collect::<BTreeSet<_>>();
@@ -492,6 +499,10 @@ impl ScopeInputs {
 impl RuntimeCatalogRefresh for ProjectScopeRefresh {
     async fn refresh_if_changed(&self, runtime: &RuntimeRegistry) -> Result<bool, CoreError> {
         self.installed.refresh_if_changed(runtime).await
+    }
+
+    async fn refresh_explicit(&self, runtime: &RuntimeRegistry) -> Result<bool, CoreError> {
+        self.installed.refresh_explicit(runtime).await
     }
 
     async fn refresh_scope(

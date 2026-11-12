@@ -93,7 +93,7 @@ fn plugin_permission_modes_prepare_sorted_and_round_trip() {
 }
 
 #[test]
-fn permission_modes_change_the_digest_and_are_skipped_when_empty() {
+fn permission_modes_change_the_digest_and_serialize_as_an_empty_list_when_absent() {
     let plain = prepared(mode_bundle(false, true, true, None));
     let with_modes = prepared(mode_bundle(
         false,
@@ -106,7 +106,7 @@ fn permission_modes_change_the_digest_and_are_skipped_when_empty() {
         document(&plain)["permission_modes"]
             .as_array()
             .is_some_and(Vec::is_empty),
-        "the section is skipped when no bundle declares a mode"
+        "permission_modes is an empty list when no modes are declared"
     );
     let a = mode("a", "A");
     let b = mode("b", "B");

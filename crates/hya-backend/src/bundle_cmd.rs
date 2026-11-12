@@ -1010,7 +1010,7 @@ fn info_first_party(bundle_id: &str) -> anyhow::Result<()> {
         println!("publisher={}", identity.publisher);
         println!("origin=first-party");
         println!("scope={BUILTIN_SCOPE}");
-        println!("format=prepared-v3");
+        println!("format=prepared-v{}", bundle.format_version);
         println!("state=active");
         println!("immutable=true");
         println!("prepared_digest={}", prepared.digest());
@@ -1037,10 +1037,10 @@ async fn remove(bundle_id: &str, scope: Scope, yes: bool, db: &str) -> anyhow::R
     };
     let summary = match &project {
         None => {
-            let installed = installed_records_if_exists()
+            let installed = bundle_admin::listings(None)
                 .await?
                 .into_iter()
-                .find(|record| record.bundle_id == bundle_id);
+                .find(|record| record.id == bundle_id && record.scope == bundle_admin::SCOPE_USER);
             let Some(record) = installed else {
                 // Not installed: the shared removal names why (preset, first-party, or not found).
                 bundle_admin::remove(bundle_id, None).await?;

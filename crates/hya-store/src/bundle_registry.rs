@@ -20,8 +20,23 @@ pub struct BundleRegistry {
 pub struct BundleRegistrySnapshot {
     /// Monotonic registry generation after last install/uninstall.
     pub generation: u64,
-    /// Installed mutable bundles (builtins are passed separately by callers).
+    /// Readable installed mutable bundles (builtins are passed separately).
     pub bundles: Vec<BundleRegistryRecord>,
+    /// Rows whose prepared payload cannot be read by this version.
+    pub unreadable: Vec<UnreadableBundleRegistryRecord>,
+}
+
+/// Identity and diagnostic for an installed row that cannot be published.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnreadableBundleRegistryRecord {
+    /// Bundle identity id, read from registry metadata without decoding the payload.
+    pub bundle_id: String,
+    /// Installed version string.
+    pub version: String,
+    /// Installed publisher.
+    pub publisher: String,
+    /// The payload validation error and reinstall instruction.
+    pub error: String,
 }
 
 /// One installed bundle row: identity, digests, and prepared catalog bytes.
@@ -47,6 +62,7 @@ pub struct BundleRegistryRecord {
 struct LoadedBundleRegistrySnapshot {
     generation: u64,
     bundles: Vec<LoadedBundleRegistryRecord>,
+    unreadable: Vec<UnreadableBundleRegistryRecord>,
 }
 
 #[derive(Debug)]
@@ -59,6 +75,7 @@ impl LoadedBundleRegistrySnapshot {
     fn into_public_snapshot(self) -> BundleRegistrySnapshot {
         BundleRegistrySnapshot {
             generation: self.generation,
+            unreadable: self.unreadable,
             bundles: self
                 .bundles
                 .into_iter()
@@ -399,6 +416,10 @@ impl BundleRegistry {
             .bundles
             .iter()
             .any(|loaded| loaded.record.bundle_id == bundle_id)
+            && !snapshot
+                .unreadable
+                .iter()
+                .any(|row| row.bundle_id == bundle_id)
         {
             let missing = StoreError::BundleNotFound {
                 bundle_id: bundle_id.to_string(),
@@ -450,6 +471,7 @@ impl BundleRegistry {
         .fetch_all(&mut **transaction)
         .await?;
         let mut bundles = Vec::with_capacity(rows.len());
+        let mut unreadable = Vec::new();
         for row in rows {
             let bundle_id: String = row.try_get("bundle_id")?;
             let source_digest: Vec<u8> = row.try_get("source_digest")?;
@@ -468,32 +490,39 @@ impl BundleRegistry {
                 bundle_id,
                 source_digest,
             };
-            let prepared = PreparedCatalog::decode(&record.prepared_bytes, &record.prepared_digest)
-                .map_err(|_| StoreError::BundleRegistryCorrupt {
-                    bundle_id: record.bundle_id.clone(),
-                })?;
-            let [prepared_bundle] = prepared.bundles() else {
-                return Err(StoreError::BundleRegistryCorrupt {
-                    bundle_id: record.bundle_id.clone(),
+            let decoded = PreparedCatalog::decode(&record.prepared_bytes, &record.prepared_digest)
+                .map_err(|error| error.to_string())
+                .and_then(|prepared| {
+                    let [bundle] = prepared.bundles() else {
+                        return Err("prepared catalog must contain exactly one bundle".to_string());
+                    };
+                    let identity = bundle.identity();
+                    if identity.id != record.bundle_id
+                        || identity.version != record.version
+                        || identity.publisher != record.publisher
+                    {
+                        return Err(
+                            "registry metadata does not match the prepared catalog".to_string()
+                        );
+                    }
+                    Ok(bundle.clone())
                 });
-            };
-            let identity = prepared_bundle.identity();
-            if identity.id.as_str() != record.bundle_id.as_str()
-                || identity.version.as_str() != record.version.as_str()
-                || identity.publisher.as_str() != record.publisher.as_str()
-            {
-                return Err(StoreError::BundleRegistryCorrupt {
-                    bundle_id: record.bundle_id.clone(),
-                });
+            match decoded {
+                Ok(prepared) => bundles.push(LoadedBundleRegistryRecord { record, prepared }),
+                Err(error) => unreadable.push(UnreadableBundleRegistryRecord {
+                    bundle_id: record.bundle_id,
+                    version: record.version,
+                    publisher: record.publisher,
+                    error: format!(
+                        "{error}; please reinstall the bundle with `hya bundle install`"
+                    ),
+                }),
             }
-            bundles.push(LoadedBundleRegistryRecord {
-                record,
-                prepared: prepared_bundle.clone(),
-            });
         }
         Ok(LoadedBundleRegistrySnapshot {
             generation,
             bundles,
+            unreadable,
         })
     }
 
@@ -602,7 +631,16 @@ fn plan_install(
     BundleCatalog::from_prepared(&complete)?;
 
     let action = match existing {
-        None => BundleInstallAction::Install,
+        None => match snapshot
+            .unreadable
+            .iter()
+            .find(|row| row.bundle_id == bundle_id)
+        {
+            Some(row) => BundleInstallAction::Replace {
+                installed_version: row.version.clone(),
+            },
+            None => BundleInstallAction::Install,
+        },
         Some(loaded) if loaded.record.source_digest == source_digest => {
             BundleInstallAction::Unchanged
         }
