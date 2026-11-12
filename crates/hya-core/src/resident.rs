@@ -52,7 +52,7 @@ use tokio::sync::{Notify, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::{
-    AgentSpec, ArchiveReviver, CreateSession, DRAIN_DEADLINE, SessionEngine, TurnBoundaryObserver,
+    AgentSpec, ArchiveReviver, DRAIN_DEADLINE, SessionEngine, TurnBoundaryObserver,
     TurnDrainReport, TurnLease, TurnRequestContext,
 };
 use crate::error::CoreError;
@@ -193,8 +193,6 @@ struct SlotState {
     status: SlotStatus,
     /// New mail has arrived and a turn is owed.
     pending: bool,
-    /// One-shot initial directive, retained only until the first run.
-    initial_directive: Option<String>,
     /// (Main only) a synthesis directive is owed on the next turn.
     synth_pending: bool,
     /// Present for resident subagents; the main/root actor remains transient.
@@ -334,7 +332,6 @@ struct RunPlan {
     cursor: usize,
     /// (Main only) inject the synthesis directive before the turn.
     synth: bool,
-    initial_directive: Option<String>,
     claim: Option<ActorClaim>,
     cancel: CancellationToken,
     /// The session's single-active-turn claim, taken atomically with the
@@ -351,6 +348,8 @@ enum ResidentRuntimeContext {
     },
 }
 struct ResidentActivation {
+    events: Vec<Event>,
+    parent_claim: Option<ActorClaim>,
     initial: Option<String>,
     guidance: Option<Arc<str>>,
     route: Option<WorkflowTurnRoute>,
@@ -622,7 +621,6 @@ impl TeamActor {
             let sidecar_factory = slot.sidecar_factory.clone();
             let handle = slot.handle.clone();
             let is_main = slot.is_main;
-            let initial_directive = slot.initial_directive.take();
             let cancel = slot.cancel.child_token();
             slot.pending = false;
             slot.synth_pending = false;
@@ -649,7 +647,6 @@ impl TeamActor {
                 is_main,
                 cursor,
                 synth,
-                initial_directive,
                 claim,
                 cancel,
                 lease,
@@ -1231,7 +1228,6 @@ impl TeamActor {
             is_main,
             cursor,
             synth,
-            initial_directive,
             claim,
             cancel,
             lease,
@@ -1283,7 +1279,7 @@ impl TeamActor {
             })
             .unwrap_or_default();
 
-        if is_main && !synth && initial_directive.is_none() && new_mail.is_empty() {
+        if is_main && !synth && new_mail.is_empty() {
             let mut st = self.lock();
             if let Some(slot) = st.residents.get_mut(&session) {
                 slot.cursor = slot.cursor.max(inbox_len);
@@ -1345,31 +1341,6 @@ impl TeamActor {
                 None => {
                     self.engine
                         .inject_system_message(session, SYNTHESIS_DIRECTIVE.to_string())
-                        .await?;
-                }
-            }
-        }
-        if let Some(initial) = initial_directive {
-            match claim.as_ref() {
-                Some(claim) => {
-                    self.engine
-                        .admit_user_prompt_for_actor_with_binding(
-                            claim,
-                            session,
-                            initial,
-                            &binding,
-                            agent.name.as_str(),
-                        )
-                        .await?;
-                }
-                None => {
-                    self.engine
-                        .admit_user_prompt_with_binding(
-                            session,
-                            initial,
-                            &binding,
-                            agent.name.as_str(),
-                        )
                         .await?;
                 }
             }
@@ -2979,7 +2950,6 @@ impl ResidentSupervisor {
         Some(
             slot.status == SlotStatus::Busy
                 || slot.has_work()
-                || slot.initial_directive.is_some()
                 || slot.pending_archive.is_some()
                 || slot.archiving
                 || self.engine.turn_active(session),
@@ -3085,7 +3055,6 @@ impl ResidentSupervisor {
                     let (reply, receiver) = oneshot::channel();
                     let stop_request = StopRequest { terminate, reply };
                     slot.pending = false;
-                    slot.initial_directive = None;
                     slot.synth_pending = false;
                     slot.cancel.cancel();
                     slot.notify.notify_one();
@@ -3284,7 +3253,6 @@ impl ResidentSupervisor {
                 match state.residents.get_mut(&child) {
                     Some(slot) => {
                         slot.pending = false;
-                        slot.initial_directive = None;
                         slot.synth_pending = false;
                         slot.stop_request = Some(StopRequest {
                             terminate: false,
@@ -3446,7 +3414,6 @@ impl ResidentSupervisor {
                 slot.archiving = true;
                 slot.pending = false;
                 slot.synth_pending = false;
-                slot.initial_directive = None;
                 slot.pending_archive = None;
                 slot.claim
             })
@@ -3595,6 +3562,8 @@ impl ResidentSupervisor {
                 resources,
             },
             ResidentActivation {
+                events: Vec::new(),
+                parent_claim: None,
                 initial: Some(arming),
                 guidance: None,
                 route: None,
@@ -3679,7 +3648,6 @@ impl ResidentSupervisor {
                         is_main: true,
                         status: SlotStatus::Idle,
                         pending: false,
-                        initial_directive: None,
                         pending_archive: None,
                         archiving: false,
                         user_stopped: false,
@@ -3823,38 +3791,17 @@ impl ResidentSupervisor {
         };
         let (binding, agents, resources, sidecar_factory) = resolved;
         let (root, parent_depth) = self.engine.session_lineage(parent).await?;
-        let session = match parent_claim.as_ref() {
-            Some(claim) => {
-                self.engine
-                    .create_for_actor(
-                        claim,
-                        CreateSession {
-                            parent: Some(parent),
-                            agent: agent.name.clone(),
-                            model: agent.model.clone(),
-                            workdir: agent.workdir.to_string_lossy().into_owned(),
-                            project: None,
-                            kind: hya_proto::SessionKind::Project,
-                        },
-                    )
-                    .await?
-            }
-            None => {
-                self.engine
-                    .create(CreateSession {
-                        parent: Some(parent),
-                        agent: agent.name.clone(),
-                        model: agent.model.clone(),
-                        workdir: agent.workdir.to_string_lossy().into_owned(),
-                        project: None,
-                        kind: hya_proto::SessionKind::Project,
-                    })
-                    .await?
-            }
-        };
-        self.engine
-            .capture_session_bundle_hooks(session, &binding, agent.name.as_str())
-            .await;
+        let session = SessionId::new();
+        let parent_projection = self.engine.read_projection(parent).await?;
+        let mut events = vec![Event::SessionCreated {
+            session,
+            parent: Some(parent),
+            agent: agent.name.clone(),
+            model: agent.model.clone(),
+            workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: parent_projection.session.project,
+            kind: parent_projection.session.kind,
+        }];
         let parent_path = self
             .engine
             .resolve_handle(root, parent)
@@ -3872,46 +3819,21 @@ impl ResidentSupervisor {
                 ToString::to_string,
             );
         let tool_call = task.as_ref().and_then(|task| task.tool_call);
-        match parent_claim.as_ref() {
-            Some(claim) => {
-                self.engine
-                    .commit_resident_mutation(
-                        claim,
-                        parent,
-                        vec![Event::MemberSpawned {
-                            session: parent,
-                            member,
-                            child: Some(session),
-                            subagent_type: agent.name.clone(),
-                            description,
-                            depth: parent_depth.saturating_add(1),
-                            directive: registration_directive.clone(),
-                            tool_call,
-                        }],
-                    )
-                    .await?;
-            }
-            None => {
-                self.engine
-                    .record_member_spawned(
-                        parent,
-                        crate::engine::MemberSpawnRecord {
-                            member,
-                            child: Some(session),
-                            subagent_type: agent.name.clone(),
-                            description,
-                            depth: parent_depth.saturating_add(1),
-                            directive: registration_directive,
-                            tool_call,
-                        },
-                    )
-                    .await?;
-            }
-        }
-        self.register_existing_resident_with_agents(
+        events.push(Event::MemberSpawned {
+            session: parent,
+            member,
+            child: Some(session),
+            subagent_type: agent.name.clone(),
+            description,
+            depth: parent_depth.saturating_add(1),
+            directive: registration_directive,
+            tool_call,
+        });
+        self.register_existing_resident_at(
             root,
             session,
-            handle.clone(),
+            parent_path,
+            leaf,
             agent,
             ResidentRuntimeContext::Resolved {
                 binding,
@@ -3919,6 +3841,8 @@ impl ResidentSupervisor {
                 resources,
             },
             ResidentActivation {
+                events,
+                parent_claim,
                 initial,
                 guidance,
                 route: None,
@@ -3951,7 +3875,7 @@ impl ResidentSupervisor {
             .residents
             .get_mut(&session)
             .ok_or_else(|| CoreError::Invalid("resident session is not registered".to_string()))?;
-        if slot.status != SlotStatus::Idle || slot.has_work() || slot.initial_directive.is_some() {
+        if slot.status != SlotStatus::Idle || slot.has_work() {
             return Err(CoreError::Invalid(
                 "resident Workflow activation cannot change during active work".to_string(),
             ));
@@ -4012,6 +3936,8 @@ impl ResidentSupervisor {
             agent,
             ResidentRuntimeContext::Bound(binding),
             ResidentActivation {
+                events: Vec::new(),
+                parent_claim: None,
                 initial,
                 guidance: None,
                 route: None,
@@ -4044,6 +3970,8 @@ impl ResidentSupervisor {
             agent,
             ResidentRuntimeContext::Bound(binding),
             ResidentActivation {
+                events: Vec::new(),
+                parent_claim: None,
                 initial,
                 guidance: None,
                 route: None,
@@ -4095,6 +4023,8 @@ impl ResidentSupervisor {
         activation: ResidentActivation,
     ) -> Result<(), CoreError> {
         let ResidentActivation {
+            mut events,
+            parent_claim,
             initial,
             guidance,
             route,
@@ -4127,54 +4057,61 @@ impl ResidentSupervisor {
             .map(|(key, _)| key.clone())
             .unwrap_or_else(|| hya_proto::mint_channel_id(ChannelKind::Group));
         let dm_channel = hya_proto::mint_channel_id(ChannelKind::Dm);
-        let claim = self
+        let created = events
+            .iter()
+            .any(|event| matches!(event, Event::SessionCreated { .. }));
+        events.extend([
+            Event::AgentRegistered {
+                session: root,
+                agent_session: session,
+                handle: leaf,
+                parent: Some(parent_path.clone()),
+                agent_type: agent.name.clone(),
+                mode: SubagentMode::Resident,
+            },
+            // The unit's leader-only broadcast channel: minted with the
+            // leader as founding member on first registration, joined
+            // by every child thereafter.
+            Event::ChannelCreated {
+                session: root,
+                channel: group_channel,
+                kind: ChannelKind::Group,
+                unit: Some(parent_path.clone()),
+                members: vec![parent_path.clone(), handle.clone()],
+            },
+            // The persistent parent-child DM pair: the revival address
+            // that outlives archive cycles.
+            Event::ChannelCreated {
+                session: root,
+                channel: dm_channel,
+                kind: ChannelKind::Dm,
+                unit: None,
+                members: vec![parent_path.clone(), handle.clone()],
+            },
+        ]);
+        let initial = initial.filter(|text| !text.trim().is_empty());
+        let has_initial = initial.is_some();
+        if let Some(text) = initial {
+            events.extend(
+                self.engine
+                    .prepare_initial_resident_prompt(session, text, &binding, agent.name.as_str())
+                    .await?,
+            );
+        }
+        let channel_policy =
+            ChannelPolicy::from_binding(&binding)?.snapshot_for(agent.name.as_str());
+        let (claim, envelopes) = self
             .engine
             .store()
-            .try_claim_new(session, self.owner_run_id)
+            .commit_resident_registration(session, self.owner_run_id, parent_claim.as_ref(), events)
             .await?;
-        if let Err(registration_error) = self
-            .engine
-            .commit_resident_mutation(
-                &claim,
-                root,
-                vec![
-                    Event::AgentRegistered {
-                        session: root,
-                        agent_session: session,
-                        handle: leaf,
-                        parent: Some(parent_path.clone()),
-                        agent_type: agent.name.clone(),
-                        mode: SubagentMode::Resident,
-                    },
-                    // The unit's leader-only broadcast channel: minted with the
-                    // leader as founding member on first registration, joined
-                    // by every child thereafter.
-                    Event::ChannelCreated {
-                        session: root,
-                        channel: group_channel,
-                        kind: ChannelKind::Group,
-                        unit: Some(parent_path.clone()),
-                        members: vec![parent_path.clone(), handle.clone()],
-                    },
-                    // The persistent parent-child DM pair: the revival address
-                    // that outlives archive cycles.
-                    Event::ChannelCreated {
-                        session: root,
-                        channel: dm_channel,
-                        kind: ChannelKind::Dm,
-                        unit: None,
-                        members: vec![parent_path.clone(), handle.clone()],
-                    },
-                ],
-            )
-            .await
-        {
-            if let Err(release_error) = self.engine.release_resident_actor_claim(&claim).await {
-                return Err(CoreError::Invalid(format!(
-                    "resident registration failed: {registration_error}; claim release failed: {release_error}"
-                )));
-            }
-            return Err(registration_error);
+        for envelope in envelopes {
+            self.engine.publish_envelope(envelope);
+        }
+        self.engine
+            .update_session_channel_policy(session, channel_policy);
+        if created {
+            self.engine.notify_session_start(session).await;
         }
         // Notify `agent.spawn` (best-effort observation point) for the
         // resident member that was just registered under its parent.
@@ -4193,8 +4130,6 @@ impl ResidentSupervisor {
         }
         let team = self.team_for(root);
         let notify = Arc::new(Notify::new());
-        let initial = initial.filter(|directive| !directive.trim().is_empty());
-        let has_initial = initial.is_some();
         {
             let mut st = team.lock();
             // New work exists (the initial directive), so a later quiescence fires.
@@ -4213,7 +4148,6 @@ impl ResidentSupervisor {
                     is_main: false,
                     status: SlotStatus::Idle,
                     pending: has_initial,
-                    initial_directive: initial,
                     pending_archive: None,
                     archiving: false,
                     user_stopped: false,
@@ -4285,7 +4219,6 @@ impl ResidentSupervisor {
                     is_main: false,
                     status: SlotStatus::Idle,
                     pending,
-                    initial_directive: None,
                     pending_archive: None,
                     archiving: false,
                     user_stopped: false,

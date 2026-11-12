@@ -261,3 +261,9 @@ runtime.publish_agent_model_preferences(map.clone());
 
 Commit precedes one infallible publication, while the request keeps its original
 binding for validation and response projection.
+
+Resident creation and arming use `commit_resident_registration`: child session,
+parent member relation, roster/channels, actor claim, and initial user message
+commit together. Failed registration leaves none of these rows/events behind.
+Publication uses only the returned committed envelopes; recovery identifies the
+persisted user message as queued work before `ResidentWorkStarted`.
