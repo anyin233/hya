@@ -424,3 +424,11 @@ work that already crossed `ResidentWorkStarted`. The
 `engine::session_hooks::registration_tests` regressions cover stale-parent and
 database rollback, hook ordering, dropped spawns, concurrent announcements, and
 all pre-first-turn stop paths including archive followed by revival.
+
+### Live provider routing
+
+Each spawn admission captures the engine's current provider router once for
+model preference and category resolution. Adding or refreshing a provider needs
+no supervisor restart. For example, after adding a provider and saving its model
+as an Agent default, the next `task` request for that Agent uses that model.
+The `task` request schema and response handles above are unchanged.

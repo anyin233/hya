@@ -7,7 +7,7 @@
 //! Session creation.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::Arc;
 
 use hya_core::{
     AgentModelConfiguration, AgentOrigin, CategoryRegistry, RuntimeRegistry, SessionEngine,
@@ -118,10 +118,7 @@ pub struct PersistentAgentModelControl {
     store: SessionStore,
     owner: OwnerRunId,
     runtime: Arc<RuntimeRegistry>,
-    /// Startup routes; superseded by `engine` once [`Self::follow_engine_router`] binds it.
-    router: Arc<ProviderRouter>,
-    /// The engine whose live routes (providers added or refreshed at runtime) are checked.
-    engine: Arc<OnceLock<Weak<SessionEngine>>>,
+    engine: Arc<SessionEngine>,
     categories: Arc<CategoryRegistry>,
     preferences: Arc<Mutex<BTreeMap<String, ModelRef>>>,
     configuration_files: Option<Arc<AgentModelConfigFiles>>,
@@ -141,7 +138,7 @@ impl PersistentAgentModelControl {
     /// * `store` - Session store whose runtime owner has already been claimed.
     /// * `owner` - Runtime owner identity used for subsequent mutations.
     /// * `runtime` - Registry receiving the immutable preference snapshot.
-    /// * `router` - Provider router used for exact mutation-time catalog checks.
+    /// * `engine` - Engine supplying current routes for mutation-time catalog checks.
     ///
     /// # Errors
     /// Returns [`AgentModelControlError::Store`] when the preference rows cannot
@@ -151,7 +148,7 @@ impl PersistentAgentModelControl {
         store: SessionStore,
         owner: OwnerRunId,
         runtime: Arc<RuntimeRegistry>,
-        router: Arc<ProviderRouter>,
+        engine: Arc<SessionEngine>,
     ) -> Result<Self, AgentModelControlError> {
         let preferences = stored_preferences(&store).await?;
         runtime.publish_agent_model_preferences(preferences.clone());
@@ -159,8 +156,7 @@ impl PersistentAgentModelControl {
             store,
             owner,
             runtime,
-            router,
-            engine: Arc::new(OnceLock::new()),
+            engine,
             categories: Arc::new(CategoryRegistry::default()),
             preferences: Arc::new(Mutex::new(preferences)),
             configuration_files: None,
@@ -168,25 +164,9 @@ impl PersistentAgentModelControl {
         })
     }
 
-    /// Check models against `engine`'s live provider routes from now on.
-    ///
-    /// The engine replaces its router when a provider is added, edited, or
-    /// refreshed (`SessionEngine::publish_provider_catalog`); without this the
-    /// control would keep checking the startup routes and reject those models.
-    /// Clones share the binding. Only a weak reference is kept, so the control
-    /// never keeps the engine alive; a dropped engine falls back to the
-    /// startup routes.
-    pub fn follow_engine_router(&self, engine: &Arc<SessionEngine>) {
-        // A second call keeps the first engine: one runtime owns one engine.
-        let _ = self.engine.set(Arc::downgrade(engine));
-    }
-
     /// The provider routes serving requests now.
     fn router(&self) -> Arc<ProviderRouter> {
-        self.engine.get().and_then(Weak::upgrade).map_or_else(
-            || Arc::clone(&self.router),
-            |engine| engine.provider_router(),
-        )
+        self.engine.provider_router()
     }
 
     /// Install the runtime's model-category registry for root and state resolution.

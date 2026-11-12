@@ -175,6 +175,11 @@ claiming success.
 
 ## Stage model routing
 
+Each Workflow invocation captures the engine’s current provider router for
+preflight and Stage routing. Providers added after startup are available to the
+next invocation without restarting the runtime. For example, add a provider,
+then set a Stage’s `model.id` to its model using the schema below.
+
 Each Stage can override its Agent model, category, and reasoning policy with an
 ordered model route. A loop verifier has an independent route:
 
