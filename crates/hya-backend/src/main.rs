@@ -758,6 +758,7 @@ fn goal_loop_hook_chain(binding: &TurnBinding, stable_agent_id: &str) -> Arc<dyn
         .filter_map(|bundle| binding.bundle_hooks(&bundle.identity().id))
         .collect();
     Arc::new(HookChain::new(ordered_evaluator_hooks(
+        binding.global_plugin_hooks(),
         agentless,
         selected,
         binding.bundle_hooks("hya/goal-loop"),
@@ -765,12 +766,18 @@ fn goal_loop_hook_chain(binding: &TurnBinding, stable_agent_id: &str) -> Arc<dyn
 }
 
 fn ordered_evaluator_hooks(
+    global: Vec<Arc<dyn HookDispatcher>>,
     agentless: Vec<Arc<dyn HookDispatcher>>,
     selected: Vec<Arc<dyn HookDispatcher>>,
     intelligent: Option<Arc<dyn HookDispatcher>>,
 ) -> Vec<Arc<dyn HookDispatcher>> {
     let mut hooks = Vec::new();
-    for hook in agentless.into_iter().chain(selected).chain(intelligent) {
+    for hook in global
+        .into_iter()
+        .chain(agentless)
+        .chain(selected)
+        .chain(intelligent)
+    {
         if !hooks.iter().any(|existing| Arc::ptr_eq(existing, &hook)) {
             hooks.push(hook);
         }
@@ -1062,18 +1069,21 @@ mod tests {
     use hya_core::hooks::NoopHookHost;
 
     #[test]
-    fn evaluator_hook_order_is_agentless_selected_intelligent_and_deduplicated() {
+    fn evaluator_hook_order_is_global_agentless_selected_intelligent_and_deduplicated() {
+        let global: Arc<dyn HookDispatcher> = Arc::new(NoopHookHost);
         let agentless: Arc<dyn HookDispatcher> = Arc::new(NoopHookHost);
         let selected: Arc<dyn HookDispatcher> = Arc::new(NoopHookHost);
         let intelligent: Arc<dyn HookDispatcher> = Arc::new(NoopHookHost);
         let ordered = ordered_evaluator_hooks(
+            vec![Arc::clone(&global)],
             vec![Arc::clone(&agentless)],
             vec![Arc::clone(&selected), Arc::clone(&intelligent)],
             Some(Arc::clone(&intelligent)),
         );
-        assert_eq!(ordered.len(), 3);
-        assert!(Arc::ptr_eq(&ordered[0], &agentless));
-        assert!(Arc::ptr_eq(&ordered[1], &selected));
-        assert!(Arc::ptr_eq(&ordered[2], &intelligent));
+        assert_eq!(ordered.len(), 4);
+        assert!(Arc::ptr_eq(&ordered[0], &global));
+        assert!(Arc::ptr_eq(&ordered[1], &agentless));
+        assert!(Arc::ptr_eq(&ordered[2], &selected));
+        assert!(Arc::ptr_eq(&ordered[3], &intelligent));
     }
 }

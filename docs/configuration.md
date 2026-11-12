@@ -1435,6 +1435,9 @@ selects Streamable HTTP.
 
 Disabled MCP declarations remain visible in `GET /v1/mcp` with state
 `DISCONNECTED`; `POST /v1/mcp/<name>/connect` enables and prepares them.
+MCP `{env:VAR}` and `{file:/path}` values are resolved when that source is
+prepared. Disabled entries need no available secrets; a missing secret when
+connecting is that server's failed status and does not abort config loading.
 The same connect call retries a failed enabled source. `AddMcpServer`
 (`POST /v1/mcp`) compares the complete declaration, including `url`,
 `transport`, `enabled`, `command`, `env`, and `timeout_ms`; replacing one
@@ -1681,15 +1684,15 @@ Layout: `<root>/.hya/plugins/<name>/plugin.toml` for each root of a
 registered Project (see above), scanned from each **immediate** subdirectory
 of `.hya/plugins` only, in directory-name order
 ([`crates/hya-app/src/plugins.rs`](../crates/hya-app/src/plugins.rs)
-`project_plugin_specs` / `scan_manifests`; per-Project loading in
+`project_plugin_inputs`; per-Project loading in
 [`crates/hya-app/src/project_plugins.rs`](../crates/hya-app/src/project_plugins.rs)).
 Two manifests of one root with the same id: the first directory wins, the
-other is skipped with a warning. Missing or **unreadable** `plugin.toml` is
-skipped **silently** (`read_to_string` failure → `continue` with no log). Only
-an **unparseable** file prints
-`hya: skipping plugin manifest <path> (<error>)` on stderr. Neither case fails
-the bind; a project plugin that fails to start is logged and left out of the
-Project's catalog until its manifest changes or the scope is rebuilt.
+other is skipped with a warning. Removing `plugin.toml` removes that declaration.
+An unreadable or unparseable manifest, or a failed initialization, retains that
+plugin's last published tools and hooks. Other Project sources can update and
+binds continue. Errors are logged and returned by explicit refresh. An input
+edit or explicit refresh retries the failed source; unchanged automatic binds
+do not repeatedly start it.
 
 Example:
 
@@ -1726,9 +1729,33 @@ tool schemas and hook chain no longer contain that plugin. Set it back to
 Each plugin publishes one complete source containing its tools, Skills, and
 hooks (including `permission.ask`). Preparation or publication failure keeps
 that source's previous contribution; hooks from the rejected process never
-become active. Other sources can still publish. An existing turn binding keeps
-the process it captured until the binding is released. Invalid YAML rejects
+become active. Other sources can still publish. Even when the configuration
+file is unreadable or malformed, an explicit refresh retries previously known
+failed sources and reports the configuration error. An existing turn binding
+keeps the process it captured until the binding is released. Invalid YAML rejects
 the configuration refresh and preserves the published sources.
+
+Automatic binds remember a failed declaration and continue with its previous
+source; they do not restart a broken plugin on each request. Changing that
+plugin's declaration retries it. To retry after repairing an executable without
+changing its declaration, call the refresh endpoint explicitly:
+
+```sh
+curl -sS -X POST http://127.0.0.1:8080/v1/bundles:refresh \
+  -H 'Content-Type: application/json' -d '{"directory":"/path/to/project"}'
+```
+
+The same rule applies to project plugins, project bundles, and MCP servers.
+An explicit refresh retries failed sources even when their declarations are
+unchanged. Healthy sources keep their processes. Failures appear in
+`errors: [{"bundleId":"…","message":"…"}]`; independent successes still
+publish. See [the response contract](bundle-runtime.md#self-proof-and-activation).
+
+Hook and `permission.ask` dispatch consult user-global config plugins first,
+installed plugin bundles next, and project plugins last. Global plugins receive
+`SessionCreated`, out-of-turn events, and `session.end` even when a Project
+scope is evicted. Removing a global plugin releases idle sessions' references;
+an active turn keeps the process captured in its binding until it finishes.
 
 ### Config-over-manifest merge
 
@@ -1750,7 +1777,8 @@ For `kind: bun` entries without `command`, hya resolves the adapter in this
 order: (1) `HYA_BUN_ADAPTER_DIR` when set, (2) the installed adapter adjacent
 to the executable at `../lib/hya/bun-adapter`, and (3) the workspace adapter
 at `crates/hya-plugin-bun/adapter`. Set `BUN` to choose the Bun binary. If
-Bun is not available, that plugin is skipped.
+Bun is not available, a new process cannot start; a reload retains the
+previously published source.
 
 `kind: claude` entries run the Claude Code adapter
 ([`crates/hya-plugin-claude/adapter`](../crates/hya-plugin-claude/adapter))

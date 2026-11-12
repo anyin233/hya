@@ -724,12 +724,22 @@ the published source retains its single-plugin `PluginHost`. Configuration edits
 are checked at the same bind/explicit-refresh boundary as bundles. There is no
 separate live host or permission interceptor for configured plugins. A respawn
 must reproduce the complete canonical initialize declaration or calls fail closed.
+User-global plugins precede installed plugin bundles and project plugins in hook
+and permission dispatch. Active turns retain their global source snapshot;
+out-of-turn events and session lifecycle dispatch use the currently published
+global sources, so idle sessions cannot pin removed global plugins. A base
+publication also releases cached Project compositions; their overlays remain,
+and their next bind recomposes against the new base. Live turn bindings retain
+their captured snapshot across this invalidation.
 
 `RuntimeSnapshot` owns exactly one `BundleCatalog`. At root admission, new turn
 binding, subsequent root model-round boundaries, and catalog refresh, `hya-app` merges project, installed, and
 first-party payloads. It prepares static Skills, native/Bun/Claude process
 contributions, and bundled MCP servers before publishing catalog and Bundle
-sources atomically. Initialization failure preserves the previous generation.
+sources atomically. A failed project source retains its previous publication;
+independent sources can still advance. Automatic binds remember failed inputs
+and continue using the retained catalog. Explicit refresh retries failures even
+when declarations are unchanged.
 Unchanged sources reuse their process owners; retained bindings keep those
 owners and staged files alive across replacement and uninstall.
 

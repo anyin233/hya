@@ -127,37 +127,70 @@ fn read_plugin_config(path: &Path) -> Result<Option<String>, hya_core::CoreError
     }
 }
 
+impl RuntimeExtensionsRefresh {
+    async fn refresh_plugins(&self, explicit: bool) -> Result<(), hya_core::CoreError> {
+        if self.pure {
+            return Ok(());
+        }
+        let mut applied = self.applied.lock().await;
+        let loaded = match read_plugin_config(&self.config_file) {
+            Ok(next) => {
+                if !explicit && *applied == next {
+                    return Ok(());
+                }
+                // Remember failed inputs too; only edits or explicit refresh retry.
+                *applied = next.clone();
+                crate::config::parse_plugin_config(next.as_deref().unwrap_or("")).map_err(|error| {
+                    hya_core::CoreError::Invalid(format!("load plugin config: {error:#}"))
+                })
+            }
+            Err(error) => Err(error),
+        };
+        let (specs, config_error) = match loaded {
+            Ok(specs) => (Some(specs), None),
+            Err(error) if explicit => (None, Some(error)),
+            Err(error) => return Err(error),
+        };
+        let plan = self
+            .reconciler
+            .replace_plugins(specs, explicit)
+            .map_err(|error| hya_core::CoreError::Invalid(error.to_string()))?;
+        let result = RuntimeMcpControl::new(self.reconciler.clone())
+            .reconcile_plan(plan)
+            .await
+            .map(|_| ())
+            .map_err(|error| hya_core::CoreError::Invalid(error.to_string()));
+        if let Some(error) = config_error {
+            return Err(error);
+        }
+        result
+    }
+}
+
 #[async_trait::async_trait]
 impl hya_core::RuntimeCatalogRefresh for RuntimeExtensionsRefresh {
     async fn refresh_if_changed(
         &self,
         runtime: &RuntimeRegistry,
     ) -> Result<bool, hya_core::CoreError> {
-        let mut changed = self.catalogs.refresh_if_changed(runtime).await?;
-        if self.pure {
-            return Ok(changed);
-        }
-        let mut applied = self.applied.lock().await;
-        let next = read_plugin_config(&self.config_file)?;
-        if *applied == next {
-            return Ok(changed);
-        }
-        let specs =
-            crate::config::parse_plugin_config(next.as_deref().unwrap_or("")).map_err(|error| {
-                hya_core::CoreError::Invalid(format!("load plugin config: {error:#}"))
-            })?;
-        let plan = self
-            .reconciler
-            .replace_plugins(specs)
-            .map_err(|error| hya_core::CoreError::Invalid(error.to_string()))?;
         let before = runtime.effective_manifest().generation;
-        RuntimeMcpControl::new(self.reconciler.clone())
-            .reconcile_plan(plan)
-            .await
-            .map_err(|error| hya_core::CoreError::Invalid(error.to_string()))?;
-        changed |= runtime.effective_manifest().generation != before;
-        *applied = next;
-        Ok(changed)
+        let catalogs = self.catalogs.refresh_if_changed(runtime).await;
+        let plugins = self.refresh_plugins(false).await;
+        catalogs?;
+        plugins?;
+        Ok(runtime.effective_manifest().generation != before)
+    }
+
+    async fn refresh_explicit(
+        &self,
+        runtime: &RuntimeRegistry,
+    ) -> Result<bool, hya_core::CoreError> {
+        let before = runtime.effective_manifest().generation;
+        let catalogs = self.catalogs.refresh_explicit(runtime).await;
+        let plugins = self.refresh_plugins(true).await;
+        catalogs?;
+        plugins?;
+        Ok(runtime.effective_manifest().generation != before)
     }
 
     async fn refresh_scope(
@@ -166,6 +199,14 @@ impl hya_core::RuntimeCatalogRefresh for RuntimeExtensionsRefresh {
         scope: &hya_core::CatalogScope,
     ) -> Result<bool, hya_core::CoreError> {
         self.catalogs.refresh_scope(runtime, scope).await
+    }
+
+    async fn refresh_scope_explicit(
+        &self,
+        runtime: &RuntimeRegistry,
+        scope: &hya_core::CatalogScope,
+    ) -> Result<bool, hya_core::CoreError> {
+        self.catalogs.refresh_scope_explicit(runtime, scope).await
     }
 }
 
@@ -229,7 +270,7 @@ impl DesiredSource {
     pub(crate) fn mcp(id: SourceId, spec: McpServerConfig) -> Self {
         Self {
             id,
-            spec: DesiredSpec::Mcp(spec),
+            spec: DesiredSpec::Mcp(normalize_mcp(spec)),
         }
     }
 
@@ -249,6 +290,21 @@ impl DesiredSource {
     fn into_record(self) -> (SourceId, DesiredRecord) {
         (self.id, DesiredRecord { spec: self.spec })
     }
+}
+
+fn normalize_mcp(mut spec: McpServerConfig) -> McpServerConfig {
+    spec.enabled = Some(spec.enabled != Some(false));
+    spec.env = Some(spec.env.unwrap_or_default());
+    spec.timeout_ms = Some(
+        spec.timeout_ms
+            .unwrap_or(hya_mcp::client::DEFAULT_CALL_TIMEOUT.as_millis() as u64),
+    );
+    spec.transport = Some(match (spec.url.is_some(), spec.transport.as_deref()) {
+        (false, _) => "stdio".to_string(),
+        (true, None | Some("http" | "streamable_http")) => "http".to_string(),
+        (true, Some(value)) => value.to_string(),
+    });
+    spec
 }
 
 impl DesiredSpec {
@@ -655,26 +711,34 @@ impl RuntimeReconciler {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.apply_desired_locked(&mut state, next, None)
+        self.apply_desired_locked(&mut state, next, &BTreeSet::new())
     }
 
-    fn replace_plugins(&self, specs: Vec<PluginSpec>) -> Result<ReconcilePlan, ReconcileError> {
+    fn replace_plugins(
+        &self,
+        specs: Option<Vec<PluginSpec>>,
+        explicit: bool,
+    ) -> Result<ReconcilePlan, ReconcileError> {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut next = state
-            .desired
-            .iter()
-            .filter(|(id, _)| id.kind() != RuntimeSourceKind::Plugin)
-            .map(|(id, record)| (id.clone(), record.clone()))
-            .collect::<BTreeMap<_, _>>();
-        for spec in specs {
-            let (id, record) =
-                DesiredSource::plugin(SourceId::plugin(spec.id.clone()), spec).into_record();
-            next.insert(id, record);
+        let mut next = state.desired.clone();
+        // An unreadable declaration file preserves known source desires.
+        if let Some(specs) = specs {
+            next.retain(|id, _| id.kind() != RuntimeSourceKind::Plugin);
+            for spec in specs {
+                let (id, record) =
+                    DesiredSource::plugin(SourceId::plugin(spec.id.clone()), spec).into_record();
+                next.insert(id, record);
+            }
         }
-        self.apply_desired_locked(&mut state, next, None)
+        let retry = if explicit {
+            next.keys().cloned().collect()
+        } else {
+            BTreeSet::new()
+        };
+        self.apply_desired_locked(&mut state, next, &retry)
     }
 
     pub(crate) fn upsert_mcp(
@@ -690,7 +754,7 @@ impl RuntimeReconciler {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut next = state.desired.clone();
         next.insert(id.clone(), record);
-        self.apply_desired_locked(&mut state, next, Some(&id))
+        self.apply_desired_locked(&mut state, next, &BTreeSet::from([id]))
     }
 
     pub(crate) fn set_mcp_enabled(
@@ -714,7 +778,7 @@ impl RuntimeReconciler {
         let (_, record) = source.into_record();
         let mut next = state.desired.clone();
         next.insert(id.clone(), record);
-        self.apply_desired_locked(&mut state, next, Some(&id))
+        self.apply_desired_locked(&mut state, next, &BTreeSet::from([id]))
             .map(Some)
     }
 
@@ -722,7 +786,7 @@ impl RuntimeReconciler {
         &self,
         state: &mut ReconcileState,
         next: BTreeMap<SourceId, DesiredRecord>,
-        retry: Option<&SourceId>,
+        retry: &BTreeSet<SourceId>,
     ) -> Result<ReconcilePlan, ReconcileError> {
         let revision = state
             .desired_revision
@@ -743,7 +807,7 @@ impl RuntimeReconciler {
                     .desired
                     .get(*id)
                     .is_none_or(|old| !old.spec.enabled() || old.spec != record.spec)
-                    || (retry.is_none_or(|target| target == *id)
+                    || (retry.contains(*id)
                         && !state.attempt.contains_key(*id)
                         && state
                             .observed
@@ -1132,7 +1196,16 @@ impl hya_server::McpControl for RuntimeMcpControl {
 pub(crate) async fn prepare_desired_source(source: DesiredSource) -> PreparedResult {
     let id = source.id().clone();
     match source.spec {
-        DesiredSpec::Mcp(config) => {
+        DesiredSpec::Mcp(mut config) => {
+            for value in config.env.iter_mut().flat_map(|env| env.values_mut()) {
+                match crate::config::resolve_secret(value) {
+                    Ok(resolved) => *value = resolved,
+                    Err(error) => {
+                        return PreparedFailure::new(id, format!("MCP_ENV_FAILED: {error:#}"))
+                            .into();
+                    }
+                }
+            }
             match hya_mcp::prepare(id.configured_id().to_string(), config).await {
                 Ok(server) => PreparedResult::Ready(prepared_mcp_source(id, server)),
                 Err(error) => PreparedResult::Failed(PreparedFailure::new(
@@ -1297,6 +1370,487 @@ mod tests {
         PreparedSource, ReconcileError, RuntimeReconciler, SourceId,
     };
 
+    struct RefreshHarness {
+        root: std::path::PathBuf,
+        engine: hya_core::SessionEngine,
+        reconciler: Arc<RuntimeReconciler>,
+        refresh: Arc<super::RuntimeExtensionsRefresh>,
+    }
+
+    impl RefreshHarness {
+        async fn new() -> anyhow::Result<Self> {
+            let root =
+                std::env::temp_dir().join(format!("hya-refresh-{}", hya_proto::SessionId::new()));
+            std::fs::create_dir_all(&root)?;
+            std::fs::write(root.join("config.yaml"), "plugins: {}\n")?;
+            let registry = Arc::new(RuntimeRegistry::new(
+                ToolRegistry::builtins(),
+                crate::runtime::builtin_agent_catalog()?,
+            ));
+            let reconciler = Arc::new(RuntimeReconciler::new(registry.clone()));
+            let refresh = Arc::new(super::RuntimeExtensionsRefresh {
+                catalogs: crate::ProjectScopeRefresh::new(Arc::new(
+                    crate::InstalledBundleRefresh::new(root.join("registry.db")),
+                )),
+                reconciler: reconciler.clone(),
+                config_file: root.join("config.yaml"),
+                applied: tokio::sync::Mutex::new(Some("plugins: {}\n".into())),
+                pure: false,
+            });
+            let (permission, _) =
+                hya_tool::PermissionPlane::new(hya_tool::PermissionRules::default());
+            let engine = hya_core::SessionEngine::new(
+                hya_store::SessionStore::connect_memory().await?,
+                Arc::new(hya_provider::ProviderRouter::new()),
+                registry,
+                permission,
+                hya_core::EventBus::default(),
+            )
+            .with_catalog_refresh(refresh.clone());
+            Ok(Self {
+                root,
+                engine,
+                reconciler,
+                refresh,
+            })
+        }
+
+        fn config(&self, ids: &[&str]) -> anyhow::Result<()> {
+            let plugins = ids.iter().map(|id| (id.to_string(), json!({"kind":"rust", "command":["python3", self.root.join(format!("{id}.py"))], "timeout_ms":1000}))).collect::<BTreeMap<_,_>>();
+            std::fs::write(
+                self.root.join("config.yaml"),
+                serde_json::to_string(&json!({"plugins":plugins}))?,
+            )?;
+            Ok(())
+        }
+
+        fn script(&self, id: &str, works: bool) -> anyhow::Result<()> {
+            let log = serde_json::to_string(&self.root.join(format!("{id}.starts")))?;
+            let body = if works {
+                r#"import json,sys
+for line in sys.stdin:
+ r=json.loads(line)
+ if 'id' in r:
+  result={'protocol_version':1,'plugin':{'id':'ID','version':'1.0.0','kind':'rust'},'hooks':[{'name':'message.user.before'}],'tools':[{'name':'echo','inputSchema':{'type':'object'}}]} if r.get('method')=='initialize' else {}
+  print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':result}),flush=True)
+"#.replace("ID", id)
+            } else {
+                "raise SystemExit(1)\n".into()
+            };
+            std::fs::write(
+                self.root.join(format!("{id}.py")),
+                format!(
+                    "import os\nwith open({log}, 'a') as f: f.write(str(os.getpid())+'\\n')\n{body}"
+                ),
+            )?;
+            Ok(())
+        }
+
+        fn starts(&self, id: &str) -> usize {
+            std::fs::read_to_string(self.root.join(format!("{id}.starts")))
+                .unwrap_or_default()
+                .lines()
+                .count()
+        }
+
+        async fn bind(&self) -> anyhow::Result<hya_core::TurnBinding> {
+            Ok(self
+                .engine
+                .bind_scope_runtime(
+                    &hya_core::CatalogScope::Directory(self.root.clone()),
+                    &self.root,
+                )
+                .await?)
+        }
+    }
+
+    impl Drop for RefreshHarness {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[tokio::test]
+    async fn hot_reload_failed_config_does_not_block_or_repeat_on_bind() -> anyhow::Result<()> {
+        let h = RefreshHarness::new().await?;
+        h.script("bad", false)?;
+        h.script("good", true)?;
+        h.config(&["bad", "good"])?;
+        let binding = h.bind().await?;
+        assert!(binding.resolve_tool("good__echo").is_some());
+        for _ in 0..3 {
+            h.bind().await?;
+        }
+        assert_eq!(h.starts("bad"), 1);
+        std::fs::write(h.root.join("config.yaml"), "plugins: [invalid")?;
+        assert!(h.bind().await?.resolve_tool("good__echo").is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hot_reload_explicit_refresh_retries_identical_failed_config() -> anyhow::Result<()> {
+        let h = RefreshHarness::new().await?;
+        h.script("retry", false)?;
+        h.config(&["retry"])?;
+        // RuntimeExtensionsRefresh snapshots the file before startup reconciliation.
+        *h.refresh.applied.lock().await = super::read_plugin_config(&h.root.join("config.yaml"))?;
+        let specs = crate::config::parse_plugin_config(&std::fs::read_to_string(
+            h.root.join("config.yaml"),
+        )?)?;
+        let plan = h.reconciler.replace_desired(
+            specs
+                .into_iter()
+                .map(|spec| DesiredSource::plugin(SourceId::plugin(spec.id.clone()), spec))
+                .collect(),
+        )?;
+        assert!(
+            super::RuntimeMcpControl::new(h.reconciler.clone())
+                .reconcile_plan(plan)
+                .await
+                .is_err()
+        );
+        assert_eq!(h.starts("retry"), 1);
+        h.script("retry", true)?;
+        let refreshed = h
+            .engine
+            .refresh_bundles(&hya_core::CatalogScope::Directory(h.root.clone()), &h.root)
+            .await?;
+        assert!(refreshed.errors.is_empty(), "{:?}", refreshed.errors);
+        assert!(refreshed.binding.resolve_tool("retry__echo").is_some());
+        assert_eq!(h.starts("retry"), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hot_reload_config_edit_does_not_retry_unrelated_failed_mcp() -> anyhow::Result<()> {
+        use hya_server::McpControl as _;
+        let h = RefreshHarness::new().await?;
+        let log = h.root.join("mcp.starts");
+        super::RuntimeMcpControl::new(h.reconciler.clone())
+            .upsert(
+                "bad".into(),
+                McpServerConfig {
+                    command: vec![
+                        "python3".into(),
+                        "-c".into(),
+                        format!(
+                            "with open({}, 'a') as f: f.write('start\\n')",
+                            serde_json::to_string(&log)?
+                        ),
+                    ],
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(anyhow::Error::msg)?;
+        std::fs::write(
+            h.root.join("config.yaml"),
+            "plugins: {}\n# unrelated provider edit\n",
+        )?;
+        h.bind().await?;
+        assert_eq!(std::fs::read_to_string(&log)?.lines().count(), 1);
+        std::fs::write(h.root.join("config.yaml"), "plugins: [invalid")?;
+        let refreshed = h
+            .engine
+            .refresh_bundles(&hya_core::CatalogScope::Directory(h.root.clone()), &h.root)
+            .await?;
+        assert!(!refreshed.errors.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(&log)?.lines().count(),
+            2,
+            "a malformed plugin config must not block explicit retry of the known MCP declaration"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hot_reload_connect_compares_mcp_defaults_semantically() -> anyhow::Result<()> {
+        use hya_server::McpControl as _;
+        let h = RefreshHarness::new().await?;
+        let script = r#"import json,sys
+for line in sys.stdin:
+ r=json.loads(line)
+ if 'id' not in r: continue
+ result={'protocolVersion':'2024-11-05','capabilities':{},'serverInfo':{'name':'test','version':'1'}} if r['method']=='initialize' else {'tools':[]} if r['method']=='tools/list' else {}
+ print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':result}),flush=True)
+"#;
+        let control = super::RuntimeMcpControl::new(h.reconciler.clone());
+        let config = McpServerConfig {
+            command: vec!["python3".into(), "-c".into(), script.into()],
+            ..Default::default()
+        };
+        control
+            .upsert("test".into(), config.clone())
+            .await
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(
+            control.status().await["test"],
+            hya_mcp::McpStatus::Connected
+        );
+        let generation = h.engine.runtime_registry().effective_manifest().generation;
+        control
+            .set_enabled("test".into(), true)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(
+            h.engine.runtime_registry().effective_manifest().generation,
+            generation
+        );
+        control
+            .upsert(
+                "test".into(),
+                McpServerConfig {
+                    enabled: Some(true),
+                    env: Some(BTreeMap::new()),
+                    transport: Some("stdio".into()),
+                    timeout_ms: Some(30_000),
+                    ..config
+                },
+            )
+            .await
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(
+            h.engine.runtime_registry().effective_manifest().generation,
+            generation
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hot_reload_global_events_survive_scope_eviction() -> anyhow::Result<()> {
+        let h = RefreshHarness::new().await?;
+        let events = h.root.join("events.log");
+        let script = format!(
+            r#"import json,sys
+for line in sys.stdin:
+ r=json.loads(line)
+ with open({}, 'a') as f: f.write(json.dumps(r)+'\n')
+ if 'id' in r:
+  result={{'protocol_version':1,'plugin':{{'id':'global','version':'1.0.0','kind':'rust'}},'hooks':[{{'name':'event'}},{{'name':'session.start'}},{{'name':'session.end'}}]}} if r.get('method')=='initialize' else {{}}
+  print(json.dumps({{'jsonrpc':'2.0','id':r['id'],'result':result}}),flush=True)
+"#,
+            serde_json::to_string(&events)?
+        );
+        std::fs::write(h.root.join("global.py"), script)?;
+        h.config(&["global"])?;
+        h.bind().await?;
+        let session = h
+            .engine
+            .create(hya_core::CreateSession {
+                parent: None,
+                agent: hya_proto::AgentName::new("hya-main"),
+                model: hya_proto::ModelRef::new("hya/offline"),
+                workdir: h.root.display().to_string(),
+                project: None,
+                kind: hya_proto::SessionKind::Temporary,
+            })
+            .await?;
+        h.engine
+            .set_catalog_scope_cache_config(hya_core::CatalogScopeCacheConfig {
+                max_scopes: 0,
+                idle_ttl: std::time::Duration::ZERO,
+            });
+        h.engine.sweep_catalog_scopes();
+        h.engine.set_title(session, "after eviction".into()).await?;
+        h.engine.archive_session(session).await?;
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let log = std::fs::read_to_string(&events).unwrap_or_default();
+                if log.contains("session.end") && log.contains("after eviction") {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+        let log = std::fs::read_to_string(events)?;
+        assert_eq!(
+            log.lines()
+                .filter(|line| line.contains("session_created"))
+                .count(),
+            1,
+            "SessionCreated must reach global event hooks exactly once: {log}"
+        );
+        assert_eq!(
+            log.lines()
+                .filter(|line| line.contains("hook/session.start"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            log.lines()
+                .filter(|line| line.contains("hook/session.end"))
+                .count(),
+            1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hot_reload_removed_global_plugin_stops_despite_idle_sessions() -> anyhow::Result<()> {
+        let h = RefreshHarness::new().await?;
+        h.script("global", true)?;
+        h.config(&["global"])?;
+        h.bind().await?;
+        let bundle = h.root.join(".hya/bundles/local");
+        std::fs::create_dir_all(&bundle)?;
+        std::fs::write(
+            bundle.join("bundle.hya.md"),
+            "---\nkind: AgentBundle\nidentity: { id: acme/local, version: 1.0.0, publisher: test }\nagent: { id: local, role: main }\n---\nLocal.\n",
+        )?;
+        let project = h
+            .engine
+            .store()
+            .create_project("idle", &[h.root.display().to_string()])
+            .await?;
+        let session = h
+            .engine
+            .create(hya_core::CreateSession {
+                parent: None,
+                agent: hya_proto::AgentName::new("hya-main"),
+                model: hya_proto::ModelRef::new("hya/offline"),
+                workdir: h.root.display().to_string(),
+                project: Some(project.id),
+                kind: hya_proto::SessionKind::Project,
+            })
+            .await?;
+        let retained = h.engine.bind_session_runtime(session, &h.root).await?;
+        assert!(
+            h.engine
+                .runtime_registry()
+                .scope_overlay(&hya_core::ScopeKey::Project(project.id))
+                .is_some()
+        );
+        let pid = std::fs::read_to_string(h.root.join("global.starts"))?
+            .trim()
+            .to_string();
+        h.config(&[])?;
+        assert!(
+            h.engine
+                .bind_global_runtime()
+                .await?
+                .resolve_tool("global__echo")
+                .is_none()
+        );
+        assert!(retained.resolve_tool("global__echo").is_some());
+        assert!(
+            h.engine
+                .runtime_registry()
+                .scope_in_use(&hya_core::ScopeKey::Project(project.id))
+        );
+        drop(retained);
+        assert!(
+            !h.engine
+                .runtime_registry()
+                .scope_in_use(&hya_core::ScopeKey::Project(project.id))
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let output = std::process::Command::new("ps")
+                    .args(["-o", "stat=", "-p", &pid])
+                    .output()?;
+                let state = String::from_utf8_lossy(&output.stdout);
+                if state.trim().is_empty() || state.trim().starts_with('Z') {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            Ok::<_, std::io::Error>(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hot_reload_http_refresh_reports_partial_publication_and_retries() -> anyhow::Result<()>
+    {
+        use axum::body::Body;
+        use http_body_util::BodyExt as _;
+        use tower::ServiceExt as _;
+        let h = RefreshHarness::new().await?;
+        h.script("bad", false)?;
+        h.script("good", true)?;
+        h.config(&["bad", "good"])?;
+        let engine = Arc::new(h.engine.clone());
+        let (_, model) = crate::runtime::offline_router(None);
+        let state = hya_server::AppState::new(
+            engine,
+            Arc::new(crate::runtime::agent_with_model(&model, None)),
+        );
+        let mut notices = state.subscribe_catalog_updates();
+        let app = hya_server::router(state);
+        let request = || {
+            axum::http::Request::post("/v1/bundles:refresh")
+                .header("content-type", "application/json")
+                .body(Body::from("{\"directory\":\"\"}"))
+        };
+        let response = app.clone().oneshot(request()?).await?;
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&response.into_body().collect().await?.to_bytes())?;
+        assert!(
+            body["errors"]
+                .as_array()
+                .is_some_and(|errors| !errors.is_empty()),
+            "{body}"
+        );
+        let generation: u64 =
+            serde_json::from_value::<String>(body["generation"].clone())?.parse()?;
+        assert!(generation > 1, "{body}");
+        assert!(
+            notices.try_recv().is_ok(),
+            "partial publication must notify catalog clients"
+        );
+        assert!(h.bind().await?.resolve_tool("good__echo").is_some());
+        assert_eq!(h.starts("bad"), 1);
+        h.script("bad", true)?;
+        let response = app.oneshot(request()?).await?;
+        let body: Value =
+            serde_json::from_slice(&response.into_body().collect().await?.to_bytes())?;
+        assert!(
+            body.get("errors").is_none(),
+            "protojson omits empty errors: {body}"
+        );
+        assert!(h.bind().await?.resolve_tool("bad__echo").is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hot_reload_enabling_disabled_mcp_resolves_its_secret() -> anyhow::Result<()> {
+        use hya_server::McpControl as _;
+        let h = RefreshHarness::new().await?;
+        let script = r#"import json,os,sys
+for line in sys.stdin:
+ r=json.loads(line)
+ if 'id' not in r: continue
+ result={'protocolVersion':'2024-11-05','capabilities':{},'serverInfo':{'name':'test','version':'1'}} if r['method']=='initialize' else {'tools':[{'name':'echo','description':os.environ['TOKEN'],'inputSchema':{'type':'object'}}]} if r['method']=='tools/list' else {}
+ print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':result}),flush=True)
+"#;
+        let control = super::RuntimeMcpControl::new(h.reconciler.clone());
+        control
+            .upsert(
+                "secret".into(),
+                McpServerConfig {
+                    enabled: Some(false),
+                    command: vec!["python3".into(), "-c".into(), script.into()],
+                    env: Some(BTreeMap::from([("TOKEN".into(), "{env:PATH}".into())])),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(anyhow::Error::msg)?;
+        control
+            .set_enabled("secret".into(), true)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        let binding = h.bind().await?;
+        let tool = binding
+            .resolve_tool("mcp__secret__echo")
+            .ok_or_else(|| anyhow::anyhow!("connected MCP tool must publish"))?;
+        assert_eq!(tool.tool.schema().description, std::env::var("PATH")?);
+        Ok(())
+    }
+
     struct MarkerTool(&'static str);
 
     #[async_trait]
@@ -1433,7 +1987,13 @@ mod tests {
                 .finish_revision(&first, vec![PreparedFailure::new(a.clone(), "failed")])
                 .is_err()
         );
-        let retry = reconciler.replace_desired(vec![desired(&a, "a")])?;
+        let retry = reconciler.upsert_mcp(
+            "a".into(),
+            McpServerConfig {
+                command: vec!["a".into()],
+                ..Default::default()
+            },
+        )?;
         assert_eq!(retry.sources().len(), 1);
         reconciler.finish_revision(
             &retry,

@@ -175,7 +175,7 @@ impl SessionEngine {
     /// empty `workdir` discovers user skills only.
     ///
     /// # Errors
-    /// Propagates catalog refresh or bind failures.
+    /// Returns bind failures; preparation failures retain the published sources.
     pub async fn bind_scope_runtime(
         &self,
         scope: &CatalogScope,
@@ -184,11 +184,10 @@ impl SessionEngine {
         self.bind_scope_runtime_for(scope, workdir, None).await
     }
 
-    /// Refresh the installed-bundle base and `scope`'s overlay now and bind
-    /// the result, reporting instead of propagating a refresh failure: a
-    /// generation that fails to prepare (for example a bundle process that
-    /// does not start) leaves the previous generation published, and
-    /// `error` says why. `changed` is whether either refresh published.
+    /// Explicitly refresh the base and `scope`, retrying failed sources even
+    /// with unchanged declarations, then bind the result. Failures retain
+    /// their source's previous publication and appear in `errors`;
+    /// independent successes can still publish and set `changed`.
     ///
     /// # Errors
     /// The bind of the (new or retained) generation fails.
@@ -197,23 +196,24 @@ impl SessionEngine {
         scope: &CatalogScope,
         workdir: &Path,
     ) -> Result<BundleRefresh, CoreError> {
-        let mut changed = false;
+        let before = self.runtime.publication_generation();
         let mut errors = Vec::new();
         if let Some(refresh) = &self.catalog_refresh {
-            match refresh.refresh_if_changed(self.runtime.as_ref()).await {
-                Ok(published) => changed |= published,
-                Err(error) => errors.push(error),
+            if let Err(error) = refresh.refresh_explicit(self.runtime.as_ref()).await {
+                errors.push(error);
             }
-            match refresh.refresh_scope(self.runtime.as_ref(), scope).await {
-                Ok(published) => changed |= published,
-                Err(error) => errors.push(error),
+            if let Err(error) = refresh
+                .refresh_scope_explicit(self.runtime.as_ref(), scope)
+                .await
+            {
+                errors.push(error);
             }
         }
         let binding = self.bind_scope_unrefreshed(scope, workdir)?;
         self.follow_scope_session_hooks(&binding, None).await;
         Ok(BundleRefresh {
             binding,
-            changed,
+            changed: self.runtime.publication_generation() != before,
             errors,
         })
     }
@@ -229,8 +229,12 @@ impl SessionEngine {
         own: Option<SessionId>,
     ) -> Result<TurnBinding, CoreError> {
         if let Some(refresh) = &self.catalog_refresh {
-            let _ = refresh.refresh_if_changed(self.runtime.as_ref()).await?;
-            let _ = refresh.refresh_scope(self.runtime.as_ref(), scope).await?;
+            if let Err(error) = refresh.refresh_if_changed(self.runtime.as_ref()).await {
+                tracing::warn!(%error, "runtime catalog refresh failed; retaining published sources");
+            }
+            if let Err(error) = refresh.refresh_scope(self.runtime.as_ref(), scope).await {
+                tracing::warn!(scope = %scope.key(), %error, "scope refresh failed; retaining published sources");
+            }
         }
         let binding = self.bind_scope_unrefreshed(scope, workdir)?;
         self.follow_scope_session_hooks(&binding, own).await;
@@ -245,17 +249,7 @@ impl SessionEngine {
         scope: &CatalogScope,
         workdir: &Path,
     ) -> Result<TurnBinding, CoreError> {
-        if let Some(refresh) = &self.catalog_refresh {
-            if let Err(error) = refresh.refresh_if_changed(self.runtime.as_ref()).await {
-                tracing::warn!("runtime catalog refresh failed: {error:#}");
-            }
-            if let Err(error) = refresh.refresh_scope(self.runtime.as_ref(), scope).await {
-                tracing::warn!(scope = %scope.key(), "catalog scope refresh failed: {error:#}");
-            }
-        }
-        let binding = self.bind_scope_unrefreshed(scope, workdir)?;
-        self.follow_scope_session_hooks(&binding, None).await;
-        Ok(binding)
+        self.bind_scope_runtime_for(scope, workdir, None).await
     }
 
     /// The binding of `session`'s own scope for a catalog read in its
@@ -413,11 +407,11 @@ fn session_workdir(session: SessionId, projection: &Projection) -> Result<PathBu
 
 /// The outcome of [`SessionEngine::refresh_bundles`].
 pub struct BundleRefresh {
-    /// The binding of the scope after the refresh (the previous generation
-    /// when the refresh failed).
+    /// The scope after refresh, including retained sources and independent
+    /// successful replacements.
     pub binding: TurnBinding,
     /// Whether the refresh published a new base or scope generation.
     pub changed: bool,
-    /// Refresh failures; each kept the previous generation published.
+    /// Refresh failures; each kept its source's previous publication.
     pub errors: Vec<CoreError>,
 }

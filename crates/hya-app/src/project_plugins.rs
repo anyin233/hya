@@ -17,11 +17,10 @@
 //! Workspace adapters declared by a project plugin are not supported and are
 //! ignored with a warning.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use hya_core::RuntimeSource;
-use hya_plugin::config::PluginSpec;
+use hya_core::{RuntimeSource, RuntimeSourceId};
 use hya_plugin::{HostInfo, PluginHost};
 
 use crate::runtime_reconcile::prepared_plugin_host;
@@ -75,169 +74,146 @@ impl ProjectPluginSettings {
     }
 }
 
-/// Start the plugins of a Project with `roots` and return one Plugin-kind
-/// source per plugin that started. Failures are logged and skipped.
-pub(crate) async fn load_project_plugins(
-    roots: &[PathBuf],
-    settings: &ProjectPluginSettings,
-) -> Vec<RuntimeSource> {
-    if !settings.enabled {
-        return Vec::new();
-    }
-    let roots = roots.to_vec();
-    let mut configured = settings.configured.clone();
-    configured.extend(crate::config::load_configured_plugin_ids());
-    let planned = match tokio::task::spawn_blocking(move || {
-        plan_project_plugins(&roots, &configured)
-    })
-    .await
-    {
-        Ok(planned) => planned,
-        Err(error) => {
-            tracing::warn!(%error, "scanning the Project's plugin manifests failed");
-            return Vec::new();
-        }
-    };
-    let mut set = tokio::task::JoinSet::new();
-    for (index, (root, spec)) in planned.into_iter().enumerate() {
-        let host = settings.host.clone();
-        set.spawn(async move {
-            let id = spec.id.clone();
-            let (connected, failures) =
-                PluginHost::connect_all_observed_in(vec![spec], root.clone(), host).await;
-            (index, id, root, connected, failures)
-        });
-    }
-    let mut started = Vec::new();
-    while let Some(joined) = set.join_next().await {
-        match joined {
-            Ok((index, id, root, connected, failures)) => {
-                if let Some(error) = failures.get(&id) {
-                    tracing::warn!(
-                        plugin = %id,
-                        root = %root.display(),
-                        %error,
-                        "project plugin failed to start"
-                    );
-                    continue;
-                }
-                if let Some(source) = plugin_source(connected, &id) {
-                    started.push((index, source));
-                }
-            }
-            Err(error) => tracing::warn!(%error, "project plugin start task failed"),
-        }
-    }
-    started.sort_by_key(|(index, _)| *index);
-    started.into_iter().map(|(_, source)| source).collect()
+#[derive(Default)]
+pub(crate) struct ProjectPlugins {
+    records: BTreeMap<PathBuf, PluginRecord>,
 }
 
-/// The specs to start with the root each runs in: roots in order, first root
-/// wins by plugin id, configured ids skip the manifest.
-fn plan_project_plugins(
-    roots: &[PathBuf],
-    configured: &BTreeSet<String>,
-) -> Vec<(PathBuf, PluginSpec)> {
-    let mut seen = BTreeSet::new();
-    let mut planned = Vec::new();
-    for root in roots {
-        for spec in crate::plugins::project_plugin_specs(root) {
-            if configured.contains(&spec.id) {
-                tracing::warn!(
-                    plugin = %spec.id,
-                    root = %root.display(),
-                    "skipping a project plugin: config.yaml declares a plugin with this id"
-                );
-                continue;
-            }
-            if !seen.insert(spec.id.clone()) {
-                tracing::warn!(
-                    plugin = %spec.id,
-                    root = %root.display(),
-                    "skipping a project plugin: an earlier Project root declares this id"
-                );
-                continue;
-            }
-            planned.push((root.clone(), spec));
+struct PluginRecord {
+    digest: Option<[u8; 32]>,
+    source: Option<RuntimeSourceId>,
+    error: Option<String>,
+}
+
+impl ProjectPlugins {
+    /// Reconcile each manifest independently, retaining failed sources by path
+    /// even when their new manifest no longer parses to an id.
+    pub(crate) async fn refresh(
+        &mut self,
+        roots: &[PathBuf],
+        settings: &ProjectPluginSettings,
+        retained: &[RuntimeSource],
+        explicit: bool,
+    ) -> (Vec<RuntimeSource>, Vec<String>, bool) {
+        if !settings.enabled {
+            self.records.clear();
+            return (Vec::new(), Vec::new(), false);
         }
+        let mut changed = false;
+        let mut configured = settings.configured.clone();
+        configured.extend(crate::config::load_configured_plugin_ids());
+        let mut present = BTreeSet::new();
+        let mut seen = configured;
+        let mut sources = Vec::new();
+        let mut errors = Vec::new();
+        for root in roots {
+            let inputs = match crate::plugins::project_plugin_inputs(root) {
+                Ok(inputs) => inputs,
+                Err(error) => {
+                    errors.push(format!("project plugins {}: {error}", root.display()));
+                    for (path, record) in &self.records {
+                        if path.starts_with(crate::plugins::root_plugins_dir(root)) {
+                            present.insert(path.clone());
+                            if let Some(id) = &record.source
+                                && let Some(source) =
+                                    retained.iter().find(|source| source.id() == id)
+                            {
+                                seen.insert(id.configured_id().to_string());
+                                sources.push(source.clone());
+                            }
+                        }
+                    }
+                    continue;
+                }
+            };
+            for crate::plugins::ProjectPluginInput { path, digest, spec } in inputs {
+                present.insert(path.clone());
+                let previous = self.records.entry(path.clone()).or_insert(PluginRecord {
+                    digest: None,
+                    source: None,
+                    error: None,
+                });
+                let mut source = previous
+                    .source
+                    .as_ref()
+                    .and_then(|id| retained.iter().find(|source| source.id() == id))
+                    .cloned();
+                // An invalid manifest still claims its last published id.
+                let id = match &spec {
+                    Ok(Some(spec)) => Some(spec.id.as_str()),
+                    Err(_) => previous
+                        .source
+                        .as_ref()
+                        .map(|source| source.configured_id()),
+                    Ok(None) => None,
+                };
+                if let Some(id) = id
+                    && !seen.insert(id.to_string())
+                {
+                    tracing::warn!(plugin = %id, manifest = %path.display(), "skipping a project plugin shadowed by config or an earlier root");
+                    changed |= previous.source.is_some();
+                    previous.source = None;
+                    previous.digest = None;
+                    previous.error = None;
+                    continue;
+                }
+                if previous.digest != Some(digest) || (explicit && previous.error.is_some()) {
+                    previous.digest = Some(digest);
+                    let prepared = match spec {
+                        Err(error) => Err(error),
+                        Ok(None) => Ok(None),
+                        Ok(Some(spec)) => {
+                            let id = spec.id.clone();
+                            let (host, failures) = PluginHost::connect_all_observed_in(
+                                vec![spec],
+                                root.clone(),
+                                settings.host.clone(),
+                            )
+                            .await;
+                            match failures.get(&id) {
+                                Some(error) => Err(error.to_string()),
+                                None => plugin_source(host, &id).map(Some),
+                            }
+                        }
+                    };
+                    match prepared {
+                        Ok(prepared) => {
+                            changed |= prepared.is_some() || previous.source.is_some();
+                            previous.source = prepared.as_ref().map(|source| source.id().clone());
+                            source = prepared;
+                            previous.error = None;
+                        }
+                        Err(error) => {
+                            previous.error = Some(error);
+                        }
+                    }
+                }
+                if let Some(error) = &previous.error {
+                    errors.push(format!("{}: {error}", path.display()));
+                }
+                if let Some(source) = source {
+                    sources.push(source);
+                }
+            }
+        }
+        self.records.retain(|path, record| {
+            let keep = present.contains(path);
+            changed |= !keep && record.source.is_some();
+            keep
+        });
+        (sources, errors, changed)
     }
-    planned
 }
 
 /// Publish one connected single-plugin host as a Plugin-kind source carrying
 /// its tools, Skills, and (when it registers any) hooks.
-fn plugin_source(host: PluginHost, id: &str) -> Option<RuntimeSource> {
-    let plugin = host.prepared_plugins().into_iter().next()?;
-    let contributions = plugin.contributions();
-    if !contributions.workspace_adapters.is_empty() {
-        tracing::warn!(
-            plugin = %id,
-            adapters = contributions.workspace_adapters.len(),
-            "ignoring workspace adapters declared by a project plugin (unsupported)"
-        );
-    }
-    match prepared_plugin_host(host) {
-        Ok(prepared) => Some(prepared.into_runtime_source()),
-        Err(error) => {
-            tracing::warn!(plugin = %id, %error, "project plugin contribution rejected");
-            None
+fn plugin_source(host: PluginHost, id: &str) -> Result<RuntimeSource, String> {
+    for plugin in host.prepared_plugins() {
+        if !plugin.contributions().workspace_adapters.is_empty() {
+            tracing::warn!(plugin = %id, "ignoring workspace adapters declared by a project plugin (unsupported)");
         }
     }
-}
-
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::unwrap_used)]
-
-    use super::*;
-
-    fn write_manifest(root: &std::path::Path, dir: &str, id: &str) {
-        let dir = root.join(".hya/plugins").join(dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("plugin.toml"),
-            format!("id = \"{id}\"\ncommand = [\"true\"]\n"),
-        )
-        .unwrap();
-    }
-
-    fn temp_root(name: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "hya-project-plugins-{}-{}-{name}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&path).unwrap();
-        path
-    }
-
-    #[test]
-    fn plan_takes_roots_in_order_first_wins_and_skips_configured_ids() {
-        let first = temp_root("first");
-        let second = temp_root("second");
-        write_manifest(&first, "a", "shared");
-        write_manifest(&first, "b", "configured");
-        write_manifest(&second, "a", "shared");
-        write_manifest(&second, "c", "only-second");
-        let configured = BTreeSet::from(["configured".to_string()]);
-
-        let planned = plan_project_plugins(&[first.clone(), second.clone()], &configured);
-        let rows = planned
-            .iter()
-            .map(|(root, spec)| (root.clone(), spec.id.clone()))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            rows,
-            vec![
-                (first.clone(), "shared".to_string()),
-                (second.clone(), "only-second".to_string()),
-            ]
-        );
-
-        std::fs::remove_dir_all(first).unwrap();
-        std::fs::remove_dir_all(second).unwrap();
-    }
+    prepared_plugin_host(host)
+        .map(|prepared| prepared.into_runtime_source())
+        .map_err(|error| error.to_string())
 }

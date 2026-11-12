@@ -19,39 +19,66 @@ pub fn root_plugins_dir(root: &Path) -> PathBuf {
 /// `claude` entries without a command to the bundled Claude adapter when Bun
 /// is on `PATH` (or `BUN`); otherwise they are skipped with a notice.
 /// Project plugins (`<root>/.hya/plugins`) are not part of this set: they load
-/// per Project, see [`project_plugin_specs`].
+/// per Project, see [`crate::ProjectScopeRefresh`].
 pub fn resolve(config: BTreeMap<String, PluginEntry>) -> Vec<PluginSpec> {
     resolve_js_specs(specs_from_config(config), find_bun)
 }
 
-/// Specs of one Project root's plugins: every enabled
-/// `<root>/.hya/plugins/<name>/plugin.toml` (one directory deep, in directory
-/// name order; a later manifest reusing an earlier id is skipped with a
-/// warning), resolved like config entries (Bun adapter for command-less
-/// `kind: bun`).
-#[must_use]
-pub fn project_plugin_specs(root: &Path) -> Vec<PluginSpec> {
-    let mut manifests = scan_manifests(&root_plugins_dir(root));
-    let mut seen = std::collections::BTreeSet::new();
-    manifests.retain(|(path, manifest)| {
-        let fresh = seen.insert(manifest.id.clone());
-        if !fresh {
-            tracing::warn!(
-                plugin = %manifest.id,
-                manifest = %path.display(),
-                "skipping a project plugin manifest whose id an earlier manifest of the same root claims"
-            );
-        }
-        fresh
-    });
-    let manifests = manifests
-        .into_iter()
-        .map(|(_, manifest)| manifest)
-        .collect();
-    resolve_js_specs(
-        hya_plugin::config::merge(BTreeMap::new(), manifests),
-        find_bun,
-    )
+pub(crate) struct ProjectPluginInput {
+    pub(crate) path: PathBuf,
+    pub(crate) digest: [u8; 32],
+    pub(crate) spec: Result<Option<PluginSpec>, String>,
+}
+
+/// Include failed declarations so a bad edit can retain its previous source.
+pub(crate) fn project_plugin_inputs(root: &Path) -> std::io::Result<Vec<ProjectPluginInput>> {
+    use sha2::{Digest as _, Sha256};
+    let entries = match std::fs::read_dir(root_plugins_dir(root)) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let mut paths = entries
+        .map(|entry| entry.map(|entry| entry.path().join("plugin.toml")))
+        .collect::<Result<Vec<_>, _>>()?;
+    paths.sort();
+    let mut inputs = Vec::new();
+    for path in paths {
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                inputs.push(ProjectPluginInput {
+                    path,
+                    digest: Sha256::digest(error.to_string()).into(),
+                    spec: Err(error.to_string()),
+                });
+                continue;
+            }
+        };
+        let spec = Manifest::parse(&text)
+            .map_err(|error| error.to_string())
+            .and_then(|manifest| {
+                if !manifest.enabled {
+                    return Ok(None);
+                }
+                let id = manifest.id.clone();
+                resolve_js_specs(
+                    hya_plugin::config::merge(BTreeMap::new(), vec![manifest]),
+                    find_bun,
+                )
+                .into_iter()
+                .next()
+                .map(Some)
+                .ok_or_else(|| format!("plugin {id}: adapter is unavailable"))
+            });
+        inputs.push(ProjectPluginInput {
+            path,
+            digest: Sha256::digest(text).into(),
+            spec,
+        });
+    }
+    Ok(inputs)
 }
 
 pub(crate) fn bundle_sidecar_command() -> Option<Vec<String>> {
@@ -282,37 +309,21 @@ fn specs_from_config(config: BTreeMap<String, PluginEntry>) -> Vec<PluginSpec> {
     hya_plugin::config::merge(config, Vec::new())
 }
 
-/// Parse every `<dir>/<name>/plugin.toml` in directory name order.
-fn scan_manifests(dir: &Path) -> Vec<(PathBuf, Manifest)> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut paths = entries
-        .flatten()
-        .map(|entry| entry.path().join("plugin.toml"))
-        .collect::<Vec<_>>();
-    paths.sort();
-    let mut manifests = Vec::new();
-    for path in paths {
-        let Ok(contents) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        match Manifest::parse(&contents) {
-            Ok(manifest) => manifests.push((path, manifest)),
-            Err(error) => eprintln!("hya: skipping plugin manifest {} ({error})", path.display()),
-        }
-    }
-    manifests
-}
-
 /// Fold one root's project plugin inputs into `hasher`: the plugin
 /// directory listing and every `plugin.toml`'s bytes. Returns whether the
 /// root has any `plugin.toml`.
 pub(crate) fn project_plugins_digest(root: &Path, hasher: &mut sha2::Sha256) -> bool {
     use sha2::Digest as _;
-    let Ok(entries) = std::fs::read_dir(root_plugins_dir(root)) else {
-        hasher.update(b"no-plugins\0");
-        return false;
+    let entries = match std::fs::read_dir(root_plugins_dir(root)) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            hasher.update(b"no-plugins\0");
+            return false;
+        }
+        Err(error) => {
+            hasher.update(error.to_string());
+            return true;
+        }
     };
     let mut dirs = entries
         .flatten()
@@ -329,7 +340,13 @@ pub(crate) fn project_plugins_digest(root: &Path, hasher: &mut sha2::Sha256) -> 
                 hasher.update(b"manifest\0");
                 hasher.update(sha2::Sha256::digest(bytes));
             }
-            Err(_) => hasher.update(b"no-manifest\0"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                hasher.update(b"no-manifest\0")
+            }
+            Err(error) => {
+                any = true;
+                hasher.update(error.to_string());
+            }
         }
     }
     any

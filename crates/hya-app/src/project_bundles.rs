@@ -179,10 +179,7 @@ pub(crate) fn load_project_bundle_dirs_for_roots(
 ///
 /// Folds everything into `hasher`; returns whether any root has a bundle
 /// directory.
-pub(crate) fn project_roots_digest(
-    roots: &[PathBuf],
-    hasher: &mut sha2::Sha256,
-) -> Result<bool, ProjectBundleError> {
+pub(crate) fn project_roots_digest(roots: &[PathBuf], hasher: &mut sha2::Sha256) -> bool {
     use sha2::Digest as _;
     let mut any = false;
     for root in roots {
@@ -192,21 +189,32 @@ pub(crate) fn project_roots_digest(
         let entries = match std::fs::read_dir(&bundle_root) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(io_error(&bundle_root, &error)),
+            Err(error) => {
+                any = true;
+                hasher.update(error.to_string());
+                continue;
+            }
         };
-        let mut dirs = entries
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| io_error(&bundle_root, &error))?
-            .into_iter()
-            .filter(|path| path.is_dir())
-            .collect::<Vec<_>>();
+        let mut dirs = Vec::new();
+        for entry in entries {
+            match entry {
+                Ok(entry) if entry.path().is_dir() => dirs.push(entry.path()),
+                Ok(_) => {}
+                Err(error) => {
+                    any = true;
+                    hasher.update(error.to_string());
+                }
+            }
+        }
         dirs.sort();
         for dir in dirs {
             any = true;
             hasher.update(b"bundle\0");
             hasher.update(dir.as_os_str().as_encoded_bytes());
-            hasher.update(directory_digest(&dir)?.to_le_bytes());
+            match directory_digest(&dir) {
+                Ok(digest) => hasher.update(digest.to_le_bytes()),
+                Err(error) => hasher.update(error.to_string()),
+            }
             match std::fs::read(dir.join(crate::bundle_config::BUNDLE_CONFIG_FILE_NAME)) {
                 Ok(bytes) => {
                     hasher.update(b"config\0");
@@ -215,23 +223,20 @@ pub(crate) fn project_roots_digest(
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                     hasher.update(b"no-config\0")
                 }
-                Err(error) => {
-                    return Err(io_error(
-                        &dir.join(crate::bundle_config::BUNDLE_CONFIG_FILE_NAME),
-                        &error,
-                    ));
-                }
+                Err(error) => hasher.update(error.to_string()),
             }
         }
     }
-    Ok(any)
+    // Failed reads are inputs too. The per-source loader reports the error
+    // and retains that source; discovery must still visit the other sources.
+    any
 }
 
 /// Build a [`BundleSource`] from a directory: every regular file below it,
 /// keyed by its path relative to the directory (forward slashes), except the
 /// user-owned `config.yml` and its lock/temporary siblings. Returns `None`
 /// when the directory carries no manifest at its root.
-fn directory_source(dir: &Path) -> Result<Option<BundleSource>, ProjectBundleError> {
+pub(crate) fn directory_source(dir: &Path) -> Result<Option<BundleSource>, ProjectBundleError> {
     let mut files = Vec::new();
     collect_files(dir, dir, &mut files)?;
     let has_manifest = files
@@ -280,7 +285,7 @@ fn collect_files(
 
 /// Stable digest of every bundle file below `dir` (sorted relative path +
 /// bytes); the bundle's `config.yml` is excluded like in [`directory_source`].
-fn directory_digest(dir: &Path) -> Result<u64, ProjectBundleError> {
+pub(crate) fn directory_digest(dir: &Path) -> Result<u64, ProjectBundleError> {
     let mut files = Vec::new();
     collect_files(dir, dir, &mut files)?;
     files.sort_by(|left, right| left.0.cmp(&right.0));

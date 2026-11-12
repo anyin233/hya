@@ -1176,7 +1176,7 @@ pub fn first_run_config_bootstrap(interactive: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn resolve_secret(raw: &str) -> anyhow::Result<String> {
+pub(crate) fn resolve_secret(raw: &str) -> anyhow::Result<String> {
     if let Some(var) = raw.strip_prefix("{env:").and_then(|s| s.strip_suffix('}')) {
         std::env::var(var).with_context(|| format!("apiKey env var {var} is not set"))
     } else if let Some(path) = raw.strip_prefix("{file:").and_then(|s| s.strip_suffix('}')) {
@@ -1381,24 +1381,9 @@ fn resolve_mcp(file: &FileConfig) -> anyhow::Result<BTreeMap<String, McpServerCo
                 "mcp server name `{id}` must contain only ASCII letters, digits, `-`, and `_`"
             );
         }
-        let env = server
-            .env
-            .as_ref()
-            .map(|vars| {
-                vars.iter()
-                    .map(|(key, value)| {
-                        resolve_secret(value).map(|resolved| (key.clone(), resolved))
-                    })
-                    .collect::<anyhow::Result<BTreeMap<_, _>>>()
-            })
-            .transpose()?;
-        out.insert(
-            id.clone(),
-            McpServerConfig {
-                env,
-                ..server.clone()
-            },
-        );
+        // Resolve secrets at source preparation, so disabled or broken MCP
+        // declarations cannot prevent unrelated configuration from loading.
+        out.insert(id.clone(), server.clone());
     }
     Ok(out)
 }
@@ -1515,7 +1500,19 @@ pub(crate) fn parse_plugin_config(
     yaml: &str,
 ) -> anyhow::Result<Vec<hya_plugin::config::PluginSpec>> {
     let file = parse_config(yaml)?;
-    Ok(crate::plugins::resolve(file.plugins))
+    let declarations = hya_plugin::config::merge(file.plugins.clone(), Vec::new());
+    let mut specs = crate::plugins::resolve(file.plugins);
+    let resolved = specs
+        .iter()
+        .map(|spec| spec.id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    // An unavailable adapter is a preparation failure, not a removed entry.
+    specs.extend(
+        declarations
+            .into_iter()
+            .filter(|spec| !resolved.contains(&spec.id)),
+    );
+    Ok(specs)
 }
 
 /// Every plugin id declared under `plugins:` (enabled or not). A project
@@ -2678,6 +2675,21 @@ mod tests {
 
     use super::*;
     use hya_tool::{Invocation, Mode};
+
+    #[tokio::test]
+    async fn hot_reload_disabled_mcp_does_not_resolve_missing_secret() {
+        let root =
+            std::env::temp_dir().join(format!("hya-disabled-mcp-{}", hya_proto::SessionId::new()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(root.join("hya")).unwrap();
+        let path = root.join("hya/config.yaml");
+        std::fs::write(&path, "mcp:\n  disabled:\n    command: [missing]\n    enabled: false\n    env:\n      TOKEN: '{env:HYA_DEFINITELY_UNSET_HOT_RELOAD_TEST}'\n").unwrap();
+        let mut env = EnvGuard::new();
+        env.set("XDG_CONFIG_HOME", root.to_str().unwrap());
+        let loaded = load().await.unwrap().unwrap();
+        assert_eq!(loaded.mcp["disabled"].enabled, Some(false));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn hot_reload_mcp_retains_remote_and_disabled_declarations() {

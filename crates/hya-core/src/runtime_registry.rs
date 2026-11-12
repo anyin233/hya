@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 
 use hya_bundle::{BundleCatalog, BundleError, ExportKind, ResourceView};
 
@@ -100,7 +100,8 @@ struct ScopeEntry {
     /// Base generation `snapshot` was composed from; a different active base
     /// generation makes the next scoped bind recompose.
     base_generation: ConfigGeneration,
-    snapshot: Arc<RuntimeSnapshot>,
+    snapshot: Option<Arc<RuntimeSnapshot>>,
+    last_binding: Weak<RuntimeSnapshot>,
 }
 
 /// Offline mutable candidate. Its contents cannot become effective except
@@ -154,6 +155,7 @@ pub struct RuntimeSourceExport {
 #[derive(Clone)]
 pub struct RuntimeSource {
     id: RuntimeSourceId,
+    project_plugin: bool,
     declaration_digest: [u8; 32],
     owner: Arc<dyn RuntimeSourceOwner>,
     exports: Vec<RuntimeSourceExport>,
@@ -548,18 +550,22 @@ impl RuntimeRegistry {
         let (snapshot, project_bundle_dirs) = match scopes.get_mut(&key) {
             None => (base, Arc::new(BTreeMap::new())),
             Some(entry) => {
-                if entry.base_generation != base.generation {
-                    let composed =
-                        compose_scope(&mut last_generation, &base, &entry.overlay, &key)?;
-                    replaced = Some(std::mem::replace(&mut entry.snapshot, composed));
-                    entry.base_generation = base.generation;
-                }
+                let snapshot = match &entry.snapshot {
+                    Some(snapshot) if entry.base_generation == base.generation => {
+                        Arc::clone(snapshot)
+                    }
+                    _ => {
+                        let composed =
+                            compose_scope(&mut last_generation, &base, &entry.overlay, &key)?;
+                        entry.last_binding = Arc::downgrade(&composed);
+                        replaced = entry.snapshot.replace(Arc::clone(&composed));
+                        entry.base_generation = base.generation;
+                        composed
+                    }
+                };
                 agent_model_configuration =
                     overlay_agent_model_configuration(agent_model_configuration, &entry.overlay);
-                (
-                    Arc::clone(&entry.snapshot),
-                    Arc::clone(&entry.project_bundle_dirs),
-                )
+                (snapshot, Arc::clone(&entry.project_bundle_dirs))
             }
         };
         drop(scopes);
@@ -611,7 +617,8 @@ impl RuntimeRegistry {
             project_bundle_dirs: Arc::new(overlay.project_bundle_dirs.clone()),
             overlay: Arc::new(overlay),
             base_generation: base.generation,
-            snapshot,
+            last_binding: Arc::downgrade(&snapshot),
+            snapshot: Some(snapshot),
         };
         let previous = self
             .scopes
@@ -658,7 +665,12 @@ impl RuntimeRegistry {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(key)
-            .is_some_and(|entry| Arc::strong_count(&entry.snapshot) > 1)
+            .is_some_and(|entry| {
+                entry.snapshot.as_ref().map_or_else(
+                    || entry.last_binding.strong_count() > 0,
+                    |snapshot| Arc::strong_count(snapshot) > 1,
+                )
+            })
     }
 
     /// Keys of every published scope overlay, sorted.
@@ -841,6 +853,40 @@ impl RuntimeRegistry {
         }
     }
 
+    /// Last publication across the base and every scope, including partial
+    /// refreshes whose other sources failed.
+    #[must_use]
+    pub fn publication_generation(&self) -> ConfigGeneration {
+        *self
+            .publication
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Bundle sources of the last base publication, for composing Project
+    /// catalogs without preparing unrelated running sources again.
+    #[must_use]
+    pub fn published_bundle_sources(&self) -> Vec<RuntimeSource> {
+        self.active()
+            .sources
+            .values()
+            .filter(|source| source.id.kind() == RuntimeSourceKind::Bundle)
+            .cloned()
+            .collect()
+    }
+
+    /// Current user-global config plugin hooks. Idle sessions never retain
+    /// these dispatchers; a config removal releases them at publication.
+    #[must_use]
+    pub fn global_plugin_hooks(&self) -> Vec<Arc<dyn crate::hooks::HookDispatcher>> {
+        self.active()
+            .sources
+            .values()
+            .filter(|source| source.id.kind() == RuntimeSourceKind::Plugin)
+            .filter_map(|source| source.hooks.clone())
+            .collect()
+    }
+
     fn active(&self) -> Arc<RuntimeSnapshot> {
         self.active
             .read()
@@ -887,6 +933,16 @@ impl RuntimeRegistry {
             .active
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = published.clone();
+        // Cached compositions must not pin retired global sources. The
+        // overlay and live turn bindings survive; the next bind recomposes.
+        let retired = self
+            .scopes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values_mut()
+            .filter_map(|entry| entry.snapshot.take())
+            .collect::<Vec<_>>();
+        drop(retired);
         Ok(published)
     }
 }
@@ -937,6 +993,10 @@ fn compose_scope(
         .iter()
         .filter(|source| !base.sources.contains_key(&source.id))
         .cloned()
+        .map(|mut source| {
+            source.project_plugin = true;
+            source
+        })
         .collect::<Vec<_>>();
     if !plugins.is_empty() {
         candidate.upsert_sources(plugins).map_err(failed)?;
@@ -1719,6 +1779,7 @@ impl RuntimeSource {
             hooks: None,
             apis: None,
             permission_modes: Vec::new(),
+            project_plugin: false,
         }
     }
 
@@ -2025,9 +2086,9 @@ impl TurnBinding {
 
     /// Hooks bound to one agent, in dispatch order.
     ///
-    /// Every agent gets every installed Plugin-kind bundle's hooks and every
-    /// hook-carrying Plugin source's hooks (a scope's project plugins), in
-    /// stable ascending source-id order. A bundle agent (AgentBundle, AgentSetBundle,
+    /// Every agent gets user-global config plugins, installed Plugin-kind
+    /// bundles, then project plugins, each in ascending source-id order.
+    /// A bundle agent (AgentBundle, AgentSetBundle,
     /// WorkflowBundle) additionally gets its own bundle's process hooks,
     /// filtered to the agent's `hook_refs`, after the Plugin hooks. An unknown
     /// agent gets none. Plugin entries are the retained source dispatchers
@@ -2079,17 +2140,48 @@ impl TurnBinding {
         hooks
     }
 
-    /// Every installed Plugin-kind bundle's hooks, then every Plugin-kind
-    /// source's hooks (a scope's project plugins), in stable ascending
+    /// User-global hooks retained by this immutable turn binding.
+    #[must_use]
+    pub fn global_plugin_hooks(&self) -> Vec<Arc<dyn crate::hooks::HookDispatcher>> {
+        self.snapshot
+            .sources
+            .values()
+            .filter(|source| {
+                source.id.kind() == RuntimeSourceKind::Plugin && !source.project_plugin
+            })
+            .filter_map(|source| source.hooks.clone())
+            .collect()
+    }
+
+    /// Captured idle-session hooks exclude process-wide config plugins.
+    pub(crate) fn scope_hooks_for_agent(&self, agent: &str) -> Vec<BoundAgentHook> {
+        let global = self.global_plugin_hooks();
+        self.bound_hooks_for_agent(agent)
+            .into_iter()
+            .filter(|hook| {
+                !global
+                    .iter()
+                    .any(|source| Arc::ptr_eq(source, &hook.source))
+            })
+            .collect()
+    }
+
+    /// User-global plugins, installed Plugin-kind bundles, then project
+    /// plugins, each in stable ascending
     /// source-id order, excluding bundle `exclude` so an owner is never
     /// dispatched twice.
     fn plugin_bundle_hooks(
         &self,
         exclude: Option<&str>,
     ) -> Vec<Arc<dyn crate::hooks::HookDispatcher>> {
-        self.snapshot
-            .sources
-            .values()
+        let mut sources = self.snapshot.sources.values().collect::<Vec<_>>();
+        sources.sort_by_key(|source| match source.id.kind() {
+            RuntimeSourceKind::Plugin if !source.project_plugin => 0,
+            RuntimeSourceKind::Bundle => 1,
+            _ => 2,
+        });
+        sources
+            .into_iter()
             .filter(|source| {
                 source.id.kind() == RuntimeSourceKind::Plugin
                     || (source.id.kind() == RuntimeSourceKind::Bundle

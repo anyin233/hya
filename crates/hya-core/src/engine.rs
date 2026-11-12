@@ -204,6 +204,21 @@ pub trait RuntimeCatalogRefresh: Send + Sync {
     /// Propagate discovery or publication failures as [`CoreError`].
     async fn refresh_if_changed(&self, runtime: &RuntimeRegistry) -> Result<bool, CoreError>;
 
+    /// Explicit refresh retries sources whose last preparation failed, even
+    /// when their declaration has not changed.
+    async fn refresh_explicit(&self, runtime: &RuntimeRegistry) -> Result<bool, CoreError> {
+        self.refresh_if_changed(runtime).await
+    }
+
+    /// Explicit variant of [`Self::refresh_scope`], including failed sources.
+    async fn refresh_scope_explicit(
+        &self,
+        runtime: &RuntimeRegistry,
+        scope: &crate::catalog_scope::CatalogScope,
+    ) -> Result<bool, CoreError> {
+        self.refresh_scope(runtime, scope).await
+    }
+
     /// Bring `scope`'s overlay up to date before it is bound: publish (via
     /// [`RuntimeRegistry::publish_scope`] under `scope.key()`) or drop the
     /// overlay when the scope's inputs changed. Called for every scope,
@@ -212,8 +227,8 @@ pub trait RuntimeCatalogRefresh: Send + Sync {
     /// at any time (cache limits); the next call must then republish it.
     ///
     /// # Errors
-    /// Propagate failures that must abort the bind; tolerate per-bundle or
-    /// per-plugin failures by publishing without them.
+    /// Report source failures while retaining each source’s last publication.
+    /// Binds log these failures and use the retained catalog.
     async fn refresh_scope(
         &self,
         runtime: &RuntimeRegistry,
@@ -1729,9 +1744,15 @@ impl SessionEngine {
         }
         let session = envelope.event.session();
         let active = session.and_then(activation_hook_for);
-        let captured = session.and_then(|session| self.captured_session_hooks(session));
-        if let Some(hooks) = active.or(captured) {
+        if let Some(hooks) = active {
             hooks.dispatch_event(&envelope);
+        } else {
+            for hooks in self.runtime.global_plugin_hooks() {
+                hooks.dispatch_event(&envelope);
+            }
+            if let Some(hooks) = session.and_then(|session| self.captured_session_hooks(session)) {
+                hooks.dispatch_event(&envelope);
+            }
         }
         self.bus.publish(envelope);
     }
@@ -1794,7 +1815,12 @@ impl SessionEngine {
             }],
         )
         .await?;
-        if let Some(hooks) = &self.hooks {
+        for hooks in self
+            .hooks
+            .iter()
+            .cloned()
+            .chain(self.runtime.global_plugin_hooks())
+        {
             hooks
                 .session_start(SessionLifecycleInput { session: id })
                 .await;
@@ -1843,7 +1869,12 @@ impl SessionEngine {
                 }
             }
         }
-        if let Some(hooks) = &self.hooks {
+        for hooks in self
+            .hooks
+            .iter()
+            .cloned()
+            .chain(self.runtime.global_plugin_hooks())
+        {
             hooks
                 .session_start(SessionLifecycleInput { session: id })
                 .await;
@@ -1854,7 +1885,12 @@ impl SessionEngine {
     /// Notify session lifecycle hooks. Best-effort by contract: implementors
     /// log their own failures, and the engine never propagates them.
     async fn notify_session_lifecycle(&self, session: SessionId, start: bool) {
-        if let Some(hooks) = &self.hooks {
+        for hooks in self
+            .hooks
+            .iter()
+            .cloned()
+            .chain(self.runtime.global_plugin_hooks())
+        {
             let input = SessionLifecycleInput { session };
             if start {
                 hooks.session_start(input).await;
@@ -1885,7 +1921,12 @@ impl SessionEngine {
     /// mid-turn): fires the startup and captured bundle hooks but keeps the
     /// captured hooks and channel policy the turn still reads.
     async fn notify_session_end_keeping_state(&self, session: SessionId) {
-        if let Some(hooks) = &self.hooks {
+        for hooks in self
+            .hooks
+            .iter()
+            .cloned()
+            .chain(self.runtime.global_plugin_hooks())
+        {
             hooks.session_end(SessionLifecycleInput { session }).await;
         }
         if let Some(hooks) = self.captured_session_hooks(session) {
@@ -1943,6 +1984,7 @@ impl SessionEngine {
         if let Some(hooks) = &self.hooks {
             dispatchers.push(Arc::clone(hooks));
         }
+        dispatchers.extend(self.runtime.global_plugin_hooks());
         if let Some(hooks) = self.captured_session_hooks(session) {
             dispatchers.push(hooks);
         }

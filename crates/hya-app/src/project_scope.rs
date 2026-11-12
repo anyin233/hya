@@ -1,43 +1,13 @@
-//! Per-Project catalog tier: the project bundles of a registered Project.
-//!
-//! [`ProjectScopeRefresh`] wraps the process-wide [`InstalledBundleRefresh`]
-//! (installed plus first-party bundles, the base every scope shares) and, for
-//! a [`CatalogScope::Project`], publishes a [`ScopeOverlay`] holding:
-//!
-//! * the complete scope catalog: the Project's bundles from
-//!   `<root>/.hya/bundles` of every root in order (first root wins on bundle
-//!   id or namespace) shadowing installed and first-party bundles by id or
-//!   namespace;
-//! * every Bundle-kind runtime source of the scope. Sources come from one
-//!   cache keyed by (bundle id, runtime fingerprint), so an installed bundle's
-//!   process is shared by the base and every scope while a project bundle's
-//!   process (its configuration lives in its own source directory) belongs to
-//!   the Project that loads it and stops once that scope is dropped and no
-//!   binding retains it;
-//! * the project bundles' model leaves and source directories, read from
-//!   each project bundle's own `config.yml`;
-//! * the Project's plugins from `<root>/.hya/plugins/*/plugin.toml` of every
-//!   root (see [`crate::project_plugins`]) as Plugin-kind sources carrying
-//!   their hooks.
-//!
-//! Directory, Global, and temporary scopes load no project tier: executable
-//! project code only runs for registered Projects.
-//!
-//! Each bind scans the Project roots without preparing anything and compares
-//! the digest with the published overlay's fingerprint; only a change (or an
-//! evicted overlay, or a new base publication) rebuilds and republishes that
-//! one Project. The Project's plugin processes are kept across a rebuild
-//! unless its plugin inputs (the plugin directory listing and every
-//! `plugin.toml`) changed: then the new overlay starts fresh processes and
-//! the old ones stop with the old overlay. A per-scope lock keeps concurrent
-//! binds of one Project from starting its processes twice.
+//! Per-Project extension refresh. Each declaration remembers its last attempt
+//! and last published source. Failed edits retain that source independently;
+//! only changed inputs or an explicit refresh retry preparation.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hya_bundle::PreparedCatalog;
+use hya_bundle::{BundleCatalog, PreparedCatalog};
 use hya_core::{
     AgentCatalog, CatalogScope, CoreError, RuntimeCatalogRefresh, RuntimeRegistry, ScopeKey,
     ScopeOverlay,
@@ -47,159 +17,369 @@ use sha2::Digest as _;
 
 use crate::agent_model_config::AgentModelConfigFiles;
 use crate::bundle_config::BundleConfigResolver;
-use crate::installed_bundle_refresh::{BaseCatalogs, InstalledBundleRefresh, compose};
-use crate::project_bundles::{load_project_bundle_dirs_for_roots, project_roots_digest};
-use crate::project_plugins::{ProjectPluginSettings, load_project_plugins};
+use crate::installed_bundle_refresh::{BaseCatalogs, InstalledBundleRefresh, SourceKey, compose};
+use crate::project_bundles::{
+    directory_digest, directory_source, project_roots_digest, root_bundles_dir,
+};
+use crate::project_plugins::{ProjectPluginSettings, ProjectPlugins};
 
-/// Refreshes the base catalog and the per-Project bundle tier.
-///
-/// Register this (not the wrapped [`InstalledBundleRefresh`]) as the engine's
-/// catalog refresh: `refresh_if_changed` refreshes the base,
-/// `refresh_scope` the Project overlay.
+/// Refreshes installed bundles and independently retained Project sources.
 pub struct ProjectScopeRefresh {
     installed: Arc<InstalledBundleRefresh>,
     plugins: ProjectPluginSettings,
-    locks: std::sync::Mutex<HashMap<ScopeKey, Arc<tokio::sync::Mutex<()>>>>,
-    /// Plugin input digest of each published overlay's `plugin_sources`.
-    plugin_digests: std::sync::Mutex<HashMap<ScopeKey, [u8; 32]>>,
+    scopes: std::sync::Mutex<HashMap<ScopeKey, Arc<tokio::sync::Mutex<ProjectSources>>>>,
+}
+
+#[derive(Default)]
+struct ProjectSources {
+    base_revision: u64,
+    roots: Vec<PathBuf>,
+    attempted: Option<[u8; 32]>,
+    plugins: ProjectPlugins,
+    bundles: BTreeMap<PathBuf, BundleRecord>,
+}
+
+struct BundleRecord {
+    enabled: Option<bool>,
+    attempted: Option<[u8; 32]>,
+    published: Option<PublishedBundle>,
+    error: Option<String>,
+}
+
+struct PublishedBundle {
+    enabled: bool,
+    catalog: PreparedCatalog,
+    sources: BTreeMap<SourceKey, hya_core::RuntimeSource>,
+    models: BTreeMap<String, ModelRef>,
 }
 
 impl ProjectScopeRefresh {
-    /// Compose Project overlays on top of `installed`'s base catalog.
+    /// Compose Project sources on top of the installed base catalog.
     #[must_use]
     pub fn new(installed: Arc<InstalledBundleRefresh>) -> Self {
         Self {
             installed,
             plugins: ProjectPluginSettings::default(),
-            locks: std::sync::Mutex::new(HashMap::new()),
-            plugin_digests: std::sync::Mutex::new(HashMap::new()),
+            scopes: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
-    /// Load project plugins with `settings` (default: enabled, no configured
-    /// ids).
+    /// Configure which project plugin declarations can load.
     #[must_use]
     pub fn with_project_plugins(mut self, settings: ProjectPluginSettings) -> Self {
         self.plugins = settings;
         self
     }
 
-    fn plugin_digests(&self) -> std::sync::MutexGuard<'_, HashMap<ScopeKey, [u8; 32]>> {
-        self.plugin_digests
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    /// The wrapped base refresh.
+    /// The process-wide installed-bundle refresh.
     #[must_use]
     pub fn installed(&self) -> &Arc<InstalledBundleRefresh> {
         &self.installed
     }
 
-    fn scope_lock(&self, key: &ScopeKey) -> Arc<tokio::sync::Mutex<()>> {
-        Arc::clone(
-            self.locks
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .entry(key.clone())
-                .or_default(),
-        )
+    fn scope_state(&self, key: &ScopeKey) -> Arc<tokio::sync::Mutex<ProjectSources>> {
+        self.scopes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(key.clone())
+            .or_default()
+            .clone()
     }
 
-    /// Drop cached sources and idle locks of scopes the registry no longer
-    /// holds (dropped or evicted overlays).
     fn collect(&self, runtime: &RuntimeRegistry) {
         let live = runtime.scope_keys();
         self.installed.source_cache().collect(&live);
-        self.locks
+        self.scopes
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|key, lock| live.contains(key) || Arc::strong_count(lock) > 1);
-        self.plugin_digests().retain(|key, _| live.contains(key));
+            .retain(|key, state| live.contains(key) || Arc::strong_count(state) > 1);
     }
 
-    /// Bring one Project's overlay up to date.
     async fn refresh_project(
         &self,
         runtime: &RuntimeRegistry,
         key: ScopeKey,
         roots: &[PathBuf],
+        explicit: bool,
     ) -> Result<bool, CoreError> {
-        let lock = self.scope_lock(&key);
-        let _serialized = lock.lock().await;
+        let state = self.scope_state(&key);
+        let mut state = state.lock().await;
         if self.installed.base_catalogs().revision == 0 {
             self.installed.refresh_if_changed(runtime).await?;
         }
         let base = self.installed.base_catalogs();
         let inputs = ScopeInputs::scan(&base, roots.to_vec(), self.plugins.enabled()).await?;
-        let current = runtime.scope_overlay(&key);
-        if !inputs.has_tiers() {
-            // Nothing project-specific: the scope binds the base snapshot.
-            if current.is_none() {
-                return Ok(false);
-            }
-            runtime.drop_scope(&key);
-            self.plugin_digests().remove(&key);
-            self.installed.source_cache().collect(&runtime.scope_keys());
-            return Ok(true);
-        }
-        if current
-            .as_ref()
-            .is_some_and(|overlay| overlay.fingerprint == inputs.fingerprint)
+        if !explicit
+            && state.attempted == Some(inputs.fingerprint)
+            && runtime.scope_overlay(&key).is_some()
         {
             return Ok(false);
         }
-        // Keep the running plugin processes unless their inputs changed.
-        let kept_plugins = current
-            .as_ref()
-            .filter(|_| self.plugin_digests().get(&key) == Some(&inputs.plugin_digest))
-            .map(|overlay| overlay.plugin_sources.clone());
-        drop(current);
-        let plugin_sources = match kept_plugins {
-            Some(sources) => sources,
-            None if inputs.plugins => load_project_plugins(roots, &self.plugins).await,
-            None => Vec::new(),
-        };
+        state.attempted = Some(inputs.fingerprint);
+        if !inputs.has_tiers() {
+            let changed = runtime.scope_overlay(&key).is_some();
+            runtime.drop_scope(&key);
+            state.bundles.clear();
+            state.plugins = ProjectPlugins::default();
+            return Ok(changed);
+        }
+        let mut changed = runtime.scope_overlay(&key).is_none()
+            || state.base_revision != base.revision
+            || state.roots != roots;
+        let retained_plugins = runtime
+            .scope_overlay(&key)
+            .map_or_else(Vec::new, |overlay| overlay.plugin_sources.clone());
+        let (plugin_sources, mut errors, plugins_changed) = state
+            .plugins
+            .refresh(roots, &self.plugins, &retained_plugins, explicit)
+            .await;
+        changed |= plugins_changed;
+        let dirs = project_bundle_dirs(roots, &state.bundles, &mut errors);
+        let present = dirs.iter().cloned().collect::<BTreeSet<_>>();
+        state.bundles.retain(|dir, record| {
+            let keep = present.contains(dir);
+            changed |= !keep && record.published.is_some();
+            keep
+        });
+        for dir in &dirs {
+            let record = state.bundles.entry(dir.clone()).or_insert(BundleRecord {
+                enabled: None,
+                attempted: None,
+                published: None,
+                error: None,
+            });
+            let enabled = record.published.as_ref().map(|published| {
+                !base
+                    .disabled
+                    .contains(&published.catalog.bundles()[0].identity().id)
+            });
+            let enabled_changed = record.enabled != enabled;
+            record.enabled = enabled;
+            if enabled == Some(false)
+                && let Some(published) = &mut record.published
+                && published.enabled
+            {
+                published.enabled = false;
+                published.sources.clear();
+                changed = true;
+            }
+            let digest = bundle_input_digest(dir);
+            let attempted = digest.as_ref().ok().copied();
+            if enabled_changed
+                || record.attempted != attempted
+                || record.attempted.is_none()
+                || (explicit && record.error.is_some())
+            {
+                record.attempted = attempted;
+                let prepared = match digest {
+                    Ok(_) => self.prepare_bundle(dir, &base.disabled).await,
+                    Err(error) => Err(error),
+                };
+                match prepared {
+                    Ok(bundle) => {
+                        record.enabled = Some(bundle.enabled);
+                        changed = true;
+                        record.published = Some(bundle);
+                        record.error = None;
+                    }
+                    Err(error) => {
+                        record.error = Some(error.to_string());
+                    }
+                }
+            }
+            if let Some(error) = &record.error {
+                errors.push(format!("project bundle {}: {error}", dir.display()));
+            }
+        }
+        if !changed {
+            return if errors.is_empty() {
+                Ok(false)
+            } else {
+                Err(CoreError::Invalid(errors.join("; ")))
+            };
+        }
+        // Select catalogs using the same first-root/id/namespace precedence as
+        // project loading, then installed bundles, then first-party bundles.
+        let mut ids = BTreeSet::new();
+        let mut namespaces = BTreeSet::new();
+        let mut catalogs = Vec::new();
+        let mut bundle_models = BTreeMap::new();
+        let mut project_bundle_dirs = BTreeMap::new();
+        let mut sources = BTreeMap::new();
+        for dir in &dirs {
+            let Some(published) = state.bundles[dir].published.as_ref() else {
+                continue;
+            };
+            let bundle = &published.catalog.bundles()[0];
+            let id = &bundle.identity().id;
+            if !published.enabled
+                || base.disabled.contains(id)
+                || ids.contains(id)
+                || namespaces.contains(bundle.namespace())
+            {
+                continue;
+            }
+            ids.insert(id.clone());
+            namespaces.insert(bundle.namespace().to_string());
+            catalogs.push(&published.catalog);
+            project_bundle_dirs.insert(id.clone(), dir.clone());
+            if !published.models.is_empty() {
+                bundle_models.insert(id.clone(), published.models.clone());
+            }
+            sources.extend(published.sources.clone());
+        }
+        for catalog in base.installed.iter().chain(&base.first_party) {
+            let bundle = &catalog.bundles()[0];
+            let id = &bundle.identity().id;
+            if base.disabled.contains(id)
+                || ids.contains(id)
+                || namespaces.contains(bundle.namespace())
+            {
+                continue;
+            }
+            ids.insert(id.clone());
+            namespaces.insert(bundle.namespace().to_string());
+            catalogs.push(catalog.as_ref());
+        }
+        let mut bundle_sources = sources.values().cloned().collect::<Vec<_>>();
+        bundle_sources.extend(
+            runtime
+                .published_bundle_sources()
+                .into_iter()
+                .filter(|source| {
+                    ids.contains(source.id().configured_id())
+                        && !project_bundle_dirs.contains_key(source.id().configured_id())
+                }),
+        );
+        let catalog = Arc::new(AgentCatalog::new(Arc::new(
+            BundleCatalog::from_verified_catalogs(&catalogs)?,
+        ))?);
+        runtime.publish_scope(
+            key.clone(),
+            ScopeOverlay {
+                catalog,
+                bundle_sources,
+                plugin_sources,
+                bundle_models,
+                project_bundle_dirs,
+                fingerprint: inputs.fingerprint,
+            },
+        )?;
+        self.installed
+            .source_cache()
+            .commit_scope(key, sources, &runtime.scope_keys());
+        state.base_revision = base.revision;
+        state.roots = roots.to_vec();
+        if errors.is_empty() {
+            Ok(true)
+        } else {
+            Err(CoreError::Invalid(errors.join("; ")))
+        }
+    }
 
-        let tier = ProjectTier::load(roots.to_vec()).await?;
+    async fn prepare_bundle(
+        &self,
+        dir: &std::path::Path,
+        disabled: &BTreeSet<String>,
+    ) -> Result<PublishedBundle, CoreError> {
+        let source = directory_source(dir)
+            .map_err(|error| CoreError::Invalid(error.to_string()))?
+            .ok_or_else(|| {
+                CoreError::Invalid(format!(
+                    "project bundle {} has no bundle.yaml or bundle.hya.md",
+                    dir.display()
+                ))
+            })?;
+        let catalog = hya_bundle::prepare_package(source)
+            .map_err(|error| CoreError::Invalid(error.to_string()))?;
+        if catalog.bundles().len() != 1 {
+            return Err(CoreError::Invalid(
+                "project bundle must prepare exactly one bundle".into(),
+            ));
+        }
+        let id = catalog.bundles()[0].identity().id.clone();
+        if disabled.contains(&id) {
+            return Ok(PublishedBundle {
+                enabled: false,
+                catalog,
+                sources: BTreeMap::new(),
+                models: BTreeMap::new(),
+            });
+        }
+        let models = AgentModelConfigFiles::project_models(dir).map_err(|error| {
+            CoreError::Invalid(format!("project bundle {id} configuration: {error:#}"))
+        })?;
         let resolver = BundleConfigResolver::new(
             self.installed.config_file().to_path_buf(),
-            tier.project_bundle_dirs.clone(),
+            BTreeMap::from([(id, dir.to_path_buf())]),
         );
-        let project = tier
-            .catalogs
-            .iter()
-            .map(|(catalog, _)| catalog)
-            .collect::<Vec<_>>();
-        let installed = base.installed.iter().map(Arc::as_ref).collect::<Vec<_>>();
-        let first_party = base.first_party.iter().map(Arc::as_ref).collect::<Vec<_>>();
         let composition = compose(
-            &project,
-            &installed,
-            &first_party,
-            &base.disabled,
+            &[&catalog],
+            &[],
+            &[],
+            &BTreeSet::new(),
             &resolver,
             self.installed.source_cache(),
             self.installed.host_reads(),
         )
         .await?;
-        let catalog = Arc::new(AgentCatalog::new(Arc::clone(&composition.bundles))?);
-        let overlay = ScopeOverlay {
+        Ok(PublishedBundle {
+            enabled: true,
             catalog,
-            bundle_sources: composition.runtime_sources(),
-            plugin_sources,
-            bundle_models: tier.bundle_models,
-            project_bundle_dirs: tier.project_bundle_dirs,
-            fingerprint: inputs.fingerprint,
-        };
-        runtime.publish_scope(key.clone(), overlay)?;
-        self.plugin_digests()
-            .insert(key.clone(), inputs.plugin_digest);
-        self.installed
-            .source_cache()
-            .commit_scope(key, composition.sources, &runtime.scope_keys());
-        Ok(true)
+            sources: composition.sources,
+            models,
+        })
     }
+}
+
+fn project_bundle_dirs(
+    roots: &[PathBuf],
+    retained: &BTreeMap<PathBuf, BundleRecord>,
+    errors: &mut Vec<String>,
+) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for root in roots {
+        let directory = root_bundles_dir(root);
+        let paths = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries
+                .map(|entry| entry.map(|entry| entry.path()))
+                .collect::<Result<Vec<_>, _>>(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => Err(error),
+        };
+        match paths {
+            Ok(mut paths) => {
+                paths.retain(|path| path.is_dir());
+                paths.sort();
+                dirs.extend(paths);
+            }
+            Err(error) => {
+                errors.push(format!("read {}: {error}", directory.display()));
+                dirs.extend(
+                    retained
+                        .keys()
+                        .filter(|dir| dir.starts_with(&directory))
+                        .cloned(),
+                );
+            }
+        }
+    }
+    dirs
+}
+
+fn bundle_input_digest(dir: &std::path::Path) -> Result<[u8; 32], CoreError> {
+    let mut digest = sha2::Sha256::new();
+    digest.update(
+        directory_digest(dir)
+            .map_err(|error| CoreError::Invalid(error.to_string()))?
+            .to_le_bytes(),
+    );
+    match std::fs::read(dir.join(crate::bundle_config::BUNDLE_CONFIG_FILE_NAME)) {
+        Ok(bytes) => digest.update(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(CoreError::Invalid(error.to_string())),
+    }
+    Ok(digest.finalize().into())
 }
 
 /// Change detector for one Project scope, computed at every bind without
@@ -215,10 +395,6 @@ struct ScopeInputs {
     fingerprint: [u8; 32],
     /// Whether any root has a project bundle directory.
     bundles: bool,
-    /// Digest of the plugin tier's inputs alone (every root's plugin
-    /// directory listing and `plugin.toml` bytes); a change respawns the
-    /// Project's plugins.
-    plugin_digest: [u8; 32],
     /// Whether any root has a `plugin.toml` (and project plugins are on).
     plugins: bool,
 }
@@ -249,13 +425,11 @@ impl ScopeInputs {
             let mut hasher = sha2::Sha256::new();
             hasher.update(b"hya-project-scope-v1\0");
             hasher.update(revision.to_le_bytes());
-            let bundles = project_roots_digest(&roots, &mut hasher)
-                .map_err(|error| CoreError::Invalid(error.to_string()))?;
+            let bundles = project_roots_digest(&roots, &mut hasher);
             hasher.update(plugin_digest);
             Ok(Self {
                 fingerprint: hasher.finalize().into(),
                 bundles,
-                plugin_digest,
                 plugins,
             })
         })
@@ -266,54 +440,6 @@ impl ScopeInputs {
     /// Whether the Project has anything to overlay on the base.
     fn has_tiers(&self) -> bool {
         self.bundles || self.plugins
-    }
-}
-
-/// The loaded project bundle tier of one Project.
-struct ProjectTier {
-    /// Kept project bundles (first root wins) with their source directories.
-    catalogs: Vec<(PreparedCatalog, PathBuf)>,
-    /// Project bundle id to source directory.
-    project_bundle_dirs: BTreeMap<String, PathBuf>,
-    /// Model leaves from each project bundle's `config.yml`.
-    bundle_models: BTreeMap<String, BTreeMap<String, ModelRef>>,
-}
-
-impl ProjectTier {
-    async fn load(roots: Vec<PathBuf>) -> Result<Self, CoreError> {
-        tokio::task::spawn_blocking(move || {
-            let (catalogs, _) = load_project_bundle_dirs_for_roots(&roots)
-                .map_err(|error| CoreError::Invalid(error.to_string()))?;
-            let project_bundle_dirs = catalogs
-                .iter()
-                .filter_map(|(catalog, dir)| {
-                    let bundle = catalog.bundles().first()?;
-                    Some((bundle.identity().id.clone(), dir.clone()))
-                })
-                .collect::<BTreeMap<_, _>>();
-            let mut bundle_models = BTreeMap::new();
-            for (bundle_id, dir) in &project_bundle_dirs {
-                match AgentModelConfigFiles::project_models(dir) {
-                    Ok(models) if !models.is_empty() => {
-                        bundle_models.insert(bundle_id.clone(), models);
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        return Err(CoreError::Invalid(format!(
-                            "project bundle {bundle_id} config {}: {error:#}",
-                            dir.display()
-                        )));
-                    }
-                }
-            }
-            Ok(Self {
-                catalogs,
-                project_bundle_dirs,
-                bundle_models,
-            })
-        })
-        .await
-        .map_err(|error| CoreError::Invalid(format!("load Project bundles: {error}")))?
     }
 }
 
@@ -331,9 +457,24 @@ impl RuntimeCatalogRefresh for ProjectScopeRefresh {
         self.collect(runtime);
         match scope {
             CatalogScope::Project { roots, .. } => {
-                self.refresh_project(runtime, scope.key(), roots).await
+                self.refresh_project(runtime, scope.key(), roots, false)
+                    .await
             }
-            // No code tiers outside registered Projects.
+            CatalogScope::Global | CatalogScope::Directory(_) => Ok(false),
+        }
+    }
+
+    async fn refresh_scope_explicit(
+        &self,
+        runtime: &RuntimeRegistry,
+        scope: &CatalogScope,
+    ) -> Result<bool, CoreError> {
+        self.collect(runtime);
+        match scope {
+            CatalogScope::Project { roots, .. } => {
+                self.refresh_project(runtime, scope.key(), roots, true)
+                    .await
+            }
             CatalogScope::Global | CatalogScope::Directory(_) => Ok(false),
         }
     }
