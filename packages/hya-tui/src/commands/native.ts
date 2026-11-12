@@ -1,4 +1,5 @@
 /** The built-in slash commands. Add a command by appending a `CommandSpec` here. */
+import { revertReadOnlyStatus } from "../app/revert"
 import { subagentsCommand } from "./subagents"
 import { brief, operations } from "../api"
 import { HttpError, parseApiCommand, type SessionInfo } from "../client"
@@ -186,6 +187,10 @@ function openThemePicker({ store, actions }: CommandContext): void {
  * provider id: its first model is highlighted) are set then.
  */
 export function openModelPicker({ store, client, actions }: CommandContext, options: { title?: string; highlight?: string; onChosen?: (model: string) => void } = {}): void {
+  if (store.state.selected?.parent) {
+    store.setStatus(revertReadOnlyStatus)
+    return
+  }
   const selected = store.state.selected
   const current = selected ? modelReference(selected) : (store.state.pendingModel ?? "")
   // Rows are loaded from the catalog already in `state.models` (no async loading state in the picker itself).
@@ -196,6 +201,10 @@ export function openModelPicker({ store, client, actions }: CommandContext, opti
     // `current` decides the opening highlight: move it to the provider's first model.
     rows: first < 0 ? rows : rows.map((row, index) => ({ ...row, current: index === first })),
     onSelect: async (row) => {
+      if (store.state.selected?.parent) {
+        store.setStatus(revertReadOnlyStatus)
+        return
+      }
       const session = store.state.selected
       const reference = row.id
       if (!session) {
@@ -219,6 +228,10 @@ export function openModelPicker({ store, client, actions }: CommandContext, opti
  * it for the next `CreateSession`. Shared by `/agent <name>` and the Agents view.
  */
 export async function selectAgent({ store, client, actions }: CommandContext, agent: string): Promise<void> {
+  if (store.state.selected?.parent) {
+    store.setStatus(revertReadOnlyStatus)
+    return
+  }
   const selected = store.state.selected
   if (!selected) {
     store.setPendingAgent(agent)
@@ -267,6 +280,10 @@ function effortModelBase(context: CommandContext): string {
  */
 export async function selectEffort(context: CommandContext, effort: string): Promise<void> {
   const { store, client, actions } = context
+  if (store.state.selected?.parent) {
+    store.setStatus(revertReadOnlyStatus)
+    return
+  }
   const base = effortModelBase(context)
   if (!base) throw new Error("No model is available; configure a provider on the backend")
   const [providerId, ...modelParts] = base.split("/")
@@ -291,6 +308,10 @@ export async function selectEffort(context: CommandContext, effort: string): Pro
 /** Open the server-backed effort picker for the active model. */
 export function openEffortPicker(context: CommandContext): void {
   const { store, actions } = context
+  if (store.state.selected?.parent) {
+    store.setStatus(revertReadOnlyStatus)
+    return
+  }
   const base = effortModelBase(context)
   if (!base) throw new Error("No model is available; configure a provider on the backend")
   const session = store.state.selected
@@ -314,6 +335,10 @@ async function respondAndReload(context: CommandContext, respond: Promise<unknow
 /** Run an unregistered `/name args` as a backend command turn, creating a session if needed. */
 export async function backendCommand(context: CommandContext, invocation: CommandInvocation): Promise<void> {
   const { store, client, actions } = context
+  if (store.state.selected?.parent) {
+    store.setStatus(revertReadOnlyStatus)
+    return
+  }
   if (!store.state.selected) await actions.newSession()
   const selected = store.state.selected
   if (!selected) throw new Error("Session creation failed")
@@ -604,6 +629,10 @@ export const nativeCommandSpecs: CommandSpec[] = [
     argumentHint: "[provider/model]",
     complete: ({ words, current, head }, context) => words.length === 1 ? matchValues(head, current, context.models) : [],
     run: async ({ store, client, actions }, { args }) => {
+      if (store.state.selected?.parent) {
+        store.setStatus(revertReadOnlyStatus)
+        return
+      }
       const selected = store.state.selected
       if (args[0]) {
         const reference = args[0]

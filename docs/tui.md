@@ -1981,6 +1981,17 @@ the call's argument fragments. Cards appear before the projection is re-read (se
 
 ### Subagents
 
+While viewing a live or archived subagent session, prompt/shell submission,
+backend slash commands, model selection (`/model` and provider pickers), agent
+selection, `/effort` (`/think`), and `/undo`/`/redo` are disabled. The status hint
+says “send mail to steer this subagent”; for example, return to the parent with
+Esc and use `/subagents steer <session> <text>`. `/fork` still copies the child
+transcript into an independent root session. These controls use
+`SessionInfo.parent`; no API contract changes are required. The explicit `/api`
+request tool remains available; the backend rejects member `CreateTurn`, model
+or agent updates, and revert/unrevert with HTTP 400 / gRPC INVALID_ARGUMENT.
+
+
 A `task` call spawns one or more subagents in their own child sessions. Its
 card shows every member's full handle, session, status, and latest activity.
 For example, a single member appears as:
