@@ -460,6 +460,12 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly epoch: ActorEpoch
   readonly inbox_through: number
 }) |
+({ readonly type: "resident_work_finished" } & {
+  readonly session: SessionId
+  readonly handle: string
+  readonly epoch: ActorEpoch
+  readonly inbox_through: number
+}) |
 ({ readonly type: "agent_heartbeat" } & {
   readonly session: SessionId
   readonly handle: string
@@ -1201,6 +1207,7 @@ export function isEvent(value: unknown): value is Event {
     (isRecord(value) && value["type"] === "agent_registered" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("agent_session" in value && isSessionId(value["agent_session"])) && ("handle" in value && typeof value["handle"] === "string") && (value["parent"] === undefined || (value["parent"] === null || typeof value["parent"] === "string")) && (value["agent_type"] === undefined || isAgentName(value["agent_type"])) && (value["mode"] === undefined || isSubagentMode(value["mode"]))) ||
     (isRecord(value) && value["type"] === "agent_activity_changed" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("handle" in value && typeof value["handle"] === "string") && ("status" in value && isRosterStatus(value["status"])) && (value["current_task"] === undefined || (value["current_task"] === null || typeof value["current_task"] === "string"))) ||
     (isRecord(value) && value["type"] === "resident_work_started" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("actor_session" in value && isSessionId(value["actor_session"])) && ("handle" in value && typeof value["handle"] === "string") && ("epoch" in value && isActorEpoch(value["epoch"])) && ("inbox_through" in value && (typeof value["inbox_through"] === "number" && Number.isInteger(value["inbox_through"]) && value["inbox_through"] >= 0))) ||
+    (isRecord(value) && value["type"] === "resident_work_finished" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("handle" in value && typeof value["handle"] === "string") && ("epoch" in value && isActorEpoch(value["epoch"])) && ("inbox_through" in value && (typeof value["inbox_through"] === "number" && Number.isInteger(value["inbox_through"]) && value["inbox_through"] >= 0))) ||
     (isRecord(value) && value["type"] === "agent_heartbeat" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("handle" in value && typeof value["handle"] === "string") && ("heartbeat_ms" in value && (typeof value["heartbeat_ms"] === "number" && Number.isInteger(value["heartbeat_ms"]) && value["heartbeat_ms"] >= 0))) ||
     (isRecord(value) && value["type"] === "mail_sent" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("from" in value && typeof value["from"] === "string") && ("to" in value && isMailEndpoint(value["to"])) && (value["kind"] === undefined || isMailKind(value["kind"])) && ("body" in value && typeof value["body"] === "string")) ||
     (isRecord(value) && value["type"] === "channel_joined" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("channel" in value && typeof value["channel"] === "string") && ("member" in value && typeof value["member"] === "string")) ||
