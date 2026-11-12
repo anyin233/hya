@@ -140,8 +140,8 @@ Installed bundles publish independently: a process that fails to start keeps
 that bundle's previous catalog and connection, or stays absent if it never
 loaded. Healthy installations still activate. Failures carry the bundle id in
 `errors[]`; an operation on another bundle succeeds with a warning. Automatic
-binds do not repeat a failed attempt until registry or watched configuration
-inputs change. An explicit refresh retries failed sources even with unchanged
+binds do not repeat a failed attempt until the registry changes. Watched
+`config.yml` files are read only during explicit refresh. An explicit refresh retries failed sources even with unchanged
 inputs.
 
 ### Management API
@@ -360,18 +360,23 @@ Project bundles (`.hya/bundles/<dir>/`, written by `hya bundle install
 - Only sessions and catalog reads bound to that Project see its bundles. The
   global scope, directories outside every Project, and temporary sessions bind
   installed and first-party bundles only; they never start project bundle code.
-- Each bind of a Project compares a digest of its roots' bundle files and
-  their `config.yml` files with the published Project overlay. A change
-  republishes that one Project; other Projects keep their generation. A
-  project bundle's `config.yml` models (`agents.<id>.model`) apply only in its
-  Project, and saving a model for one of its Agents writes that file.
+- The first bind loads a Project's bundle sources. Later binds reuse the
+  prepared sources without reading bundle files. Source and `config.yml`
+  edits are scanned by explicit refresh: `POST /v1/bundles:refresh` with
+  `{"directory":"/path/to/project"}`, for example
+  `curl -X POST http://127.0.0.1:8080/v1/bundles:refresh -H 'Content-Type: application/json' -d '{"directory":"/path/to/project"}'`.
+  Changed roots and eviction also reload
+  the scope. Installed changes still follow registry generations. A project
+  bundle's `config.yml` models (`agents.<id>.model`) apply only in its Project;
+  saving a model writes that file and explicitly refreshes the scope.
 - An invalid or unreadable project bundle, including malformed model config,
   keeps that bundle's published catalog and process; unrelated project bundles
   and plugins can still update. The retained bundle keeps its precedence over
   lower-priority bundles with the same identity. Binds continue without
-  repeatedly preparing unchanged failed sources. Fix its inputs or explicitly
-  call `POST /v1/bundles:refresh` to retry. Removing the bundle directory is an
-  explicit removal and publishes an overlay without it.
+  repeatedly preparing unchanged failed sources. After fixing its inputs,
+  call `POST /v1/bundles:refresh` to retry. After removing a source directory,
+  refresh to publish an overlay without it. Bundle management mutations request
+  that refresh automatically.
 - Runtime sources are shared by content: an installed bundle's process is one
   process for the global scope and every Project. A project bundle's process
   belongs to the Project that loads it. It stops once that Project no longer

@@ -521,6 +521,11 @@ impl RuntimeRegistry {
         workdir: &Path,
         discover: impl FnOnce() -> Vec<SkillCatalogEntry>,
     ) -> Result<TurnBinding, RuntimeRefreshError> {
+        let discovered = if self.pure_skills {
+            hya_tool::merge_skill_catalog(Vec::new())
+        } else {
+            discover()
+        };
         let mut last_generation = self
             .publication
             .lock()
@@ -528,11 +533,7 @@ impl RuntimeRegistry {
         let mut base = self.active();
         let agent_model_preferences = self.agent_model_preferences.borrow().clone();
         let mut agent_model_configuration = self.agent_model_configuration.borrow().clone();
-        let discovered = if self.pure_skills {
-            hya_tool::merge_skill_catalog(Vec::new())
-        } else {
-            discover()
-        };
+        let mut retired = Vec::new();
         let existing = base
             .skills
             .get(workdir)
@@ -540,7 +541,7 @@ impl RuntimeRegistry {
         if existing != discovered {
             let mut candidate = RuntimeCandidate::from_snapshot(&base);
             candidate.replace_skills(workdir, discovered);
-            base = self.publish_candidate(&mut last_generation, &base, candidate)?;
+            base = self.publish_candidate(&mut last_generation, &base, candidate, &mut retired)?;
         }
 
         let key = scope.key();
@@ -575,7 +576,9 @@ impl RuntimeRegistry {
             }
         };
         drop(scopes);
-        // Release a superseded scope snapshot's sources outside the lock.
+        // Source destruction may clean up staged files.
+        drop(last_generation);
+        drop(retired);
         drop(replaced);
         Ok(TurnBinding {
             snapshot,
@@ -632,7 +635,7 @@ impl RuntimeRegistry {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(key, entry);
-        // Release the replaced scope's sources outside the scope lock.
+        drop(last_generation);
         drop(previous);
         Ok(generation)
     }
@@ -650,6 +653,7 @@ impl RuntimeRegistry {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(key);
+        drop(_publication);
         drop(removed);
     }
 
@@ -739,7 +743,8 @@ impl RuntimeRegistry {
     }
 
     /// Build and validate a complete candidate, then publish it with one pointer
-    /// replacement. Failed candidates do not allocate a generation.
+    /// replacement. Failed candidates do not allocate a generation. `build`
+    /// applies prepared in-memory inputs; callers perform discovery/I/O first.
     pub fn refresh(
         &self,
         build: impl FnOnce(&mut RuntimeCandidate) -> Result<(), RuntimeRefreshError>,
@@ -750,13 +755,20 @@ impl RuntimeRegistry {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let current = self.active();
         let mut candidate = RuntimeCandidate::from_snapshot(&current);
-        build(&mut candidate)?;
+        if let Err(error) = build(&mut candidate) {
+            drop(last_generation);
+            return Err(error);
+        }
         if candidate.logically_matches(&current) {
+            drop(last_generation);
             return Ok(current.generation);
         }
-        Ok(self
-            .publish_candidate(&mut last_generation, &current, candidate)?
-            .generation)
+        let mut retired = Vec::new();
+        let published =
+            self.publish_candidate(&mut last_generation, &current, candidate, &mut retired)?;
+        drop(last_generation);
+        drop(retired);
+        Ok(published.generation)
     }
 
     /// Atomically publish a complete agent catalog while preserving the
@@ -931,6 +943,7 @@ impl RuntimeRegistry {
         last_generation: &mut ConfigGeneration,
         current: &RuntimeSnapshot,
         candidate: RuntimeCandidate,
+        retired: &mut Vec<Arc<RuntimeSnapshot>>,
     ) -> Result<Arc<RuntimeSnapshot>, RuntimeRefreshError> {
         let published = Arc::new(candidate.into_snapshot(
             allocate_generation(last_generation)?,
@@ -942,14 +955,13 @@ impl RuntimeRegistry {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = published.clone();
         // Cached compositions must not pin retired global sources. The
         // overlay and live turn bindings survive; the next bind recomposes.
-        let retired = self
-            .scopes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .values_mut()
-            .filter_map(|entry| entry.snapshot.take())
-            .collect::<Vec<_>>();
-        drop(retired);
+        retired.extend(
+            self.scopes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .values_mut()
+                .filter_map(|entry| entry.snapshot.take()),
+        );
         Ok(published)
     }
 }
@@ -4669,6 +4681,25 @@ mod tests {
                 .expect("test bundle Skill sources must publish");
         }
         registry
+    }
+
+    #[test]
+    fn skill_discovery_runs_outside_publication_lock() {
+        let registry = RuntimeRegistry::new(
+            ToolRegistry::builtins(),
+            Arc::new(TestCatalog::from_prepared(&[]).unwrap()),
+        );
+        let directory = Path::new("/skill-discovery-lock-test");
+        registry
+            .bind_scoped_with_skills(
+                &CatalogScope::Directory(directory.to_path_buf()),
+                directory,
+                || {
+                    assert!(registry.publication.try_lock().is_ok());
+                    Vec::new()
+                },
+            )
+            .unwrap();
     }
 
     #[test]

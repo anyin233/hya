@@ -327,7 +327,12 @@ async fn an_installed_project_bundle_reaches_only_its_project_scope() {
     );
 
     remove_project_bundle(&dir, "acme/tools").expect("remove");
-    assert!(refresh.refresh_scope(&runtime, &scope).await.unwrap());
+    assert!(
+        refresh
+            .refresh_scope_explicit(&runtime, &scope)
+            .await
+            .unwrap()
+    );
     assert!(bind(&scope).resolve_agent("acme-tools-lead").is_none());
     std::fs::remove_dir_all(&root).unwrap();
     std::fs::remove_dir_all(&other).unwrap();
