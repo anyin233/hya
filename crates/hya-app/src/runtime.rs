@@ -509,10 +509,13 @@ impl BoundSidecarFactory for BundleSidecarFactory {
             )?;
             validate_bundle_sidecar_skills(&self.binding, &self.stable_agent_id, contributions)?;
             let tools = bind_bundle_sidecar_tools(&self.binding, &self.stable_agent_id, &plugin)?;
-            if !contributions.apis.is_empty() || !contributions.workspace_adapters.is_empty() {
+            if !contributions.apis.is_empty() {
                 return Err(CoreError::Invalid(
-                    "bundle sidecar has undeclared API or workspace-adapter exports".into(),
+                    "bundle sidecar has undeclared API exports".into(),
                 ));
+            }
+            if !contributions.workspace_adapters.is_empty() {
+                tracing::warn!(agent = %self.stable_agent_id, "ignoring unsupported bundle sidecar workspace adapters");
             }
             let hooks = self
                 .binding
@@ -566,7 +569,9 @@ impl BundleSidecarHandle {
 
 impl Drop for BundleSidecarHandle {
     fn drop(&mut self) {
-        drop(self.host.take());
+        if let Some(host) = self.host.take() {
+            host.stop_now();
+        }
         let _ = self.cleanup_activation_dir();
     }
 }
@@ -5185,11 +5190,49 @@ for line in sys.stdin:
             "workspaceAdapters": []
         }
         print(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": result}), flush=True)
+    elif method == "tool/call":
+        print(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": {"ok": True, "output": "echo", "time_ms": 0}}), flush=True)
     elif method == "shutdown":
         print(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": True}), flush=True)
         break
 "#
         .replace("__HOOKS__", hooks)
+    }
+
+    #[tokio::test]
+    async fn bundle_sidecar_ignores_unsupported_workspace_adapters() {
+        let root = tempdir();
+        let staging = tempdir();
+        let catalog = Arc::new(to_agent_catalog(
+            BundleCatalog::from_prepared(&agent_bundles([materialized_tool_bundle(
+                "workspace-adapter",
+            )]))
+            .unwrap(),
+        ));
+        let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let binding = runtime.bind_turn(&root).unwrap();
+        let fixture = activation_sidecar_fixture("[]").replace(
+            "\"workspaceAdapters\": []",
+            r#""workspaceAdapters": [{"type":"worktree","name":"unsupported","description":"ignored"}]"#,
+        );
+        let environment = BundleSidecarEnvironment::from_command(
+            vec!["python3".into(), "-c".into(), fixture],
+            staging.clone(),
+        );
+        let factory = environment
+            .factory_for(&binding, "worker")
+            .unwrap()
+            .unwrap();
+        let mut handle = factory
+            .start(SidecarStart {
+                activation_id: "unsupported-adapter".into(),
+                lifecycle: SidecarLifecycle::Transient,
+            })
+            .await
+            .expect("unsupported workspace adapters must not break activation");
+        handle.shutdown().await.unwrap();
+        std::fs::remove_dir_all(staging).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
@@ -5344,8 +5387,8 @@ for line in sys.stdin:
     }
 
     /// Initialization validates packaged Skills independently of an agent's view.
-    #[test]
-    fn bundle_sidecar_skill_declarations_match_complete_package() {
+    #[tokio::test]
+    async fn bundle_sidecar_skill_declarations_match_complete_package() {
         let make_skill = |local_id: &str| {
             let content = format!(
                 "---\nname: {local_id}\ndescription: {local_id} fixture\n---\n{local_id} body\n"
@@ -5363,6 +5406,18 @@ for line in sys.stdin:
         let selected = make_skill("selected");
         let unselected = make_skill("unselected");
         let mut bundle = disjoint_materialized_bundle("selected-skills");
+        set_materialized_extension_content_for_path(
+            &mut bundle,
+            "extensions/alpha.js",
+            r#"
+export default {server: async () => ({
+    tool: {echo: {description: "echo", execute: async () => "echo"}},
+    event: async () => {},
+})};
+"#
+            .to_string(),
+        );
+
         bundle.agents[0]
             .resource_view
             .allow
@@ -5415,11 +5470,27 @@ for line in sys.stdin:
             validate_bundle_sidecar_skills(&binding, "alpha", &full_contributions).is_ok(),
             "complete declarations are valid even when the agent selects only one Skill"
         );
+        let staging = tempdir();
+        let environment = BundleSidecarEnvironment::from_command(
+            plugins::bundle_sidecar_command().expect("Bun must be available"),
+            staging.clone(),
+        );
+        let factory = environment.factory_for(&binding, "alpha").unwrap().unwrap();
+        let mut handle = factory
+            .start(SidecarStart {
+                activation_id: "static-skills".into(),
+                lifecycle: SidecarLifecycle::Transient,
+            })
+            .await
+            .expect("a real activation may omit packaged Skill declarations");
         assert!(
             validate_bundle_sidecar_skills(&binding, "alpha", &PluginContributionSet::default(),)
-                .is_err(),
-            "missing package Skill declarations must fail closed"
+                .is_ok(),
+            "static packaged Skills do not require process declarations"
         );
+        handle.shutdown().await.unwrap();
+        std::fs::remove_dir_all(staging).unwrap();
+        std::fs::remove_dir_all(turn_dir).unwrap();
     }
 
     #[tokio::test]
@@ -5477,7 +5548,13 @@ for line in sys.stdin:
             .await
             .expect("shutdown activation must acknowledge ready");
 
+        let retained_tools = handle.tool_bindings();
+        let ctx = sidecar_test_ctx(&turn_dir);
         handle.shutdown().await.expect("shutdown must reap child");
+        assert!(
+            matches!(retained_tools[0].tool.execute(&ctx, json!({})).await,
+            Err(ToolError::Other(message)) if message.contains("plugin connection closed"))
+        );
         assert_eq!(
             std::fs::read_to_string(staging_root.join("shutdown.sentinel"))
                 .expect("shutdown fixture sentinel"),
@@ -5533,6 +5610,12 @@ for line in sys.stdin:
             "sidecar start must create its unique activation directory"
         );
 
+        let tools = handle.tool_bindings();
+        let tool = tools[0].tool.clone();
+        let ctx = sidecar_test_ctx(&turn_dir);
+        tool.execute(&ctx, json!({})).await.unwrap();
+        let loss = handle.loss_token().unwrap();
+
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             drop(handle);
             let activation_removed = !activation_dir.exists();
@@ -5549,6 +5632,16 @@ for line in sys.stdin:
                 "dropping BundleSidecarHandle must remove its activation directory and leave the staging parent empty"
             );
         }));
+
+        let stopped_result = tool.execute(&ctx, json!({})).await;
+        assert!(
+            loss.is_cancelled(),
+            "drop must close the owned connection immediately"
+        );
+        assert!(
+            matches!(stopped_result, Err(ToolError::Other(message)) if message.contains("plugin connection closed")),
+            "retained views must return Closed after handle drop"
+        );
 
         std::fs::remove_dir_all(&staging_root).expect("cleanup drop cleanup staging root");
         std::fs::remove_dir_all(&turn_dir).expect("cleanup drop cleanup turn directory");
@@ -6055,6 +6148,40 @@ export default {
         assert!(!turn_dir.exists());
     }
 
+    fn sidecar_test_ctx(root: &Path) -> ToolCtx {
+        let session = SessionId::new();
+        let (permission, _permission_rx) =
+            PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+                Action::Tool,
+                "*",
+                Mode::Allow,
+            )]));
+        let (interaction, _interaction_rx) = InteractionPlane::new();
+        let (spawner, _spawner_rx) = SpawnerPlane::new();
+        ToolCtx {
+            workflows: hya_tool::WorkflowPlane::disconnected(),
+            permission: permission.for_session(session),
+            interaction: interaction.for_session(session),
+            spawner,
+            operation: ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
+            mailbox: MailboxPlane::disconnected(),
+            lifecycle: LifecyclePlane::disconnected(),
+            session: Some(session),
+            parent_session: None,
+            todo: TodoPlane::default(),
+            skills: SkillPlane::default(),
+            artifacts: ArtifactPlane::default(),
+            websearch: WebSearchPlane::default(),
+            formatter: FormatterPlane::default(),
+            agents: Default::default(),
+            lsp: LspPlane::default(),
+            workdir: root.to_path_buf(),
+            roots: vec![root.to_path_buf()],
+            cancel: Default::default(),
+            project_activity: hya_tool::ProjectActivityPlane::disconnected(),
+        }
+    }
+
     #[tokio::test]
     async fn one_bun_module_serves_two_agents_with_disjoint_tool_views() {
         let root = tempdir();
@@ -6108,37 +6235,8 @@ extensions:
             plugins::bundle_sidecar_command().expect("Bun must be available"),
             staging.clone(),
         );
-        let session = SessionId::new();
-        let (permission, _permission_rx) =
-            PermissionPlane::new(PermissionRules::new(vec![Rule::new(
-                Action::Tool,
-                "*",
-                Mode::Allow,
-            )]));
-        let (interaction, _interaction_rx) = InteractionPlane::new();
-        let (spawner, _spawner_rx) = SpawnerPlane::new();
-        let ctx = ToolCtx {
-            workflows: hya_tool::WorkflowPlane::disconnected(),
-            permission: permission.for_session(session),
-            interaction: interaction.for_session(session),
-            spawner,
-            operation: ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-            mailbox: MailboxPlane::disconnected(),
-            lifecycle: LifecyclePlane::disconnected(),
-            session: Some(session),
-            parent_session: None,
-            todo: TodoPlane::default(),
-            skills: SkillPlane::default(),
-            artifacts: ArtifactPlane::default(),
-            websearch: WebSearchPlane::default(),
-            formatter: FormatterPlane::default(),
-            agents: Default::default(),
-            lsp: LspPlane::default(),
-            workdir: root.clone(),
-            roots: vec![root.clone()],
-            cancel: Default::default(),
-            project_activity: hya_tool::ProjectActivityPlane::disconnected(),
-        };
+        let ctx = sidecar_test_ctx(&root);
+        let session = ctx.session.unwrap();
         for agent in ["alpha", "beta"] {
             let factory = environment.factory_for(&binding, agent).unwrap().unwrap();
             let mut handle = factory
@@ -6187,6 +6285,253 @@ extensions:
             handle.shutdown().await.unwrap();
             assert_eq!(result.unwrap()["output"], format!("{agent} result"));
         }
+        assert!(std::fs::read_dir(&staging).unwrap().next().is_none());
+        std::fs::remove_dir_all(staging).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    struct ToolViewProvider {
+        inner: FakeProvider,
+        requests: Arc<std::sync::Mutex<Vec<CompletionRequest>>>,
+    }
+
+    #[async_trait]
+    impl Provider for ToolViewProvider {
+        fn id(&self) -> &str {
+            self.inner.id()
+        }
+
+        fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+            self.inner.capabilities(model)
+        }
+
+        async fn stream(
+            &self,
+            request: CompletionRequest,
+            session: SessionId,
+            message: MessageId,
+        ) -> Result<EventStream, ProviderError> {
+            self.requests.lock().unwrap().push(request.clone());
+            self.inner.stream(request, session, message).await
+        }
+    }
+
+    #[tokio::test]
+    async fn one_bun_module_enforces_disjoint_views_in_engine_turns() {
+        disjoint_engine_turns(false).await;
+    }
+
+    #[tokio::test]
+    async fn one_bundle_process_enforces_disjoint_views_in_engine_turns() {
+        disjoint_engine_turns(true).await;
+    }
+
+    async fn disjoint_engine_turns(process: bool) {
+        let root = tempdir();
+        let staging = tempdir();
+        let extensions = if process {
+            "  files: [{ id: main, path: main.py }]\n  process: {kind: rust, command: [python3, '${BUNDLE_ROOT}/main.py']}"
+        } else {
+            "  js: [{ id: main, path: main.js }]"
+        };
+        let tool_path = if process { "tool.json" } else { "main.js" };
+        let manifest = format!(
+            r#"kind: Bundle
+identity: {{id: test/disjoint-turns, version: 1.0.0, publisher: test}}
+agents:
+  - {{id: alpha, role: main, resource_view: {{allow: [alpha]}}}}
+  - {{id: beta, role: main, resource_view: {{allow: [beta]}}}}
+resources:
+  tools:
+    - {{id: alpha, path: {tool_path}}}
+    - {{id: beta, path: {tool_path}}}
+extensions:
+{extensions}
+"#
+        );
+        let prepared = prepare_package(BundleSource::new("disjoint-turns", vec![
+            SourceFile::new("bundle.yaml", manifest),
+            SourceFile::new("tool.json", r#"{"type":"object"}"#),
+            SourceFile::new("main.js", r#"
+export default {server: async () => ({tool: {
+  alpha: {description: "alpha", execute: async () => `alpha:${process.pid}`},
+  beta: {description: "beta", execute: async () => `beta:${process.pid}`},
+}})};
+"#),
+            SourceFile::new("main.py", r#"
+import json, os, sys
+for line in sys.stdin:
+    req = json.loads(line)
+    if req['method'] == 'initialize':
+        result = {'protocol_version': 1, 'plugin': {'id': 'disjoint-turns', 'version': '1', 'kind': 'rust'},
+                  'tools': [{'name': name, 'description': name, 'inputSchema': {'type': 'object'}} for name in ['alpha', 'beta']]}
+    elif req['method'] == 'tool/call':
+        result = {'ok': True, 'output': {'title': '', 'output': req['params']['tool'] + ':' + str(os.getpid()), 'metadata': {}}, 'time_ms': 0}
+    elif req['method'] == 'shutdown':
+        print(json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'result': {}}), flush=True)
+        break
+    else:
+        continue
+    print(json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'result': result}), flush=True)
+"#),
+        ])).unwrap();
+        let catalog = Arc::new(to_agent_catalog(
+            BundleCatalog::from_prepared(prepared.bundles()).unwrap(),
+        ));
+        let runtime = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog));
+        let bundle = &prepared.bundles()[0];
+        let process_extension = prepared.bundle_process("test/disjoint-turns");
+        let config = crate::bundle_config::bundle_config_location(
+            &root.join("config.yaml"),
+            "test/disjoint-turns",
+            crate::bundle_config::BundleConfigScope::User,
+        )
+        .unwrap();
+        let source = crate::bundle_runtime::prepare_source(
+            bundle,
+            crate::bundle_runtime::BundleRuntimeParts {
+                process: process_extension,
+                schemas: &[],
+                apis: &[],
+                permission_modes: &[],
+                reads: None,
+            },
+            &crate::bundle_runtime::BundleRuntimeConfig::capture(bundle, process_extension, config),
+        )
+        .await
+        .unwrap();
+        runtime
+            .refresh(|candidate| candidate.upsert_sources(vec![source.source]))
+            .unwrap();
+        let mut process_ids = Vec::new();
+        for (agent, other) in [("alpha", "beta"), ("beta", "alpha")] {
+            let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let scripts = [
+                agent.to_string(),
+                other.to_string(),
+                format!("bundle:test/disjoint-turns/tool/{other}"),
+            ]
+            .into_iter()
+            .map(|name| {
+                vec![
+                    FakeStep::ToolCall {
+                        name,
+                        input: json!({}),
+                    },
+                    FakeStep::Finish(FinishReason::ToolCalls),
+                ]
+            })
+            .chain([vec![FakeStep::Finish(FinishReason::Stop)]])
+            .collect();
+            let provider = ToolViewProvider {
+                inner: FakeProvider::scripted_turns(scripts),
+                requests: requests.clone(),
+            };
+            let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+                Action::Tool,
+                "*",
+                Mode::Allow,
+            )]));
+            let environment = BundleSidecarEnvironment::from_command(
+                plugins::bundle_sidecar_command().unwrap(),
+                staging.clone(),
+            );
+            let engine = SessionEngine::new(
+                SessionStore::connect_memory().await.unwrap(),
+                Arc::new(ProviderRouter::new().with(Arc::new(provider))),
+                runtime.clone(),
+                permission,
+                EventBus::default(),
+            )
+            .with_sidecar_environment(Arc::new(environment));
+            let session = engine
+                .create(CreateSession {
+                    parent: None,
+                    agent: AgentName::new(agent),
+                    model: ModelRef::new("fake"),
+                    workdir: root.to_string_lossy().into_owned(),
+                    project: None,
+                    kind: hya_proto::SessionKind::Project,
+                })
+                .await
+                .unwrap();
+            engine
+                .admit_user_prompt(session, "exercise this agent's tool view".into())
+                .await
+                .unwrap();
+            engine
+                .run_turn(
+                    session,
+                    &AgentSpec {
+                        name: AgentName::new(agent),
+                        model: ModelRef::new("fake"),
+                        system_prompt: "tool view test".into(),
+                        workdir: root.clone(),
+                        reasoning: None,
+                    },
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap();
+            {
+                let requests = requests.lock().unwrap();
+                assert_eq!(requests.len(), 4);
+                for request in requests.iter() {
+                    let names = request
+                        .tools
+                        .iter()
+                        .map(|tool| tool.name.as_str())
+                        .collect::<Vec<_>>();
+                    assert!(names.contains(&agent), "selected tool missing: {names:?}");
+                    assert!(
+                        !names.contains(&other),
+                        "other agent's tool advertised: {names:?}"
+                    );
+                    assert!(
+                        !names
+                            .contains(&format!("bundle:test/disjoint-turns/tool/{other}").as_str())
+                    );
+                }
+            }
+            let events = engine.store().replay(session).await.unwrap();
+            let results = events
+                .iter()
+                .filter_map(|event| match &event.event {
+                    Event::ToolResult { output, .. } => Some(output["output"].as_str().unwrap()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(results.len(), 1, "only the selected tool may execute");
+            let (tool, pid) = results[0].split_once(':').unwrap();
+            assert_eq!(tool, agent);
+            process_ids.push(pid.to_string());
+            let errors = events
+                .iter()
+                .filter_map(|event| match &event.event {
+                    Event::ToolError { message_text, .. } => Some(message_text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                errors,
+                [
+                    format!("unknown tool: {other}"),
+                    format!("unknown tool: bundle:test/disjoint-turns/tool/{other}")
+                ]
+            );
+        }
+        if process {
+            assert_eq!(
+                process_ids[0], process_ids[1],
+                "both turns must use one shared process"
+            );
+        } else {
+            assert_ne!(
+                process_ids[0], process_ids[1],
+                "private activations must remain session-local"
+            );
+        }
+        drop(runtime);
         assert!(std::fs::read_dir(&staging).unwrap().next().is_none());
         std::fs::remove_dir_all(staging).unwrap();
         std::fs::remove_dir_all(root).unwrap();
