@@ -69,3 +69,22 @@ has no model turn to resume, so it stays non-autonomous until a user root turn
 or explicit main activation. Workflow tests must not manufacture root turn
 leases. Drain endings carry their actual `FinishCause`; a user cancel and a
 failed leader must not become restartable shutdowns.
+
+## Why must the episode drain its own turn before writing a team ending?
+
+M4-4's temporary SQLx diagnostics reproduced `Sqlite(PoolTimedOut)` with the
+lead episode's suspended `run_one_turn` holding the memory store's only pooled
+connection in `cached_projection`. The cancellation branch awaited `team.kill`
+(and its lead activity write) before polling that future again. The connection
+could therefore never be released to the kill or the test's replay. This can
+also exhaust a larger pool when enough episodes cancel together.
+
+Await the owned turn before starting those writes. Cancellation is bounded by
+`DRAIN_DEADLINE`; close a straggler under its claim before dropping the future.
+Sidecar loss requests `Failed("activation sidecar lost")` and uses this same
+ending, without an in-process epoch bump. Idle loss drops the handle and keeps
+the episode. Every sidecar stop uses `SIDECAR_STOP_DEADLINE`, including idle
+loss and unhealthy-handle replacement. Failure reports retain stop diagnostics.
+`take_episode` removes the slot/index before archive publication and completion;
+the old direct `archive_stopped_agent`, claim replacement and `remove_slot`
+paths are gone. Startup recovery and orphan `Takeover` remain separate.

@@ -422,6 +422,9 @@ struct ImmediateSidecarHandle {
 
 const SIDECAR_PERMISSION_TOOL: &str = "bundle:hya/sidecar-permission/tool/echo";
 
+// Episode ending: five seconds for the turn, five for its sidecar, one for commit.
+const RESIDENT_END_BOUND: std::time::Duration = std::time::Duration::from_secs(11);
+
 fn sidecar_permission_bundle() -> Bundle {
     Bundle {
         check: None,
@@ -1011,6 +1014,45 @@ impl Tool for HookProbeTool {
     }
 }
 
+async fn assert_sidecar_failed(
+    engine: &SessionEngine,
+    supervisor: &ResidentSupervisor,
+    root: SessionId,
+    child: SessionId,
+    handle: &str,
+) {
+    let events = engine.replay(root).await.unwrap();
+    assert_eq!(events.iter().filter(|e| matches!(&e.event,
+        Event::SubagentReported { child: reported, outcome: hya_proto::ReportOutcome::Failed, report, .. }
+        if *reported == child && report.contains("activation sidecar lost")
+    )).count(), 1);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(&e.event,
+                Event::MailSent { from, body, .. }
+                if from == handle && body.contains("activation sidecar lost")
+            ))
+            .count(),
+        1
+    );
+    assert!(!events.iter().any(|e| matches!(&e.event, Event::AgentRestarted { child: restarted, .. } if *restarted == child)));
+    let projection = engine.read_projection(root).await.unwrap();
+    assert_eq!(
+        projection.team.archived[handle].reason,
+        hya_proto::ArchiveReason::Reported
+    );
+    assert!(
+        !engine
+            .store()
+            .active_actor_ids()
+            .await
+            .unwrap()
+            .contains(&child)
+    );
+    assert_eq!(supervisor.episode_count(), 0);
+}
+
 async fn assert_stopped_member_revives(
     engine: &SessionEngine,
     root: SessionId,
@@ -1027,6 +1069,7 @@ async fn assert_stopped_member_revives(
         )
         .await
         .expect("engine mail must revive the stopped member");
+    assert!(engine.replay(root).await.unwrap().iter().any(|e| matches!(&e.event, Event::AgentRestarted { child: restarted, epoch, .. } if *restarted == child && *epoch > hya_proto::ActorEpoch::INITIAL)));
     let projection = engine.read_projection(root).await.unwrap();
     assert_eq!(projection.team.roster[handle].session, child);
     assert!(!projection.team.archived.contains_key(handle));
@@ -3012,7 +3055,7 @@ async fn resident_replacement_declaration_drift_disables_once_and_releases_claim
 }
 
 #[tokio::test]
-async fn resident_activation_hook_transport_loss_enters_epoch_recovery() {
+async fn resident_activation_hook_transport_loss_reports_failure() {
     assert_resident_hook_transport_loss(HookLossStage::Before).await;
 }
 
@@ -3122,13 +3165,9 @@ async fn assert_resident_hook_transport_loss(stage: HookLossStage) {
             break (*status, current_task.clone());
         }
     };
-    supervisor.team_cancel(root).unwrap().cancel();
 
     assert_eq!(observed_status, RosterStatus::Failed);
-    assert_eq!(
-        observed_task.as_deref(),
-        Some("aborted by resident recovery")
-    );
+    assert_eq!(observed_task.as_deref(), Some("activation sidecar lost"));
     assert_eq!(hook_calls.load(Ordering::SeqCst), 1);
     let expected_calls = match stage {
         HookLossStage::Before => 0,
@@ -3144,6 +3183,7 @@ async fn assert_resident_hook_transport_loss(stage: HookLossStage) {
     assert_eq!(requests.lock().unwrap().len(), expected_requests);
     assert_eq!(terminates.load(Ordering::SeqCst), 1);
 
+    assert_sidecar_failed(&engine, &supervisor, root, child, &handle).await;
     let child_events = engine.store().replay(child).await.unwrap();
     assert!(
         !child_events
@@ -3156,6 +3196,8 @@ async fn assert_resident_hook_transport_loss(stage: HookLossStage) {
             Event::ToolError { message_text, .. } if message_text.contains("blocked by plugin")
         )
     }));
+    assert_stopped_member_revives(&engine, root, child, &handle, "after hook sidecar loss").await;
+    supervisor.end_member(root, &handle).await.unwrap();
 }
 
 #[tokio::test]
@@ -3513,16 +3555,16 @@ async fn idle_resident_sidecar_loss_is_reaped_before_next_mail() {
 }
 
 #[tokio::test]
-async fn resident_prework_sidecar_loss_rearms_queued_mail_under_recovered_claim() {
-    assert_prework_loss_preserves_input(false).await;
+async fn resident_prework_sidecar_loss_reports_failure_with_unread_mail() {
+    assert_prework_loss_reports_failure(false).await;
 }
 
 #[tokio::test]
-async fn resident_initial_directive_survives_prework_sidecar_loss() {
-    assert_prework_loss_preserves_input(true).await;
+async fn resident_initial_directive_is_closed_after_prework_sidecar_loss() {
+    assert_prework_loss_reports_failure(true).await;
 }
 
-async fn assert_prework_loss_preserves_input(initial: bool) {
+async fn assert_prework_loss_reports_failure(initial: bool) {
     let polls = Arc::new(AtomicUsize::new(0));
     let polled = Arc::new(Notify::new());
     let provider = Arc::new(AckProbeProvider {
@@ -3585,60 +3627,50 @@ async fn assert_prework_loss_preserves_input(initial: bool) {
             .await
             .unwrap();
     }
-    tokio::time::timeout(std::time::Duration::from_millis(250), terminated.notified())
+    tokio::time::timeout(RESIDENT_END_BOUND, terminated.notified())
         .await
         .expect("first prework sidecar loss must terminate deterministically");
 
-    let polled_result =
-        tokio::time::timeout(std::time::Duration::from_millis(250), polled.notified()).await;
-    assert!(
-        polled_result.is_ok(),
-        "owed input must re-arm a fresh sidecar and poll the provider"
-    );
-    tokio::time::timeout(std::time::Duration::from_millis(250), async {
+    tokio::time::timeout(RESIDENT_END_BOUND, async {
         loop {
             let envelope = events.recv().await.unwrap();
-            if matches!(
-                &envelope.event,
-                Event::AgentActivityChanged {
-                    session,
-                    handle: event_handle,
-                    status: RosterStatus::Idle,
-                    ..
-                } if *session == root && event_handle == &handle
-            ) {
+            if matches!(&envelope.event, Event::AgentArchived { child: archived, .. } if *archived == child) {
                 break;
             }
         }
-    })
-    .await
-    .expect("recovered resident must become idle before explicit cleanup");
-    assert_eq!(starts.load(Ordering::SeqCst), 2);
+    }).await.expect("prework loss must end the episode");
+    assert_eq!(starts.load(Ordering::SeqCst), 1);
     assert_eq!(terminates.load(Ordering::SeqCst), 1);
-    assert_eq!(polls.load(Ordering::SeqCst), 1);
-    assert!(
-        engine
-            .store()
-            .active_actor_ids()
-            .await
-            .unwrap()
-            .contains(&child)
-    );
-    assert!(supervisor.team_cancel(root).is_some());
-
-    let child_projection = engine.read_projection(child).await.unwrap();
-    assert_eq!(
-        child_projection
-            .session
-            .messages
-            .iter()
-            .filter(|message| message.role == Role::User)
-            .count(),
-        1
-    );
+    assert_eq!(polls.load(Ordering::SeqCst), 0);
+    assert_sidecar_failed(&engine, &supervisor, root, child, &handle).await;
+    let projection = engine.read_projection(child).await.unwrap();
+    if initial {
+        assert!(
+            projection
+                .session
+                .messages
+                .iter()
+                .any(|m| m.role == Role::Assistant && m.finish == Some(FinishReason::Cancelled))
+        );
+    } else {
+        assert!(
+            !projection
+                .session
+                .messages
+                .iter()
+                .any(|m| m.role == Role::User)
+        );
+    }
+    assert_stopped_member_revives(
+        &engine,
+        root,
+        child,
+        &handle,
+        "new episode after prework loss",
+    )
+    .await;
     supervisor.end_member(root, &handle).await.unwrap();
     assert_eq!(shutdowns.load(Ordering::SeqCst), 0);
-    assert_eq!(terminates.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
@@ -3708,13 +3740,13 @@ async fn running_resident_sidecar_loss_aborts_before_provider_release() {
         .expect("provider must enter first turn");
     loss.cancel();
 
-    let observed = tokio::time::timeout(std::time::Duration::from_millis(250), async {
+    let observed = tokio::time::timeout(RESIDENT_END_BOUND, async {
         let mut terminated_seen = false;
-        let mut recovery_seen = false;
-        while !(terminated_seen && recovery_seen) {
+        let mut failure_seen = false;
+        while !(terminated_seen && failure_seen) {
             tokio::select! {
                 _ = terminated.notified(), if !terminated_seen => terminated_seen = true,
-                envelope = events.recv(), if !recovery_seen => {
+                envelope = events.recv(), if !failure_seen => {
                     let envelope = envelope.unwrap();
                     if matches!(
                         &envelope.event,
@@ -3725,9 +3757,9 @@ async fn running_resident_sidecar_loss_aborts_before_provider_release() {
                             current_task: Some(task),
                         } if *session == root
                             && event_handle == &handle
-                            && task == "aborted by resident recovery"
+                            && task == "activation sidecar lost"
                     ) {
-                        recovery_seen = true;
+                        failure_seen = true;
                     }
                 }
             }
@@ -3735,7 +3767,7 @@ async fn running_resident_sidecar_loss_aborts_before_provider_release() {
     })
     .await;
     let terminated_before_release = terminates.load(Ordering::SeqCst);
-    let slot_remains_before_release = supervisor.team_cancel(root).is_some();
+    let episodes_before_release = supervisor.episode_count();
     let claim_remains_before_release = engine
         .store()
         .active_actor_ids()
@@ -3755,17 +3787,21 @@ async fn running_resident_sidecar_loss_aborts_before_provider_release() {
 
     assert!(
         observed.is_ok(),
-        "running resident sidecar loss must recover before provider release"
+        "running loss must end before provider release"
     );
     assert_eq!(terminated_before_release, 1);
-    assert!(slot_remains_before_release);
-    assert!(claim_remains_before_release);
+    assert_eq!(episodes_before_release, 0);
+    assert!(!claim_remains_before_release);
     assert!(!successful_provider_output);
     assert_eq!(polls.load(Ordering::SeqCst), 1);
+    assert_sidecar_failed(&engine, &supervisor, root, child, &handle).await;
+    assert_stopped_member_revives(&engine, root, child, &handle, "after running sidecar loss")
+        .await;
+    supervisor.end_member(root, &handle).await.unwrap();
 }
 
 #[tokio::test]
-async fn resident_running_loss_recover_claim_failure_finalizes_old_claim() {
+async fn resident_running_loss_never_takes_over_its_claim() {
     let db_dir = support::TestDir::new("resident-running-loss-recover-claim-failure");
     let db_path = db_dir.path().join("sessions.db");
     let db_path = db_path.to_string_lossy().into_owned();
@@ -3869,7 +3905,7 @@ async fn resident_running_loss_recover_claim_failure_finalizes_old_claim() {
     .unwrap();
     loss.cancel();
 
-    let observed = tokio::time::timeout(std::time::Duration::from_millis(250), async {
+    let observed = tokio::time::timeout(RESIDENT_END_BOUND, async {
         let mut terminated_seen = false;
         let mut failure_seen = false;
         while !(terminated_seen && failure_seen) {
@@ -3886,7 +3922,7 @@ async fn resident_running_loss_recover_claim_failure_finalizes_old_claim() {
                             current_task: Some(task),
                         } if *session == root
                             && event_handle == &handle
-                            && task.starts_with("resident recovery failed")
+                            && task.starts_with("activation sidecar lost")
                     ) {
                         failure_seen = true;
                     }
@@ -3913,7 +3949,7 @@ async fn resident_running_loss_recover_claim_failure_finalizes_old_claim() {
                     current_task: Some(task),
                 } if *session == root
                     && event_handle == &handle
-                    && task.starts_with("resident recovery failed")
+                    && task.starts_with("activation sidecar lost")
             )
         })
         .count();
@@ -3933,18 +3969,22 @@ async fn resident_running_loss_recover_claim_failure_finalizes_old_claim() {
 
     assert!(
         observed.is_ok(),
-        "recover_claim failure must terminate and finalize the resident"
+        "sidecar loss must finalize its claim without takeover"
     );
     assert_eq!(terminates.load(Ordering::SeqCst), 1);
     assert!(claim_released);
-    assert!(supervisor.team_cancel(root).is_none());
+    assert_eq!(supervisor.episode_count(), 0);
     assert_eq!(matching_failures, 1);
     assert_eq!(polls.load(Ordering::SeqCst), 1);
     assert!(!successful_provider_output);
+    assert_sidecar_failed(&engine, &supervisor, root, child, &handle).await;
+    assert_stopped_member_revives(&engine, root, child, &handle, "after running sidecar loss")
+        .await;
+    supervisor.end_member(root, &handle).await.unwrap();
 }
 
 #[tokio::test]
-async fn resident_running_loss_recovery_transaction_failure_finalizes_recovered_claim() {
+async fn resident_running_loss_never_runs_recovery_transaction() {
     let db_dir = support::TestDir::new("resident-running-loss-recovery-transaction-failure");
     let db_path = db_dir.path().join("sessions.db");
     let db_path = db_path.to_string_lossy().into_owned();
@@ -4050,7 +4090,7 @@ async fn resident_running_loss_recovery_transaction_failure_finalizes_recovered_
         .unwrap();
     loss.cancel();
 
-    let observed = tokio::time::timeout(std::time::Duration::from_millis(250), async {
+    let observed = tokio::time::timeout(RESIDENT_END_BOUND, async {
         let mut terminated_seen = false;
         let mut failure_seen = false;
         while !(terminated_seen && failure_seen) {
@@ -4067,7 +4107,7 @@ async fn resident_running_loss_recovery_transaction_failure_finalizes_recovered_
                             current_task: Some(task),
                         } if *session == root
                             && event_handle == &handle
-                            && task.starts_with("resident recovery failed")
+                            && task.starts_with("activation sidecar lost")
                     ) {
                         failure_seen = true;
                     }
@@ -4077,7 +4117,7 @@ async fn resident_running_loss_recovery_transaction_failure_finalizes_recovered_
     })
     .await;
 
-    let child_replay_at_recovery = engine.store().replay(child).await.unwrap();
+    let child_replay_at_failure = engine.store().replay(child).await.unwrap();
     release.notify_one();
     let root_events = engine.store().replay(root).await.unwrap();
     let matching_failures = root_events
@@ -4092,7 +4132,7 @@ async fn resident_running_loss_recovery_transaction_failure_finalizes_recovered_
                     current_task: Some(task),
                 } if *session == root
                     && event_handle == &handle
-                    && task.starts_with("resident recovery failed")
+                    && task.starts_with("activation sidecar lost")
             )
         })
         .count();
@@ -4128,16 +4168,20 @@ async fn resident_running_loss_recovery_transaction_failure_finalizes_recovered_
 
     assert!(
         observed.is_ok(),
-        "recovery transaction failure must terminate and finalize the recovered resident"
+        "sidecar loss must end without the recovery transaction"
     );
     assert_eq!(terminates.load(Ordering::SeqCst), 1);
     assert!(claim_released);
-    assert!(supervisor.team_cancel(root).is_none());
+    assert_eq!(supervisor.episode_count(), 0);
     assert_eq!(matching_failures, 1);
     assert_eq!(aborted_recovery_events, 0);
     assert_eq!(polls.load(Ordering::SeqCst), 1);
-    assert_eq!(child_events, child_replay_at_recovery);
+    assert_eq!(child_events, child_replay_at_failure);
     assert!(!successful_provider_output);
+    assert_sidecar_failed(&engine, &supervisor, root, child, &handle).await;
+    assert_stopped_member_revives(&engine, root, child, &handle, "after running sidecar loss")
+        .await;
+    supervisor.end_member(root, &handle).await.unwrap();
 }
 
 #[tokio::test]
@@ -4201,7 +4245,7 @@ async fn resident_running_loss_terminate_failure_disables_and_releases_claim() {
         .expect("provider must enter first turn");
     loss.cancel();
 
-    let observed = tokio::time::timeout(std::time::Duration::from_millis(250), async {
+    let observed = tokio::time::timeout(RESIDENT_END_BOUND, async {
         terminated.notified().await;
         loop {
             let envelope = events.recv().await.unwrap();
@@ -4214,7 +4258,7 @@ async fn resident_running_loss_terminate_failure_disables_and_releases_claim() {
                     current_task: Some(task),
                 } if *session == root
                     && event_handle == &handle
-                    && task == "resident stopped"
+                    && task.starts_with("activation sidecar lost")
             ) {
                 break;
             }
@@ -4233,9 +4277,22 @@ async fn resident_running_loss_terminate_failure_disables_and_releases_claim() {
             .unwrap()
             .contains(&child)
     );
-    assert!(supervisor.team_cancel(root).is_none());
+    assert_eq!(supervisor.episode_count(), 0);
 
+    assert_sidecar_failed(&engine, &supervisor, root, child, &handle).await;
+    let projection = engine.read_projection(root).await.unwrap();
+    assert!(
+        projection
+            .session
+            .members
+            .iter()
+            .find(|m| m.child == Some(child))
+            .unwrap()
+            .summary
+            .contains("sidecar did not stop")
+    );
     assert_stopped_member_revives(&engine, root, child, &handle, "after terminate failure").await;
+    supervisor.end_member(root, &handle).await.unwrap();
 }
 
 #[tokio::test]
