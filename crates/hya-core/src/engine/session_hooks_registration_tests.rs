@@ -1287,6 +1287,7 @@ async fn wait_after_a_revived_member_is_killed_before_its_first_turn_uses_this_e
         engine.clone(),
         supervisor.clone(),
         rx,
+        tokio_util::sync::CancellationToken::new(),
     ));
     let outcome = lifecycle
         .for_session(root)

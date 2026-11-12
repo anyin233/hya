@@ -156,7 +156,7 @@ impl RuntimeExtensionsRefresh {
             .replace_plugins(specs, explicit)
             .map_err(|error| hya_core::CoreError::Invalid(error.to_string()))?;
         let result = RuntimeMcpControl::new(self.reconciler.clone())
-            .reconcile_plan(plan)
+            .reconcile_plan(plan, tokio_util::sync::CancellationToken::new())
             .await
             .map(|_| ())
             .map_err(|error| hya_core::CoreError::Invalid(error.to_string()));
@@ -1021,6 +1021,7 @@ impl RuntimeMcpControl {
     pub(crate) async fn reconcile_plan(
         &self,
         mut plan: ReconcilePlan,
+        stop: tokio_util::sync::CancellationToken,
     ) -> Result<ReconcileOutcome, ReconcileError> {
         if plan.is_complete() {
             return Ok(ReconcileOutcome {
@@ -1036,7 +1037,19 @@ impl RuntimeMcpControl {
         }
         let mut first_error = None;
         let mut published_generation = None;
-        while let Some(joined) = set.join_next_with_id().await {
+        loop {
+            let joined = tokio::select! {
+                biased;
+                () = stop.cancelled() => {
+                    set.abort_all();
+                    while set.join_next().await.is_some() {}
+                    return Err(ReconcileError::InvalidPrepared("runtime reconciliation cancelled".to_string()));
+                }
+                joined = set.join_next_with_id() => match joined {
+                    Some(joined) => joined,
+                    None => break,
+                },
+            };
             let result = match joined {
                 Ok((id, result)) => {
                     tasks.remove(&id);
@@ -1157,7 +1170,10 @@ impl hya_server::McpControl for RuntimeMcpControl {
                 .reconciler
                 .upsert_mcp(name, config)
                 .map_err(|error| error.to_string())?;
-            match self.reconcile_plan(plan).await {
+            match self
+                .reconcile_plan(plan, tokio_util::sync::CancellationToken::new())
+                .await
+            {
                 Ok(outcome) => {
                     trace_publication(&outcome);
                     Ok(())
@@ -1179,7 +1195,10 @@ impl hya_server::McpControl for RuntimeMcpControl {
             else {
                 return Ok(false);
             };
-            match self.reconcile_plan(plan).await {
+            match self
+                .reconcile_plan(plan, tokio_util::sync::CancellationToken::new())
+                .await
+            {
                 Ok(outcome) => {
                     trace_publication(&outcome);
                     Ok(true)
@@ -1511,7 +1530,7 @@ for line in sys.stdin:
         )?;
         assert!(
             super::RuntimeMcpControl::new(h.reconciler.clone())
-                .reconcile_plan(plan)
+                .reconcile_plan(plan, tokio_util::sync::CancellationToken::new())
                 .await
                 .is_err()
         );

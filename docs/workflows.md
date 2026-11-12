@@ -344,3 +344,12 @@ Stages and levels, automatic join rendering, and a canonical revision.
 
 `hya-core::run_workflow` accepts only a `CompiledWorkflow` plus a resolved
 `WorkflowRunContext`. It does not parse source or rebuild the plan.
+
+### Reads during execution
+
+The `workflow` tool handles each request independently. While
+`workflow {"action":"run","name":"my-workflow"}` waits for a long run,
+`workflow {"action":"list"}` and `workflow {"action":"state"}` return without
+waiting for completion, including in the same Session. The command and result
+schemas are unchanged; per-session admission still rejects a second active run.
+Runtime shutdown cancels and waits for admitted background Workflow execution.

@@ -975,7 +975,11 @@ mod tests {
             &channel,
         );
         let (plane, rx) = hya_tool::MailboxPlane::new();
-        let service = tokio::spawn(crate::run_mailbox_service(engine.clone(), rx));
+        let service = tokio::spawn(crate::run_mailbox_service(
+            engine.clone(),
+            rx,
+            tokio_util::sync::CancellationToken::new(),
+        ));
         let result = plane
             .for_session(org.lead_2.session)
             .with_channel_policy(engine.session_channel_policy(org.lead_2.session).unwrap())
@@ -994,7 +998,11 @@ mod tests {
         );
 
         let (plane, rx) = hya_tool::MailboxPlane::new();
-        let service = tokio::spawn(crate::run_mailbox_service(engine.clone(), rx));
+        let service = tokio::spawn(crate::run_mailbox_service(
+            engine.clone(),
+            rx,
+            tokio_util::sync::CancellationToken::new(),
+        ));
         let (permission, _) = PermissionPlane::new(PermissionRules::default());
         let ctx = hya_tool::ToolCtx {
             permission,

@@ -568,6 +568,7 @@ async fn consumed_results_do_not_repeat_synthesis(via_wait: bool, late_mail: boo
             engine.clone(),
             supervisor.clone(),
             rx,
+            tokio_util::sync::CancellationToken::new(),
         ));
         let outcome = lifecycle
             .for_session(root)
