@@ -549,6 +549,7 @@ impl SessionEngine {
         agent: &AgentSpec,
         cancel: CancellationToken,
     ) -> Result<FinishReason, CoreError> {
+        self.ensure_external_turn_allowed(session).await?;
         self.run_turn_with_external_dirs_and_claim(
             session,
             agent,
@@ -565,6 +566,7 @@ impl SessionEngine {
         cancel: CancellationToken,
         external_dirs: &[PathBuf],
     ) -> Result<FinishReason, CoreError> {
+        self.ensure_external_turn_allowed(session).await?;
         self.run_turn_with_external_dirs_and_claim(
             session,
             agent,
@@ -592,6 +594,7 @@ impl SessionEngine {
         explicit_model: Option<ModelRef>,
         admitted_prompt: Option<MessageId>,
     ) -> Result<FinishReason, CoreError> {
+        self.ensure_external_turn_allowed(session).await?;
         let mut request = TurnRequestContext::new(cancel, external_dirs, guidance, None, None);
         request.explicit_model = explicit_model;
         request.admitted_prompt = admitted_prompt;

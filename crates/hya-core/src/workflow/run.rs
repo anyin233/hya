@@ -1179,7 +1179,7 @@ async fn activate_resident_stage(
                 }
             };
             let Some(event) = event else {
-                supervisor.stop_resident(root, &actor.handle).await?;
+                supervisor.end_member(root, &actor.handle).await?;
                 stop_requested = true;
                 continue;
             };
