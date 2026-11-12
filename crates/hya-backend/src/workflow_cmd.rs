@@ -3,17 +3,12 @@ use std::io::Write as _;
 
 use anyhow::Context as _;
 use clap::Subcommand;
-use hya_app::{
-    BuiltSessionEngine, WorkflowCommand as ControlCommand, WorkflowCommandResult, WorkflowControl,
-    WorkflowInvocation, agent_with_model, build_session_engine, open_store,
-    resolve_headless_agent_name, resolve_runtime,
-};
-use hya_core::CreateSession;
+use hya_app::{WorkflowCommand as ControlCommand, WorkflowCommandResult, WorkflowInvocation};
 use hya_proto::{
-    SessionId, WorkflowInfo, WorkflowMemberRole, WorkflowModelAssignment,
-    WorkflowModelResolvedCandidate, WorkflowProjection, WorkflowRevision,
-    WorkflowRouteFailureClass, WorkflowRunProjection, WorkflowRunResult, WorkflowRunStatus,
-    WorkflowStagePlan, WorkflowStageRouteOutcome, WorkflowStageStatus, WorkflowSummary,
+    WorkflowInfo, WorkflowMemberRole, WorkflowModelAssignment, WorkflowModelResolvedCandidate,
+    WorkflowProjection, WorkflowRevision, WorkflowRouteFailureClass, WorkflowRunProjection,
+    WorkflowRunResult, WorkflowRunStatus, WorkflowStagePlan, WorkflowStageRouteOutcome,
+    WorkflowStageStatus, WorkflowSummary,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -79,144 +74,57 @@ pub(crate) enum WorkflowCliCommand {
     },
 }
 
-struct WorkflowRuntime {
-    built: BuiltSessionEngine,
-    control: WorkflowControl,
-    session: hya_proto::SessionId,
-    responder: tokio::task::JoinHandle<()>,
-}
+/// Inspect prepared data only: no providers, native tools, MCP or plugin processes.
+async fn catalog() -> anyhow::Result<hya_app::WorkflowCatalog> {
+    use hya_app::{WorkflowCatalog, WorkflowCatalogRoots, bundle_admin};
+    use hya_bundle::BundleCatalog;
+    use hya_core::{AgentCatalog, CatalogScope, RuntimeRegistry};
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
 
-impl WorkflowRuntime {
-    async fn start(
-        model_override: Option<String>,
-        store: hya_store::SessionStore,
-        yolo: bool,
-        pure: bool,
-        session: Option<SessionId>,
-    ) -> anyhow::Result<Self> {
-        let workdir = std::env::current_dir().context("resolve current directory")?;
-        let has_explicit_model = model_override.is_some();
-        crate::first_run_config_bootstrap(false)?;
-        let runtime = resolve_runtime(model_override)
-            .await
-            .with_yolo(yolo)
-            .with_pure(pure);
-        let mut agent = if pure {
-            crate::agent_with_model_pure(&runtime.model, None)
-        } else {
-            agent_with_model(&runtime.model, None)
-        };
-        let mut built = if pure {
-            crate::build_session_engine_pure(
-                store,
-                runtime.router,
-                &agent,
-                runtime.mcp,
-                runtime.plugins,
-                (runtime.websearch, runtime.permission, runtime.settings),
-            )
-            .await?
-        } else {
-            build_session_engine(
-                store,
-                runtime.router,
-                &agent,
-                runtime.mcp,
-                runtime.plugins,
-                (runtime.websearch, runtime.permission, runtime.settings),
-            )
-            .await?
-        };
-        let engine = built.engine();
-        let asks = built
-            .take_asks()
-            .ok_or_else(|| anyhow::anyhow!("asks receiver missing"))?;
-        let _ = built.take_questions();
-        let responder = crate::spawn_reject_responder(asks);
-        let session = if let Some(session) = session {
-            let projection = engine
-                .read_projection(session)
-                .await
-                .context("read workflow Session")?;
-            anyhow::ensure!(
-                projection.session.id.is_some(),
-                "workflow Session `{session}` was not found"
-            );
-            session
-        } else {
-            // Ensure a Project for `workdir` before binding runtime, so a
-            // `.hya/bundles` project bundle agent is selectable below (F1
-            // design Q3, same as `exec`/`run`/`-p` goal/`loop`).
-            let project_id = crate::ensure_project_for_workdir(engine.store(), &workdir)
-                .await
-                .context("ensure project for cwd")?;
-            // Same `default_agent` precedence/failure mode as `serve` and
-            // `exec`: config `default_agent`, then the built-in default; an
-            // unselectable id fails clearly rather than falling back silently.
-            agent.name = resolve_headless_agent_name(
-                &engine,
-                &workdir,
-                None,
-                runtime.default_agent.as_deref(),
-            )
-            .await
-            .context("resolve default agent")?;
-            let model = if has_explicit_model {
-                agent.model.clone()
-            } else {
-                built
-                    .effective_root_model(&agent, &workdir)
-                    .await
-                    .context("resolve Workflow root Agent model")?
-            };
-            engine
-                .create(CreateSession {
-                    parent: None,
-                    agent: agent.name.clone(),
-                    model,
-                    workdir: workdir.to_string_lossy().into_owned(),
-                    project: Some(project_id),
-                    kind: hya_proto::SessionKind::Project,
-                })
-                .await
-                .context("create workflow Session")?
-        };
-        let control = built.workflow_control();
-        Ok(Self {
-            built,
-            control,
-            session,
-            responder,
+    let workdir = std::env::current_dir().context("resolve current directory")?;
+    let registry = bundle_admin::existing_registry().await?;
+    let disabled = match &registry {
+        Some(registry) => registry.disabled_bundle_ids().await?,
+        None => BTreeSet::new(),
+    };
+    let (mut catalogs, _) = hya_app::project_bundles::load_project_bundles(
+        &hya_app::project_bundles::root_bundles_dir(&workdir),
+    )?;
+    if let Some(registry) = registry {
+        for record in registry.snapshot().await?.bundles {
+            catalogs.push(bundle_admin::decode_installed_catalog(&record)?);
+        }
+    }
+    catalogs.extend(hya_app::first_party_catalogs()?);
+    let mut ids = BTreeSet::new();
+    let mut namespaces = BTreeSet::new();
+    // Project > installed > first-party, just as a fresh headless Project bind.
+    let catalogs = catalogs
+        .iter()
+        .filter(|catalog| {
+            let bundle = &catalog.bundles()[0];
+            let id = &bundle.identity().id;
+            if disabled.contains(id) || ids.contains(id) || namespaces.contains(bundle.namespace())
+            {
+                return false;
+            }
+            ids.insert(id.clone());
+            namespaces.insert(bundle.namespace().to_string());
+            true
         })
-    }
-
-    async fn execute(
-        &self,
-        command: ControlCommand,
-    ) -> Result<WorkflowCommandResult, hya_app::WorkflowControlError> {
-        self.control
-            .execute(
-                self.session,
-                WorkflowInvocation::default(),
-                command,
-                CancellationToken::new(),
-            )
-            .await
-    }
-
-    async fn shutdown(self) -> anyhow::Result<()> {
-        self.responder.abort();
-        let mut built = self.built;
-        built
-            .shutdown()
-            .await
-            .context("shutdown Workflow runtime")?;
-        let engine = built.engine();
-        engine
-            .store()
-            .release_runtime_owner(engine.runtime_owner())?;
-        Ok(())
-    }
+        .collect::<Vec<_>>();
+    let bundles = BundleCatalog::from_verified_catalogs(&catalogs)?;
+    let agents = AgentCatalog::new(Arc::new(bundles))?;
+    let registry = RuntimeRegistry::new(
+        hya_tool::ToolRegistry::from_tool_families(&[]),
+        Arc::new(agents),
+    )
+    .with_pure_skills(true);
+    let scope = CatalogScope::Directory(workdir.clone());
+    let binding = registry.bind_scoped(&scope, &workdir)?;
+    WorkflowCatalog::build(WorkflowCatalogRoots::for_scope(&scope, &workdir), &binding)
+        .map_err(control_error)
 }
 
 /// Run one CLI Workflow command through `WorkflowControl::execute`.
@@ -227,14 +135,18 @@ pub(crate) async fn run(
     yolo: bool,
     pure: bool,
 ) -> anyhow::Result<()> {
-    let read_only = matches!(
-        &command,
-        WorkflowCliCommand::List { .. } | WorkflowCliCommand::Info { .. }
-    );
     let (command, json_output, is_run, session) = match command {
-        WorkflowCliCommand::List { json } => (ControlCommand::List, json, false, None),
+        WorkflowCliCommand::List { json } => {
+            let result = WorkflowCommandResult::List {
+                workflows: catalog().await?.list(),
+            };
+            return finish(&result, json, false);
+        }
         WorkflowCliCommand::Info { name, json } => {
-            (ControlCommand::Info { name }, json, false, None)
+            let result = WorkflowCommandResult::Info {
+                workflow: catalog().await?.info(&name).map_err(control_error)?,
+            };
+            return finish(&result, json, false);
         }
         WorkflowCliCommand::Use {
             name,
@@ -281,52 +193,64 @@ pub(crate) async fn run(
     // `list`/`info` never open the database. Every other command writes it
     // (a Session, a selection, a run, crash recovery on open), so it holds
     // the database lock, or goes through the server that owns the database.
-    let store = if !read_only {
-        match crate::db_writer::claim(db, "workflow").await? {
-            Writer::Direct(store) => store,
-            Writer::Server(server) => {
-                let route = match command {
-                    ControlCommand::Select {
-                        name,
-                        expected_revision,
-                    } => WorkflowRoute::Select {
-                        name,
-                        expected_revision: expected_revision.map(|revision| revision.to_string()),
-                    },
-                    ControlCommand::Run {
-                        name,
-                        expected_revision,
-                        inputs,
-                        ..
-                    } => {
-                        let reason = if expected_revision.is_some() {
-                            Some("`workflow run --revision` cannot be sent to it")
-                        } else if pure {
-                            Some("--pure cannot apply to it (it loaded its own context)")
-                        } else if yolo {
-                            Some("--yolo cannot apply to its Workflow runs")
-                        } else {
-                            None
-                        };
-                        if let Some(reason) = reason {
-                            crate::db_writer::exit_unroutable("workflow", db, &server, reason);
-                        }
-                        WorkflowRoute::Run { name, inputs }
+    let store = match crate::db_writer::claim(db, "workflow").await? {
+        Writer::Direct(store) => store,
+        Writer::Server(server) => {
+            let route = match command {
+                ControlCommand::Select {
+                    name,
+                    expected_revision,
+                } => WorkflowRoute::Select {
+                    name,
+                    expected_revision: expected_revision.map(|revision| revision.to_string()),
+                },
+                ControlCommand::Run {
+                    name,
+                    expected_revision,
+                    inputs,
+                    ..
+                } => {
+                    let reason = if expected_revision.is_some() {
+                        Some("`workflow run --revision` cannot be sent to it")
+                    } else if pure {
+                        Some("--pure cannot apply to it (it loaded its own context)")
+                    } else if yolo {
+                        Some("--yolo cannot apply to its Workflow runs")
+                    } else {
+                        None
+                    };
+                    if let Some(reason) = reason {
+                        crate::db_writer::exit_unroutable("workflow", db, &server, reason);
                     }
-                    ControlCommand::State => WorkflowRoute::State,
-                    other => anyhow::bail!("unexpected Workflow command {other:?}"),
-                };
-                let result =
-                    crate::routed::workflow(&server.url, session, model_override, route).await?;
-                return finish(&result, json_output, is_run);
-            }
+                    WorkflowRoute::Run { name, inputs }
+                }
+                ControlCommand::State => WorkflowRoute::State,
+                other => anyhow::bail!("unexpected Workflow command {other:?}"),
+            };
+            let result =
+                crate::routed::workflow(&server.url, session, model_override, route).await?;
+            return finish(&result, json_output, is_run);
         }
-    } else {
-        open_store("").await?
     };
-    let runtime = WorkflowRuntime::start(model_override, store, yolo, pure, session).await?;
-    let result = runtime.execute(command).await;
-    let shutdown = runtime.shutdown().await;
+    let mut runtime =
+        crate::startup::HeadlessSession::start(store, model_override, yolo, pure, session).await?;
+    let result = runtime
+        .built
+        .workflow_control()
+        .execute(
+            runtime.session,
+            WorkflowInvocation::default(),
+            command,
+            CancellationToken::new(),
+        )
+        .await;
+    let shutdown = runtime.built.shutdown().await;
+    let engine = runtime.built.engine();
+    if shutdown.is_ok() {
+        engine
+            .store()
+            .release_runtime_owner(engine.runtime_owner())?;
+    }
     let result = result.map_err(control_error)?;
     shutdown?;
     finish(&result, json_output, is_run)

@@ -6,10 +6,7 @@ use hya_server::AppState;
 use crate::cli_args::RelayFlags;
 use crate::{db_lock, serve_relay};
 
-use super::{
-    agent_base_with_model, build_session_engine, build_session_engine_pure, open_store,
-    resolve_runtime,
-};
+use hya_app::open_store;
 
 pub(crate) async fn cmd_serve(
     bind: String,
@@ -381,40 +378,23 @@ pub(crate) async fn prepare_server(
     hosts: &hya_server::HostPolicy,
 ) -> anyhow::Result<PreparedServer> {
     emit_startup_mark("backend_start", None);
-    super::first_run_config_bootstrap(false)?;
     let store = open_store(&db).await?;
     emit_startup_mark("store_open", None);
-    let mut runtime = resolve_runtime(model_override)
-        .await
-        .with_yolo(yolo)
-        .with_pure(pure);
-    emit_startup_mark("runtime_resolved", None);
-    let pending_discovery = std::mem::take(&mut runtime.pending_discovery);
-    // Server AppState: base-only agent slot. Environment + AGENTS + references
-    // are discovered per turn so Bundle Some does not drop project AGENTS and
-    // Bundle None does not duplicate startup-baked AGENTS.
-    let agent = Arc::new(agent_base_with_model(&runtime.model, None));
-    let mut built = if pure {
-        build_session_engine_pure(
-            store,
-            runtime.router,
-            agent.as_ref(),
-            runtime.mcp,
-            runtime.plugins,
-            (runtime.websearch, runtime.permission, runtime.settings),
-        )
-        .await?
-    } else {
-        build_session_engine(
-            store,
-            runtime.router,
-            agent.as_ref(),
-            runtime.mcp,
-            runtime.plugins,
-            (runtime.websearch, runtime.permission, runtime.settings),
-        )
-        .await?
-    };
+    let crate::startup::StartedEngine {
+        mut built,
+        agent,
+        default_agent,
+        pending_discovery,
+        ..
+    } = crate::startup::start(
+        store,
+        model_override,
+        yolo,
+        pure,
+        crate::startup::Surface::Server,
+    )
+    .await?;
+    let agent = Arc::new(agent);
     let mut lock = db_lock::owned_metadata(&db)?;
     emit_startup_mark("engine_built", None);
     let engine = built.engine();
@@ -435,7 +415,7 @@ pub(crate) async fn prepare_server(
         .with_mcp_control(mcp_control)
         .with_workflow_control(workflow_control)
         .with_agent_model_control(agent_model_control)
-        .with_default_agent(runtime.default_agent.clone())
+        .with_default_agent(default_agent)
         .with_pure_guidance(pure)
         .with_auto_title(true)
         .with_allowed_hosts(hosts.clone());

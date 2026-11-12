@@ -112,10 +112,10 @@ URIs are never locked.
 | `exec` | `--db`, else in-memory | Through the server: a new root session in the current directory, one prompt turn, the same stdout. `--model` sets the session's model, `--yolo` its permission mode. `--pure` exits 75. | Lock held for the run |
 | `workflow use`, `workflow state` | `--db`, else in-memory | Through the server (`/v1/sessions/{id}/workflow`) | Lock held for the command |
 | `workflow run` | `--db`, else in-memory | Through the server; a run without `--session` creates the session there. `--revision`, `--pure`, and `--yolo` exit 75 (no `/v1` field for them). | Lock held for the run |
-| `workflow list`, `workflow info` | In-memory always | Not affected | Not affected |
+| `workflow list`, `workflow info` | Catalog only; no session store | Not affected | Not affected |
 | `sessions archive`/`unarchive` | Durable default or `--db` | Through the server (`PATCH /v1/sessions/{id}`) | Lock held for the write |
 | `sessions` (list), `tail-session` | Durable default or `--db` | Read directly, never write, no lock | Read directly, no lock |
-| `-p` goal mode, `loop` | A private temporary database per run | Not affected (`--db` is ignored) | Not affected |
+| `-p` goal mode, `loop` | A private in-memory database per run | Not affected (`--db` is ignored) | Not affected |
 | `serve` | `--db`, else in-memory | Exits 75 | Takes the lock (it is the server) |
 | `agent`, `bundle`, `models`, `provider`, `update` | No session store | Not affected | Not affected |
 
@@ -192,7 +192,11 @@ hya --db sessions.db workflow state --session hysec_...
 ```
 
 `list` and `info` read the merged project, user, installed, and immutable
-first-party Workflow catalog. `use` persists an exact source/revision identity
+first-party Workflow catalog directly from prepared data. They do not open a
+session database, create a Session, resolve providers, or start MCP/plugin
+processes. Their `--json` results remain the shared `WorkflowCommandResult`
+variants `List { workflows: WorkflowSummary[] }` and `Info { workflow: WorkflowInfo }`.
+`use` persists an exact source/revision identity
 in an existing Session and therefore requires `--session`. `state` also requires
 `--session` and replays that Session from the selected database.
 
@@ -1285,17 +1289,20 @@ hya sessions archive <session-id>
 hya sessions unarchive <session-id>
 ```
 
-`sessions` lists persisted sessions in a SQLite database, including sessions
-created by `exec --db` and `exec --json --db`, one per line:
+`sessions` lists non-archived root sessions in a SQLite database, including
+sessions created by `exec --db` and `exec --json --db`, one per line:
 `<id>  events=<n>  started_ms=<ms>`, plus `  archived_ms=<ms>` on an archived
-session. Empty `--db` is remapped to the durable XDG path (same as bare
+session. Rows are ordered by creation time, newest first, then by session id
+ascending for equal timestamps. Updating an older session does not move it
+above a newer one. Empty `--db` is remapped to the durable XDG path (same as bare
 interactive startup), not in-memory; `--db` may also follow `archive` and
 `unarchive`.
 
 Archived root sessions are hidden by default: the TUI archives its session
 when you quit it gracefully, and `--resume` brings it back (see
 [Archived sessions](protocol/README.md#archived-sessions)). `--all` lists them
-too and `--archived` lists only them (the two flags conflict).
+too, along with child sessions; `--archived` lists only archived roots (the two
+flags conflict).
 `archive <id>` archives a root session and `unarchive <id>` brings one back;
 both print `archived <id>` / `unarchived <id>` and succeed when the session
 already is in that state. Archiving a subagent child session or an unknown id

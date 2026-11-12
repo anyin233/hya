@@ -1,16 +1,14 @@
 //! `hya` — the unified command-line entry point and the workspace's only
 //! shipped executable (built from the `hya-backend` package). Bare `hya` on a
-//! terminal starts the Bun TUI and WebUI against an in-process server
+//! terminal starts the Bun TUI and WebUI against the database's daemon
 //! (`frontend.rs`; a guidance banner without a terminal); subcommands select
 //! the controlled area: headless `exec`, `-p` goal mode, HTTP/SSE `serve`,
 //! `tail-session`, auth, bundles, Workflows, models, sessions, and `update`
-//! for the self-update TCB.
+//! for the release installer.
 //!
 //! Models come from Hya's provider declarations. Explicit model lists or bounded
 //! startup discovery build authenticated or anonymous routes. With no resolved
 //! live model rows, the offline echo provider keeps the whole stack runnable.
-
-// allow: SIZE_OK — Phase 1 only extracts bootstrap glue; CLI command bodies stay here unchanged.
 
 mod agent_cmd;
 mod auth_cmd;
@@ -31,6 +29,7 @@ mod routed;
 mod serve;
 mod serve_relay;
 mod sessions_cmd;
+mod startup;
 mod update_cmd;
 mod workflow_cmd;
 
@@ -45,21 +44,19 @@ use hya_core::completion::{PluginGoalEvaluator, render_transcript};
 use hya_core::hooks::HookDispatcher;
 use hya_core::loop_mode::{LoopConfig, ModelLoopPlanner, ModelLoopVerifier, run_loop};
 use hya_core::{
-    CreateSession, GoalEvaluator, HookChain, HookLoopPlanner, HookLoopVerifier, ModelGoalEvaluator,
-    RunOutcome, SafetyCaps, TurnBinding, run_goal,
+    GoalEvaluator, HookChain, HookLoopPlanner, HookLoopVerifier, ModelGoalEvaluator, RunOutcome,
+    SafetyCaps, TurnBinding, run_goal,
 };
 use hya_proto::{FinishCause, ModelRef, ProjectId, SessionId};
 use hya_store::SessionStore;
 use tokio_util::sync::CancellationToken;
 
-use crate::permission::spawn_reject_responder;
 use cli_args::{Cli, Command};
 
 pub use hya_app::{
     InvocationPolicy, RuntimeConfig, WebSearchConfig, agent_base_with_model, agent_with_model,
-    agent_with_model_pure, build_session_engine, build_session_engine_pure, discover_context_files,
-    host_info, offline_router, open_store, resolve_headless_agent_name, resolve_runtime,
-    spawn_team_supervisor, today,
+    agent_with_model_pure, discover_context_files, host_info, offline_router, open_store,
+    resolve_headless_agent_name, resolve_runtime, spawn_team_supervisor, today,
 };
 
 pub(crate) fn first_run_config_bootstrap(interactive: bool) -> anyhow::Result<()> {
@@ -174,79 +171,12 @@ async fn cmd_exec(
     json: bool,
     pure: bool,
 ) -> anyhow::Result<()> {
-    first_run_config_bootstrap(false)?;
-    let has_explicit_model = model_override.is_some();
-    let runtime = resolve_runtime(model_override)
-        .await
-        .with_yolo(yolo)
-        .with_pure(pure);
-    let mut agent = if pure {
-        agent_with_model_pure(&runtime.model, None)
-    } else {
-        agent_with_model(&runtime.model, None)
-    };
-    let mut built = if pure {
-        build_session_engine_pure(
-            store,
-            runtime.router,
-            &agent,
-            runtime.mcp,
-            runtime.plugins,
-            (runtime.websearch, runtime.permission, runtime.settings),
-        )
-        .await?
-    } else {
-        build_session_engine(
-            store,
-            runtime.router,
-            &agent,
-            runtime.mcp,
-            runtime.plugins,
-            (runtime.websearch, runtime.permission, runtime.settings),
-        )
-        .await?
-    };
-    let engine = built.engine();
-    let project_id = ensure_project_for_workdir(engine.store(), &agent.workdir)
-        .await
-        .context("ensure project for cwd")?;
-    // Honor the configured `default_agent` for this headless root session,
-    // same precedence and failure mode as `serve`'s root-session resolution:
-    // config `default_agent`, then the built-in default; an unselectable id
-    // fails clearly instead of silently falling back to the built-in agent.
-    agent.name = resolve_headless_agent_name(
-        &engine,
-        &agent.workdir,
-        None,
-        runtime.default_agent.as_deref(),
-    )
-    .await
-    .context("resolve default agent")?;
-    let session_model = if has_explicit_model {
-        agent.model.clone()
-    } else {
-        built
-            .effective_root_model(&agent, &agent.workdir)
-            .await
-            .context("resolve headless root Agent model")?
-    };
-    let asks = built
-        .take_asks()
-        .ok_or_else(|| anyhow::anyhow!("asks receiver missing"))?;
-    let _ = built.take_questions();
-    let _mcp_manager = built.mcp_control();
-    let _responder = spawn_reject_responder(asks);
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: agent.name.clone(),
-            model: session_model,
-            workdir: agent.workdir.to_string_lossy().into_owned(),
-            project: Some(project_id),
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .context("create session")?;
+    let mut headless =
+        startup::HeadlessSession::start(store, model_override, yolo, pure, None).await?;
+    let engine = headless.built.engine();
+    let session = headless.session;
+    let agent = &headless.agent;
+    let built = &mut headless.built;
     // `--json` streams durable envelopes live from the event bus (db
     // persistence is unchanged and per-event): an abnormally terminated run
     // still leaves a usable partial trajectory on stdout.
@@ -272,11 +202,11 @@ async fn cmd_exec(
         .context("admit prompt")?;
     let cancel = CancellationToken::new();
     let (turn, stop) = run_until_stopped(
-        &built,
+        built,
         &cancel,
         engine.run_turn_with_external_dirs_and_guidance(
             session,
-            &agent,
+            agent,
             cancel.clone(),
             &[],
             None,
@@ -413,102 +343,24 @@ async fn cmd_goal(
     yolo: bool,
     pure: bool,
 ) -> anyhow::Result<()> {
-    first_run_config_bootstrap(false)?;
-    let has_explicit_model = model_override.is_some();
-    // A temp file-backed store, not `connect_memory`: long worker turns (real
-    // cargo test runs) can idle out the single in-memory pooled connection,
-    // which drops every table mid-run. A file also enables `tail-session`.
-    let goal_db = std::env::temp_dir().join(format!(
-        "hya-goal-{}.db",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    let store = SessionStore::connect(goal_db.to_string_lossy().as_ref())
-        .await
-        .context("open goal store")?;
-    let runtime = resolve_runtime(model_override)
-        .await
-        .with_yolo(yolo)
-        .with_pure(pure);
-    let evaluator_router = runtime.router.clone();
-    // D7 evaluator model: the CLI flag outranks config `goal.evaluator_model`;
-    // with neither, the worker's current model judges.
+    let mut headless =
+        startup::HeadlessSession::start(open_store("").await?, model_override, yolo, pure, None)
+            .await?;
+    let engine = headless.built.engine();
+    let session = headless.session;
+    let agent = headless.agent.clone();
+    let evaluator_router = headless.evaluator_router.clone();
     let evaluator_model = config::resolve_evaluator_model(
         evaluator_model_flag.as_deref(),
-        runtime.settings.goal().evaluator_model.as_deref(),
-        &runtime.model,
+        None,
+        &headless.evaluator_model,
     )
     .to_string();
-    let mut agent = if pure {
-        agent_with_model_pure(&runtime.model, None)
-    } else {
-        agent_with_model(&runtime.model, None)
-    };
-    let mut built = if pure {
-        build_session_engine_pure(
-            store,
-            runtime.router,
-            &agent,
-            runtime.mcp,
-            runtime.plugins,
-            (runtime.websearch, runtime.permission, runtime.settings),
-        )
-        .await?
-    } else {
-        build_session_engine(
-            store,
-            runtime.router,
-            &agent,
-            runtime.mcp,
-            runtime.plugins,
-            (runtime.websearch, runtime.permission, runtime.settings),
-        )
-        .await?
-    };
-    let engine = built.engine();
-    let project_id = ensure_project_for_workdir(engine.store(), &agent.workdir)
-        .await
-        .context("ensure project for cwd")?;
-    // Same `default_agent` precedence/failure mode as `serve` and `exec`.
-    agent.name = resolve_headless_agent_name(
-        &engine,
-        &agent.workdir,
-        None,
-        runtime.default_agent.as_deref(),
-    )
-    .await
-    .context("resolve default agent")?;
-    let session_model = if has_explicit_model {
-        agent.model.clone()
-    } else {
-        built
-            .effective_root_model(&agent, &agent.workdir)
-            .await
-            .context("resolve goal root Agent model")?
-    };
     let binding = engine
         .bind_root_runtime(&agent.workdir)
         .await
         .context("bind goal evaluator resources")?;
-    let asks = built
-        .take_asks()
-        .ok_or_else(|| anyhow::anyhow!("asks receiver missing"))?;
-    let _ = built.take_questions();
-    let _mcp_manager = built.mcp_control();
-    let _responder = spawn_reject_responder(asks);
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: agent.name.clone(),
-            model: session_model,
-            workdir: agent.workdir.to_string_lossy().into_owned(),
-            project: Some(project_id),
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .context("create session")?;
+    let built = &mut headless.built;
     // Selection point (design §4.5): a registered `goal.evaluate` hook
     // provider outranks the built-in evaluator. The probe is the trait
     // capability probe (default false), so any dispatcher without the hook —
@@ -535,7 +387,7 @@ async fn cmd_goal(
     };
     let cancel = CancellationToken::new();
     let (outcome, stop) = run_until_stopped(
-        &built,
+        built,
         &cancel,
         run_goal(
             engine.clone(),
@@ -572,102 +424,24 @@ async fn cmd_loop(
     yolo: bool,
     pure: bool,
 ) -> anyhow::Result<()> {
-    first_run_config_bootstrap(false)?;
-    let has_explicit_model = model_override.is_some();
-    // A temp file-backed store, not `connect_memory`: long worker turns (real
-    // cargo test runs) can idle out the single in-memory pooled connection,
-    // which drops every table mid-run. A file also enables `tail-session`.
-    let goal_db = std::env::temp_dir().join(format!(
-        "hya-goal-{}.db",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    let store = SessionStore::connect(goal_db.to_string_lossy().as_ref())
-        .await
-        .context("open goal store")?;
-    let runtime = resolve_runtime(model_override)
-        .await
-        .with_yolo(yolo)
-        .with_pure(pure);
-    let evaluator_router = runtime.router.clone();
-    // D7 evaluator model plumbing, shared with goal mode: CLI flag outranks
-    // config `goal.evaluator_model`; with neither, the worker's model judges.
+    let mut headless =
+        startup::HeadlessSession::start(open_store("").await?, model_override, yolo, pure, None)
+            .await?;
+    let engine = headless.built.engine();
+    let session = headless.session;
+    let agent = headless.agent.clone();
+    let evaluator_router = headless.evaluator_router.clone();
     let evaluator_model = config::resolve_evaluator_model(
         evaluator_model_flag.as_deref(),
-        runtime.settings.goal().evaluator_model.as_deref(),
-        &runtime.model,
+        None,
+        &headless.evaluator_model,
     )
     .to_string();
-    let mut agent = if pure {
-        agent_with_model_pure(&runtime.model, None)
-    } else {
-        agent_with_model(&runtime.model, None)
-    };
-    let mut built = if pure {
-        build_session_engine_pure(
-            store,
-            runtime.router,
-            &agent,
-            runtime.mcp,
-            runtime.plugins,
-            (runtime.websearch, runtime.permission, runtime.settings),
-        )
-        .await?
-    } else {
-        build_session_engine(
-            store,
-            runtime.router,
-            &agent,
-            runtime.mcp,
-            runtime.plugins,
-            (runtime.websearch, runtime.permission, runtime.settings),
-        )
-        .await?
-    };
-    let engine = built.engine();
-    let project_id = ensure_project_for_workdir(engine.store(), &agent.workdir)
-        .await
-        .context("ensure project for cwd")?;
-    // Same `default_agent` precedence/failure mode as `serve` and `exec`.
-    agent.name = resolve_headless_agent_name(
-        &engine,
-        &agent.workdir,
-        None,
-        runtime.default_agent.as_deref(),
-    )
-    .await
-    .context("resolve default agent")?;
-    let session_model = if has_explicit_model {
-        agent.model.clone()
-    } else {
-        built
-            .effective_root_model(&agent, &agent.workdir)
-            .await
-            .context("resolve loop root Agent model")?
-    };
     let binding = engine
         .bind_root_runtime(&agent.workdir)
         .await
         .context("bind loop evaluator resources")?;
-    let asks = built
-        .take_asks()
-        .ok_or_else(|| anyhow::anyhow!("asks receiver missing"))?;
-    let _ = built.take_questions();
-    let _mcp_manager = built.mcp_control();
-    let _responder = spawn_reject_responder(asks);
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: agent.name.clone(),
-            model: session_model,
-            workdir: agent.workdir.to_string_lossy().into_owned(),
-            project: Some(project_id),
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .context("create session")?;
+    let built = &mut headless.built;
     let predicate = cli_args::build_loop_predicate(while_command, until_command, &agent.workdir)
         .map_err(anyhow::Error::msg)
         .context("resolve loop condition")?;
@@ -696,7 +470,7 @@ async fn cmd_loop(
     let should_stop = Arc::clone(&evaluator_dispatcher);
     let cancel = CancellationToken::new();
     let (outcome, stop) = run_until_stopped(
-        &built,
+        built,
         &cancel,
         run_loop(
             engine.clone(),

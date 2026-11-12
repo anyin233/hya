@@ -99,7 +99,7 @@ async fn sessions_hides_archived_roots_and_archive_round_trips() -> TestResult {
 
     let default = listed(&root, &db, &[])?;
     assert!(!default.contains(&parked), "{default:?}");
-    assert!(default.contains(&kept) && default.contains(&child));
+    assert_eq!(default, std::slice::from_ref(&kept));
     let all = listed(&root, &db, &["--all"])?;
     assert!(all.contains(&parked) && all.contains(&kept) && all.contains(&child));
     assert_eq!(
@@ -118,6 +118,41 @@ async fn sessions_hides_archived_roots_and_archive_round_trips() -> TestResult {
     assert!(output.status.success(), "{output:?}");
     assert!(listed(&root, &db, &[])?.contains(&parked));
     assert!(listed(&root, &db, &["--archived"])?.is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sessions_order_roots_by_creation_then_id_even_after_an_update() -> TestResult {
+    let root = scratch("hya-sessions-order")?;
+    let db = root.join("state/sessions.db");
+    let old = seed(&db, None).await?;
+    let mut newer = [seed(&db, None).await?, seed(&db, None).await?];
+    newer.sort();
+    let child = seed(&db, Some(old)).await?;
+    let stamped = Command::new("python3")
+        .args(["-c", "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('UPDATE event_log SET ts = CASE WHEN session_id = ? THEN 10 ELSE 20 END', (sys.argv[2].encode(),)); c.commit()"])
+        .arg(&db).arg(old.to_string()).output()?;
+    assert!(stamped.status.success(), "{stamped:?}");
+    let store = SessionStore::connect(&db.to_string_lossy()).await?;
+    store
+        .append_event(
+            old,
+            &Event::SessionTitled {
+                session: old,
+                title: "updated old root".into(),
+            },
+        )
+        .await?;
+    drop(store);
+    let expected = [newer[0].to_string(), newer[1].to_string(), old.to_string()];
+    assert_eq!(listed(&root, &db, &[])?, expected);
+    let all = listed(&root, &db, &["--all"])?;
+    assert!(
+        all.contains(&child.to_string()),
+        "--all retains children: {all:?}"
+    );
+    assert_eq!(all.last(), Some(&old.to_string()));
     let _ = std::fs::remove_dir_all(&root);
     Ok(())
 }

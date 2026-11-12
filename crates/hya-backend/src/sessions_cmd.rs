@@ -31,7 +31,7 @@ pub(crate) enum SessionsAction {
 /// Which sessions `hya sessions` lists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Listing {
-    /// Every session except archived roots (the default).
+    /// Non-archived root sessions (the default).
     Active,
     /// Every session (`--all`).
     All,
@@ -58,7 +58,13 @@ async fn list(db: &str, listing: Listing) -> anyhow::Result<()> {
     let store = hya_store::SessionStore::connect_read_only(db)
         .await
         .with_context(|| format!("open existing database read-only at {db}"))?;
-    let sessions = store.list_sessions().await.context("list sessions")?;
+    let mut sessions = store.list_sessions().await.context("list sessions")?;
+    sessions.sort_by(|left, right| {
+        right
+            .started_millis
+            .cmp(&left.started_millis)
+            .then_with(|| left.session.cmp(&right.session))
+    });
     let mut shown = 0usize;
     for row in sessions {
         let projection = store
@@ -67,7 +73,7 @@ async fn list(db: &str, listing: Listing) -> anyhow::Result<()> {
             .with_context(|| format!("read session {}", row.session))?;
         let archived_at = projection.session.archived_at_millis();
         let keep = match listing {
-            Listing::Active => archived_at.is_none(),
+            Listing::Active => projection.session.parent.is_none() && archived_at.is_none(),
             Listing::All => true,
             Listing::Archived => archived_at.is_some(),
         };
@@ -131,22 +137,16 @@ async fn update_through_server(
     session: SessionId,
     archived: bool,
 ) -> anyhow::Result<()> {
-    let response = reqwest::Client::new()
-        .patch(format!(
-            "{}/v1/sessions/{session}",
-            url.trim_end_matches('/')
-        ))
-        .json(&serde_json::json!({ "archived": archived }))
-        .send()
+    hya_sdk_v1::V1Sdk::new(url.trim_end_matches('/'), "")
+        .update_session(hya_api::v1::UpdateSessionRequest {
+            session: session.to_string(),
+            archived: Some(archived),
+            ..Default::default()
+        })
         .await
-        .with_context(|| format!("reach the hya server at {url}"))?;
-    if response.status().is_success() {
-        return Ok(());
-    }
-    let status = response.status();
-    let body: serde_json::Value = response.json().await.unwrap_or_default();
-    let message = body["error"]["message"]
-        .as_str()
-        .map_or_else(|| status.to_string(), str::to_owned);
-    anyhow::bail!("{message}: {session}")
+        .map_err(|error| match error {
+            hya_sdk_v1::SdkError::Api { message, .. } => anyhow::anyhow!("{message}: {session}"),
+            error => anyhow::Error::new(error).context(format!("reach the hya server at {url}")),
+        })?;
+    Ok(())
 }
