@@ -258,36 +258,6 @@ impl PermissionRequests {
         reply: PermissionReply,
         message: Option<String>,
     ) -> Result<bool, StoreError> {
-        let missing = {
-            let pending = self.inner.lock().await;
-            !pending.contains_key(id)
-        };
-        if missing {
-            let valid = self
-                .store
-                .list_pending_interactions()
-                .await?
-                .into_iter()
-                .any(|row| {
-                    row.id == id && row.kind == "permission" && row.session == Some(session)
-                });
-            if !valid {
-                return Ok(false);
-            }
-            let payload = serde_json::json!({
-                "reply": reply_name(reply),
-                "message": message,
-                "session": session.to_string(),
-            });
-            let queued = hya_store::PendingInteractionReply {
-                id: id.to_string(),
-                kind: "permission".to_string(),
-                payload: payload.to_string(),
-                created_at: hya_proto::now_millis(),
-            };
-            self.store.queue_pending_interaction_reply(&queued).await?;
-            return Ok(true);
-        }
         let (entry, related) = {
             let mut pending = self.inner.lock().await;
             let Some(entry) = pending.get(id) else {

@@ -2,19 +2,6 @@
 use hya_proto::SessionId;
 use sqlx::Row;
 
-/// A reply submitted while the owning process was handing off.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PendingInteractionReply {
-    /// Stable interaction identifier.
-    pub id: String,
-    /// Interaction plane (`permission` or `question`).
-    pub kind: String,
-    /// JSON reply submitted by the client.
-    pub payload: String,
-    /// Reply timestamp in Unix milliseconds.
-    pub created_at: i64,
-}
-
 /// Durable metadata for one pending permission or question request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingInteraction {
@@ -97,65 +84,5 @@ impl super::SessionStore {
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() == 1)
-    }
-
-    /// Queue a reply durably when the in-memory oneshot owner is gone.
-    pub async fn queue_pending_interaction_reply(
-        &self,
-        reply: &PendingInteractionReply,
-    ) -> Result<(), super::StoreError> {
-        sqlx::query("INSERT INTO pending_interaction_reply (id, kind, payload, created_at, consumed_at) VALUES (?, ?, ?, ?, NULL) ON CONFLICT(id) DO NOTHING")
-            .bind(&reply.id).bind(&reply.kind).bind(&reply.payload).bind(reply.created_at).execute(&self.pool).await?;
-        Ok(())
-    }
-
-    /// List replies that still need successor continuation.
-    pub async fn list_pending_interaction_replies(
-        &self,
-    ) -> Result<Vec<PendingInteractionReply>, super::StoreError> {
-        let rows = sqlx::query("SELECT id, kind, payload, created_at FROM pending_interaction_reply WHERE consumed_at IS NULL ORDER BY created_at, id").fetch_all(&self.pool).await?;
-        rows.into_iter()
-            .map(|row| {
-                Ok(PendingInteractionReply {
-                    id: row.try_get("id")?,
-                    kind: row.try_get("kind")?,
-                    payload: row.try_get("payload")?,
-                    created_at: row.try_get("created_at")?,
-                })
-            })
-            .collect()
-    }
-
-    /// Atomically claim a reply and resolve its interaction. This is the
-    /// successor handoff fence: once claimed, a crash cannot cause the
-    /// operator answer (or its continuation) to be applied a second time.
-    pub async fn claim_pending_interaction_reply(
-        &self,
-        id: &str,
-    ) -> Result<bool, super::StoreError> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let reply = sqlx::query(
-            "UPDATE pending_interaction_reply SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL",
-        )
-        .bind(now)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-        if reply.rows_affected() != 1 {
-            tx.rollback().await?;
-            return Ok(false);
-        }
-        sqlx::query(
-            "UPDATE pending_interaction SET resolved_at = ? WHERE id = ? AND resolved_at IS NULL",
-        )
-        .bind(now)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-        tx.commit().await?;
-        Ok(true)
     }
 }

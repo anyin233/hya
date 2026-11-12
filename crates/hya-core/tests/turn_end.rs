@@ -29,10 +29,7 @@ use hya_provider::{
     ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{
-    Decision, InvocationPolicy, InvocationRule, Mode, PermissionModel, PermissionPlane,
-    PermissionRules, PermissionTarget, Tool, ToolCtx, ToolError, ToolRegistry,
-};
+use hya_tool::{PermissionPlane, PermissionRules, Tool, ToolCtx, ToolError, ToolRegistry};
 use serde_json::json;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -226,7 +223,7 @@ async fn engine_with_gate_tool() -> (
 
 /// Build the scripted harness on `tools`, claiming the store's runtime owner
 /// and wiring it into the engine (`with_runtime_owner`) exactly like the
-/// production engine builder, so handoff checkpoints are writable.
+/// production engine builder, so restart records are writable.
 async fn scripted_engine(
     provider: Arc<ScriptProvider>,
     tools: Arc<ToolRegistry>,
@@ -1092,581 +1089,113 @@ async fn interrupting_an_idle_subagent_stops_nothing() {
     );
 }
 
-/// An aborted restart handoff strands nothing: a turn that cannot reach its
-/// round boundary in time (here: parked mid-provider-stream) is neither
-/// cancelled nor closed, the quiesce lifts so the old harness keeps serving,
-/// and the turn later closes like any user cancel — never as `handoff`.
 #[tokio::test]
-async fn handoff_aborts_rather_than_terminalizing_a_stranded_turn() {
+async fn stop_cancels_root_and_child_turns_and_restores_each_once() {
     let (engine, agent, provider) = engine_with_script().await;
     let root = make_session(&engine, None, "hya-main").await;
-
-    provider.script(root, Script::Hang);
-    engine
-        .admit_user_prompt(root, "keep working".to_string())
-        .await
-        .unwrap();
-    let lead = {
+    let child = make_session(&engine, Some(root), "hya-task").await;
+    let mut tasks = Vec::new();
+    for session in [root, child] {
+        provider.script(session, Script::Hang);
+        engine
+            .admit_user_prompt(session, "continue working".into())
+            .await
+            .unwrap();
         let engine = engine.clone();
         let agent = agent.clone();
-        tokio::spawn(async move {
+        tasks.push(tokio::spawn(async move {
             engine
-                .run_turn(root, &agent, CancellationToken::new())
+                .run_turn(session, &agent, CancellationToken::new())
                 .await
+        }));
+    }
+    assert!(
+        eventually(|| async {
+            open_tool_parts(&engine, root).await == 1 && open_tool_parts(&engine, child).await == 1
         })
-    };
-    assert!(
-        eventually(|| async { open_tool_parts(&engine, root).await == 1 }).await,
-        "the root turn is mid-stream with an open part"
+        .await
     );
-
     let report = engine
-        .handoff_turns(&agent, Duration::from_millis(300))
-        .await;
-    assert_eq!(
-        report.stragglers,
-        vec![root],
-        "the parked turn rejects the restart"
-    );
-    assert_eq!(report.cancelled, Vec::<SessionId>::new());
-    assert!(
-        !engine.handoff_readiness().quiescing,
-        "the abort lifts the quiesce"
-    );
-    assert!(engine.turn_active(root), "the live turn keeps running");
+        .stop_for_restart(Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(report.cancelled.len(), 2);
+    assert!(report.stragglers.is_empty());
+    for task in tasks {
+        assert_eq!(task.await.unwrap().unwrap(), FinishReason::Cancelled);
+    }
+    let pending = engine.store().list_pending_resumes().await.unwrap();
+    assert_eq!(pending.len(), 2);
+    assert!(pending.iter().all(|row| row.prompt.contains("bash (call ")));
 
-    // Nothing was closed and nothing is queued for a successor.
-    let finishes = assistant_finishes(&engine.replay(root).await.unwrap(), root);
-    assert!(
-        finishes.first().is_none_or(|(_, list)| list.is_empty()),
-        "no MessageFinished was appended: {finishes:?}"
+    let (permission, _) = PermissionPlane::new(PermissionRules::default());
+    let next = Arc::new(
+        SessionEngine::new(
+            engine.store().clone(),
+            Arc::new(ProviderRouter::new().with(provider.clone())),
+            support::test_runtime(Arc::new(ToolRegistry::builtins())),
+            permission,
+            EventBus::default(),
+        )
+        .with_runtime_owner(engine.runtime_owner()),
     );
+    assert_eq!(
+        next.resume_interrupted_turns(&agent).await.unwrap().len(),
+        2
+    );
+    assert!(eventually(|| async { !next.turn_active(root) && !next.turn_active(child) }).await);
     assert!(
-        engine
-            .store()
-            .list_pending_resumes()
+        next.resume_interrupted_turns(&agent)
             .await
             .unwrap()
             .is_empty()
     );
-    assert_eq!(
-        open_tool_parts(&engine, root).await,
-        1,
-        "the mid-flight part stays open, not terminalized"
-    );
-
-    // The untouched turn closes like a user cancel, never as a handoff.
-    assert!(engine.cancel_turn(root, FinishCause::UserCancel));
-    let finish = tokio::time::timeout(Duration::from_secs(5), lead)
-        .await
-        .expect("the turn returns after the cancel")
-        .unwrap()
-        .unwrap();
-    assert_eq!(finish, FinishReason::Cancelled);
-    let finishes = assistant_finishes(&engine.replay(root).await.unwrap(), root);
-    assert_eq!(
-        finishes[0].1,
-        vec![(FinishReason::Cancelled, Some(FinishCause::UserCancel))],
-        "the handoff never wrote a close for the stranded turn"
-    );
-
-    // The abort left nothing resumable.
-    let resumed = engine.resume_handed_off_turns(&agent, None).await;
-    assert!(resumed.is_empty(), "{resumed:?}");
-    assert_eq!(provider.streams_for(root), 1, "no continuation was driven");
+    for session in [root, child] {
+        let events = next.replay(session).await.unwrap();
+        assert_eq!(events.iter().filter(|e| matches!(&e.event,
+            Event::TextDelta { delta, .. } if delta.contains("Your previous turn was interrupted by a restart.")
+        )).count(), 1);
+        assert_eq!(provider.streams_for(session), 2);
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.event, Event::ToolResult { .. }))
+        );
+    }
 }
 
-/// Suspend before the next model call: a quiesced root turn finishes its
-/// current round (the gated tool completes — its side effect is kept), then
-/// checkpoints atomically at the round boundary instead of requesting a
-/// second stream, closing with `cause: handoff` and queueing one prompt-less
-/// resume row. The successor's resume continues the same session at most
-/// once: a new assistant turn, no new user prompt, no repeated side effect.
 #[tokio::test]
-async fn suspend_checkpoints_before_the_next_model_call_and_resumes_once() {
-    let (engine, agent, provider, gate) = engine_with_gate_tool().await;
-    let root = make_session(&engine, None, "hya-main").await;
-
-    provider.script(root, Script::Tool);
+async fn stop_interrupts_a_running_tool_without_recording_success() {
+    let (engine, agent, provider, _tool) = engine_with_gate_tool().await;
+    let session = make_session(&engine, None, "hya-main").await;
+    provider.script(session, Script::Tool);
     engine
-        .admit_user_prompt(root, "go".to_string())
+        .admit_user_prompt(session, "run tool".into())
         .await
         .unwrap();
-    let lead = {
+    let task = {
         let engine = engine.clone();
-        let agent = agent.clone();
         tokio::spawn(async move {
             engine
-                .run_turn(root, &agent, CancellationToken::new())
+                .run_turn(session, &agent, CancellationToken::new())
                 .await
         })
     };
-    assert!(
-        eventually(|| async { open_tool_parts(&engine, root).await == 1 }).await,
-        "the turn is parked in the gated tool"
-    );
-
-    // Quiesce mid-tool: nothing is cancelled; the turn hands off only after
-    // the tool completes, at its next round boundary.
-    assert_eq!(engine.begin_handoff_quiesce(), vec![root]);
-    assert!(engine.handoff_readiness().quiescing);
-    gate.release.notify_one();
-
-    let finish = tokio::time::timeout(Duration::from_secs(5), lead)
+    assert!(eventually(|| async { open_tool_parts(&engine, session).await == 1 }).await);
+    engine
+        .stop_for_restart(Duration::from_secs(2))
         .await
-        .expect("the turn returns at the boundary")
-        .unwrap()
         .unwrap();
-    assert_eq!(finish, FinishReason::Cancelled);
-    assert_eq!(
-        provider.streams_for(root),
-        1,
-        "no second model call was started after the quiesce"
-    );
-
-    let finishes = assistant_finishes(&engine.replay(root).await.unwrap(), root);
-    assert_eq!(
-        finishes[0].1,
-        vec![(FinishReason::Cancelled, Some(FinishCause::Handoff))],
-        "the checkpoint close is the resume marker"
-    );
-    assert_eq!(
-        open_tool_parts(&engine, root).await,
-        0,
-        "the completed tool call was kept, not errored"
-    );
-
-    // Exactly one prompt-less resume row was queued.
+    assert_eq!(task.await.unwrap().unwrap(), FinishReason::Cancelled);
     let rows = engine.store().list_pending_resumes().await.unwrap();
-    assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0].session, root);
-    assert!(rows[0].prompt.is_empty(), "the continuation is prompt-less");
-
-    // The successor: one continuation turn, no new user prompt, no repeated
-    // side effect.
-    let resumed = engine.resume_handed_off_turns(&agent, None).await;
-    assert_eq!(resumed, vec![root]);
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].prompt.contains("gate_tool (call "));
     assert!(
-        eventually(|| async {
-            let messages = &engine.read_projection(root).await.unwrap().session.messages[..];
-            messages.len() == 3
-                && messages[0].role == Role::User
-                && messages[2].role == Role::Assistant
-                && messages[2].finish == Some(FinishReason::Stop)
-        })
-        .await,
-        "the continuation turn finished"
-    );
-    let messages = &engine.read_projection(root).await.unwrap().session.messages[..];
-    assert_eq!(
-        finishes[0].0, messages[1].id,
-        "the handoff message is stable"
-    );
-    assert_eq!(
-        messages.iter().filter(|m| m.role == Role::User).count(),
-        1,
-        "no user message was added to the transcript"
-    );
-    assert_eq!(
-        provider.streams_for(root),
-        2,
-        "exactly one continuation stream"
-    );
-
-    // At most once: the tail moved, another pass finds nothing to resume.
-    let again = engine.resume_handed_off_turns(&agent, None).await;
-    assert!(again.is_empty(), "{again:?}");
-    assert_eq!(provider.streams_for(root), 2, "no second continuation");
-}
-
-/// A handoff that partly drains and then aborts: the session that reached its
-/// boundary checkpointed and is re-driven in-process (the same session, no
-/// new prompt), a session that merely finished naturally during the window is
-/// NOT reported as handed off, and the stranded session is left exactly as it
-/// was — live, unclosed — for the old harness to keep serving.
-#[tokio::test]
-async fn aborted_handoff_re_drives_checkpointed_sessions_in_process() {
-    let (engine, agent, provider, gate) = engine_with_gate_tool().await;
-    let draining = make_session(&engine, None, "hya-main").await;
-    let stranded = make_session(&engine, None, "hya-task").await;
-    let natural = make_session(&engine, None, "hya-main").await;
-
-    provider.script(draining, Script::Tool);
-    provider.script(stranded, Script::Hang);
-    provider.script(natural, Script::Gate);
-    for session in [draining, stranded, natural] {
-        engine
-            .admit_user_prompt(session, "work".to_string())
+        !engine
+            .replay(session)
             .await
-            .unwrap();
-    }
-    let lead_draining = {
-        let engine = engine.clone();
-        let agent = agent.clone();
-        tokio::spawn(async move {
-            engine
-                .run_turn(draining, &agent, CancellationToken::new())
-                .await
-        })
-    };
-    let lead_stranded = {
-        let engine = engine.clone();
-        let agent = agent.clone();
-        tokio::spawn(async move {
-            engine
-                .run_turn(stranded, &agent, CancellationToken::new())
-                .await
-        })
-    };
-    let lead_natural = {
-        let engine = engine.clone();
-        let agent = agent.clone();
-        tokio::spawn(async move {
-            engine
-                .run_turn(natural, &agent, CancellationToken::new())
-                .await
-        })
-    };
-    assert!(
-        eventually(|| async {
-            open_tool_parts(&engine, draining).await == 1
-                && open_tool_parts(&engine, stranded).await == 1
-                && provider.streams_for(natural) == 1
-        })
-        .await,
-        "the two tool turns are parked mid-round and the natural turn is parked in its stream"
-    );
-
-    let quiesced = engine.begin_handoff_quiesce();
-    assert_eq!(quiesced.len(), 3, "{quiesced:?}");
-    assert!(
-        quiesced.contains(&draining) && quiesced.contains(&stranded) && quiesced.contains(&natural)
-    );
-    gate.release.notify_one();
-    provider.release.notify_one();
-    assert!(
-        eventually(|| async { !engine.turn_active(draining) }).await,
-        "the drained session checkpointed and ended"
-    );
-    let natural_finish = tokio::time::timeout(Duration::from_secs(5), lead_natural)
-        .await
-        .expect("the natural turn finishes during the window")
-        .unwrap()
-        .unwrap();
-    assert_eq!(natural_finish, FinishReason::Stop);
-
-    let report = engine
-        .handoff_turns(&agent, Duration::from_millis(300))
-        .await;
-    assert_eq!(report.stragglers, vec![stranded]);
-    assert_eq!(
-        report.cancelled,
-        vec![draining],
-        "only the session that reached a handoff boundary counts; the natural Stop is not a handoff"
-    );
-    assert!(!engine.handoff_readiness().quiescing);
-    let natural_finishes = assistant_finishes(&engine.replay(natural).await.unwrap(), natural);
-    assert_eq!(
-        natural_finishes[0].1,
-        vec![(FinishReason::Stop, None)],
-        "the naturally finished turn was not rewritten into a handoff"
-    );
-
-    // The checkpointed session was re-driven in-process: same session, one
-    // continuation stream, finished Stop, no new user prompt.
-    assert!(
-        eventually(|| async {
-            let messages = &engine
-                .read_projection(draining)
-                .await
-                .unwrap()
-                .session
-                .messages[..];
-            messages.len() == 3 && messages[2].finish == Some(FinishReason::Stop)
-        })
-        .await,
-        "the in-process continuation finished"
-    );
-    assert_eq!(provider.streams_for(draining), 2);
-    let drain_messages = &engine
-        .read_projection(draining)
-        .await
-        .unwrap()
-        .session
-        .messages[..];
-    assert_eq!(
-        drain_messages
+            .unwrap()
             .iter()
-            .filter(|m| m.role == Role::User)
-            .count(),
-        1,
-        "the in-process continuation is prompt-less"
-    );
-    let _ = lead_draining
-        .await
-        .expect("the drained turn returns")
-        .unwrap();
-
-    // The stranded session was never touched by the handoff.
-    assert!(engine.turn_active(stranded));
-    assert_eq!(open_tool_parts(&engine, stranded).await, 1);
-    let stranded_finishes = assistant_finishes(&engine.replay(stranded).await.unwrap(), stranded);
-    assert!(
-        stranded_finishes[0].1.is_empty(),
-        "no close was written for the stranded turn"
-    );
-    assert!(engine.cancel_turn(stranded, FinishCause::UserCancel));
-    let finish = tokio::time::timeout(Duration::from_secs(5), lead_stranded)
-        .await
-        .expect("the stranded turn returns after the cancel")
-        .unwrap()
-        .unwrap();
-    assert_eq!(finish, FinishReason::Cancelled);
-    let stranded_finishes = assistant_finishes(&engine.replay(stranded).await.unwrap(), stranded);
-    assert_eq!(
-        stranded_finishes[0].1,
-        vec![(FinishReason::Cancelled, Some(FinishCause::UserCancel))]
-    );
-}
-
-/// A restart-handoff quiesce refuses new turns but cancels nothing: the
-/// active turn runs to its natural end — the safe boundary the cutover waits
-/// for — and no handoff marker is written when nothing had to be closed.
-#[tokio::test]
-async fn quiesce_waits_for_the_active_turn_and_refuses_new_ones() {
-    let (engine, agent, provider) = engine_with_script().await;
-    let root = make_session(&engine, None, "hya-main").await;
-
-    provider.script(root, Script::Gate);
-    engine
-        .admit_user_prompt(root, "parked".to_string())
-        .await
-        .unwrap();
-    let lead = {
-        let engine = engine.clone();
-        let agent = agent.clone();
-        tokio::spawn(async move {
-            engine
-                .run_turn(root, &agent, CancellationToken::new())
-                .await
-        })
-    };
-    tokio::time::timeout(Duration::from_secs(5), provider.entered.notified())
-        .await
-        .expect("the turn reaches the provider");
-
-    let active = engine.begin_handoff_quiesce();
-    assert_eq!(active, vec![root]);
-
-    // New turns are refused while the parked one is untouched.
-    let refused = engine
-        .run_turn(root, &agent, CancellationToken::new())
-        .await
-        .unwrap();
-    assert_eq!(refused, FinishReason::Cancelled);
-    let readiness = engine.handoff_readiness();
-    assert_eq!(readiness.active, vec![root]);
-    assert!(readiness.pending_asks.is_empty(), "{readiness:?}");
-    let finishes = assistant_finishes(&engine.replay(root).await.unwrap(), root);
-    assert!(
-        finishes.first().is_none_or(|(_, list)| list.is_empty()),
-        "the parked turn is not closed: {finishes:?}"
-    );
-
-    // The parked turn reaches its natural end: the safe boundary.
-    provider.release.notify_one();
-    let finish = tokio::time::timeout(Duration::from_secs(5), lead)
-        .await
-        .expect("the parked turn finishes")
-        .unwrap()
-        .unwrap();
-    assert_eq!(finish, FinishReason::Stop);
-    let finishes = assistant_finishes(&engine.replay(root).await.unwrap(), root);
-    assert_eq!(
-        finishes[0].1,
-        vec![(FinishReason::Stop, None)],
-        "a natural end carries no harness cause"
-    );
-    let readiness = engine.handoff_readiness();
-    assert!(readiness.active.is_empty(), "{readiness:?}");
-}
-
-/// The cutover must never strand a pending permission ask: a session parked
-/// on a prompt stays listed in `handoff_readiness().pending_asks` until the
-/// reply lands, and the turn then finishes normally.
-#[tokio::test]
-async fn handoff_readiness_names_sessions_with_pending_permission_asks() {
-    let policy = InvocationPolicy::compile(
-        PermissionModel::Default,
-        vec![InvocationRule::new(
-            PermissionTarget::Command,
-            "^printf ",
-            Mode::Ask,
-        )],
-    )
-    .unwrap();
-    let (permission, mut asks) =
-        PermissionPlane::new_with_policy(PermissionRules::default(), policy);
-    let turns = vec![
-        vec![
-            FakeStep::ToolCall {
-                name: "bash".to_string(),
-                input: json!({ "command": "printf one" }),
-            },
-            FakeStep::Finish(FinishReason::ToolCalls),
-        ],
-        vec![
-            FakeStep::Text("done".to_string()),
-            FakeStep::Finish(FinishReason::Stop),
-        ],
-    ];
-    let engine = Arc::new(SessionEngine::new(
-        SessionStore::connect_memory().await.unwrap(),
-        Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted_turns(turns)))),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
-        permission,
-        EventBus::default(),
-    ));
-    let root = make_session(&engine, None, "hya-main").await;
-    // The session's recorded model routes to the fake provider.
-    engine
-        .switch_model(root, ModelRef::new("fake"))
-        .await
-        .unwrap();
-    let ask_agent = AgentSpec {
-        name: AgentName::new("hya-main"),
-        model: ModelRef::new("fake"),
-        system_prompt: "x".to_string(),
-        workdir: PathBuf::from("/tmp"),
-        reasoning: None,
-    };
-    engine
-        .admit_user_prompt(root, "run".to_string())
-        .await
-        .unwrap();
-    let lead = {
-        let engine = engine.clone();
-        let ask_agent = ask_agent.clone();
-        tokio::spawn(async move {
-            engine
-                .run_turn(root, &ask_agent, CancellationToken::new())
-                .await
-        })
-    };
-    let request = tokio::time::timeout(Duration::from_secs(5), asks.recv())
-        .await
-        .expect("permission ask timeout")
-        .expect("permission ask");
-    assert_eq!(request.session, Some(root), "the ask carries its session");
-    let readiness = engine.handoff_readiness();
-    assert_eq!(
-        readiness.pending_asks,
-        vec![root],
-        "the parked ask names its session"
-    );
-
-    // The reply reaches the turn at a safe boundary; the session clears.
-    request.reply.send(Decision::AllowOnce).unwrap();
-    let finish = tokio::time::timeout(Duration::from_secs(5), lead)
-        .await
-        .expect("the turn finishes after the reply")
-        .unwrap()
-        .unwrap();
-    assert_eq!(finish, FinishReason::Stop);
-    let readiness = engine.handoff_readiness();
-    assert!(readiness.pending_asks.is_empty(), "{readiness:?}");
-    assert!(readiness.active.is_empty(), "{readiness:?}");
-}
-
-/// Child and Workflow sessions a restart handoff closed are never auto-resumed:
-/// an explicit non-resume outcome. A child is re-driven by its parent's resumed
-/// turn (the handoff-errored `task` call is in the model's view); a Workflow
-/// run is terminalized by `recover_nonterminal_workflows` on its own.
-#[tokio::test]
-async fn restart_handoff_does_not_auto_resume_child_or_workflow_sessions() {
-    let (engine, agent, provider) = engine_with_script().await;
-    let root = make_session(&engine, None, "hya-main").await;
-    let child = make_session(&engine, Some(root), "hya-task").await;
-    let workflow = make_session(&engine, None, "hya-main").await;
-
-    // A child whose transcript ends with the handoff close.
-    let child_message = MessageId::new();
-    for event in [
-        Event::MessageStarted {
-            session: child,
-            message: child_message,
-            role: Role::Assistant,
-            agent: None,
-            model: None,
-        },
-        Event::MessageFinished {
-            session: child,
-            message: child_message,
-            role: Role::Assistant,
-            finish: FinishReason::Cancelled,
-            tokens: None,
-            cause: Some(FinishCause::Handoff),
-        },
-    ] {
-        engine.store().append_event(child, &event).await.unwrap();
-    }
-    // A root whose last turn closed with `handoff` while a Workflow run is
-    // active on it.
-    let run = hya_proto::WorkflowRunId::new();
-    let workflow_message = MessageId::new();
-    for event in [
-        Event::WorkflowRunStarted {
-            session: workflow,
-            run,
-            workflow: hya_proto::WorkflowIdentity {
-                source: hya_proto::WorkflowSourceId::new("test:restart-flow"),
-                name: "restart-flow".to_string(),
-                revision: hya_proto::WorkflowRevision::from_bytes([1; 32]),
-            },
-            request_hash: "inputs".to_string(),
-            owner: hya_proto::OwnerRunId::new(),
-            stages: vec![hya_proto::WorkflowStagePlan {
-                id: "stage".to_string(),
-                title: None,
-                agent: AgentName::new("hya-task"),
-                mode: "once".to_string(),
-                level: 0,
-                worker_model: None,
-                selected_worker_model: None,
-                verifier_model: None,
-                selected_verifier_model: None,
-            }],
-        },
-        Event::MessageStarted {
-            session: workflow,
-            message: workflow_message,
-            role: Role::Assistant,
-            agent: None,
-            model: None,
-        },
-        Event::MessageFinished {
-            session: workflow,
-            message: workflow_message,
-            role: Role::Assistant,
-            finish: FinishReason::Cancelled,
-            tokens: None,
-            cause: Some(FinishCause::Handoff),
-        },
-    ] {
-        engine.store().append_event(workflow, &event).await.unwrap();
-    }
-
-    // Both are handoff-marked, and the resume driver picks up neither.
-    let resumed = engine.resume_handed_off_turns(&agent, None).await;
-    assert!(resumed.is_empty(), "{resumed:?}");
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(
-        provider.streams_for(child) + provider.streams_for(workflow),
-        0,
-        "no continuation stream was started for a child or workflow session"
-    );
-    assert!(
-        !engine.turn_active(child) && !engine.turn_active(workflow),
-        "nothing was driven"
+            .any(|e| matches!(e.event, Event::ToolResult { .. }))
     );
 }
