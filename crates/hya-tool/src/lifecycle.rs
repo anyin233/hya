@@ -102,7 +102,7 @@ impl WaitSpec {
     pub fn parse(input: &Value, wake_on_mail: bool) -> Result<Self, ToolError> {
         let mut mode = None;
         let mut targets = Vec::new();
-        match input.get("targets").or_else(|| input.get("target")) {
+        match input.get("targets") {
             None | Some(Value::Null) => {}
             Some(Value::String(text)) => match text.trim() {
                 "" => {}
@@ -139,7 +139,7 @@ impl WaitSpec {
                 )));
             }
         }
-        let timeout = match input.get("timeout_secs").or_else(|| input.get("timeout")) {
+        let timeout = match input.get("timeout_secs") {
             None | Some(Value::Null) => WAIT_DEFAULT_TIMEOUT_SECS,
             Some(value) => {
                 let seconds = value

@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 
 #[derive(Deserialize)]
 struct WorkflowToolInput {
-    /// Command name. `list` remains the default for compatibility.
-    #[serde(default, alias = "command")]
+    /// Command name. `list` is the default.
+    #[serde(default)]
     action: Option<String>,
     /// Declared Workflow name for `info`, `select`, and `run`.
     #[serde(default)]

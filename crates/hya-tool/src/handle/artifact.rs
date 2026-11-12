@@ -11,7 +11,6 @@
 use std::fs::OpenOptions;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -68,7 +67,7 @@ impl std::fmt::Display for ArtifactId {
 
 /// What a stored artifact is, independent of its bytes.
 ///
-/// Persisted beside the body so a hook can discriminate on the producing tool
+/// Persisted beside the body to record the producing tool
 /// or the payload type without parsing the body first.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ArtifactMeta {
@@ -92,53 +91,18 @@ impl ArtifactMeta {
     }
 }
 
-/// User-supplied post-processing for a retrieved artifact body.
-///
-/// Hooks run on **retrieval**, never on write. The stored bytes stay the
-/// authoritative capture, so a hook that is wrong — or that someone changes
-/// their mind about — can never have destroyed the original output.
-///
-/// Applicable hooks are chained in registration order, each transforming the
-/// previous one's result, which is what lets "strip noise, then extract the
-/// failing assertion" compose out of two independent hooks.
-pub trait ArtifactHook: Send + Sync {
-    /// Hook name, used to attribute a failure back to its registration.
-    fn name(&self) -> &str;
-
-    /// Whether this hook should run for `meta`. Defaults to every artifact.
-    fn applies_to(&self, meta: &ArtifactMeta) -> bool {
-        let _ = meta;
-        true
-    }
-
-    /// Transform `body`, or return `None` to pass it through untouched.
-    ///
-    /// # Errors
-    /// Return [`HandleError::Hook`] to fail the retrieval. The failure is
-    /// surfaced rather than swallowed: a silently skipped hook looks exactly
-    /// like a hook that ran and found nothing to do.
-    fn post_process(
-        &self,
-        meta: &ArtifactMeta,
-        body: String,
-    ) -> Result<Option<String>, HandleError>;
-}
-
 /// Store for spilled tool output under one root directory.
 ///
-/// Cloning shares the hook chain; the store owns no open handles, so a clone
-/// per tool call is cheap.
+/// The store owns no open handles.
 #[derive(Clone, Default)]
 pub struct ArtifactStore {
     root: PathBuf,
-    hooks: Vec<Arc<dyn ArtifactHook>>,
 }
 
 impl std::fmt::Debug for ArtifactStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ArtifactStore")
             .field("root", &self.root)
-            .field("hooks", &self.hook_names())
             .finish()
     }
 }
@@ -147,38 +111,13 @@ impl ArtifactStore {
     /// Store artifacts under `root`, creating it lazily on first write.
     #[must_use]
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self {
-            root: root.into(),
-            hooks: Vec::new(),
-        }
-    }
-
-    /// Append a post-processing hook to the retrieval chain.
-    #[must_use]
-    pub fn with_hook(mut self, hook: Arc<dyn ArtifactHook>) -> Self {
-        self.hooks.push(hook);
-        self
+        Self { root: root.into() }
     }
 
     /// Directory holding the artifacts.
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
-    }
-
-    /// Names of the registered hooks, in chain order.
-    #[must_use]
-    pub fn hook_names(&self) -> Vec<&str> {
-        self.hooks.iter().map(|hook| hook.name()).collect()
-    }
-
-    /// Whether any hook would transform a retrieved body.
-    ///
-    /// Lets a caller decide between reading the stored bytes directly and paying
-    /// for a resolve that runs the chain.
-    #[must_use]
-    pub fn has_hooks(&self) -> bool {
-        !self.hooks.is_empty()
     }
 
     /// Where the body for `id` is stored, whether or not it exists yet.
@@ -226,7 +165,7 @@ impl ArtifactStore {
         Ok(meta)
     }
 
-    /// Read the stored metadata and raw body, before any hook runs.
+    /// Read the stored metadata and captured body.
     ///
     /// # Errors
     /// Returns [`HandleError::NotFound`] when no artifact carries `id`, or
@@ -241,22 +180,12 @@ impl ArtifactStore {
         Ok((meta, body))
     }
 
-    /// Read an artifact and run the applicable hook chain over it.
+    /// Read the captured artifact body.
     ///
     /// # Errors
-    /// Propagates [`ArtifactHook::post_process`] failures, plus the errors of
-    /// [`ArtifactStore::load`]. A failing hook never modifies what is on disk.
+    /// Returns the errors of [`ArtifactStore::load`].
     pub fn resolve(&self, id: &ArtifactId) -> Result<String, HandleError> {
-        let (meta, mut body) = self.load(id)?;
-        for hook in &self.hooks {
-            if !hook.applies_to(&meta) {
-                continue;
-            }
-            if let Some(next) = hook.post_process(&meta, body.clone())? {
-                body = next;
-            }
-        }
-        Ok(body)
+        Ok(self.load(id)?.1)
     }
 
     fn body_path(&self, id: &ArtifactId) -> PathBuf {

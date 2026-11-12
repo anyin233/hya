@@ -3,7 +3,7 @@ import { extensionManager } from "../extensions/manager"
 const builtinTools = new Set([
   "bash", "shell", "read", "edit", "multiedit", "write", "apply_patch", "patch",
   "grep", "glob", "find", "ls", "lsp", "webfetch", "fetch", "websearch", "search",
-  "skill", "ask_user", "question", "task", "invalid", "workflow", "list_agents", "search_agent", "archive", "plan_exit", "project_activity", "wait", "todo__update_content",
+  "skill", "ask_user", "question", "task", "workflow", "list_agents", "search_agent", "archive", "plan_exit", "project_activity", "wait", "todo__update_content",
   "send", "list_channel", "report",
   "todo", "todo__read", "todo__write", "todo__update", "todo__update_status", "todo__replace",
   "todo__add", "todo__remove", "todo__clear",

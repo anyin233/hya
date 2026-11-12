@@ -17,8 +17,6 @@ extensions:
       path: native/src/agents.rs
     - id: native-archive
       path: native/src/archive.rs
-    - id: native-invalid
-      path: native/src/invalid.rs
     - id: native-lsp
       path: native/src/lsp.rs
     - id: native-lsp-description

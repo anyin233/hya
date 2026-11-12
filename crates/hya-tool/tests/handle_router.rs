@@ -1,18 +1,14 @@
 //! Integration tests for `hya-tool`: internal resource URL resolution.
 //!
-//! Covers the spill-and-retrieve loop behind `artifact://`, the user-pluggable
-//! post-processing hook chain, and the query projections every scheme shares.
+//! Covers spill-and-retrieve and the query projections every scheme shares.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_tool::SkillPlane;
-use hya_tool::handle::{
-    ArtifactHook, ArtifactId, ArtifactMeta, ArtifactStore, HandleError, HandleRef, HandleRouter,
-};
+use hya_tool::handle::{ArtifactId, HandleError, HandleRef, HandleRouter};
 
 fn tempdir(tag: &str) -> PathBuf {
     let nanos = SystemTime::now()
@@ -22,80 +18,6 @@ fn tempdir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("hya-handle-{tag}-{nanos}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     dir
-}
-
-/// Wraps the body so a test can prove the hook ran and in what order.
-struct Tag(&'static str);
-
-impl ArtifactHook for Tag {
-    fn name(&self) -> &str {
-        self.0
-    }
-
-    fn post_process(
-        &self,
-        _meta: &ArtifactMeta,
-        body: String,
-    ) -> Result<Option<String>, hya_tool::handle::HandleError> {
-        Ok(Some(format!("{}<{}>", body, self.0)))
-    }
-}
-
-/// Only fires for artifacts produced by one tool.
-struct OnlyForTool(&'static str);
-
-impl ArtifactHook for OnlyForTool {
-    fn name(&self) -> &str {
-        "only-for-tool"
-    }
-
-    fn applies_to(&self, meta: &ArtifactMeta) -> bool {
-        meta.tool == self.0
-    }
-
-    fn post_process(
-        &self,
-        _meta: &ArtifactMeta,
-        _body: String,
-    ) -> Result<Option<String>, hya_tool::handle::HandleError> {
-        Ok(Some("REPLACED".to_string()))
-    }
-}
-
-/// Declines every body, to prove `None` is a pass-through and not an erasure.
-struct Abstain;
-
-impl ArtifactHook for Abstain {
-    fn name(&self) -> &str {
-        "abstain"
-    }
-
-    fn post_process(
-        &self,
-        _meta: &ArtifactMeta,
-        _body: String,
-    ) -> Result<Option<String>, hya_tool::handle::HandleError> {
-        Ok(None)
-    }
-}
-
-struct Broken;
-
-impl ArtifactHook for Broken {
-    fn name(&self) -> &str {
-        "broken"
-    }
-
-    fn post_process(
-        &self,
-        _meta: &ArtifactMeta,
-        _body: String,
-    ) -> Result<Option<String>, hya_tool::handle::HandleError> {
-        Err(hya_tool::handle::HandleError::Hook {
-            hook: "broken".to_string(),
-            message: "deliberate failure".to_string(),
-        })
-    }
 }
 
 /// The core loop: a tool spills a large body and reports a handle; retrieving
@@ -118,106 +40,6 @@ fn spilled_output_resolves_through_its_handle() {
     let resolved = router.resolve(&meta.handle().parse().unwrap()).unwrap();
     assert_eq!(resolved.body, body, "retrieval must be byte-exact");
     assert_eq!(resolved.media_type, "text/plain");
-}
-
-#[test]
-fn hooks_chain_in_registration_order() {
-    let dir = tempdir("chain");
-    let store = ArtifactStore::new(dir.join("artifacts"))
-        .with_hook(Arc::new(Tag("first")))
-        .with_hook(Arc::new(Tag("second")));
-    let router = HandleRouter::new(&dir).with_artifacts(store);
-
-    let meta = router
-        .artifacts()
-        .store("bash", "text/plain", b"body")
-        .unwrap();
-
-    assert_eq!(router.artifacts().hook_names(), vec!["first", "second"]);
-    assert_eq!(
-        router
-            .resolve(&meta.handle().parse().unwrap())
-            .unwrap()
-            .body,
-        "body<first><second>",
-        "each hook transforms the previous hook's output"
-    );
-}
-
-#[test]
-fn a_hook_can_select_the_artifacts_it_cares_about() {
-    let dir = tempdir("applies");
-    let store =
-        ArtifactStore::new(dir.join("artifacts")).with_hook(Arc::new(OnlyForTool("webfetch")));
-    let router = HandleRouter::new(&dir).with_artifacts(store);
-
-    let matched = router
-        .artifacts()
-        .store("webfetch", "text/plain", b"page")
-        .unwrap();
-    let skipped = router
-        .artifacts()
-        .store("bash", "text/plain", b"stdout")
-        .unwrap();
-
-    assert_eq!(
-        router
-            .resolve(&matched.handle().parse().unwrap())
-            .unwrap()
-            .body,
-        "REPLACED"
-    );
-    assert_eq!(
-        router
-            .resolve(&skipped.handle().parse().unwrap())
-            .unwrap()
-            .body,
-        "stdout",
-        "a hook that does not apply must leave the body alone"
-    );
-}
-
-#[test]
-fn declining_a_hook_passes_the_body_through_unchanged() {
-    let dir = tempdir("abstain");
-    let store = ArtifactStore::new(dir.join("artifacts")).with_hook(Arc::new(Abstain));
-    let router = HandleRouter::new(&dir).with_artifacts(store);
-    let meta = router
-        .artifacts()
-        .store("bash", "text/plain", b"untouched")
-        .unwrap();
-
-    assert_eq!(
-        router
-            .resolve(&meta.handle().parse().unwrap())
-            .unwrap()
-            .body,
-        "untouched"
-    );
-}
-
-/// Hooks run on retrieval, never on write. A broken hook must be loud, and must
-/// not have cost the user the captured output.
-#[test]
-fn a_failing_hook_is_reported_and_leaves_the_stored_bytes_intact() {
-    let dir = tempdir("broken");
-    let root = dir.join("artifacts");
-    let store = ArtifactStore::new(&root).with_hook(Arc::new(Broken));
-    let router = HandleRouter::new(&dir).with_artifacts(store);
-    let meta = router
-        .artifacts()
-        .store("bash", "text/plain", b"precious output")
-        .unwrap();
-
-    let error = router.resolve(&meta.handle().parse().unwrap()).unwrap_err();
-    assert!(
-        error.to_string().contains("broken"),
-        "the failure must name the hook: {error}"
-    );
-
-    // The raw capture is still on disk and still readable without the chain.
-    let (_, raw) = ArtifactStore::new(&root).load(&meta.id).unwrap();
-    assert_eq!(raw, "precious output");
 }
 
 #[test]

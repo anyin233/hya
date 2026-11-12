@@ -4,9 +4,9 @@ use hya_tool::TodoItem;
 use super::SessionEngine;
 
 /// Todo tools whose results carry the session's full list in
-/// `metadata.todos` (the current `todo__` group and the legacy names).
+/// `metadata.todos` (the `todo__` group).
 pub(crate) fn is_todo_tool(name: &str) -> bool {
-    name.starts_with("todo__") || matches!(name, "todowrite" | "todo")
+    name.starts_with("todo__")
 }
 
 impl SessionEngine {
