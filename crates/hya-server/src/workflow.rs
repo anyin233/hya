@@ -58,10 +58,7 @@ pub(crate) async fn intercept_slash(
     let result = match execute_reserved(st, session, command, WorkflowDelivery::Started).await {
         Ok(result) => result,
         Err(error) => {
-            let message = error.code.as_deref().map_or_else(
-                || error.message.clone(),
-                |code| format!("{code}: {}", error.message),
-            );
+            let message = format!("{}: {}", error.code, error.message);
             st.engine.inject_assistant_message(session, message).await?;
             return Err(error);
         }
@@ -191,24 +188,6 @@ async fn execute_reserved(
         .execute(session, command, delivery)
         .await
         .map_err(ApiError::workflow)
-}
-
-/// Convert a server-owned control failure into the stable HTTP boundary.
-pub(crate) fn error_status(error: &WorkflowControlError) -> axum::http::StatusCode {
-    match error.code.as_str() {
-        "WORKFLOW_INVALID_INPUT" | "WORKFLOW_INVALID_SOURCE" => {
-            axum::http::StatusCode::UNPROCESSABLE_ENTITY
-        }
-        "WORKFLOW_NOT_FOUND" | "SESSION_NOT_FOUND" | "WORKFLOW_NOT_SELECTED" => {
-            axum::http::StatusCode::NOT_FOUND
-        }
-        "WORKFLOW_UNAUTHORIZED" => axum::http::StatusCode::FORBIDDEN,
-        "WORKFLOW_BUSY" | "WORKFLOW_OPERATION_CONFLICT" | "WORKFLOW_STALE_REVISION" => {
-            axum::http::StatusCode::CONFLICT
-        }
-        "WORKFLOW_RUNTIME_UNAVAILABLE" => axum::http::StatusCode::SERVICE_UNAVAILABLE,
-        _ => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-    }
 }
 
 #[cfg(test)]

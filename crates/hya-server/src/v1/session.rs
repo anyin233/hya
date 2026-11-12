@@ -340,33 +340,33 @@ async fn list_sessions(
         id => Some(super::project::parse_project(id)?),
     };
     let rows = st.engine.store().list_sessions_in(project).await?;
-    let mut infos = Vec::with_capacity(rows.len());
+    let mut listed_rows = Vec::with_capacity(rows.len());
     for row in rows {
+        let projection = st.engine.read_projection_shared(row.session).await?;
         if !request.parent.is_empty()
             && let Ok(parent) = parse_session(&request.parent)
+            && projection.session.parent != Some(parent)
         {
-            let projection = st.engine.read_projection_shared(row.session).await?;
-            let is_child = projection.session.parent == Some(parent);
-            if !is_child {
-                continue;
-            }
+            continue;
         }
-        // The list query already carries each log's bounds; re-listing every
-        // session per row made this O(sessions x events).
-        let info =
-            projection_info_at(&st, row.session, row.started_millis, row.updated_millis).await?;
-        // Archived root sessions are hidden unless asked for.
+        let archived = projection.session.is_archived();
         let listed = if request.archived_only {
-            info.archived
+            archived
         } else {
-            request.include_archived || !info.archived
+            request.include_archived || !archived
         };
         if listed {
-            infos.push(info);
+            listed_rows.push(row);
         }
     }
-    infos.reverse();
-    let (sessions, page) = super::catalog::paginate(infos, &request.page);
+    listed_rows.reverse();
+    let (rows, page) = super::catalog::paginate(listed_rows, &request.page);
+    let mut sessions = Vec::with_capacity(rows.len());
+    for row in rows {
+        sessions.push(
+            projection_info_at(&st, row.session, row.started_millis, row.updated_millis).await?,
+        );
+    }
     Ok(Json(pb::ListSessionsResponse {
         sessions,
         page: Some(page),

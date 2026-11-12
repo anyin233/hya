@@ -15,9 +15,7 @@
 //! `docs/protocol/` for the contract, integration guide, and generated
 //! reference/OpenAPI.
 
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::{Json, Router};
+use axum::Router;
 use tower_http::cors::{AllowHeaders, AllowOrigin, Any, CorsLayer};
 
 mod agent_model_control;
@@ -225,73 +223,5 @@ fn cors() -> CorsLayer {
         .allow_methods(Any)
 }
 
-/// HTTP error returned by `/v1` handlers as `(status, message)`.
-///
-/// `CoreError` / `StoreError` map to 500.
-pub struct ApiError {
-    status: StatusCode,
-    message: String,
-    code: Option<String>,
-}
-
-impl ApiError {
-    pub(crate) fn structured(
-        status: StatusCode,
-        code: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        Self {
-            status,
-            message: message.into(),
-            code: Some(code.into()),
-        }
-    }
-
-    pub(crate) fn workflow(error: crate::WorkflowControlError) -> Self {
-        let status = crate::workflow::error_status(&error);
-        Self::structured(status, error.code, error.message)
-    }
-
-    pub(crate) fn code(&self) -> Option<&str> {
-        self.code.as_deref()
-    }
-
-    pub(crate) fn text(&self) -> &str {
-        &self.message
-    }
-
-    fn internal(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: message.into(),
-            code: None,
-        }
-    }
-}
-
-impl From<hya_core::CoreError> for ApiError {
-    fn from(e: hya_core::CoreError) -> Self {
-        Self::internal(e.to_string())
-    }
-}
-
-impl From<hya_store::StoreError> for ApiError {
-    fn from(e: hya_store::StoreError) -> Self {
-        Self::internal(e.to_string())
-    }
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        if let Some(code) = self.code {
-            return (
-                self.status,
-                Json(serde_json::json!({
-                    "error": { "code": code, "message": self.message }
-                })),
-            )
-                .into_response();
-        }
-        (self.status, self.message).into_response()
-    }
-}
+/// Shared HTTP and gRPC error using the stable v1 code table.
+pub use v1::ApiError;

@@ -295,7 +295,7 @@ fn vcs_status(workdir: &std::path::Path) -> Result<pb::VcsStatus, V1Error> {
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
         .unwrap_or_default();
     let files = if crate::support::git::is_repo(workdir) {
-        crate::support::git::status(workdir).map_err(V1Error::from)?
+        crate::support::git::status(workdir)?
     } else {
         Vec::new()
     };
@@ -351,7 +351,7 @@ async fn get_vcs_diff(
     let paths = diff_paths(&request.paths)?;
     // `raw` is accepted and ignored: the diff is always git's unified patch.
     let diff = if crate::support::git::is_repo(&workdir) {
-        crate::support::git::raw_diff(&workdir, &paths).map_err(V1Error::from)?
+        crate::support::git::raw_diff(&workdir, &paths)?
     } else {
         String::new()
     };
