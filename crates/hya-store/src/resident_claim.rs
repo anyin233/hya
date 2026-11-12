@@ -15,6 +15,32 @@ pub struct RecoveredActorClaim {
 }
 
 impl SessionStore {
+    /// Commit a tool outcome and its optional team-mail acknowledgement together.
+    /// The actor capability fences both logs; publish envelopes only after success.
+    pub async fn commit_tool_result_with_mail(
+        &self,
+        claim: Option<&ActorClaim>,
+        session: SessionId,
+        result: Event,
+        acknowledgement: Option<Event>,
+    ) -> Result<Vec<Envelope>, StoreError> {
+        let mut tx = self.begin_transaction().await?;
+        if let Some(claim) = claim {
+            fence_actor_claim(&mut tx, claim).await?;
+        }
+        let mut envelopes =
+            vec![crate::append_event_in_transaction(&mut tx, session, result).await?];
+        if let Some(acknowledgement) = acknowledgement {
+            let root = acknowledgement.session().ok_or_else(|| {
+                StoreError::ActorClaimData("mail acknowledgement has no session".into())
+            })?;
+            envelopes
+                .push(crate::append_event_in_transaction(&mut tx, root, acknowledgement).await?);
+        }
+        tx.commit().await?;
+        Ok(envelopes)
+    }
+
     /// Session ids of resident actors currently in the `active` claim state.
     pub async fn active_actor_ids(&self) -> Result<Vec<SessionId>, StoreError> {
         let rows = sqlx::query(

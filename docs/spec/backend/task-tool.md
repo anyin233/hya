@@ -502,3 +502,19 @@ is refused rather than taken over by an ordinary archive.
 Forced teardown holds further resident wakes and cancels each member's turn
 before acquiring its handoff lease. A claim-less archive checks ownership only
 inside the terminal transaction.
+
+### Mail during a running turn
+
+Unread team mail can steer an active turn without starting another turn. For
+example, a peer sending “focus on parsing” while a tool runs causes the next
+successful tool result to carry a `[NEW MAIL]` notice. Channel steer permissions
+still apply; mail after an accepted report remains unread for the next wake.
+
+The result and `MailConsumed { session: <team root>, handle: string, through: u64 }`
+commit in one store transaction under the turn's actor claim, when present.
+Observers are notified only after commit. Failure to append either event rolls
+back both. Object results append the notice to a string `output` field, or add a
+string `steer` field. Other JSON results become `{ "result": <original JSON>,
+"steer": <notice string> }`, preserving the tool value and the notice. Results
+without a notice keep their original JSON shape. No new command or configuration
+is required.

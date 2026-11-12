@@ -744,6 +744,12 @@ async fn mail_a_wait_returned_is_never_delivered_again() {
     assert!(notice.contains("FRESH_STATUS"), "{notice}");
     assert!(!notice.contains("RESEND_FULL_REPORT"), "{notice}");
 
+    // Preparing a steer notice does not deliver it. Let wait deliver the fresh
+    // mail before releasing the turn lease.
+    let fresh = wait(&team, team.root, json!({"timeout_secs": 0}), true).await;
+    assert_eq!(fresh.mail.len(), 1);
+    assert!(fresh.mail[0].preview.contains("FRESH_STATUS"));
+
     // The lead's turn ends: its resident wake must not re-inject either mail.
     drop(lead_turn);
     tokio::time::sleep(Duration::from_millis(500)).await;
