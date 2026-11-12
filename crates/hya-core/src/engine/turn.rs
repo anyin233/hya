@@ -677,6 +677,8 @@ impl SessionEngine {
         activation: TurnActivation,
         mut request: TurnRequestContext<'_>,
     ) -> Result<FinishReason, CoreError> {
+        let message = MessageId::new();
+        let draining_on_entry = self.draining();
         let lease = match request.lease.take() {
             Some(lease) if lease.session() == session => lease,
             Some(_) => {
@@ -686,21 +688,76 @@ impl SessionEngine {
             }
             None => match self.begin_turn(session, &request.cancel).await? {
                 Some(lease) => lease,
-                None => return Ok(FinishReason::Cancelled),
+                None => {
+                    if draining_on_entry.is_none()
+                        && self.draining() == Some(hya_proto::FinishCause::Shutdown)
+                    {
+                        self.close_turn_message(
+                            request.actor_claim,
+                            session,
+                            message,
+                            FinishReason::Cancelled,
+                            self.draining(),
+                        )
+                        .await?;
+                    }
+                    return Ok(FinishReason::Cancelled);
+                }
             },
         };
+        lease.set_message(message);
         // The turn's effective cancel: the caller's token, or the engine
         // (user abort via `cancel_turn`, process drain).
         request.cancel = lease.bind_cancel(&request.cancel);
+        let actor_claim = request.actor_claim;
+        let cancel = request.cancel.clone();
+        let workflow_route = request.workflow_route.clone();
         let observer = self.turn_gate.observer();
         if let Some(observer) = observer.as_ref() {
             observer.turn_started(session);
         }
-        let outcome = scope_held_turn(
+        let mut outcome = scope_held_turn(
             session,
-            self.run_claimed_turn(session, agent, activation, request),
+            self.run_claimed_turn(session, message, agent, activation, request),
         )
         .await;
+        let cause = self.turn_gate.cancel_cause(session);
+        if matches!(outcome, Err(CoreError::Cancelled))
+            && cause == Some(hya_proto::FinishCause::Shutdown)
+        {
+            outcome = Ok(FinishReason::Cancelled);
+        }
+        match &outcome {
+            Ok(FinishReason::Cancelled) | Err(CoreError::Cancelled) => {
+                self.close_turn_message(
+                    actor_claim,
+                    session,
+                    message,
+                    FinishReason::Cancelled,
+                    cause,
+                )
+                .await?;
+            }
+            Err(error) => {
+                self.fail_turn_message(actor_claim, session, message, error)
+                    .await?
+            }
+            Ok(_) => {}
+        }
+        if let Some(route) = workflow_route.as_ref() {
+            let failure = match &outcome {
+                Ok(FinishReason::Cancelled) => Some(if cancel.is_cancelled() {
+                    hya_proto::WorkflowRouteFailureClass::Cancelled
+                } else {
+                    hya_proto::WorkflowRouteFailureClass::Aborted
+                }),
+                Err(error) => Some(workflow_failure_class(error, &cancel)),
+                Ok(_) => None,
+            };
+            if let Some(failure) = failure {
+                route.finalize(Some(failure)).await?;
+            }
+        }
         if let Err(error) = &outcome
             && !matches!(error, CoreError::Cancelled)
         {
@@ -752,6 +809,7 @@ impl SessionEngine {
     async fn run_claimed_turn(
         &self,
         session: SessionId,
+        message: MessageId,
         agent: &AgentSpec,
         activation: TurnActivation,
         request: TurnRequestContext<'_>,
@@ -774,7 +832,11 @@ impl SessionEngine {
         let (binding, resolved, root_sidecar_tools, mut sidecar_handle, apply_default_overlays) =
             match activation {
                 TurnActivation::Root => {
-                    let binding = self.bind_session_runtime(session, &workdir).await?;
+                    let binding = tokio::select! {
+                        biased;
+                        () = self.turn_gate.drain_cancel.cancelled() => return Ok(FinishReason::Cancelled),
+                        binding = self.bind_session_runtime(session, &workdir) => binding?,
+                    };
                     if self
                         .fall_back_from_missing_agent(session, &projection, &binding)
                         .await?
@@ -887,7 +949,6 @@ impl SessionEngine {
             let (agent, agents, resources) = prepared?;
             // `list_agents` shows the user's runtime/configured Agent efforts.
             let agents = self.annotate_agent_efforts(agents).await?;
-            let message = MessageId::new();
             let stable_id = projection
                 .session
                 .agent
@@ -902,6 +963,10 @@ impl SessionEngine {
                 &projection,
                 &agent,
             );
+            let message_guard = self.turn_gate.message_guard(session).await;
+            if self.turn_gate.cancel_cause(session) == Some(hya_proto::FinishCause::Shutdown) {
+                return Ok(FinishReason::Cancelled);
+            }
             self.emit_for_actor(
                 actor_claim,
                 session,
@@ -914,6 +979,7 @@ impl SessionEngine {
                 },
             )
             .await?;
+            drop(message_guard);
             self.emit_for_actor(
                 actor_claim,
                 session,
@@ -944,7 +1010,7 @@ impl SessionEngine {
                     sidecar_hooks,
                 }),
             };
-            let outcome = match sidecar_loss {
+            match sidecar_loss {
                 Some(loss_token) => {
                     tokio::select! {
                         biased;
@@ -960,47 +1026,7 @@ impl SessionEngine {
                         outcome = Box::pin(self.run_turn_rounds(session, message, &agent, execution)) => outcome,
                     }
                 }
-            };
-            // Close the message before anything fallible below: every
-            // assistant message ends with exactly one `MessageFinished`, and a
-            // turn that did not reach the model's own finish records why.
-            match &outcome {
-                Ok(FinishReason::Cancelled) | Err(CoreError::Cancelled) => {
-                    let cause = self.turn_gate.cancel_cause(session);
-                    let _ = self
-                        .close_turn_message(
-                            actor_claim,
-                            session,
-                            message,
-                            FinishReason::Cancelled,
-                            cause,
-                        )
-                        .await;
-                }
-                Err(error) => {
-                    // A provider/tool error after MessageStarted must still close the
-                    // assistant message, else clients wait forever for a finish event.
-                    let _ = self
-                        .fail_turn_message(actor_claim, session, message, error)
-                        .await;
-                }
-                Ok(_) => {}
             }
-            if let Some(route) = workflow_route.as_ref() {
-                let failure = match &outcome {
-                    Ok(FinishReason::Cancelled) => Some(if cancel.is_cancelled() {
-                        hya_proto::WorkflowRouteFailureClass::Cancelled
-                    } else {
-                        hya_proto::WorkflowRouteFailureClass::Aborted
-                    }),
-                    Err(error) => Some(workflow_failure_class(error, &cancel)),
-                    Ok(_) => None,
-                };
-                if let Some(failure) = failure {
-                    route.finalize(Some(failure)).await?;
-                }
-            }
-            outcome
         };
         let outcome = if apply_default_overlays {
             scope_optional_activation_hooks(session, activation_hooks, post_ack).await

@@ -922,16 +922,22 @@ shutdown):
    reason and a released claim, as before 0.41.0.)
 
 Daemon stops additionally call `SessionEngine::stop_for_restart(deadline)`.
-It refuses new turns, snapshots pending/running tool calls before cancelling
-them, and drains every active session with cause `shutdown`. The cancellation
-event and restore row commit together for each non-archived root that was
-actually cancelled. Children stay under the resident supervisor's recovery;
-the root prompt names interrupted subagents when its roster identifies them.
+It refuses new turns and drains every active session with cause `shutdown`.
+Turn preparation cancelled before its assistant message starts still emits an
+assistant start/finish pair through the common turn closer. The store writer
+indexes each shutdown-cancelled assistant message in `pending_resume` in that
+finish event's transaction, for non-archived roots only. Children stay under the
+resident supervisor's recovery; the root prompt names interrupted subagents
+when its live or shutdown-archived roster identifies them.
 `AppState::resume_interrupted_turns()` on the next start injects one user-role
 restore prompt and starts a turn through the normal server path: project
 guidance, external directories, RunGuard busy tracking, and cancellation.
 The row remains until the assistant message starts, so a crash between prompt
-injection and turn start does not lose the turn or duplicate the prompt.
+injection and turn start does not lose the turn or duplicate the prompt for
+that interruption. A second shutdown cancellation is a new interruption and
+gets one more prompt. Any assistant start, including an ordinary engine turn,
+deletes the row. Prompt text is built at startup from the interrupted message's
+tool parts that are not `Completed`, including errors and denials.
 Missing, archived, and child sessions are discarded; failures are logged per
 session and do not abort other restores or startup. The model decides what to
 redo. An unanswered permission or question never becomes a synthetic successful

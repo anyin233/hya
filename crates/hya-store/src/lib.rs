@@ -935,19 +935,41 @@ pub async fn append_event_in_transaction(
     .await?;
     let seq: i64 = row.try_get("seq")?;
     materialize::materialize_event_side_tables(tx, session, &event, ts_millis).await?;
-    if matches!(
-        event,
+    match &event {
         Event::MessageStarted {
             role: hya_proto::Role::Assistant,
             ..
+        } => {
+            sqlx::query("DELETE FROM pending_resume WHERE session_id = ?")
+                .bind(session.storage_key())
+                .execute(&mut **tx)
+                .await?;
         }
-    ) {
-        sqlx::query(
-            "DELETE FROM pending_resume WHERE session_id = ? AND prompt_message_id IS NOT NULL",
-        )
-        .bind(session.storage_key())
-        .execute(&mut **tx)
-        .await?;
+        Event::MessageFinished {
+            message,
+            role: hya_proto::Role::Assistant,
+            finish: hya_proto::FinishReason::Cancelled,
+            cause: Some(hya_proto::FinishCause::Shutdown),
+            ..
+        } => {
+            let projection = projection_cache::fold(tx, session, None).await?.projection;
+            if projection.session.id.is_some()
+                && projection.session.parent.is_none()
+                && !projection.session.is_archived()
+            {
+                sqlx::query(
+                    "INSERT INTO pending_resume (session_id, message_id, created_at) VALUES (?, ?, ?) \
+                     ON CONFLICT(session_id) DO UPDATE SET message_id = excluded.message_id, \
+                     prompt_message_id = NULL, created_at = excluded.created_at",
+                )
+                .bind(session.storage_key())
+                .bind(message.to_string())
+                .bind(ts_millis)
+                .execute(&mut **tx)
+                .await?;
+            }
+        }
+        _ => {}
     }
     Ok(Envelope {
         seq: EventSeq(seq.max(0) as u64),

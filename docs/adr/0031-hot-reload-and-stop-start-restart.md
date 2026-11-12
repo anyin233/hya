@@ -36,8 +36,10 @@ Three rules replace the handoff.
    next turn sees the new catalog. A source that fails to load keeps its last
    published state.
 2. **A binary change is `stop` then `start`.** `hya serve stop` drains: it
-   cancels every active turn and atomically records its cancellation together
-   with one `pending_resume` row for an interrupted, non-archived root session.
+   cancels every active turn. The store's event writer atomically indexes each
+   assistant `MessageFinished { Cancelled, Shutdown }` in `pending_resume` for
+   a non-archived root session, even when shutdown interrupted turn preparation
+   before its assistant message started. Any assistant start deletes that row.
    Child sessions remain under the resident supervisor's recovery.
    `hya serve start` starts a fresh process that binds its
    own listener. There is no listener inheritance, self-check, generation pin,
@@ -46,11 +48,14 @@ Three rules replace the handoff.
 3. **An interrupted session receives a restore prompt.** On start, each session
    with a `pending_resume` row gets one injected prompt stating that the
    previous turn was interrupted by a restart and which tool calls did not
-   finish, and a new turn is started through normal server admission, including
+   complete successfully, derived from the interrupted message's event log at
+   startup. A new turn is started through normal server admission, including
    guidance, external directories, busy tracking, and cancellation. The row
    remains until the assistant turn starts, so a crash after prompt injection
-   starts the turn on the next launch without injecting a second prompt.
-   Missing or archived sessions lose their rows; a session's restore failure
+   starts the turn on the next launch without injecting a second prompt for
+   that interruption. A second graceful stop is a new interruption and receives
+   its own prompt. An ordinary assistant turn also clears a pending restore.
+   Missing, child, or archived sessions lose their rows; a session's restore failure
    is logged with its id and does not block other sessions or server startup.
    The model decides what to redo.
 

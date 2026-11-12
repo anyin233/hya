@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
-use hya_proto::{FinishCause, SessionId};
+use hya_proto::{FinishCause, MessageId, SessionId};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
@@ -72,6 +72,8 @@ struct ActiveTurn {
     id: u64,
     cancel: CancellationToken,
     cause: Option<FinishCause>,
+    message: Option<MessageId>,
+    message_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Default)]
@@ -87,6 +89,7 @@ pub(crate) struct TurnGate {
     state: Mutex<GateState>,
     next_id: AtomicU64,
     released: Notify,
+    pub(super) drain_cancel: CancellationToken,
     observer: RwLock<Option<Weak<dyn TurnBoundaryObserver>>>,
 }
 
@@ -119,6 +122,8 @@ impl TurnGate {
                 id,
                 cancel: CancellationToken::new(),
                 cause: None,
+                message: None,
+                message_lock: Arc::default(),
             },
         );
         Ok(TurnLease {
@@ -192,6 +197,29 @@ impl TurnGate {
             .and_then(|turn| turn.cause)
     }
 
+    pub(crate) fn message(&self, session: SessionId) -> Option<MessageId> {
+        self.state()
+            .active
+            .get(&session)
+            .and_then(|turn| turn.message)
+    }
+
+    /// Serialize assistant start with deadline-driven terminalization.
+    pub(crate) async fn message_guard(
+        &self,
+        session: SessionId,
+    ) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        let lock = self
+            .state()
+            .active
+            .get(&session)
+            .map(|turn| turn.message_lock.clone());
+        match lock {
+            Some(lock) => Some(lock.lock_owned().await),
+            None => None,
+        }
+    }
+
     /// Start draining: refuse every new claim and cancel every active turn
     /// with `cause`. Returns the sessions whose turns were cancelled.
     /// Idempotent; the first drain's cause wins.
@@ -211,18 +239,10 @@ impl TurnGate {
         for token in tokens {
             token.cancel();
         }
+        self.drain_cancel.cancel();
         // Queued claims re-check and observe the drain.
         self.released.notify_waiters();
         sessions
-    }
-
-    /// Refuse new turns before restart snapshots are taken, without cancelling
-    /// running tools until their pending/running state has been captured.
-    pub(crate) fn prepare_drain(&self, cause: FinishCause) -> Vec<SessionId> {
-        let mut state = self.state();
-        state.draining.get_or_insert(cause);
-        self.released.notify_waiters();
-        state.active.keys().copied().collect()
     }
 
     /// Whether a drain has begun.
@@ -338,6 +358,17 @@ pub struct TurnLease {
 }
 
 impl TurnLease {
+    /// Register the message before fallible preparation, so a drain can close
+    /// this turn even if preparation or sidecar cleanup misses its deadline.
+    pub(crate) fn set_message(&self, message: MessageId) {
+        let mut state = self.gate.state();
+        if let Some(turn) = state.active.get_mut(&self.session)
+            && turn.id == self.id
+        {
+            turn.message = Some(message);
+        }
+    }
+
     /// The session this lease owns.
     #[must_use]
     pub fn session(&self) -> SessionId {

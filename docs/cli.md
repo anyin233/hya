@@ -953,10 +953,17 @@ The next `start` appends one user-role restore prompt, then starts a fresh
 turn with normal project guidance, busy tracking, and cancellation. The row
 is deleted when the assistant message starts; a crash before that point
 starts the turn on the next launch without repeating the prompt. Missing or
-archived sessions are skipped. A restore failure is logged with the session
+archived sessions are skipped. An ordinary assistant turn also clears the row
+when it starts, so continuing with `hya exec`, `-p`, or `loop` before the next
+daemon start does not leave a stale restore. A second shutdown that cancels a
+restored turn is a new interruption and gets its own prompt; a crash after
+injection gets no duplicate prompt for the same interruption.
+A restore failure is logged with the session
 id and does not prevent other restores or server startup. The prompt says the
-previous turn was interrupted by a restart and lists unfinished tool names
-and call IDs. Completed results stay in the transcript. The model decides
+previous turn was interrupted by a restart and lists tool calls that did not
+complete successfully, with names and call IDs. This list is built from the
+interrupted message at startup, including tool errors and denials. Completed
+results stay in the transcript. The model decides
 what to redo; interrupted tools may already have had side effects.
 
 ```sh

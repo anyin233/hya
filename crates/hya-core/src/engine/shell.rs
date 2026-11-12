@@ -229,106 +229,128 @@ impl SessionEngine {
         // already has one active.
         let lease = self.try_begin_turn(session)?;
         let cancel = lease.bind_cancel(&cancel);
-        self.admit_shell_user_message(session).await?;
-        let projection = self.store.read_projection(session).await?;
-        let workdir = session_workdir(agent, &projection);
-        let binding = self.bind_session_runtime(session, &workdir).await?;
-        let stable_id = projection
-            .session
-            .agent
-            .as_ref()
-            .unwrap_or(&agent.name)
-            .as_str();
-        // Shell turns do not attach project/reference guidance.
-        let (agent, resources) = effective_agent_for_binding(agent, stable_id, &binding, None)?;
-
-        self.capture_session_bundle_hooks(session, &binding, stable_id)
-            .await;
-        let bound_hooks = binding.bundle_hooks_for_agent(stable_id);
         let message = MessageId::new();
-        let operation = async {
-            self.emit(
-                session,
-                Event::MessageStarted {
-                    session,
-                    message,
-                    role: Role::Assistant,
-                    agent: None,
-                    model: None,
-                },
-            )
-            .await?;
-            self.emit(
-                session,
-                Event::TurnBindingRecorded {
-                    session,
-                    message,
-                    generation: binding.generation(),
-                },
-            )
-            .await?;
-
-            let part = PartId::new();
-            let call = ToolCallId::new();
-            let name = ToolName::new("bash");
-            self.emit(
-                session,
-                Event::ToolInputStart {
-                    session,
-                    message,
-                    part,
-                    call,
-                    name: name.clone(),
-                },
-            )
-            .await?;
-
-            let finish = tokio::select! {
+        lease.set_message(message);
+        let prepare = async {
+            self.admit_shell_user_message(session).await?;
+            let projection = self.store.read_projection(session).await?;
+            let workdir = session_workdir(agent, &projection);
+            let binding = tokio::select! {
                 biased;
-                () = cancel.cancelled() => FinishReason::Cancelled,
-                outcome = self.execute_shell_part(
-                    ShellPart {
+                () = self.turn_gate.drain_cancel.cancelled() => return Ok((message, FinishReason::Cancelled)),
+                binding = self.bind_session_runtime(session, &workdir) => binding?,
+            };
+            let stable_id = projection
+                .session
+                .agent
+                .as_ref()
+                .unwrap_or(&agent.name)
+                .as_str();
+            // Shell turns do not attach project/reference guidance.
+            let (agent, resources) = effective_agent_for_binding(agent, stable_id, &binding, None)?;
+
+            self.capture_session_bundle_hooks(session, &binding, stable_id)
+                .await;
+            let bound_hooks = binding.bundle_hooks_for_agent(stable_id);
+            let operation = async {
+                let message_guard = self.turn_gate.message_guard(session).await;
+                if self.turn_gate.cancel_cause(session) == Some(hya_proto::FinishCause::Shutdown) {
+                    return Ok((message, FinishReason::Cancelled));
+                }
+                self.emit(
+                    session,
+                    Event::MessageStarted {
+                        session,
+                        message,
+                        role: Role::Assistant,
+                        agent: None,
+                        model: None,
+                    },
+                )
+                .await?;
+                drop(message_guard);
+                self.emit(
+                    session,
+                    Event::TurnBindingRecorded {
+                        session,
+                        message,
+                        generation: binding.generation(),
+                    },
+                )
+                .await?;
+
+                let part = PartId::new();
+                let call = ToolCallId::new();
+                let name = ToolName::new("bash");
+                self.emit(
+                    session,
+                    Event::ToolInputStart {
                         session,
                         message,
                         part,
                         call,
-                        name,
+                        name: name.clone(),
                     },
-                    command,
-                    &binding,
-                    &agent,
-                    &resources,
-                    cancel.clone(),
-                ) => outcome?,
+                )
+                .await?;
+
+                let finish = tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => FinishReason::Cancelled,
+                    outcome = self.execute_shell_part(
+                        ShellPart {
+                            session,
+                            message,
+                            part,
+                            call,
+                            name,
+                        },
+                        command,
+                        &binding,
+                        &agent,
+                        &resources,
+                        cancel.clone(),
+                    ) => outcome?,
+                };
+                Ok((message, finish))
             };
-            self.close_turn_message(
-                None,
-                session,
-                message,
-                finish,
-                (finish == FinishReason::Cancelled)
-                    .then(|| self.turn_gate.cancel_cause(session))
-                    .flatten(),
-            )
-            .await?;
-            Ok((message, finish))
+            if bound_hooks.is_empty() {
+                operation.await
+            } else {
+                let hooks = Arc::new(HookChain::new(bound_hooks)) as Arc<dyn HookDispatcher>;
+                scope_activation_hooks(session, hooks, operation).await
+            }
         };
-        let outcome = if bound_hooks.is_empty() {
-            operation.await
-        } else {
-            let hooks = Arc::new(HookChain::new(bound_hooks)) as Arc<dyn HookDispatcher>;
-            scope_activation_hooks(session, hooks, operation).await
-        };
-        if let Err(error) = &outcome {
-            // Never leave the shell turn's message open (no-op when it never started).
-            let _ = match error {
-                CoreError::Cancelled => {
-                    let cause = self.turn_gate.cancel_cause(session);
-                    self.close_turn_message(None, session, message, FinishReason::Cancelled, cause)
-                        .await
-                }
-                other => self.fail_turn_message(None, session, message, other).await,
-            };
+        let mut outcome = prepare.await;
+        let cause = self.turn_gate.cancel_cause(session);
+        if matches!(outcome, Err(CoreError::Cancelled))
+            && cause == Some(hya_proto::FinishCause::Shutdown)
+        {
+            outcome = Ok((message, FinishReason::Cancelled));
+        }
+        match &outcome {
+            Ok((_, finish)) => {
+                self.close_turn_message(
+                    None,
+                    session,
+                    message,
+                    *finish,
+                    if *finish == FinishReason::Cancelled {
+                        cause
+                    } else {
+                        None
+                    },
+                )
+                .await?
+            }
+            Err(CoreError::Cancelled) => {
+                self.close_turn_message(None, session, message, FinishReason::Cancelled, cause)
+                    .await?
+            }
+            Err(error) => {
+                self.fail_turn_message(None, session, message, error)
+                    .await?
+            }
         }
         drop(lease);
         outcome

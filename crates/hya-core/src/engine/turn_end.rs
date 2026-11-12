@@ -205,11 +205,20 @@ impl SessionEngine {
             return false;
         }
         let until = tokio::time::Instant::now() + deadline;
-        if !self.turn_gate.wait_released(session, until).await
-            && let Ok(envelopes) = self
-                .store
-                .close_open_turns(session, cause, "stopped: the stop deadline passed")
+        if self.turn_gate.wait_released(session, until).await {
+            return true;
+        }
+        if let Some(message) = self.turn_gate.message(session) {
+            if let Err(error) = self
+                .close_turn_message(None, session, message, FinishReason::Cancelled, Some(cause))
                 .await
+            {
+                tracing::error!(%session, %error, "turn stop failed");
+            }
+        } else if let Ok(envelopes) = self
+            .store
+            .close_open_turns(session, cause, "stopped: the stop deadline passed")
+            .await
         {
             for envelope in envelopes {
                 self.publish_envelope(envelope);
@@ -239,25 +248,7 @@ impl SessionEngine {
     /// and waits up to `deadline` for them to end. A turn still running at the
     /// deadline has its open messages closed here instead.
     pub async fn drain_turns(&self, cause: FinishCause, deadline: Duration) -> TurnDrainReport {
-        self.drain_with_straggler_reason(cause, deadline, "stopped: the drain deadline passed")
-            .await
-    }
-
-    /// Shared drain body: cancel every active turn with `cause`, wait up to
-    /// `deadline`, close stragglers with `reason` text.
-    async fn drain_with_straggler_reason(
-        &self,
-        cause: FinishCause,
-        deadline: Duration,
-        straggler_reason: &str,
-    ) -> TurnDrainReport {
-        let mut cancelled = self.turn_gate.begin_drain(cause);
-        // Turns an earlier `begin_drain` already cancelled are still ours.
-        for session in self.turn_gate.active_sessions() {
-            if !cancelled.contains(&session) {
-                cancelled.push(session);
-            }
-        }
+        let cancelled = self.turn_gate.begin_drain(cause);
         let until = tokio::time::Instant::now() + deadline;
         let mut report = TurnDrainReport {
             cancelled,
@@ -268,7 +259,7 @@ impl SessionEngine {
         }
         report.stragglers = self.turn_gate.active_sessions();
         for session in &report.stragglers {
-            if let Some((message, _)) = self.restart_prompt(*session) {
+            if let Some(message) = self.turn_gate.message(*session) {
                 if let Err(error) = self
                     .close_turn_message(
                         None,
@@ -279,13 +270,11 @@ impl SessionEngine {
                     )
                     .await
                 {
-                    tracing::error!(%session, %error, "restart cancellation failed");
+                    tracing::error!(%session, %error, "turn drain failed");
                 }
-                continue;
-            }
-            if let Ok(envelopes) = self
+            } else if let Ok(envelopes) = self
                 .store
-                .close_open_turns(*session, cause, straggler_reason)
+                .close_open_turns(*session, cause, "stopped: the drain deadline passed")
                 .await
             {
                 for envelope in envelopes {
@@ -309,20 +298,7 @@ impl SessionEngine {
         finish: FinishReason,
         cause: Option<FinishCause>,
     ) -> Result<(), CoreError> {
-        if finish == FinishReason::Cancelled
-            && cause == Some(FinishCause::Shutdown)
-            && let Some((interrupted, prompt)) = self.restart_prompt(session)
-            && interrupted == message
-        {
-            let envelopes = self
-                .store
-                .cancel_turn_for_restart(session, message, self.runtime_owner, &prompt)
-                .await?;
-            for envelope in envelopes {
-                self.publish_envelope(envelope);
-            }
-            return Ok(());
-        }
+        let _message_guard = self.turn_gate.message_guard(session).await;
         let projection = self.store.read_projection(session).await?;
         let Some(entry) = projection
             .session
@@ -330,6 +306,32 @@ impl SessionEngine {
             .iter()
             .find(|entry| entry.id == message)
         else {
+            // An admitted turn can be stopped before runtime/sidecar preparation
+            // opens its message. Shutdown must still leave its event pair.
+            if finish == FinishReason::Cancelled && cause == Some(FinishCause::Shutdown) {
+                self.emit_batch_for_actor(
+                    actor_claim,
+                    session,
+                    vec![
+                        Event::MessageStarted {
+                            session,
+                            message,
+                            role: Role::Assistant,
+                            agent: None,
+                            model: None,
+                        },
+                        Event::MessageFinished {
+                            session,
+                            message,
+                            role: Role::Assistant,
+                            finish,
+                            tokens: None,
+                            cause,
+                        },
+                    ],
+                )
+                .await?;
+            }
             return Ok(());
         };
         if entry.finish.is_some() {
