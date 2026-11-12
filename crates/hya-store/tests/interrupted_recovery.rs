@@ -3,7 +3,6 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::borrow::Cow;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -12,7 +11,6 @@ use hya_proto::{
     PartProjection, Role, SessionId, ToolCallId, ToolPartState,
 };
 use hya_store::SessionStore;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 fn temp_db() -> String {
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
@@ -191,53 +189,6 @@ async fn recovery_requires_the_runtime_owner_claim() {
             .await
             .is_err()
     );
-}
-
-/// A database written before the open-turn index existed: the migration
-/// backfills the index from the event log, so the first recovery after the
-/// upgrade still closes turns a crash left open.
-#[tokio::test]
-async fn upgrade_backfills_turns_left_open_before_the_index_existed() {
-    let path = temp_db();
-    let open = SessionId::new();
-    let done = SessionId::new();
-    {
-        let options = SqliteConnectOptions::new()
-            .filename(&path)
-            .create_if_missing(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap();
-        let mut migrator = sqlx::migrate!("./migrations");
-        let before_index = migrator
-            .migrations
-            .iter()
-            .filter(|migration| migration.version < 10)
-            .cloned()
-            .collect::<Vec<_>>();
-        migrator.migrations = Cow::Owned(before_index);
-        migrator.run(&pool).await.unwrap();
-        for (session, event) in crashed_log(open, done) {
-            sqlx::query("INSERT INTO event_log (session_id, payload, ts) VALUES (?, ?, 1)")
-                .bind(session.storage_key())
-                .bind(serde_json::to_string(&event).unwrap())
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
-        pool.close().await;
-    }
-
-    let store = SessionStore::connect(&path).await.unwrap();
-    let owner = OwnerRunId::new();
-    store.claim_runtime_owner(owner).unwrap();
-    let report = store.recover_interrupted_turns(owner).await.unwrap();
-    assert_eq!((report.sessions, report.messages), (1, 1));
-    assert_recovered(&store, open, done).await;
-    drop(store);
-    remove_db(&path);
 }
 
 /// A resident spawned by a `task` call that already returned outlives its

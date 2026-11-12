@@ -58,12 +58,14 @@
 
 ## Migrations
 
-- Add monotonically numbered SQL files under `crates/hya-store/migrations/`.
+- The session store uses one `0001_init.sql` baseline under
+  `crates/hya-store/migrations/`. Existing schemas without its checksum fail at
+  open with `StoreError::UnsupportedDatabase`; never upgrade the old baseline.
 - `BundleRegistry` embeds its separate migrations from
   `crates/hya-store/bundle_migrations`; migration tests use a `BundleRegistry`
   temp DB.
-- Migrations are additive for active control-plane state. Do not repurpose the
-  dormant `session`, `team_run`, or `team_member` tables for admission.
+- Keep `session` as the placement/parent index; admission belongs only in
+  `admission_journal`. Retired team/mail/task/transcript tables are absent.
 - Keep CHECK/UNIQUE constraints aligned with Rust invariants; exercise
   `SessionStore` migrations through `SessionStore::connect_memory` tests and
   `BundleRegistry` migrations through its temp-DB tests.
@@ -71,13 +73,12 @@
   heartbeat, wall-clock, or background-expiry columns.
 - Write-through index tables (`materialize.rs`) are maintained inside the
   event-append transaction and read only for narrow queries that must not
-  replay every log. `open_assistant_message` (0010) indexes assistant messages
+  replay every log. `open_assistant_message` indexes assistant messages
   without a finish for startup crash recovery; every `event_log` writer must go
   through `append_event` / `append_event_in_transaction` /
   `commit_resident_mutation` so the index stays exact, and `delete_session`
-  clears its rows. A new index migration backfills from `event_log` in one
-  pass (filter on the `{"type":"…` payload prefix before `json_extract`).
-- `projection_snapshot` (0011) is the durable level of the projection cache —
+  clears its rows.
+- `projection_snapshot` is the durable level of the projection cache —
   a pure cache of the shared reducer, never read as truth. Rows are trusted
   only under the running `PROJECTION_REDUCER_VERSION` and while their anchor
   event (`event_log.seq = last_seq` of the same session) exists. Any change to
@@ -87,13 +88,12 @@
   the cache back; a new session-row removal path must also delete the
   session's `projection_snapshot` row and drop the in-process entry, as
   `delete_session` does. See `docs/architecture/storage.md#projection-cache`.
-- `saved_permission.time_created` (0013) is a nullable ms timestamp added by
-  `ALTER TABLE`; rows from before it keep `NULL` and report no time.
-- `project` / `project_root` (0014, ADR-0024) are mutable configuration
+- `saved_permission.time_created` is a nullable ms timestamp; NULL reports no time.
+- `project` / `project_root` (ADR-0024) are mutable configuration
   tables like `saved_permission`, not events and not a projection. A session's
   membership lives in its `session_created` event (`project`, `kind`) and is
   mirrored by the materializer into `session.project_id` / `session.kind`
-  (`ALTER TABLE`; older rows read as `kind = 'project'`, no Project). Session
+  in the baseline schema. Session
   existence and archive state still come from the log and the projection:
   Project session counts and `list_sessions_in` join `session` against
   `event_log`, and `delete_project` folds candidate roots to skip archived
@@ -101,7 +101,7 @@
   Project is deleted. Roots are validated in Rust (absolute, lexically
   normalized, no `..`, de-duplicated, non-empty) with typed `StoreError`
   variants; `resolve_project_by_path` matches whole path components.
-- `file_blob` (0012) holds the per-session, content-addressed file contents
+- `file_blob` holds the per-session, content-addressed file contents
   behind session revert (`files_changed` / `session_reverted` events carry
   only the sha256 hash). It is auxiliary content, not a projection: write the
   blob before appending the event that names it, keep it scoped to the

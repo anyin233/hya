@@ -7,7 +7,7 @@
 //! - an in-process map `session -> Arc<Projection>` shared by every clone of a
 //!   [`crate::SessionStore`], advanced on read by folding only the events
 //!   after the cached projection's `last_seq`;
-//! - durable rows in `projection_snapshot` (migration 0011), written every
+//! - durable rows in `projection_snapshot`, written every
 //!   [`DEFAULT_SNAPSHOT_INTERVAL`] newly folded events, so a restarted process
 //!   folds only the tail instead of the whole log.
 //!

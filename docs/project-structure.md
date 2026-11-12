@@ -164,10 +164,9 @@ Important modules:
 | File | Purpose |
 | --- | --- |
 | [`src/lib.rs`](../crates/hya-store/src/lib.rs) | Connections, append/replay/`read_projection`, list/delete sessions, token ledger, `decode_session_key`. |
-| [`src/admission.rs`](../crates/hya-store/src/admission.rs) | Durable spawn-admission journal (queue, bindings, fairness). |
+| [`src/admission.rs`](../crates/hya-store/src/admission.rs) | Durable spawn-admission operation deduplication, lifecycle, and refunds. |
 | [`src/mailbox.rs`](../crates/hya-store/src/mailbox.rs) | Event-sourced mail writes, resident recovery, stop/failure finalization. |
 | [`src/resident_claim.rs`](../crates/hya-store/src/resident_claim.rs) | Actor claim fencing primitives. |
-| [`src/sync.rs`](../crates/hya-store/src/sync.rs) | Compat sync history/replay helpers. |
 | [`src/permission.rs`](../crates/hya-store/src/permission.rs) | Saved permissions. |
 | [`src/bundle_registry.rs`](../crates/hya-store/src/bundle_registry.rs) | **Separate** installed-bundle registry SQLite DB (not the session event log). |
 | [`src/agent_model_preference.rs`](../crates/hya-store/src/agent_model_preference.rs) | Durable per-Agent model preference rows kept outside the session event log. |
@@ -178,15 +177,7 @@ Session-store migrations (`migrations/`):
 
 | Migration | Role |
 | --- | --- |
-| `0001_init.sql` | Core schema: event log plus reserved tables (sessions, messages, parts, teams, mail, tasks, goals). Projection remains event-log based. |
-| `0002_sync_event.sql` | Compat sync event history. |
-| `0003_saved_permission.sql` | Saved permission rows. |
-| `0004_admission_journal.sql` | Spawn admission journal. |
-| `0005_resident_actor_claim.sql` | Resident actor claims. |
-| `0006_admission_queue_states.sql` | Admission queue states. |
-| `0007_admission_bindings.sql` | Admission bindings. |
-| `0008_admission_fairness.sql` | Admission fairness bookkeeping. |
-| `0009_agent_model_preference.sql` | Durable per-Agent model preference table. |
+| `0001_init.sql` | Current event log, placement/recovery indexes, token ledger, permissions, Projects, preferences, admission/actor fencing, and handoff/interaction state. Older session schemas are rejected at open; see [Storage](architecture/storage.md#session-schema-and-compatibility). |
 
 Bundle registry uses a **separate** migration set under
 `bundle_migrations/0001_init.sql` for the installed-bundle database file.
