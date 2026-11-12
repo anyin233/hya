@@ -1628,7 +1628,6 @@ mod tests {
                     crate::auth_cmd::OauthCommand::Login {
                         provider,
                         oauth_type,
-                        device,
                         loopback,
                         no_browser,
                         browser,
@@ -1638,8 +1637,7 @@ mod tests {
             }) => {
                 assert_eq!(provider, "codex");
                 assert_eq!(oauth_type, "openai-codex");
-                // Defaults applied at runtime: device + no-browser for openai-codex.
-                assert!(!device);
+                // Defaults applied at runtime: device-code + no-browser for openai-codex.
                 assert!(!loopback);
                 assert!(!no_browser);
                 assert!(!browser);

@@ -450,7 +450,7 @@ async fn list(refresh: bool, db: &str) -> anyhow::Result<()> {
         if index > 0 {
             println!();
         }
-        let key = match auth::load_credential(&provider.id) {
+        let key = match auth::load_credential(&provider.id)? {
             Some(credential) if credential.oauth().is_some() => "oauth",
             Some(_) => "saved key",
             None if provider.inline_api_key => "config api_key",

@@ -1215,7 +1215,7 @@ configured exits 1.
 
 ```sh
 hya login <provider> <token>
-hya oauth login --provider <name> --type <openai-codex|grok-build|aliases…> [--device] [--loopback] [--no-browser] [--browser] [--model <id>] [--base-url <url>]
+hya oauth login --provider <name> --type <openai-codex|grok-build> [--loopback] [--no-browser] [--browser] [--model <id>] [--base-url <url>]
 hya oauth status [provider]
 hya models [provider] [--verbose] [--refresh]
 hya agent list [--all]
@@ -1226,14 +1226,9 @@ hya agent list [--all]
 OAuth flow in Rust, stores a refreshable credential bundle, and upserts the
 provider route into `config.yaml`.
 
-**`--type` values and aliases.** Interactive OAuth accepts only two provider
-implementations:
-
-| Canonical | Accepted aliases |
-| --- | --- |
-| `openai-codex` | `openai_codex`, `codex` |
-| `grok-build` | `grok_build`, `grok`, `xai-oauth` |
-
+**`--type` values.** Interactive OAuth accepts only two provider
+implementations, spelled exactly as their `kind` label: `openai-codex` and
+`grok-build`.
 Every other provider must use `hya login <provider> <token>` or an
 inline `api_key` in config.
 
@@ -1252,7 +1247,7 @@ Prefer the default device-code flow on headless or remote machines.
 **Timeout and options.** The whole interactive login has a **600-second
 (10 minute)** default timeout. If the user does not complete device or loopback
 approval in that window, the command fails and must be rerun. Flags map to
-`OAuthLoginOptions`: `provider`, `oauth_type`, `device`, `loopback`,
+`OAuthLoginOptions`: `provider`, `oauth_type`, `loopback`,
 `no_browser`, `model`, `base_url` (the `auth_dir` / `config_path` fields are
 test-only overrides).
 
