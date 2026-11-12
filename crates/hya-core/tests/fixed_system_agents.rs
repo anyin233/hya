@@ -514,13 +514,71 @@ async fn summarize_session_exact_resolves_summary_from_one_captured_binding() {
         .await
         .unwrap();
 
+    let message = hya_proto::MessageId::new();
+    let part = PartId::new();
+    let call = hya_proto::ToolCallId::new();
+    engine
+        .store()
+        .append_events(
+            session,
+            vec![
+                Event::MessageStarted {
+                    session,
+                    message,
+                    role: Role::Assistant,
+                    agent: None,
+                    model: None,
+                },
+                Event::ToolCallRequested {
+                    session,
+                    message,
+                    part,
+                    call,
+                    name: hya_proto::ToolName::new("bash"),
+                    input: serde_json::json!({"command": "cargo test evidence"}),
+                },
+                Event::ToolResult {
+                    session,
+                    message,
+                    part,
+                    call,
+                    output: serde_json::json!({"stdout": "evidence tests passed"}),
+                    time_ms: 1,
+                },
+                Event::MessageFinished {
+                    session,
+                    message,
+                    role: Role::Assistant,
+                    finish: FinishReason::Stop,
+                    tokens: None,
+                    cause: None,
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
     engine
         .summarize_session(session)
         .await
         .expect("summary definition present");
 
+    let handoff = engine.terminal_handoff(session).await.unwrap();
+    assert!(!handoff.degraded);
     let requests = provider.requests.lock().unwrap();
-    assert_eq!(requests.len(), 1, "exactly one summary completion");
+    let rendered = serde_json::to_string(&requests[0].messages).unwrap();
+    assert!(rendered.contains("cargo test evidence"), "{rendered}");
+    assert!(rendered.contains("evidence tests passed"), "{rendered}");
+    assert_eq!(requests.len(), 2, "summary and handoff completions");
+    let handoff_input = serde_json::to_string(&requests[1].messages).unwrap();
+    assert!(
+        handoff_input.contains("cargo test evidence"),
+        "{handoff_input}"
+    );
+    assert!(
+        handoff_input.contains("evidence tests passed"),
+        "{handoff_input}"
+    );
     let req = &requests[0];
     assert_eq!(req.system.as_deref(), Some(builtin_prompt("hya-summary")));
     assert_eq!(req.model.as_str(), "remembered/summary");
@@ -1096,4 +1154,48 @@ async fn compaction_usage_is_attributed_with_compaction_purpose() {
         compaction.len() as u64
     );
     assert_eq!(usage.by_model.len(), 3);
+}
+
+#[tokio::test]
+async fn manual_compaction_waits_for_turn_lease() {
+    let workdir = support::TestDir::new("fixed-summary-session");
+    let provider = Arc::new(CaptureProvider {
+        requests: Mutex::new(Vec::new()),
+    });
+    let engine = engine_with_capture(
+        catalog(&[AgentFixture::main("hya-main")]),
+        provider.clone(),
+        true,
+    )
+    .await;
+    engine.runtime_registry().publish_agent_model_preferences(
+        [(
+            "hya-summary".to_string(),
+            ModelRef::new("remembered/summary"),
+        )]
+        .into_iter()
+        .collect(),
+    );
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("hya-main"),
+            model: ModelRef::new("session-model"),
+            workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    let lease = engine.try_begin_turn(session).unwrap();
+    let summary = engine.summarize_session(session);
+    tokio::pin!(summary);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(20), &mut summary)
+            .await
+            .is_err()
+    );
+    assert!(provider.requests.lock().unwrap().is_empty());
+    drop(lease);
+    summary.await.unwrap();
 }

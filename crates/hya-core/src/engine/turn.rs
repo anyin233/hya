@@ -32,7 +32,7 @@ use crate::sidecar::{SidecarEnvironment, SidecarHandle, SidecarStart};
 use crate::workflow::WorkflowTurnRoute;
 use crate::{AgentResourcePolicy, TurnBinding};
 
-mod messages;
+pub(super) mod messages;
 
 use super::spill::ArtifactEvictionSink;
 use super::stream_round::RoundAttribution;

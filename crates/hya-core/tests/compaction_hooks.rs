@@ -542,3 +542,78 @@ async fn compaction_commit_failure_is_atomic_and_fails_turn() {
     );
     assert!(!events.iter().any(|e| matches!(&e.event, Event::TextDelta { delta, .. } if delta.contains(hya_provider::COMPACT_CONTEXT_MARKER))));
 }
+
+/// SQLite's data_version on a separate connection advances once per writer
+/// transaction, independent of how many event rows that transaction appends.
+struct TransactionCountingSummarizer {
+    observer: tokio::sync::Mutex<sqlx::SqliteConnection>,
+    before: std::sync::atomic::AtomicI64,
+}
+
+#[async_trait]
+impl Summarizer for TransactionCountingSummarizer {
+    async fn summarize(
+        &self,
+        _messages: &[hya_proto::Message],
+        _options: SummarizeOptions,
+    ) -> Result<String, hya_core::CoreError> {
+        let version: i64 = sqlx::query_scalar("PRAGMA data_version")
+            .fetch_one(&mut *self.observer.lock().await)
+            .await
+            .unwrap();
+        self.before
+            .store(version, std::sync::atomic::Ordering::SeqCst);
+        Ok("one committed summary".to_string())
+    }
+}
+
+#[tokio::test]
+async fn successful_compaction_is_one_transaction() {
+    use sqlx::Connection;
+    use std::sync::atomic::{AtomicI64, Ordering};
+    let dir = tempdir();
+    let db = dir.join("events.db");
+    let store = SessionStore::connect(db.to_str().unwrap()).await.unwrap();
+    let observer = sqlx::SqliteConnection::connect(&format!("sqlite://{}", db.display()))
+        .await
+        .unwrap();
+    let summarizer = Arc::new(TransactionCountingSummarizer {
+        observer: tokio::sync::Mutex::new(observer),
+        before: AtomicI64::new(0),
+    });
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
+    let engine = SessionEngine::new(
+        store,
+        Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted_turns(vec![])))),
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        perm,
+        EventBus::default(),
+    )
+    .with_compaction(summarizer.clone(), CompactionConfig::default());
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    engine
+        .admit_user_prompt(session, "summarize this".to_string())
+        .await
+        .unwrap();
+    let marker = engine.summarize_session(session).await.unwrap();
+    let after: i64 = sqlx::query_scalar("PRAGMA data_version")
+        .fetch_one(&mut *summarizer.observer.lock().await)
+        .await
+        .unwrap();
+    assert_eq!(after - summarizer.before.load(Ordering::SeqCst), 1);
+    assert!(
+        engine.replay(session).await.unwrap().iter().any(
+            |e| matches!(e.event, Event::ContextCompacted { message, .. } if message == marker)
+        )
+    );
+}
