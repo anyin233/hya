@@ -33,17 +33,16 @@ declared tools before the runtime can publish it.
 | Bundle | Canonical tool names |
 | --- | --- |
 | `hya/base-tools` | `read`, `write`, `edit`, `ls`, `glob`, `find`, `grep`, `ask_user`, `bash`, `apply_patch` |
-| `hya/extended-tools` | `invalid`, `lsp`, `skill`, `list_agents`, `task`, `workflow`, `search_agent`, `archive`, `plan_exit`, `project_activity`, `wait` |
+| `hya/extended-tools` | `lsp`, `skill`, `list_agents`, `task`, `workflow`, `search_agent`, `archive`, `plan_exit`, `project_activity`, `wait` |
 | `hya/network-tools` | `webfetch`, `websearch` |
 | `hya/channel-tools` | `send`, `list_channel`, `report`, `wait` (overrides extended-tools' `wait`) |
 | `hya/todo-tools` | `todo__read`, `todo__update_status`, `todo__update_content` |
 
-The registry holds 29 canonical names: `wait` is exported by two families and
+The registry holds 28 canonical names: `wait` is exported by two families and
 installed once.
 
-`ask_user` is the existing canonical name for the requested `ask` function;
-`question` remains its hidden compatibility alias. The user-assigned `lsp`,
-`task`, and `invalid` tools belong to the extended family.
+`ask_user` is the canonical name for the requested `ask` function; `question` remains its hidden alias. The
+user-assigned `lsp` and `task` tools belong to the extended family.
 
 `ask_user` asks structured questions through the interaction plane. For example,
 `{"questions":[{"question":"Ship?","header":"confirm","options":[{"label":"yes","description":"proceed"}]}]}`
@@ -285,3 +284,16 @@ A mismatch or missing
 library prevents builtin registry construction.
 Calls made outside an existing Tokio runtime use a one-call host runtime;
 the same bundle ABI and permission context apply.
+
+### Legacy cleanup
+
+The `invalid` placeholder tool is no longer registered. Artifact reads return the
+captured bytes (with any requested handle projection); artifact post-processing
+hooks are no longer supported.
+The six hidden aliases remain dispatchable because current frontend consumers
+still recognize them. `apply_patch` and `plan_exit` remain available to the
+first-party core agents.
+
+Use `send.channel`, `archive.target`, `wait.targets`, `wait.timeout_secs`,
+and `workflow.action`; their former parameter aliases are removed.
+For example, wait for a worker with `{"targets":["worker"],"timeout_secs":30}`.

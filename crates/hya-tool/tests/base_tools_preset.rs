@@ -52,7 +52,6 @@ fn each_embedded_bundle_owns_its_requested_tool_family() {
         (
             "hya/extended-tools",
             &[
-                "invalid",
                 "lsp",
                 "skill",
                 "list_agents",
@@ -113,7 +112,6 @@ fn embedded_base_tools_preset_is_the_registry_authority() {
     }
 
     let frozen = [
-        ("invalid", ToolPermission::Tool, &[][..]),
         ("read", ToolPermission::ReadOnly, &[][..]),
         ("write", ToolPermission::Tool, &[][..]),
         ("edit", ToolPermission::Tool, &[][..]),

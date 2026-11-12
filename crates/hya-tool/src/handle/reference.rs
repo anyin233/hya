@@ -51,9 +51,8 @@ impl fmt::Display for HandleScheme {
 
 /// A slice of a resolved body, requested through the handle's query string.
 ///
-/// Projections are applied by the router *after* any hook chain, so a hook sees
-/// the whole body and the caller's `?head=40` still means the first forty lines
-/// of what the hook produced.
+/// Projections select a portion of the resource body.
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum Projection {
     /// The entire body.
