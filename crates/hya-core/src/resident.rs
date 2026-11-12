@@ -230,14 +230,14 @@ enum Ending {
     Archived(String),
     Killed(String),
     Teardown,
-    Shutdown,
+    Shutdown(FinishCause),
 }
 
 impl Ending {
     fn cause(&self) -> FinishCause {
         match self {
             Self::Archived(_) | Self::Teardown => FinishCause::Archived,
-            Self::Shutdown => FinishCause::Shutdown,
+            Self::Shutdown(cause) => *cause,
             Self::Killed(_) => FinishCause::Other,
             Self::Failed(_) => FinishCause::Other,
             Self::Reported(_) => FinishCause::UserCancel,
@@ -257,10 +257,15 @@ impl Ending {
                 MemberRunStatus::Cancelled,
                 "root turn teardown".into(),
             ),
-            Self::Shutdown => (
+            Self::Shutdown(cause) => (
                 ArchiveReason::Shutdown,
                 MemberRunStatus::Cancelled,
-                "stopped: shutdown".into(),
+                match cause {
+                    FinishCause::UserCancel => "stopped: cancelled by the user",
+                    FinishCause::LeaderFailed => "stopped: the team lead failed",
+                    _ => "stopped: shutdown",
+                }
+                .into(),
             ),
             Self::Reported(_) | Self::Failed(_) => unreachable!("report is not a forced ending"),
         }
@@ -314,6 +319,9 @@ struct TeamState {
     residents: HashMap<SessionId, Episode>,
     /// Number of non-idle residents (incl. main). Quiescence = this is 0.
     busy: usize,
+    registrations: usize,
+    workflow_runs: usize,
+    main_autonomous: bool,
     phase: TeamPhase,
     turns_used: u64,
     messages_used: u64,
@@ -452,6 +460,52 @@ struct TeamActor {
     supervisor: Weak<ResidentSupervisor>,
 }
 
+/// Keeps a selected team alive across claim writes and initialization.
+struct TeamRegistration(Arc<TeamActor>);
+
+impl TeamRegistration {
+    // Caller holds the supervisor map lock, excluding retirement.
+    fn new(team: Arc<TeamActor>) -> Self {
+        team.lock().registrations += 1;
+        Self(team)
+    }
+}
+
+impl std::ops::Deref for TeamRegistration {
+    type Target = Arc<TeamActor>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for TeamRegistration {
+    fn drop(&mut self) {
+        self.0.lock().registrations -= 1;
+        if let Some(supervisor) = self.0.supervisor.upgrade() {
+            supervisor.retire_team(&self.0);
+        }
+    }
+}
+
+/// Workflow execution owns team progress; a cold lead has no model turn to resume.
+pub(crate) struct WorkflowActivity(TeamRegistration);
+
+impl Drop for WorkflowActivity {
+    fn drop(&mut self) {
+        let mut state = self.0.lock();
+        state.workflow_runs -= 1;
+        state.last_synth_work_seq = state.work_seq;
+        if state.workflow_runs == 0
+            && state.main_autonomous
+            && let Some(main) = state.residents.get(&self.0.root)
+            && main.has_work()
+        {
+            main.notify.notify_one();
+        }
+    }
+}
+
 impl TeamActor {
     fn new(
         root: SessionId,
@@ -466,6 +520,9 @@ impl TeamActor {
             state: Mutex::new(TeamState {
                 residents: HashMap::new(),
                 busy: 0,
+                registrations: 0,
+                workflow_runs: 0,
+                main_autonomous: true,
                 phase: TeamPhase::Live,
                 turns_used: 0,
                 messages_used: 0,
@@ -713,7 +770,7 @@ impl TeamActor {
     /// Decide atomically what this claim does next, charging the turn budget.
     async fn next_action(&self, session: SessionId, claim: Option<&ActorClaim>) -> Action {
         let mut st = self.lock();
-        let lead_failed = st.lead_failed;
+        let lead_failed = st.lead_failed || st.workflow_runs != 0 || !st.main_autonomous;
         let Some(slot) = st
             .residents
             .get_mut(&session)
@@ -927,7 +984,12 @@ impl TeamActor {
     fn maybe_fire_quiescence(&self, st: &mut TeamState) {
         // A failed lead gets no synthesis turn: the lead is dead until the
         // user resumes it (the synthesis re-fires after its next turn).
-        if st.phase.killed() || st.busy != 0 || st.lead_failed {
+        if st.phase.killed()
+            || st.busy != 0
+            || st.lead_failed
+            || st.workflow_runs != 0
+            || !st.main_autonomous
+        {
             return;
         }
         // Nor does a lead the user stopped: the user, not the harness, says
@@ -1019,6 +1081,9 @@ impl TeamActor {
         let mut st = self.lock();
         if st.main_session == Some(session) {
             st.lead_failed = false;
+            if st.workflow_runs == 0 {
+                st.main_autonomous = true;
+            }
         }
     }
 
@@ -1895,7 +1960,7 @@ async fn episode_task(
                     .get(&session)
                     .is_none_or(|slot| slot.ending.is_none())
             {
-                team.kill(Ending::Shutdown).await;
+                team.kill(Ending::Shutdown(FinishCause::Shutdown)).await;
             }
             finish_episode(
                 &team,
@@ -1916,7 +1981,7 @@ async fn episode_task(
                 .get(&session)
                 .is_some_and(|slot| slot.ending.is_some());
             if !requested {
-                team.kill(Ending::Shutdown).await;
+                team.kill(Ending::Shutdown(FinishCause::Shutdown)).await;
             }
         }
         if !team.owns_slot(session, task_claim.as_ref()) {
@@ -1951,7 +2016,7 @@ async fn episode_task(
                         .get(&session)
                         .is_none_or(|slot| slot.ending.is_none())
                     {
-                        team.kill(Ending::Shutdown).await;
+                        team.kill(Ending::Shutdown(FinishCause::Shutdown)).await;
                     }
                     continue;
                 }
@@ -2112,7 +2177,7 @@ async fn episode_task(
                         result = &mut completion => result,
                         _ = cancel.cancelled() => {
                             if team.lock().residents.get(&session).is_none_or(|slot| slot.ending.is_none()) {
-                                team.kill(Ending::Shutdown).await;
+                                team.kill(Ending::Shutdown(FinishCause::Shutdown)).await;
                             }
                             let ending = team.lock().residents.get(&session).and_then(|slot| slot.ending.clone());
                             if let Some(ending) = ending {
@@ -2411,6 +2476,8 @@ pub struct ResidentSupervisor {
     /// Claim commit + install and orphan Takeover share this boundary across
     /// team generations. Kills never wait for it or for registration hooks.
     claim_writes: tokio::sync::Mutex<()>,
+    #[cfg(test)]
+    registration_pause: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
     self_ref: Weak<ResidentSupervisor>,
     listener_stop: CancellationToken,
     listener: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -3049,6 +3116,8 @@ impl ResidentSupervisor {
             teams: Mutex::new(HashMap::new()),
             episodes: Mutex::new(HashMap::new()),
             claim_writes: tokio::sync::Mutex::new(()),
+            #[cfg(test)]
+            registration_pause: Mutex::new(None),
             self_ref: self_ref.clone(),
             listener_stop: CancellationToken::new(),
             listener: Mutex::new(None),
@@ -3148,37 +3217,52 @@ impl ResidentSupervisor {
             .or_else(|| self.teams().get(&session).cloned())
     }
 
-    /// Resolve before taking the map lock; install main before exposing the new
-    /// team. A killed team's old context and counters are never copied forward.
-    async fn team_for(&self, root: SessionId) -> Result<Arc<TeamActor>, CoreError> {
-        self.team_for_with_main(root, None).await
+    /// Reserve under the map lock so retirement cannot cancel a team between
+    /// selection and episode installation. Explicit kills still end registrations.
+    async fn team_for(&self, root: SessionId) -> Result<TeamRegistration, CoreError> {
+        if let Some(team) = self.teams().get(&root).cloned() {
+            return Ok(TeamRegistration::new(team));
+        }
+        let main = self.resolve_main_activation(root).await?;
+        let mut teams = self.teams();
+        let team = teams
+            .entry(root)
+            .or_insert_with(|| self.new_team(root, main));
+        Ok(TeamRegistration::new(team.clone()))
     }
 
-    async fn team_for_with_main(
+    pub(crate) async fn workflow_activity(
         &self,
-        root: SessionId,
-        main: Option<MainActivation>,
-    ) -> Result<Arc<TeamActor>, CoreError> {
-        if let Some(team) = self.teams().get(&root).cloned() {
-            return Ok(team);
+        session: SessionId,
+    ) -> Result<WorkflowActivity, CoreError> {
+        let (root, _) = self.engine.session_lineage(session).await?;
+        let team = self.team_for(root).await?;
+        {
+            let mut state = team.lock();
+            if state.workflow_runs == 0 && !self.engine.turn_active(root) {
+                state.main_autonomous = false;
+            }
+            state.workflow_runs += 1;
         }
-        let main = match main {
-            Some(main) => main,
-            None => self.resolve_main_activation(root).await?,
-        };
+        Ok(WorkflowActivity(team))
+    }
+
+    fn new_team(&self, root: SessionId, main: MainActivation) -> Arc<TeamActor> {
+        let team = Arc::new(TeamActor::new(
+            root,
+            self.engine.clone(),
+            self.self_ref.clone(),
+        ));
+        team.install_main(main);
+        team
+    }
+
+    fn team_for_with_main(&self, root: SessionId, main: MainActivation) {
         let mut teams = self.teams();
-        Ok(teams
+        let team = teams
             .entry(root)
-            .or_insert_with(|| {
-                let team = Arc::new(TeamActor::new(
-                    root,
-                    self.engine.clone(),
-                    self.self_ref.clone(),
-                ));
-                team.install_main(main);
-                team
-            })
-            .clone())
+            .or_insert_with(|| self.new_team(root, main));
+        team.lock().main_autonomous = true;
     }
 
     fn request_team_end(&self, team: &TeamActor, ending: Ending) -> (bool, Vec<EpisodeDone>) {
@@ -3197,7 +3281,7 @@ impl ResidentSupervisor {
         let TeamPhase::Killed(ending) = state.phase.clone() else {
             unreachable!()
         };
-        if matches!(ending, Ending::Teardown | Ending::Shutdown) {
+        if matches!(ending, Ending::Teardown | Ending::Shutdown(_)) {
             self.engine.cancel_turn(team.root, ending.cause());
         }
         let done = state
@@ -3220,6 +3304,7 @@ impl ResidentSupervisor {
         let mut state = team.lock();
         if state.phase.killed()
             || state.busy != 0
+            || state.registrations != 0
             || self.engine.turn_active(team.root)
             || state
                 .residents
@@ -3230,7 +3315,11 @@ impl ResidentSupervisor {
         }
         teams.remove(&team.root);
         for (session, slot) in &mut state.residents {
-            slot.request_end(&self.engine, *session, Ending::Shutdown);
+            slot.request_end(
+                &self.engine,
+                *session,
+                Ending::Shutdown(FinishCause::Shutdown),
+            );
         }
         team.cancel.cancel();
     }
@@ -3309,11 +3398,11 @@ impl ResidentSupervisor {
     }
 
     async fn resolve_main_activation(&self, root: SessionId) -> Result<MainActivation, CoreError> {
-        let projection = self.engine.read_projection(root).await?;
+        let mut projection = self.engine.read_projection(root).await?;
         let session = &projection.session;
         let invalid =
             || CoreError::Invalid(format!("root session {root} lacks activation context"));
-        let base = AgentSpec {
+        let mut base = AgentSpec {
             name: session.agent.clone().ok_or_else(invalid)?,
             model: session.model.clone().ok_or_else(invalid)?,
             workdir: session.workdir.clone().ok_or_else(invalid)?.into(),
@@ -3324,6 +3413,14 @@ impl ResidentSupervisor {
             .engine
             .bind_session_runtime(root, &base.workdir)
             .await?;
+        if self
+            .engine
+            .fall_back_from_missing_agent(root, &projection, &binding)
+            .await?
+        {
+            projection = self.engine.read_projection(root).await?;
+            base.name = projection.session.agent.clone().ok_or_else(invalid)?;
+        }
         let agent = self
             .engine
             .agent_spec_for_binding(&binding, &base, base.name.as_str())?;
@@ -3398,11 +3495,11 @@ impl ResidentSupervisor {
             }
             let mut done = Vec::new();
             for team in teams {
-                done.extend(team.kill(Ending::Shutdown).await);
+                done.extend(team.kill(Ending::Shutdown(cause)).await);
             }
             for root in &roots {
                 for team in self.episode_teams(*root) {
-                    done.extend(team.kill(Ending::Shutdown).await);
+                    done.extend(team.kill(Ending::Shutdown(cause)).await);
                 }
             }
             for result in futures::future::join_all(done.into_iter().map(await_episode)).await {
@@ -3414,7 +3511,7 @@ impl ResidentSupervisor {
             // failed write in this drain leaves an orphan for the next request.
             for (root, handle, actor) in orphans {
                 if let Err(error) = self
-                    .end_orphan(root, &handle, actor, &Ending::Shutdown)
+                    .end_orphan(root, &handle, actor, &Ending::Shutdown(cause))
                     .await
                 {
                     tracing::error!(%root, %actor, %error, "resident shutdown orphan reconciliation failed");
@@ -3958,15 +4055,14 @@ impl ResidentSupervisor {
             .await?;
         self.team_for_with_main(
             root,
-            Some(MainActivation {
+            MainActivation {
                 agent,
                 binding,
                 agents,
                 resources,
                 guidance,
-            }),
-        )
-        .await?;
+            },
+        );
         Ok(())
     }
 
@@ -4322,6 +4418,18 @@ impl ResidentSupervisor {
         let channel_policy =
             ChannelPolicy::from_binding(&binding)?.snapshot_for(agent.name.as_str());
         let mut team = self.team_for(root).await?;
+        #[cfg(test)]
+        {
+            let pause = self
+                .registration_pause
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some((entered, release)) = pause {
+                entered.notify_one();
+                release.notified().await;
+            }
+        }
         let mut write = self.claim_writes.lock().await;
         loop {
             let previous = self.team_with_resident(session).and_then(|team| {
@@ -4508,3 +4616,6 @@ async fn await_episode(mut done: EpisodeDone) -> Result<(), CoreError> {
             .map_err(|_| CoreError::Invalid("episode exited without its ending result".into()))?;
     }
 }
+
+#[cfg(test)]
+mod tests;

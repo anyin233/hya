@@ -755,6 +755,11 @@ members are archived (`reason: shutdown`) so a later run on the same `--db`
 can wake them by mailing their handle; the lead is never archived. The cause is `shutdown`, or `leader_failed` when the lead's turn
 failed (then the exit status is 1).
 
+The drain preserves that cause on member deadline closes and archive notes too:
+Ctrl-C records `stopped: cancelled by the user`; a failed lead records
+`stopped: the team lead failed`. User cancellation does not create a pending
+restore prompt for the next start.
+
 | Signal during the run | What happens | `cause` | Exit status |
 | --- | --- | --- | --- |
 | SIGINT (Ctrl-C) | Drain: every in-flight turn in every session is cancelled and closed; the transcript/trajectory is still printed | `user_cancel` | **130** |

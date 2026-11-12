@@ -39,6 +39,11 @@ communication half (ADR-0011).
 - **Revival is a downward DM only** (ADR-0016): re-resolve the runtime binding,
   bump the claim epoch, re-debit the budget, arm a new episode. There is no
   other wake path for an archived agent.
+  Registration reserves its selected team through claim commit and episode
+  initialization; idle-team retirement cannot cancel a new revival. Cold main
+  activation applies root turns' missing-agent policy: a removed recorded root
+  agent switches durably to `hya-task` when that agent is available. Missing
+  resident definitions still fail closed.
 - **Depth is hardcoded to two subagent layers** (a constant, not config).
   Orchestration tools are not advertised at depth 2; admission depth checks
   remain as the API-level backstop.
