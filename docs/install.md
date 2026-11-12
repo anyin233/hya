@@ -106,9 +106,7 @@ hya update --prefix /opt/hya       # a prefix other than the running hya's
 `--backend-only`, `--tui-only`, `--version`, `--force`, and `--prefix` with the
 same meaning. Without `--prefix` the prefix is the real `<prefix>` of the
 running `<prefix>/bin/hya` beside `<prefix>/lib/hya`; a build-tree `hya` is
-refused. The signed updater commands (`status`, `apply`, `authorize`, and so
-on) remain separate and cannot be combined with these options; see
-[self-update.md](self-update.md).
+refused. `hya update version` prints the updater's package version.
 
 ## Release package
 

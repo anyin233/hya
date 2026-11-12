@@ -79,8 +79,8 @@ one. It applies uniformly across every path that creates a root Session:
 
 - `hya serve` — `POST /v1/sessions` without an explicit `agent` id, and the
   default row markers on `GET /v1/catalog/agents`.
-- Headless commands — `hya exec`, `hya run`, `hya -p` goal mode, `hya loop`,
-  `hya rpc`, and `hya workflow run` when it creates a new Session (see
+- Headless commands — `hya exec`, `hya -p` goal mode, `hya loop`, and
+  `hya workflow run` when it creates a new Session (see
   [CLI Reference](cli.md#hya-exec)).
 
 Precedence: an explicit per-invocation agent id (a request field on `serve`;
