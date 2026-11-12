@@ -13,6 +13,7 @@ use std::sync::Arc;
 pub(crate) struct ScopedBundleHooks {
     dispatcher: Arc<dyn HookDispatcher>,
     names: Option<BTreeSet<String>>,
+    events: bool,
     _owner: Option<Arc<dyn crate::RuntimeSourceOwner>>,
 }
 
@@ -29,6 +30,7 @@ impl ScopedBundleHooks {
                     })
                     .collect(),
             ),
+            events: true,
             _owner: None,
         }
     }
@@ -39,7 +41,17 @@ impl ScopedBundleHooks {
         Self {
             dispatcher,
             names: None,
+            events: true,
             _owner: Some(owner),
+        }
+    }
+
+    pub(crate) fn without_events(dispatcher: Arc<dyn HookDispatcher>) -> Self {
+        Self {
+            dispatcher,
+            names: None,
+            events: false,
+            _owner: None,
         }
     }
     fn has(&self, name: &str) -> bool {
@@ -66,7 +78,7 @@ pub(crate) fn restricted_sidecar_hooks(
 #[async_trait]
 impl HookDispatcher for ScopedBundleHooks {
     fn dispatch_event(&self, envelope: &Envelope) {
-        if self.has("event") {
+        if self.events && self.has("event") {
             self.dispatcher.dispatch_event(envelope);
         }
     }
