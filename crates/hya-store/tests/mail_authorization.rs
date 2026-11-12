@@ -1,158 +1,39 @@
-//! Transactional mail authorization regressions.
+//! Harness-only rejection fields; agent send regressions run through the engine.
 #![allow(clippy::unwrap_used)]
-use hya_proto::{ChannelKind, Event, MailKind, SessionId};
-use hya_store::SessionStore;
+
+use hya_proto::{AgentName, Event, SessionId, SubagentMode};
+use hya_store::{SessionStore, StoreError};
 
 #[tokio::test]
-async fn non_member_cannot_send_to_dm() {
+async fn harness_rejections_preserve_sender_and_address() {
     let store = SessionStore::connect_memory().await.unwrap();
     let root = SessionId::new();
+    let child = SessionId::new();
     store
         .append_event(
             root,
-            &Event::ChannelCreated {
+            &Event::AgentRegistered {
                 session: root,
-                channel: "DM-test1234".into(),
-                kind: ChannelKind::Dm,
-                unit: None,
-                members: vec!["main".into(), "main/worker".into()],
+                agent_session: child,
+                handle: "transient-1".into(),
+                parent: Some("main".into()),
+                agent_type: AgentName::new("worker"),
+                mode: SubagentMode::Transient,
             },
         )
         .await
         .unwrap();
-    let result = store
-        .append_channel_mail(
-            root,
-            "main/outsider".into(),
-            "DM-test1234".into(),
-            MailKind::Message,
-            "intrusion".into(),
-            None,
-            None,
-        )
-        .await;
-    assert!(
-        result.is_err(),
-        "non-member mail must be rejected: {result:?}"
-    );
-}
-
-#[tokio::test]
-async fn dm_member_can_send() {
-    let store = SessionStore::connect_memory().await.unwrap();
-    let root = SessionId::new();
-    store
-        .append_event(
-            root,
-            &Event::ChannelCreated {
-                session: root,
-                channel: "DM-test1234".into(),
-                kind: ChannelKind::Dm,
-                unit: None,
-                members: vec!["main".into(), "main/worker".into()],
-            },
-        )
-        .await
-        .unwrap();
-    let (_, recipients) = store
-        .append_channel_mail(
-            root,
-            "main".into(),
-            "DM-test1234".into(),
-            MailKind::Message,
-            "hello".into(),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-    assert_eq!(recipients, 2);
-    let projection = store.read_projection(root).await.unwrap();
-    assert_eq!(projection.team.inboxes["main/worker"][0].body, "hello");
-}
-
-#[tokio::test]
-async fn missing_channel_is_rejected() {
-    let store = SessionStore::connect_memory().await.unwrap();
-    let result = store
-        .append_channel_mail(
-            SessionId::new(),
-            "main".into(),
-            "DM-missing1".into(),
-            MailKind::Message,
-            "hello".into(),
-            None,
-            None,
-        )
-        .await;
-    assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn dm_policy_denies_direction() {
-    let store = SessionStore::connect_memory().await.unwrap();
-    let root = SessionId::new();
-    store
-        .append_event(
-            root,
-            &Event::ChannelCreated {
-                session: root,
-                channel: "DM-test1234".into(),
-                kind: ChannelKind::Dm,
-                unit: None,
-                members: vec!["main".into(), "main/worker".into()],
-            },
-        )
-        .await
-        .unwrap();
-    let policy = hya_proto::mail::ChannelPolicySnapshot {
-        dm_parent: 0,
-        dm_child: 1,
-        ..Default::default()
-    };
-    let result = store
-        .append_channel_mail(
-            root,
-            "main".into(),
-            "DM-test1234".into(),
-            MailKind::Message,
-            "hello".into(),
-            None,
-            Some(policy),
-        )
-        .await;
-    assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn group_member_cannot_announce_as_the_leader() {
-    let store = SessionStore::connect_memory().await.unwrap();
-    let root = SessionId::new();
-    store
-        .append_event(
-            root,
-            &Event::ChannelCreated {
-                session: root,
-                channel: "announce-test1234".into(),
-                kind: ChannelKind::Group,
-                unit: Some("main".into()),
-                members: vec!["main".into(), "main/worker".into()],
-            },
-        )
-        .await
-        .unwrap();
-    let result = store
-        .append_channel_mail(
-            root,
-            "main/worker".into(),
-            "announce-test1234".into(),
-            MailKind::Message,
-            "hello".into(),
-            None,
-            None,
-        )
-        .await;
-    assert!(
-        matches!(result, Err(hya_store::StoreError::MailAuthorizationRejected { sender, channel, .. }) if sender == "main/worker" && channel == "announce-test1234")
-    );
+    let before = store.replay(root).await.unwrap().len();
+    for handle in ["main/missing-1", "main/transient-1"] {
+        let result = store
+            .append_harness_mail(root, handle, "notice".into())
+            .await;
+        assert!(
+            matches!(result,
+            Err(StoreError::MailAuthorizationRejected { ref sender, ref channel, .. })
+            if sender == "harness" && channel == &format!("direct:{handle}")),
+            "{result:?}"
+        );
+    }
+    assert_eq!(store.replay(root).await.unwrap().len(), before);
 }

@@ -296,25 +296,16 @@ impl SessionEngine {
                 .await;
             let envelope = match append {
                 Ok(envelope) => envelope,
-                Err(error @ hya_store::StoreError::MailboxRejected(_)) => {
-                    // ADR-0015: a downward mail to one of the sender's own
-                    // ARCHIVED direct children revives it instead of failing.
-                    // Everything else keeps the indistinguishable rejection.
-                    if let Some(reviver) = self.archive_reviver()
-                        && let Ok(projection) = self.read_projection(root).await
-                    {
-                        let own_archived_child = projection.team.archived.contains_key(handle)
-                            && scope::parent_path(handle) == Some(from.as_str());
-                        if own_archived_child {
-                            reviver.revive(root, &from, handle, body).await?;
-                            return Ok(MailReceipt {
-                                from,
-                                to,
-                                recipients: 1,
-                            });
-                        }
-                    }
-                    return Err(CoreError::Store(error));
+                Err(ref error @ hya_store::StoreError::MailRevivalRequired { ref target, .. }) => {
+                    let Some(reviver) = self.archive_reviver() else {
+                        return Err(error.clone().into());
+                    };
+                    reviver.revive(root, &from, target, body).await?;
+                    return Ok(MailReceipt {
+                        from,
+                        to,
+                        recipients: 1,
+                    });
                 }
                 Err(error) => return Err(error.into()),
             };
@@ -347,11 +338,11 @@ impl SessionEngine {
             .await;
         let (envelope, recipients) = match append {
             Ok(result) => result,
-            Err(hya_store::StoreError::MailRevivalRequired { target, .. }) => {
-                let reviver = self.archive_reviver().ok_or_else(|| {
-                    CoreError::Invalid("archived child revival is unavailable".into())
-                })?;
-                reviver.revive(root, &from, &target, body).await?;
+            Err(ref error @ hya_store::StoreError::MailRevivalRequired { ref target, .. }) => {
+                let Some(reviver) = self.archive_reviver() else {
+                    return Err(error.clone().into());
+                };
+                reviver.revive(root, &from, target, body).await?;
                 return Ok(MailReceipt {
                     from,
                     to,
@@ -945,6 +936,630 @@ mod tests {
         SessionEngine::new(store, router, runtime, permission, EventBus::default())
     }
 
+    fn assert_mail_rejected(
+        result: Result<MailReceipt, CoreError>,
+        expected_sender: &str,
+        expected_channel: &str,
+    ) {
+        assert!(
+            matches!(result,
+                Err(CoreError::Store(hya_store::StoreError::MailAuthorizationRejected {
+                    ref sender, ref channel, ..
+                })) if sender == expected_sender && channel == expected_channel),
+            "expected rejection for {expected_sender} to {expected_channel}: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mail_auth_non_member_cannot_send_to_dm_through_engine_and_plane() {
+        let engine = Arc::new(engine().await);
+        let org = org(&engine).await;
+        mint_dm(&engine, org.root, "main", &org.lead_1.path).await;
+        let channel = dm_channel_between(
+            &engine.read_projection(org.root).await.unwrap(),
+            "main",
+            &org.lead_1.path,
+        )
+        .unwrap();
+        let before = engine.replay(org.root).await.unwrap().len();
+        assert_mail_rejected(
+            engine
+                .mail_send(
+                    org.lead_2.session,
+                    MailEndpoint::Channel(channel.clone()),
+                    MailKind::Message,
+                    "intrusion".into(),
+                )
+                .await,
+            &org.lead_2.path,
+            &channel,
+        );
+        let (plane, rx) = hya_tool::MailboxPlane::new();
+        let service = tokio::spawn(crate::run_mailbox_service(engine.clone(), rx));
+        let result = plane
+            .for_session(org.lead_2.session)
+            .with_channel_policy(engine.session_channel_policy(org.lead_2.session).unwrap())
+            .send(
+                MailEndpoint::Channel(channel.clone()),
+                MailKind::Message,
+                "intrusion".into(),
+            )
+            .await;
+        drop(plane);
+        service.await.unwrap();
+        assert!(
+            matches!(result, Err(hya_tool::MailboxError::Rejected(ref message))
+            if message.contains(&org.lead_2.path) && message.contains(&channel)),
+            "{result:?}"
+        );
+
+        let (plane, rx) = hya_tool::MailboxPlane::new();
+        let service = tokio::spawn(crate::run_mailbox_service(engine.clone(), rx));
+        let (permission, _) = PermissionPlane::new(PermissionRules::default());
+        let ctx = hya_tool::ToolCtx {
+            permission,
+            interaction: hya_tool::InteractionPlane::new().0,
+            spawner: hya_tool::SpawnerPlane::new().0,
+            workflows: hya_tool::WorkflowPlane::disconnected(),
+            operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
+            mailbox: plane
+                .for_session(org.lead_2.session)
+                .with_channel_policy(engine.session_channel_policy(org.lead_2.session).unwrap()),
+            project_activity: hya_tool::ProjectActivityPlane::disconnected(),
+            lifecycle: hya_tool::LifecyclePlane::disconnected(),
+            session: Some(org.lead_2.session),
+            parent_session: Some(org.root),
+            todo: Default::default(),
+            skills: Default::default(),
+            artifacts: Default::default(),
+            agents: Default::default(),
+            websearch: Default::default(),
+            lsp: Default::default(),
+            formatter: Default::default(),
+            workdir: PathBuf::from("."),
+            roots: vec![PathBuf::from(".")],
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+        let result = ToolRegistry::builtins()
+            .get("send")
+            .unwrap()
+            .execute(
+                &ctx,
+                serde_json::json!({"channel": channel, "body": "intrusion"}),
+            )
+            .await;
+        drop(ctx);
+        drop(plane);
+        service.await.unwrap();
+        assert!(
+            matches!(result, Err(hya_tool::ToolError::Input(ref message))
+            if message.contains(&org.lead_2.path) && message.contains(&channel)),
+            "{result:?}"
+        );
+        assert_eq!(engine.replay(org.root).await.unwrap().len(), before);
+    }
+
+    #[tokio::test]
+    async fn mail_auth_missing_channel_is_typed_through_engine() {
+        let engine = engine().await;
+        let root = root_team(&engine).await;
+        engine.ensure_root_registered(root).await.unwrap();
+        let before = engine.replay(root).await.unwrap().len();
+        assert_mail_rejected(
+            engine
+                .mail_send(
+                    root,
+                    MailEndpoint::Channel("DM-missing1".into()),
+                    MailKind::Message,
+                    "hello".into(),
+                )
+                .await,
+            "main",
+            "DM-missing1",
+        );
+        assert_eq!(engine.replay(root).await.unwrap().len(), before);
+    }
+
+    #[tokio::test]
+    async fn mail_auth_dm_membership_and_direction_through_engine() {
+        let engine = engine().await;
+        let org = org(&engine).await;
+        mint_dm(&engine, org.root, "main", &org.lead_1.path).await;
+        let channel = dm_channel_between(
+            &engine.read_projection(org.root).await.unwrap(),
+            "main",
+            &org.lead_1.path,
+        )
+        .unwrap();
+        let receipt = engine
+            .mail_send(
+                org.root,
+                MailEndpoint::Channel(channel.clone()),
+                MailKind::Message,
+                "hello".into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(receipt.recipients, 2);
+        assert_eq!(inbox(&engine, org.root, &org.lead_1.path).await, ["hello"]);
+        engine.update_session_channel_policy(
+            org.root,
+            hya_tool::ChannelPolicySnapshot {
+                dm_parent: 0,
+                ..Default::default()
+            },
+        );
+        let before = engine.replay(org.root).await.unwrap().len();
+        assert_mail_rejected(
+            engine
+                .mail_send(
+                    org.root,
+                    MailEndpoint::Channel(channel.clone()),
+                    MailKind::Message,
+                    "blocked".into(),
+                )
+                .await,
+            "main",
+            &channel,
+        );
+        assert_eq!(engine.replay(org.root).await.unwrap().len(), before);
+    }
+
+    #[tokio::test]
+    async fn mail_auth_group_member_cannot_announce_as_leader_through_engine() {
+        let engine = engine().await;
+        let org = org(&engine).await;
+        let channel = engine
+            .read_projection(org.root)
+            .await
+            .unwrap()
+            .team
+            .channels
+            .into_iter()
+            .find(|(_, state)| state.unit.as_deref() == Some("main"))
+            .unwrap()
+            .0;
+        let before = engine.replay(org.root).await.unwrap().len();
+        assert_mail_rejected(
+            engine
+                .mail_send(
+                    org.lead_1.session,
+                    MailEndpoint::Channel(channel.clone()),
+                    MailKind::Announcement,
+                    "impersonation".into(),
+                )
+                .await,
+            &org.lead_1.path,
+            &channel,
+        );
+        assert_eq!(engine.replay(org.root).await.unwrap().len(), before);
+    }
+
+    #[tokio::test]
+    async fn mail_auth_relative_parent_cannot_bypass_child_policy() {
+        let engine = engine().await;
+        let org = org(&engine).await;
+        engine.update_session_channel_policy(
+            org.worker_1.session,
+            hya_tool::ChannelPolicySnapshot {
+                dm_child: 0,
+                dm_parent: 1,
+                ..Default::default()
+            },
+        );
+        let before = engine.replay(org.root).await.unwrap().len();
+        assert_mail_rejected(
+            engine
+                .mail_send(
+                    org.worker_1.session,
+                    MailEndpoint::Handle("lead-1".into()),
+                    MailKind::Message,
+                    "blocked".into(),
+                )
+                .await,
+            &org.worker_1.path,
+            "direct:lead-1",
+        );
+        assert_eq!(engine.replay(org.root).await.unwrap().len(), before);
+    }
+
+    #[tokio::test]
+    async fn mail_auth_relative_parent_uses_child_policy() {
+        let engine = engine().await;
+        let org = org(&engine).await;
+        engine.update_session_channel_policy(
+            org.worker_1.session,
+            hya_tool::ChannelPolicySnapshot {
+                dm_child: 1,
+                dm_parent: 0,
+                ..Default::default()
+            },
+        );
+        engine
+            .mail_send(
+                org.worker_1.session,
+                MailEndpoint::Handle("lead-1".into()),
+                MailKind::Message,
+                "status up".into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            inbox(&engine, org.root, &org.lead_1.path).await,
+            ["status up"]
+        );
+    }
+
+    #[tokio::test]
+    async fn mail_auth_group_survives_released_claim_and_count_matches_replay() {
+        let engine = engine().await;
+        let org = org(&engine).await;
+        engine
+            .store()
+            .release_claim(&org.lead_2._claim)
+            .await
+            .unwrap();
+        let receipt = engine
+            .mail_announce(org.root, "all hands".into())
+            .await
+            .unwrap();
+        let replay = hya_proto::Projection::from_events(&engine.replay(org.root).await.unwrap());
+        let delivered = replay
+            .team
+            .inboxes
+            .values()
+            .filter(|inbox| inbox.iter().any(|mail| mail.body == "all hands"))
+            .count();
+        assert_eq!(receipt.recipients, delivered);
+        assert_eq!(receipt.recipients, 3);
+        assert_eq!(
+            inbox(&engine, org.root, &org.lead_1.path).await,
+            ["all hands"]
+        );
+        assert_eq!(
+            inbox(&engine, org.root, &org.lead_2.path).await,
+            ["all hands"]
+        );
+
+        mint_dm(&engine, org.root, "main", &org.lead_2.path).await;
+        let channel = dm_channel_between(
+            &engine.read_projection(org.root).await.unwrap(),
+            "main",
+            &org.lead_2.path,
+        )
+        .unwrap();
+        assert_mail_rejected(
+            engine
+                .mail_send(
+                    org.root,
+                    MailEndpoint::Channel(channel.clone()),
+                    MailKind::Message,
+                    "private".into(),
+                )
+                .await,
+            "main",
+            &channel,
+        );
+        assert_mail_rejected(
+            engine
+                .mail_send(
+                    org.root,
+                    MailEndpoint::Handle(org.lead_2.path.clone()),
+                    MailKind::Message,
+                    "private".into(),
+                )
+                .await,
+            "main",
+            &format!("direct:{}", org.lead_2.path),
+        );
+    }
+
+    #[tokio::test]
+    async fn mail_auth_terminal_member_is_skipped_by_group_but_rejected_by_dm() {
+        let engine = engine().await;
+        let org = org(&engine).await;
+        engine
+            .record_agent_activity(
+                org.root,
+                org.lead_2.path.clone(),
+                RosterStatus::Failed,
+                None,
+            )
+            .await
+            .unwrap();
+        let receipt = engine
+            .mail_announce(org.root, "healthy recipients".into())
+            .await
+            .unwrap();
+        let replay = hya_proto::Projection::from_events(&engine.replay(org.root).await.unwrap());
+        assert_eq!(
+            receipt.recipients,
+            replay
+                .team
+                .inboxes
+                .values()
+                .filter(|inbox| { inbox.iter().any(|mail| mail.body == "healthy recipients") })
+                .count()
+        );
+        assert_eq!(receipt.recipients, 2);
+        assert!(inbox(&engine, org.root, &org.lead_2.path).await.is_empty());
+        mint_dm(&engine, org.root, "main", &org.lead_2.path).await;
+        let channel = dm_channel_between(
+            &engine.read_projection(org.root).await.unwrap(),
+            "main",
+            &org.lead_2.path,
+        )
+        .unwrap();
+        assert_mail_rejected(
+            engine
+                .mail_send(
+                    org.root,
+                    MailEndpoint::Channel(channel.clone()),
+                    MailKind::Message,
+                    "private".into(),
+                )
+                .await,
+            "main",
+            &channel,
+        );
+    }
+
+    #[derive(Default)]
+    struct RevivalHook {
+        block: std::sync::atomic::AtomicBool,
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::hooks::HookDispatcher for RevivalHook {
+        fn dispatch_event(&self, _: &hya_proto::Envelope) {}
+
+        async fn agent_spawn(&self, _: crate::hooks::AgentSpawnInput) {
+            if self.block.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
+        }
+
+        async fn command_execute_before(
+            &self,
+            input: crate::hooks::CommandExecuteBeforeInput,
+        ) -> crate::hooks::CommandExecuteBeforeOutcome {
+            crate::hooks::CommandExecuteBeforeOutcome::Continue { text: input.text }
+        }
+
+        async fn text_complete(
+            &self,
+            input: crate::hooks::TextCompleteInput,
+        ) -> crate::hooks::TextCompleteOutcome {
+            crate::hooks::TextCompleteOutcome::Continue { text: input.text }
+        }
+
+        async fn message_user_before(
+            &self,
+            input: crate::hooks::MessageUserBeforeInput,
+        ) -> crate::hooks::MessageUserBeforeOutcome {
+            crate::hooks::MessageUserBeforeOutcome::Continue { text: input.text }
+        }
+
+        async fn chat_params(
+            &self,
+            input: crate::hooks::ChatParamsInput,
+        ) -> crate::hooks::ChatParamsOutcome {
+            crate::hooks::ChatParamsOutcome::Continue {
+                request: input.request,
+            }
+        }
+
+        async fn tool_execute_before(
+            &self,
+            input: crate::hooks::ToolExecuteBeforeInput,
+        ) -> crate::hooks::ToolExecuteBeforeOutcome {
+            crate::hooks::ToolExecuteBeforeOutcome::Continue { input: input.input }
+        }
+
+        async fn tool_execute_after(
+            &self,
+            input: crate::hooks::ToolExecuteAfterInput,
+        ) -> crate::hooks::ToolExecuteAfterOutcome {
+            crate::hooks::ToolExecuteAfterOutcome::Continue {
+                result: input.result,
+            }
+        }
+    }
+
+    async fn archived_child(
+        engine: &Arc<SessionEngine>,
+    ) -> (SessionId, Arc<ResidentSupervisor>, String, String) {
+        let root = root_team(engine).await;
+        let supervisor = ResidentSupervisor::start(engine.clone());
+        let child = engine
+            .create(CreateSession {
+                parent: Some(root),
+                agent: AgentName::new("resident"),
+                model: ModelRef::new("fake"),
+                workdir: ".".into(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
+            })
+            .await
+            .unwrap();
+        supervisor
+            .register_existing_resident(
+                root,
+                child,
+                "resident-1".into(),
+                AgentSpec {
+                    name: AgentName::new("resident"),
+                    model: ModelRef::new("fake"),
+                    system_prompt: String::new(),
+                    workdir: PathBuf::from("."),
+                    reasoning: None,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        let handle = "main/resident-1".to_string();
+        let channel = dm_channel_between(
+            &engine.read_projection(root).await.unwrap(),
+            "main",
+            &handle,
+        )
+        .unwrap();
+        supervisor
+            .archive_member(root, &handle, "archive for revival test")
+            .await
+            .unwrap();
+        (root, supervisor, handle, channel)
+    }
+
+    #[tokio::test]
+    async fn mail_auth_handle_revival_requires_an_authorized_own_archived_child() {
+        let engine = Arc::new(engine().await);
+        let (root, supervisor, handle, _) = archived_child(&engine).await;
+        let allowed = engine.session_channel_policy(root).unwrap();
+        let outsider = register_child(&engine, root, root, "main", "outsider-1").await;
+        let before = engine.replay(root).await.unwrap().len();
+        assert_mail_rejected(
+            engine
+                .mail_send(
+                    root,
+                    MailEndpoint::Handle("resident-1".into()),
+                    MailKind::Message,
+                    "relative revival stays unsupported".into(),
+                )
+                .await,
+            "main",
+            "direct:resident-1",
+        );
+        assert_mail_rejected(
+            engine
+                .mail_send(
+                    outsider.session,
+                    MailEndpoint::Handle(handle.clone()),
+                    MailKind::Message,
+                    "cannot revive a sibling".into(),
+                )
+                .await,
+            &outsider.path,
+            &format!("direct:{handle}"),
+        );
+        engine.update_session_channel_policy(
+            root,
+            hya_tool::ChannelPolicySnapshot {
+                dm_parent: 0,
+                ..Default::default()
+            },
+        );
+        assert_mail_rejected(
+            engine
+                .mail_send(
+                    root,
+                    MailEndpoint::Handle(handle.clone()),
+                    MailKind::Message,
+                    "policy forbids revival".into(),
+                )
+                .await,
+            "main",
+            &format!("direct:{handle}"),
+        );
+        assert_eq!(engine.replay(root).await.unwrap().len(), before);
+        assert!(
+            engine
+                .read_projection(root)
+                .await
+                .unwrap()
+                .team
+                .archived
+                .contains_key(&handle)
+        );
+        engine.update_session_channel_policy(root, allowed);
+        let receipt = engine
+            .mail_send(
+                root,
+                MailEndpoint::Handle(handle.clone()),
+                MailKind::Message,
+                "authorized revival".into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(receipt.recipients, 1);
+        assert!(engine.replay(root).await.unwrap().iter().any(|e| {
+            matches!(&e.event, Event::AgentRestarted { handle: restarted, .. } if restarted == &handle)
+        }));
+        supervisor
+            .drain(
+                hya_proto::FinishCause::Shutdown,
+                std::time::Duration::from_secs(2),
+            )
+            .await;
+    }
+
+    #[tokio::test]
+    async fn mail_auth_dm_during_revival_delivers_without_a_second_revive() {
+        use std::time::Duration;
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let hooks = Arc::new(RevivalHook::default());
+            let engine = Arc::new(engine().await.with_hooks(hooks.clone()));
+            let (root, supervisor, handle, channel) = archived_child(&engine).await;
+            hooks.block.store(true, std::sync::atomic::Ordering::SeqCst);
+            let reviving = tokio::spawn({
+                let supervisor = supervisor.clone();
+                let handle = handle.clone();
+                async move {
+                    supervisor
+                        .revive_child(root, "main", &handle, "episode two".into())
+                        .await
+                }
+            });
+            hooks.entered.notified().await;
+            let projection = engine.read_projection(root).await.unwrap();
+            assert!(projection.team.roster.contains_key(&handle));
+            assert!(projection.team.archived.contains_key(&handle));
+            let result = engine
+                .mail_send(
+                    root,
+                    MailEndpoint::Channel(channel.clone()),
+                    MailKind::Message,
+                    "during revival".into(),
+                )
+                .await;
+            let handle_result = engine
+                .mail_send(
+                    root,
+                    MailEndpoint::Handle(handle.clone()),
+                    MailKind::Message,
+                    "handle during revival".into(),
+                )
+                .await;
+            let delivered = inbox(&engine, root, &handle).await;
+            let restarts_before_release = engine
+                .replay(root)
+                .await
+                .unwrap()
+                .iter()
+                .filter(|e| matches!(&e.event, Event::AgentRestarted { .. }))
+                .count();
+            // Release and join before asserting, including on the broken path.
+            hooks.release.notify_one();
+            reviving.await.unwrap().unwrap();
+            supervisor
+                .drain(hya_proto::FinishCause::Shutdown, Duration::from_secs(2))
+                .await;
+            let receipt = result.expect("the roster wins while AgentRestarted is pending");
+            assert_eq!(handle_result.unwrap().recipients, 1);
+            assert_eq!(receipt.to, MailEndpoint::Channel(channel));
+            assert_eq!(receipt.recipients, 2);
+            assert_eq!(delivered, ["during revival", "handle during revival"]);
+            assert_eq!(restarts_before_release, 0);
+        })
+        .await
+        .expect("revival synchronization must complete");
+    }
+
     async fn root_team(engine: &SessionEngine) -> SessionId {
         engine
             .create(CreateSession {
@@ -1059,10 +1674,7 @@ mod tests {
                 "hi".to_string(),
             )
             .await;
-        assert!(matches!(
-            result,
-            Err(CoreError::Store(hya_store::StoreError::MailboxRejected(_)))
-        ));
+        assert_mail_rejected(result, "main", "direct:transient-1");
 
         let after_len = engine.replay(root).await.unwrap().len();
         assert_eq!(after_len, before_len);
@@ -1085,10 +1697,7 @@ mod tests {
                 "hi".to_string(),
             )
             .await;
-        assert!(matches!(
-            result,
-            Err(CoreError::Store(hya_store::StoreError::MailboxRejected(_)))
-        ));
+        assert_mail_rejected(result, "main", "direct:missing-1");
 
         let after_len = engine.replay(root).await.unwrap().len();
         assert_eq!(after_len, before_len);
@@ -1180,10 +1789,10 @@ mod tests {
 
         release.notify_one();
         let send_result = send.await.unwrap();
-        assert!(matches!(
-            send_result,
-            Err(CoreError::Store(hya_store::StoreError::MailboxRejected(_)))
-        ));
+        assert!(matches!(send_result,
+            Err(CoreError::Store(hya_store::StoreError::MailRevivalRequired {
+                sender, channel, target,
+            })) if sender == "main" && channel == format!("direct:{handle}") && target == handle));
 
         let replay = primary.replay(root).await.unwrap();
         assert!(
