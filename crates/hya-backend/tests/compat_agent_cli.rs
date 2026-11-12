@@ -198,7 +198,9 @@ fn exec_uses_a_project_bundle_agent_from_the_cwd_and_records_a_project_id()
     std::fs::create_dir_all(bundle_dir.join("prompts"))?;
     std::fs::write(
         bundle_dir.join("bundle.yaml"),
-        "kind: Bundle\n\\n         identity:\n  id: hya/exec-project-demo\n  version: 1.0.0\n  publisher: hya\n\\n         agent:\n  id: exec-project-lead\n  role: main\n  prompt: prompts/lead.md\n",
+        "kind: Bundle\n\
+         identity:\n  id: hya/exec-project-demo\n  version: 1.0.0\n  publisher: hya\n\
+         agents:\n  - id: exec-project-lead\n    role: main\n    prompt: prompts/lead.md\n",
     )?;
     std::fs::write(
         bundle_dir.join("prompts/lead.md"),

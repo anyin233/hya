@@ -330,13 +330,15 @@ pub(crate) async fn workflow(
         } => {
             let response = submit(
                 &sdk,
-                serde_json::json!({
-                    "session": id,
-                    "select": {
-                        "name": name,
-                        "expectedRevision": expected_revision.unwrap_or_default(),
-                    },
-                }),
+                pb::SubmitWorkflowCommandRequest {
+                    session: id,
+                    command: Some(pb::submit_workflow_command_request::Command::Select(
+                        pb::WorkflowSelectCommand {
+                            name,
+                            expected_revision: expected_revision.unwrap_or_default(),
+                        },
+                    )),
+                },
             )
             .await?;
             Ok(WorkflowCommandResult::Selected {
@@ -346,10 +348,15 @@ pub(crate) async fn workflow(
         WorkflowRoute::Run { name, inputs } => {
             let response = submit(
                 &sdk,
-                serde_json::json!({
-                    "session": id,
-                    "run": { "name": name.unwrap_or_default(), "inputs": inputs },
-                }),
+                pb::SubmitWorkflowCommandRequest {
+                    session: id.clone(),
+                    command: Some(pb::submit_workflow_command_request::Command::Run(
+                        pb::WorkflowRunCommand {
+                            name: name.unwrap_or_default(),
+                            inputs: Some(serde_json::from_value(serde_json::to_value(inputs)?)?),
+                        },
+                    )),
+                },
             )
             .await?;
             let started: WorkflowRunResult = serde_json::from_str(&response.raw_json)
@@ -377,9 +384,10 @@ pub(crate) async fn workflow(
     }
 }
 
-async fn submit(sdk: &V1Sdk, request: serde_json::Value) -> anyhow::Result<pb::WorkflowState> {
-    let request: pb::SubmitWorkflowCommandRequest =
-        serde_json::from_value(request).context("encode Workflow command")?;
+async fn submit(
+    sdk: &V1Sdk,
+    request: pb::SubmitWorkflowCommandRequest,
+) -> anyhow::Result<pb::WorkflowState> {
     let response = sdk.submit_workflow_command(request).await.map_err(api)?;
     match response.result {
         Some(
