@@ -833,7 +833,7 @@ impl SessionEngine {
     /// show the agent that actually runs. Returns whether it switched; a
     /// catalog without the task agent keeps the recorded id, and the turn then
     /// fails with `AgentDefinitionMissing` naming it.
-    async fn fall_back_from_missing_agent(
+    pub(crate) async fn fall_back_from_missing_agent(
         &self,
         session: SessionId,
         projection: &hya_proto::Projection,

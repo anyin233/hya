@@ -2861,6 +2861,100 @@ mod tests {
         (built, agent, root)
     }
 
+    struct SessionRecordingProvider {
+        sessions: Arc<std::sync::Mutex<Vec<SessionId>>>,
+    }
+
+    #[async_trait]
+    impl Provider for SessionRecordingProvider {
+        fn id(&self) -> &str {
+            "hya"
+        }
+        fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+            DevProvider::new().capabilities(model)
+        }
+        fn configured_identity_v1(&self) -> Option<Vec<u8>> {
+            DevProvider::new().configured_identity_v1()
+        }
+        async fn stream(
+            &self,
+            request: CompletionRequest,
+            session: SessionId,
+            message: MessageId,
+        ) -> Result<EventStream, ProviderError> {
+            self.sessions.lock().unwrap().push(session);
+            DevProvider::new().stream(request, session, message).await
+        }
+    }
+
+    #[tokio::test]
+    async fn cold_workflow_control_run_never_requests_a_root_model_turn() {
+        let _env = StableEnvGuard::new();
+        let sessions = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let router = ProviderRouter::new().with(Arc::new(SessionRecordingProvider {
+            sessions: sessions.clone(),
+        }));
+        let mut agent = agent_with_model("hya/offline", None);
+        agent.workdir = tempdir();
+        let directory = agent.workdir.join(".hya/workflows");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("cold.hya.md"), "---\nkind: Workflow\nname: cold\ndescription: Two stages on a cold root.\nnodes:\n  first:\n    agent: hya-scout\n    directive: First.\n  second:\n    agent: hya-scout\n    directive: Second.\n---\nflowchart TD\n  first --> second\n").unwrap();
+        let mut built = build_session_engine_pure(
+            SessionStore::connect_memory().await.unwrap(),
+            router,
+            &agent,
+            BTreeMap::new(),
+            Vec::new(),
+            (
+                WebSearchConfig::default(),
+                InvocationPolicy::default(),
+                config::EngineSettings::default(),
+            ),
+        )
+        .await
+        .unwrap();
+        let engine = built.engine();
+        let root = engine
+            .create(CreateSession {
+                parent: None,
+                agent: agent.name.clone(),
+                model: agent.model.clone(),
+                workdir: agent.workdir.to_string_lossy().into_owned(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
+            })
+            .await
+            .unwrap();
+        let result = built
+            .workflow_control()
+            .execute(
+                root,
+                Default::default(),
+                hya_proto::WorkflowCommand::Run {
+                    name: Some("cold".into()),
+                    expected_revision: None,
+                    inputs: BTreeMap::new(),
+                    run: None,
+                },
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            hya_proto::WorkflowCommandResult::Run { .. }
+        ));
+        // Drain joins the main task too, including a synthesis queued at the final handoff.
+        built.shutdown().await.unwrap();
+        let sessions = sessions.lock().unwrap();
+        assert_eq!(
+            sessions.iter().filter(|session| **session == root).count(),
+            0,
+            "unasked root provider requests: {sessions:?}"
+        );
+        assert_eq!(sessions.len(), 2, "only the two stages should run");
+    }
+
     #[tokio::test]
     async fn review_drain_joins_late_registration_before_killing_team() {
         let _env = StableEnvGuard::new();
@@ -4262,7 +4356,7 @@ You are the installed resident agent.
                 &Event::SessionCreated {
                     session: root,
                     parent: None,
-                    agent: base.name.clone(),
+                    agent: AgentName::new("removed-root-bundle-agent"),
                     model: base.model.clone(),
                     workdir: workdir.to_string_lossy().into_owned(),
                     project: None,
@@ -7360,7 +7454,7 @@ export default {
         let lead = engine
             .create(CreateSession {
                 parent: None,
-                agent: AgentName::new("worker"),
+                agent: AgentName::new("build"),
                 model: ModelRef::new("fake"),
                 workdir: workdir.to_string_lossy().into_owned(),
                 project: None,
@@ -7629,7 +7723,7 @@ export default {
         let lead = engine
             .create(CreateSession {
                 parent: None,
-                agent: AgentName::new("worker"),
+                agent: AgentName::new("build"),
                 model: ModelRef::new("fake"),
                 workdir: workdir.to_string_lossy().into_owned(),
                 project: None,
@@ -7969,7 +8063,7 @@ for line in sys.stdin:
         let lead = engine
             .create(CreateSession {
                 parent: None,
-                agent: AgentName::new("worker"),
+                agent: AgentName::new("build"),
                 model: ModelRef::new("fake"),
                 workdir: workdir.to_string_lossy().into_owned(),
                 project: None,

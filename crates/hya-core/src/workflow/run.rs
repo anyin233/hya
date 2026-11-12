@@ -572,6 +572,10 @@ impl PreparedWorkflowRun {
             durable_run,
             actor_claim,
         } = self;
+        let _activity = match context.resident_supervisor.as_ref() {
+            Some(supervisor) => Some(supervisor.workflow_activity(lead).await?),
+            None => None,
+        };
         let plan = workflow.plan();
         let name = workflow.definition().name();
         let mut reports: Vec<StageReport> = plan.stages().iter().map(pending_report).collect();

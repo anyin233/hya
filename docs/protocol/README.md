@@ -446,7 +446,13 @@ server) made it. Child (subagent) sessions never produce these frames.
 - **Deleted.** `sessionDeleted` is live-only because deletion removes the
   session's log: there is nothing to replay. Its `session` names the deleted
   root session; drop the row. A `DeleteSession` also removes every descendant
-  subagent session and its session-scoped persisted state. Child sessions never
+  subagent session and its session-scoped persisted state. Both
+  `DELETE /v1/sessions/{session}` and `hya.v1.Session.DeleteSession`
+  (`DeleteSessionRequest { session: string }` → empty `DeleteSessionResponse`)
+  await engine teardown of live root-team episodes and sidecars before removing
+  their rows; deleted sessions receive no later episode writes. For example,
+  deleting a root with an active member stops that member before replying.
+  Child sessions never
   produce these frames, so the live list notice names only the requested root
   session. It also follows the server's own drop of an unused
   [ephemeral session](#ephemeral-sessions).

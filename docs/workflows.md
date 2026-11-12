@@ -345,6 +345,14 @@ Stages and levels, automatic join rendering, and a canonical revision.
 `hya-core::run_workflow` accepts only a `CompiledWorkflow` plus a resolved
 `WorkflowRunContext`. It does not parse source or rebuild the plan.
 
+Execution owns the team's activity until the run settles. Stage handoffs cannot
+start `TEAM QUIESCED` synthesis on the root while a Workflow runs. A Workflow
+started on a cold root (for example `hya workflow run my-workflow`) runs only
+its stages; it does not start a root model turn. A later user root turn or
+explicit model-team activation restores autonomous main wakes. This rule lives
+in the core runner and also applies to `WorkflowControl`, HTTP and tool runs;
+callers do not acquire a root turn lease to enforce it.
+
 ### Reads during execution
 
 The `workflow` tool handles each request independently. While

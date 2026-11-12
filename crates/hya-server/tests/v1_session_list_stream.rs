@@ -546,3 +546,102 @@ async fn session_list_frames_match_over_grpc() {
         .collect();
     assert_eq!(sse_rows, expected);
 }
+
+async fn delete_live_team_joins_episodes(grpc: bool) {
+    let gate = Arc::new(Semaphore::new(0));
+    let state = state(gate.clone()).await;
+    let engine = state.engine.clone();
+    let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
+    let root = engine
+        .create(hya_core::CreateSession {
+            parent: None,
+            agent: AgentName::new("hya-main"),
+            model: ModelRef::new("fake"),
+            workdir: ".".into(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    let agent = AgentSpec {
+        name: AgentName::new("hya-scout"),
+        model: ModelRef::new("fake"),
+        workdir: ".".into(),
+        system_prompt: String::new(),
+        reasoning: None,
+    };
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
+    let (child, _) = supervisor
+        .spawn_resident(
+            root,
+            agent,
+            (binding, Arc::from([]), resources, None),
+            "work".into(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !engine.turn_active(child) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(supervisor.episode_count(), 1);
+    assert_eq!(
+        engine.store().active_actor_ids().await.unwrap(),
+        vec![child]
+    );
+
+    if grpc {
+        pb::session_server::Session::delete_session(
+            &V1Grpc::new(state),
+            tonic::Request::new(pb::DeleteSessionRequest {
+                session: root.to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+    } else {
+        let (status, body) = call(
+            &router(state),
+            Method::DELETE,
+            &format!("/v1/sessions/{root}"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    assert_eq!(
+        supervisor.episode_count(),
+        0,
+        "public delete left a live episode"
+    );
+    assert!(supervisor.team_cancel(root).is_none());
+    assert!(!engine.turn_active(child));
+    assert!(engine.store().active_actor_ids().await.unwrap().is_empty());
+    gate.add_permits(10);
+    supervisor
+        .drain(hya_proto::FinishCause::UserCancel, Duration::from_secs(5))
+        .await;
+    for session in [root, child] {
+        assert!(!engine.store().session_exists(session).await.unwrap());
+        assert!(
+            engine.replay(session).await.unwrap().is_empty(),
+            "events written after delete"
+        );
+    }
+}
+
+#[tokio::test]
+async fn http_delete_joins_live_team_before_removing_sessions() {
+    delete_live_team_joins_episodes(false).await;
+}
+
+#[tokio::test]
+async fn grpc_delete_joins_live_team_before_removing_sessions() {
+    delete_live_team_joins_episodes(true).await;
+}

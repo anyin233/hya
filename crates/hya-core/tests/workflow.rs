@@ -405,7 +405,6 @@ async fn two_stage_workflow_runs_in_order_and_hands_off_evidence() {
     let provider = RecordingProvider::new();
     let engine = engine(provider.clone()).await;
     let lead = start_lead(&engine).await;
-    let _lead_turn = engine.try_begin_turn(lead).unwrap();
     let binding = engine.bind_runtime(workdir.path()).unwrap();
     let base = engine
         .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
@@ -485,7 +484,6 @@ flowchart TD
     let provider = RecordingProvider::new();
     let engine = engine(provider.clone()).await;
     let lead = start_lead(&engine).await;
-    let _lead_turn = engine.try_begin_turn(lead).unwrap();
     let binding = engine.bind_runtime(workdir.path()).unwrap();
     let base = engine
         .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
@@ -557,7 +555,6 @@ flowchart TD
     let provider = BarrierProvider::new();
     let engine = engine(provider.clone()).await;
     let lead = start_lead(&engine).await;
-    let _lead_turn = engine.try_begin_turn(lead).unwrap();
     let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
     let base = engine
         .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
@@ -627,7 +624,6 @@ flowchart TD
     let provider = RecordingProvider::new();
     let engine = engine(provider.clone()).await;
     let lead = start_lead(&engine).await;
-    let _lead_turn = engine.try_begin_turn(lead).unwrap();
     let binding = engine.bind_runtime(workdir.path()).unwrap();
     let base = engine
         .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
@@ -705,7 +701,6 @@ flowchart TD
     provider.script_verdict(false);
     let engine = engine(provider.clone()).await;
     let lead = start_lead(&engine).await;
-    let _lead_turn = engine.try_begin_turn(lead).unwrap();
     let binding = engine.bind_runtime(workdir.path()).unwrap();
     let base = engine
         .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
@@ -761,7 +756,6 @@ fn base_spec() -> hya_core::AgentSpec {
 
 /// Shared run harness for the negative-path tests below.
 struct Run {
-    _lead_turn: hya_core::TurnLease,
     provider: Arc<RecordingProvider>,
     engine: Arc<SessionEngine>,
     lead: SessionId,
@@ -772,11 +766,9 @@ async fn setup(workdir_label: &str) -> Run {
     let provider = RecordingProvider::new();
     let engine = engine(provider.clone()).await;
     let lead = start_lead(&engine).await;
-    let _lead_turn = engine.try_begin_turn(lead).unwrap();
     let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
     let _ = workdir_label;
     Run {
-        _lead_turn,
         provider,
         engine,
         lead,
@@ -977,7 +969,6 @@ flowchart TD
     )
     .await;
     let lead = start_lead(&engine).await;
-    let _lead_turn = engine.try_begin_turn(lead).unwrap();
     let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
     let base = engine
         .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
@@ -1077,7 +1068,6 @@ flowchart TD
     provider.script_verdict(true); // second judgment: met -> stop
     let engine = engine(provider.clone()).await;
     let lead = start_lead(&engine).await;
-    let _lead_turn = engine.try_begin_turn(lead).unwrap();
     let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
     let base = engine
         .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
@@ -1171,7 +1161,6 @@ flowchart TD
     provider.script_hanging_verifier();
     let engine = engine(provider.clone()).await;
     let lead = start_lead(&engine).await;
-    let _lead_turn = engine.try_begin_turn(lead).unwrap();
     let binding = engine.bind_runtime(workdir.path()).unwrap();
     let base = engine
         .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
@@ -1238,7 +1227,6 @@ flowchart TD
     let (engine, _events) = engine_parts(provider.clone(), catalog, None).await;
     let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
     let lead = start_lead(&engine).await;
-    let _lead_turn = engine.try_begin_turn(lead).unwrap();
     let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
     let base = engine
         .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
@@ -1381,7 +1369,6 @@ flowchart TD
     let (engine, _events) = engine_parts(provider.clone(), catalog, None).await;
     let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
     let lead = start_lead(&engine).await;
-    let _lead_turn = engine.try_begin_turn(lead).unwrap();
     let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
     let base = engine
         .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
@@ -1473,7 +1460,6 @@ flowchart TD
     let (engine, _events) = engine_parts(provider, catalog, None).await;
     let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
     let lead = start_lead(&engine).await;
-    let _lead_turn = engine.try_begin_turn(lead).unwrap();
     let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
     let base = engine
         .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
@@ -1535,7 +1521,6 @@ flowchart TD
     let (engine, _events) = engine_parts(provider, catalog, None).await;
     let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
     let lead = start_lead(&engine).await;
-    let _lead_turn = engine.try_begin_turn(lead).unwrap();
     let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
     let base = engine
         .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
@@ -1784,7 +1769,6 @@ flowchart TD
     ]);
     let (engine, mut event_rx) = engine_parts(provider.clone(), catalog, None).await;
     let lead = start_lead(&engine).await;
-    let _lead_turn = engine.try_begin_turn(lead).unwrap();
     let workdir = support::TestDir::new("workflow-roster");
     let binding = engine.bind_runtime(workdir.path()).unwrap();
     let base = engine
@@ -2068,7 +2052,6 @@ flowchart TD
     )
     .await;
     let lead = start_lead(&engine).await;
-    let _lead_turn = engine.try_begin_turn(lead).unwrap();
     let workdir = support::TestDir::new("workflow-sidecar");
     let binding = engine.bind_runtime(workdir.path()).unwrap();
     let base = engine
