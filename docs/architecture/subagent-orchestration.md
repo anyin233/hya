@@ -43,10 +43,10 @@ Termination signals other than a model-issued report:
 | Path | Producer | Result |
 | --- | --- | --- |
 | Turn terminal error | engine | failure report + degraded handoff + archive |
-| Budget kill (per-team turn/message) | governor/supervisor | failure report + degraded handoff + archive |
+| Budget kill (per-team turn/message) | supervisor | failed member row + degraded handoff + archive (`killed`); no report mail |
 | Parent/ancestor `archive(target)` | tool call | turn cancelled (`cause: archived`) + degraded handoff + member row cancelled + archive (`archived_by_parent`); no report mail |
 | Graceful drain (end of a one-shot run, SIGINT/SIGTERM, `serve` stop) | `ResidentSupervisor::drain` | turns drained, then degraded handoff + member row cancelled + archive (`shutdown`) |
-| Root teardown | engine (root session delete) | force-archive every live descendant |
+| Root teardown | engine (root session delete) | request episode endings, await completion, reconcile orphans; cancelled member rows and `root_teardown` archive; no report mail |
 | Handoff model call fails | engine | deterministic degraded handoff (projection-derived), marked `degraded`; archive proceeds |
 
 An idle agent without a report is **never** auto-archived: it may be awaiting
@@ -634,12 +634,14 @@ and admission refunds; `Refused` returns only the notice. See the exact
 Terminal activity preserves unread mail regardless of its textual note;
 delivery and explicit consumption alone advance the inbox cursor.
 
-Killed teams accept no registrations. Spawn and revival share a registration
-gate with the kill decision, wait for the old slots and budget counters to be
-released, then restore the root activation context as `main` on a fresh team.
-Hooks run outside that gate. A refused voluntary report is discarded; the member
-must call `report` again after handling the work that blocked it. Root teardown
-holds resident wakes and cancels turns before acquiring handoff leases.
+Killed teams leave the live map immediately. Spawn uses a fresh team's counters
+and triggering-turn main context; only revival of the same member awaits its old
+episode. A claim committed across a kill installs into that killed team with its
+ending already requested. The supervisor claim-write boundary serializes
+registration commit plus installation with orphan Takeover, across team
+generations; hooks and kill requests run outside it. A refused voluntary report
+is discarded and the committed notice wakes the member. Root teardown requests
+endings and awaits completion without member turn leases or parent report mail.
 
 Workflow Stage waits also recognize archived actors. They use the linked parent
 member row for the terminal status and summary, so failure and cancellation can
@@ -755,7 +757,7 @@ excluding the lead. `ArchiveReviver::has_episode(session: SessionId) -> bool`
 queries the current in-memory episode. Its internal
 `reconcile_orphan(root: SessionId, handle: &str, archive: ResidentArchive,
 cause: FinishCause) -> Result<ResidentArchiveOutcome, CoreError>` takes the
-registration lock, refuses an existing episode, then calls the store finalizer
+supervisor claim-write boundary, refuses an existing episode, then calls the store finalizer
 with `Takeover`. `ResidentArchive` retains the store contract above; orphan
 archives always use `check_gate: false` and the runtime-owning store.
 
@@ -769,3 +771,29 @@ The client guard checks durable registration history, so it covers archived
 members, orphans and the interval between registration commit and in-memory
 installation.
 Public command-prompt admission uses the same guard as text prompts.
+
+
+### Team ending ownership
+
+Team activity counters live on the team object. Kill removes that object from
+the live-team map immediately and requests each episode's ending. Ending episodes
+remain indexed by session until completion, so same-actor revival waits for its
+own previous episode while new tasks can use a fresh team and activation context.
+A live team retires when its last member is gone and its lead is idle with no
+work owed.
+
+All forced endings run on the episode task after its turn has finished or reached
+the cancellation deadline. Sidecar termination has a five-second deadline; failure
+still releases in-memory ownership. Root deletion requests `RootTeardown`, with
+no parent mail, and awaits those endings before deleting the root. Shutdown joins
+intake and registration handlers before resident draining, then awaits the episode
+endings and the supervisor bus listener. The lead is never archived.
+
+The registration transaction and episode installation share the supervisor's
+claim-write boundary with every orphan Takeover decision. Kill does not acquire
+that boundary: a registration committed across a kill installs into its killed
+team with the ending already requested. Initialization always publishes committed
+registration envelopes before the episode's terminal envelopes. Cancellation
+during initialization returns a failed spawn outcome. Archive publication occurs
+after the episode leaves memory and before completion is resolved, preventing a
+new registration from overtaking the old archive on the bus.

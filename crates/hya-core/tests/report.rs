@@ -2415,6 +2415,9 @@ async fn failed_shutdown_archive_has_no_second_terminal_write_path() {
         dir.path().join("session.db").display()
     );
     let store = SessionStore::connect(&database).await.unwrap();
+    store
+        .claim_runtime_owner(hya_proto::OwnerRunId::new())
+        .unwrap();
     let faults = sqlx::SqlitePool::connect(&database).await.unwrap();
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
     let engine = Arc::new(SessionEngine::new(

@@ -883,20 +883,23 @@ mod tests {
                 },
                 namespace: None,
                 digest: "test-only-resident".to_string(),
-                agents: vec![hya_bundle::PreparedAgent {
-                    id: AgentName::new("resident"),
-                    description: None,
-                    role: hya_bundle::AgentRole::Subagent,
-                    color: None,
-                    prompt: None,
-                    prompt_source: None,
-                    prompt_digest: None,
-                    model_policy: hya_bundle::ModelPolicy::default(),
-                    workdir: None,
-                    resource_view: hya_bundle::ResourceView::default(),
-                    can_spawn: Vec::new(),
-                    hook_refs: Vec::new(),
-                }],
+                agents: ["build", "resident"]
+                    .into_iter()
+                    .map(|id| hya_bundle::PreparedAgent {
+                        id: AgentName::new(id),
+                        description: None,
+                        role: hya_bundle::AgentRole::Subagent,
+                        color: None,
+                        prompt: None,
+                        prompt_source: None,
+                        prompt_digest: None,
+                        model_policy: hya_bundle::ModelPolicy::default(),
+                        workdir: None,
+                        resource_view: hya_bundle::ResourceView::default(),
+                        can_spawn: Vec::new(),
+                        hook_refs: Vec::new(),
+                    })
+                    .collect(),
                 tools: Vec::new(),
                 skills: Vec::new(),
                 mcp: Vec::new(),
@@ -1379,8 +1382,15 @@ mod tests {
 
     async fn archived_child(
         engine: &Arc<SessionEngine>,
-    ) -> (SessionId, Arc<ResidentSupervisor>, String, String) {
+    ) -> (
+        SessionId,
+        Arc<ResidentSupervisor>,
+        String,
+        String,
+        crate::engine::TurnLease,
+    ) {
         let root = root_team(engine).await;
+        let lead_turn = engine.try_begin_turn(root).unwrap();
         let supervisor = ResidentSupervisor::start(engine.clone());
         let child = engine
             .create(CreateSession {
@@ -1420,13 +1430,13 @@ mod tests {
             .archive_member(root, &handle, "archive for revival test")
             .await
             .unwrap();
-        (root, supervisor, handle, channel)
+        (root, supervisor, handle, channel, lead_turn)
     }
 
     #[tokio::test]
     async fn mail_auth_handle_revival_requires_an_authorized_own_archived_child() {
         let engine = Arc::new(engine().await);
-        let (root, supervisor, handle, _) = archived_child(&engine).await;
+        let (root, supervisor, handle, _, lead_turn) = archived_child(&engine).await;
         let allowed = engine.session_channel_policy(root).unwrap();
         let outsider = register_child(&engine, root, root, "main", "outsider-1").await;
         let before = engine.replay(root).await.unwrap().len();
@@ -1497,6 +1507,7 @@ mod tests {
         assert!(engine.replay(root).await.unwrap().iter().any(|e| {
             matches!(&e.event, Event::AgentRestarted { handle: restarted, .. } if restarted == &handle)
         }));
+        drop(lead_turn);
         supervisor
             .drain(
                 hya_proto::FinishCause::Shutdown,
@@ -1512,7 +1523,7 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(10), async {
             let hooks = Arc::new(RevivalHook::default());
             let engine = Arc::new(engine().await.with_hooks(hooks.clone()));
-            let (root, supervisor, handle, channel) = archived_child(&engine).await;
+            let (root, supervisor, handle, channel, lead_turn) = archived_child(&engine).await;
             hooks.block.store(true, std::sync::atomic::Ordering::SeqCst);
             let reviving = tokio::spawn({
                 let supervisor = supervisor.clone();
@@ -1554,6 +1565,7 @@ mod tests {
             // Release and join before asserting, including on the broken path.
             hooks.release.notify_one();
             reviving.await.unwrap().unwrap();
+            drop(lead_turn);
             supervisor
                 .drain(hya_proto::FinishCause::Shutdown, Duration::from_secs(2))
                 .await;

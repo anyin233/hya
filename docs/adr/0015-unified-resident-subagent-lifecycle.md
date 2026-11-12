@@ -42,12 +42,16 @@ communication half (ADR-0011).
 - **Depth is hardcoded to two subagent layers** (a constant, not config).
   Orchestration tools are not advertised at depth 2; admission depth checks
   remain as the API-level backstop.
-- **Termination is engine-guaranteed without timers.** The chain is: report
-  gate → parent `kill` (force-archive with an engine-synthesized failure report
-  and a deterministically degraded handoff) → root-turn teardown force-archive.
-  Per-team turn/message budget kills stay as the runaway backstop. An idle
-  agent without a report is *never* auto-archived — it may be awaiting an
-  answer from its parent.
+- **Termination is owned by the episode.** The chain is: report gate → parent
+  `archive` → root teardown. Requesters cancel and await the episode's ending;
+  they never finalize a live episode from outside its task. Parent archive,
+  root teardown and shutdown cancel the member without report mail; team
+  turn/message budget kills mark it failed without report mail. Forced endings
+  await the cancelled turn for at most five seconds and sidecar termination for
+  at most five more, then commit a degraded handoff and archive. A killed team
+  leaves the live map immediately; subsequent work gets fresh counters and main
+  context. An idle agent without a report is never auto-archived — it may be
+  awaiting an answer from its parent.
 - **A user cancel stops the subtree without archiving it** (0.45.9). Cancelling
   a session's turn cancels every live member's turn below it and holds them:
   the harness starts none of their turns (mail wakes, quiescence synthesis)
@@ -59,15 +63,15 @@ communication half (ADR-0011).
 
 - The zombie hazard moves from "runs forever" to "never reports", and is
   closed by a responsibility chain rather than timers: a stuck child blocks
-  its parent's report gate, forcing the parent to wait or kill.
+  its parent's report gate, forcing the parent to wait or archive it.
 - A corollary invariant: **while I am live, my parent is live** (a parent
   cannot pass its own report gate while children remain), so upward mail never
   hits an archived peer and revival is exclusively a downward act.
 - Revival cost is O(handoff), not O(history). Episodes are bounded contexts;
   the transcript stays in the log, out of the model window.
-- Every termination costs exactly one extra model call (the handoff). A failed
-  handoff call degrades to a deterministic projection-derived document marked
-  `degraded`; terminality never blocks on the summarizer.
+- Voluntary reports use one extra model call for the handoff. Forced endings
+  use a deterministic projection-derived document marked `degraded`; cancellation
+  interrupts a report handoff and proceeds to the requested forced ending.
 - The per-run spawn budget becomes a lease ledger: refund on archive, debit on
   spawn and on revive. Long-lived roots no longer burn out.
 - Breaking, accepted: transient teams, the evidence envelope, foreground

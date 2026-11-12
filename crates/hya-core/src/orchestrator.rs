@@ -61,15 +61,6 @@ impl Default for SubagentLimits {
     }
 }
 
-/// Result of charging a per-team turn/message against its budget.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TeamBudget {
-    /// The charge was within budget; work may proceed.
-    Ok,
-    /// The charge tripped the budget; the team must be killed.
-    Exceeded,
-}
-
 /// Result of reserving a spawn against the per-run budget.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OperationReservation {
@@ -105,19 +96,15 @@ struct OperationDebit {
 /// - `reserve` draws from a per-top-level-run budget so the total number of
 ///   members spawned under one run cannot exceed `per_run_budget`.
 /// - `release` frees a completed root's budget entry so the map cannot leak.
-/// - `charge_team_turn`/`charge_team_message` guard per-team runaway activity;
-///   `release_team` drops the counters when a team ends.
+///
+/// Per-team activity counters belong to the resident team, so replacing a
+/// killed team always starts with fresh counters.
 #[derive(Clone)]
 pub struct SubagentGovernor {
     limits: SubagentLimits,
     general_stream_sem: Arc<Semaphore>,
     reserved_stream_sem: Arc<Semaphore>,
     budgets: Arc<Mutex<BudgetState>>,
-    /// Per-team running totals of resident turns and mail messages, keyed by the
-    /// team-root session. Separate from `budgets` (which is per-run spawn count)
-    /// because these guard runaway *activity*, not fan-out.
-    team_turns: Arc<Mutex<HashMap<SessionId, u64>>>,
-    team_messages: Arc<Mutex<HashMap<SessionId, u64>>>,
 }
 
 impl SubagentGovernor {
@@ -131,8 +118,6 @@ impl SubagentGovernor {
             general_stream_sem: Arc::new(Semaphore::new(limits.max_concurrency)),
             reserved_stream_sem: Arc::new(Semaphore::new(RESERVED_STREAM_PERMITS)),
             budgets: Arc::new(Mutex::new(BudgetState::default())),
-            team_turns: Arc::new(Mutex::new(HashMap::new())),
-            team_messages: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -309,50 +294,8 @@ impl SubagentGovernor {
         }
     }
 
-    /// Charge one resident turn against `root`'s per-team turn budget. Returns
-    /// [`TeamBudget::Exceeded`] the first time the running total exceeds the
-    /// configured budget so the caller can kill the team exactly once.
-    pub fn charge_team_turn(&self, root: SessionId) -> TeamBudget {
-        charge(&self.team_turns, root, self.limits.per_team_turn_budget)
-    }
-
-    /// Charge one mail message against `root`'s per-team message budget. Returns
-    /// [`TeamBudget::Exceeded`] the first time the running total exceeds the
-    /// configured budget (the message-loop backstop).
-    pub fn charge_team_message(&self, root: SessionId) -> TeamBudget {
-        charge(
-            &self.team_messages,
-            root,
-            self.limits.per_team_message_budget,
-        )
-    }
-
-    /// Drop a finished/killed team's turn + message counters so long-lived roots
-    /// do not leak entries.
-    pub fn release_team(&self, root: SessionId) {
-        lock(&self.team_turns).remove(&root);
-        lock(&self.team_messages).remove(&root);
-    }
-
     fn lock_budgets(&self) -> std::sync::MutexGuard<'_, BudgetState> {
         lock(&self.budgets)
-    }
-}
-
-/// Increment `root`'s counter in `map` and report whether it now exceeds `budget`.
-/// A `budget` of 0 means "unbounded" (never trips), so a misconfiguration cannot
-/// wedge every team immediately.
-fn charge(map: &Arc<Mutex<HashMap<SessionId, u64>>>, root: SessionId, budget: u64) -> TeamBudget {
-    if budget == 0 {
-        return TeamBudget::Ok;
-    }
-    let mut guard = lock(map);
-    let count = guard.entry(root).or_insert(0);
-    *count = count.saturating_add(1);
-    if *count > budget {
-        TeamBudget::Exceeded
-    } else {
-        TeamBudget::Ok
     }
 }
 
@@ -457,38 +400,5 @@ mod tests {
         assert_eq!(gov.remaining_budget(root), 3);
         assert!(!gov.release_operation(operation));
         assert_eq!(gov.remaining_budget(root), 3);
-    }
-
-    #[test]
-    fn team_message_budget_trips_once_then_release_resets() {
-        let gov = SubagentGovernor::new(SubagentLimits {
-            per_team_message_budget: 2,
-            ..SubagentLimits::default()
-        });
-        let root = SessionId::new();
-        assert_eq!(gov.charge_team_message(root), TeamBudget::Ok, "1st ok");
-        assert_eq!(gov.charge_team_message(root), TeamBudget::Ok, "2nd ok");
-        assert_eq!(
-            gov.charge_team_message(root),
-            TeamBudget::Exceeded,
-            "3rd exceeds budget of 2"
-        );
-        // A distinct team has its own fresh counter.
-        assert_eq!(gov.charge_team_message(SessionId::new()), TeamBudget::Ok);
-        // Release resets the counter so a reused root starts clean.
-        gov.release_team(root);
-        assert_eq!(gov.charge_team_message(root), TeamBudget::Ok, "reset");
-    }
-
-    #[test]
-    fn zero_team_budget_is_unbounded() {
-        let gov = SubagentGovernor::new(SubagentLimits {
-            per_team_turn_budget: 0,
-            ..SubagentLimits::default()
-        });
-        let root = SessionId::new();
-        for _ in 0..10_000 {
-            assert_eq!(gov.charge_team_turn(root), TeamBudget::Ok);
-        }
     }
 }

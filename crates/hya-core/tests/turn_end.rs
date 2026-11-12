@@ -2048,10 +2048,15 @@ async fn root_wake_stopped_during_binding(mail: bool) {
     let (engine, agent, provider) = engine_with_script().await;
     let root = make_session(&engine, None, "hya-main").await;
     let supervisor = ResidentSupervisor::start(engine.clone());
-    let worker = make_session(&engine, Some(root), "hya-task").await;
-    supervisor
-        .register_existing_resident(root, worker, "worker".into(), agent.clone(), None)
-        .await
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let worker_agent = engine
+        .agent_spec_for_binding(&binding, &agent, "hya-task")
+        .unwrap();
+    let agents = engine
+        .agent_roster_for_binding(&binding, "hya-task")
+        .unwrap();
+    let resources = engine
+        .agent_resource_policy_for_binding(&binding, "hya-task")
         .unwrap();
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
@@ -2087,15 +2092,28 @@ async fn root_wake_stopped_during_binding(mail: bool) {
         })
         .unwrap();
     register_main(&supervisor, &engine, &agent, root).await;
+    // Bind the worker before installing the root-only binding gate.
+    let (worker, handle) = supervisor
+        .spawn_resident(
+            root,
+            worker_agent,
+            (binding, agents, resources, None),
+            String::new(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
     let (sender, to) = if mail {
-        (worker, "main")
+        (worker, "main".to_string())
     } else {
-        (root, "main/worker")
+        (root, handle)
     };
     engine
         .mail_send(
             sender,
-            MailEndpoint::Handle(to.into()),
+            MailEndpoint::Handle(to),
             MailKind::Message,
             "wake work".into(),
         )
@@ -2121,7 +2139,12 @@ async fn root_wake_stopped_during_binding(mail: bool) {
     release.notify_one();
     let report = stop.await.unwrap().unwrap();
     assert!(report.stragglers.is_empty(), "{report:?}");
-    supervisor.team_cancel(root).unwrap().cancel();
+    tokio::time::timeout(
+        Duration::from_secs(11),
+        supervisor.drain(FinishCause::Shutdown, Duration::from_secs(5)),
+    )
+    .await
+    .expect("resident shutdown must finish before inspecting the stopped root");
     let expected = if mail {
         vec![vec![(FinishReason::Cancelled, Some(FinishCause::Shutdown))]]
     } else {

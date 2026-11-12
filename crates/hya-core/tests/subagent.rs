@@ -2293,7 +2293,7 @@ async fn explicit_idle_resident_stop_is_final_idempotent_and_releases_claim() {
     let projection = engine.read_projection(root).await.unwrap();
     assert!(!projection.team.roster.contains_key(handle.as_str()));
     assert_eq!(projection.team.archived[handle.as_str()].session, child);
-    assert!(supervisor.team_cancel(root).is_none());
+    assert_eq!(supervisor.episode_count(), 0);
 
     assert_stopped_member_revives(&engine, root, child, &handle, "after stop").await;
 }
@@ -2864,7 +2864,7 @@ async fn explicit_running_resident_stop_is_idempotent_fences_and_drops_queued_ma
             .unwrap()
             .contains(&child)
     );
-    assert!(supervisor.team_cancel(root).is_none());
+    assert_eq!(supervisor.episode_count(), 0);
 
     let projection = engine.read_projection(root).await.unwrap();
     assert!(!projection.team.roster.contains_key(handle.as_str()));
@@ -2988,7 +2988,7 @@ async fn resident_replacement_declaration_drift_disables_once_and_releases_claim
             .unwrap()
             .contains(&child)
     );
-    assert!(supervisor.team_cancel(root).is_none());
+    assert_eq!(supervisor.episode_count(), 0);
 
     assert_eq!(starts.load(Ordering::SeqCst), 2);
     let child_projection = engine.read_projection(child).await.unwrap();
@@ -3416,7 +3416,7 @@ async fn resident_sidecar_ready_failure_terminates_handle_once_and_removes_slot(
             .unwrap()
             .contains(&child)
     );
-    assert!(supervisor.team_cancel(root).is_none());
+    assert_eq!(supervisor.episode_count(), 0);
 }
 
 #[tokio::test]
