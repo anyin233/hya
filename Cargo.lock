@@ -1406,6 +1406,7 @@ dependencies = [
  "hya-bundle",
  "hya-proto",
  "libc",
+ "libsqlite3-sys",
  "semver",
  "serde_json",
  "sqlx",
@@ -4004,7 +4005,15 @@ name = "xtask"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "futures",
+ "hya-app",
  "hya-bundle",
+ "hya-core",
+ "hya-proto",
+ "hya-provider",
+ "hya-store",
+ "hya-tool",
  "hya-version",
  "pbjson-build",
  "prost",
@@ -4013,6 +4022,8 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_norway",
+ "tokio",
+ "tokio-util",
  "toml",
  "tonic-build",
 ]
