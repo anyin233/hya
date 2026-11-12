@@ -19,14 +19,12 @@
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use hya_core::RuntimeSource;
-use hya_core::hooks::HookDispatcher;
 use hya_plugin::config::PluginSpec;
 use hya_plugin::{HostInfo, PluginHost};
 
-use crate::runtime_reconcile::prepared_plugin_source;
+use crate::runtime_reconcile::prepared_plugin_host;
 
 /// How a [`crate::ProjectScopeRefresh`] loads project plugins.
 #[derive(Clone, Debug)]
@@ -87,7 +85,8 @@ pub(crate) async fn load_project_plugins(
         return Vec::new();
     }
     let roots = roots.to_vec();
-    let configured = settings.configured.clone();
+    let mut configured = settings.configured.clone();
+    configured.extend(crate::config::load_configured_plugin_ids());
     let planned = match tokio::task::spawn_blocking(move || {
         plan_project_plugins(&roots, &configured)
     })
@@ -177,19 +176,13 @@ fn plugin_source(host: PluginHost, id: &str) -> Option<RuntimeSource> {
             "ignoring workspace adapters declared by a project plugin (unsupported)"
         );
     }
-    let has_hooks = !contributions.hooks.is_empty();
-    let source = match prepared_plugin_source(plugin) {
-        Ok(prepared) => prepared.into_runtime_source(),
+    match prepared_plugin_host(host) {
+        Ok(prepared) => Some(prepared.into_runtime_source()),
         Err(error) => {
             tracing::warn!(plugin = %id, %error, "project plugin contribution rejected");
-            return None;
+            None
         }
-    };
-    Some(if has_hooks {
-        source.with_hooks(Arc::new(host) as Arc<dyn HookDispatcher>)
-    } else {
-        source
-    })
+    }
 }
 
 #[cfg(test)]

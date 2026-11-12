@@ -73,7 +73,7 @@ fn install_writes_a_loadable_source_directory_and_reinstall_is_unchanged() {
         std::fs::read_to_string(dir.join("acme__tools/prompts/lead.md")).unwrap(),
         "Lead.\n"
     );
-    let (catalogs, _) = load_project_bundles(&dir);
+    let (catalogs, _) = load_project_bundles(&dir).unwrap();
     assert_eq!(catalogs.len(), 1, "the runtime loader must see the bundle");
     assert_eq!(project_ids(&dir), vec!["acme/tools".to_string()]);
     let leftovers = std::fs::read_dir(root.join(".hya"))
@@ -229,7 +229,7 @@ fn bundle_config_file_survives_upgrade_and_is_not_bundle_content() {
         DENY,
     )
     .expect("install v1");
-    let (before_catalogs, before_fingerprint) = load_project_bundles(&dir);
+    let (before_catalogs, before_fingerprint) = load_project_bundles(&dir).unwrap();
     let config = dir.join("acme__tools/config.yml");
     std::fs::write(
         &config,
@@ -238,7 +238,7 @@ fn bundle_config_file_survives_upgrade_and_is_not_bundle_content() {
     .unwrap();
     std::fs::write(dir.join("acme__tools/.config.yml.lock"), "").unwrap();
 
-    let (with_config, with_config_fingerprint) = load_project_bundles(&dir);
+    let (with_config, with_config_fingerprint) = load_project_bundles(&dir).unwrap();
     assert_eq!(
         with_config_fingerprint, before_fingerprint,
         "config.yml must not change the project content fingerprint"

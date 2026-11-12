@@ -326,7 +326,8 @@ async fn the_first_root_wins_on_bundle_id_and_namespace() {
     assert!(reversed.resolve_agent("ns-one-agent").is_none());
 
     let (catalogs, _) =
-        hya_app::project_bundles::load_project_bundles_for_roots(&[first.clone(), second.clone()]);
+        hya_app::project_bundles::load_project_bundles_for_roots(&[first.clone(), second.clone()])
+            .unwrap();
     let mut ids = catalogs
         .iter()
         .map(|catalog| catalog.bundles()[0].identity().id.clone())
@@ -701,4 +702,37 @@ async fn saving_a_project_bundle_model_writes_only_that_projects_file() {
             .configured_agent_model("tools-agent"),
         None
     );
+}
+
+#[tokio::test]
+async fn hot_reload_invalid_project_bundle_keeps_published_catalog() {
+    let root = temp_path("invalid-edit");
+    write_project_bundle(&root, "kept", "acme/kept", "ORIGINAL");
+    let h = harness(&root.join("registry.sqlite")).await;
+    let scope = project(&[&root]);
+    let before = h.bind(&scope).await;
+    std::fs::write(
+        root.join(".hya/bundles/kept/bundle.hya.md"),
+        "---\nkind: invalid\n---\n",
+    )
+    .unwrap();
+    assert!(h.refresh.refresh_scope(&h.runtime, &scope).await.is_err());
+    let after = h.runtime.bind_scoped(&scope, &root).unwrap();
+    assert_eq!(
+        prompt_of(&after, "kept-agent"),
+        prompt_of(&before, "kept-agent")
+    );
+    std::fs::remove_file(root.join(".hya/bundles/kept/bundle.hya.md")).unwrap();
+    assert!(h.refresh.refresh_scope(&h.runtime, &scope).await.is_err());
+    std::fs::remove_dir_all(root.join(".hya/bundles/kept")).unwrap();
+    assert!(h.refresh.refresh_scope(&h.runtime, &scope).await.unwrap());
+    assert!(
+        h.runtime
+            .bind_scoped(&scope, &root)
+            .unwrap()
+            .resolve_agent("kept-agent")
+            .is_none()
+    );
+    drop(h);
+    std::fs::remove_dir_all(root).unwrap();
 }

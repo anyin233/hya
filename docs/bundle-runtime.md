@@ -102,6 +102,12 @@ A bundle update goes live in four steps, each of which can refuse it:
    libraries are loaded once per process: changing them needs
    `hya serve restart` ([cli.md](cli.md#self-proof-and-rollback)).
 
+`hya bundle remove`, `enable`, and `disable` also request a refresh of the
+running database backend and the current directory's Project, without changing
+the daemon PID. Without a running daemon the next start reads the written
+registry. Configured plugin edits use the same refresh boundary (or the next
+turn/catalog bind); see [Configuration](configuration.md#reloading-configured-plugins).
+
 `Catalog.RefreshBundles` (`POST /v1/bundles:refresh`, gRPC
 `hya.v1.Catalog/RefreshBundles`):
 
@@ -288,6 +294,12 @@ Project bundles (`.hya/bundles/<dir>/`, written by `hya bundle install
   republishes that one Project; other Projects keep their generation. A
   project bundle's `config.yml` models (`agents.<id>.model`) apply only in its
   Project, and saving a model for one of its Agents writes that file.
+- An invalid or unreadable project bundle, including malformed model config,
+  rejects the replacement overlay. The published catalog and its processes
+  remain intact; Hya reports the error instead of exposing a reduced tier or
+  a lower-priority bundle with the same identity. Fix the source and refresh
+  again. Removing the bundle directory is an explicit removal and can publish
+  an overlay without it.
 - Runtime sources are shared by content: an installed bundle's process is one
   process for the global scope and every Project. A project bundle's process
   belongs to the Project that loads it. It stops once that Project no longer

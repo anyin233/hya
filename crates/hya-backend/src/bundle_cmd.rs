@@ -215,12 +215,13 @@ async fn set_enabled(bundle_id: &str, enabled: bool, db: &str) -> anyhow::Result
     refresh_daemon(db).await
 }
 
-/// Ask the running backend of `db`, if any, to republish the user scope now.
+/// Ask the running backend to refresh the base and the current Project now.
 async fn refresh_daemon(db: &str) -> anyhow::Result<()> {
     if let Some(found) = crate::daemon::running(db).await {
         reqwest::Client::new()
             .post(format!("{}/v1/bundles:refresh", found.url))
-            .json(&serde_json::json!({ "directory": "" }))
+            .json(&serde_json::json!({ "directory": std::env::current_dir()
+                .context("read the current directory")?.to_string_lossy() }))
             .send()
             .await
             .context("ask the backend to refresh its bundles")?

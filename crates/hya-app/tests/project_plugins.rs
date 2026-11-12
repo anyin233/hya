@@ -347,12 +347,15 @@ async fn project_sessions_bind_their_projects_plugins_and_config_plugins_win() {
         1,
         "only the project's own plugin started from the manifests"
     );
-    assert_eq!(user_text(&bound, inside, "hi").await, "[alpha] hi");
+    assert_eq!(
+        user_text(&bound, inside, "hi").await,
+        "[configured] [alpha] hi"
+    );
 
     let unbound = engine.bind_session_runtime(outside, &other).await.unwrap();
     assert!(unbound.resolve_tool("alpha__echo").is_none());
     assert_eq!(echo(&unbound, "configured__echo").origin, "config");
-    assert_eq!(user_text(&unbound, outside, "hi").await, "hi");
+    assert_eq!(user_text(&unbound, outside, "hi").await, "[configured] hi");
     drop((bound, unbound));
     built.shutdown().await.expect("shutdown");
 }

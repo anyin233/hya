@@ -450,7 +450,7 @@ Together that is a 128-permit live stream budget.
 For each `ToolCallRequested` collected in the round, in order:
 
 1. Re-validate the actor claim.
-2. **`tool.execute.before` hooks** — global plugin host first, then activation
+2. **`tool.execute.before` hooks** — captured plugin sources, then activation
    (sidecar). A `Veto { reason }` produces `ToolError` with message
    `blocked by plugin: <reason>` and the tool never runs.
 3. After the before-hook batch, re-check activation-hook health (unhealthy →
@@ -649,8 +649,7 @@ it came from:
   processes exit even if the sessions stay idle (a turn in flight keeps its
   binding, and so its processes, until it ends).
 - A released session's out-of-turn events and lifecycle hooks reach no
-  bundle or scope hooks until its next bind. Process-wide (config) plugin
-  hooks are separate and unaffected.
+  bundle, configured-plugin, or scope hooks until its next bind.
 
 #### `ToolRegistrySnapshot` and dispatch identity
 
@@ -687,14 +686,16 @@ changes the fingerprint, so a reload can detect that permissions actually
 changed rather than re-deriving the rule set.
 
 `hya-app::RuntimeReconciler` owns only desired/observed coordination for MCP
-and startup plugin declarations. It has no resolve or dispatch API and caches
+and configured plugin declarations. It has no resolve or dispatch API and caches
 no effective tool set. Stable source IDs are `(mcp|plugin, configured_id)`;
 the effective source manifest, declaration digest, client/child owner, and
-exports live only in `RuntimeSnapshot`. Startup, deferred MCP, and Compat MCP
-control all submit to this reconciler. Complete current-revision candidates
-publish through `RuntimeRegistry`; stale successes are dropped, failures leave
-the prior generation unchanged, and explicit removals publish before unrelated
-additions. The publication closure always starts from the current snapshot, so
+exports live only in `RuntimeSnapshot`. Startup, deferred MCP, plugin config
+edits, and v1 MCP control all submit to this reconciler. Each source has its own
+operation ticket and publishes its complete contribution through `RuntimeRegistry`.
+A mutation of one source leaves other pending preparations valid. Stale results
+are dropped, failed sources can be retried with identical declarations, and
+explicit removals publish before unrelated additions. A failed source keeps its
+previous contribution without preventing independent successes from publishing. The publication closure always starts from the current snapshot, so
 it cannot overwrite a concurrent skill refresh with an older candidate.
 
 #### Deferred MCP startup
@@ -718,9 +719,11 @@ ASCII alphanumerics, `_`, and `-`, and replaces every other character with
 Resources are **not** registered as tools and are **not** reachable by the
 model through the tool registry today.
 
-Configured Plugin reconciliation covers tool exports and their RPC binding;
-startup callbacks remain owned by the configured `PluginHost`. A respawn must
-reproduce the complete canonical initialize declaration or calls fail closed.
+Configured Plugin reconciliation publishes tools, Skills, and hooks together;
+the published source retains its single-plugin `PluginHost`. Configuration edits
+are checked at the same bind/explicit-refresh boundary as bundles. There is no
+separate live host or permission interceptor for configured plugins. A respawn
+must reproduce the complete canonical initialize declaration or calls fail closed.
 
 `RuntimeSnapshot` owns exactly one `BundleCatalog`. At root admission, new turn
 binding, subsequent root model-round boundaries, and catalog refresh, `hya-app` merges project, installed, and
@@ -808,9 +811,9 @@ is no TTL, heartbeat, reclaim, second runtime, or persisted process state.
 
 ### Activation-hook health gate
 
-A task-local activation hook dispatcher is scoped to one session and runs
-**in addition to** (not instead of) the global plugin host for
-`tool.execute.before` / `tool.execute.after` (and event dispatch).
+A task-local activation hook dispatcher is scoped to one session and includes
+the configured/project plugin sources captured by its binding, followed by the
+selected bundle and activation sidecar hooks for tool and event dispatch.
 
 The turn loop checks the activation hook dispatcher's `is_healthy()`:
 
@@ -1305,16 +1308,15 @@ bridge (see below).
 | `tool_execute_before` | `ToolExecuteBeforeInput { session, message, call, tool, input }` | `Continue { input }` or `Veto { reason }` |
 | `tool_execute_after` | `ToolExecuteAfterInput { …, result: ToolOutcomeNative }` | `Continue { result }` where result is `Ok { output, time_ms }` or `Err { message }` |
 
-The CLI installs a `PluginHost` when `plugins:` are configured.
+The app publishes one complete runtime source for each configured plugin.
 
 ### `tool.execute.before`
 
 Runs before every model-issued tool call and also for direct shell turns. A
 hook may return rewritten input JSON (replaces the model's arguments) or a
 `Veto` with a reason. A veto skips execution entirely and emits a `ToolError`
-whose message is `blocked by plugin: <reason>`. Both the global plugin host
-and the per-session activation (sidecar) dispatcher run this hook (global
-first).
+whose message is `blocked by plugin: <reason>`. Captured configured/project
+plugin hooks run before the selected bundle and activation sidecar hooks.
 
 ### `text_complete`
 
@@ -1348,9 +1350,9 @@ through to the normal user prompt.
 
 ### Activation hooks
 
-A task-local activation hook dispatcher is scoped to one session and runs
-alongside the global host for the same tool before/after hooks and event
-dispatch. If it reports unhealthy while a tool call is in flight, the whole
+A task-local activation hook dispatcher is scoped to one session and includes
+its captured source hooks and activation sidecar for tool before/after hooks
+and event dispatch. If it reports unhealthy while a tool call is in flight, the whole
 turn is cancelled rather than silently continuing without the sidecar's hooks
 (see [Activation-hook health gate](#activation-hook-health-gate)).
 

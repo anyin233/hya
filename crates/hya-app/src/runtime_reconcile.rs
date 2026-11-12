@@ -22,7 +22,7 @@ use thiserror::Error;
 
 pub(crate) type SourceId = RuntimeSourceId;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) enum DesiredSpec {
     Mcp(McpServerConfig),
     Plugin(PluginSpec),
@@ -32,7 +32,6 @@ pub(crate) enum DesiredSpec {
 pub(crate) struct DesiredSource {
     id: SourceId,
     spec: DesiredSpec,
-    spec_digest: [u8; 32],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -44,13 +43,6 @@ struct AttemptTicket {
 #[derive(Clone)]
 struct DesiredRecord {
     spec: DesiredSpec,
-    spec_digest: [u8; 32],
-}
-
-#[derive(Clone)]
-struct AttemptRecord {
-    revision: u64,
-    ticket: AttemptTicket,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,7 +55,6 @@ pub(crate) enum ObservedState {
 
 #[derive(Clone)]
 struct ObservedRecord {
-    revision: u64,
     ticket: Option<AttemptTicket>,
     state: ObservedState,
     declaration_digest: Option<[u8; 32]>,
@@ -79,15 +70,13 @@ pub(crate) struct SourceStatus {
     pub(crate) effective_generation: ConfigGeneration,
     pub(crate) observed_declaration_digest: Option<[u8; 32]>,
     pub(crate) effective_declaration_digest: Option<[u8; 32]>,
-    pub(crate) observed_revision: Option<u64>,
-    pub(crate) observed_ticket_revision: Option<u64>,
 }
 
 #[derive(Default)]
 struct ReconcileState {
     desired_revision: u64,
     desired: BTreeMap<SourceId, DesiredRecord>,
-    attempt: BTreeMap<SourceId, AttemptRecord>,
+    attempt: BTreeMap<SourceId, AttemptTicket>,
     observed: BTreeMap<SourceId, ObservedRecord>,
 }
 
@@ -100,10 +89,89 @@ pub(crate) struct RuntimeMcpControl {
     reconciler: Arc<RuntimeReconciler>,
 }
 
+/// Refresh config plugins at the same bind/explicit-refresh boundary as bundles.
+pub(crate) struct RuntimeExtensionsRefresh {
+    catalogs: crate::ProjectScopeRefresh,
+    reconciler: Arc<RuntimeReconciler>,
+    config_file: PathBuf,
+    applied: tokio::sync::Mutex<Option<String>>,
+    pure: bool,
+}
+
+impl RuntimeExtensionsRefresh {
+    pub(crate) fn new(
+        catalogs: crate::ProjectScopeRefresh,
+        reconciler: Arc<RuntimeReconciler>,
+        pure: bool,
+    ) -> Result<Self, hya_core::CoreError> {
+        let config_file = crate::config::active_config_path();
+        let applied = read_plugin_config(&config_file)?;
+        Ok(Self {
+            catalogs,
+            reconciler,
+            config_file,
+            applied: tokio::sync::Mutex::new(applied),
+            pure,
+        })
+    }
+}
+
+fn read_plugin_config(path: &Path) -> Result<Option<String>, hya_core::CoreError> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(hya_core::CoreError::Invalid(format!(
+            "read plugin config {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
+#[async_trait::async_trait]
+impl hya_core::RuntimeCatalogRefresh for RuntimeExtensionsRefresh {
+    async fn refresh_if_changed(
+        &self,
+        runtime: &RuntimeRegistry,
+    ) -> Result<bool, hya_core::CoreError> {
+        let mut changed = self.catalogs.refresh_if_changed(runtime).await?;
+        if self.pure {
+            return Ok(changed);
+        }
+        let mut applied = self.applied.lock().await;
+        let next = read_plugin_config(&self.config_file)?;
+        if *applied == next {
+            return Ok(changed);
+        }
+        let specs =
+            crate::config::parse_plugin_config(next.as_deref().unwrap_or("")).map_err(|error| {
+                hya_core::CoreError::Invalid(format!("load plugin config: {error:#}"))
+            })?;
+        let plan = self
+            .reconciler
+            .replace_plugins(specs)
+            .map_err(|error| hya_core::CoreError::Invalid(error.to_string()))?;
+        let before = runtime.effective_manifest().generation;
+        RuntimeMcpControl::new(self.reconciler.clone())
+            .reconcile_plan(plan)
+            .await
+            .map_err(|error| hya_core::CoreError::Invalid(error.to_string()))?;
+        changed |= runtime.effective_manifest().generation != before;
+        *applied = next;
+        Ok(changed)
+    }
+
+    async fn refresh_scope(
+        &self,
+        runtime: &RuntimeRegistry,
+        scope: &hya_core::CatalogScope,
+    ) -> Result<bool, hya_core::CoreError> {
+        self.catalogs.refresh_scope(runtime, scope).await
+    }
+}
+
 type ControlFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 pub(crate) struct ReconcilePlan {
-    revision: u64,
     tickets: BTreeMap<SourceId, AttemptTicket>,
     sources: Vec<DesiredSource>,
 }
@@ -127,6 +195,7 @@ pub(crate) struct PreparedSource {
     skills: Vec<RuntimeSourceSkill>,
     resources: BTreeMap<String, Value>,
     schemas: Vec<SourceSchema>,
+    hooks: Option<Arc<dyn hya_core::hooks::HookDispatcher>>,
 }
 
 pub(crate) struct PreparedFailure {
@@ -158,21 +227,17 @@ pub(crate) enum ReconcileError {
 impl DesiredSource {
     #[must_use]
     pub(crate) fn mcp(id: SourceId, spec: McpServerConfig) -> Self {
-        let spec_digest = digest_mcp(&spec);
         Self {
             id,
             spec: DesiredSpec::Mcp(spec),
-            spec_digest,
         }
     }
 
     #[must_use]
     pub(crate) fn plugin(id: SourceId, spec: PluginSpec) -> Self {
-        let spec_digest = digest_plugin(&spec);
         Self {
             id,
             spec: DesiredSpec::Plugin(spec),
-            spec_digest,
         }
     }
 
@@ -182,13 +247,7 @@ impl DesiredSource {
     }
 
     fn into_record(self) -> (SourceId, DesiredRecord) {
-        (
-            self.id,
-            DesiredRecord {
-                spec: self.spec,
-                spec_digest: self.spec_digest,
-            },
-        )
+        (self.id, DesiredRecord { spec: self.spec })
     }
 }
 
@@ -206,7 +265,6 @@ impl DesiredRecord {
         DesiredSource {
             id,
             spec: self.spec.clone(),
-            spec_digest: self.spec_digest,
         }
     }
 }
@@ -244,6 +302,7 @@ impl PreparedSource {
             skills: Vec::new(),
             resources: BTreeMap::new(),
             schemas: Vec::new(),
+            hooks: None,
         }
     }
     /// Attach parsed Skill contributions to this prepared runtime source.
@@ -283,10 +342,14 @@ impl PreparedSource {
                 )
             })
             .collect();
-        RuntimeSource::new(self.id, self.declaration_digest, self.owner, exports)
+        let source = RuntimeSource::new(self.id, self.declaration_digest, self.owner, exports)
             .with_skills(self.skills)
             .with_resources(self.resources)
-            .with_schemas(self.schemas)
+            .with_schemas(self.schemas);
+        match self.hooks {
+            Some(hooks) => source.with_hooks(hooks),
+            None => source,
+        }
     }
 }
 
@@ -531,6 +594,21 @@ pub(crate) fn prepared_plugin_source(
     Ok(PreparedSource::new(id, declaration_digest, Arc::new(plugin), exports).with_skills(skills))
 }
 
+/// The host is retained only by its published source, alongside its tools.
+pub(crate) fn prepared_plugin_host(
+    host: hya_plugin::PluginHost,
+) -> Result<PreparedSource, ReconcileError> {
+    let plugin = host.prepared_plugins().into_iter().next().ok_or_else(|| {
+        ReconcileError::InvalidPrepared("plugin host has no prepared plugin".into())
+    })?;
+    let has_hooks = !plugin.contributions().hooks.is_empty();
+    let mut source = prepared_plugin_source(plugin)?;
+    if has_hooks {
+        source.hooks = Some(Arc::new(host));
+    }
+    Ok(source)
+}
+
 impl From<PreparedSource> for PreparedResult {
     fn from(source: PreparedSource) -> Self {
         Self::Ready(source)
@@ -577,7 +655,26 @@ impl RuntimeReconciler {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.apply_desired_locked(&mut state, next)
+        self.apply_desired_locked(&mut state, next, None)
+    }
+
+    fn replace_plugins(&self, specs: Vec<PluginSpec>) -> Result<ReconcilePlan, ReconcileError> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut next = state
+            .desired
+            .iter()
+            .filter(|(id, _)| id.kind() != RuntimeSourceKind::Plugin)
+            .map(|(id, record)| (id.clone(), record.clone()))
+            .collect::<BTreeMap<_, _>>();
+        for spec in specs {
+            let (id, record) =
+                DesiredSource::plugin(SourceId::plugin(spec.id.clone()), spec).into_record();
+            next.insert(id, record);
+        }
+        self.apply_desired_locked(&mut state, next, None)
     }
 
     pub(crate) fn upsert_mcp(
@@ -592,8 +689,8 @@ impl RuntimeReconciler {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut next = state.desired.clone();
-        next.insert(id, record);
-        self.apply_desired_locked(&mut state, next)
+        next.insert(id.clone(), record);
+        self.apply_desired_locked(&mut state, next, Some(&id))
     }
 
     pub(crate) fn set_mcp_enabled(
@@ -616,22 +713,17 @@ impl RuntimeReconciler {
         let source = DesiredSource::mcp(id.clone(), config);
         let (_, record) = source.into_record();
         let mut next = state.desired.clone();
-        next.insert(id, record);
-        self.apply_desired_locked(&mut state, next).map(Some)
+        next.insert(id.clone(), record);
+        self.apply_desired_locked(&mut state, next, Some(&id))
+            .map(Some)
     }
 
     fn apply_desired_locked(
         &self,
         state: &mut ReconcileState,
         next: BTreeMap<SourceId, DesiredRecord>,
+        retry: Option<&SourceId>,
     ) -> Result<ReconcilePlan, ReconcileError> {
-        if desired_matches(&state.desired, &next) {
-            return Ok(ReconcilePlan {
-                revision: state.desired_revision,
-                tickets: BTreeMap::new(),
-                sources: Vec::new(),
-            });
-        }
         let revision = state
             .desired_revision
             .checked_add(1)
@@ -643,16 +735,23 @@ impl RuntimeReconciler {
             .filter(|(id, _)| next.get(*id).is_none_or(|record| !record.spec.enabled()))
             .map(|(id, _)| id.clone())
             .collect::<BTreeSet<_>>();
-        let changed =
-            next.iter()
-                .filter(|(_, record)| record.spec.enabled())
-                .filter(|(id, record)| {
-                    state.desired.get(*id).is_none_or(|old| {
-                        !old.spec.enabled() || old.spec_digest != record.spec_digest
-                    })
-                })
-                .map(|(id, _)| id.clone())
-                .collect::<Vec<_>>();
+        let changed = next
+            .iter()
+            .filter(|(_, record)| record.spec.enabled())
+            .filter(|(id, record)| {
+                state
+                    .desired
+                    .get(*id)
+                    .is_none_or(|old| !old.spec.enabled() || old.spec != record.spec)
+                    || (retry.is_none_or(|target| target == *id)
+                        && !state.attempt.contains_key(*id)
+                        && state
+                            .observed
+                            .get(*id)
+                            .is_none_or(|observed| observed.state != ObservedState::Ready))
+            })
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
         let sources = changed
             .iter()
             .filter_map(|id| next.get(id).map(|record| record.as_source(id.clone())))
@@ -660,24 +759,22 @@ impl RuntimeReconciler {
 
         state.desired_revision = revision;
         state.desired = next;
-        state.attempt.clear();
+        state.attempt.retain(|id, _| {
+            state
+                .desired
+                .get(id)
+                .is_some_and(|record| record.spec.enabled())
+        });
         let mut tickets = BTreeMap::new();
         for source in changed {
             let ticket = AttemptTicket {
                 revision,
                 source: source.clone(),
             };
-            state.attempt.insert(
-                source.clone(),
-                AttemptRecord {
-                    revision,
-                    ticket: ticket.clone(),
-                },
-            );
+            state.attempt.insert(source.clone(), ticket.clone());
             state.observed.insert(
                 source.clone(),
                 ObservedRecord {
-                    revision,
                     ticket: Some(ticket.clone()),
                     state: ObservedState::Connecting,
                     declaration_digest: None,
@@ -693,10 +790,10 @@ impl RuntimeReconciler {
                 Ok(())
             })?;
             for source in removed {
+                state.attempt.remove(&source);
                 state.observed.insert(
                     source,
                     ObservedRecord {
-                        revision,
                         ticket: None,
                         state: ObservedState::Removed,
                         declaration_digest: None,
@@ -706,11 +803,7 @@ impl RuntimeReconciler {
             }
         }
 
-        Ok(ReconcilePlan {
-            revision,
-            tickets,
-            sources,
-        })
+        Ok(ReconcilePlan { tickets, sources })
     }
 
     pub(crate) fn finish_revision<I, T>(
@@ -727,22 +820,11 @@ impl RuntimeReconciler {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.desired_revision != plan.revision {
-            let current = state.desired_revision;
-            return reject_after_unlock(
-                state,
-                results,
-                ReconcileError::StaleAttempt {
-                    attempted: plan.revision,
-                    current,
-                },
-            );
-        }
-
         let mut seen = BTreeSet::new();
         for result in &results {
             let source = result.source();
-            if let Err(error) = validate_result_source(&state, plan, source) {
+            if !plan.tickets.contains_key(source) {
+                let error = ReconcileError::InvalidPrepared(format!("unexpected source {source}"));
                 return reject_after_unlock(state, results, error);
             }
             if !seen.insert(source.clone()) {
@@ -760,70 +842,69 @@ impl RuntimeReconciler {
             return reject_after_unlock(state, results, error);
         }
 
-        let mut failures = BTreeMap::new();
-        for result in &results {
-            if let PreparedResult::Failed(failure) = result {
-                failures.insert(failure.source.clone(), failure.error.clone());
+        let mut first_error = None;
+        let mut published_generation = None;
+        for result in results {
+            let id = result.source().clone();
+            if let Err(error) = validate_result_source(&state, plan, &id) {
+                first_error.get_or_insert(error);
+                continue;
             }
-        }
-        if let Some((source_id, error)) = failures.first_key_value() {
-            let aborted = format!("REVISION_PREPARATION_FAILED: {source_id}: {error}");
-            fail_attempt_locked(&mut state, plan, &failures, &aborted);
-            let failure = ReconcileError::PreparationFailed {
-                source_id: source_id.clone(),
-                error: error.clone(),
+            let outcome = match result {
+                PreparedResult::Failed(failure) => Err(ReconcileError::PreparationFailed {
+                    source_id: id.clone(),
+                    error: failure.error,
+                }),
+                PreparedResult::Ready(prepared) => {
+                    let declaration_digest = prepared.declaration_digest;
+                    let source = prepared.into_runtime_source();
+                    let before = self.registry.effective_manifest().generation;
+                    match self
+                        .registry
+                        .refresh(|candidate| candidate.upsert_sources(vec![source]))
+                    {
+                        Ok(generation) => {
+                            if generation != before {
+                                published_generation = Some(generation);
+                            }
+                            state.observed.insert(
+                                id.clone(),
+                                ObservedRecord {
+                                    ticket: plan.tickets.get(&id).cloned(),
+                                    state: ObservedState::Ready,
+                                    declaration_digest: Some(declaration_digest),
+                                    typed_error: None,
+                                },
+                            );
+                            Ok(())
+                        }
+                        Err(error) => Err(ReconcileError::Runtime(error)),
+                    }
+                }
             };
-            return reject_after_unlock(state, results, failure);
-        }
-
-        let ready = results
-            .into_iter()
-            .filter_map(|result| match result {
-                PreparedResult::Ready(source) => Some(source),
-                PreparedResult::Failed(_) => None,
-            })
-            .collect::<Vec<_>>();
-        let observations = ready
-            .iter()
-            .map(|source| (source.id.clone(), source.declaration_digest))
-            .collect::<Vec<_>>();
-        let runtime_sources = ready
-            .into_iter()
-            .map(PreparedSource::into_runtime_source)
-            .collect::<Vec<_>>();
-        let before = self.registry.effective_manifest();
-        let publication = self
-            .registry
-            .refresh(|candidate| candidate.upsert_sources(runtime_sources.clone()));
-        let generation = match publication {
-            Ok(generation) => generation,
-            Err(error) => {
-                let typed_error = format!("RUNTIME_CANDIDATE_REJECTED: {error}");
-                fail_attempt_locked(&mut state, plan, &BTreeMap::new(), &typed_error);
-                return reject_after_unlock(state, runtime_sources, error.into());
+            state.attempt.remove(&id);
+            if let Err(error) = outcome {
+                state.observed.insert(
+                    id.clone(),
+                    ObservedRecord {
+                        ticket: plan.tickets.get(&id).cloned(),
+                        state: ObservedState::Failed,
+                        declaration_digest: None,
+                        typed_error: Some(match &error {
+                            ReconcileError::PreparationFailed { error, .. } => error.clone(),
+                            _ => error.to_string(),
+                        }),
+                    },
+                );
+                first_error.get_or_insert(error);
             }
-        };
-        let published_generation = (generation != before.generation).then_some(generation);
-        for (source, declaration_digest) in observations {
-            let ticket = plan.tickets.get(&source).cloned();
-            state.attempt.remove(&source);
-            state.observed.insert(
-                source,
-                ObservedRecord {
-                    revision: plan.revision,
-                    ticket,
-                    state: ObservedState::Ready,
-                    declaration_digest: Some(declaration_digest),
-                    typed_error: None,
-                },
-            );
         }
-        let outcome = ReconcileOutcome {
-            published_generation,
-        };
-        drop(state);
-        drop(runtime_sources);
-        Ok(outcome)
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(ReconcileOutcome {
+                published_generation,
+            }),
+        }
     }
 
     #[must_use]
@@ -853,10 +934,6 @@ impl RuntimeReconciler {
                         .sources
                         .get(&source)
                         .map(|manifest| manifest.declaration_digest),
-                    observed_revision: observed.map(|record| record.revision),
-                    observed_ticket_revision: observed
-                        .and_then(|record| record.ticket.as_ref())
-                        .map(|ticket| ticket.revision),
                 };
                 (source, status)
             })
@@ -872,7 +949,7 @@ impl RuntimeMcpControl {
 
     pub(crate) async fn reconcile_plan(
         &self,
-        plan: ReconcilePlan,
+        mut plan: ReconcilePlan,
     ) -> Result<ReconcileOutcome, ReconcileError> {
         if plan.is_complete() {
             return Ok(ReconcileOutcome {
@@ -886,28 +963,52 @@ impl RuntimeMcpControl {
             let handle = set.spawn(async move { prepare_desired_source(source).await });
             tasks.insert(handle.id(), id);
         }
-        let mut results = Vec::new();
+        let mut first_error = None;
+        let mut published_generation = None;
         while let Some(joined) = set.join_next_with_id().await {
-            match joined {
+            let result = match joined {
                 Ok((id, result)) => {
                     tasks.remove(&id);
-                    results.push(result);
+                    result
                 }
                 Err(error) => {
                     let Some(source) = tasks.remove(&error.id()) else {
                         return Err(ReconcileError::InvalidPrepared(format!(
-                            "MCP preparation task {} had no source ticket",
+                            "source preparation task {} had no source ticket",
                             error.id()
                         )));
                     };
-                    results.push(PreparedResult::Failed(PreparedFailure::new(
+                    PreparedResult::Failed(PreparedFailure::new(
                         source,
-                        format!("MCP_PREPARE_TASK_FAILED: {error}"),
-                    )));
+                        format!("SOURCE_PREPARE_TASK_FAILED: {error}"),
+                    ))
+                }
+            };
+            let id = result.source().clone();
+            let ticket = plan.tickets.remove(&id).ok_or_else(|| {
+                ReconcileError::InvalidPrepared(format!("missing planned ticket for {id}"))
+            })?;
+            let source_plan = ReconcilePlan {
+                tickets: BTreeMap::from([(id, ticket)]),
+                sources: Vec::new(),
+            };
+            match self.reconciler.finish_revision(&source_plan, [result]) {
+                Ok(outcome) => {
+                    if outcome.published_generation.is_some() {
+                        published_generation = outcome.published_generation;
+                    }
+                }
+                Err(error) => {
+                    first_error.get_or_insert(error);
                 }
             }
         }
-        self.reconciler.finish_revision(&plan, results)
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(ReconcileOutcome {
+                published_generation,
+            }),
+        }
     }
 
     fn mcp_status(&self) -> BTreeMap<String, McpStatus> {
@@ -918,13 +1019,9 @@ impl RuntimeMcpControl {
             .map(|(source, status)| {
                 let declaration_matches = status.observed_declaration_digest.is_some()
                     && status.observed_declaration_digest == status.effective_declaration_digest;
-                let ticket_is_current = status.observed_revision.is_some()
-                    && status.observed_revision == status.observed_ticket_revision;
                 let value = match status.observed {
                     ObservedState::Connecting => McpStatus::Connecting,
-                    ObservedState::Ready
-                        if status.effective && declaration_matches && ticket_is_current =>
-                    {
+                    ObservedState::Ready if status.effective && declaration_matches => {
                         McpStatus::Connected
                     }
                     ObservedState::Failed => McpStatus::Failed {
@@ -1044,10 +1141,21 @@ pub(crate) async fn prepare_desired_source(source: DesiredSource) -> PreparedRes
                 )),
             }
         }
-        DesiredSpec::Plugin(spec) => PreparedResult::Failed(PreparedFailure::new(
-            id,
-            format!("PLUGIN_DYNAMIC_RECONCILIATION_UNSUPPORTED: {}", spec.id),
-        )),
+        DesiredSpec::Plugin(spec) => {
+            let (host, failures) = hya_plugin::PluginHost::connect_all_observed(
+                vec![spec],
+                crate::runtime::host_info(),
+            )
+            .await;
+            let prepared = match failures.into_values().next() {
+                Some(error) => Err(format!("PLUGIN_START_FAILED: {error}")),
+                None => prepared_plugin_host(host).map_err(|error| error.to_string()),
+            };
+            match prepared {
+                Ok(source) => source.into(),
+                Err(error) => PreparedFailure::new(id, error).into(),
+            }
+        }
     }
 }
 
@@ -1104,18 +1212,6 @@ impl ReconcilePlan {
     }
 }
 
-fn desired_matches(
-    left: &BTreeMap<SourceId, DesiredRecord>,
-    right: &BTreeMap<SourceId, DesiredRecord>,
-) -> bool {
-    left.len() == right.len()
-        && left.iter().all(|(id, left)| {
-            right
-                .get(id)
-                .is_some_and(|right| left.spec_digest == right.spec_digest)
-        })
-}
-
 fn validate_result_source(
     state: &ReconcileState,
     plan: &ReconcilePlan,
@@ -1127,14 +1223,36 @@ fn validate_result_source(
         )));
     };
     let Some(active) = state.attempt.get(source) else {
+        if let Some(current) = state
+            .observed
+            .get(source)
+            .and_then(|observed| observed.ticket.as_ref())
+            && current.revision > ticket.revision
+        {
+            return Err(ReconcileError::StaleAttempt {
+                attempted: ticket.revision,
+                current: current.revision,
+            });
+        }
+        if !state
+            .desired
+            .get(source)
+            .is_some_and(|record| record.spec.enabled())
+        {
+            return Err(ReconcileError::StaleAttempt {
+                attempted: ticket.revision,
+                current: state.desired_revision,
+            });
+        }
         return Err(ReconcileError::InvalidPrepared(format!(
             "missing active attempt for {source}"
         )));
     };
-    if active.revision != plan.revision || active.ticket != *ticket {
-        return Err(ReconcileError::InvalidPrepared(format!(
-            "ticket mismatch for {source}"
-        )));
+    if active != ticket {
+        return Err(ReconcileError::StaleAttempt {
+            attempted: ticket.revision,
+            current: active.revision,
+        });
     }
     Ok(())
 }
@@ -1147,72 +1265,6 @@ fn reject_after_unlock<T>(
     drop(state);
     drop(staged);
     Err(error)
-}
-
-fn fail_attempt_locked(
-    state: &mut ReconcileState,
-    plan: &ReconcilePlan,
-    source_errors: &BTreeMap<SourceId, String>,
-    fallback: &str,
-) {
-    for source in plan.tickets.keys() {
-        state.attempt.remove(source);
-        state.observed.insert(
-            source.clone(),
-            ObservedRecord {
-                revision: plan.revision,
-                ticket: plan.tickets.get(source).cloned(),
-                state: ObservedState::Failed,
-                declaration_digest: None,
-                typed_error: Some(
-                    source_errors
-                        .get(source)
-                        .map_or_else(|| fallback.to_string(), Clone::clone),
-                ),
-            },
-        );
-    }
-}
-
-fn digest_mcp(spec: &McpServerConfig) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(b"hya:mcp-spec:v1\0");
-    update_strings(&mut digest, &spec.command);
-    if let Some(env) = &spec.env {
-        for (key, value) in env {
-            update_bytes(&mut digest, key.as_bytes());
-            update_bytes(&mut digest, value.as_bytes());
-        }
-    }
-    update_bytes(&mut digest, &[u8::from(spec.enabled.unwrap_or(true))]);
-    update_bytes(
-        &mut digest,
-        &spec.timeout_ms.unwrap_or_default().to_be_bytes(),
-    );
-    digest.finalize().into()
-}
-
-fn digest_plugin(spec: &PluginSpec) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(b"hya:plugin-spec:v1\0");
-    update_bytes(&mut digest, spec.id.as_bytes());
-    update_bytes(&mut digest, format!("{:?}", spec.kind).as_bytes());
-    update_strings(&mut digest, &spec.command);
-    update_bytes(
-        &mut digest,
-        &spec.timeout_ms.unwrap_or_default().to_be_bytes(),
-    );
-    for (key, value) in &spec.env {
-        update_bytes(&mut digest, key.as_bytes());
-        update_bytes(&mut digest, value.as_bytes());
-    }
-    digest.finalize().into()
-}
-
-fn update_strings(digest: &mut Sha256, values: &[String]) {
-    for value in values {
-        update_bytes(digest, value.as_bytes());
-    }
 }
 
 fn update_bytes(digest: &mut Sha256, value: &[u8]) {
@@ -1337,6 +1389,97 @@ mod tests {
     /// `POST /v1/mcp` semantics: a server that cannot start is stored and
     /// reported FAILED with its error (the add succeeds), and a disabled
     /// server is stored without connecting.
+    #[test]
+    fn hot_reload_unrelated_source_does_not_invalidate_pending_preparation() -> anyhow::Result<()> {
+        let registry = Arc::new(RuntimeRegistry::new(
+            ToolRegistry::builtins(),
+            crate::runtime::builtin_agent_catalog()?,
+        ));
+        let reconciler = RuntimeReconciler::new(registry.clone());
+        let a = SourceId::mcp("a");
+        let first = reconciler.replace_desired(vec![desired(&a, "a")])?;
+        let second = reconciler.upsert_mcp(
+            "b".into(),
+            McpServerConfig {
+                command: vec!["b".into()],
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(second.sources().len(), 1);
+        reconciler.finish_revision(
+            &first,
+            vec![prepared(
+                a.clone(),
+                [1; 32],
+                "mcp__a__tool",
+                Arc::new(AtomicUsize::new(0)),
+            )],
+        )?;
+        assert!(reconciler.status()[&a].effective);
+        Ok(())
+    }
+
+    #[test]
+    fn hot_reload_identical_failed_source_can_retry() -> anyhow::Result<()> {
+        let registry = Arc::new(RuntimeRegistry::new(
+            ToolRegistry::builtins(),
+            crate::runtime::builtin_agent_catalog()?,
+        ));
+        let reconciler = RuntimeReconciler::new(registry);
+        let a = SourceId::mcp("a");
+        let first = reconciler.replace_desired(vec![desired(&a, "a")])?;
+        assert!(
+            reconciler
+                .finish_revision(&first, vec![PreparedFailure::new(a.clone(), "failed")])
+                .is_err()
+        );
+        let retry = reconciler.replace_desired(vec![desired(&a, "a")])?;
+        assert_eq!(retry.sources().len(), 1);
+        reconciler.finish_revision(
+            &retry,
+            vec![prepared(
+                a.clone(),
+                [2; 32],
+                "mcp__a__retry",
+                Arc::new(AtomicUsize::new(0)),
+            )],
+        )?;
+        assert_eq!(reconciler.status()[&a].observed, ObservedState::Ready);
+        Ok(())
+    }
+
+    #[test]
+    fn hot_reload_mcp_compares_remote_endpoint_and_transport() -> anyhow::Result<()> {
+        let registry = Arc::new(RuntimeRegistry::new(
+            ToolRegistry::builtins(),
+            crate::runtime::builtin_agent_catalog()?,
+        ));
+        let reconciler = RuntimeReconciler::new(registry);
+        let config = McpServerConfig {
+            url: Some("http://localhost/first".into()),
+            ..Default::default()
+        };
+        reconciler.upsert_mcp("remote".into(), config.clone())?;
+        let mut changed = config;
+        changed.url = Some("http://localhost/second".into());
+        assert_eq!(
+            reconciler
+                .upsert_mcp("remote".into(), changed.clone())?
+                .sources()
+                .len(),
+            1
+        );
+        changed.transport = Some("sse".into());
+        assert_eq!(
+            reconciler
+                .upsert_mcp("remote".into(), changed)?
+                .sources()
+                .len(),
+            1
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn mcp_add_keeps_failed_servers_and_never_connects_disabled() -> anyhow::Result<()> {
         use hya_mcp::McpStatus;
@@ -1487,7 +1630,7 @@ mod tests {
     }
 
     #[test]
-    fn current_failure_keeps_generation_and_closes_partial_successes() -> anyhow::Result<()> {
+    fn source_failure_preserves_independent_successes() -> anyhow::Result<()> {
         let registry = Arc::new(RuntimeRegistry::new(
             ToolRegistry::builtins(),
             crate::runtime::builtin_agent_catalog()?,
@@ -1509,7 +1652,7 @@ mod tests {
                 PreparedResult::from(prepared(
                     ready_source,
                     [4; 32],
-                    "partial_tool",
+                    "mcp__ready__partial_tool",
                     partial_closes.clone(),
                 )),
                 PreparedResult::from(PreparedFailure::new(
@@ -1523,9 +1666,9 @@ mod tests {
             failed,
             Err(ReconcileError::PreparationFailed { .. })
         ));
-        assert_eq!(partial_closes.load(Ordering::SeqCst), 1);
+        assert_eq!(partial_closes.load(Ordering::SeqCst), 0);
         let after_failure_generation = registry.effective_manifest().generation;
-        assert_eq!(after_failure_generation, before_generation);
+        assert_eq!(after_failure_generation.get(), before_generation.get() + 1);
         let status = reconciler.status();
         let observed = &status[&failed_source];
         assert_eq!(observed.observed, ObservedState::Failed);
@@ -1536,7 +1679,7 @@ mod tests {
         assert!(!observed.effective);
         assert_eq!(observed.effective_generation, after_failure_generation);
         let after = registry.bind_turn(&workdir)?;
-        assert!(after.resolve_tool("partial_tool").is_none());
+        assert!(after.resolve_tool("mcp__ready__partial_tool").is_some());
         Ok(())
     }
 
@@ -1594,7 +1737,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_mcp_plugin_revision_publishes_exactly_once_only_when_complete() -> anyhow::Result<()> {
+    fn mixed_mcp_plugin_plan_publishes_each_complete_source() -> anyhow::Result<()> {
         let registry = Arc::new(RuntimeRegistry::new(
             ToolRegistry::builtins(),
             crate::runtime::builtin_agent_catalog()?,
@@ -1677,7 +1820,7 @@ mod tests {
         assert_eq!(outcome.published_generation, Some(effective.generation));
         assert_eq!(
             effective.generation.get(),
-            old_binding.generation().get() + 1
+            old_binding.generation().get() + 2
         );
         let names = registry
             .tool_schemas()
