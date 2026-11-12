@@ -25,6 +25,34 @@ via the Bun extension adapter (`kind: bun`).
 
 ---
 
+## Generated contract
+
+The serde types in `crates/hya-plugin/src/messages.rs` are the source of truth.
+The `plugin_hooks!` declaration associates each hook name with its parameter
+and reply types and expands the Rust enum and name helpers together. The
+existing Rust toolchain generates both adapters' `wire.gen.ts` declarations,
+method names, and payload guards, including nested `hya-proto` types. Change the Rust types,
+then run from the repository root:
+
+```sh
+CARGO_BUILD_JOBS=8 cargo run --locked -p xtask -- gen-plugin
+```
+
+Commit the generated files together with the source change. The generator is
+deterministic; `cargo test -p xtask` fails if any generated file is stale. The
+19-hook JSON goldens under `crates/hya-plugin/tests/fixtures/hook-wire.json` pin
+the existing wire forms (including camelCase compaction fields, optional
+lineage, result tags, and `chat.params` request headers). Both adapters test
+their generated guards against those fixtures. Adapter support remains an
+explicit subset of the full native hook contract.
+
+The Bun adapter's `src/stdio.ts` and `src/protocol.ts` are the canonical TS
+runtime sources. `gen-plugin` copies them into the Claude adapter, and the
+same stale-output test checks those copies. This keeps each installed adapter
+self-contained without introducing a shared package or build system. Both
+adapters dispatch hook parameters through the generated boundary guards;
+invalid request payloads return JSON-RPC `INVALID_PARAMS` (`-32602`).
+
 ## Transport
 
 - **Channel:** the host spawns a child process and speaks **newline-delimited JSON**
@@ -44,6 +72,16 @@ via the Bun extension adapter (`kind: bun`).
 | Anything else | Rejected |
 
 ---
+
+### TypeScript adapter dispatch
+
+The Bun and Claude adapters share the same stdio implementation. Initialization
+is a barrier before dispatching subsequent frames. Independent requests and
+notifications then run concurrently; replies correlate by `id` and can arrive
+out of order. Hook handlers within one invocation still run in declaration
+order. `shutdown` stops admission, drains active calls and observations, then
+runs disposal and replies. EOF also drains admitted work. A pending handler
+therefore does not block another call, but must finish before shutdown completes.
 
 ## Methods
 
@@ -288,6 +326,36 @@ After `initialize`, the plugin must reply with an `InitializeResult`:
   stringified.
 
 ---
+
+### Bun tool context
+
+A Bun tool's `execute(input, context)` receives only:
+
+```ts
+type ToolContext = {
+  readonly sessionID: string
+  readonly metadata: (input: {
+    readonly title?: string
+    readonly metadata?: Readonly<Record<string, unknown>>
+  }) => void
+}
+```
+
+`sessionID` is the host's tool-call session. `metadata()` supplies the returned
+tool output's title and metadata; it does not publish live updates. For example:
+
+```ts
+execute: async (input, context) => {
+  context.metadata({ title: "Lookup", metadata: { session: context.sessionID } })
+  return "Found the result"
+}
+```
+
+The fabricated fields `messageID`, `agent`, `directory`, `worktree`, `abort`,
+and `ask` have been removed. A process's working directory is its materialized
+bundle root, not the session workspace. No cancellation or permission-ask
+function is exposed by this facade. Native processes can use the explicitly
+granted [request-scoped host capabilities](#request-scoped-host-capabilities).
 
 ## Hook failure behavior
 

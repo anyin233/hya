@@ -8,13 +8,7 @@ export type ToolInfo = {
 
 export type ToolContext = {
   readonly sessionID: string
-  readonly messageID: string
-  readonly agent: string
-  readonly directory: string
-  readonly worktree: string
-  readonly abort: AbortSignal
   readonly metadata: (input: ToolMetadataInput) => void
-  readonly ask: () => Promise<never>
 }
 
 export type ToolMetadataInput = {
@@ -22,17 +16,8 @@ export type ToolMetadataInput = {
   readonly metadata?: Readonly<Record<string, unknown>>
 }
 
-export type ToolCallParams = {
-  readonly tool: string
-  readonly session: string
-  readonly call: string
-  readonly input: unknown
-}
-
-export type ToolRuntimeContext = {
-  readonly directory: string
-  readonly worktree: string
-}
+import type { ToolCallParams } from "./wire.gen"
+export type { ToolCallParams } from "./wire.gen"
 
 export type ToolCallReply = {
   readonly ok: boolean
@@ -67,14 +52,6 @@ export type ExtensionToolDefinition = {
 type ToolExecutionState = {
   title: string
   metadata: Record<string, unknown>
-}
-
-export class UnsupportedToolAskError extends Error {
-  readonly name = "UnsupportedToolAskError"
-
-  constructor() {
-    super("Bun adapter tool context ask() is not supported yet")
-  }
 }
 
 export function buildToolRegistry(hooks: readonly ExtensionHooks[]): ToolRegistry {
@@ -125,7 +102,6 @@ export function buildToolRegistry(hooks: readonly ExtensionHooks[]): ToolRegistr
 export async function callRegisteredTool(
   registry: ReadonlyMap<string, ExtensionToolDefinition>,
   params: ToolCallParams,
-  context: ToolRuntimeContext,
 ): Promise<ToolCallReply> {
   const started = performance.now()
   const tool = registry.get(params.tool)
@@ -136,7 +112,7 @@ export async function callRegisteredTool(
   try {
     const result = await tool.execute(
       params.input,
-      toolContext(params, context, state),
+      toolContext(params, state),
     )
     return {
       ok: true,
@@ -164,16 +140,10 @@ function inputSchemaFromArgs(args: unknown): unknown {
 
 function toolContext(
   params: ToolCallParams,
-  context: ToolRuntimeContext,
   state: ToolExecutionState,
 ): ToolContext {
   return {
     sessionID: params.session,
-    messageID: "",
-    agent: "",
-    directory: context.directory,
-    worktree: context.worktree,
-    abort: new AbortController().signal,
     metadata: (input) => {
       if (input.title !== undefined) {
         state.title = input.title
@@ -181,9 +151,6 @@ function toolContext(
       if (input.metadata !== undefined) {
         state.metadata = { ...state.metadata, ...input.metadata }
       }
-    },
-    ask: async () => {
-      throw new UnsupportedToolAskError()
     },
   }
 }

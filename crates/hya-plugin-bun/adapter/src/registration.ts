@@ -7,6 +7,9 @@ export type { HookRegistration } from "./contributions"
  * The hya wire hook names the adapter dispatches. Extensions register
  * handlers under these exact names on their server result object.
  */
+import type { HookName } from "./wire.gen"
+export type { HookName } from "./wire.gen"
+
 export const HOOK_NAMES = [
   "event",
   "command.execute.before",
@@ -18,9 +21,8 @@ export const HOOK_NAMES = [
   "permission.ask",
   "permission.approve",
   "model.fallback",
-] as const
+] as const satisfies readonly HookName[]
 
-export type HookName = (typeof HOOK_NAMES)[number]
 
 export function hookRegistrationsFrom(
   hooks: readonly ExtensionHooks[],

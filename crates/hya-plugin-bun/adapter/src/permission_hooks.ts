@@ -1,21 +1,10 @@
+import { isPermissionOutcomeWire } from "./wire.gen"
 import { type ExtensionHooks } from "./loader/init"
 import { isRecord } from "./validate"
 
-export type WireResource = { readonly type: string; readonly value?: string }
-
-export type PermissionAskParams = {
-  readonly session?: string
-  readonly action: string
-  readonly resource: WireResource
-}
-
-export type PermissionStatus = "allow_once" | "allow_always" | "reject" | "defer"
-
-export type PermissionOutcome =
-  | { readonly outcome: "allow_once" }
-  | { readonly outcome: "allow_always" }
-  | { readonly outcome: "reject"; readonly feedback?: string }
-  | { readonly outcome: "defer" }
+import type { PermissionAskParams, PermissionOutcomeWire as PermissionOutcome } from "./wire.gen"
+export type { WireResource, PermissionAskParams, PermissionOutcomeWire as PermissionOutcome } from "./wire.gen"
+export type PermissionStatus = PermissionOutcome["outcome"]
 
 /**
  * `permission.ask` handlers receive the hya-shaped params as-is and return
@@ -47,25 +36,12 @@ export async function runPermissionAskHooks(
 }
 
 export function outcomeFrom(returned: unknown): PermissionOutcome | undefined {
-  if (isPermissionStatus(returned)) {
-    return { outcome: returned }
-  }
-  if (isRecord(returned) && isPermissionStatus(returned.outcome)) {
-    if (returned.outcome === "reject" && typeof returned.feedback === "string") {
-      return { outcome: "reject", feedback: returned.feedback }
-    }
-    return { outcome: returned.outcome }
-  }
-  return undefined
-}
-
-function isPermissionStatus(value: unknown): value is PermissionStatus {
-  return (
-    value === "allow_once" ||
-    value === "allow_always" ||
-    value === "reject" ||
-    value === "defer"
-  )
+  const candidate = typeof returned === "string" ? { outcome: returned } : returned
+  if (!isRecord(candidate)) return undefined
+  const wire = candidate.outcome === "reject" && typeof candidate.feedback === "string"
+    ? { outcome: candidate.outcome, feedback: candidate.feedback }
+    : { outcome: candidate.outcome }
+  return isPermissionOutcomeWire(wire) ? wire : undefined
 }
 
 function isPermissionAskHook(

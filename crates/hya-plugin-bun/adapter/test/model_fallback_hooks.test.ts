@@ -92,5 +92,5 @@ test("model.fallback gives up when no handler retries", async () => {
 test("model.fallback rejects malformed params", async () => {
   const file = await extension("chooser", 'async () => "x/y"')
   const responses = await consult([file], { ...params, tried: "nope" })
-  expect(responses[1]?.error?.message).toBe("params.tried must be an array of strings")
+  expect(responses[1]?.error?.message).toBe("invalid model.fallback params")
 })

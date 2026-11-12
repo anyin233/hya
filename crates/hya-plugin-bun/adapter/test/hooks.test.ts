@@ -193,7 +193,7 @@ test("wire hook methods dispatch through the adapter process", async () => {
       '    "message.user.before": async (params) => `${params.text} (checked)`,',
       '    "experimental.text.complete": async (params) => `${params.text}!`,',
       '    "command.execute.before": async () => "rewritten",',
-      '    "chat.params": async (params) => ({ ...params.request, temperature: 0 }),',
+      '    "chat.params": async (params) => ({ ...params.request, temperature: 0, headers: { ...params.request.headers, "x-plugin": "live" } }),',
       "  }),",
       "}",
     ].join("\n"),
@@ -230,7 +230,7 @@ test("wire hook methods dispatch through the adapter process", async () => {
         params: {
           session: "s",
           message: "m",
-          request: { model: "test-model", messages: [], tools: [], temperature: 1 },
+          request: { model: "test-model", messages: [], tools: [], temperature: 1, headers: { "x-host": "kept" } },
         },
       },
       shutdownRequest(6),
@@ -248,6 +248,7 @@ test("wire hook methods dispatch through the adapter process", async () => {
       messages: [],
       tools: [],
       temperature: 0,
+      headers: { "x-host": "kept", "x-plugin": "live" },
     },
   })
 })
@@ -322,7 +323,7 @@ test("chat.params handlers receive the request lineage (root_session, agent)", a
     outcome: "continue",
     request: { model: "none@none", messages: [], tools: [] },
   })
-  expect(responses[3]?.error?.message).toBe("params.root_session is invalid")
+  expect(responses[3]?.error?.message).toBe("invalid chat.params params")
 })
 
 

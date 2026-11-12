@@ -548,3 +548,15 @@ To benchmark the first materialization, use a fresh `XDG_CACHE_HOME`. To measure
 a subsequent cold daemon start after installation, reuse that directory while
 stopping the daemon between samples. `hya serve stop --db <db>` stops the daemon;
 changing `XDG_CACHE_HOME` alone does not stop an already running one.
+
+### JavaScript call context and concurrency
+
+Bun tools receive `execute(input, { sessionID, metadata })`; see the exact
+[tool context contract](plugin-protocol.md#bun-tool-context). The adapter no
+longer supplies placeholder identity, workspace, cancellation, or permission
+fields. Use `metadata({ title, metadata })` to annotate the returned result.
+
+Bun and Claude processes execute independent request ids concurrently. Keep
+per-call state local to the handler; await operations that must finish before
+returning. Initialization completes before calls start. Shutdown drains active
+calls before disposing extensions; reply order follows completion order.

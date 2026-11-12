@@ -1,0 +1,579 @@
+{
+  "event": {
+    "params": {
+      "envelope": {
+        "seq": 7,
+        "ts_millis": 42,
+        "event": {
+          "type": "session_unarchived",
+          "session": "hysec_00000000000000000000"
+        }
+      }
+    },
+    "replies": [
+      {}
+    ]
+  },
+  "command.execute.before": {
+    "params": {
+      "session": "hysec_00000000000000000000",
+      "command": "cmd",
+      "arguments": "arg",
+      "text": "/cmd arg"
+    },
+    "replies": [
+      {
+        "outcome": "continue",
+        "text": "next"
+      }
+    ]
+  },
+  "experimental.text.complete": {
+    "params": {
+      "session": "hysec_00000000000000000000",
+      "message": "00000000-0000-0000-0000-000000000001",
+      "part": "00000000-0000-0000-0000-000000000001",
+      "text": "hello"
+    },
+    "replies": [
+      {
+        "outcome": "continue",
+        "text": "next"
+      }
+    ]
+  },
+  "message.user.before": {
+    "params": {
+      "session": "hysec_00000000000000000000",
+      "text": "hi"
+    },
+    "replies": [
+      {
+        "outcome": "continue",
+        "text": "next"
+      }
+    ]
+  },
+  "chat.params": {
+    "params": {
+      "session": "hysec_00000000000000000000",
+      "root_session": "hysec_00000000000000000000",
+      "agent": "worker",
+      "message": "00000000-0000-0000-0000-000000000001",
+      "request": {
+        "model": "dev/echo",
+        "system": "system",
+        "messages": [
+          {
+            "role": "user",
+            "id": "00000000-0000-0000-0000-000000000001",
+            "parts": [
+              {
+                "type": "text",
+                "id": "00000000-0000-0000-0000-000000000001",
+                "text": "hi"
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "name": "echo",
+            "description": "Echo",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "temperature": 0.5,
+        "max_output_tokens": 128,
+        "reasoning": "high",
+        "headers": {
+          "x-test": "live"
+        }
+      }
+    },
+    "replies": [
+      {
+        "outcome": "continue",
+        "request": {
+          "model": "dev/echo",
+          "system": "system",
+          "messages": [
+            {
+              "role": "user",
+              "id": "00000000-0000-0000-0000-000000000001",
+              "parts": [
+                {
+                  "type": "text",
+                  "id": "00000000-0000-0000-0000-000000000001",
+                  "text": "hi"
+                }
+              ]
+            }
+          ],
+          "tools": [
+            {
+              "name": "echo",
+              "description": "Echo",
+              "input_schema": {
+                "type": "object"
+              }
+            }
+          ],
+          "temperature": 0.5,
+          "max_output_tokens": 128,
+          "reasoning": "high",
+          "headers": {
+            "x-test": "live"
+          }
+        }
+      }
+    ],
+    "other_params": [
+      {
+        "session": "hysec_00000000000000000000",
+        "message": "00000000-0000-0000-0000-000000000001",
+        "request": {
+          "model": "dev/echo",
+          "messages": [
+            {
+              "role": "user",
+              "id": "00000000-0000-0000-0000-000000000001",
+              "parts": [
+                {
+                  "type": "text",
+                  "id": "00000000-0000-0000-0000-000000000001",
+                  "text": "hi"
+                }
+              ]
+            }
+          ],
+          "tools": [
+            {
+              "name": "echo",
+              "description": "Echo",
+              "input_schema": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "tool.execute.before": {
+    "params": {
+      "session": "hysec_00000000000000000000",
+      "message": "00000000-0000-0000-0000-000000000001",
+      "call": "00000000-0000-0000-0000-000000000001",
+      "tool": "echo",
+      "input": {
+        "a": [
+          1,
+          true,
+          null,
+          "中"
+        ]
+      }
+    },
+    "replies": [
+      {
+        "outcome": "continue",
+        "input": {}
+      },
+      {
+        "outcome": "veto",
+        "reason": "blocked"
+      }
+    ]
+  },
+  "tool.execute.after": {
+    "params": {
+      "session": "hysec_00000000000000000000",
+      "message": "00000000-0000-0000-0000-000000000001",
+      "call": "00000000-0000-0000-0000-000000000001",
+      "tool": "echo",
+      "input": {
+        "a": [
+          1,
+          true,
+          null,
+          "中"
+        ]
+      },
+      "result": {
+        "status": "ok",
+        "output": {
+          "answer": 42
+        },
+        "time_ms": 5
+      }
+    },
+    "replies": [
+      {
+        "outcome": "continue",
+        "result": {
+          "status": "ok",
+          "output": {},
+          "time_ms": 0
+        }
+      },
+      {
+        "outcome": "continue",
+        "result": {
+          "status": "err",
+          "message": "failed"
+        }
+      }
+    ],
+    "other_params": [
+      {
+        "session": "hysec_00000000000000000000",
+        "message": "00000000-0000-0000-0000-000000000001",
+        "call": "00000000-0000-0000-0000-000000000001",
+        "tool": "echo",
+        "input": {
+          "a": [
+            1,
+            true,
+            null,
+            "中"
+          ]
+        },
+        "result": {
+          "status": "err",
+          "message": "failed"
+        }
+      }
+    ]
+  },
+  "permission.ask": {
+    "params": {
+      "session": "hysec_00000000000000000000",
+      "action": "read",
+      "resource": {
+        "type": "path",
+        "value": "/tmp/a"
+      }
+    },
+    "replies": [
+      {
+        "outcome": "allow_once"
+      },
+      {
+        "outcome": "allow_always"
+      },
+      {
+        "outcome": "reject",
+        "feedback": "no"
+      },
+      {
+        "outcome": "reject"
+      },
+      {
+        "outcome": "defer"
+      }
+    ],
+    "other_params": [
+      {
+        "action": "read",
+        "resource": {
+          "type": "tool",
+          "value": "value"
+        }
+      },
+      {
+        "action": "read",
+        "resource": {
+          "type": "glob",
+          "value": "value"
+        }
+      },
+      {
+        "action": "read",
+        "resource": {
+          "type": "command",
+          "value": "value"
+        }
+      },
+      {
+        "action": "read",
+        "resource": {
+          "type": "subagent",
+          "value": "value"
+        }
+      },
+      {
+        "action": "read",
+        "resource": {
+          "type": "url",
+          "value": "value"
+        }
+      },
+      {
+        "action": "read",
+        "resource": {
+          "type": "web_search",
+          "value": "value"
+        }
+      },
+      {
+        "action": "read",
+        "resource": {
+          "type": "skill",
+          "value": "value"
+        }
+      },
+      {
+        "action": "read",
+        "resource": {
+          "type": "any"
+        }
+      }
+    ]
+  },
+  "permission.approve": {
+    "params": {
+      "session": "hysec_00000000000000000000",
+      "root_session": "hysec_00000000000000000000",
+      "agent": "worker",
+      "mode": "review",
+      "action": "bash",
+      "resource": {
+        "type": "command",
+        "value": "ls"
+      }
+    },
+    "replies": [
+      {
+        "outcome": "defer"
+      }
+    ],
+    "other_params": [
+      {
+        "session": "hysec_00000000000000000000",
+        "root_session": "hysec_00000000000000000000",
+        "mode": "review",
+        "action": "bash",
+        "resource": {
+          "type": "command",
+          "value": "ls"
+        }
+      }
+    ]
+  },
+  "goal.evaluate": {
+    "params": {
+      "condition": "done",
+      "transcript": "text"
+    },
+    "replies": [
+      {
+        "met": true,
+        "reason": "verified"
+      }
+    ]
+  },
+  "loop.verifier": {
+    "params": {
+      "target": "done",
+      "transcript": "text"
+    },
+    "replies": [
+      {
+        "score": 100,
+        "satisfied": true,
+        "evidence_quality": "verified",
+        "critical_gaps": [],
+        "iteration_summary": "summary",
+        "reason": "done"
+      }
+    ]
+  },
+  "loop.planner": {
+    "params": {
+      "target": "done",
+      "history": [
+        "first"
+      ],
+      "last": {
+        "score": 1,
+        "satisfied": false,
+        "evidence_quality": "missing",
+        "critical_gaps": [
+          "test"
+        ],
+        "iteration_summary": "first",
+        "reason": "missing"
+      },
+      "planner_notes": "notes"
+    },
+    "replies": [
+      {
+        "directive": "test",
+        "continuity_brief": "brief",
+        "planner_notes": "notes",
+        "strategy_change": true,
+        "change_note": "change"
+      }
+    ]
+  },
+  "loop.should_stop": {
+    "params": {
+      "target": "done",
+      "transcript": "text"
+    },
+    "replies": [
+      {
+        "stop": true,
+        "reason": "stop"
+      }
+    ]
+  },
+  "compaction.before": {
+    "params": {
+      "session": "hysec_00000000000000000000",
+      "trigger": "overflow",
+      "messagesTokenEstimate": 123
+    },
+    "replies": [
+      {
+        "outcome": "proceed"
+      },
+      {
+        "outcome": "skip",
+        "reason": "small"
+      },
+      {
+        "outcome": "replace",
+        "instructions": "summarize"
+      }
+    ],
+    "other_params": [
+      {
+        "session": "hysec_00000000000000000000",
+        "trigger": "proactive",
+        "messagesTokenEstimate": 123
+      }
+    ]
+  },
+  "compaction.after": {
+    "params": {
+      "session": "hysec_00000000000000000000",
+      "summaryTokens": 32
+    },
+    "replies": [
+      {}
+    ]
+  },
+  "session.start": {
+    "params": {
+      "session": "hysec_00000000000000000000"
+    },
+    "replies": [
+      {}
+    ]
+  },
+  "session.end": {
+    "params": {
+      "session": "hysec_00000000000000000000"
+    },
+    "replies": [
+      {}
+    ]
+  },
+  "agent.spawn": {
+    "params": {
+      "parent": "hysec_00000000000000000000",
+      "child": "hysec_11111111111111111111"
+    },
+    "replies": [
+      {}
+    ]
+  },
+  "model.fallback": {
+    "params": {
+      "session": "hysec_00000000000000000000",
+      "root_session": "hysec_00000000000000000000",
+      "agent": "worker",
+      "message": "00000000-0000-0000-0000-000000000001",
+      "model": "dev/echo",
+      "error": {
+        "class": "retryable",
+        "message": "offline"
+      },
+      "attempt": 1,
+      "tried": [
+        "dev/echo"
+      ]
+    },
+    "replies": [
+      {
+        "outcome": "retry",
+        "model": "dev/next"
+      },
+      {
+        "outcome": "give_up"
+      }
+    ],
+    "other_params": [
+      {
+        "session": "hysec_00000000000000000000",
+        "root_session": "hysec_00000000000000000000",
+        "message": "00000000-0000-0000-0000-000000000001",
+        "model": "dev/echo",
+        "error": {
+          "class": "unknown_model",
+          "message": "failed"
+        },
+        "attempt": 1,
+        "tried": [
+          "dev/echo"
+        ]
+      },
+      {
+        "session": "hysec_00000000000000000000",
+        "root_session": "hysec_00000000000000000000",
+        "message": "00000000-0000-0000-0000-000000000001",
+        "model": "dev/echo",
+        "error": {
+          "class": "auth",
+          "message": "failed"
+        },
+        "attempt": 1,
+        "tried": [
+          "dev/echo"
+        ]
+      },
+      {
+        "session": "hysec_00000000000000000000",
+        "root_session": "hysec_00000000000000000000",
+        "message": "00000000-0000-0000-0000-000000000001",
+        "model": "dev/echo",
+        "error": {
+          "class": "invalid_request",
+          "message": "failed"
+        },
+        "attempt": 1,
+        "tried": [
+          "dev/echo"
+        ]
+      },
+      {
+        "session": "hysec_00000000000000000000",
+        "root_session": "hysec_00000000000000000000",
+        "message": "00000000-0000-0000-0000-000000000001",
+        "model": "dev/echo",
+        "error": {
+          "class": "other",
+          "message": "failed"
+        },
+        "attempt": 1,
+        "tried": [
+          "dev/echo"
+        ]
+      }
+    ]
+  }
+}

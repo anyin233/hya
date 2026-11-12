@@ -23,8 +23,12 @@
 
 import { isRecord } from "./validate"
 
-/** Wire hook names the adapter registers (hya plugin ABI v1). */
-export type HookName =
+import type { HookName as WireHookName } from "./wire.gen"
+export type { HookRegistration } from "./wire.gen"
+import type { HookRegistration } from "./wire.gen"
+
+/** The subset translated from Claude Code lifecycle points. */
+export type HookName = Extract<WireHookName,
   | "event"
   | "command.execute.before"
   | "message.user.before"
@@ -34,12 +38,7 @@ export type HookName =
   | "session.start"
   | "session.end"
   | "agent.spawn"
-
-/** One hook registration on the initialize wire. */
-export type HookRegistration = {
-  /** Wire hook name understood by the hya host. */
-  readonly name: HookName
-}
+>
 
 /** One CC hook command: the `hooks: [{type: "command", command}]` entry. */
 export type ClaudeHookCommand = {

@@ -87,6 +87,15 @@ the complete packaged Skill set, independently of the agent's Skill selection.
 The `bun-disjoint` example still illustrates independent entrypoints; splitting
 a module is unnecessary when its consumers select different exports.
 
+Bun tools receive `execute(input, { sessionID, metadata })`. `sessionID` is the
+host's calling session; `metadata({ title?, metadata? })` annotates the returned
+tool result. There is no `messageID`, `agent`, `directory`, `worktree`, `abort`,
+or `ask` context field. Independent calls and observations run concurrently in
+the shared Bun/Claude stdio runtime, so keep per-call state local. Initialization
+is a barrier and shutdown drains admitted work before disposal. Rust serde
+payloads generate both adapters' hook contracts with `cargo run -p xtask --
+gen-plugin`; see `docs/plugin-protocol.md` for exact types and usage.
+
 The activation-scoped JS profile admits only self-contained selected Extension entrypoints; it does not load inert support files or discover transitive JS imports.
 Use external single-file bundling; activation never executes the authoring tree.
 A missing relative helper import fails before ACK. For source preparation,

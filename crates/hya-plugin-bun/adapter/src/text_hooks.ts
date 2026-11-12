@@ -5,10 +5,8 @@ export type TextHookName =
   | "command.execute.before"
   | "experimental.text.complete"
 
-export type TextOutcome = {
-  readonly outcome: "continue"
-  readonly text: string
-}
+import type { HookParams, MessageUserBeforeOutcomeWire as TextOutcome } from "./wire.gen"
+export type { MessageUserBeforeOutcomeWire as TextOutcome } from "./wire.gen"
 
 /**
  * Enrichment hooks that rewrite a text payload (`message.user.before`,
@@ -19,7 +17,7 @@ export type TextOutcome = {
 export async function runTextHooks(
   hooks: readonly ExtensionHooks[],
   name: TextHookName,
-  params: Readonly<Record<string, unknown>> & { readonly text: string },
+  params: HookParams[TextHookName],
 ): Promise<TextOutcome> {
   let current = params.text
   for (const hook of hooks) {

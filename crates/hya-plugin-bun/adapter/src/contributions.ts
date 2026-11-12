@@ -19,11 +19,8 @@ export type SkillContribution = {
   readonly digest: string
 }
 
-/** One hook registration emitted by the Bun adapter. */
-export type HookRegistration = {
-  /** Wire hook name understood by the hya host. */
-  readonly name: string
-}
+import type { HookRegistration } from "./wire.gen"
+export type { HookRegistration } from "./wire.gen"
 
 /** One workspace adapter metadata declaration emitted by the Bun adapter. */
 export type WorkspaceAdapterContribution = {

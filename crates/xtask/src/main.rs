@@ -17,6 +17,7 @@
 //! - `release-rehearsal` — validate and smoke the non-publishing release asset.
 //! - `gen-api` — regenerate the `hya.v1` contract crate and its docs from
 //!   `proto/hya/v1` (Rust codegen + API reference + OpenAPI).
+//! - `gen-plugin` — generate plugin hook names, TS payloads and checked shared runtime copies.
 //! - `gen-relay` — regenerate the `hya.relay.v1` rendezvous types in
 //!   `crates/hya-relay/src/gen/` from `proto/hya/relay/v1`.
 //!
@@ -25,6 +26,7 @@
 
 mod first_party_release;
 mod gen_api;
+mod gen_plugin;
 mod gen_relay;
 mod lifecycle_bench;
 mod matrix_check;
@@ -48,9 +50,10 @@ fn main() {
         Some("matrix-check") => matrix_check::run(args.collect()),
         Some("gen-api") => gen_api::run(args.collect()),
         Some("gen-relay") => gen_relay::run(args.collect()),
+        Some("gen-plugin") => gen_plugin::run(args.collect()),
         _ => {
             eprintln!(
-                "usage: cargo xtask <startup-bench|lifecycle-bench|matrix-check|package-bundle|package-native-tool-bundle|package-native-tool-library|release-rehearsal|gen-api|gen-relay>"
+                "usage: cargo xtask <startup-bench|lifecycle-bench|matrix-check|package-bundle|package-native-tool-bundle|package-native-tool-library|release-rehearsal|gen-api|gen-relay|gen-plugin>"
             );
             Ok(())
         }

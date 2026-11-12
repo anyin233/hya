@@ -842,6 +842,15 @@ An empty process Skill list is valid: static packaged Skills remain available
 without any process declaration, for both private activations and shared bundle
 processes.
 
+JavaScript tools implement `execute(input, context)`. The context contains only
+`sessionID: string` and `metadata({ title?: string, metadata?: Record<string,
+unknown> }): void`; [the plugin protocol](plugin-protocol.md#bun-tool-context)
+defines their behavior and a worked example. Placeholder `messageID`, `agent`,
+`directory`, `worktree`, `abort`, and `ask` fields are no longer exposed.
+Independent tool calls and observations can run concurrently in one process;
+keep invocation state local. Native hook payloads and their generated TS types
+come from the [shared wire contract](plugin-protocol.md#generated-contract).
+
 The activation-scoped JS profile admits only self-contained selected Extension entrypoints; it does not load inert support files or discover transitive JS imports. Use external single-file bundling before packaging; activation never executes the authoring tree. Only selected captured PreparedResource bytes are rematerialized for activation. A missing relative helper import fails before ACK, with existing cleanup handling the failure before model or dispatch.
 
 ---

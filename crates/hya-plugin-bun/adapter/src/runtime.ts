@@ -1,10 +1,12 @@
+import { HOOK_METHODS } from "./wire.gen"
+import { runStdio } from "./stdio"
+export { readLines } from "./stdio"
 import { handleEventNotification } from "./event_method"
 import { handleInitialize, PROTOCOL_VERSION } from "./initialize"
 import {
   ERROR_CODES,
   errorResponse,
   okResponse,
-  parseJsonRpcRequest,
   type JsonRpcMessage,
   type JsonRpcRequest,
 } from "./protocol"
@@ -33,37 +35,17 @@ export type { RuntimeOptions }
 
 const METHOD_INITIALIZE = "initialize"
 const METHOD_SHUTDOWN = "shutdown"
-const METHOD_EVENT = "event"
+const METHOD_EVENT = HOOK_METHODS.Event
 const METHOD_TOOL_CALL = "tool/call"
-const METHOD_MESSAGE_USER_BEFORE = "hook/message.user.before"
-const METHOD_CHAT_PARAMS = "hook/chat.params"
-const METHOD_COMMAND_EXECUTE_BEFORE = "hook/command.execute.before"
-const METHOD_TEXT_COMPLETE = "hook/experimental.text.complete"
-const METHOD_PERMISSION_ASK = "hook/permission.ask"
-const METHOD_PERMISSION_APPROVE = "hook/permission.approve"
-const METHOD_MODEL_FALLBACK = "hook/model.fallback"
-const METHOD_TOOL_EXECUTE_BEFORE = "hook/tool.execute.before"
-const METHOD_TOOL_EXECUTE_AFTER = "hook/tool.execute.after"
-
-export async function* readLines(
-  input: ReadableStream<Uint8Array>,
-): AsyncGenerator<string> {
-  const decoder = new TextDecoder()
-  let buffered = ""
-  for await (const chunk of input) {
-    buffered += decoder.decode(chunk, { stream: true })
-    let newline = buffered.indexOf("\n")
-    while (newline >= 0) {
-      yield trimTrailingCarriageReturn(buffered.slice(0, newline))
-      buffered = buffered.slice(newline + 1)
-      newline = buffered.indexOf("\n")
-    }
-  }
-  const tail = buffered + decoder.decode()
-  if (tail.length > 0) {
-    yield trimTrailingCarriageReturn(tail)
-  }
-}
+const METHOD_MESSAGE_USER_BEFORE = HOOK_METHODS.MessageUserBefore
+const METHOD_CHAT_PARAMS = HOOK_METHODS.ChatParams
+const METHOD_COMMAND_EXECUTE_BEFORE = HOOK_METHODS.CommandExecuteBefore
+const METHOD_TEXT_COMPLETE = HOOK_METHODS.TextComplete
+const METHOD_PERMISSION_ASK = HOOK_METHODS.PermissionAsk
+const METHOD_PERMISSION_APPROVE = HOOK_METHODS.PermissionApprove
+const METHOD_MODEL_FALLBACK = HOOK_METHODS.ModelFallback
+const METHOD_TOOL_EXECUTE_BEFORE = HOOK_METHODS.ToolExecuteBefore
+const METHOD_TOOL_EXECUTE_AFTER = HOOK_METHODS.ToolExecuteAfter
 
 export function handleRequest(
   request: JsonRpcMessage,
@@ -149,25 +131,5 @@ function isDisposeHook(value: unknown): value is DisposeHook {
 
 export async function runAdapter(options: RuntimeOptions): Promise<void> {
   const context = createRequestContext(options)
-  for await (const line of readLines(options.input)) {
-    if (line.length === 0) {
-      continue
-    }
-    const parsed = parseJsonRpcRequest(line)
-    if (!parsed.ok) {
-      await options.stderr.write(`invalid JSON-RPC request: ${parsed.message}\n`)
-      continue
-    }
-    const handled = await handleRequest(parsed.request, context)
-    if (handled.response.length > 0) {
-      await options.stdout.write(handled.response)
-    }
-    if (handled.shouldExit) {
-      break
-    }
-  }
-}
-
-function trimTrailingCarriageReturn(line: string): string {
-  return line.endsWith("\r") ? line.slice(0, -1) : line
+  await runStdio(options, (request) => handleRequest(request, context))
 }

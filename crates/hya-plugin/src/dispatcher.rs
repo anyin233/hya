@@ -17,18 +17,20 @@ use hya_core::loop_mode::{EvidenceQuality, PlannerOutput, VerifierVerdict};
 use hya_proto::Envelope;
 use hya_provider::{CompletionRequest, ReasoningEffort};
 use hya_tool::{Action, Decision, Resource};
+use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
 
 use crate::host::{PluginConn, PluginHost};
 use crate::messages::{
     AgentSpawnParams, ChatParamsOutcomeWire, ChatParamsParams, CommandBeforeOutcomeWire,
     CommandExecuteBeforeParams, CompactionAfterParams, CompactionBeforeOutcomeWire,
-    CompactionBeforeParams, HookName, MessageUserBeforeOutcomeWire, MessageUserBeforeParams,
-    ModelFailureClassWire, ModelFallbackErrorWire, ModelFallbackOutcomeWire, ModelFallbackParams,
+    CompactionBeforeParams, EvidenceQualityWire, GoalEvaluateParams, GoalVerdictWire, HookName,
+    LoopPlanParams, LoopShouldStopParams, LoopShouldStopWire, LoopVerifyParams,
+    MessageUserBeforeOutcomeWire, MessageUserBeforeParams, ModelFailureClassWire,
+    ModelFallbackErrorWire, ModelFallbackOutcomeWire, ModelFallbackParams, PlannerOutputWire,
     SessionLifecycleParams, TextCompleteOutcomeWire, TextCompleteParams, ToolAfterOutcomeWire,
-    ToolBeforeOutcomeWire, ToolExecuteAfterParams, ToolExecuteBeforeParams, WireCompletionRequest,
-    WireToolResult,
+    ToolBeforeOutcomeWire, ToolExecuteAfterParams, ToolExecuteBeforeParams, VerifierVerdictWire,
+    WireCompletionRequest, WireToolResult,
 };
 
 const GUARD_FAILED_SAFE: &str = "guard failed safe";
@@ -500,93 +502,6 @@ impl HookDispatcher for PluginHost {
     }
 }
 
-/// Wire params for `goal.evaluate`.
-#[derive(Serialize)]
-struct GoalEvaluateParams<'a> {
-    condition: &'a str,
-    transcript: &'a str,
-}
-
-/// Wire verdict for `goal.evaluate`: tolerant `{"met": bool, "reason": str}` —
-/// `reason` may be omitted, anything else is a malformed reply.
-#[derive(Deserialize)]
-struct GoalVerdictWire {
-    met: bool,
-    #[serde(default)]
-    reason: String,
-}
-
-/// Wire params for `loop.verifier`.
-#[derive(Serialize)]
-struct LoopVerifyParams<'a> {
-    target: &'a str,
-    transcript: &'a str,
-}
-
-/// Wire params for `loop.planner`.
-#[derive(Serialize)]
-struct LoopPlanParams<'a> {
-    target: &'a str,
-    history: &'a [String],
-    last: VerifierVerdictWire,
-    planner_notes: &'a str,
-}
-
-/// Wire params for `loop.should_stop`.
-#[derive(Serialize)]
-struct LoopShouldStopParams<'a> {
-    target: &'a str,
-    transcript: &'a str,
-}
-
-/// Wire reply for `loop.should_stop`: `{"stop": bool, "reason": str}` —
-/// `reason` may be omitted (it reads as "no reason given"), anything else is
-/// a malformed reply and fails open to "keep going".
-#[derive(Deserialize)]
-struct LoopShouldStopWire {
-    stop: bool,
-    #[serde(default)]
-    reason: String,
-}
-
-/// Wire mirror of [`EvidenceQuality`] (`missing`/`claim_only`/`supported`/`verified`).
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum EvidenceQualityWire {
-    Missing,
-    ClaimOnly,
-    Supported,
-    Verified,
-}
-
-/// Wire mirror of [`VerifierVerdict`]. Free-text fields may be omitted.
-#[derive(Serialize, Deserialize)]
-struct VerifierVerdictWire {
-    score: u8,
-    satisfied: bool,
-    evidence_quality: EvidenceQualityWire,
-    #[serde(default)]
-    critical_gaps: Vec<String>,
-    #[serde(default)]
-    iteration_summary: String,
-    #[serde(default)]
-    reason: String,
-}
-
-/// Wire mirror of [`PlannerOutput`]. Only `directive` is required.
-#[derive(Serialize, Deserialize)]
-struct PlannerOutputWire {
-    directive: String,
-    #[serde(default)]
-    continuity_brief: String,
-    #[serde(default)]
-    planner_notes: String,
-    #[serde(default)]
-    strategy_change: bool,
-    #[serde(default)]
-    change_note: String,
-}
-
 impl From<&VerifierVerdict> for VerifierVerdictWire {
     fn from(verdict: &VerifierVerdict) -> Self {
         Self {
@@ -747,5 +662,74 @@ pub(crate) fn wire_to_outcome(wire: WireToolResult) -> ToolOutcomeNative {
     match wire {
         WireToolResult::Ok { output, time_ms } => ToolOutcomeNative::Ok { output, time_ms },
         WireToolResult::Err { message } => ToolOutcomeNative::Err { message },
+    }
+}
+
+#[cfg(test)]
+mod wire_golden_tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+    use serde_json::Value;
+    #[test]
+    fn evaluator_payloads_keep_their_wire_shape() {
+        let fixtures: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/hook-wire.json")).unwrap();
+        let params = &fixtures["goal.evaluate"]["params"];
+        assert_eq!(
+            serde_json::to_value(GoalEvaluateParams {
+                condition: "done",
+                transcript: "text"
+            })
+            .unwrap(),
+            *params
+        );
+        assert_eq!(
+            serde_json::to_value(LoopVerifyParams {
+                target: "done",
+                transcript: "text"
+            })
+            .unwrap(),
+            fixtures["loop.verifier"]["params"]
+        );
+        assert_eq!(
+            serde_json::to_value(LoopShouldStopParams {
+                target: "done",
+                transcript: "text"
+            })
+            .unwrap(),
+            fixtures["loop.should_stop"]["params"]
+        );
+        let last =
+            serde_json::from_value(fixtures["loop.planner"]["params"]["last"].clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(LoopPlanParams {
+                target: "done",
+                history: &["first".into()],
+                last,
+                planner_notes: "notes"
+            })
+            .unwrap(),
+            fixtures["loop.planner"]["params"]
+        );
+        let goal: GoalVerdictWire =
+            serde_json::from_value(fixtures["goal.evaluate"]["replies"][0].clone()).unwrap();
+        assert!(goal.met);
+        assert_eq!(goal.reason, "verified");
+        let stop: LoopShouldStopWire =
+            serde_json::from_value(fixtures["loop.should_stop"]["replies"][0].clone()).unwrap();
+        assert!(stop.stop);
+        assert_eq!(stop.reason, "stop");
+        let verdict: VerifierVerdictWire =
+            serde_json::from_value(fixtures["loop.verifier"]["replies"][0].clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(verdict).unwrap(),
+            fixtures["loop.verifier"]["replies"][0]
+        );
+        let plan: PlannerOutputWire =
+            serde_json::from_value(fixtures["loop.planner"]["replies"][0].clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(plan).unwrap(),
+            fixtures["loop.planner"]["replies"][0]
+        );
     }
 }

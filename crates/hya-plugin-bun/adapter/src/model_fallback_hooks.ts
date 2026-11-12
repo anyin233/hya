@@ -1,25 +1,8 @@
 import type { ExtensionHooks } from "./loader/init"
 import { isNonEmptyString, isRecord } from "./validate"
 
-export type ModelFallbackParams = {
-  readonly session: string
-  /** Root of the session's spawn tree; equals `session` for a root. */
-  readonly root_session: string
-  /** Stable id of the agent bound to `session`. */
-  readonly agent?: string
-  readonly message: string
-  /** Model whose attempt just failed (`provider/model`). */
-  readonly model: string
-  readonly error: { readonly class: string; readonly message: string }
-  /** 1-based count of failed attempts so far in this round. */
-  readonly attempt: number
-  /** Models already attempted in this round, in order. */
-  readonly tried: readonly string[]
-}
-
-export type ModelFallbackOutcome =
-  | { readonly outcome: "retry"; readonly model: string }
-  | { readonly outcome: "give_up" }
+import type { ModelFallbackParams, ModelFallbackOutcomeWire as ModelFallbackOutcome } from "./wire.gen"
+export type { ModelFallbackParams, ModelFallbackOutcomeWire as ModelFallbackOutcome } from "./wire.gen"
 
 /**
  * `model.fallback` handlers receive the hya params as-is and return either

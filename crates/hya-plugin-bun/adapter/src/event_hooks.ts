@@ -1,10 +1,7 @@
 import type { ExtensionHooks } from "./loader/init"
 
-export type EventEnvelope = {
-  readonly seq: number | string
-  readonly ts_millis: number
-  readonly event: Readonly<Record<string, unknown>>
-}
+import type { Envelope as EventEnvelope } from "./wire.gen"
+export type { Envelope as EventEnvelope } from "./wire.gen"
 
 /**
  * `event` handlers receive the raw hya envelope `{ seq, ts_millis, event }`

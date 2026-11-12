@@ -5,9 +5,8 @@ import {
 import type { ExtensionHooks } from "./loader/init"
 import type { ExtensionToolDefinition } from "./tool"
 
-export type TextSink = {
-  readonly write: (data: string) => unknown
-}
+export type { TextSink } from "./stdio"
+import type { TextSink } from "./stdio"
 
 export type RuntimeEnv = Readonly<Record<string, string | undefined>>
 
@@ -27,10 +26,7 @@ export type RuntimeOptions = {
   readonly env?: RuntimeEnv
 }
 
-export type HandledRequest = {
-  readonly response: string
-  readonly shouldExit: boolean
-}
+export type { HandledRequest } from "./stdio"
 
 export type RequestContext = {
   readonly version: string
