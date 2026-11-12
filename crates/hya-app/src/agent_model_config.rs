@@ -27,6 +27,17 @@ use hya_proto::ModelRef;
 use hya_provider::ReasoningEffort;
 use serde_norway::{Mapping, Value};
 
+/// App-owned leaves; other keys belong to bundle configuration.
+#[derive(Debug, Default, serde::Deserialize)]
+pub(crate) struct AgentFileSettings {
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub reasoning: Option<String>,
+    #[serde(flatten)]
+    _bundle_settings: BTreeMap<String, Value>,
+}
+
 static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
 
 /// Files holding user-selected base models for built-in and bundle Agents.
@@ -129,6 +140,49 @@ impl AgentModelConfigFiles {
         let builtin = read_models(&self.global_file)?.unwrap_or_default();
         let bundles = self.load_user_bundles()?;
         Ok(AgentModelConfiguration { builtin, bundles })
+    }
+
+    pub(crate) fn load_with_builtin(
+        &self,
+        agents: &BTreeMap<String, AgentFileSettings>,
+    ) -> anyhow::Result<(AgentModelConfiguration, BTreeMap<String, ReasoningEffort>)> {
+        let builtin = agents
+            .iter()
+            .filter_map(|(id, entry)| {
+                entry
+                    .model
+                    .as_ref()
+                    .map(|model| (id.clone(), ModelRef::new(model)))
+            })
+            .collect();
+        let mut efforts = typed_efforts(agents)?;
+        let mut bundles = BTreeMap::new();
+        let root = user_bundle_config_root(&self.global_file);
+        let entries = match fs::read_dir(&root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok((AgentModelConfiguration { builtin, bundles }, efforts));
+            }
+            Err(error) => return Err(error).with_context(|| format!("read {}", root.display())),
+        };
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let leaf = entry.file_name();
+            let leaf = leaf.to_str().context("bundle config leaf must be UTF-8")?;
+            let id = decode_bundle_leaf(leaf)?;
+            let path = entry.path().join(BUNDLE_CONFIG_FILE_NAME);
+            let agents = read_agent_settings(&path)?;
+            efforts.extend(typed_efforts(&agents)?);
+            let models = agents
+                .into_iter()
+                .filter_map(|(id, entry)| entry.model.map(|model| (id, ModelRef::new(model))))
+                .collect();
+            bundles.insert(id, models);
+        }
+        Ok((AgentModelConfiguration { builtin, bundles }, efforts))
     }
 
     /// `agents.<id>.reasoning` leaves (an Agent's default thinking effort)
@@ -278,7 +332,6 @@ impl AgentModelConfigFiles {
         model: Option<&ModelRef>,
     ) -> anyhow::Result<PathBuf> {
         let path = self.path_in(resolver, origin)?;
-        let _parent = ensure_parent(&path)?;
         let _lock = lock_for(&path)?;
 
         let existing = match fs::read_to_string(&path) {
@@ -315,6 +368,44 @@ impl AgentModelConfigFiles {
     }
 }
 
+pub(crate) fn read_agent_settings(
+    path: &Path,
+) -> anyhow::Result<BTreeMap<String, AgentFileSettings>> {
+    #[derive(Default, serde::Deserialize)]
+    struct Document {
+        #[serde(default)]
+        agents: BTreeMap<String, AgentFileSettings>,
+    }
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+    };
+    if raw.trim().is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let document: Document =
+        serde_norway::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
+    Ok(document.agents)
+}
+
+pub(crate) fn typed_efforts(
+    agents: &BTreeMap<String, AgentFileSettings>,
+) -> anyhow::Result<BTreeMap<String, ReasoningEffort>> {
+    agents
+        .iter()
+        .filter_map(|(id, entry)| {
+            entry.reasoning.as_deref().map(|label| {
+                ReasoningEffort::parse(label)
+                    .map(|effort| (id.clone(), effort))
+                    .with_context(|| {
+                        format!("agents.{id}.reasoning is not a thinking effort: `{label}`")
+                    })
+            })
+        })
+        .collect()
+}
+
 fn read_models(path: &Path) -> anyhow::Result<Option<BTreeMap<String, ModelRef>>> {
     let raw = match fs::read_to_string(path) {
         Ok(raw) => raw,
@@ -327,43 +418,8 @@ fn read_models(path: &Path) -> anyhow::Result<Option<BTreeMap<String, ModelRef>>
 
 /// `agents.<id>.reasoning` leaves of one file; empty when the file is absent.
 fn read_efforts(path: &Path) -> anyhow::Result<BTreeMap<String, ReasoningEffort>> {
-    let raw = match fs::read_to_string(path) {
-        Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
-        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
-    };
-    let root = parse_document(&raw, path)?;
-    let Some(agents) = root
-        .as_mapping()
-        .and_then(|map| map.get(key("agents")))
-        .and_then(Value::as_mapping)
-    else {
-        return Ok(BTreeMap::new());
-    };
-    let mut efforts = BTreeMap::new();
-    for (agent_key, agent_value) in agents {
-        let (Some(agent_id), Some(agent)) = (agent_key.as_str(), agent_value.as_mapping()) else {
-            continue;
-        };
-        match agent.get(key("reasoning")) {
-            None | Some(Value::Null) => {}
-            Some(Value::String(label)) => {
-                let effort = ReasoningEffort::parse(label).ok_or_else(|| {
-                    anyhow!(
-                        "configuration agents.{agent_id}.reasoning in {} is not a thinking \
-                         effort: `{label}`",
-                        path.display()
-                    )
-                })?;
-                efforts.insert(agent_id.to_string(), effort);
-            }
-            Some(_) => bail!(
-                "configuration agents.{agent_id}.reasoning in {} must be a string or null",
-                path.display()
-            ),
-        }
-    }
-    Ok(efforts)
+    typed_efforts(&read_agent_settings(path)?)
+        .with_context(|| format!("read Agent efforts {}", path.display()))
 }
 
 fn key(name: &str) -> Value {
@@ -383,47 +439,18 @@ fn parse_document(raw: &str, path: &Path) -> anyhow::Result<Value> {
 }
 
 fn extract_models(root: &Value, path: &Path) -> anyhow::Result<BTreeMap<String, ModelRef>> {
-    let Some(agents_value) = root.as_mapping().and_then(|map| map.get(key("agents"))) else {
-        return Ok(BTreeMap::new());
-    };
-    let agents = agents_value.as_mapping().ok_or_else(|| {
-        anyhow!(
-            "configuration agents field {} must be a mapping",
-            path.display()
-        )
-    })?;
-
-    let mut models = BTreeMap::new();
-    for (agent_key, agent_value) in agents {
-        let agent_id = agent_key.as_str().ok_or_else(|| {
-            anyhow!(
-                "configuration agents key in {} must be a string",
-                path.display()
-            )
-        })?;
-        let agent = agent_value.as_mapping().ok_or_else(|| {
-            anyhow!(
-                "configuration agents.{agent_id} in {} must be a mapping",
-                path.display()
-            )
-        })?;
-        let Some(model_value) = agent.get(key("model")) else {
-            continue;
-        };
-        match model_value {
-            Value::Null => {}
-            Value::String(model) => {
-                models.insert(agent_id.to_string(), ModelRef::new(model.clone()));
-            }
-            _ => {
-                bail!(
-                    "configuration agents.{agent_id}.model in {} must be a string or null",
-                    path.display()
-                );
-            }
-        }
+    #[derive(serde::Deserialize)]
+    struct Document {
+        #[serde(default)]
+        agents: BTreeMap<String, AgentFileSettings>,
     }
-    Ok(models)
+    let document: Document = serde_norway::from_value(root.clone())
+        .with_context(|| format!("parse Agent configuration {}", path.display()))?;
+    Ok(document
+        .agents
+        .into_iter()
+        .filter_map(|(id, entry)| entry.model.map(|model| (id, ModelRef::new(model))))
+        .collect())
 }
 
 fn update_model(
@@ -498,7 +525,8 @@ fn ensure_parent(path: &Path) -> anyhow::Result<PathBuf> {
     Ok(parent)
 }
 
-fn lock_for(path: &Path) -> anyhow::Result<File> {
+pub(crate) fn lock_for(path: &Path) -> anyhow::Result<File> {
+    ensure_parent(path)?;
     let parent = path.parent().unwrap_or_else(|| Path::new(""));
     let file_name = path
         .file_name()
@@ -522,7 +550,7 @@ fn lock_for(path: &Path) -> anyhow::Result<File> {
     Ok(file)
 }
 
-fn atomic_replace(
+pub(crate) fn atomic_replace(
     path: &Path,
     contents: &str,
     permissions: Option<std::fs::Permissions>,
@@ -673,7 +701,7 @@ mod tests {
         let global = files.global_path().to_path_buf();
         std::fs::create_dir_all(global.parent().unwrap()).unwrap();
         std::fs::write(&global, "agents:\n  general:\n    reasoning: ludicrous\n").unwrap();
-        let error = files.load_efforts().unwrap_err().to_string();
+        let error = format!("{:#}", files.load_efforts().unwrap_err());
         assert!(
             error.contains("agents.general.reasoning") && error.contains("ludicrous"),
             "{error}"
@@ -870,6 +898,55 @@ mod tests {
         );
         assert!(error.is_err());
         assert_eq!(std::fs::read_to_string(&global).unwrap(), malformed);
+    }
+
+    #[test]
+    fn agent_settings_require_mapping_entries() {
+        let (_dir, files) = files();
+        let path = files.global_path();
+        ensure_parent(path).unwrap();
+        for entry in ["[p/model, high]", "p/model"] {
+            fs::write(path, format!("agents:\n  worker: {entry}\n")).unwrap();
+            assert!(read_agent_settings(path).is_err());
+        }
+    }
+
+    #[test]
+    fn provider_and_agent_writes_share_transaction() {
+        let (_dir, files) = files();
+        let path = files.global_path().to_path_buf();
+        ensure_parent(&path).unwrap();
+        fs::write(&path, "agents: {}\n").unwrap();
+        let lock = lock_for(&path).unwrap();
+        let (sent, received) = std::sync::mpsc::channel();
+        let provider_path = path.clone();
+        let writer = thread::spawn(move || {
+            crate::config::upsert_oauth_provider(
+                &provider_path,
+                "openai",
+                "openai",
+                "https://example.com/v1",
+            )
+            .unwrap();
+            sent.send(()).unwrap();
+        });
+        let premature = received
+            .recv_timeout(std::time::Duration::from_millis(200))
+            .is_ok();
+        // Model save inside the already-held transaction, while provider save waits.
+        fs::write(&path, "agents:\n  worker:\n    model: openai/model\n").unwrap();
+        drop(lock);
+        writer.join().unwrap();
+        assert!(
+            !premature,
+            "provider writer bypassed the agent-model file lock"
+        );
+        assert_eq!(
+            files.load().unwrap().builtin.get("worker"),
+            Some(&ModelRef::new("openai/model"))
+        );
+        let root: Value = serde_norway::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        assert!(root["providers"]["openai"].is_mapping());
     }
 
     #[test]

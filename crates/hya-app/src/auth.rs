@@ -227,26 +227,10 @@ pub fn save_credential_in(
     let file = AuthFile::from_credential(credential);
     let body = serde_norway::to_string(&file).map_err(std::io::Error::other)?;
     let path = dir.join(format!("{provider}.yaml"));
-    let tmp = dir.join(format!(".{provider}.yaml.tmp"));
-    // Create the temp file with mode 0600 so the secret is never readable
-    // by others, even between the write and the rename.
-    let _ = std::fs::remove_file(&tmp);
-    #[cfg(unix)]
-    {
-        use std::io::Write as _;
-        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&tmp)?;
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        file.write_all(body.as_bytes())?;
-        file.sync_all()?;
-    }
-    #[cfg(not(unix))]
-    std::fs::write(&tmp, body)?;
-    std::fs::rename(&tmp, path)
+    let _lock = crate::agent_model_config::lock_for(&path).map_err(std::io::Error::other)?;
+    // Credentials always use private permissions, including replacement of an
+    // existing file; the shared writer creates a unique private temporary file.
+    crate::agent_model_config::atomic_replace(&path, &body, None).map_err(std::io::Error::other)
 }
 
 /// List provider ids that have a credential file under `dir`.

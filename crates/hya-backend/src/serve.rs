@@ -401,7 +401,7 @@ pub(crate) async fn prepare_server(
             agent.as_ref(),
             runtime.mcp,
             runtime.plugins,
-            (runtime.websearch, runtime.permission),
+            (runtime.websearch, runtime.permission, runtime.settings),
         )
         .await?
     } else {
@@ -411,7 +411,7 @@ pub(crate) async fn prepare_server(
             agent.as_ref(),
             runtime.mcp,
             runtime.plugins,
-            (runtime.websearch, runtime.permission),
+            (runtime.websearch, runtime.permission, runtime.settings),
         )
         .await?
     };

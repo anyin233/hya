@@ -297,7 +297,12 @@ async fn projection_info_at(
             .agent
             .as_ref()
             .map(|agent| agent.as_str());
-        let resolved = st.engine.effective_effort(model, agent, None).await?;
+        let workdir = std::path::Path::new(projection.session.workdir.as_deref().unwrap_or("."));
+        let binding = st.engine.bind_session_runtime(session, workdir).await?;
+        let resolved = st
+            .engine
+            .effective_effort(model, agent, None, Some(&binding))
+            .await?;
         let (effort, source) = (resolved.effort, resolved.source);
         info.effective_effort = effort
             .map(|value| value.as_str().to_string())

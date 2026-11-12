@@ -40,26 +40,24 @@ permission:
 A missing or unusable config is **not an error**. Hya publishes the canonical
 `hya/offline` row so the stack remains usable without credentials.
 
-`load()` returns “no usable config” when there is no config file, the file is
-empty, or it contains no provider, MCP, plugin, meaningful permission, or
-`tools:` declaration. Provider declarations are not credential-gated: explicit
-models build anonymous routes, and empty model lists make one optional-auth
-catalog request during each startup.
+Startup parses one typed `config.yaml` document and passes its settings to the
+engine builder. Categories, subagent limits, compaction, global reasoning,
+catalog cache limits, formatter/LSP settings, and built-in Agent defaults use
+that snapshot, including when no provider is configured. A missing or empty
+file selects the offline defaults. Provider declarations are not credential-gated:
+explicit models build anonymous routes, and empty model lists make one
+optional-auth catalog request during startup.
 
-**Meaningful permission:** a `permission:` block counts only if its `model`
-differs from `default` **or** it has at least one rule
-(`has_meaningful_permission`). The literal starter block
-`permission: { model: default, rules: [] }` is treated as **absent**. A
-permission-only config keeps hya’s config active only when that block is
-meaningful by this rule.
+Plugin/MCP refresh remains a separate read transaction: bind and explicit
+refresh observe file edits, and failed sources retain their last published state.
 
-**Independent re-reads:** `categories:` and `subagents:` are re-read by separate
-loaders that reopen and reparse `config.yaml` independently of the main
-`load()` (`load_categories`, `load_subagent_limits`). Both still take effect
-even when hya is running on the offline provider because `load()` returned
-`None`. A parse failure on those paths degrades silently to defaults — no error
-is printed — so a malformed `categories:` / `subagents:` block looks like the
-keys being ignored.
+Provider edits (including OAuth login), Agent model saves, and credential saves
+coordinate through a stable `.<filename>.lock` sidecar. Each edit rereads the
+owning document while locked and replaces it atomically using a unique private
+temporary file. Concurrent writers preserve each other's unrelated fields.
+For example, saving an Agent model while OAuth login adds its provider retains
+both `agents.<id>.model` and `providers.<id>`. The lock file is coordination
+state and must remain in place while writers may be active.
 
 Normal startup never searches, opens, or imports Claude, Codex CLI, Grok CLI,
 OpenCode, or another product's configuration. First run creates the starter
@@ -2151,3 +2149,26 @@ Startup diagnostics also accept `HYA_STARTUP_TRACE_FILE` (an optional file path)
 The backend and TUI append the JSONL phase marks documented in
 [tui.md](tui.md#precompiled-startup); an unwritable diagnostic file never prevents
 startup. `HYA_STARTUP_TRACE=1|true` continues to emit backend marks on stderr.
+
+### Startup and scoped configuration contracts
+
+Embedded callers pass `RuntimeConfig.settings` (`EngineSettings`) as the third
+member of the builder's `(WebSearchConfig, InvocationPolicy, EngineSettings)`
+input. The value comes from `resolve_runtime`; it holds the same typed disk
+snapshot as provider resolution. `EngineSettings::default()` supplies defaults
+for hosts that intentionally supply all runtime inputs themselves.
+
+A project's bundle `config.yml` owns both `agents.<id>.model` (string or null)
+and `agents.<id>.reasoning` (effort label or null). Both are captured in the
+same scope publication. For example:
+
+```yaml
+agents:
+  tools-agent:
+    model: openai/gpt-6
+    reasoning: high
+```
+
+The next bound turn uses that project's model and effort together. A project
+bundle shadows the same bundle's user-scope effort even when its own effort
+leaf is absent. Stored runtime Agent preferences still take precedence.

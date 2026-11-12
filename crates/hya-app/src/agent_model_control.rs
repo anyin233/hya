@@ -201,6 +201,18 @@ impl PersistentAgentModelControl {
         Ok(self)
     }
 
+    pub(crate) async fn with_configuration_snapshot(
+        mut self,
+        files: AgentModelConfigFiles,
+        configuration: AgentModelConfiguration,
+    ) -> Self {
+        self.runtime
+            .publish_agent_model_configuration(configuration.clone());
+        *self.configuration.lock().await = configuration;
+        self.configuration_files = Some(Arc::new(files));
+        self
+    }
+
     /// Bundle configuration scopes as `binding` sees them: the bundles of the
     /// binding's Project resolve to their project source directory, every
     /// other bundle to the user scope.

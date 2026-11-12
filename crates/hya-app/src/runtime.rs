@@ -14,13 +14,12 @@ use hya_bundle::BundleCatalog;
 use hya_core::agent_catalog::{AgentCatalog, AgentDefinition};
 use hya_core::{
     AgentResourcePolicy, AgentSpec, BoundSidecarFactory, BoundSpawnRequest, BoundSpawnSender,
-    BoundWorkflowRequest, BoundWorkflowSender, CategoryRegistry, CompactionConfig, CoreError,
-    DRAIN_DEADLINE, EventBus, ModelSummarizer, PromptEnv, ResidentSupervisor, RuntimeRegistry,
-    RuntimeSourceKind, SessionEngine, SidecarEnvironment, SidecarHandle, SidecarLifecycle,
-    SidecarStart, SpawnAdmissionOutcome, SubagentGovernor, Summarizer, TaskSpawnOrigin,
-    TokenAccounting, TurnBinding, TurnDrainReport, apply_agent_model_preference,
-    apply_spawn_model_policy, build_system_prompt, resolve_dispatch_model, run_lifecycle_service,
-    run_mailbox_service,
+    BoundWorkflowRequest, BoundWorkflowSender, CategoryRegistry, CoreError, DRAIN_DEADLINE,
+    EventBus, ModelSummarizer, PromptEnv, ResidentSupervisor, RuntimeRegistry, RuntimeSourceKind,
+    SessionEngine, SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart,
+    SpawnAdmissionOutcome, SubagentGovernor, Summarizer, TaskSpawnOrigin, TokenAccounting,
+    TurnBinding, TurnDrainReport, apply_agent_model_preference, apply_spawn_model_policy,
+    build_system_prompt, resolve_dispatch_model, run_lifecycle_service, run_mailbox_service,
 };
 
 // Single discovery/date implementation lives in hya-core; re-export for callers.
@@ -57,7 +56,7 @@ use crate::runtime_reconcile::{
     DesiredSource, RuntimeExtensionsRefresh, RuntimeMcpControl, RuntimeReconciler, SourceId,
     adapt_prepared_bundle_skills,
 };
-use crate::{InstalledBundleRefresh, bundle_registry_path, formatter_config, plugins};
+use crate::{InstalledBundleRefresh, bundle_registry_path, plugins};
 
 /// Agent catalog for a process before installed bundles are refreshed.
 ///
@@ -98,15 +97,6 @@ pub fn offline_router(model_override: Option<String>) -> (ProviderRouter, String
 pub(crate) fn process_owner_run_id() -> OwnerRunId {
     static OWNER_RUN_ID: OnceLock<OwnerRunId> = OnceLock::new();
     *OWNER_RUN_ID.get_or_init(OwnerRunId::new)
-}
-
-/// Compaction thresholds from `config.yaml`, with `HYA_COMPACTION_*` env overrides.
-///
-/// Prefer [`crate::config::load_context_settings`] when the token-accounting
-/// mode is needed too; this returns only the thresholds.
-#[must_use]
-pub fn compaction_config() -> CompactionConfig {
-    crate::config::load_context_settings().compaction
 }
 
 /// Canonical Harness agent base string (no Environment / AGENTS).
@@ -1080,6 +1070,8 @@ pub struct RuntimeConfig {
     /// Websearch keeps its own configuration; builtin tools and the embedded
     /// skill catalog are unaffected.
     pub pure: bool,
+    /// Parsed startup settings for engine composition.
+    pub settings: config::EngineSettings,
 }
 
 impl RuntimeConfig {
@@ -1131,6 +1123,7 @@ fn offline_runtime(model_override: Option<String>, strict: bool) -> RuntimeConfi
         },
         websearch: WebSearchConfig::default(),
         pending_discovery: Vec::new(),
+        settings: config::EngineSettings::default(),
         pure: false,
     }
 }
@@ -1174,6 +1167,7 @@ async fn resolve_runtime_strict(model_override: Option<String>) -> anyhow::Resul
         permission: cfg.permission,
         websearch: cfg.websearch,
         pending_discovery: cfg.pending_discovery,
+        settings: cfg.settings,
         pure: false,
     })
 }
@@ -2182,7 +2176,7 @@ pub async fn build_session_engine(
     agent: &AgentSpec,
     mcp: BTreeMap<String, McpServerConfig>,
     plugins: Vec<PluginSpec>,
-    tool_config: (WebSearchConfig, InvocationPolicy),
+    tool_config: (WebSearchConfig, InvocationPolicy, config::EngineSettings),
 ) -> anyhow::Result<BuiltSessionEngine> {
     build_session_engine_with_mcp_defer(
         store,
@@ -2208,7 +2202,7 @@ pub async fn build_session_engine_pure(
     agent: &AgentSpec,
     mcp: BTreeMap<String, McpServerConfig>,
     plugins: Vec<PluginSpec>,
-    tool_config: (WebSearchConfig, InvocationPolicy),
+    tool_config: (WebSearchConfig, InvocationPolicy, config::EngineSettings),
 ) -> anyhow::Result<BuiltSessionEngine> {
     build_session_engine_with_mcp_defer(
         store,
@@ -2252,7 +2246,7 @@ async fn build_session_engine_with_mcp_defer(
     agent: &AgentSpec,
     mcp: BTreeMap<String, McpServerConfig>,
     plugins: Vec<PluginSpec>,
-    tool_config: (WebSearchConfig, InvocationPolicy),
+    tool_config: (WebSearchConfig, InvocationPolicy, config::EngineSettings),
     options: EngineBuildOptions,
 ) -> anyhow::Result<BuiltSessionEngine> {
     let owner_run_id = process_owner_run_id();
@@ -2290,7 +2284,7 @@ async fn build_session_engine_with_mcp_defer(
         .await
         .context("recover nonterminal admissions before spawn readiness")?;
     crate::startup_trace::mark("store_recovery", None);
-    let (websearch, invocation_policy) = tool_config;
+    let (websearch, invocation_policy, settings) = tool_config;
     let router = Arc::new(router);
     let registry = ToolRegistry::builtins();
     if !websearch.enabled {
@@ -2300,7 +2294,7 @@ async fn build_session_engine_with_mcp_defer(
     let project_plugins = if options.pure {
         crate::project_plugins::ProjectPluginSettings::disabled()
     } else {
-        let configured = crate::config::load_configured_plugin_ids();
+        let configured = settings.plugin_ids();
         crate::project_plugins::ProjectPluginSettings::new(host_info()).with_configured_ids(
             plugins
                 .iter()
@@ -2327,7 +2321,7 @@ async fn build_session_engine_with_mcp_defer(
             candidate.replace_sources_of_kind(RuntimeSourceKind::Bundle, static_sources)
         })?;
     }
-    let categories = Arc::new(crate::config::load_categories());
+    let categories = Arc::new(settings.categories());
     let reconciler = Arc::new(RuntimeReconciler::new(runtime.clone()));
     let mcp_control = Arc::new(RuntimeMcpControl::new(reconciler.clone()));
     let catalog_refresh = Arc::new(RuntimeExtensionsRefresh::new(
@@ -2347,7 +2341,7 @@ async fn build_session_engine_with_mcp_defer(
     ]);
     let (permission, asks) = PermissionPlane::new_with_policy(rules, invocation_policy);
     let (interaction, questions) = InteractionPlane::new();
-    let subagent_limits = crate::config::load_subagent_limits();
+    let subagent_limits = settings.subagents();
     let spawn_queue_capacity = usize::try_from(subagent_limits.per_run_budget)
         .unwrap_or(tokio::sync::Semaphore::MAX_PERMITS)
         .clamp(1, tokio::sync::Semaphore::MAX_PERMITS);
@@ -2360,12 +2354,12 @@ async fn build_session_engine_with_mcp_defer(
     let bus = EventBus::new(crate::config::resolve_event_bus_capacity());
     let governor = SubagentGovernor::new(subagent_limits);
     let sidecar_environment = Arc::new(BundleSidecarEnvironment::production());
-    let context_settings = crate::config::load_context_settings();
+    let context_settings = settings.context();
     let mut engine_builder = SessionEngine::new(store, router, runtime, permission, bus)
         // Stop/start records use this store's runtime-owner claim.
         .with_runtime_owner(owner_run_id)
-        .with_global_reasoning(crate::config::load_global_reasoning())
-        .with_catalog_scope_cache(crate::config::load_catalog_scope_cache())
+        .with_global_reasoning(settings.reasoning())
+        .with_catalog_scope_cache(settings.scopes())
         .with_catalog_refresh(catalog_refresh)
         .with_sidecar_environment(sidecar_environment.clone())
         .with_model_categories(categories.clone())
@@ -2375,8 +2369,8 @@ async fn build_session_engine_with_mcp_defer(
         .with_model_fallbacks(category_model_fallbacks(&categories))
         .with_compaction(summarizer, context_settings.compaction)
         .with_token_accounting(TokenAccounting::new(context_settings.token_accounting))
-        .with_formatter(formatter_config::load_plane())
-        .with_lsp(crate::lsp::load_plane()?)
+        .with_formatter(settings.formatter())
+        .with_lsp(settings.lsp()?)
         .with_websearch(WebSearchPlane::configured(websearch))
         .with_interaction(interaction)
         // INVARIANT (spawn-intake liveness): the engine *owns* this sender for its
@@ -2410,6 +2404,7 @@ async fn build_session_engine_with_mcp_defer(
         engine_builder = engine_builder.with_mcp_background_after(budget);
     }
     let engine = Arc::new(engine_builder);
+    let (agent_configuration, agent_efforts) = settings.agents()?;
     let agent_model_control = PersistentAgentModelControl::load(
         engine.store().clone(),
         owner_run_id,
@@ -2419,21 +2414,14 @@ async fn build_session_engine_with_mcp_defer(
     .await
     .context("load Agent model preferences before engine readiness")?
     .with_categories(categories.clone())
-    .with_configuration(crate::agent_model_config::AgentModelConfigFiles::new(
-        crate::config::active_config_path(),
-    ))
-    .await
-    .context("load Agent model configuration before engine readiness")?;
-    // `agents.<id>.reasoning` defaults load at startup, like model leaves.
+    .with_configuration_snapshot(
+        crate::agent_model_config::AgentModelConfigFiles::new(crate::config::active_config_path()),
+        agent_configuration,
+    )
+    .await;
     engine
         .runtime_registry()
-        .publish_agent_effort_configuration(
-            crate::agent_model_config::AgentModelConfigFiles::new(
-                crate::config::active_config_path(),
-            )
-            .load_efforts()
-            .context("load Agent effort configuration before engine readiness")?,
-        );
+        .publish_agent_effort_configuration(agent_efforts);
     let plugin_desired = plugins
         .into_iter()
         .map(|spec| DesiredSource::plugin(SourceId::plugin(spec.id.clone()), spec))
@@ -2725,7 +2713,7 @@ impl HyaRuntime {
             agent.as_ref(),
             runtime.mcp,
             runtime.plugins,
-            (runtime.websearch, runtime.permission),
+            (runtime.websearch, runtime.permission, runtime.settings),
         )
         .await?;
         let engine = built.engine();
@@ -2990,7 +2978,11 @@ mod tests {
             &agent,
             BTreeMap::new(),
             Vec::new(),
-            (WebSearchConfig::default(), InvocationPolicy::default()),
+            (
+                WebSearchConfig::default(),
+                InvocationPolicy::default(),
+                config::EngineSettings::default(),
+            ),
         )
         .await
         .unwrap();
@@ -3040,7 +3032,11 @@ mod tests {
             &agent,
             BTreeMap::new(),
             Vec::new(),
-            (WebSearchConfig::default(), InvocationPolicy::default()),
+            (
+                WebSearchConfig::default(),
+                InvocationPolicy::default(),
+                config::EngineSettings::default(),
+            ),
         )
         .await
         .unwrap();
@@ -3065,7 +3061,11 @@ mod tests {
             &agent,
             BTreeMap::new(),
             Vec::new(),
-            (WebSearchConfig::default(), InvocationPolicy::default()),
+            (
+                WebSearchConfig::default(),
+                InvocationPolicy::default(),
+                config::EngineSettings::default(),
+            ),
         )
         .await
         .unwrap();
@@ -3124,7 +3124,11 @@ mod tests {
             &agent,
             BTreeMap::new(),
             Vec::new(),
-            (WebSearchConfig::default(), InvocationPolicy::default()),
+            (
+                WebSearchConfig::default(),
+                InvocationPolicy::default(),
+                config::EngineSettings::default(),
+            ),
         )
         .await
         .unwrap();
@@ -3463,6 +3467,38 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
+    async fn builder_uses_the_parsed_startup_snapshot() {
+        let dir = tempdir();
+        let _env = EnvGuard::set(&dir, &dir);
+        let path = dir.join("hya/config.yaml");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "reasoning: high\n").unwrap();
+        let runtime = resolve_runtime(None).await;
+        std::fs::write(&path, "reasoning: low\n").unwrap();
+        let agent = agent_base_with_model(&runtime.model, None);
+        let mut built = build_session_engine(
+            SessionStore::connect_memory().await.unwrap(),
+            runtime.router,
+            &agent,
+            runtime.mcp,
+            runtime.plugins,
+            (runtime.websearch, runtime.permission, runtime.settings),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            built
+                .engine()
+                .effective_effort(&agent.model, None, None, None)
+                .await
+                .unwrap()
+                .effort,
+            Some(ReasoningEffort::High)
+        );
+        built.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn resolve_runtime_without_config_carries_but_does_not_print_the_notice() {
         let dir = tempdir();
         let _env = EnvGuard::set(&dir, &dir);
@@ -3553,6 +3589,7 @@ for line in sys.stdin:
                     ..WebSearchConfig::default()
                 },
                 InvocationPolicy::default(),
+                config::EngineSettings::default(),
             ),
         )
         .await
@@ -3587,7 +3624,11 @@ for line in sys.stdin:
             &agent,
             BTreeMap::new(),
             Vec::new(),
-            (WebSearchConfig::default(), InvocationPolicy::default()),
+            (
+                WebSearchConfig::default(),
+                InvocationPolicy::default(),
+                config::EngineSettings::default(),
+            ),
         )
         .await
         .unwrap();
@@ -3766,7 +3807,11 @@ You are the runtime-installed agent.
             &agent,
             BTreeMap::new(),
             Vec::new(),
-            (WebSearchConfig::default(), InvocationPolicy::default()),
+            (
+                WebSearchConfig::default(),
+                InvocationPolicy::default(),
+                config::EngineSettings::default(),
+            ),
         )
         .await
         .unwrap();
@@ -3895,7 +3940,11 @@ You are the runtime-installed agent.
             &agent,
             BTreeMap::new(),
             Vec::new(),
-            (WebSearchConfig::default(), InvocationPolicy::default()),
+            (
+                WebSearchConfig::default(),
+                InvocationPolicy::default(),
+                config::EngineSettings::default(),
+            ),
         )
         .await
         .unwrap();
@@ -4080,7 +4129,11 @@ You are the installed resident agent.
             &base,
             BTreeMap::new(),
             Vec::new(),
-            (WebSearchConfig::default(), InvocationPolicy::default()),
+            (
+                WebSearchConfig::default(),
+                InvocationPolicy::default(),
+                config::EngineSettings::default(),
+            ),
         )
         .await
         .expect("startup recovery must resolve the installed resident definition");
@@ -4142,7 +4195,11 @@ You are the installed resident agent.
             &agent,
             mcp,
             Vec::new(),
-            (WebSearchConfig::default(), InvocationPolicy::default()),
+            (
+                WebSearchConfig::default(),
+                InvocationPolicy::default(),
+                config::EngineSettings::default(),
+            ),
             EngineBuildOptions {
                 defer_mcp: true,
                 pure: false,
@@ -4188,7 +4245,11 @@ You are the installed resident agent.
                 env: BTreeMap::new(),
                 plugin_dir: None,
             }],
-            (WebSearchConfig::default(), InvocationPolicy::default()),
+            (
+                WebSearchConfig::default(),
+                InvocationPolicy::default(),
+                config::EngineSettings::default(),
+            ),
         )
         .await
         .unwrap();
@@ -4234,7 +4295,11 @@ You are the installed resident agent.
                 env: BTreeMap::new(),
                 plugin_dir: None,
             }],
-            (WebSearchConfig::default(), InvocationPolicy::default()),
+            (
+                WebSearchConfig::default(),
+                InvocationPolicy::default(),
+                config::EngineSettings::default(),
+            ),
             EngineBuildOptions {
                 defer_mcp: true,
                 pure: false,
@@ -4285,7 +4350,11 @@ You are the installed resident agent.
             &agent,
             mcp,
             plugins,
-            (WebSearchConfig::default(), InvocationPolicy::default()),
+            (
+                WebSearchConfig::default(),
+                InvocationPolicy::default(),
+                config::EngineSettings::default(),
+            ),
             EngineBuildOptions {
                 defer_mcp: false,
                 pure: false,
@@ -4328,7 +4397,11 @@ You are the installed resident agent.
             &agent,
             BTreeMap::new(),
             Vec::new(),
-            (WebSearchConfig::default(), InvocationPolicy::default()),
+            (
+                WebSearchConfig::default(),
+                InvocationPolicy::default(),
+                config::EngineSettings::default(),
+            ),
         )
         .await
         .unwrap();

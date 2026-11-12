@@ -57,7 +57,7 @@ async fn roster_shows_runtime_over_configured_over_authored_agent_effort() {
         row("general", None),
     ]
     .into();
-    let annotated = engine.annotate_agent_efforts(roster).await.unwrap();
+    let annotated = engine.annotate_agent_efforts(roster, None).await.unwrap();
     let shown: Vec<_> = annotated
         .iter()
         .map(|agent| {
@@ -79,8 +79,11 @@ async fn roster_shows_runtime_over_configured_over_authored_agent_effort() {
     );
 
     assert_eq!(
-        engine.agent_effort("review", None).await.unwrap(),
+        engine.agent_effort("review", None, None).await.unwrap(),
         Some((ReasoningEffort::High, AgentEffortSource::Preference))
     );
-    assert_eq!(engine.agent_effort("general", None).await.unwrap(), None);
+    assert_eq!(
+        engine.agent_effort("general", None, None).await.unwrap(),
+        None
+    );
 }

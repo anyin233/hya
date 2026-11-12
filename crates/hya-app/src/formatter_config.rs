@@ -1,22 +1,22 @@
 //! Load optional formatter configuration into a `FormatterPlane`.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
-use std::sync::Arc;
 
+#[cfg(test)]
 use anyhow::Context as _;
-use hya_tool::{BuiltinFormatterProvider, FormatterConfig, FormatterEntry, FormatterPlane};
+use hya_tool::{FormatterConfig, FormatterEntry};
 use serde::Deserialize;
 
+#[cfg(test)]
 #[derive(Debug, Default, Deserialize)]
 struct FileConfig {
     #[serde(default)]
     formatter: RawFormatterConfig,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(untagged)]
-enum RawFormatterConfig {
+pub(crate) enum RawFormatterConfig {
     Bool(bool),
     Map(BTreeMap<String, RawFormatterEntry>),
 }
@@ -27,8 +27,8 @@ impl Default for RawFormatterConfig {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct RawFormatterEntry {
+#[derive(Clone, Debug, Default, Deserialize)]
+pub(crate) struct RawFormatterEntry {
     #[serde(default)]
     disabled: bool,
     #[serde(default)]
@@ -65,47 +65,13 @@ impl From<RawFormatterEntry> for FormatterEntry {
     }
 }
 
-/// Build the process formatter plane from optional formatter config on disk.
-///
-/// Missing or invalid config yields a disabled plane (status still queryable).
-pub fn load_plane() -> FormatterPlane {
-    FormatterPlane::new(Arc::new(BuiltinFormatterProvider::new(load_config())))
-}
-
-fn load_config() -> FormatterConfig {
-    let Some(path) = config_path() else {
-        return FormatterConfig::Disabled;
-    };
-    let Ok(yaml) = std::fs::read_to_string(&path) else {
-        return FormatterConfig::Disabled;
-    };
-    match parse_formatter_config(&yaml) {
-        Ok(config) => config,
-        Err(error) => {
-            eprintln!("hya: formatter config error ({error:#}); formatter status disabled");
-            FormatterConfig::Disabled
-        }
-    }
-}
-
+#[cfg(test)]
 fn parse_formatter_config(yaml: &str) -> anyhow::Result<FormatterConfig> {
     if yaml.trim().is_empty() {
         return Ok(FormatterConfig::Disabled);
     }
     let file: FileConfig = serde_norway::from_str(yaml).context("parse formatter config")?;
     Ok(file.formatter.into())
-}
-
-fn config_path() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
-        let path = PathBuf::from(dir).join("hya/config.yaml");
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    let home = std::env::var("HOME").ok()?;
-    let path = PathBuf::from(home).join(".config/hya/config.yaml");
-    path.exists().then_some(path)
 }
 
 #[cfg(test)]

@@ -144,7 +144,11 @@ async fn with_agent_effort(
         .resolve(&row.agent_id)
         .and_then(|definition| definition.model_policy.reasoning.clone())
         .and_then(|label| hya_provider::ReasoningEffort::parse(&label));
-    if let Some((effort, source)) = st.engine.agent_effort(&row.agent_id, authored).await? {
+    if let Some((effort, source)) = st
+        .engine
+        .agent_effort(&row.agent_id, authored, Some(binding))
+        .await?
+    {
         row.effort = effort.as_str().to_string();
         row.effort_source = match source {
             hya_core::AgentEffortSource::Preference => pb::AgentEffortSource::Preference,

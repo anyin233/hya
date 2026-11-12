@@ -976,7 +976,7 @@ impl SessionEngine {
             };
             let (agent, agents, resources) = prepared?;
             // `list_agents` shows the user's runtime/configured Agent efforts.
-            let agents = self.annotate_agent_efforts(agents).await?;
+            let agents = self.annotate_agent_efforts(agents, Some(&binding)).await?;
             let stable_id = projection
                 .session
                 .agent
@@ -1361,7 +1361,9 @@ impl SessionEngine {
                                 live_binding = fresh;
                                 live_agent = materialized;
                                 live_resources = compiled;
-                                live_agents = self.annotate_agent_efforts(roster).await?;
+                                live_agents = self
+                                    .annotate_agent_efforts(roster, Some(&live_binding))
+                                    .await?;
                                 binding = &live_binding;
                                 resources = &live_resources;
                                 agents = &live_agents;
@@ -1800,7 +1802,12 @@ impl SessionEngine {
             // to the next request without a restart. `live_agent.reasoning` is
             // the Agent's authored effort; the user's per-Agent choices outrank it.
             let effort = self
-                .effective_effort(&model, Some(&stable_id), live_agent.reasoning)
+                .effective_effort(
+                    &model,
+                    Some(&stable_id),
+                    live_agent.reasoning,
+                    Some(binding),
+                )
                 .await?
                 .effort;
             let request =
