@@ -631,3 +631,27 @@ and delivery cursors still read the live roster. `wait` reads both roster and
 archive and returns failed members' current-episode reasons. Forced finalization
 replaces even a previous episode's terminal member row when revival has not yet
 started a turn. Claim-release idempotency prevents duplicate terminal writes.
+
+### Transactional mail authorization
+
+Mail ids name channels; knowing an id grants no permission. `append_channel_mail`
+checks existence, sender membership and posting direction under `BEGIN IMMEDIATE`.
+A group accepts posts only from its unit leader and records them as announcements.
+The admitted `ChannelPolicySnapshot` send bits (`unit_leader`, `unit_member`,
+`dm_parent`, `dm_child`: `u8`) are checked by the store, using the channel's actual
+kind and sender role. `append_direct_mail` checks its resolved hierarchy endpoint
+and the corresponding DM send bit in that same transaction. Harness-authored mail
+bypasses agent send policy and still requires a live resident recipient.
+
+For example, a parent can send to its child's `DM-…` channel; an unrelated agent
+sending to that id receives `StoreError::MailAuthorizationRejected { channel,
+sender, reason }` and appends no event. An authorized DM to an archived direct
+child returns `MailRevivalRequired { channel, sender, target }`; the engine invokes
+revival after the transaction, preserving `engine.mail_send` as the entry point.
+
+Recipient counts and replay share `TeamProjection::mail_recipient_is_live`.
+For live resident subscribers the transaction checks active actor claims in one
+batch. A missing claim rejects the entire append rather than recording a receipt
+whose count differs from replay. Resident-mail and follow-up capabilities still
+control when an accepted inbox message wakes or steers an actor; they do not grant
+permission to append mail.

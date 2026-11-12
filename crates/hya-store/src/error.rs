@@ -176,6 +176,26 @@ pub enum StoreError {
         /// Validation detail.
         detail: String,
     },
+    /// An authorized DM targets an archived direct child and needs engine revival.
+    #[error("sender `{sender}` to channel `{channel}` must revive `{target}`")]
+    MailRevivalRequired {
+        /// Acting handle.
+        sender: String,
+        /// Authorized channel.
+        channel: String,
+        /// Archived direct child.
+        target: String,
+    },
+    /// A mail write failed channel authorization inside its transaction.
+    #[error("mailbox rejected: sender `{sender}` to channel `{channel}`: {reason}")]
+    MailAuthorizationRejected {
+        /// Addressed channel.
+        channel: String,
+        /// Acting canonical handle.
+        sender: String,
+        /// Failed authorization condition.
+        reason: String,
+    },
     /// Mail append rejected by roster / permission / validation rules.
     #[error("mailbox rejected: {0}")]
     MailboxRejected(String),

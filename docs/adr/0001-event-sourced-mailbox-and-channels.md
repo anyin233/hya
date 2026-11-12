@@ -72,15 +72,21 @@ Same writer-lock discipline and optional claim fence, then:
    the unit the sender leads if it leads one, otherwise its home unit; `#^name`
    addresses its home unit and is an error for an agent that leads nobody.
    `#announce` is reserved and refused here — see ADR-0011's announce path.
-2. **Count** eligible subscribers on the channel (does not reject the send when zero are
-   eligible — the `MailSent` is still appended)
-3. Append `Event::MailSent { to: Channel(...) }`
-4. Commit and return `(envelope, recipient_count)` where the count is the eligible set at
+2. Require that the channel exists, the sender is a member, and the direction
+   is allowed by the captured send policy. Groups additionally require the unit
+   leader. Failures carry channel and sender context in a typed store error.
+3. Count subscribers with the shared replay eligibility predicate. Query their
+   resident claims in one batch; a live recipient without an active claim rejects
+   the entire append. An archived direct-child DM returns an authorized revival
+   request to the engine instead of appending.
+4. Append `Event::MailSent { to: Channel(...) }`
+5. Commit and return `(envelope, recipient_count)` where the count is the eligible set at
    send time
 
 ### Eligibility (`resident_member_is_eligible`)
 
-Used for **non-root** resident direct-mail rejection and for channel recipient counting:
+Used for **non-root** resident direct-mail rejection. Channel counting uses the
+shared replay predicate, with the claim check serving as an all-recipient append gate:
 
 | Member | Counts as eligible? |
 | --- | --- |
@@ -92,6 +98,7 @@ Direct mail applies this only when `entry.session != root` and
 `mode == Resident`. A roster entry whose session **is** the team root is never
 passed through `resident_member_is_eligible` on the direct path.
 
-The reducer's channel fan-out (above) uses the roster status skip only; the store's active-claim
-check is the writer-side gate that prevents delivering *new* mail into a non-root resident that
-no longer holds a live claim.
+`RosterEntry::accepts_mail` supplies the shared status rule. The reducer's
+channel fan-out and store recipient count both use it. Claims fence admission:
+a missing live-recipient claim rejects the whole write, so an accepted channel
+receipt always counts the inboxes replay actually updates.

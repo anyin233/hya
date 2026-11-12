@@ -324,6 +324,14 @@ pub struct TeamProjection {
     pub archived: BTreeMap<String, ArchivedEntry>,
 }
 
+impl RosterEntry {
+    /// Whether the replayed member state accepts new mail.
+    pub fn accepts_mail(&self) -> bool {
+        !self.mode.is_resident()
+            || !matches!(self.status, RosterStatus::Done | RosterStatus::Failed)
+    }
+}
+
 /// One archived agent's history row (ADR-0015), folded from `AgentArchived`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ArchivedEntry {
@@ -381,6 +389,13 @@ impl std::fmt::Display for ChannelResolveError {
 }
 
 impl TeamProjection {
+    /// Whether a channel subscriber receives mail in the shared replay model.
+    pub fn mail_recipient_is_live(&self, handle: &str) -> bool {
+        self.roster
+            .get(handle)
+            .is_none_or(RosterEntry::accepts_mail)
+    }
+
     /// Whether `path` leads a unit — that is, whether any roster entry is its
     /// direct child.
     #[must_use]
@@ -1583,13 +1598,7 @@ impl Projection {
                         // set first so the inbox borrow does not alias the channel.
                         let members: Vec<String> = channel_state.members.iter().cloned().collect();
                         for member in members {
-                            if self.team.roster.get(&member).is_some_and(|entry| {
-                                entry.mode.is_resident()
-                                    && matches!(
-                                        entry.status,
-                                        RosterStatus::Done | RosterStatus::Failed
-                                    )
-                            }) {
+                            if !self.team.mail_recipient_is_live(&member) {
                                 continue;
                             }
                             self.team

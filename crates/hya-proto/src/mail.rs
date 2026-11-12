@@ -244,3 +244,16 @@ mod tests {
         assert_eq!(ChannelKind::default(), ChannelKind::Group);
     }
 }
+
+/// Actor-specific channel capability snapshot captured from an admitted turn binding.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ChannelPolicySnapshot {
+    /// Unit leader capability bits.
+    pub unit_leader: u8,
+    /// Unit direct-report capability bits.
+    pub unit_member: u8,
+    /// Parent endpoint capability bits.
+    pub dm_parent: u8,
+    /// Child endpoint capability bits.
+    pub dm_child: u8,
+}

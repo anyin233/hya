@@ -10,7 +10,6 @@
 //! reducer. Resident supervisors (and other bus subscribers) wake idle actors on
 //! mail; this module itself only persists and publishes.
 
-use hya_bundle::{ChannelParticipantRole, ChannelTemplateKind};
 use hya_proto::{
     AgentName, Event, MailEndpoint, MailKind, RosterStatus, SessionId, SubagentMode, scope,
 };
@@ -249,33 +248,6 @@ impl SessionEngine {
             other => other,
         };
         let policy_projection = self.read_projection(root).await?;
-        let (policy_kind, policy_role) = match &to {
-            MailEndpoint::Handle(target) => (
-                ChannelTemplateKind::ParentDm,
-                if scope::parent_path(&from) == Some(target.as_str()) {
-                    ChannelParticipantRole::Child
-                } else {
-                    ChannelParticipantRole::Parent
-                },
-            ),
-            MailEndpoint::Channel(channel) => match policy_projection.team.channels.get(channel) {
-                Some(state) if state.kind == hya_proto::ChannelKind::Group => (
-                    ChannelTemplateKind::Unit,
-                    ChannelParticipantRole::UnitLeader,
-                ),
-                _ => (
-                    ChannelTemplateKind::ParentDm,
-                    dm_role_for(&policy_projection, channel, &from),
-                ),
-            },
-        };
-        if channel_policy
-            .is_some_and(|policy| !snapshot_allows(policy, policy_kind, policy_role, 0))
-        {
-            return Err(CoreError::Invalid(
-                "channel policy denies send for this agent and topology role".to_string(),
-            ));
-        }
         // A subagent the user stopped (`cancel_user_turn`) is not restarted
         // by mail from above it: the user decides when it continues.
         if !user_steer && let Some(reviver) = self.archive_reviver() {
@@ -319,6 +291,7 @@ impl SessionEngine {
                     kind,
                     body.clone(),
                     actor_claim,
+                    channel_policy,
                 )
                 .await;
             let envelope = match append {
@@ -360,59 +333,33 @@ impl SessionEngine {
                 ));
             }
         };
-        // ADR-0015 revive: mail on the pair's DM channel whose other member
-        // is the sender's own ARCHIVED direct child wakes that child, exactly
-        // like handle-addressed mail.
-        if let Some(reviver) = self.archive_reviver() {
-            let projection = self.read_projection(root).await?;
-            let archived_peer = projection
-                .team
-                .channels
-                .get(&channel)
-                .filter(|state| {
-                    state.kind == hya_proto::ChannelKind::Dm && state.members.contains(&from)
-                })
-                .and_then(|state| state.members.iter().find(|member| **member != from))
-                .filter(|peer| {
-                    projection.team.archived.contains_key(peer.as_str())
-                        && !projection.team.roster.contains_key(peer.as_str())
-                        && scope::parent_path(peer) == Some(from.as_str())
-                })
-                .cloned();
-            if let Some(peer) = archived_peer {
-                reviver.revive(root, &from, &peer, body).await?;
+        let append = self
+            .store()
+            .append_channel_mail(
+                root,
+                from.clone(),
+                channel,
+                kind,
+                body.clone(),
+                actor_claim,
+                channel_policy,
+            )
+            .await;
+        let (envelope, recipients) = match append {
+            Ok(result) => result,
+            Err(hya_store::StoreError::MailRevivalRequired { target, .. }) => {
+                let reviver = self.archive_reviver().ok_or_else(|| {
+                    CoreError::Invalid("archived child revival is unavailable".into())
+                })?;
+                reviver.revive(root, &from, &target, body).await?;
                 return Ok(MailReceipt {
                     from,
                     to,
                     recipients: 1,
                 });
             }
-        }
-        // ADR-0016 write gate: group channels are the unit leader's broadcast
-        // pipe. Anyone else posting into one is rejected before the store.
-        // The channel's own nature also picks the delivery kind: a group
-        // post is a one-way announcement, everything else stays 1:1 chatter.
-        let kind = {
-            let projection = self.read_projection(root).await?;
-            match projection.team.channels.get(&channel) {
-                Some(state)
-                    if state.kind == hya_proto::ChannelKind::Group
-                        && state.unit.as_deref() != Some(from.as_str()) =>
-                {
-                    return Err(CoreError::Invalid(format!(
-                        "`#{channel}` is a group broadcast channel; only its unit leader may post (address a peer directly instead)"
-                    )));
-                }
-                Some(state) if state.kind == hya_proto::ChannelKind::Group => {
-                    MailKind::Announcement
-                }
-                _ => kind,
-            }
+            Err(error) => return Err(error.into()),
         };
-        let (envelope, recipients) = self
-            .store()
-            .append_channel_mail(root, from.clone(), channel, kind, body, actor_claim)
-            .await?;
         self.publish_envelope(envelope);
         Ok(MailReceipt {
             from,
@@ -450,18 +397,6 @@ impl SessionEngine {
         // (`announce-{8}`, leader-only posting). Fall back to the legacy
         // reserved channel when no minted channel exists yet (pre-mint logs).
         let projection = self.read_projection(root).await?;
-        if channel_policy.is_some_and(|policy| {
-            !snapshot_allows(
-                policy,
-                ChannelTemplateKind::Unit,
-                ChannelParticipantRole::UnitLeader,
-                0,
-            )
-        }) {
-            return Err(CoreError::Invalid(
-                "channel policy denies unit broadcast for this agent".to_string(),
-            ));
-        }
         let Some(group) = projection
             .team
             .channels
@@ -486,6 +421,7 @@ impl SessionEngine {
                 MailKind::Announcement,
                 body,
                 actor_claim,
+                channel_policy,
             )
             .await?;
         self.publish_envelope(envelope);
@@ -536,40 +472,6 @@ impl SessionEngine {
             "no default channel: you neither lead a unit nor report to one; address a channel explicitly with `#channel` or a peer handle".to_string(),
         ))
     }
-}
-
-fn dm_role_for(
-    projection: &hya_proto::Projection,
-    channel: &str,
-    actor: &str,
-) -> ChannelParticipantRole {
-    projection
-        .team
-        .channels
-        .get(channel)
-        .and_then(|state| state.members.iter().find(|member| member.as_str() != actor))
-        .map_or(ChannelParticipantRole::Child, |peer| {
-            if scope::parent_path(peer) == Some(actor) {
-                ChannelParticipantRole::Parent
-            } else {
-                ChannelParticipantRole::Child
-            }
-        })
-}
-
-fn snapshot_allows(
-    policy: hya_tool::ChannelPolicySnapshot,
-    kind: ChannelTemplateKind,
-    role: ChannelParticipantRole,
-    bit: u8,
-) -> bool {
-    let bits = match (kind, role) {
-        (ChannelTemplateKind::Unit, ChannelParticipantRole::UnitLeader) => policy.unit_leader,
-        (ChannelTemplateKind::Unit, _) => policy.unit_member,
-        (ChannelTemplateKind::ParentDm, ChannelParticipantRole::Parent) => policy.dm_parent,
-        (ChannelTemplateKind::ParentDm, _) => policy.dm_child,
-    };
-    bits & (1 << bit) != 0
 }
 
 impl SessionEngine {
@@ -1108,9 +1010,12 @@ mod tests {
                 Some(policy),
             )
             .await;
-        assert!(
-            matches!(result, Err(CoreError::Invalid(message)) if message.contains("channel policy denies send"))
-        );
+        assert!(matches!(
+            result,
+            Err(CoreError::Store(
+                hya_store::StoreError::MailAuthorizationRejected { .. }
+            ))
+        ));
     }
 
     #[tokio::test]
@@ -1621,6 +1526,11 @@ mod tests {
         assert_eq!(
             inbox(&engine, org.root, &org.worker_1.path).await,
             vec!["all hands".to_string()]
+        );
+        assert_eq!(
+            inbox(&engine, org.root, &org.worker_2.path).await,
+            vec!["all hands".to_string()],
+            "every sibling in lead-1's unit receives the announcement"
         );
         assert!(
             inbox(&engine, org.root, &org.other_worker.path)

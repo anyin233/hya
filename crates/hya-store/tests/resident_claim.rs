@@ -512,6 +512,7 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
             MailKind::Message,
             "epoch independent".to_string(),
             None,
+            None,
         )
         .await
         .unwrap();
@@ -806,6 +807,7 @@ async fn resident_stop_finalizer_rolls_back_at_each_write_boundary_and_is_exactl
                 fixture.handle.clone(),
                 MailKind::Message,
                 "after stop".to_string(),
+                None,
                 None,
             )
             .await;

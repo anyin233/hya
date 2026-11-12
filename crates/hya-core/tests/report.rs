@@ -1933,13 +1933,40 @@ async fn public_mail_send_uses_the_session_captured_channel_policy() {
     let result = engine
         .mail_send(
             root,
-            MailEndpoint::Handle(handle),
+            MailEndpoint::Handle(handle.clone()),
             MailKind::Message,
             "must be denied".to_string(),
         )
         .await;
     assert!(
-        matches!(result, Err(CoreError::Invalid(message)) if message.contains("channel policy denies send"))
+        matches!(result, Err(CoreError::Store(hya_store::StoreError::MailAuthorizationRejected { sender, channel, .. })) if sender == "main" && !channel.is_empty())
+    );
+    supervisor
+        .report_and_archive(root, &handle, ReportOutcome::Done, "done".into())
+        .await
+        .unwrap();
+    let result = engine
+        .mail_send(
+            root,
+            MailEndpoint::Handle(handle.clone()),
+            MailKind::Message,
+            "denied revival".into(),
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(CoreError::Store(
+            hya_store::StoreError::MailAuthorizationRejected { .. }
+        ))
+    ));
+    assert!(
+        engine
+            .read_projection(root)
+            .await
+            .unwrap()
+            .team
+            .archived
+            .contains_key(&handle)
     );
 }
 
