@@ -54,7 +54,7 @@ pub(crate) fn runtime(tools: ToolRegistry) -> Arc<RuntimeRegistry> {
             permission_modes: vec![],
         })
         .collect::<Vec<_>>();
-    let bundles = bundles.into_iter().map(|bundle| bundle).collect::<Vec<_>>();
+    let bundles = bundles.into_iter().collect::<Vec<_>>();
     let catalog = BundleCatalog::from_prepared(&bundles);
     let Ok(catalog) = catalog else {
         panic!("unit-test catalog must be valid: {catalog:?}");
