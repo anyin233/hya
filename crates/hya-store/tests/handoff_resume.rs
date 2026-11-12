@@ -1,7 +1,10 @@
 //! Shutdown cancellation is atomic; restore prompts survive until turn start.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use hya_proto::{AgentName, Event, MessageId, ModelRef, OwnerRunId, Role, SessionId};
+use hya_proto::{
+    AgentName, Event, FinishCause, FinishReason, MessageId, ModelRef, OwnerRunId, PartId, Role,
+    SessionId, ToolCallId, ToolName,
+};
 use hya_store::SessionStore;
 
 async fn create(store: &SessionStore, session: SessionId) {
@@ -49,10 +52,14 @@ async fn restore_is_appended_once_and_survives_a_new_owner() {
     create(&store, session).await;
     let interrupted = open_turn(&store, session).await;
     store
-        .cancel_turn_for_restart(session, interrupted, owner, "restore: bash did not finish")
+        .close_open_turns(session, FinishCause::Shutdown, "stopping")
         .await
         .unwrap();
     assert_eq!(store.list_pending_resumes().await.unwrap().len(), 1);
+    assert_eq!(
+        store.list_pending_resumes().await.unwrap()[0].message,
+        interrupted
+    );
     store.release_runtime_owner(owner).unwrap();
     let next = OwnerRunId::new();
     store.claim_runtime_owner(next).unwrap();
@@ -61,7 +68,7 @@ async fn restore_is_appended_once_and_survives_a_new_owner() {
         .await
         .unwrap()
         .unwrap();
-    assert!(envelopes.iter().any(|e| matches!(&e.event, Event::TextDelta { delta, .. } if delta == "restore: bash did not finish")));
+    assert!(envelopes.iter().any(|e| matches!(&e.event, Event::TextDelta { delta, .. } if delta.contains("Your previous turn was interrupted by a restart."))));
     assert_eq!(
         store.list_pending_resumes().await.unwrap().len(),
         1,
@@ -81,10 +88,14 @@ async fn restore_is_appended_once_and_survives_a_new_owner() {
     let restored = open_turn(&store, session).await;
     assert!(store.list_pending_resumes().await.unwrap().is_empty());
     store
-        .cancel_turn_for_restart(session, restored, next, "second stop")
+        .close_open_turns(session, FinishCause::Shutdown, "second stop")
         .await
         .unwrap();
     assert_eq!(store.list_pending_resumes().await.unwrap().len(), 1);
+    assert_eq!(
+        store.list_pending_resumes().await.unwrap()[0].message,
+        restored
+    );
 }
 
 #[tokio::test]
@@ -94,9 +105,9 @@ async fn deleting_a_session_removes_its_restore() {
     store.claim_runtime_owner(owner).unwrap();
     let session = SessionId::new();
     create(&store, session).await;
-    let message = open_turn(&store, session).await;
+    open_turn(&store, session).await;
     store
-        .cancel_turn_for_restart(session, message, owner, "restore")
+        .close_open_turns(session, FinishCause::Shutdown, "stopping")
         .await
         .unwrap();
     store.delete_session(session).await.unwrap();
@@ -118,9 +129,9 @@ async fn shutdown_cancellation_and_restore_are_one_transaction() {
     store.claim_runtime_owner(owner).unwrap();
     let session = SessionId::new();
     create(&store, session).await;
-    let message = open_turn(&store, session).await;
+    open_turn(&store, session).await;
     store
-        .cancel_turn_for_restart(session, message, owner, "stopping")
+        .close_open_turns(session, FinishCause::Shutdown, "stopping")
         .await
         .unwrap();
     assert_eq!(
@@ -137,9 +148,9 @@ async fn archived_root_is_not_restored_at_stop_or_start() {
     store.claim_runtime_owner(owner).unwrap();
     let session = SessionId::new();
     create(&store, session).await;
-    let first = open_turn(&store, session).await;
+    open_turn(&store, session).await;
     store
-        .cancel_turn_for_restart(session, first, owner, "restore")
+        .close_open_turns(session, FinishCause::Shutdown, "stopping")
         .await
         .unwrap();
     store
@@ -160,9 +171,9 @@ async fn archived_root_is_not_restored_at_stop_or_start() {
             .is_none()
     );
     assert!(store.list_pending_resumes().await.unwrap().is_empty());
-    let second = open_turn(&store, session).await;
+    open_turn(&store, session).await;
     store
-        .cancel_turn_for_restart(session, second, owner, "restore")
+        .close_open_turns(session, FinishCause::Shutdown, "stopping")
         .await
         .unwrap();
     assert!(store.list_pending_resumes().await.unwrap().is_empty());
@@ -176,9 +187,9 @@ async fn another_cancel_replaces_an_unconsumed_restore() {
     let session = SessionId::new();
     create(&store, session).await;
     for prompt in ["first stop", "second stop"] {
-        let message = open_turn(&store, session).await;
+        open_turn(&store, session).await;
         store
-            .cancel_turn_for_restart(session, message, owner, prompt)
+            .close_open_turns(session, FinishCause::Shutdown, prompt)
             .await
             .unwrap();
     }
@@ -189,5 +200,87 @@ async fn another_cancel_replaces_an_unconsumed_restore() {
         .unwrap()
         .unwrap();
     assert!(injected.iter().any(|entry| matches!(&entry.event,
-        Event::TextDelta { delta, .. } if delta == "second stop")));
+        Event::TextDelta { delta, .. } if delta.contains("Your previous turn was interrupted by a restart."))));
+}
+
+#[tokio::test]
+async fn restore_is_derived_from_the_indexed_messages_noncompleted_tools() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let owner = OwnerRunId::new();
+    store.claim_runtime_owner(owner).unwrap();
+    let session = SessionId::new();
+    create(&store, session).await;
+    let message = open_turn(&store, session).await;
+    let mut events = Vec::new();
+    for name in ["completed", "errored", "denied", "pending", "running"] {
+        let part = PartId::new();
+        let call = ToolCallId::new();
+        events.push(Event::ToolInputStart {
+            session,
+            message,
+            part,
+            call,
+            name: ToolName::new(name),
+        });
+        if name == "pending" {
+            continue;
+        }
+        events.push(Event::ToolCallRequested {
+            session,
+            message,
+            part,
+            call,
+            name: ToolName::new(name),
+            input: serde_json::json!({}),
+        });
+        if name == "completed" {
+            events.push(Event::ToolResult {
+                session,
+                message,
+                part,
+                call,
+                output: serde_json::json!({"ok":true}),
+                time_ms: 1,
+            });
+        } else if name != "running" {
+            events.push(Event::ToolError {
+                session,
+                message,
+                part,
+                call,
+                message_text: name.into(),
+                value: None,
+            });
+        }
+    }
+    events.push(Event::MessageFinished {
+        session,
+        message,
+        role: Role::Assistant,
+        finish: FinishReason::Cancelled,
+        tokens: None,
+        cause: Some(FinishCause::Shutdown),
+    });
+    store.append_events(session, events).await.unwrap();
+    assert_eq!(
+        store.list_pending_resumes().await.unwrap()[0].message,
+        message
+    );
+    let envelopes = store
+        .take_restart_resume(session, owner)
+        .await
+        .unwrap()
+        .unwrap();
+    let text = envelopes
+        .iter()
+        .find_map(|e| match &e.event {
+            Event::TextDelta { delta, .. } => Some(delta.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(text.contains("Tool calls that did not complete successfully:"));
+    assert!(!text.contains("- completed (call "));
+    for name in ["errored", "denied", "pending", "running"] {
+        assert!(text.contains(&format!("- {name} (call ")));
+    }
 }

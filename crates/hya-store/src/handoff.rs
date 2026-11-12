@@ -1,8 +1,8 @@
 //! Durable restore prompts for sessions interrupted by a process stop.
 
 use hya_proto::{
-    Envelope, Event, FinishCause, FinishReason, MessageId, OwnerRunId, PartId, Role, SessionId,
-    now_millis,
+    Envelope, Event, FinishCause, FinishReason, MessageId, OwnerRunId, PartId, PartProjection,
+    Role, SessionId, ToolPartState,
 };
 use sqlx::Row;
 
@@ -10,59 +10,20 @@ use crate::{
     SessionStore, StoreError, append_event_in_transaction, decode_session_key, replay_projection,
 };
 
-/// A restore prompt waiting for the next runtime owner.
+/// A shutdown-interrupted message waiting for the next runtime owner.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingResume {
     /// Interrupted session.
     pub session: SessionId,
-    /// Explains the interruption and names unfinished tool calls.
-    pub prompt: String,
+    /// Assistant message cancelled by shutdown.
+    pub message: MessageId,
 }
 
 impl SessionStore {
-    /// Cancel an open turn and queue its root's restore in the same transaction.
-    /// A finished turn is left alone; children and archived roots get no restore.
-    pub async fn cancel_turn_for_restart(
-        &self,
-        session: SessionId,
-        message: MessageId,
-        owner: OwnerRunId,
-        prompt: &str,
-    ) -> Result<Vec<Envelope>, StoreError> {
-        self.require_runtime_owner(owner)?;
-        self.warm_projection(session).await?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let mut projection = replay_projection(&self.projections, &mut tx, session).await?;
-        projection
-            .session
-            .messages
-            .retain(|entry| entry.id == message && entry.finish.is_none());
-        if projection.session.messages.is_empty() {
-            return Ok(Vec::new());
-        }
-        let events = crate::recovery::open_turn_terminal_events(
-            session,
-            &projection,
-            "cancelled: the backend is stopping",
-            "CANCELLED",
-            Some(FinishCause::Shutdown),
-        );
-        let mut envelopes = Vec::with_capacity(events.len());
-        for event in events {
-            envelopes.push(append_event_in_transaction(&mut tx, session, event).await?);
-        }
-        if projection.session.parent.is_none() && !projection.session.is_archived() {
-            sqlx::query("INSERT INTO pending_resume (session_id, prompt, created_at) VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET prompt = excluded.prompt, prompt_message_id = NULL, created_at = excluded.created_at")
-                .bind(session.storage_key()).bind(prompt).bind(now_millis()).execute(&mut *tx).await?;
-        }
-        tx.commit().await?;
-        Ok(envelopes)
-    }
-
     /// Discover pending restores in creation order without consuming them.
     pub async fn list_pending_resumes(&self) -> Result<Vec<PendingResume>, StoreError> {
         let rows = sqlx::query(
-            "SELECT session_id, prompt FROM pending_resume ORDER BY created_at, session_id",
+            "SELECT session_id, message_id FROM pending_resume ORDER BY created_at, session_id",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -71,7 +32,10 @@ impl SessionStore {
                 let key: Vec<u8> = row.try_get("session_id")?;
                 Ok(PendingResume {
                     session: decode_session_key(&key)?,
-                    prompt: row.try_get("prompt")?,
+                    message: row
+                        .try_get::<String, _>("message_id")?
+                        .parse()
+                        .map_err(|error| sqlx::Error::Decode(Box::new(error)))?,
                 })
             })
             .collect()
@@ -87,7 +51,7 @@ impl SessionStore {
         self.require_runtime_owner(owner)?;
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let row = sqlx::query(
-            "SELECT prompt, prompt_message_id FROM pending_resume WHERE session_id = ?",
+            "SELECT message_id, prompt_message_id FROM pending_resume WHERE session_id = ?",
         )
         .bind(session.storage_key())
         .fetch_optional(&mut *tx)
@@ -114,7 +78,76 @@ impl SessionStore {
             tx.commit().await?;
             return Ok(Some(Vec::new()));
         }
-        let text: String = row.try_get("prompt")?;
+        let interrupted: String = row.try_get("message_id")?;
+        let interrupted = projection
+            .session
+            .messages
+            .iter()
+            .find(|message| message.id.to_string() == interrupted)
+            .ok_or(sqlx::Error::RowNotFound)?;
+        let unfinished = interrupted
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                PartProjection::Tool {
+                    call, name, state, ..
+                } if !matches!(state, ToolPartState::Completed { .. }) => {
+                    Some(format!("- {name} (call {call})"))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let tools = if unfinished.is_empty() {
+            "None.".to_string()
+        } else {
+            unfinished.join("\n")
+        };
+        let mut text = format!(
+            "Your previous turn was interrupted by a restart.\n\nTool calls that did not complete successfully:\n{tools}\n\n\
+             Unanswered permission and question requests were cancelled. Unfinished calls are not \
+             successes; side effects may have happened before interruption. Review the existing \
+             transcript and decide what to redo, then continue the task."
+        );
+        let candidates = projection
+            .team
+            .roster
+            .values()
+            .map(|entry| (&entry.handle, entry.session))
+            .chain(
+                projection
+                    .team
+                    .archived
+                    .values()
+                    .filter(|entry| entry.reason == hya_proto::ArchiveReason::Shutdown)
+                    .map(|entry| (&entry.handle, entry.session)),
+            );
+        let mut children = Vec::new();
+        for (handle, child) in candidates {
+            if child == session {
+                continue;
+            }
+            let child = replay_projection(&self.projections, &mut tx, child).await?;
+            if child
+                .session
+                .messages
+                .iter()
+                .rev()
+                .find(|message| message.role == Role::Assistant)
+                .is_some_and(|message| {
+                    message.finish == Some(FinishReason::Cancelled)
+                        && message.cause == Some(FinishCause::Shutdown)
+                        && message.time_updated >= interrupted.time_created
+                })
+            {
+                children.push(handle.as_str());
+            }
+        }
+        if !children.is_empty() {
+            text.push_str(&format!(
+                "\n\nInterrupted subagents: {}. Their recovery is managed by the supervisor.",
+                children.join(", ")
+            ));
+        }
         let message = MessageId::new();
         let part = PartId::new();
         let events = [
@@ -169,7 +202,7 @@ impl SessionStore {
 mod tests {
     use super::*;
 
-    async fn interrupted(store: &SessionStore, owner: OwnerRunId) -> (SessionId, MessageId) {
+    async fn interrupted(store: &SessionStore) -> (SessionId, MessageId) {
         let session = SessionId::new();
         store
             .append_event(
@@ -201,7 +234,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .cancel_turn_for_restart(session, message, owner, "restore")
+            .close_open_turns(session, FinishCause::Shutdown, "stopping")
             .await
             .unwrap();
         (session, message)
@@ -211,7 +244,7 @@ mod tests {
         let store = SessionStore::connect_memory().await.unwrap();
         let owner = OwnerRunId::new();
         store.claim_runtime_owner(owner).unwrap();
-        let (session, _) = interrupted(&store, owner).await;
+        let (session, _) = interrupted(&store).await;
         sqlx::query("CREATE TRIGGER fail_restore BEFORE INSERT ON event_log BEGIN SELECT RAISE(ABORT, 'injected append failure'); END")
         .execute(&store.pool).await.unwrap();
         assert!(store.take_restart_resume(session, owner).await.is_err());
@@ -235,7 +268,7 @@ mod tests {
         let store = SessionStore::connect_memory().await.unwrap();
         let owner = OwnerRunId::new();
         store.claim_runtime_owner(owner).unwrap();
-        let (session, _) = interrupted(&store, owner).await;
+        let (session, _) = interrupted(&store).await;
         sqlx::query("DELETE FROM event_log WHERE session_id = ?")
             .bind(session.storage_key())
             .execute(&store.pool)
@@ -257,7 +290,7 @@ mod tests {
         let store = SessionStore::connect_memory().await.unwrap();
         let owner = OwnerRunId::new();
         store.claim_runtime_owner(owner).unwrap();
-        let (session, _) = interrupted(&store, owner).await;
+        let (session, _) = interrupted(&store).await;
         let message = MessageId::new();
         store
             .append_event(
@@ -275,7 +308,17 @@ mod tests {
         sqlx::query("CREATE TRIGGER fail_resume BEFORE INSERT ON pending_resume BEGIN SELECT RAISE(ABORT, 'injected resume failure'); END").execute(&store.pool).await.unwrap();
         assert!(
             store
-                .cancel_turn_for_restart(session, message, owner, "restore")
+                .append_event(
+                    session,
+                    &Event::MessageFinished {
+                        session,
+                        message,
+                        role: Role::Assistant,
+                        finish: FinishReason::Cancelled,
+                        tokens: None,
+                        cause: Some(FinishCause::Shutdown),
+                    }
+                )
                 .await
                 .is_err()
         );

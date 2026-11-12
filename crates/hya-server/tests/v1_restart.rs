@@ -104,7 +104,7 @@ async fn restored_turn_has_guidance_and_rejects_a_concurrent_client_turn() {
         .await
         .unwrap();
     store
-        .cancel_turn_for_restart(busy, interrupted, owner, "busy restore")
+        .close_open_turns(busy, hya_proto::FinishCause::Shutdown, "stopping")
         .await
         .unwrap();
     let session = engine
@@ -133,25 +133,13 @@ async fn restored_turn_has_guidance_and_rejects_a_concurrent_client_turn() {
         .await
         .unwrap();
     store
-        .cancel_turn_for_restart(session, message, owner, "restore")
+        .close_open_turns(session, hya_proto::FinishCause::Shutdown, "stopping")
         .await
         .unwrap();
     let state = AppState::new(engine.clone(), agent.clone());
     let app = router(state.clone());
-    let admitted = app
-        .clone()
-        .oneshot(
-            Request::post(format!("/v1/sessions/{busy}/turns"))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"prompt":{"text":"busy"}}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(admitted.status(), StatusCode::OK);
-    tokio::time::timeout(Duration::from_secs(5), provider.entered.notified())
-        .await
-        .unwrap();
+    // Another engine turn owns admission but has not started its message yet.
+    let busy_lease = engine.try_begin_turn(busy).unwrap();
     // Simulate dying after prompt injection, before any assistant starts.
     assert!(engine.inject_restart_prompt(session).await.unwrap());
     assert_eq!(store.list_pending_resumes().await.unwrap().len(), 2);
@@ -159,6 +147,15 @@ async fn restored_turn_has_guidance_and_rejects_a_concurrent_client_turn() {
     tokio::time::timeout(Duration::from_secs(5), provider.entered.notified())
         .await
         .unwrap();
+    assert_eq!(store.list_pending_resumes().await.unwrap().len(), 1);
+    assert_eq!(store.list_pending_resumes().await.unwrap()[0].session, busy);
+    assert!(!store.replay(busy).await.unwrap().iter().any(|e| matches!(
+        e.event,
+        hya_proto::Event::MessageStarted {
+            role: hya_proto::Role::User,
+            ..
+        }
+    )));
     let response = app
         .clone()
         .oneshot(
@@ -179,16 +176,7 @@ async fn restored_turn_has_guidance_and_rejects_a_concurrent_client_turn() {
         .await
         .unwrap();
     assert_eq!(cancel.status(), StatusCode::OK);
-    let cancel_busy = app
-        .clone()
-        .oneshot(
-            Request::post(format!("/v1/sessions/{busy}/turns/{interrupted}/cancel"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(cancel_busy.status(), StatusCode::OK);
+    drop(busy_lease);
     tokio::time::timeout(Duration::from_secs(2), async {
         while engine.turn_active(session) || engine.turn_active(busy) {
             tokio::task::yield_now().await;
@@ -202,7 +190,7 @@ async fn restored_turn_has_guidance_and_rejects_a_concurrent_client_turn() {
         events
             .iter()
             .filter(|event| matches!(&event.event,
-        hya_proto::Event::TextDelta { delta, .. } if delta == "restore"))
+        hya_proto::Event::TextDelta { delta, .. } if delta.contains("Your previous turn was interrupted by a restart.")))
             .count(),
         1
     );
@@ -210,7 +198,7 @@ async fn restored_turn_has_guidance_and_rejects_a_concurrent_client_turn() {
     std::fs::remove_dir_all(workdir).unwrap();
     assert_eq!(response.status(), StatusCode::CONFLICT);
     assert!(
-        provider.requests.lock().unwrap()[1]
+        provider.requests.lock().unwrap()[0]
             .system
             .as_ref()
             .unwrap()
