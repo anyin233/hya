@@ -48,7 +48,7 @@ fn failure(message: impl std::fmt::Display) -> BundleControlError {
 /// A registry or project failure, with the policy failures `overwrite` resolves explained.
 #[must_use]
 pub fn store_error(error: StoreError) -> BundleControlError {
-    match registry_read_error(error) {
+    match error {
         StoreError::NamespaceConflict {
             namespace,
             existing_bundle_id,
@@ -83,17 +83,6 @@ pub fn store_error(error: StoreError) -> BundleControlError {
         }
         error @ StoreError::BundleAgentIdReserved { .. } => invalid(error.to_string()),
         error => failure(error),
-    }
-}
-
-// The store classifies unreadable prepared rows as corrupt; retain a recovery
-// instruction at the app boundary without accepting or migrating the old format.
-pub(crate) fn registry_read_error(error: StoreError) -> StoreError {
-    match error {
-        error @ StoreError::BundleRegistryCorrupt { .. } => StoreError::BundleRegistryData(
-            format!("{error}; please reinstall the bundle with `hya bundle install`"),
-        ),
-        error => error,
     }
 }
 
@@ -465,13 +454,15 @@ pub async fn remove(
     }
     let installed = match existing_registry().await? {
         Some(registry) => {
-            let found = registry
-                .snapshot()
-                .await
-                .map_err(store_error)?
+            let snapshot = registry.snapshot().await.map_err(store_error)?;
+            let found = snapshot
                 .bundles
                 .iter()
-                .any(|record| record.bundle_id == bundle_id);
+                .any(|record| record.bundle_id == bundle_id)
+                || snapshot
+                    .unreadable
+                    .iter()
+                    .any(|record| record.bundle_id == bundle_id);
             found.then_some(registry)
         }
         None => None,
@@ -626,18 +617,39 @@ pub async fn listings(
     project_dir: Option<&Path>,
 ) -> Result<Vec<BundleListing>, BundleControlError> {
     let registry = existing_registry().await?;
-    let (disabled, installed) = match &registry {
-        Some(registry) => (
-            registry.disabled_bundle_ids().await.map_err(store_error)?,
-            registry.snapshot().await.map_err(store_error)?.bundles,
-        ),
-        None => (BTreeSet::new(), Vec::new()),
+    let (disabled, installed, unreadable) = match &registry {
+        Some(registry) => {
+            let snapshot = registry.snapshot().await.map_err(store_error)?;
+            (
+                registry.disabled_bundle_ids().await.map_err(store_error)?,
+                snapshot.bundles,
+                snapshot.unreadable,
+            )
+        }
+        None => (BTreeSet::new(), Vec::new(), Vec::new()),
     };
     let project = project_dir.map(project_bundles).unwrap_or_default();
     let mut higher_ids = BTreeSet::new();
     let mut higher_namespaces = BTreeSet::new();
     let mut rows = Vec::new();
-    for bundle in &project {
+    for entry in &project {
+        let bundle = match entry {
+            Ok(bundle) => bundle,
+            Err(unreadable) => {
+                let id = hya_bundle::read_bundle_identity(&unreadable.dir)
+                    .map(|(id, _)| id)
+                    .unwrap_or_else(|_| unreadable.dir.display().to_string());
+                rows.push(BundleListing {
+                    enabled: !disabled.contains(&id),
+                    id,
+                    scope: SCOPE_PROJECT.to_string(),
+                    state: "unreadable".to_string(),
+                    error: unreadable.error.to_string(),
+                    ..BundleListing::default()
+                });
+                continue;
+            }
+        };
         let id = bundle.bundle_id().to_string();
         let enabled = !disabled.contains(&id);
         if enabled {
@@ -652,22 +664,21 @@ pub async fn listings(
             enabled,
         ));
     }
+    for record in unreadable {
+        rows.push(BundleListing {
+            id: record.bundle_id.clone(),
+            version: record.version.clone(),
+            publisher: record.publisher.clone(),
+            scope: SCOPE_USER.to_string(),
+            state: "unreadable".to_string(),
+            enabled: !disabled.contains(&record.bundle_id),
+            removable: true,
+            error: record.error,
+            ..BundleListing::default()
+        });
+    }
     for record in &installed {
-        let Ok(prepared) = decode_installed_catalog(record) else {
-            // Written by an incompatible version: name it and say what to do.
-            rows.push(BundleListing {
-                id: record.bundle_id.clone(),
-                version: record.version.clone(),
-                publisher: record.publisher.clone(),
-                scope: SCOPE_USER.to_string(),
-                state: "unreadable".to_string(),
-                enabled: !disabled.contains(&record.bundle_id),
-                removable: true,
-                error: "unreadable registry row; reinstall the bundle".to_string(),
-                ..BundleListing::default()
-            });
-            continue;
-        };
+        let prepared = decode_installed_catalog(record).map_err(store_error)?;
         let [bundle] = prepared.bundles() else {
             continue;
         };

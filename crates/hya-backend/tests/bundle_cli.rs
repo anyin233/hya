@@ -193,6 +193,141 @@ fn assert_success(action: &str, output: &Output) {
     );
 }
 
+async fn registry_with_old_and_current_bundles(
+    data_root: &Path,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let package = write_fixture(data_root)?;
+    let install = bundle_command(data_root)
+        .args(["bundle", "install", "-y"])
+        .arg(&package)
+        .output()?;
+    assert_success("install fixture", &install);
+    let registry_path = data_root.join("hya/bundles/registry.sqlite3");
+    let registry = hya_store::BundleRegistry::connect(&registry_path.to_string_lossy()).await?;
+    let prepared = hya_bundle::prepare_package(workflow_bundle_source())?;
+    registry
+        .install(
+            &[],
+            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            hya_store::BundleInstallCandidate {
+                source_digest: [0x67; 32],
+                prepared_digest: prepared.digest().to_owned(),
+                prepared_bytes: prepared.bytes().to_vec(),
+                installed_at: 1,
+            },
+        )
+        .await?;
+    drop(registry);
+    let corrupt = Command::new("python3")
+        .args([
+            "-c",
+            "import sqlite3,json,hashlib,sys\nwith sqlite3.connect(sys.argv[1]) as db:\n row=db.execute('SELECT prepared_bytes FROM installed_bundle WHERE bundle_id=?',(sys.argv[2],)).fetchone()\n doc=json.loads(row[0]);doc['format_version']=3\n data=json.dumps(doc).encode()\n db.execute('UPDATE installed_bundle SET prepared_bytes=?,prepared_digest=? WHERE bundle_id=?',(data,hashlib.sha256(data).hexdigest(),sys.argv[2]))",
+        ])
+        .arg(&registry_path)
+        .arg(BUNDLE_ID)
+        .output()?;
+    assert_success("write old registry row", &corrupt);
+    Ok(package)
+}
+
+#[tokio::test]
+async fn bundle_list_shows_readable_and_unreadable_registry_rows()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    registry_with_old_and_current_bundles(&data_root).await?;
+    let output = bundle_command(&data_root)
+        .args(["bundle", "list"])
+        .output()?;
+    assert_success("list with unreadable row", &output);
+    let text = String::from_utf8(output.stdout)?;
+    let old = text
+        .lines()
+        .find(|line| line.starts_with(BUNDLE_ID))
+        .ok_or("missing old row")?;
+    assert!(old.contains("unreadable"), "{text}");
+    let current = text
+        .lines()
+        .find(|line| line.starts_with("hya/workflow-info "))
+        .ok_or("missing readable row")?;
+    assert!(current.contains("active"), "{text}");
+    fs::remove_dir_all(data_root)?;
+    Ok(())
+}
+
+#[test]
+fn bundle_list_includes_an_unpreparable_project_manifest() -> Result<(), Box<dyn std::error::Error>>
+{
+    let data_root = unique_data_root()?;
+    let dir = data_root.join(".hya/bundles/broken");
+    fs::create_dir_all(&dir)?;
+    fs::write(
+        dir.join("bundle.yaml"),
+        "kind: Bundle\nidentity: { id: test/broken, version: 1.0.0, publisher: test }\nagents: [{ id: broken, role: main, prompt: missing.md }]\n",
+    )?;
+    let output = bundle_command(&data_root)
+        .args(["bundle", "list", "--project"])
+        .output()?;
+    assert_success("list invalid project bundle", &output);
+    let text = String::from_utf8(output.stdout)?;
+    assert!(
+        text.lines().any(|line| line.starts_with("test/broken ")
+            && line.contains("unreadable")
+            && line.ends_with("project")),
+        "{text}"
+    );
+    fs::remove_dir_all(data_root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn bundle_remove_deletes_an_unreadable_registry_row() -> Result<(), Box<dyn std::error::Error>>
+{
+    let data_root = unique_data_root()?;
+    registry_with_old_and_current_bundles(&data_root).await?;
+    let output = bundle_command(&data_root)
+        .args(["bundle", "remove", "-y", BUNDLE_ID])
+        .output()?;
+    assert_success("remove unreadable row", &output);
+    let registry = hya_store::BundleRegistry::connect(
+        &data_root
+            .join("hya/bundles/registry.sqlite3")
+            .to_string_lossy(),
+    )
+    .await?;
+    let snapshot = registry.snapshot().await?;
+    assert_eq!(snapshot.generation, 3);
+    assert_eq!(snapshot.bundles.len(), 1);
+    assert_eq!(snapshot.bundles[0].bundle_id, "hya/workflow-info");
+    fs::remove_dir_all(data_root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn bundle_install_overwrite_replaces_an_unreadable_row_with_the_same_package()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = registry_with_old_and_current_bundles(&data_root).await?;
+    let output = bundle_command(&data_root)
+        .args(["bundle", "install", "--overwrite", "-y"])
+        .arg(package)
+        .output()?;
+    assert_success("overwrite unreadable row", &output);
+    let registry = hya_store::BundleRegistry::connect(
+        &data_root
+            .join("hya/bundles/registry.sqlite3")
+            .to_string_lossy(),
+    )
+    .await?;
+    let snapshot = registry.snapshot().await?;
+    assert_eq!(
+        snapshot.generation, 3,
+        "the same source still needs replacement"
+    );
+    assert_eq!(snapshot.bundles.len(), 2);
+    fs::remove_dir_all(data_root)?;
+    Ok(())
+}
+
 #[test]
 fn bundle_install_list_info_uninstall_workflow() -> Result<(), Box<dyn std::error::Error>> {
     let data_root = unique_data_root()?;
@@ -388,7 +523,7 @@ fn bundle_list_and_info_include_first_party_without_creating_registry()
     for expected in [
         "name=hya/plan-impl-review",
         "origin=first-party",
-        "format=prepared-v3",
+        "format=prepared-v4",
         "immutable=true",
         "kind=Bundle",
         "workflow=plan-impl-review",

@@ -50,7 +50,7 @@ fn agent_set_package_is_deterministic_and_resolves_every_member()
 }
 
 #[test]
-fn agent_set_rejects_empty_duplicate_and_unknown_source_contracts() {
+fn agent_set_rejects_duplicate_agents_invalid_fields_and_missing_sources() {
     for (agents, extra) in [
         ("[{id: same, role: main}, {id: same, role: subagent}]", ""),
         (

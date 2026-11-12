@@ -198,7 +198,7 @@ async fn bundle_registry_initializes_empty_at_generation_zero() {
 }
 
 #[tokio::test]
-async fn corrupted_prepared_blob_is_rejected_by_snapshot() {
+async fn corrupted_prepared_blob_is_an_unreadable_snapshot_row() {
     let path = temp_db();
     let registry = BundleRegistry::connect(&path).await;
     let Ok(registry) = registry else {
@@ -243,11 +243,18 @@ async fn corrupted_prepared_blob_is_rejected_by_snapshot() {
     assert_eq!(generation, 1);
 
     let snapshot = registry.snapshot().await;
-    assert!(matches!(
-        snapshot,
-        Err(StoreError::BundleRegistryCorrupt { bundle_id })
-            if bundle_id == "hya/installed-package"
-    ));
+    let Ok(snapshot) = snapshot else {
+        panic!("one corrupt row must not reject the snapshot: {snapshot:?}");
+    };
+    assert!(snapshot.bundles.is_empty());
+    let [row] = snapshot.unreadable.as_slice() else {
+        panic!("expected one unreadable row: {snapshot:?}");
+    };
+    assert_eq!(row.bundle_id, "hya/installed-package");
+    assert_eq!(row.version, "1.0.0");
+    assert_eq!(row.publisher, "hya");
+    assert!(row.error.contains("digest"), "{}", row.error);
+    assert!(row.error.contains("please reinstall"), "{}", row.error);
 }
 
 #[tokio::test]

@@ -48,7 +48,8 @@ fn bundle_files(bundle_id: &str, namespace: &str, version: &str, prompt: &str) -
 
 fn project_ids(dir: &Path) -> Vec<String> {
     project_bundles(dir)
-        .iter()
+        .into_iter()
+        .map(|bundle| bundle.expect("readable project fixture"))
         .map(|bundle| bundle.bundle_id().to_string())
         .collect()
 }

@@ -14,7 +14,7 @@ async function cellPoint(term: Tui, row: number, col: number): Promise<{ x: numb
   return { x: box.x + ((col + 0.5) / cols) * box.width, y: box.y + ((row + 0.5) / rows) * box.height }
 }
 
-const bundle = `kind: Plugin
+const bundle = `kind: Bundle
 identity: { id: e2e/tui-panel, version: 1.0.0, publisher: e2e }
 extensions:
   files:

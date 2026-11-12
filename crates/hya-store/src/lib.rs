@@ -50,7 +50,7 @@ pub use agent_model_preference::AgentModelPreference;
 pub use bundle_registry::{
     BundleInstallAction, BundleInstallCandidate, BundleInstallOutcome, BundleInstallPlan,
     BundleRegistry, BundleRegistryRecord, BundleRegistrySnapshot, BundleUninstallOutcome,
-    NamespaceInstallPolicy, is_downgrade,
+    NamespaceInstallPolicy, UnreadableBundleRegistryRecord, is_downgrade,
 };
 pub use error::StoreError;
 pub use handoff::PendingResume;

@@ -99,6 +99,38 @@ resources:
 }
 
 #[test]
+fn native_library_and_support_files_round_trip_in_local_id_order() {
+    let source = BundleSource::new(
+        "library-with-support",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                br#"kind: Bundle
+identity: { id: hya/todo-tools, version: 1.0.0, publisher: hya }
+extensions:
+  files: [{ id: types, path: types.json }]
+  libraries: [{ id: runtime, path: native/libhya_todo_tools.so }]
+"#,
+            ),
+            SourceFile::new("types.json", b"{}".as_slice()),
+            SourceFile::new("native/libhya_todo_tools.so", vec![0, 0xff, 0x80]),
+        ],
+    );
+    let prepared = prepare_package(source.clone()).expect("prepare library with support file");
+    assert_eq!(
+        prepared.bundles()[0]
+            .extensions()
+            .iter()
+            .map(|resource| resource.local_id.as_str())
+            .collect::<Vec<_>>(),
+        ["runtime", "types"]
+    );
+    let package = write_public_package(&source).expect("package library with support file");
+    let inspected = inspect_public_package(&package).expect("inspect library with support file");
+    assert_eq!(inspected.bytes(), prepared.bytes());
+}
+
+#[test]
 fn native_library_bundle_packages_raw_bytes_without_a_process() {
     let library = vec![0xcf, 0xfa, 0xed, 0xfe, 0, 0xff, 0x80];
     let source = BundleSource::new(

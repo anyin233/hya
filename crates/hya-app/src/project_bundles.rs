@@ -391,11 +391,20 @@ fn prepare_project_bundle(
     })
 }
 
-/// Every valid project bundle under `dir`, sorted by bundle id then
-/// directory. Directories without a manifest or that fail to prepare are
-/// skipped for this management listing; runtime loading rejects invalid sources.
+/// A project directory with a manifest that cannot be read or prepared.
+#[derive(Debug)]
+pub struct UnreadableProjectBundle {
+    /// Source directory, retained even if its identity cannot be read.
+    pub dir: PathBuf,
+    /// Why preparation failed.
+    pub error: ProjectBundleError,
+}
+
+/// Project bundles under `dir`, including unreadable manifest directories.
+/// Directories without a manifest are skipped. Readable entries sort by bundle
+/// id; unreadable entries sort by directory.
 #[must_use]
-pub fn project_bundles(dir: &Path) -> Vec<ProjectBundle> {
+pub fn project_bundles(dir: &Path) -> Vec<Result<ProjectBundle, UnreadableProjectBundle>> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -404,12 +413,21 @@ pub fn project_bundles(dir: &Path) -> Vec<ProjectBundle> {
         .map(|entry| entry.path())
         .filter(|path| path.is_dir())
         .filter_map(|path| {
-            let source = directory_source(&path).ok()??;
-            prepare_project_bundle(path, source).ok()
+            let result = match directory_source(&path) {
+                Ok(Some(source)) => prepare_project_bundle(path.clone(), source),
+                Ok(None) => return None,
+                Err(error) => Err(error),
+            };
+            Some(result.map_err(|error| UnreadableProjectBundle { dir: path, error }))
         })
         .collect::<Vec<_>>();
-    bundles.sort_by(|left, right| {
-        (left.bundle_id(), left.dir()).cmp(&(right.bundle_id(), right.dir()))
+    bundles.sort_by(|left, right| match (left, right) {
+        (Ok(left), Ok(right)) => {
+            (left.bundle_id(), left.dir()).cmp(&(right.bundle_id(), right.dir()))
+        }
+        (Err(left), Err(right)) => left.dir.cmp(&right.dir),
+        (Err(_), Ok(_)) => std::cmp::Ordering::Less,
+        (Ok(_), Err(_)) => std::cmp::Ordering::Greater,
     });
     bundles
 }
@@ -503,7 +521,10 @@ pub fn plan_project_install(
         }
     }
 
-    let installed = project_bundles(dir);
+    let installed = project_bundles(dir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
     let existing = installed
         .iter()
         .find(|bundle| bundle.bundle_id() == bundle_id);
@@ -692,6 +713,7 @@ pub fn find_project_bundle(
 ) -> Result<ProjectBundle, ProjectBundleError> {
     project_bundles(dir)
         .into_iter()
+        .filter_map(Result::ok)
         .find(|bundle| bundle.bundle_id() == bundle_id)
         .ok_or_else(|| {
             StoreError::BundleNotFound {

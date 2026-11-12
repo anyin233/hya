@@ -5,6 +5,21 @@ use hya_bundle::{
 };
 use sha2::{Digest, Sha256};
 
+#[test]
+fn old_agent_bundle_manifest_reports_wrong_kind_before_removed_fields() {
+    let result = prepare_package(BundleSource::new(
+        "old-agent-bundle",
+        vec![SourceFile::new(
+            "bundle.yaml",
+            b"kind: AgentBundle\nidentity: { id: test/old, version: 1.0.0, publisher: test }\nagent: { id: old-agent, role: main, prompt: prompt.md }\n".as_slice(),
+        )],
+    ));
+    assert!(
+        matches!(&result, Err(BundleError::WrongKind { found, .. }) if found == "AgentBundle"),
+        "expected the removed kind diagnostic, got {result:?}"
+    );
+}
+
 fn source(root: &str, bundle_id: &str, stable_id: &str, reverse_files: bool) -> BundleSource {
     let manifest = format!(
         r#"kind: Bundle
@@ -88,7 +103,7 @@ agents:
 
 #[test]
 #[allow(clippy::expect_used)]
-fn plugin_bundle_prepares_without_agents() {
+fn bundle_prepares_without_agents() {
     let source = BundleSource::new(
         "plugin",
         vec![SourceFile::new(
@@ -98,14 +113,14 @@ identity: { id: hya/plugins-demo, version: 1.0.0, publisher: hya }
 "#,
         )],
     );
-    let prepared = prepare_package(source).expect("Plugin should prepare");
+    let prepared = prepare_package(source).expect("agentless bundle should prepare");
     assert_eq!(prepared.bundles()[0].kind().as_str(), "Bundle");
     assert!(prepared.bundles()[0].agents().is_empty());
 }
 
 #[test]
 #[allow(clippy::expect_used)]
-fn plugin_bundle_round_trips_static_skill_and_rejects_agent_fields() {
+fn bundle_round_trips_static_skill_and_rejects_malformed_declarations() {
     let manifest = br#"kind: Bundle
 identity: { id: hya/plugins-demo, version: 1.0.0, publisher: hya }
 resources:
@@ -120,9 +135,9 @@ resources:
             SourceFile::new("skills/guide.md", b"Use the guide.\n".as_slice()),
         ],
     ))
-    .expect("Plugin skill should prepare");
+    .expect("bundle skill should prepare");
     let decoded = PreparedCatalog::decode(prepared.bytes(), prepared.digest())
-        .expect("Plugin prepared bytes should decode");
+        .expect("bundle prepared bytes should decode");
     let plugin = &decoded.bundles()[0];
     assert_eq!(plugin.skills.len(), 1);
     assert_eq!(plugin.skills[0].local_id, "guide");
@@ -135,7 +150,10 @@ resources:
             "plugin-invalid",
             vec![SourceFile::new("bundle.yaml", text.into_bytes())],
         ));
-        assert!(result.is_err(), "Plugin must reject `{key}`");
+        assert!(
+            result.is_err(),
+            "Bundle must reject malformed `{key}: {{}}`"
+        );
     }
 }
 

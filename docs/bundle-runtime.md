@@ -29,13 +29,18 @@ URI schemes, APIs, permission modes, and TUI declarations all enter its digest.
 Changing only process argv changes both bundle digest and Workflow revision.
 Derived catalog indexes are rebuilt on load and are never stored.
 The removed `spawn_lifecycle` field is no longer part of `PreparedAgent`.
-Older install records fail with a **please reinstall** diagnostic; they are
-never migrated or decoded through a compatibility path. Move the old registry
-(`$XDG_DATA_HOME/hya/bundles/registry.sqlite3`, default
-`~/.local/share/hya/bundles/registry.sqlite3`) aside before reinstalling its
-bundles from source packages, for example
-`hya bundle install ./my-plugin.hyabundle`. An unreadable registry row is
-rejected with the same reinstall instruction before publication.
+Older install records are **unreadable**, with a **please reinstall** diagnostic;
+they are never migrated or decoded through a compatibility path. The registry
+snapshot separates readable bundles from unreadable rows, retaining each
+unreadable row's id, version, publisher, and decode error. Other installed
+bundles and a Project's `.hya/bundles` and `.hya/plugins` continue to load.
+Refresh publishes the readable bundles and reports each unreadable row as a
+source error; an unreadable row contributes no runtime state or shadowing claim.
+Repair a row in place with `hya bundle install --overwrite ./my-plugin.hyabundle`,
+even when its version and package digest are unchanged, or delete it with
+`hya bundle remove publisher/name`. The registry file needs no manual removal.
+For prepared first-party catalogs, `hya bundle info` reports the actual format
+version (`prepared-v4`).
 Only public 7z packages can be inspected and installed; private envelopes are
 unsupported.
 
@@ -139,6 +144,13 @@ request's scope and returns that refresh in `BundleChange.refresh`.
 | `InstallBundle` | `POST /v1/bundles:install` `{directory, path, project, overwrite}` | `hya bundle install` of an absolute package path on the backend's machine, self-check included; `project` installs into `<directory>/.hya/bundles`. |
 | `UninstallBundle` | `POST /v1/bundles:uninstall` `{directory, bundleId, project}` | `hya bundle remove`; first-party bundles fail with `failed_precondition`. |
 | `SetBundleEnabled` | `POST /v1/bundles:set-enabled` `{directory, bundleId, enabled}` | `hya bundle enable\|disable`: the disabled set (`bundle_disabled` in the registry database) applies to every scope; trusted presets cannot be disabled. |
+
+An unreadable installed row still appears in `ListBundles` with its stored
+`id`, `version`, `publisher`, `scope: "user"`, `state: "unreadable"`, and an
+`error` string containing the validation failure and reinstall instruction.
+Unpreparable Project manifest directories also appear as `unreadable`, with
+`scope: "project"`, their id when readable (otherwise their directory path),
+and the preparation error; repair their source files in place.
 
 Errors: a relative path or an invalid package is `invalid_argument` (400), an
 unknown id `not_found` (404), an immutable bundle or a conflict that

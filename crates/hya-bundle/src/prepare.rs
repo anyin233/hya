@@ -1292,17 +1292,27 @@ fn parse_source(source: BundleSource) -> Result<ParsedSource, BundleError> {
 }
 
 fn parse_yaml_manifest(name: &str, bytes: &[u8]) -> Result<SourceManifest, BundleError> {
+    #[derive(serde::Deserialize)]
+    struct Kind {
+        kind: String,
+    }
+    let kind: Kind =
+        serde_norway::from_slice(bytes).map_err(|error| BundleError::InvalidManifest {
+            source_name: name.to_string(),
+            detail: error.to_string(),
+        })?;
+    if kind.kind != "Bundle" {
+        return Err(BundleError::WrongKind {
+            source_name: name.to_string(),
+            found: kind.kind,
+        });
+    }
     let manifest: SourceManifest =
         serde_norway::from_slice(bytes).map_err(|error| BundleError::InvalidManifest {
             source_name: name.to_string(),
             detail: error.to_string(),
         })?;
-    if manifest.kind != "Bundle" {
-        return Err(BundleError::WrongKind {
-            source_name: name.to_string(),
-            found: manifest.kind,
-        });
-    }
+    debug_assert_eq!(manifest.kind, "Bundle");
     Ok(manifest)
 }
 
@@ -1768,7 +1778,7 @@ fn prepare_resource_sets(
         extensions.push(resource);
     }
     extensions.extend(native_libraries);
-    extensions.sort_by(|left, right| left.stable_id.cmp(&right.stable_id));
+    extensions.sort_by(|left, right| left.local_id.cmp(&right.local_id));
     let mut names = BTreeSet::new();
     for extension in &extensions {
         for name in std::iter::once(&extension.local_id).chain(&extension.aliases) {
