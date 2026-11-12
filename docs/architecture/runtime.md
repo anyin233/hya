@@ -866,6 +866,15 @@ and runtime configuration generations are independent: takeover does not
 terminate old snapshot owners, and a runtime refresh does not take over an
 actor.
 
+Resident slots also belong to that exact claim in memory. Archiving and
+reviving a child keeps its session id but installs a new claim. For example,
+if the old episode is blocked in a plugin's `session.start` or `agent.spawn`,
+releasing the hook after revival does not publish its old registration, replace
+the revived session's hooks or channel policy, start a second resident driver,
+or remove the new slot. Initialization, turn bookkeeping and cleanup recheck
+the claim after asynchronous work; stale cleanup quietly exits. The existing
+`archive` and downward-mail revival interfaces need no extra options.
+
 Before runtime readiness, `hya-app` advances all active resident claims, aborts
 non-actor admissions through the existing startup seam, folds the canonical
 projections, terminalizes each old epoch's actor-bound admissions and running
