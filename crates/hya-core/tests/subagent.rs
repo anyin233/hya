@@ -1144,6 +1144,38 @@ impl Tool for HookProbeTool {
     }
 }
 
+async fn assert_stopped_member_revives(
+    engine: &SessionEngine,
+    root: SessionId,
+    child: SessionId,
+    handle: &str,
+    body: &str,
+) {
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::parse(handle),
+            MailKind::Message,
+            body.into(),
+        )
+        .await
+        .expect("engine mail must revive the stopped member");
+    let projection = engine.read_projection(root).await.unwrap();
+    assert_eq!(projection.team.roster[handle].session, child);
+    assert!(!projection.team.archived.contains_key(handle));
+    assert!(
+        engine
+            .store()
+            .active_actor_ids()
+            .await
+            .unwrap()
+            .contains(&child)
+    );
+    assert!(engine.read_projection(child).await.unwrap().session.messages.iter().any(|message| {
+        message.role == Role::User && message.parts.iter().any(|part| matches!(part, PartProjection::Text { text, .. } if text.contains(body)))
+    }));
+}
+
 async fn engine() -> (Arc<SessionEngine>, AgentSpec) {
     let router = Arc::new(ProviderRouter::new().with(Arc::new(SelectiveFakeProvider)));
     let tools = Arc::new(ToolRegistry::builtins());
@@ -2399,19 +2431,7 @@ async fn explicit_idle_resident_stop_is_final_idempotent_and_releases_claim() {
     assert_eq!(projection.team.archived[handle.as_str()].session, child);
     assert!(supervisor.team_cancel(root).is_none());
 
-    let error = engine
-        .store()
-        .append_direct_mail(
-            root,
-            "main".into(),
-            handle.clone(),
-            MailKind::Message,
-            "after stop".to_string(),
-            None,
-        )
-        .await
-        .expect_err("stopped resident must reject new mail");
-    assert!(matches!(error, hya_store::StoreError::MailboxRejected(_)));
+    assert_stopped_member_revives(&engine, root, child, &handle, "after stop").await;
 }
 
 #[tokio::test]
@@ -3917,19 +3937,7 @@ async fn explicit_running_resident_stop_is_idempotent_fences_and_drops_queued_ma
         replay_at_recovery
     );
 
-    let error = engine
-        .store()
-        .append_direct_mail(
-            root,
-            "main".into(),
-            handle.clone(),
-            MailKind::Message,
-            "after stop".to_string(),
-            None,
-        )
-        .await
-        .expect_err("stopped resident must reject new mail");
-    assert!(matches!(error, hya_store::StoreError::MailboxRejected(_)));
+    assert_stopped_member_revives(&engine, root, child, &handle, "after stop").await;
 }
 
 #[tokio::test]
@@ -4039,21 +4047,6 @@ async fn resident_replacement_declaration_drift_disables_once_and_releases_claim
     );
     assert!(supervisor.team_cancel(root).is_none());
 
-    let third = engine
-        .store()
-        .append_direct_mail(
-            root,
-            "main".into(),
-            handle.clone(),
-            MailKind::Message,
-            "resident declaration drift third".to_string(),
-            None,
-        )
-        .await;
-    assert!(matches!(
-        third,
-        Err(hya_store::StoreError::MailboxRejected(_))
-    ));
     assert_eq!(starts.load(Ordering::SeqCst), 2);
     let child_projection = engine.read_projection(child).await.unwrap();
     assert!(!child_projection.session.messages.iter().any(|message| {
@@ -4062,10 +4055,17 @@ async fn resident_replacement_declaration_drift_disables_once_and_releases_claim
                 part,
                 PartProjection::Text { text, .. }
                     if text.contains("declaration drift second")
-                        || text.contains("declaration drift third")
             )
         })
     }));
+    assert_stopped_member_revives(
+        &engine,
+        root,
+        child,
+        &handle,
+        "resident declaration drift third",
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -5587,19 +5587,7 @@ async fn resident_running_loss_terminate_failure_disables_and_releases_claim() {
     );
     assert!(supervisor.team_cancel(root).is_none());
 
-    let error = engine
-        .store()
-        .append_direct_mail(
-            root,
-            "main".into(),
-            handle,
-            MailKind::Message,
-            "after terminate failure".to_string(),
-            None,
-        )
-        .await
-        .expect_err("disabled resident must reject new mail");
-    assert!(matches!(error, hya_store::StoreError::MailboxRejected(_)));
+    assert_stopped_member_revives(&engine, root, child, &handle, "after terminate failure").await;
 }
 
 #[tokio::test]

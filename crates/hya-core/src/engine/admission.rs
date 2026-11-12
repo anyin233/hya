@@ -1,4 +1,6 @@
-use hya_proto::{Envelope, Event, FinishReason, MessageId, OperationId, PartId, Role, SessionId};
+use hya_proto::{
+    Envelope, Event, FinishReason, MemberRunStatus, MessageId, OperationId, PartId, Role, SessionId,
+};
 use hya_store::{
     ActorClaim, AdmissionClaim, AdmissionClaimOutcome, AdmissionRecord, AdmissionStartOutcome,
     AdmissionState, AdmissionTerminal, RecoveredActorClaim,
@@ -292,6 +294,9 @@ impl SessionEngine {
     /// # Errors
     /// Propagates store/event failures; a failed row aborts the sweep.
     pub async fn force_archive_team(&self, root: SessionId) -> Result<(), CoreError> {
+        if let Some(reviver) = self.archive_reviver() {
+            reviver.stop_for_user(root);
+        }
         let projection = self.read_projection(root).await?;
         // Deepest paths first so a child's report mail still finds its (live)
         // parent inside the same sweep.
@@ -304,6 +309,12 @@ impl SessionEngine {
         paths.sort_by_key(|path| std::cmp::Reverse(path.len()));
         for path in paths {
             let child = projection.team.roster[path].session;
+            self.stop_turn(
+                child,
+                hya_proto::FinishCause::Archived,
+                super::DRAIN_DEADLINE,
+            )
+            .await;
             let claim = self
                 .archive_reviver()
                 .and_then(|reviver| reviver.resident_claim(root, child));
@@ -349,12 +360,18 @@ impl SessionEngine {
         root: SessionId,
         handle: &str,
     ) -> Result<(), CoreError> {
-        let finalized = self
-            .store
-            .finalize_resident_stop(claim, root, handle)
-            .await?;
-        self.publish_resident_finalization(finalized);
-        Ok(())
+        crate::resident::archive_stopped_agent(
+            self,
+            root,
+            handle,
+            claim.actor_id,
+            Some(claim),
+            hya_proto::ArchiveReason::Killed,
+            MemberRunStatus::Cancelled,
+            hya_proto::FinishCause::UserCancel,
+            "resident stopped",
+        )
+        .await
     }
 
     /// Fail a resident with `reason` (its member row closes `failed`) and
@@ -366,12 +383,18 @@ impl SessionEngine {
         handle: &str,
         reason: &str,
     ) -> Result<(), CoreError> {
-        let finalized = self
-            .store
-            .finalize_resident_failure(claim, root, handle, reason)
-            .await?;
-        self.publish_resident_finalization(finalized);
-        Ok(())
+        crate::resident::archive_stopped_agent(
+            self,
+            root,
+            handle,
+            claim.actor_id,
+            Some(claim),
+            hya_proto::ArchiveReason::Killed,
+            MemberRunStatus::Failed,
+            hya_proto::FinishCause::Other,
+            reason,
+        )
+        .await
     }
 
     pub(crate) fn publish_resident_finalization(

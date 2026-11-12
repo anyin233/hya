@@ -47,6 +47,8 @@ pub struct ResidentArchive {
     pub reason: ArchiveReason,
     /// Human-readable terminal reason used in cancellation and member closure.
     pub note: String,
+    /// Terminal status of the parent member row, supplied by the caller.
+    pub member_status: MemberRunStatus,
     /// Optional outcome and report sent to the parent.
     pub report: Option<(ReportOutcome, String)>,
     /// Recheck unread mail and live children for a voluntary report.
@@ -299,65 +301,6 @@ impl SessionStore {
         })
     }
 
-    /// Graceful resident stop: terminalize in-flight work with reason `resident stopped` and release the claim.
-    /// The resident's still-open member row on its parent's log closes `cancelled`.
-    pub async fn finalize_resident_stop(
-        &self,
-        claim: &ActorClaim,
-        root: SessionId,
-        handle: &str,
-    ) -> Result<(Vec<Envelope>, Vec<AdmissionRecord>), StoreError> {
-        self.finalize_resident_stop_with_cause(claim, root, handle, FinishCause::UserCancel)
-            .await
-    }
-
-    /// Stop with the caller's terminal cause, including an unstarted initial
-    /// task in the same transaction as the terminal activity and claim release.
-    pub async fn finalize_resident_stop_with_cause(
-        &self,
-        claim: &ActorClaim,
-        root: SessionId,
-        handle: &str,
-        cause: FinishCause,
-    ) -> Result<(Vec<Envelope>, Vec<AdmissionRecord>), StoreError> {
-        self.finalize_resident_with_reason(
-            Some(claim),
-            claim.actor_id,
-            root,
-            handle,
-            "resident stopped",
-            MemberRunStatus::Cancelled,
-            cause,
-            None,
-        )
-        .await
-    }
-
-    /// Atomically terminalize a resident actor with the supplied reason and
-    /// release its claim. The stop path shares this transaction so activation
-    /// failures use the same rollback and idempotency boundary. The resident's
-    /// still-open member row on its parent's log closes `failed`.
-    #[doc(hidden)]
-    pub async fn finalize_resident_failure(
-        &self,
-        claim: &ActorClaim,
-        root: SessionId,
-        handle: &str,
-        reason: &str,
-    ) -> Result<(Vec<Envelope>, Vec<AdmissionRecord>), StoreError> {
-        self.finalize_resident_with_reason(
-            Some(claim),
-            claim.actor_id,
-            root,
-            handle,
-            reason,
-            MemberRunStatus::Failed,
-            FinishCause::Other,
-            None,
-        )
-        .await
-    }
-
     /// Commit prepared archive effects together with terminal cleanup and claim release.
     pub async fn finalize_resident_archive(
         &self,
@@ -367,32 +310,9 @@ impl SessionStore {
         archive: ResidentArchive,
         cause: FinishCause,
     ) -> Result<(Vec<Envelope>, Vec<AdmissionRecord>), StoreError> {
-        let note = archive.note.clone();
-        self.finalize_resident_with_reason(
-            claim,
-            archive.actor,
-            root,
-            handle,
-            &note,
-            MemberRunStatus::Cancelled,
-            cause,
-            Some(archive),
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn finalize_resident_with_reason(
-        &self,
-        claim: Option<&ActorClaim>,
-        actor_id: SessionId,
-        root: SessionId,
-        handle: &str,
-        reason: &str,
-        member_status: MemberRunStatus,
-        cause: FinishCause,
-        archive: Option<ResidentArchive>,
-    ) -> Result<(Vec<Envelope>, Vec<AdmissionRecord>), StoreError> {
+        let actor_id = archive.actor;
+        let reason = archive.note.as_str();
+        let member_status = archive.member_status;
         let mut tx = self.begin_transaction().await?;
         let owned_claim;
         let claim = match claim {
@@ -443,17 +363,6 @@ impl SessionStore {
             .handoff
             .as_ref()
             .map_or(1, |handoff| handoff.generation.saturating_add(1));
-        let archive = archive.unwrap_or_else(|| ResidentArchive {
-            actor: actor_id,
-            generation,
-            doc: format!("## Goal\nResident stopped\n## State\n{reason}\n## Decisions\nNone\n## Next steps\nAwait a new directive\n## Evidence\nSee retained transcript\n## Risks\nTask cancelled"),
-            degraded: true,
-            reason: if member_status == MemberRunStatus::Failed { ArchiveReason::Killed } else { ArchiveReason::ArchivedByParent },
-            note: reason.into(),
-            report: None,
-            check_gate: false,
-            expected_work: None,
-        });
         if archive
             .expected_work
             .is_some_and(|work| work != (entry.resident_cursor, entry.resident_work))
@@ -722,9 +631,8 @@ async fn append_resident_effects_in_transaction(
     Ok(envelopes)
 }
 
-/// Close `actor`'s own member row on its parent's log with `status` when it
-/// is still open (`spawning`/`running`). A row a report or archive already
-/// closed is left alone, so a repeated finalization appends nothing.
+/// Close this episode's member row, including a revived actor that has not
+/// started its first turn. The finalizer's claim/archive fence owns idempotency.
 async fn close_parent_member_row_in_transaction(
     cache: &ProjectionCache,
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -739,12 +647,7 @@ async fn close_parent_member_row_in_transaction(
     let parent_projection = replay_projection(cache, tx, parent).await?;
     let mut envelopes = Vec::new();
     for row in &parent_projection.session.members {
-        if row.child == Some(actor)
-            && matches!(
-                row.status,
-                MemberRunStatus::Spawning | MemberRunStatus::Running
-            )
-        {
+        if row.child == Some(actor) {
             let event = Event::MemberFinished {
                 session: parent,
                 member: row.member,

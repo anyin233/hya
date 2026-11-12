@@ -977,15 +977,13 @@ async fn team_turn_budget_kill_before_first_turn_closes_initial_task() {
     .await
     .unwrap();
     assert_cancelled_task(&engine, child, FinishCause::Other).await;
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while supervisor.team_cancel(root).is_some() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    supervisor
-        .revive_child(root, "main", &handle, "new task".into())
+    engine
+        .mail_send(
+            root,
+            hya_proto::MailEndpoint::parse(&handle),
+            hya_proto::MailKind::Message,
+            "new task".into(),
+        )
         .await
         .unwrap();
     assert!(
@@ -1048,58 +1046,324 @@ async fn team_message_budget_kill_before_first_turn_closes_initial_task() {
 }
 
 #[tokio::test]
-async fn terminal_archive_rechecks_mail_after_report_gate() {
-    let (engine, supervisor, agent, root) = fixture(SubagentLimits::default(), None).await;
-    let (child, lease) = armed_child(&engine, &supervisor, &agent, root).await;
-    supervisor.report_gate(root, "main/worker").await.unwrap();
-    engine
-        .store()
-        .append_harness_mail(root, "main/worker", "late directive".into())
-        .await
-        .unwrap();
-    let claim = engine
-        .store()
-        .recover_claim(child, OwnerRunId::new())
-        .await
-        .unwrap()
-        .claim;
-    // archive_reported_agent owns its turn lease; the fixture must release it.
-    drop(lease);
-    let result = crate::resident::archive_reported_agent(
-        &engine,
-        root,
-        "main/worker",
-        child,
-        Some(&claim),
-        hya_proto::ReportOutcome::Done,
-        "finished".into(),
-        hya_proto::ArchiveReason::Reported,
-        false,
+async fn mail_to_a_killed_team_waits_for_cleanup_and_restores_main() {
+    let hooks = Arc::new(Hooks::default());
+    let (engine, supervisor, agent, root) = fixture(
+        SubagentLimits {
+            per_team_message_budget: 1,
+            ..SubagentLimits::default()
+        },
+        Some(hooks.clone()),
     )
     .await;
-    assert!(result.is_err(), "late mail must refuse archive");
-    engine.store().validate_actor_claim(&claim).await.unwrap();
-    assert!(
-        engine
-            .read_projection(child)
-            .await
-            .unwrap()
-            .session
-            .handoff
-            .is_none()
-    );
-
-    let projection = engine.read_projection(root).await.unwrap();
-    assert!(projection.team.roster.contains_key("main/worker"));
-    assert!(
-        projection.team.inboxes["main/worker"]
-            .iter()
-            .any(|mail| mail.body == "late directive")
-    );
-    engine
-        .store()
-        .finalize_resident_stop(&claim, root, "main/worker")
+    let mut main = agent.clone();
+    main.name = AgentName::new("hya-main");
+    let binding = engine.bind_runtime(&main.workdir).unwrap();
+    let resources = binding.agent_resource_policy(main.name.as_str()).unwrap();
+    supervisor
+        .ensure_main(root, main, (binding, Arc::from([]), resources), None, None)
         .await
         .unwrap();
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    *hooks.pause_start.lock().unwrap() = Some((entered.clone(), release.clone()));
+    let spawning = tokio::spawn({
+        let engine = engine.clone();
+        let supervisor = supervisor.clone();
+        async move { spawn(&supervisor, &engine, &agent, root, None).await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), entered.notified())
+        .await
+        .expect("child start hook");
+    let projection = engine.read_projection(root).await.unwrap();
+    let (handle, entry) = projection
+        .team
+        .roster
+        .iter()
+        .find(|(path, _)| path.as_str() != "main")
+        .unwrap();
+    let handle = handle.clone();
+    let child = entry.session;
+    let mut bus = engine.bus().subscribe();
+    for i in 0..2 {
+        engine
+            .mail_announce(root, format!("budget {i}"))
+            .await
+            .unwrap();
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !engine
+            .read_projection(root)
+            .await
+            .unwrap()
+            .team
+            .archived
+            .contains_key(&handle)
+        {
+            bus.recv().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    let mut revive = tokio::spawn({
+        let engine = engine.clone();
+        let handle = handle.clone();
+        async move {
+            engine
+                .mail_send(
+                    root,
+                    hya_proto::MailEndpoint::parse(&handle),
+                    hya_proto::MailKind::Message,
+                    "fresh task".into(),
+                )
+                .await
+        }
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut revive)
+            .await
+            .is_err(),
+        "revive must wait for the killed initializer"
+    );
+    *hooks.pause_start.lock().unwrap() = None;
+    release.notify_waiters();
+    let spawned = tokio::time::timeout(Duration::from_secs(5), spawning)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(spawned, Err(crate::CoreError::Store(hya_store::StoreError::StaleActorClaim { actor_id })) if actor_id == child),
+        "the killed initializer must be fenced: {spawned:?}"
+    );
+    tokio::time::timeout(Duration::from_secs(5), revive)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let projection = engine.read_projection(child).await.unwrap();
+            if projection
+                .session
+                .messages
+                .last()
+                .is_some_and(|message| message.finish == Some(FinishReason::Stop))
+            {
+                break;
+            }
+            bus.recv().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!supervisor.team_cancel(root).unwrap().is_cancelled());
+    engine
+        .mail_send(
+            child,
+            hya_proto::MailEndpoint::parse("main"),
+            hya_proto::MailKind::Message,
+            "wake main".into(),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let projection = engine.read_projection(root).await.unwrap();
+            if projection.session.messages.iter().any(|message| {
+                message.role == Role::User && message.parts.iter().any(|part| {
+                    matches!(part, hya_proto::PartProjection::Text { text, .. } if text.contains("wake main"))
+                })
+            })
+            {
+                break;
+            }
+            bus.recv().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    supervisor.stop_resident(root, &handle).await.unwrap();
+    supervisor.team_cancel(root).unwrap().cancel();
+}
+
+#[tokio::test]
+async fn wait_after_a_revived_member_is_killed_before_its_first_turn_uses_this_episode() {
+    let hooks = Arc::new(Hooks::default());
+    let (engine, supervisor, agent, root) = fixture(
+        SubagentLimits {
+            per_team_message_budget: 1,
+            ..SubagentLimits::default()
+        },
+        Some(hooks.clone()),
+    )
+    .await;
+    let mut main = agent.clone();
+    main.name = AgentName::new("hya-main");
+    let binding = engine.bind_runtime(&main.workdir).unwrap();
+    let resources = binding.agent_resource_policy(main.name.as_str()).unwrap();
+    supervisor
+        .ensure_main(root, main, (binding, Arc::from([]), resources), None, None)
+        .await
+        .unwrap();
+    let _lead = engine.try_begin_turn(root).unwrap();
+    let (child, handle) = spawn(&supervisor, &engine, &agent, root, None)
+        .await
+        .unwrap();
+    let mut bus = engine.bus().subscribe();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !engine
+            .read_projection(root)
+            .await
+            .unwrap()
+            .team
+            .roster
+            .get(&handle)
+            .is_some_and(|entry| entry.status == hya_proto::RosterStatus::Idle)
+            || engine
+                .read_projection(child)
+                .await
+                .unwrap()
+                .session
+                .messages
+                .last()
+                .is_none_or(|message| {
+                    message.finish != Some(FinishReason::Stop) || message.role != Role::Assistant
+                })
+        {
+            bus.recv().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    supervisor
+        .report_and_archive(
+            root,
+            &handle,
+            hya_proto::ReportOutcome::Done,
+            "OLD REPORT".into(),
+        )
+        .await
+        .unwrap();
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    *hooks.pause_spawn.lock().unwrap() = Some((entered.clone(), release.clone()));
+    let reviving = tokio::spawn({
+        let engine = engine.clone();
+        let handle = handle.clone();
+        async move {
+            engine
+                .mail_send(
+                    root,
+                    hya_proto::MailEndpoint::parse(&handle),
+                    hya_proto::MailKind::Message,
+                    "next task".into(),
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(5), entered.notified())
+        .await
+        .unwrap();
+    engine
+        .mail_announce(root, "kill before the next turn".into())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !engine
+            .read_projection(root)
+            .await
+            .unwrap()
+            .team
+            .archived
+            .contains_key(&handle)
+        {
+            bus.recv().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    let (lifecycle, rx) = hya_tool::LifecyclePlane::new();
+    tokio::spawn(crate::run_lifecycle_service(
+        engine.clone(),
+        supervisor.clone(),
+        rx,
+    ));
+    let outcome = lifecycle
+        .for_session(root)
+        .wait(
+            hya_tool::WaitSpec::parse(
+                &serde_json::json!({"targets": [handle], "timeout_secs": 0}),
+                false,
+            )
+            .unwrap(),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let member = outcome
+        .already_finished
+        .iter()
+        .chain(&outcome.finished)
+        .find(|member| member.session == child)
+        .unwrap();
+    assert_eq!(member.outcome.as_deref(), Some("failed"), "{outcome:?}");
+    assert_eq!(
+        member.report.as_deref(),
+        Some("per-team message budget exceeded")
+    );
+    *hooks.pause_spawn.lock().unwrap() = None;
+    release.notify_waiters();
+    tokio::time::timeout(Duration::from_secs(5), reviving)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn spawn_after_an_empty_team_is_killed_resets_its_budgets() {
+    let (engine, supervisor, agent, root) = fixture(
+        SubagentLimits {
+            per_team_message_budget: 1,
+            ..SubagentLimits::default()
+        },
+        None,
+    )
+    .await;
+    let mut main = agent.clone();
+    main.name = AgentName::new("hya-main");
+    let binding = engine.bind_runtime(&main.workdir).unwrap();
+    let resources = binding.agent_resource_policy(main.name.as_str()).unwrap();
+    supervisor
+        .ensure_main(root, main, (binding, Arc::from([]), resources), None, None)
+        .await
+        .unwrap();
+    let _lead = engine.try_begin_turn(root).unwrap();
+    spawn(&supervisor, &engine, &agent, root, None)
+        .await
+        .unwrap();
+    let killed = supervisor.team_cancel(root).unwrap();
+    engine.force_archive_team(root).await.unwrap();
+    assert!(supervisor.team_cancel(root).is_none());
+    engine
+        .mail_announce(root, "trip the empty team's budget".into())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), killed.cancelled())
+        .await
+        .unwrap();
+    let (child, handle) = tokio::time::timeout(
+        Duration::from_secs(2),
+        spawn(&supervisor, &engine, &agent, root, None),
+    )
+    .await
+    .expect("an already-empty killed team must not wait for another slot removal")
+    .unwrap();
+    assert!(!supervisor.team_cancel(root).unwrap().is_cancelled());
+    assert_eq!(
+        engine.read_projection(root).await.unwrap().team.roster[&handle].session,
+        child
+    );
+    supervisor.stop_resident(root, &handle).await.unwrap();
     supervisor.team_cancel(root).unwrap().cancel();
 }
