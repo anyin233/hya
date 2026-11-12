@@ -72,25 +72,10 @@ pub(crate) fn log_path(db: &str) -> Option<PathBuf> {
     db_lock::paths(db).map(|paths| paths.log)
 }
 
-/// Whether a process with this pid exists (signal 0). Shared with the
-/// daemon discovery.
-pub(crate) fn process_alive(pid: u32) -> bool {
-    let Ok(pid) = i32::try_from(pid) else {
-        return false;
-    };
-    // SAFETY: signal 0 only checks that the process exists.
-    let status = unsafe { libc::kill(pid, 0) };
-    status == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
-/// The live server of `db`: a discovery file whose pid is alive and whose
+/// The live server of `db`: discovery belonging to the kernel lock holder whose
 /// URL answers `GET /v1/health` with `ok: true`.
 pub(crate) async fn running(db: &str) -> Option<Discovery> {
-    let paths = db_lock::paths(db)?;
-    let found = db_lock::read_discovery(&paths.discovery)?;
-    if !process_alive(found.pid) {
-        return None;
-    }
+    let found = db_lock::holder(db).ok()??.discovery?;
     db_lock::probe(&found.url, PROBE_TIMEOUT)
         .await
         .then_some(found)
@@ -110,7 +95,7 @@ pub(crate) async fn start_with_relay(
     relay: &RelayFlags,
     wait: Duration,
 ) -> anyhow::Result<Ready> {
-    let Some(paths) = db_lock::paths(&spec.db) else {
+    let Some(paths) = hya_store::database_paths(&spec.db)? else {
         anyhow::bail!(
             "the backend daemon needs a database file; {:?} is in memory (pass --db <path>)",
             spec.db
@@ -345,10 +330,7 @@ pub(crate) async fn stop(
     let Some(busy) = db_lock::holder(db).context("check the database lock")? else {
         return Ok(Stopped::NotRunning);
     };
-    let Some(pid) = busy
-        .holder_pid
-        .or_else(|| busy.discovery.as_ref().map(|found| found.pid))
-    else {
+    let Some(pid) = busy.holder_pid else {
         anyhow::bail!(
             "database {db} is locked ({}) by a process whose pid is unknown; stop it by hand",
             busy.paths.lock.display()
@@ -362,6 +344,9 @@ pub(crate) async fn stop(
             "hya: could not record the stop request for pid {pid}; signalling anyway: {error}"
         );
     }
+    if db_lock::holder(db)?.is_none_or(|holder| holder.holder_pid != Some(pid)) {
+        return Ok(Stopped::Stopped { pid, killed: false });
+    }
     // SAFETY: `kill` has no memory-safety preconditions.
     unsafe {
         libc::kill(raw, libc::SIGTERM);
@@ -374,6 +359,11 @@ pub(crate) async fn stop(
             "hya server pid {pid} did not stop within {} s; run `hya serve stop --force` to kill it",
             timeout.as_secs()
         );
+    }
+    // Ownership can have changed during the graceful-stop timeout. Never
+    // escalate against the old PID after its lock has been released.
+    if db_lock::holder(db)?.is_none_or(|holder| holder.holder_pid != Some(pid)) {
+        return Ok(Stopped::Stopped { pid, killed: false });
     }
     // SAFETY: as above.
     unsafe {

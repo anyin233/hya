@@ -1275,6 +1275,9 @@ mod refresh_tests {
             std::env::temp_dir().join(format!("hya-cli-refresh-{}", hya_proto::SessionId::new()));
         std::fs::create_dir_all(&root).unwrap();
         let db = root.join("hya.db");
+        let owner = hya_store::SessionStore::connect_runtime(db.to_str().unwrap())
+            .await
+            .unwrap();
         let paths = crate::db_lock::paths(db.to_str().unwrap()).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -1304,6 +1307,7 @@ mod refresh_tests {
         let result = super::refresh_daemon(db.to_str().unwrap()).await;
         server.abort();
         let _ = server.await;
+        drop(owner);
         std::fs::remove_dir_all(root).unwrap();
         assert!(
             result.is_err(),

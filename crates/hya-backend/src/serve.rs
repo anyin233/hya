@@ -382,11 +382,7 @@ pub(crate) async fn prepare_server(
 ) -> anyhow::Result<PreparedServer> {
     emit_startup_mark("backend_start", None);
     super::first_run_config_bootstrap(false)?;
-    let store = if db_lock::paths(&db).is_some() {
-        hya_store::SessionStore::connect_runtime(&db).await?
-    } else {
-        open_store(&db).await?
-    };
+    let store = open_store(&db).await?;
     emit_startup_mark("store_open", None);
     let mut runtime = resolve_runtime(model_override)
         .await

@@ -368,8 +368,29 @@ fn concurrent_starts_share_one_daemon() -> TestResult {
         .filter(|info| info["started"] == serde_json::json!(true))
         .count();
     assert_eq!(started, 1, "exactly one starter started it: {infos:?}");
-    assert!(run(&root, &db, &["stop"])?.status.success());
+    let stopped = run(&root, &db, &["stop"])?;
+    assert!(stopped.status.success(), "{stopped:?}");
     wait_until("the daemon exited", Duration::from_secs(5), || !alive(pid))?;
+    let _ = std::fs::remove_dir_all(&root);
+    Ok(())
+}
+
+#[test]
+fn start_ignores_an_unlocked_file_naming_a_live_process() -> TestResult {
+    let root = scratch("hya-daemon-stale-live")?;
+    let db = root.join("s.db");
+    std::fs::write(
+        format!("{}.runtime-owner.lock", db.display()),
+        format!("{}\n", std::process::id()),
+    )?;
+    let output = run(&root, &db, &["start", "--json"])?;
+    let info = json(&output)?;
+    let pid = pid_of(&info)?;
+    let mut daemon = Daemons(vec![pid]);
+    assert!(output.status.success(), "{output:?}");
+    assert_ne!(pid, i32::try_from(std::process::id())?);
+    assert!(run(&root, &db, &["stop"])?.status.success());
+    daemon.0.clear();
     let _ = std::fs::remove_dir_all(&root);
     Ok(())
 }

@@ -121,7 +121,7 @@ async fn exec_entry(
     json: bool,
     pure: bool,
 ) -> anyhow::Result<()> {
-    match db_writer::claim(db, "exec")? {
+    match db_writer::claim(db, "exec").await? {
         db_writer::Writer::Server(server) => {
             if pure {
                 db_writer::exit_unroutable(
@@ -142,8 +142,9 @@ async fn exec_entry(
             )
             .await
         }
-        // The direct runtime claims the store owner lock.
-        db_writer::Writer::Direct => cmd_exec(prompt, model_override, db, yolo, json, pure).await,
+        db_writer::Writer::Direct(store) => {
+            cmd_exec(prompt, model_override, store, yolo, json, pure).await
+        }
     }
 }
 
@@ -168,14 +169,13 @@ pub(crate) async fn ensure_project_for_workdir(
 async fn cmd_exec(
     prompt: String,
     model_override: Option<String>,
-    db: &str,
+    store: SessionStore,
     yolo: bool,
     json: bool,
     pure: bool,
 ) -> anyhow::Result<()> {
     first_run_config_bootstrap(false)?;
     let has_explicit_model = model_override.is_some();
-    let store = open_store(db).await?;
     let runtime = resolve_runtime(model_override)
         .await
         .with_yolo(yolo)
@@ -313,6 +313,11 @@ async fn cmd_exec(
         print!("{}", render_transcript(&projection));
     }
     let shutdown = built.shutdown().await.context("shutdown spawn supervisor");
+    if shutdown.is_ok() {
+        engine
+            .store()
+            .release_runtime_owner(engine.runtime_owner())?;
+    }
     exit_if_stopped(stop);
     // Surface the turn error only after the stdout trajectory is complete.
     turn.context("run turn")?;
@@ -787,7 +792,9 @@ fn ordered_evaluator_hooks(
 
 async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
     let session: SessionId = id.parse().context("parse session id")?;
-    let store = open_store(&db).await?;
+    let store = SessionStore::connect_read_only(&db)
+        .await
+        .with_context(|| format!("open existing database read-only at {db}"))?;
     let envelopes = store.replay(session).await.context("replay session")?;
     let mut out = std::io::stdout().lock();
     for env in envelopes {

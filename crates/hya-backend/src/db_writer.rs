@@ -1,28 +1,36 @@
-//! Route writers using owner metadata; direct runtimes claim ownership in the store.
+//! Reserve direct writers before SQLite opens, or route to the owner server.
 
 use crate::db_lock::{self, Discovery};
 
 /// How a writing command reaches its database.
-#[derive(Debug)]
 pub(crate) enum Writer {
-    /// Open the store here; runtime construction claims its ownership.
-    Direct,
+    /// An opened store already holding ownership (or an in-memory store).
+    Direct(hya_store::SessionStore),
     /// A live server owns the database: go through it.
     Server(Discovery),
 }
 
 /// Find out how `hya <command>` writes `db`. Exits 75 when the database is
 /// held by a process that serves no HTTP yet.
-pub(crate) fn claim(db: &str, command: &str) -> anyhow::Result<Writer> {
-    match db_lock::holder(db)? {
-        None => Ok(Writer::Direct),
-        Some(busy) => match busy.discovery {
-            Some(server) => Ok(Writer::Server(server)),
-            None => {
-                eprintln!("{}", starting_message(command, db, busy.holder_pid));
-                std::process::exit(db_lock::EXIT_DB_IN_USE);
+pub(crate) async fn claim(db: &str, command: &str) -> anyhow::Result<Writer> {
+    match hya_app::open_store(db).await {
+        Ok(store) => Ok(Writer::Direct(store)),
+        Err(error)
+            if error
+                .downcast_ref::<hya_store::StoreError>()
+                .is_some_and(|error| matches!(error, hya_store::StoreError::RuntimeOwnerBusy)) =>
+        {
+            let busy = db_lock::holder(db)?;
+            if let Some(server) = busy.as_ref().and_then(|busy| busy.discovery.clone()) {
+                return Ok(Writer::Server(server));
             }
-        },
+            eprintln!(
+                "{}",
+                starting_message(command, db, busy.and_then(|busy| busy.holder_pid))
+            );
+            std::process::exit(db_lock::EXIT_DB_IN_USE);
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -60,10 +68,13 @@ pub(crate) fn exit_unroutable(command: &str, db: &str, server: &Discovery, reaso
 mod tests {
     use super::*;
 
-    #[test]
-    fn in_memory_stores_are_direct_and_unlocked() {
+    #[tokio::test]
+    async fn in_memory_stores_are_direct_and_unlocked() {
         for db in ["", ":memory:", "file:x.db?mode=memory"] {
-            assert!(matches!(claim(db, "exec").unwrap(), Writer::Direct));
+            assert!(matches!(
+                claim(db, "exec").await.unwrap(),
+                Writer::Direct(_)
+            ));
         }
     }
 

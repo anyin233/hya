@@ -1,10 +1,11 @@
 //! Daemon discovery metadata. The store owns the sole database lock.
-//! Readers inspect its PID metadata and probe HTTP without taking a lock.
+//! Discovery trusts PID/URL metadata only while the kernel lock is held.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use hya_server::ShutdownReason;
+pub(crate) use hya_store::DatabasePaths as DbPaths;
 use serde::{Deserialize, Serialize};
 
 /// `hya serve`'s exit status when another process holds the database
@@ -58,48 +59,12 @@ fn auto_transport() -> String {
     "auto".to_owned()
 }
 
-/// `<db>.runtime-owner.lock`, `<db>.server.json`, the daemon log `<db>.server.log`, the
-/// stop request `<db>.server.stop` of one database.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct DbPaths {
-    pub(crate) lock: PathBuf,
-    pub(crate) discovery: PathBuf,
-    /// Where a detached `hya serve` daemon of this database writes its
-    /// output (ADR-0023).
-    pub(crate) log: PathBuf,
-    /// Why `hya serve stop|restart` asked the holder to stop
-    /// ([`request_stop`]); read by the server when its SIGTERM arrives.
-    pub(crate) stop: PathBuf,
-    /// The server's relay identity `<db>.relay-identity.json` (0600; the
-    /// relay link's keys, ADR-0025 D3).
-    pub(crate) relay_identity: PathBuf,
-}
-
 /// The lock and discovery paths of `db`, or `None` for stores that are not
 /// locked (in-memory, SQLite URIs).
 pub(crate) fn paths(db: &str) -> Option<DbPaths> {
-    if db.is_empty() || db == ":memory:" || db.starts_with("file:") || db.starts_with("sqlite:") {
-        return None;
-    }
-    let path = Path::new(db);
-    let name = path.file_name()?;
-    let parent = match path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
-        _ => PathBuf::from("."),
-    };
-    let dir = parent.canonicalize().unwrap_or(parent);
-    let with = |suffix: &str| {
-        let mut file = name.to_os_string();
-        file.push(suffix);
-        dir.join(file)
-    };
-    Some(DbPaths {
-        lock: with(".runtime-owner.lock"),
-        discovery: with(".server.json"),
-        log: with(".server.log"),
-        stop: with(".server.stop"),
-        relay_identity: with(".relay-identity.json"),
-    })
+    // Best-effort paths for optional log/relay display. Ownership callers use
+    // the fallible store resolver directly so filesystem errors surface.
+    hya_store::database_paths(db).ok().flatten()
 }
 
 /// Discovery lifecycle held inside the store runtime-owner claim.
@@ -141,44 +106,54 @@ impl Busy {
 
 /// Create discovery state only after the store's runtime-owner claim succeeds.
 pub(crate) fn owned_metadata(db: &str) -> std::io::Result<Option<DbLock>> {
-    let Some(paths) = paths(db) else {
+    let Some(paths) = hya_store::database_paths(db)? else {
         return Ok(None);
     };
-    for stale in [&paths.discovery, &paths.stop] {
-        match std::fs::remove_file(stale) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(with_path(error, stale)),
-        }
-    }
     Ok(Some(DbLock {
         paths,
         published: false,
     }))
 }
 
-/// Read the runtime owner's PID metadata without ever acquiring its lock.
+/// Probe the kernel lock before trusting any PID or discovery metadata.
 pub(crate) fn holder(db: &str) -> std::io::Result<Option<Busy>> {
-    let Some(paths) = paths(db) else {
+    use std::fs::TryLockError;
+    use std::io::Read as _;
+    let Some(paths) = hya_store::database_paths(db)? else {
         return Ok(None);
     };
-    let text = match std::fs::read_to_string(&paths.lock) {
-        Ok(text) => text,
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = match options.open(&paths.lock) {
+        Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(with_path(error, &paths.lock)),
     };
-    let Some(pid) = text
-        .trim()
-        .parse()
-        .ok()
-        .filter(|pid| crate::daemon::process_alive(*pid))
-    else {
-        return Ok(None);
-    };
+    match file.try_lock_shared() {
+        Ok(()) => return Ok(None),
+        Err(TryLockError::WouldBlock) => {}
+        Err(TryLockError::Error(error)) => return Err(with_path(error, &paths.lock)),
+    }
+    let mut text = String::new();
+    file.read_to_string(&mut text)
+        .map_err(|error| with_path(error, &paths.lock))?;
+    let pid = text.trim().parse().ok().filter(|pid| *pid > 0);
+    let discovery = read_discovery(&paths.discovery).filter(|found| Some(found.pid) == pid);
+    // The owner may have released the lock while we read its metadata.
+    match file.try_lock_shared() {
+        Ok(()) => return Ok(None),
+        Err(TryLockError::WouldBlock) => {}
+        Err(TryLockError::Error(error)) => return Err(with_path(error, &paths.lock)),
+    }
     Ok(Some(Busy {
         db: db.to_owned(),
-        holder_pid: Some(pid),
-        discovery: read_discovery(&paths.discovery).filter(|found| found.pid == pid),
+        holder_pid: pid,
+        discovery,
         paths,
     }))
 }
@@ -449,6 +424,23 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_shared_probes_do_not_look_like_a_runtime_owner() {
+        let scratch = Scratch::new("shared-probes");
+        let db = scratch.db();
+        let paths = paths(&db).unwrap();
+        let probe = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&paths.lock)
+            .unwrap();
+        std::fs::write(&paths.lock, format!("{}\n", std::process::id())).unwrap();
+        probe.try_lock_shared().unwrap();
+        assert!(holder(&db).unwrap().is_none());
+    }
+
+    #[test]
     fn the_discovery_file_has_the_documented_shape() {
         let scratch = Scratch::new("shape");
         let mut lock = owned_metadata(&scratch.db()).unwrap().unwrap();
@@ -501,8 +493,8 @@ mod tests {
         assert!(!text.contains("relay"), "{text}");
     }
 
-    #[test]
-    fn claiming_removes_a_stale_discovery_file() {
+    #[tokio::test]
+    async fn claiming_removes_a_stale_discovery_file() {
         let scratch = Scratch::new("stale");
         let db = scratch.db();
         let stale = paths(&db).unwrap().discovery;
@@ -511,7 +503,7 @@ mod tests {
             r#"{"url":"http://127.0.0.1:1","pid":1,"version":"0","startedAt":1}"#,
         )
         .unwrap();
-        let _lock = owned_metadata(&db).unwrap().unwrap();
+        let _store = hya_store::SessionStore::connect_runtime(&db).await.unwrap();
         assert!(!stale.exists());
     }
 

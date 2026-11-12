@@ -1178,14 +1178,14 @@ async fn resolve_runtime_strict(model_override: Option<String>) -> anyhow::Resul
     })
 }
 
-/// Open a SQLite session store at `db`, or an in-memory store when `db` is empty.
+/// Reserve ownership before opening a SQLite runtime store, or use memory when `db` is empty.
 pub async fn open_store(db: &str) -> anyhow::Result<SessionStore> {
     if db.is_empty() {
         SessionStore::connect_memory()
             .await
             .context("open in-memory store")
     } else {
-        SessionStore::connect(db)
+        SessionStore::connect_runtime(db)
             .await
             .with_context(|| format!("open store at {db}"))
     }

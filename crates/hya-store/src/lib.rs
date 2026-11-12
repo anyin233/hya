@@ -26,10 +26,9 @@ mod recovery;
 mod resident_claim;
 mod workflow;
 
-use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -66,7 +65,7 @@ pub use resident_claim::RecoveredActorClaim;
 pub use workflow::{WorkflowAdmissionOutcome, WorkflowSelectionOutcome};
 
 struct RuntimeOwnerState {
-    lock_path: Option<PathBuf>,
+    paths: Option<DatabasePaths>,
     claim: Mutex<Option<RuntimeOwnerClaim>>,
     pending_lock: Mutex<Option<RuntimeOwnerLock>>,
 }
@@ -87,15 +86,15 @@ impl Drop for RuntimeOwnerLock {
 impl RuntimeOwnerState {
     fn memory() -> Self {
         Self {
-            lock_path: None,
+            paths: None,
             claim: Mutex::new(None),
             pending_lock: Mutex::new(None),
         }
     }
 
-    fn file(lock_path: PathBuf) -> Self {
+    fn file(paths: DatabasePaths) -> Self {
         Self {
-            lock_path: Some(lock_path),
+            paths: Some(paths),
             claim: Mutex::new(None),
             pending_lock: Mutex::new(None),
         }
@@ -122,8 +121,8 @@ impl RuntimeOwnerState {
         {
             Some(file) => Some(file),
             None => self
-                .lock_path
-                .as_deref()
+                .paths
+                .as_ref()
                 .map(acquire_runtime_owner_lock)
                 .transpose()?,
         };
@@ -160,10 +159,81 @@ impl RuntimeOwnerState {
     }
 }
 
-fn runtime_owner_lock_path(sqlite_path: &Path) -> PathBuf {
-    let mut lock_path = OsString::from(sqlite_path.as_os_str());
-    lock_path.push(".runtime-owner.lock");
-    PathBuf::from(lock_path)
+/// Canonical database identity and its adjacent ownership/discovery files.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DatabasePaths {
+    /// SQLite file, resolving symlinks even when their target does not exist yet.
+    pub database: PathBuf,
+    /// Sole exclusive runtime-owner lock; its content is the owner's PID.
+    pub lock: PathBuf,
+    /// Published daemon URL and PID.
+    pub discovery: PathBuf,
+    /// Detached daemon output.
+    pub log: PathBuf,
+    /// Stop/restart notice addressed to the current owner.
+    pub stop: PathBuf,
+    /// Persistent relay identity.
+    pub relay_identity: PathBuf,
+}
+
+/// Resolve a plain database filename and all sidecars using one identity.
+/// Memory databases and SQLite URIs have no filesystem ownership files.
+pub fn database_paths(db: &str) -> std::io::Result<Option<DatabasePaths>> {
+    if db.is_empty() || db == ":memory:" || db.starts_with("file:") || db.starts_with("sqlite:") {
+        return Ok(None);
+    }
+    let database = resolve_database_path(Path::new(db), &mut 40)?;
+    let with = |suffix: &str| {
+        let mut path = database.as_os_str().to_owned();
+        path.push(suffix);
+        PathBuf::from(path)
+    };
+    Ok(Some(DatabasePaths {
+        lock: with(".runtime-owner.lock"),
+        discovery: with(".server.json"),
+        log: with(".server.log"),
+        stop: with(".server.stop"),
+        relay_identity: with(".relay-identity.json"),
+        database,
+    }))
+}
+
+fn resolve_database_path(path: &Path, links_left: &mut usize) -> std::io::Result<PathBuf> {
+    let mut resolved = if path.is_absolute() {
+        PathBuf::new()
+    } else {
+        std::env::current_dir()?
+    };
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                resolved.pop();
+            }
+            Component::RootDir | Component::Prefix(_) => resolved.push(component.as_os_str()),
+            Component::Normal(name) => {
+                resolved.push(name);
+                match fs::symlink_metadata(&resolved) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        if *links_left == 0 {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::InvalidInput,
+                                "too many database symlinks",
+                            ));
+                        }
+                        *links_left -= 1;
+                        let target = fs::read_link(&resolved)?;
+                        resolved.pop();
+                        resolved = resolve_database_path(&resolved.join(target), links_left)?;
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+    }
+    Ok(resolved)
 }
 
 fn runtime_owner_lock_error(path: Option<&Path>, source: std::io::Error) -> StoreError {
@@ -173,7 +243,8 @@ fn runtime_owner_lock_error(path: Option<&Path>, source: std::io::Error) -> Stor
     }
 }
 
-fn acquire_runtime_owner_lock(path: &Path) -> Result<RuntimeOwnerLock, StoreError> {
+fn acquire_runtime_owner_lock(paths: &DatabasePaths) -> Result<RuntimeOwnerLock, StoreError> {
+    let path = &paths.lock;
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err(runtime_owner_lock_error(
@@ -194,30 +265,57 @@ fn acquire_runtime_owner_lock(path: &Path) -> Result<RuntimeOwnerLock, StoreErro
     options.mode(0o600);
     #[cfg(unix)]
     options.custom_flags(libc::O_NOFOLLOW);
-    let mut file = options
+    let file = options
         .open(path)
         .map_err(|source| runtime_owner_lock_error(Some(path), source))?;
     #[cfg(unix)]
     file.set_permissions(fs::Permissions::from_mode(0o600))
         .map_err(|source| runtime_owner_lock_error(Some(path), source))?;
-    match file.try_lock() {
-        Ok(()) => {
-            file.set_len(0)
-                .map_err(|source| runtime_owner_lock_error(Some(path), source))?;
-            writeln!(file, "{}", std::process::id())
-                .map_err(|source| runtime_owner_lock_error(Some(path), source))?;
-            Ok(RuntimeOwnerLock(file))
+    // Discovery briefly probes this same lock. Give such a probe time to
+    // release it rather than reporting a false competing runtime.
+    let deadline = std::time::Instant::now() + Duration::from_millis(200);
+    loop {
+        match file.try_lock() {
+            Ok(()) => {
+                let lock = RuntimeOwnerLock(file);
+                lock.0
+                    .set_len(0)
+                    .map_err(|source| runtime_owner_lock_error(Some(path), source))?;
+                // Clear notices before publishing the PID: requests addressed to
+                // this owner after publication must survive the rest of startup.
+                for stale in [&paths.stop, &paths.discovery] {
+                    match fs::remove_file(stale) {
+                        Ok(()) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(runtime_owner_lock_error(Some(stale), error)),
+                    }
+                }
+                writeln!(&lock.0, "{}", std::process::id())
+                    .map_err(|source| runtime_owner_lock_error(Some(path), source))?;
+                return Ok(lock);
+            }
+            Err(TryLockError::WouldBlock) => {
+                // Shared probes can delay acquisition; an exclusive owner is
+                // a real competitor and must be rejected immediately.
+                match file.try_lock_shared() {
+                    Ok(()) => file
+                        .unlock()
+                        .map_err(|source| runtime_owner_lock_error(Some(path), source))?,
+                    Err(TryLockError::WouldBlock) => return Err(StoreError::RuntimeOwnerBusy),
+                    Err(TryLockError::Error(source)) => {
+                        return Err(runtime_owner_lock_error(Some(path), source));
+                    }
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(StoreError::RuntimeOwnerBusy);
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Err(TryLockError::Error(source)) => {
+                return Err(runtime_owner_lock_error(Some(path), source));
+            }
         }
-        Err(TryLockError::WouldBlock) => Err(StoreError::RuntimeOwnerBusy),
-        Err(TryLockError::Error(source)) => Err(runtime_owner_lock_error(Some(path), source)),
     }
-}
-
-fn canonical_runtime_owner_lock_path(sqlite_path: &str) -> Result<PathBuf, StoreError> {
-    let path = Path::new(sqlite_path);
-    let canonical = fs::canonicalize(path)
-        .map_err(|source| runtime_owner_lock_error(Some(&runtime_owner_lock_path(path)), source))?;
-    Ok(runtime_owner_lock_path(&canonical))
 }
 
 /// SQLite-backed session event log, admission journal, and related tables.
@@ -231,6 +329,7 @@ pub struct SessionStore {
     pool: sqlx::SqlitePool,
     runtime_owner: Arc<RuntimeOwnerState>,
     projections: Arc<ProjectionCache>,
+    read_only: bool,
     /// In-memory stores only: an idle connection that keeps the database
     /// alive. SQLite drops an in-memory database with its last connection,
     /// and the pool closes its one connection when a query future is dropped
@@ -267,22 +366,41 @@ impl SessionStore {
     /// Open or create a file-backed store at `sqlite://{path}`, initialize the schema, enable WAL.
     /// Existing databases without the current baseline return [`StoreError::UnsupportedDatabase`].
     pub async fn connect(path: &str) -> Result<Self, StoreError> {
+        let paths = database_paths(path)
+            .map_err(|source| runtime_owner_lock_error(Some(Path::new(path)), source))?;
+        Self::connect_file(path, paths, None).await
+    }
+
+    async fn connect_file(
+        path: &str,
+        paths: Option<DatabasePaths>,
+        lock: Option<RuntimeOwnerLock>,
+    ) -> Result<Self, StoreError> {
         let opts = SqliteConnectOptions::from_str(&format!("sqlite://{path}"))?
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
             .busy_timeout(Duration::from_secs(5))
             .foreign_keys(true);
+        let opts = match paths.as_ref() {
+            Some(paths) => opts.filename(&paths.database),
+            None => opts,
+        };
         let pool = SqlitePoolOptions::new()
             .max_connections(8)
             .connect_with(opts)
             .await?;
         Self::migrate(&pool).await?;
-        let lock_path = canonical_runtime_owner_lock_path(path)?;
+        let runtime_owner = paths.map_or_else(RuntimeOwnerState::memory, RuntimeOwnerState::file);
+        *runtime_owner
+            .pending_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = lock;
         Ok(Self {
             pool,
-            runtime_owner: Arc::new(RuntimeOwnerState::file(lock_path)),
+            runtime_owner: Arc::new(runtime_owner),
             projections: Arc::new(ProjectionCache::new()),
+            read_only: false,
             _memory_keeper: None,
         })
     }
@@ -290,27 +408,30 @@ impl SessionStore {
     /// Reserve runtime ownership before SQLite initialization, then transfer the
     /// lock to the first `claim_runtime_owner` call on the returned store.
     pub async fn connect_runtime(path: &str) -> Result<Self, StoreError> {
-        let sqlite = Path::new(path);
-        let parent = sqlite
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        let canonical = if sqlite.exists() {
-            sqlite.canonicalize()
-        } else {
-            parent
-                .canonicalize()
-                .map(|parent| parent.join(sqlite.file_name().unwrap_or_default()))
-        }
-        .map_err(|source| runtime_owner_lock_error(Some(sqlite), source))?;
-        let lock = acquire_runtime_owner_lock(&runtime_owner_lock_path(&canonical))?;
-        let store = Self::connect(path).await?;
-        *store
-            .runtime_owner
-            .pending_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lock);
-        Ok(store)
+        let paths = database_paths(path)
+            .map_err(|source| runtime_owner_lock_error(Some(Path::new(path)), source))?;
+        let lock = paths.as_ref().map(acquire_runtime_owner_lock).transpose()?;
+        Self::connect_file(path, paths, lock).await
+    }
+
+    /// Open an existing database read-only, without initialization or ownership.
+    /// SQLite rejects a missing file; projection reads never persist snapshots.
+    pub async fn connect_read_only(path: &str) -> Result<Self, StoreError> {
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{path}"))?
+            .read_only(true)
+            .create_if_missing(false)
+            .busy_timeout(Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(8)
+            .connect_with(opts)
+            .await?;
+        Ok(Self {
+            pool,
+            runtime_owner: Arc::new(RuntimeOwnerState::memory()),
+            projections: Arc::new(ProjectionCache::new()),
+            read_only: true,
+            _memory_keeper: None,
+        })
     }
 
     /// Open an in-memory store (single connection) and run migrations.
@@ -330,6 +451,7 @@ impl SessionStore {
             pool,
             runtime_owner: Arc::new(RuntimeOwnerState::memory()),
             projections: Arc::new(ProjectionCache::new()),
+            read_only: false,
             _memory_keeper: Some(Arc::new(Mutex::new(keeper))),
         })
     }
@@ -627,7 +749,10 @@ impl SessionStore {
             self.projections.remove(session);
             return Ok(folded.projection);
         }
-        if last_seq > persisted_seq && unpersisted >= self.projections.snapshot_interval() {
+        if !self.read_only
+            && last_seq > persisted_seq
+            && unpersisted >= self.projections.snapshot_interval()
+        {
             // Best effort: a failed write only means a later read folds more.
             match projection_cache::persist_snapshot(&mut conn, session, &folded.projection).await {
                 Ok(()) => {

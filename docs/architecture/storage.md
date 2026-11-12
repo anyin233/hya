@@ -43,6 +43,11 @@ same row writer. The engine publishes committed batches through
 `SessionStore::connect_memory()` opens an in-memory SQLite database with one
 connection.
 
+Runtime composition uses `SessionStore::connect_runtime(path)`: it reserves the
+owner lock before any SQLite connection or migration. Read-only CLI commands use
+`SessionStore::connect_read_only(path)` instead: the file must exist, migrations
+never run, and projection reads cannot write snapshots.
+
 CLI session-store selection
 ([`main.rs`](../../crates/hya-backend/src/main.rs),
 [`open_store`](../../crates/hya-app/src/runtime.rs)):
@@ -660,9 +665,19 @@ the session can be reconstructed.
 ### Runtime owner discovery
 
 The store holds the only database advisory lock, `<canonical-db>.runtime-owner.lock`.
-After acquiring it, the owner writes its decimal PID followed by a newline; releasing
-the claim clears the PID before unlocking. Process exit releases the OS lock even if live tasks kept the claim from being dropped; readers
-ignore metadata whose PID is no longer alive. Discovery never acquires a lock.
+The kernel lock alone determines ownership. Discovery probes the existing lock
+with a non-blocking shared acquisition, so probes cannot mistake one another
+for an exclusive owner. It creates no lock file and trusts PID/URL metadata
+only while the exclusive lock is held. A stale
+PID is ignored even if an unrelated live process has reused it; stop never
+signals a PID taken from an unlocked file.
+
+On acquisition the owner truncates old PID metadata, clears stale discovery and
+stop notices, then writes its decimal PID followed by a newline before opening
+SQLite. Stop requests arriving after this publication survive startup. Releasing
+the claim clears the PID before unlocking; a crash can leave stale content but
+the kernel releases the lock. Acquisition retries for at most 200 ms to allow a
+transient discovery probe to finish.
 The daemon publishes `<db>.server.json` after binding its listener and removes it
 before releasing ownership. `hya serve start --db sessions.db --json` reads this
 metadata and checks `/v1/health`; concurrent starters attach to the same writer.
@@ -672,5 +687,22 @@ optional `relay` and `allowHosts` fields (see the CLI Backend daemon section).
 `SessionStore::connect_runtime(path: &str) -> Result<SessionStore, StoreError>`
 reserves that same lock before SQLite initialization and transfers it to the
 first `claim_runtime_owner(owner: OwnerRunId) -> Result<(), StoreError>` call.
-Daemon startup uses this entry point so concurrent initializers cannot race on
-SQLite's first WAL setup. A conflicting reservation returns `RuntimeOwnerBusy`.
+Every file-backed runtime writer uses this entry point, including `exec`,
+`workflow use|run|state`, `sessions archive|unarchive`, and `serve`, so concurrent
+initializers cannot race on SQLite's first WAL setup. A conflicting reservation
+returns `RuntimeOwnerBusy`; CLI writers route to the owner's published server
+or exit 75 before touching SQLite.
+
+`database_paths(db: &str) -> std::io::Result<Option<DatabasePaths>>` is the shared
+path contract for the store and CLI. `None` denotes an empty/in-memory path or
+SQLite URI. `DatabasePaths` contains `PathBuf` fields `database`, `lock`,
+`discovery`, `log`, `stop`, and `relay_identity`. It resolves relative paths,
+parent symlinks, and database symlinks (including dangling targets), so creation
+of the target does not change the ownership identity. Filesystem errors surface
+to the ownership caller.
+
+For example, `hya exec --db sessions.db "hello"` reserves ownership before
+creating the database. `hya sessions --db sessions.db` then reads it without
+owning it; the same listing on a missing path reports an error and creates no
+database. `connect_read_only(path: &str) -> Result<SessionStore, StoreError>`
+opens SQLite in read-only mode without changing its journal mode or schema.
