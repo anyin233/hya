@@ -77,6 +77,12 @@ function handleRequestWithResponse(
   context: RequestContext,
 ): Promise<HandledRequest> | HandledRequest {
   switch (request.method) {
+    case METHOD_SESSION_START:
+    case METHOD_SESSION_END:
+    case METHOD_AGENT_SPAWN:
+      return handleObservation(request.method, request.params, context).then(() => ({
+        response: okResponse(request.id, {}), shouldExit: false,
+      }))
     case METHOD_INITIALIZE:
       return handleInitialize(request, context)
     case METHOD_SHUTDOWN:
@@ -169,15 +175,20 @@ async function handleToolExecuteBefore(
       continue
     }
     for (const hook of group.commands) {
-      const run = await runClaudeHookCommand(
-        hook,
-        claudeHookPayload("tool.execute.before", {
-          session: params.value["session"] as string,
-          tool: toolName,
-          input: params.value["input"],
-        }),
-        context.bundleRoot,
-      )
+      let run
+      try {
+        run = await runClaudeHookCommand(
+          hook,
+          claudeHookPayload("tool.execute.before", {
+            session: params.value["session"] as string,
+            tool: toolName,
+            input: params.value["input"],
+          }),
+          context.bundleRoot,
+        )
+      } catch (error) {
+        return { response: okResponse(request.id, { outcome: "veto", reason: `Claude guard failed: ${String(error)}` }), shouldExit: false }
+      }
       const decision = toolDecisionFromClaudeStdout(run.stdout)
       if (decision !== undefined && decision.outcome === "veto") {
         return { response: okResponse(request.id, decision), shouldExit: false }

@@ -187,12 +187,12 @@ export function claudeHookPayload(
   return payload
 }
 
-/** Execute one CC hook command, returning its stdout (empty on failure). */
+/** Execute one CC hook command; process failures reject with diagnostics. */
 export async function runClaudeHookCommand(
   hook: ClaudeHookCommand,
   payload: unknown,
   pluginRoot?: string,
-): Promise<{ readonly ok: boolean; readonly stdout: string }> {
+): Promise<{ readonly stdout: string }> {
   const command = pluginRoot === undefined
     ? hook.command
     : hook.command.replaceAll("${CLAUDE_PLUGIN_ROOT}", pluginRoot)
@@ -212,11 +212,15 @@ export async function runClaudeHookCommand(
     process_.stdin.write(JSON.stringify(payload))
     await process_.stdin.flush()
     process_.stdin.end()
-    const stdout = await new Response(process_.stdout).text()
-    const exitCode = await process_.exited
-    return { ok: exitCode === 0, stdout }
-  } catch {
-    return { ok: false, stdout: "" }
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(process_.stdout).text(),
+      new Response(process_.stderr).text(),
+      process_.exited,
+    ])
+    if (exitCode !== 0) {
+      throw new Error(`Claude hook exited ${exitCode}: ${stderr}`)
+    }
+    return { stdout }
   } finally {
     clearTimeout(timeout)
   }

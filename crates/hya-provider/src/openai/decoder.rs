@@ -64,9 +64,9 @@ impl OpenAiChatDecoder {
         }
     }
 
-    fn close(&mut self) -> Vec<Event> {
+    fn close(&mut self) -> Result<Vec<Event>, ProviderError> {
         if self.finished {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         self.finished = true;
         let (session, message) = (self.session, self.message);
@@ -74,7 +74,7 @@ impl OpenAiChatDecoder {
         self.end_reasoning(&mut out);
         self.end_text(&mut out);
         for (_, entry) in std::mem::take(&mut self.tools) {
-            let input = entry.input();
+            let input = entry.input()?;
             out.push(Event::ToolCallRequested {
                 session,
                 message,
@@ -98,7 +98,7 @@ impl OpenAiChatDecoder {
             tokens: (!self.usage.is_zero()).then_some(self.usage),
             cause: None,
         });
-        out
+        Ok(out)
     }
 
     fn record_usage(&mut self, chunk: &Value) {
@@ -115,7 +115,7 @@ impl Decoder for OpenAiChatDecoder {
             return Ok(Vec::new());
         }
         if data == "[DONE]" {
-            return Ok(self.close());
+            return self.close();
         }
         let chunk: Value = serde_json::from_str(data)?;
         self.record_usage(&chunk);
@@ -224,7 +224,7 @@ impl Decoder for OpenAiChatDecoder {
     }
 
     fn finish(&mut self) -> Result<Vec<Event>, ProviderError> {
-        Ok(self.close())
+        self.close()
     }
 }
 

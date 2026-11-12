@@ -101,3 +101,15 @@ marketplace entry before invoking `--emit-bundle-manifest`.
 All imported files must be regular UTF-8 files. Symlinks are rejected so the
 prepared package remains a closed source tree. `.git` and `node_modules`
 directories are excluded from the staged source copy.
+
+Command-hook failures (including nonzero exits and timeouts) surface with
+process diagnostics. `tool.execute.before` returns a veto with a failure reason
+when its guard command fails. Hook stdout and stderr are drained concurrently,
+so diagnostic output cannot block completion. For example, a `PreToolUse`
+command `echo policy-unavailable >&2; exit 1` blocks the attempted tool.
+
+Lifecycle methods `hook/session.start` and `hook/session.end` accept
+`{session: string}`; `hook/agent.spawn` accepts `{parent: string, child: string}`.
+The host sends JSON-RPC requests with an id; the adapter executes the commands
+and acknowledges with an empty object result. Id-less notifications execute
+without a response.

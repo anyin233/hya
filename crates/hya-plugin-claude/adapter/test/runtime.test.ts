@@ -87,7 +87,7 @@ describe("runtime handshake", () => {
     const runtimeFile = path.join(root, "runtime/claude-plugin.json")
     const run = await runAdapterProcess([
       initializeRequest(1),
-      { jsonrpc: "2.0", method: "hook/session.start", params: { session: "ses_test" } },
+      { jsonrpc: "2.0", id: 3, method: "hook/session.start", params: { session: "ses_test" } },
       { jsonrpc: "2.0", id: 2, method: "shutdown", params: {} },
     ], { argv: ["--bundle-runtime", runtimeFile, "--plugin-id", "installed"] })
     expect(run.exitCode).toBe(0)
@@ -161,4 +161,18 @@ describe("hook dispatch", () => {
     )
     expect(responses[1]?.error?.code).toBe(-32601)
   })
+})
+
+test("failed guard blocks the tool with diagnostics", async () => {
+  const dir = await makePluginDir({
+    name: "broken-guard",
+    hooksJson: { PreToolUse: [{ hooks: [{ type: "command", command: "echo unavailable >&2; exit 7" }] }] },
+  })
+  const { responses } = await runAdapterProcess([
+    initializeRequest(1),
+    { jsonrpc: "2.0", id: 2, method: "hook/tool.execute.before", params: { session: "s", message: "m", call: "c", tool: "bash", input: {} } },
+    { jsonrpc: "2.0", id: 3, method: "shutdown", params: {} },
+  ], { argv: ["--plugin-dir", dir] })
+  expect(responses[1]?.result).toMatchObject({ outcome: "veto" })
+  expect((responses[1]?.result as { reason: string }).reason).toContain("unavailable")
 })

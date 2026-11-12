@@ -69,8 +69,9 @@ impl ToolAsm {
             requested: false,
         }
     }
-    pub(crate) fn input(&self) -> Value {
-        serde_json::from_str(&self.args).unwrap_or(Value::Null)
+    pub(crate) fn input(&self) -> Result<Value, crate::ProviderError> {
+        serde_json::from_str(&self.args)
+            .map_err(|e| crate::ProviderError::Decode(format!("tool {} arguments: {e}", self.name)))
     }
 
     pub(crate) fn delta(
@@ -150,6 +151,14 @@ pub(crate) fn assistant_clusters(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn truncated_tool_arguments_are_rejected() {
+        let mut tool = ToolAsm::new();
+        tool.name = "read".into();
+        tool.args = "{\"path\":".into();
+        assert!(tool.input().is_err());
+    }
 
     #[test]
     fn completed_object_prefers_string_output() {

@@ -308,3 +308,9 @@ records final bytes on every committed failure, and maps private hashline codes
 to `ToolError::Input` without exposing file contents. The projected SDK part and
 the client then preserve that typed outcome or use the bounded fallback without
 making their own error state.
+
+Resource policy construction propagates candidate collection and selection
+errors immediately rather than returning empty selected resources. Member
+`wait` propagates projection/store errors while reading handoff generation,
+terminal results, or the last assistant message; absent records alone yield
+absence. Neither failure is interpreted as a finished or missing member.

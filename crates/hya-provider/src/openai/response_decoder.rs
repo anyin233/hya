@@ -64,9 +64,9 @@ impl OpenAiResponsesDecoder {
         }
     }
 
-    fn close(&mut self, finish: FinishReason) -> Vec<Event> {
+    fn close(&mut self, finish: FinishReason) -> Result<Vec<Event>, ProviderError> {
         if self.finished {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         self.finished = true;
         let (session, message) = (self.session, self.message);
@@ -101,7 +101,7 @@ impl OpenAiResponsesDecoder {
                     part: entry.part,
                     call: entry.call,
                     name: ToolName::new(&entry.name),
-                    input: entry.input(),
+                    input: entry.input()?,
                 });
             }
         }
@@ -113,7 +113,7 @@ impl OpenAiResponsesDecoder {
             tokens: (!self.usage.is_zero()).then_some(self.usage),
             cause: None,
         });
-        out
+        Ok(out)
     }
 
     fn reasoning_delta(
@@ -232,7 +232,7 @@ impl OpenAiResponsesDecoder {
         vec![event]
     }
 
-    fn tool_done(&mut self, index: usize, item: &Value) -> Vec<Event> {
+    fn tool_done(&mut self, index: usize, item: &Value) -> Result<Vec<Event>, ProviderError> {
         let mut out = self.tool_added(index, item);
         let (session, message) = (self.session, self.message);
         let entry = self.tools.entry(index).or_insert_with(ToolAsm::new);
@@ -250,10 +250,10 @@ impl OpenAiResponsesDecoder {
                 part: entry.part,
                 call: entry.call,
                 name: ToolName::new(&entry.name),
-                input: entry.input(),
+                input: entry.input()?,
             });
         }
-        out
+        Ok(out)
     }
 
     fn text_delta(&mut self, index: usize, delta: &str) -> Vec<Event> {
@@ -392,7 +392,7 @@ impl Decoder for OpenAiResponsesDecoder {
             "response.output_item.done"
                 if event.pointer("/item/type").and_then(Value::as_str) == Some("function_call") =>
             {
-                self.tool_done(index, &event["item"])
+                self.tool_done(index, &event["item"])?
             }
             "response.function_call_arguments.delta" => self.tool_delta(
                 index,
@@ -410,11 +410,11 @@ impl Decoder for OpenAiResponsesDecoder {
                 } else {
                     FinishReason::Stop
                 };
-                self.close(finish)
+                self.close(finish)?
             }
             "response.incomplete" => {
                 self.record_usage(&event);
-                self.close(FinishReason::Length)
+                self.close(FinishReason::Length)?
             }
             "response.failed" => {
                 let error = event.pointer("/response/error").unwrap_or(&Value::Null);
@@ -449,6 +449,6 @@ impl Decoder for OpenAiResponsesDecoder {
         } else {
             FinishReason::Stop
         };
-        Ok(self.close(finish))
+        self.close(finish)
     }
 }

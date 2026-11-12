@@ -122,7 +122,7 @@ pub(crate) async fn wait_for_members(
             handle,
             session,
             done_at_start,
-            generation: handoff_generation(engine, session).await,
+            generation: handoff_generation(engine, session).await?,
         });
     }
     // Mail past this inbox index is new to the caller: in-turn steering and
@@ -150,7 +150,7 @@ pub(crate) async fn wait_for_members(
             &caller_path,
             &targets,
         )
-        .await;
+        .await?;
         let inbox = scan_inbox(
             supervisor,
             root,
@@ -284,19 +284,13 @@ fn terminal_status(status: RosterStatus) -> bool {
 }
 
 /// The member's latest terminal handoff generation (0: never archived).
-async fn handoff_generation(engine: &SessionEngine, session: SessionId) -> u32 {
-    engine
-        .read_projection_shared(session)
-        .await
-        .ok()
-        .and_then(|projection| {
-            projection
-                .session
-                .handoff
-                .as_ref()
-                .map(|handoff| handoff.generation)
-        })
-        .unwrap_or(0)
+async fn handoff_generation(engine: &SessionEngine, session: SessionId) -> Result<u32, CoreError> {
+    let projection = engine.read_projection_shared(session).await?;
+    Ok(projection
+        .session
+        .handoff
+        .as_ref()
+        .map_or(0, |handoff| handoff.generation))
 }
 
 /// Sort the targets by standing against the call's baseline.
@@ -307,7 +301,7 @@ async fn evaluate(
     projection: &Projection,
     caller_path: &str,
     targets: &[Target],
-) -> Standing {
+) -> Result<Standing, CoreError> {
     let mut standing = Standing::default();
     for target in targets {
         let live = projection
@@ -339,7 +333,7 @@ async fn evaluate(
             } else {
                 standing
                     .stalled
-                    .push((target.session, last_answer(engine, target.session).await));
+                    .push((target.session, last_answer(engine, target.session).await?));
                 WaitMemberState::Idle
             };
             standing.running.push(WaitMember {
@@ -363,7 +357,7 @@ async fn evaluate(
                 .filter(|entry| entry.session == target.session)
                 .map(|entry| entry.reason)
         };
-        let row = terminal_row(engine, target.session).await;
+        let row = terminal_row(engine, target.session).await?;
         let (state, outcome, full) = match (reason, row) {
             (None | Some(ArchiveReason::Reported), Some((MemberRunStatus::Done, summary))) => (
                 WaitMemberState::Reported,
@@ -407,7 +401,7 @@ async fn evaluate(
                 .flatten(),
         };
         let fresh = !target.done_at_start
-            || handoff_generation(engine, target.session).await > target.generation;
+            || handoff_generation(engine, target.session).await? > target.generation;
         if fresh {
             if state == WaitMemberState::Reported
                 && let Some(body) = full
@@ -419,40 +413,40 @@ async fn evaluate(
             standing.already.push(member);
         }
     }
-    standing
+    Ok(standing)
 }
 
 /// The member row for `child` on its parent's log.
 async fn terminal_row(
     engine: &SessionEngine,
     child: SessionId,
-) -> Option<(MemberRunStatus, String)> {
-    let parent = engine
-        .read_projection_shared(child)
-        .await
-        .ok()?
-        .session
-        .parent?;
-    let parent_projection = engine.read_projection_shared(parent).await.ok()?;
-    parent_projection
+) -> Result<Option<(MemberRunStatus, String)>, CoreError> {
+    let Some(parent) = engine.read_projection_shared(child).await?.session.parent else {
+        return Ok(None);
+    };
+    let parent_projection = engine.read_projection_shared(parent).await?;
+    Ok(parent_projection
         .session
         .members
         .iter()
         .rev()
         .find(|row| row.child == Some(child))
-        .map(|row| (row.status, row.summary.clone()))
+        .map(|row| (row.status, row.summary.clone())))
 }
 
 /// The member's last assistant message: the turn a stall notice is about.
-async fn last_answer(engine: &SessionEngine, session: SessionId) -> Option<MessageId> {
-    let projection = engine.read_projection_shared(session).await.ok()?;
-    projection
+async fn last_answer(
+    engine: &SessionEngine,
+    session: SessionId,
+) -> Result<Option<MessageId>, CoreError> {
+    let projection = engine.read_projection_shared(session).await?;
+    Ok(projection
         .session
         .messages
         .iter()
         .rev()
         .find(|message| message.role == Role::Assistant)
-        .map(|message| message.id)
+        .map(|message| message.id))
 }
 
 /// What the caller's inbox holds past its cursor at one evaluation.

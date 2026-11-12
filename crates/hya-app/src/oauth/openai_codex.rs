@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use crate::auth::{OAuthCredential, OAuthType};
 
-use super::callback::wait_for_callback;
+use super::callback::{bind_callback, wait_for_callback};
 use super::pkce::{generate_pkce_pair, generate_state};
 use super::{
     OAuthError, decode_jwt_claims, expires_at_from_secs, json_str, open_browser, post_form,
@@ -64,8 +64,9 @@ pub async fn login_openai_codex(
 ) -> Result<OAuthCredential, OAuthError> {
     let redirect_uri =
         format!("http://{DEFAULT_REDIRECT_HOST}:{DEFAULT_REDIRECT_PORT}{DEFAULT_REDIRECT_PATH}");
-    let state = generate_state();
-    let (verifier, challenge) = generate_pkce_pair();
+    let state = generate_state()?;
+    let (verifier, challenge) = generate_pkce_pair()?;
+    let listener = bind_callback(DEFAULT_REDIRECT_PORT)?;
     let authorize_url = build_authorize_url(&redirect_uri, &state, &challenge);
 
     println!(
@@ -77,12 +78,7 @@ pub async fn login_openai_codex(
     }
 
     let params = tokio::task::spawn_blocking(move || {
-        wait_for_callback(
-            DEFAULT_REDIRECT_HOST,
-            DEFAULT_REDIRECT_PORT,
-            DEFAULT_REDIRECT_PATH,
-            timeout,
-        )
+        wait_for_callback(listener, DEFAULT_REDIRECT_PATH, timeout)
     })
     .await
     .map_err(|e| OAuthError::Protocol(e.to_string()))??;

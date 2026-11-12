@@ -1464,3 +1464,9 @@ The gate returns `GateOutcome::Stop { reason: String }`, `Stalled`,
 `InvalidCondition { reason: String }`, or `Continue { directive: String }`;
 the driver attaches iteration counts and selects cancellation as `Cancelled`.
 These outcome types are internal Rust contracts; no event or protobuf schema changes.
+
+Loopback OAuth (`hya oauth login --provider openai --type openai-codex --loopback`)
+requires OS entropy for both PKCE and CSRF state; entropy failure aborts login.
+The callback listener binds `127.0.0.1:1455` before printing or opening the
+`http://localhost:1455/auth/callback` authorization redirect. A bind error stops
+login before launching the browser; device-code login is unchanged.
