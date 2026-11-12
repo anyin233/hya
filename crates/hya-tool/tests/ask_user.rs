@@ -172,7 +172,7 @@ async fn ask_user_supports_multiple_selection_and_allow_custom_false() {
 }
 
 #[tokio::test]
-async fn ask_user_reports_cancellation_per_question() {
+async fn ask_user_returns_an_error_when_a_question_is_cancelled() {
     // Given
     let session = SessionId::new();
     let (interaction, mut rx) = InteractionPlane::new();
@@ -200,12 +200,7 @@ async fn ask_user_reports_cancellation_per_question() {
     request.reply.send(QuestionAnswer::Cancelled).unwrap();
 
     // Then
-    let out = handle.await.unwrap().unwrap();
-    assert_eq!(
-        out["metadata"]["answers"],
-        json!([{ "question": "Ship it?", "answer": [], "cancelled": true }])
-    );
-    assert!(out["output"].as_str().unwrap().contains("Unanswered"));
+    assert!(matches!(handle.await.unwrap(), Err(ToolError::Cancelled)));
 }
 
 #[tokio::test]

@@ -1,47 +1,59 @@
 //! Stop cancels turns; the next process restores them with an explicit prompt.
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
-use hya_proto::{FinishCause, PartProjection, Role, SessionId, ToolPartState};
+use hya_proto::{FinishCause, PartProjection, Role, ToolPartState};
 
-use super::{AgentSpec, SessionEngine, TurnDrainReport};
+use super::{SessionEngine, TurnDrainReport};
 use crate::error::CoreError;
 
 impl SessionEngine {
+    /// Inject a queued restore once. `true` also covers an injected prompt
+    /// whose assistant turn did not start before the previous process died.
+    pub async fn inject_restart_prompt(
+        &self,
+        session: hya_proto::SessionId,
+    ) -> Result<bool, CoreError> {
+        let Some(envelopes) = self
+            .store
+            .take_restart_resume(session, self.runtime_owner)
+            .await?
+        else {
+            return Ok(false);
+        };
+        for envelope in envelopes {
+            self.publish_envelope(envelope);
+        }
+        Ok(true)
+    }
+
     /// Cancel every active turn and queue one restore prompt per interrupted session.
     pub async fn stop_for_restart(&self, deadline: Duration) -> Result<TurnDrainReport, CoreError> {
-        let report = self.drain_turns(FinishCause::Shutdown, deadline).await;
-        for session in &report.cancelled {
+        let sessions = self.turn_gate.prepare_drain(FinishCause::Shutdown);
+        for session in &sessions {
             let projection = self.store.read_projection(*session).await?;
-            let mut unfinished = Vec::new();
-            if let Some(message) = projection
+            let Some(message) = projection
                 .session
                 .messages
                 .iter()
                 .rev()
-                .find(|message| message.role == Role::Assistant)
-                .filter(|message| message.cause == Some(FinishCause::Shutdown))
-            {
-                for part in &message.parts {
-                    if let PartProjection::Tool {
-                        call, name, state, ..
-                    } = part
-                    {
-                        let interrupted = match state {
-                            ToolPartState::Pending { .. } | ToolPartState::Running { .. } => true,
-                            ToolPartState::Error { value, .. } => {
-                                value.as_ref().is_some_and(|value| {
-                                    value["code"] == "CANCELLED"
-                                        || value["error"]["type"] == "cancelled"
-                                })
-                            }
-                            ToolPartState::Completed { .. } => false,
-                        };
-                        if interrupted {
-                            unfinished.push(format!("- {name} (call {call})"));
-                        }
+                .find(|message| message.role == Role::Assistant && message.finish.is_none())
+            else {
+                self.cancel_turn(*session, FinishCause::Shutdown);
+                continue;
+            };
+            let mut unfinished = Vec::new();
+            for part in &message.parts {
+                if let PartProjection::Tool {
+                    call, name, state, ..
+                } = part
+                {
+                    let interrupted = matches!(
+                        state,
+                        ToolPartState::Pending { .. } | ToolPartState::Running { .. }
+                    );
+                    if interrupted {
+                        unfinished.push(format!("- {name} (call {call})"));
                     }
                 }
             }
@@ -56,52 +68,55 @@ impl SessionEngine {
                  successes; side effects may have happened before interruption. Review the existing \
                  transcript and decide what to redo, then continue the task."
             );
-            self.store
-                .queue_restart_resume(*session, self.runtime_owner, &prompt)
-                .await?;
+            let children = projection
+                .team
+                .roster
+                .values()
+                .filter(|entry| entry.session != *session && sessions.contains(&entry.session))
+                .map(|entry| entry.handle.as_str())
+                .collect::<Vec<_>>();
+            let prompt = if children.is_empty() {
+                prompt
+            } else {
+                format!(
+                    "{prompt}\n\nInterrupted subagents: {}. Their recovery is managed by the supervisor.",
+                    children.join(", ")
+                )
+            };
+            self.restart_prompts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(*session, (message.id, prompt));
+            self.cancel_turn(*session, FinishCause::Shutdown);
+        }
+        let report = self.drain_turns(FinishCause::Shutdown, deadline).await;
+        // Surface a failed cancellation transaction without retrying it.
+        for session in sessions {
+            if let Some((message, _)) = self.restart_prompt(session) {
+                let projection = self.store.read_projection(session).await?;
+                if projection
+                    .session
+                    .messages
+                    .iter()
+                    .any(|entry| entry.id == message && entry.finish.is_none())
+                {
+                    return Err(CoreError::Invalid(format!(
+                        "restart cancellation did not commit for session {session}"
+                    )));
+                }
+            }
         }
         Ok(report)
     }
 
-    /// Inject each pending restore once, reserve its session, and start a fresh turn.
-    pub async fn resume_interrupted_turns(
-        self: &Arc<Self>,
-        base: &AgentSpec,
-    ) -> Result<Vec<SessionId>, CoreError> {
-        let rows = self.store.list_pending_resumes().await?;
-        let mut resumed = Vec::new();
-        for row in rows {
-            let session = row.session;
-            let lease = self.try_begin_turn(session)?;
-            let projection = self.store.read_projection(session).await?;
-            let envelopes = self
-                .store
-                .take_restart_resume(session, self.runtime_owner)
-                .await?;
-            if envelopes.is_empty() {
-                continue;
-            }
-            for envelope in envelopes {
-                self.publish_envelope(envelope);
-            }
-            let mut agent = base.clone();
-            if let Some(workdir) = projection.session.workdir.as_deref() {
-                agent.workdir = PathBuf::from(workdir);
-            }
-            if let Some(name) = projection.session.agent.clone() {
-                agent.name = name;
-            }
-            if let Some(model) = projection.session.model.clone() {
-                agent.model = model;
-            }
-            let engine = Arc::clone(self);
-            tokio::spawn(async move {
-                if let Err(error) = engine.run_restored_turn(session, &agent, lease).await {
-                    tracing::error!(%session, %error, "restored turn failed");
-                }
-            });
-            resumed.push(session);
-        }
-        Ok(resumed)
+    pub(super) fn restart_prompt(
+        &self,
+        session: hya_proto::SessionId,
+    ) -> Option<(hya_proto::MessageId, String)> {
+        self.restart_prompts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&session)
+            .cloned()
     }
 }

@@ -179,7 +179,6 @@ impl SessionStore {
         let projection = replay_projection(&self.projections, &mut tx, session).await?;
         let code = match cause {
             FinishCause::Interrupted => "INTERRUPTED",
-            FinishCause::Handoff => "HANDOFF",
             _ => "CANCELLED",
         };
         let has_open_message = projection

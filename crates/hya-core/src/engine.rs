@@ -446,6 +446,7 @@ pub struct SessionEngine {
     runtime_owner: hya_proto::OwnerRunId,
     /// Single-active-turn registry shared by every clone of this engine.
     turn_gate: Arc<turn_gate::TurnGate>,
+    restart_prompts: Arc<Mutex<HashMap<SessionId, (MessageId, String)>>>,
     /// Runtime-only sticky shake placeholders per session, shared by engine
     /// clones (see [`crate::compaction::apply_sticky_evictions`]).
     pub(crate) sticky_evictions: Arc<Mutex<HashMap<SessionId, crate::compaction::StickyEvictions>>>,
@@ -507,6 +508,7 @@ impl Clone for SessionEngine {
             background_job_seq: self.background_job_seq.clone(),
             runtime_owner: self.runtime_owner,
             turn_gate: Arc::clone(&self.turn_gate),
+            restart_prompts: Arc::clone(&self.restart_prompts),
             sticky_evictions: Arc::clone(&self.sticky_evictions),
             #[cfg(test)]
             direct_mail_pre_append_gate: self.direct_mail_pre_append_gate.clone(),
@@ -672,6 +674,7 @@ impl SessionEngine {
             background_job_seq: Arc::new(AtomicU64::new(1)),
             runtime_owner: hya_proto::OwnerRunId::new(),
             turn_gate: Arc::new(turn_gate::TurnGate::default()),
+            restart_prompts: Arc::new(Mutex::new(HashMap::new())),
             sticky_evictions: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(test)]
             direct_mail_pre_append_gate: None,

@@ -283,8 +283,10 @@ impl SessionEngine {
             )
             .await?;
 
-            let finish = self
-                .execute_shell_part(
+            let finish = tokio::select! {
+                biased;
+                () = cancel.cancelled() => FinishReason::Cancelled,
+                outcome = self.execute_shell_part(
                     ShellPart {
                         session,
                         message,
@@ -296,21 +298,17 @@ impl SessionEngine {
                     &binding,
                     &agent,
                     &resources,
-                    cancel,
-                )
-                .await?;
-            self.emit(
+                    cancel.clone(),
+                ) => outcome?,
+            };
+            self.close_turn_message(
+                None,
                 session,
-                Event::MessageFinished {
-                    session,
-                    message,
-                    role: Role::Assistant,
-                    finish,
-                    tokens: None,
-                    cause: (finish == FinishReason::Cancelled)
-                        .then(|| self.turn_gate.cancel_cause(session))
-                        .flatten(),
-                },
+                message,
+                finish,
+                (finish == FinishReason::Cancelled)
+                    .then(|| self.turn_gate.cancel_cause(session))
+                    .flatten(),
             )
             .await?;
             Ok((message, finish))

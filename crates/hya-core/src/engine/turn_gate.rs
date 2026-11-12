@@ -216,6 +216,15 @@ impl TurnGate {
         sessions
     }
 
+    /// Refuse new turns before restart snapshots are taken, without cancelling
+    /// running tools until their pending/running state has been captured.
+    pub(crate) fn prepare_drain(&self, cause: FinishCause) -> Vec<SessionId> {
+        let mut state = self.state();
+        state.draining.get_or_insert(cause);
+        self.released.notify_waiters();
+        state.active.keys().copied().collect()
+    }
+
     /// Whether a drain has begun.
     pub(crate) fn draining(&self) -> Option<FinishCause> {
         self.state().draining

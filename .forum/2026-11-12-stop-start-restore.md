@@ -1,10 +1,15 @@
 # How are interrupted daemon turns restored after stop/start?
 
 ADR-0031 replaces listener handoff with cancellation and a fresh daemon.
-`SessionEngine::stop_for_restart` drains active turns, then records one restore
-prompt per interrupted session. The next process consumes each queue row in
-the same transaction that appends its user-role prompt. It starts a fresh turn;
-it never manufactures a successful result for an unanswered permission or
+`SessionEngine::stop_for_restart` snapshots unfinished calls before cancellation.
+Each cancelled turn's finish and its eligible root's restore row commit in one
+transaction. Child sessions stay under the supervisor; archived roots get no
+restore. The next process records prompt injection in the queue row and deletes
+the row only when the restored assistant message starts. A crash between those
+events starts the turn on the next launch without injecting again.
+Restores use the normal server guidance, external directories, and RunGuard;
+one session's failure is logged with its id and does not block the others.
+It never manufactures a successful result for an unanswered permission or
 question. A tool may already have produced side effects before cancellation.
 
 The database schema is the single `0001_init.sql` baseline. The restore queue

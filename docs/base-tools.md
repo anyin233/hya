@@ -45,6 +45,12 @@ installed once.
 `question` remains its hidden compatibility alias. The user-assigned `lsp`,
 `task`, and `invalid` tools belong to the extended family.
 
+`ask_user` asks structured questions through the interaction plane. For example,
+`{"questions":[{"question":"Ship?","header":"confirm","options":[{"label":"yes","description":"proceed"}]}]}`
+returns the selected labels in `metadata.answers`. If any question is cancelled
+(including an empty free-text reply), the call returns `ToolError::Cancelled`;
+the engine records an error rather than a completed tool result.
+
 ## Usage
 
 Applications continue to construct builtins with `ToolRegistry::builtins()`.

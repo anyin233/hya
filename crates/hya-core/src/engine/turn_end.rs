@@ -268,6 +268,21 @@ impl SessionEngine {
         }
         report.stragglers = self.turn_gate.active_sessions();
         for session in &report.stragglers {
+            if let Some((message, _)) = self.restart_prompt(*session) {
+                if let Err(error) = self
+                    .close_turn_message(
+                        None,
+                        *session,
+                        message,
+                        FinishReason::Cancelled,
+                        Some(cause),
+                    )
+                    .await
+                {
+                    tracing::error!(%session, %error, "restart cancellation failed");
+                }
+                continue;
+            }
             if let Ok(envelopes) = self
                 .store
                 .close_open_turns(*session, cause, straggler_reason)
@@ -294,6 +309,20 @@ impl SessionEngine {
         finish: FinishReason,
         cause: Option<FinishCause>,
     ) -> Result<(), CoreError> {
+        if finish == FinishReason::Cancelled
+            && cause == Some(FinishCause::Shutdown)
+            && let Some((interrupted, prompt)) = self.restart_prompt(session)
+            && interrupted == message
+        {
+            let envelopes = self
+                .store
+                .cancel_turn_for_restart(session, message, self.runtime_owner, &prompt)
+                .await?;
+            for envelope in envelopes {
+                self.publish_envelope(envelope);
+            }
+            return Ok(());
+        }
         let projection = self.store.read_projection(session).await?;
         let Some(entry) = projection
             .session

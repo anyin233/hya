@@ -131,20 +131,6 @@ impl PermissionRequests {
                     continue;
                 }
                 let asked = permission_asked_event(&request_id, &entry);
-                let payload = asked["properties"].to_string();
-                if store
-                    .save_pending_interaction(&hya_store::PendingInteraction::new(
-                        &request_id,
-                        entry.session,
-                        "permission",
-                        payload,
-                    ))
-                    .await
-                    .is_err()
-                {
-                    let _ = entry.reply.send(Decision::Reject { feedback: None });
-                    continue;
-                }
                 pending.insert(request_id, entry);
                 drop(pending);
                 let _published = events.send(asked);
@@ -278,9 +264,6 @@ impl PermissionRequests {
         let save_action = entry.action;
         let save_remember = entry.remember.clone();
         let ok = entry.reply.send(decision(reply, message)).is_ok();
-        if ok {
-            let _ = self.store.resolve_pending_interaction(id).await;
-        }
         if ok && matches!(reply, PermissionReply::Always) {
             self.saved.remember(id, save_action, &save_remember).await?;
         }
@@ -321,9 +304,6 @@ impl PermissionRequests {
         let save_remember = entry.remember.clone();
         let replied_session = entry.session;
         let ok = entry.reply.send(decision(reply, message)).is_ok();
-        if ok {
-            let _ = self.store.resolve_pending_interaction(id).await;
-        }
         if ok && matches!(reply, PermissionReply::Always) {
             self.saved.remember(id, save_action, &save_remember).await?;
         }

@@ -28,8 +28,7 @@ use super::session::parse_session;
 /// Spawn `session`'s already-admitted turn on a server run: `run`'s
 /// run-registry entry is held by the spawned task until the turn ends, so
 /// clients see the session busy for exactly the turn's duration. The shared
-/// tail of every `create_turn` kind and of the prompt-less restart-handoff
-/// resume ([`resume_turn`]).
+/// tail of every `create_turn` kind and restart restore.
 fn spawn_turn_run(
     st: &ServerState,
     session: SessionId,
@@ -41,7 +40,7 @@ fn spawn_turn_run(
 ) {
     let engine = st.engine.clone();
     tokio::spawn(async move {
-        let _ = engine
+        if let Err(error) = engine
             .run_turn_with_external_dirs_and_guidance(
                 session,
                 &agent,
@@ -50,9 +49,59 @@ fn spawn_turn_run(
                 guidance,
                 explicit_model,
             )
-            .await;
+            .await
+        {
+            tracing::error!(%session, %error, "server turn failed");
+        }
         drop(run);
     });
+}
+
+impl crate::AppState {
+    /// Restore interrupted roots through the ordinary server turn context and
+    /// run registry. A failed session is logged and does not block startup.
+    pub async fn resume_interrupted_turns(&self) -> Vec<SessionId> {
+        let st = self.server_state();
+        let rows = match st.engine.store().list_pending_resumes().await {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::error!(%error, "cannot list pending restores");
+                return Vec::new();
+            }
+        };
+        let mut resumed = Vec::new();
+        for row in rows {
+            let session = row.session;
+            match resume_turn(&st, session).await {
+                Ok(true) => resumed.push(session),
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::error!(%session, error = %error.0, "cannot restore interrupted turn")
+                }
+            }
+        }
+        resumed
+    }
+}
+
+async fn resume_turn(st: &ServerState, session: SessionId) -> Result<bool, V1Error> {
+    let run = st.start_run(session).ok_or_else(V1Error::session_busy)?;
+    if !st.engine.inject_restart_prompt(session).await? {
+        return Ok(false);
+    }
+    let turn = crate::support::reference::session_agent_with_guidance(st, session).await?;
+    let external_dirs =
+        crate::support::reference::external_directories_at(st, &turn.agent.workdir).await;
+    spawn_turn_run(
+        st,
+        session,
+        run,
+        turn.agent,
+        turn.guidance,
+        external_dirs,
+        None,
+    );
+    Ok(true)
 }
 
 pub(crate) fn router() -> Router<ServerState> {

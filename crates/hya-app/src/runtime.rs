@@ -1148,15 +1148,12 @@ pub async fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
 }
 
 /// [`resolve_runtime`] without the offline fallback: a configuration error
-/// is returned. `hya serve check` uses it so a broken configuration fails the
-/// self-proof instead of composing the offline provider.
+/// is returned rather than composing the offline provider.
 ///
 /// # Errors
 ///
 /// The configuration could not be loaded.
-pub async fn resolve_runtime_strict(
-    model_override: Option<String>,
-) -> anyhow::Result<RuntimeConfig> {
+async fn resolve_runtime_strict(model_override: Option<String>) -> anyhow::Result<RuntimeConfig> {
     let Some(cfg) = config::load().await? else {
         return Ok(offline_runtime(model_override, false));
     };

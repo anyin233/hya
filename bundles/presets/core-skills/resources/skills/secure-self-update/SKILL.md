@@ -46,14 +46,13 @@ To replace the running backend with code you changed in a hya source checkout
 (no release involved):
 
 1. Build: `cargo build -p hya-backend --bin hya`.
-2. Restart from the new build with the tests that prove the change:
-   `./target/debug/hya serve restart --verify 'cargo test -p <crate>'`.
-   The restart first runs `hya serve check` of the new build against a snapshot
-   of the live database; a failing check or verify command leaves the running
-   backend untouched — fix and retry.
-3. The current turn resumes in the new build; the next turn runs the new code.
-4. `hya serve status`: a `restart` line means the new build failed to start and
-   the backend rolled back to the previous build; read `<db>.server.log`.
+2. Run the checks that prove the change, for example `cargo test -p <crate>`.
+3. Run `./target/debug/hya serve restart`. This stops the current daemon,
+   cancels its active turns, then starts the new binary with a fresh listener.
+4. Interrupted root sessions receive one restore prompt and a new turn. The
+   prompt names unfinished tool calls; the model decides what to redo.
+5. Check `hya serve status`. If startup failed, read `<db>.server.log`, fix the
+   failure, and run `./target/debug/hya serve start`.
 
 ## Agent boundaries
 

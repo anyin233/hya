@@ -930,12 +930,18 @@ and says so (use `hya serve relay connect`).
 
 On every graceful daemon stop (including SIGTERM, SIGINT, and SIGHUP), the
 engine refuses new turns, cancels all active turns, and records one
-`pending_resume` row per interrupted session. Unanswered permission and
+`pending_resume` row per interrupted, non-archived root session in the same
+transaction as its cancellation. Child sessions stay under the resident
+supervisor's recovery. Unanswered permission and
 question requests are cancelled with the turn. Their tools are never marked
 successful merely because an answer arrives after cancellation.
 
-The next `start` consumes each pending row and appends one user-role restore
-prompt in a single transaction, then starts a fresh turn. The prompt says the
+The next `start` appends one user-role restore prompt, then starts a fresh
+turn with normal project guidance, busy tracking, and cancellation. The row
+is deleted when the assistant message starts; a crash before that point
+starts the turn on the next launch without repeating the prompt. Missing or
+archived sessions are skipped. A restore failure is logged with the session
+id and does not prevent other restores or server startup. The prompt says the
 previous turn was interrupted by a restart and lists unfinished tool names
 and call IDs. Completed results stay in the transcript. The model decides
 what to redo; interrupted tools may already have had side effects.

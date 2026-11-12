@@ -15,7 +15,6 @@ mod bundle_registry;
 pub mod error;
 mod file_blob;
 mod handoff;
-mod interaction;
 mod mailbox;
 mod materialize;
 mod model_effort_preference;
@@ -57,7 +56,6 @@ pub use bundle_registry::{
 pub use error::StoreError;
 pub use handoff::PendingResume;
 pub use hya_proto::{ActorClaim, OwnerRunId};
-pub use interaction::PendingInteraction;
 pub use mailbox::{RecoveredResidentOutcome, RecoveredResidentWork};
 pub use model_effort_preference::ModelEffortPreference;
 pub use paths::user_cache_dir;
@@ -401,23 +399,10 @@ impl SessionStore {
         session: SessionId,
         event: &Event,
     ) -> Result<(EventSeq, i64), StoreError> {
-        let payload = serde_json::to_string(event)?;
-        let key = session.storage_key();
-        let ts_millis = now_millis();
         let mut tx = self.pool.begin().await?;
-        let row = sqlx::query(
-            "INSERT INTO event_log (session_id, payload, ts) VALUES (?, ?, ?) RETURNING seq, ts",
-        )
-        .bind(&key)
-        .bind(payload)
-        .bind(ts_millis)
-        .fetch_one(&mut *tx)
-        .await?;
-        materialize::materialize_event_side_tables(&mut tx, session, event, ts_millis).await?;
+        let envelope = append_event_in_transaction(&mut tx, session, event.clone()).await?;
         tx.commit().await?;
-        let seq: i64 = row.try_get("seq")?;
-        let ts: i64 = row.try_get("ts")?;
-        Ok((EventSeq(seq.max(0) as u64), ts))
+        Ok((envelope.seq, envelope.ts_millis))
     }
 
     /// Load all envelopes for a session in sequence order (payload JSON decoded to `Event`).
@@ -802,6 +787,20 @@ pub(crate) async fn append_event_in_transaction(
     .await?;
     let seq: i64 = row.try_get("seq")?;
     materialize::materialize_event_side_tables(tx, session, &event, ts_millis).await?;
+    if matches!(
+        event,
+        Event::MessageStarted {
+            role: hya_proto::Role::Assistant,
+            ..
+        }
+    ) {
+        sqlx::query(
+            "DELETE FROM pending_resume WHERE session_id = ? AND prompt_message_id IS NOT NULL",
+        )
+        .bind(session.storage_key())
+        .execute(&mut **tx)
+        .await?;
+    }
     Ok(Envelope {
         seq: EventSeq(seq.max(0) as u64),
         ts_millis,

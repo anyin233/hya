@@ -1719,7 +1719,6 @@ mod tests {
             FinishCause::Interrupted,
             FinishCause::ProviderError,
             FinishCause::Archived,
-            FinishCause::Handoff,
         ] {
             let finished = Event::MessageFinished {
                 session,

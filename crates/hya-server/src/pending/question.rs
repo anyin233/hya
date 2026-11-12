@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use hya_proto::SessionId;
-use hya_store::{PendingInteraction, SessionStore};
 use hya_tool::{
     QuestionAnswer, QuestionInfo as ToolQuestionInfo, QuestionKind, QuestionPrompt, QuestionReply,
     QuestionRequest,
@@ -15,7 +14,6 @@ use tokio::sync::{Mutex, broadcast, mpsc};
 pub(crate) struct QuestionRequests {
     inner: Arc<Mutex<BTreeMap<String, PendingQuestion>>>,
     events: broadcast::Sender<Value>,
-    store: SessionStore,
 }
 
 struct PendingQuestion {
@@ -51,22 +49,18 @@ struct QuestionOption {
 
 impl QuestionRequests {
     #[must_use]
-    pub(crate) fn new(store: SessionStore) -> Self {
+    pub(crate) fn new() -> Self {
         let (events, _) = broadcast::channel(256);
         Self {
             inner: Arc::default(),
             events,
-            store,
         }
     }
 
     #[must_use]
     #[allow(dead_code)]
-    pub(crate) fn spawn(
-        mut rx: mpsc::UnboundedReceiver<QuestionRequest>,
-        store: SessionStore,
-    ) -> Self {
-        let requests = Self::new(store.clone());
+    pub(crate) fn spawn(mut rx: mpsc::UnboundedReceiver<QuestionRequest>) -> Self {
+        let requests = Self::new();
         let inner = requests.inner.clone();
         let events = requests.events.clone();
         std::mem::drop(tokio::spawn(async move {
@@ -78,15 +72,6 @@ impl QuestionRequests {
                 };
                 let request_id = req.id.to_string();
                 let asked = question_asked_event(&request_id, &entry);
-                let payload = serde_json::to_string(&asked).unwrap_or_default();
-                let _ = store
-                    .save_pending_interaction(&PendingInteraction::new(
-                        &request_id,
-                        entry.session,
-                        "question",
-                        payload,
-                    ))
-                    .await;
                 inner.lock().await.insert(request_id, entry);
                 if let Some(asked) = asked {
                     let _published = events.send(asked);
@@ -165,9 +150,6 @@ impl QuestionRequests {
             .send_many(answers_from_reply(entry.questions, answers))
             .is_ok();
         if ok {
-            let _ = self.store.resolve_pending_interaction(id).await;
-        }
-        if ok {
             self.publish_replied(Some(session), id, event_answers);
         }
         ok
@@ -180,9 +162,6 @@ impl QuestionRequests {
             return false;
         };
         let ok = reject_entry(entry);
-        if ok {
-            let _ = self.store.resolve_pending_interaction(id).await;
-        }
         if ok {
             self.publish_rejected(Some(session), id);
         }

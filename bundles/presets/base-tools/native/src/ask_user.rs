@@ -106,6 +106,9 @@ impl Tool for AskUserTool {
             .zip(raw_answers)
             .map(|(question, answer)| answer_entry(question, answer))
             .collect::<Vec<_>>();
+        if answers.iter().any(|answer| answer.cancelled) {
+            return Err(ToolError::Cancelled);
+        }
 
         let formatted = answers
             .iter()
@@ -214,4 +217,63 @@ fn option_labels(question: &QuestionInput) -> Vec<String> {
         .iter()
         .map(|option| option.label.clone())
         .collect()
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use hya_proto::SessionId;
+    use hya_tool::{
+        InteractionPlane, LspPlane, PermissionPlane, PermissionRules, SkillPlane, SpawnerPlane,
+        TodoPlane, WebSearchPlane, handle::ArtifactPlane,
+    };
+    use std::path::PathBuf;
+    use tokio_util::sync::CancellationToken;
+    fn ctx_with(interaction: InteractionPlane, session: SessionId) -> ToolCtx {
+        let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
+        let (spawner, _srx) = SpawnerPlane::new();
+        ToolCtx {
+            workflows: hya_tool::WorkflowPlane::disconnected(),
+            permission,
+            interaction: interaction.for_session(session),
+            spawner,
+            operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
+            mailbox: hya_tool::MailboxPlane::disconnected(),
+            lifecycle: hya_tool::LifecyclePlane::disconnected(),
+            session: Some(session),
+            parent_session: None,
+            todo: TodoPlane::default(),
+            skills: SkillPlane::default(),
+            artifacts: ArtifactPlane::default(),
+            websearch: WebSearchPlane::default(),
+            lsp: LspPlane::default(),
+            formatter: hya_tool::FormatterPlane::default(),
+            agents: Default::default(),
+            workdir: PathBuf::from("."),
+            roots: vec![PathBuf::from(".")],
+            cancel: CancellationToken::new(),
+            project_activity: hya_tool::ProjectActivityPlane::disconnected(),
+        }
+    }
+    #[tokio::test]
+    async fn cancelled_question_is_an_error() {
+        let (interaction, mut rx) = InteractionPlane::new();
+        let ctx = ctx_with(interaction, SessionId::new());
+        let task = tokio::spawn(async move {
+            AskUserTool
+                .execute(
+                    &ctx,
+                    json!({"questions": [{"question":"Ship?", "header":"confirm", "options":[]}]}),
+                )
+                .await
+        });
+        rx.recv()
+            .await
+            .unwrap()
+            .reply
+            .send(QuestionAnswer::Cancelled)
+            .unwrap();
+        assert!(matches!(task.await.unwrap(), Err(ToolError::Cancelled)));
+    }
 }

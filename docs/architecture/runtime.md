@@ -922,20 +922,30 @@ shutdown):
    reason and a released claim, as before 0.41.0.)
 
 Daemon stops additionally call `SessionEngine::stop_for_restart(deadline)`.
-It drains every active session with cause `shutdown`, cancels its unresolved
-permission/question metadata, and queues one restore prompt naming unfinished
-tools and call IDs. `SessionEngine::resume_interrupted_turns(base)` on the next
-start reserves each session's turn, atomically consumes its queue row and
-appends the user-role restore prompt, then starts a new turn. This applies to
-root and child sessions; the model decides what to redo. An unanswered
-permission or question never becomes a synthetic successful tool result.
+It refuses new turns, snapshots pending/running tool calls before cancelling
+them, and drains every active session with cause `shutdown`. The cancellation
+event and restore row commit together for each non-archived root that was
+actually cancelled. Children stay under the resident supervisor's recovery;
+the root prompt names interrupted subagents when its roster identifies them.
+`AppState::resume_interrupted_turns()` on the next start injects one user-role
+restore prompt and starts a turn through the normal server path: project
+guidance, external directories, RunGuard busy tracking, and cancellation.
+The row remains until the assistant message starts, so a crash between prompt
+injection and turn start does not lose the turn or duplicate the prompt.
+Missing, archived, and child sessions are discarded; failures are logged per
+session and do not abort other restores or startup. The model decides what to
+redo. An unanswered permission or question never becomes a synthetic successful
+tool result.
 A new process binds fresh listeners and publishes new discovery metadata
 (ADR-0031); listener inheritance and rollback generations no longer exist.
 
 ```rust
 impl SessionEngine {
     pub async fn stop_for_restart(&self, deadline: Duration) -> Result<TurnDrainReport, CoreError>;
-    pub async fn resume_interrupted_turns(self: &Arc<Self>, base: &AgentSpec) -> Result<Vec<SessionId>, CoreError>;
+    pub async fn inject_restart_prompt(&self, session: SessionId) -> Result<bool, CoreError>;
+}
+impl AppState {
+    pub async fn resume_interrupted_turns(&self) -> Vec<SessionId>;
 }
 ```
 

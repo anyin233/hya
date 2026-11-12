@@ -283,7 +283,7 @@ fn restart_replaces_the_daemon() -> TestResult {
     let url = first["url"].as_str().ok_or("no url")?.to_string();
     let stream = open_events(&url)?;
 
-    // Restart blocks until the successor is healthy and reports its new generation.
+    // Restart stops the old process and waits for the new daemon to be healthy.
     let restarted = run(&root, &db, &["restart", "--json"])?;
     assert!(
         restarted.status.success(),
@@ -291,6 +291,7 @@ fn restart_replaces_the_daemon() -> TestResult {
         String::from_utf8_lossy(&restarted.stderr)
     );
     let ready = json(&restarted)?;
+    assert_eq!(ready["restarted"], true, "{ready}");
     assert_ne!(
         pid_of(&ready)?,
         first_pid,

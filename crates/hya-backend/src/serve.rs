@@ -492,7 +492,7 @@ pub(crate) async fn prepare_server(
     // Build the complete shared server before advertising readiness.
     let server = hya_server::build(state.clone());
     relay.set_service(server.clone());
-    let resumed = engine.resume_interrupted_turns(&agent).await?;
+    let resumed = state.resume_interrupted_turns().await;
     if !resumed.is_empty() {
         eprintln!(
             "hya: restored {} interrupted session turn(s)",
