@@ -64,6 +64,14 @@ Derived invariant (used by the channel plane): **while I am live, my parent is
 live** — a parent cannot archive before all its children archive. Upward mail
 never resolves to an archived peer; revival is exclusively downward.
 
+A mail wake coalesces eligible unread messages into one owned user prompt.
+Delivery, `ResidentWorkStarted` (or main's `MailConsumed`) and Busy activity
+commit in one fenced store transaction; user-text hooks run before that
+transaction. Main synthesis also owns a user prompt. See
+[atomic mail wakes](../spec/backend/task-tool.md#atomic-mail-wakes) for the
+store types and examples. A failed commit leaves both prompt and consumption
+absent; policy-denied mail alone never starts a turn.
+
 ## 2. Unified spawn admission
 
 One path replaces both the durable-owner (transient) and legacy (resident)
