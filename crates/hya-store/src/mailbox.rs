@@ -63,7 +63,8 @@ pub enum ResidentArchiveOwner<'a> {
     /// The episode ending itself under its current claim.
     Claim(&'a ActorClaim),
     /// End an orphan: the caller guarantees there is no in-memory episode.
-    /// Takes over the active claim and fences the previous owner atomically.
+    /// Requires the runtime-owning store and `check_gate: false`. Takes over
+    /// the active claim and fences the previous owner atomically.
     Takeover,
 }
 
@@ -379,10 +380,23 @@ impl SessionStore {
         let member_status = archive.member_status;
         let mut tx = self.begin_transaction().await?;
         let owned_claim;
-        let (claim, admission_epoch) = match owner {
-            ResidentArchiveOwner::Claim(claim) => (claim, claim.epoch.get()),
+        let claim = match owner {
+            ResidentArchiveOwner::Claim(claim) => claim,
             ResidentArchiveOwner::Takeover => {
-                let owner_run_id = hya_proto::OwnerRunId::new();
+                let owner_run_id = self
+                    .runtime_owner
+                    .claim
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .as_ref()
+                    .map(|claim| claim.owner)
+                    .ok_or(StoreError::RuntimeOwnerClaimRequired)?;
+                self.require_runtime_owner(owner_run_id)?;
+                if archive.check_gate {
+                    return Err(StoreError::ActorClaimData(
+                        "voluntary report requires an episode claim".into(),
+                    ));
+                }
                 let epoch: Option<i64> = sqlx::query_scalar(
                     "UPDATE resident_actor_claim SET epoch = epoch + 1, owner_run_id = ? \
                      WHERE actor_id = ? AND state = 'active' AND epoch < 9223372036854775807 \
@@ -392,13 +406,36 @@ impl SessionStore {
                 .bind(actor_id.storage_key())
                 .fetch_optional(&mut *tx)
                 .await?;
-                let epoch = epoch.ok_or(StoreError::ActorClaimUnavailable { actor_id })? as u64;
+                let Some(epoch) = epoch else {
+                    let released: bool = sqlx::query_scalar(
+                        "SELECT EXISTS(SELECT 1 FROM resident_actor_claim \
+                         WHERE actor_id = ? AND state = 'released')",
+                    )
+                    .bind(actor_id.storage_key())
+                    .fetch_one(&mut *tx)
+                    .await?;
+                    if released {
+                        let projection =
+                            replay_projection(&self.projections, &mut tx, root).await?;
+                        if projection
+                            .team
+                            .archived
+                            .get(handle)
+                            .is_some_and(|entry| entry.session == actor_id)
+                        {
+                            tx.commit().await?;
+                            return Ok((ResidentArchiveOutcome::Committed, Vec::new(), Vec::new()));
+                        }
+                    }
+                    return Err(StoreError::ActorClaimUnavailable { actor_id });
+                };
+                let epoch = epoch as u64;
                 owned_claim = ActorClaim {
                     actor_id,
                     epoch: ActorEpoch::from_storage(epoch),
                     owner_run_id,
                 };
-                (&owned_claim, epoch - 1)
+                &owned_claim
             }
         };
         if let Err(error) = fence_actor_claim(&mut tx, claim).await {
@@ -531,7 +568,7 @@ impl SessionStore {
              SET state = 'aborted', \
                  logical_released = CASE WHEN state = 'started' THEN 1 ELSE logical_released END, \
                  terminal_reason = ?, updated_at = ? \
-             WHERE actor_id = ? AND actor_epoch = ? AND state IN ('accepted', 'started') \
+             WHERE actor_id = ? AND actor_epoch <= ? AND state IN ('accepted', 'started') \
              RETURNING operation_id, source_tool_call_id, root_session_id, request_fingerprint, \
                        state, admission_units, logical_released, \
                        terminal_reason, created_at, updated_at, actor_id, actor_epoch",
@@ -539,9 +576,7 @@ impl SessionStore {
         .bind(reason)
         .bind(now_millis())
         .bind(claim.actor_id.storage_key())
-        .bind(i64::try_from(admission_epoch).map_err(|_| {
-            StoreError::ActorClaimData("actor epoch exceeds SQLite INTEGER range".to_string())
-        })?)
+        .bind(epoch)
         .fetch_all(&mut *tx)
         .await?;
         let admissions = rows

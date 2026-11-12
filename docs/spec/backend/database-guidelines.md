@@ -283,10 +283,23 @@ turn cleanup remains unchanged.
 `finalize_resident_archive(owner: ResidentArchiveOwner<'_>, root: SessionId,
 handle: &str, archive: ResidentArchive, cause: FinishCause)` returns
 `Result<(ResidentArchiveOutcome, Vec<Envelope>, Vec<AdmissionRecord>), StoreError>`.
-`Claim(&ActorClaim)` fences the episode; `Takeover` bumps an orphan's active
-claim epoch and replaces its owner inside the terminal transaction. Voluntary
-gate refusals commit only a harness notice and return `Refused`; terminal effects
-return `Committed`. A store error rolls back everything, including takeover.
+`Claim(&ActorClaim)` fences the episode; `Takeover` requires the store's registered
+runtime owner and bumps an orphan's active claim epoch under that owner inside
+the terminal transaction. The caller guarantees no in-memory episode exists.
+For example, after an archive write fails, retry the orphan with `Takeover` and
+`check_gate: false`; if another ending already released and archived the same
+actor under the same root/handle, the retry returns `Committed` with empty event
+and admission lists. A missing claim, or a released claim without the matching
+root/handle/actor archive, returns `ActorClaimUnavailable`. A store that has not
+claimed runtime ownership returns `RuntimeOwnerClaimRequired`.
+`Takeover` with `check_gate: true` returns `ActorClaimData` ("voluntary report
+requires an episode claim"): voluntary report gates belong to live episodes.
+Claim-based gate refusals commit only a harness notice and return `Refused`;
+terminal effects return `Committed`. Refused or failed transitions leave the
+claim tuple unchanged. A store error rolls back everything, including takeover.
+Successful terminal finalization aborts every nonterminal admission for that
+actor through the final claim epoch, including admissions left by earlier
+recovery attempts; only previously started rows set `logical_released`.
 The engine supplies
 the prepared handoff, archive reason, terminal note and `member_status` explicitly
 (see [Task Tool](task-tool.md#atomic-resident-termination)); the store never
