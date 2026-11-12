@@ -629,21 +629,25 @@ flowchart TD
         .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
         .unwrap();
 
-    let report = run_workflow(
-        engine.clone(),
-        lead,
-        &def,
-        hya_core::WorkflowRunContext {
-            binding,
-            caller: "hya-main".to_string(),
-            base_agent: base,
-            inputs: BTreeMap::new(),
-            resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
-            routing: None,
-        },
-        CancellationToken::new(),
+    let report = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        run_workflow(
+            engine.clone(),
+            lead,
+            &def,
+            hya_core::WorkflowRunContext {
+                binding,
+                caller: "hya-main".to_string(),
+                base_agent: base,
+                inputs: BTreeMap::new(),
+                resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
+                routing: None,
+            },
+            CancellationToken::new(),
+        ),
     )
     .await
+    .expect("an archived failed actor must settle its Workflow stage")
     .unwrap();
 
     assert_eq!(report.status, WorkflowStatus::Failed);
@@ -1404,11 +1408,19 @@ flowchart TD
     let projection = engine.read_projection(lead).await.unwrap();
     let resident = projection
         .team
-        .roster
+        .archived
         .values()
         .find(|entry| entry.agent_type.as_str() == "resident-worker")
-        .expect("resident roster row remains replay-visible");
-    assert!(resident.resident_work.is_none());
+        .expect("cancelled resident remains in the archive");
+    assert!(!projection.team.roster.contains_key(&resident.handle));
+    assert!(
+        !engine
+            .store()
+            .active_actor_ids()
+            .await
+            .unwrap()
+            .contains(&resident.session)
+    );
 }
 
 /// Agent ids are definitions, not identities: transient reuse creates distinct
@@ -1535,11 +1547,19 @@ flowchart TD
     let projection = engine.read_projection(lead).await.unwrap();
     let resident = projection
         .team
-        .roster
+        .archived
         .values()
         .find(|entry| entry.agent_type.as_str() == "resident-worker")
-        .expect("resident roster row");
-    assert!(resident.resident_work.is_none());
+        .expect("failed resident remains in the archive");
+    assert!(!projection.team.roster.contains_key(&resident.handle));
+    assert!(
+        !engine
+            .store()
+            .active_actor_ids()
+            .await
+            .unwrap()
+            .contains(&resident.session)
+    );
 }
 
 // ---------------------------------------------------------------------------

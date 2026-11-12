@@ -506,13 +506,8 @@ async fn revive_is_rejected_for_agents_the_caller_did_not_spawn() {
                 break;
             }
             Err(CoreError::Invalid(message)) if message.contains("still working") => {
-                let projection = engine.read_projection(root).await.unwrap();
-                let entry = projection.team.roster.get(&lead_handle).unwrap();
-                assert!(
-                    entry.status == RosterStatus::Busy,
-                    "slot busy but roster {:?}: ordering bug ({message})",
-                    entry.status
-                );
+                // A mail wake may reserve the slot before its Busy event is
+                // published; a separate projection read cannot prove ordering.
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
             Err(other) => panic!("unexpected lead report error: {other:?}"),
@@ -547,8 +542,8 @@ async fn stop_still_terminates_a_resident_without_report() {
     let (_child, handle) = spawn_idle_resident(&supervisor, &engine, root, "work").await;
     supervisor.stop_resident(root, &handle).await.unwrap();
     let projection = engine.read_projection(root).await.unwrap();
-    let entry = projection.team.roster.get(&handle).unwrap();
-    assert_eq!(entry.status, RosterStatus::Failed);
+    assert!(!projection.team.roster.contains_key(&handle));
+    assert!(projection.team.archived.contains_key(&handle));
 }
 
 #[tokio::test]

@@ -1,7 +1,7 @@
 use hya_proto::{
-    ActorClaim, Envelope, Event, FinishCause, FinishReason, MailEndpoint, MailKind,
-    MemberRunStatus, MessageId, PartId, Projection, Role, RosterEntry, RosterStatus, SessionId,
-    SubagentMode, now_millis, scope,
+    ActorClaim, ArchiveReason, Envelope, Event, FinishCause, FinishReason, MailEndpoint, MailKind,
+    MemberId, MemberRunStatus, MessageId, PartId, Projection, ReportOutcome, Role, RosterEntry,
+    RosterStatus, SessionId, SubagentMode, now_millis, scope,
 };
 
 use crate::{
@@ -31,6 +31,28 @@ pub struct RecoveredResidentOutcome {
     pub work: RecoveredResidentWork,
     pub envelopes: Vec<Envelope>,
     pub admissions: Vec<AdmissionRecord>,
+}
+
+/// Prepared terminal effects; generation fences the handoff episode.
+pub struct ResidentArchive {
+    /// Resident session being archived.
+    pub actor: SessionId,
+    /// Next handoff generation.
+    pub generation: u32,
+    /// Prepared handoff document.
+    pub doc: String,
+    /// Whether the handoff is deterministic.
+    pub degraded: bool,
+    /// Archive classification.
+    pub reason: ArchiveReason,
+    /// Human-readable terminal reason used in cancellation and member closure.
+    pub note: String,
+    /// Optional outcome and report sent to the parent.
+    pub report: Option<(ReportOutcome, String)>,
+    /// Recheck unread mail and live children for a voluntary report.
+    pub check_gate: bool,
+    /// Cursor and active work observed before preparing the handoff.
+    pub expected_work: Option<(u64, Option<hya_proto::ResidentWorkProjection>)>,
 }
 
 impl SessionStore {
@@ -299,12 +321,14 @@ impl SessionStore {
         cause: FinishCause,
     ) -> Result<(Vec<Envelope>, Vec<AdmissionRecord>), StoreError> {
         self.finalize_resident_with_reason(
-            claim,
+            Some(claim),
+            claim.actor_id,
             root,
             handle,
             "resident stopped",
             MemberRunStatus::Cancelled,
             cause,
+            None,
         )
         .await
     }
@@ -322,26 +346,67 @@ impl SessionStore {
         reason: &str,
     ) -> Result<(Vec<Envelope>, Vec<AdmissionRecord>), StoreError> {
         self.finalize_resident_with_reason(
-            claim,
+            Some(claim),
+            claim.actor_id,
             root,
             handle,
             reason,
             MemberRunStatus::Failed,
             FinishCause::Other,
+            None,
         )
         .await
     }
 
+    /// Commit prepared archive effects together with terminal cleanup and claim release.
+    pub async fn finalize_resident_archive(
+        &self,
+        claim: Option<&ActorClaim>,
+        root: SessionId,
+        handle: &str,
+        archive: ResidentArchive,
+        cause: FinishCause,
+    ) -> Result<(Vec<Envelope>, Vec<AdmissionRecord>), StoreError> {
+        let note = archive.note.clone();
+        self.finalize_resident_with_reason(
+            claim,
+            archive.actor,
+            root,
+            handle,
+            &note,
+            MemberRunStatus::Cancelled,
+            cause,
+            Some(archive),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
     async fn finalize_resident_with_reason(
         &self,
-        claim: &ActorClaim,
+        claim: Option<&ActorClaim>,
+        actor_id: SessionId,
         root: SessionId,
         handle: &str,
         reason: &str,
         member_status: MemberRunStatus,
         cause: FinishCause,
+        archive: Option<ResidentArchive>,
     ) -> Result<(Vec<Envelope>, Vec<AdmissionRecord>), StoreError> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.begin_transaction().await?;
+        let owned_claim;
+        let claim = match claim {
+            Some(claim) => claim,
+            None => {
+                owned_claim = Self::try_claim_new_in_transaction(
+                    &mut tx,
+                    actor_id,
+                    hya_proto::OwnerRunId::new(),
+                )
+                .await?;
+                &owned_claim
+            }
+        };
         if let Err(error) = fence_actor_claim(&mut tx, claim).await {
             let stale = matches!(
                 &error,
@@ -363,10 +428,61 @@ impl SessionStore {
                 "resident stop handle is not registered".to_string(),
             ));
         };
-        if entry.session != claim.actor_id || entry.mode != SubagentMode::Resident {
+        if actor_id != claim.actor_id
+            || entry.session != claim.actor_id
+            || entry.mode != SubagentMode::Resident
+        {
             return Err(StoreError::ActorClaimData(
                 "resident stop handle does not match actor claim".to_string(),
             ));
+        }
+
+        let actor = replay_projection(&self.projections, &mut tx, claim.actor_id).await?;
+        let generation = actor
+            .session
+            .handoff
+            .as_ref()
+            .map_or(1, |handoff| handoff.generation.saturating_add(1));
+        let archive = archive.unwrap_or_else(|| ResidentArchive {
+            actor: actor_id,
+            generation,
+            doc: format!("## Goal\nResident stopped\n## State\n{reason}\n## Decisions\nNone\n## Next steps\nAwait a new directive\n## Evidence\nSee retained transcript\n## Risks\nTask cancelled"),
+            degraded: true,
+            reason: if member_status == MemberRunStatus::Failed { ArchiveReason::Killed } else { ArchiveReason::ArchivedByParent },
+            note: reason.into(),
+            report: None,
+            check_gate: false,
+            expected_work: None,
+        });
+        if archive
+            .expected_work
+            .is_some_and(|work| work != (entry.resident_cursor, entry.resident_work))
+            || archive.generation != generation
+        {
+            return Err(StoreError::MailboxRejected(
+                "resident episode changed during handoff".into(),
+            ));
+        }
+        if archive.check_gate {
+            let read_through = entry.resident_work.map_or(entry.resident_cursor, |work| {
+                entry.resident_cursor.max(work.inbox_through)
+            });
+            let inbox_len = projection
+                .team
+                .inboxes
+                .get(handle)
+                .map_or(0, |inbox| inbox.len() as u64);
+            if read_through < inbox_len
+                || projection
+                    .team
+                    .roster
+                    .keys()
+                    .any(|path| scope::parent_path(path) == Some(handle))
+            {
+                return Err(StoreError::MailboxRejected(
+                    "report rejected: unread mail or live children arrived before archive".into(),
+                ));
+            }
         }
 
         let mut envelopes = append_resident_effects_in_transaction(
@@ -377,16 +493,18 @@ impl SessionStore {
             cause,
         )
         .await?;
-        envelopes.extend(
-            close_parent_member_row_in_transaction(
-                &self.projections,
-                &mut tx,
-                claim.actor_id,
-                member_status,
-                reason,
-            )
-            .await?,
-        );
+        if archive.report.is_none() {
+            envelopes.extend(
+                close_parent_member_row_in_transaction(
+                    &self.projections,
+                    &mut tx,
+                    claim.actor_id,
+                    member_status,
+                    reason,
+                )
+                .await?,
+            );
+        }
 
         let epoch = i64::try_from(claim.epoch.get()).map_err(|_| {
             StoreError::ActorClaimData("actor epoch exceeds SQLite INTEGER range".to_string())
@@ -439,8 +557,95 @@ impl SessionStore {
             });
         }
 
-        tx.commit().await?;
         envelopes.push(root_envelope);
+        if claim.actor_id != root {
+            envelopes.push(
+                append_event_in_transaction(
+                    &mut tx,
+                    claim.actor_id,
+                    Event::HandoffCommitted {
+                        session: claim.actor_id,
+                        handle: handle.into(),
+                        generation: archive.generation,
+                        doc: archive.doc,
+                        degraded: archive.degraded,
+                    },
+                )
+                .await?,
+            );
+            if let Some((outcome, report)) = archive.report {
+                let parent_path = scope::parent_path(handle).unwrap_or(scope::ROOT_HANDLE);
+                let parent = projection
+                    .team
+                    .roster
+                    .get(parent_path)
+                    .map_or(root, |entry| entry.session);
+                let parent_projection =
+                    replay_projection(&self.projections, &mut tx, parent).await?;
+                let member = parent_projection
+                    .session
+                    .members
+                    .iter()
+                    .find(|row| row.child == Some(claim.actor_id))
+                    .map_or_else(MemberId::new, |row| row.member);
+                envelopes.push(
+                    append_event_in_transaction(
+                        &mut tx,
+                        parent,
+                        Event::SubagentReported {
+                            session: parent,
+                            member,
+                            child: claim.actor_id,
+                            handle: handle.into(),
+                            outcome,
+                            report: report.clone(),
+                        },
+                    )
+                    .await?,
+                );
+                let target = projection
+                    .team
+                    .channels
+                    .iter()
+                    .find(|(_, channel)| {
+                        channel.kind == hya_proto::ChannelKind::Dm
+                            && channel.members.contains(handle)
+                            && channel.members.contains(parent_path)
+                    })
+                    .map_or_else(
+                        || MailEndpoint::Handle(parent_path.into()),
+                        |(key, _)| MailEndpoint::Channel(key.clone()),
+                    );
+                envelopes.push(
+                    append_event_in_transaction(
+                        &mut tx,
+                        root,
+                        Event::MailSent {
+                            session: root,
+                            from: handle.into(),
+                            to: target,
+                            kind: MailKind::Message,
+                            body: report,
+                        },
+                    )
+                    .await?,
+                );
+            }
+            envelopes.push(
+                append_event_in_transaction(
+                    &mut tx,
+                    root,
+                    Event::AgentArchived {
+                        session: root,
+                        handle: handle.into(),
+                        child: claim.actor_id,
+                        reason: archive.reason,
+                    },
+                )
+                .await?,
+            );
+        }
+        tx.commit().await?;
         Ok((envelopes, admissions))
     }
 }
@@ -576,11 +781,16 @@ async fn released_resident_matches(
     }
 
     let projection = replay_projection(cache, tx, root).await?;
-    Ok(projection.team.roster.get(handle).is_some_and(|entry| {
-        entry.session == claim.actor_id
-            && entry.mode == SubagentMode::Resident
-            && entry.status == RosterStatus::Failed
-    }))
+    Ok(projection
+        .team
+        .archived
+        .get(handle)
+        .is_some_and(|entry| entry.session == claim.actor_id)
+        || projection.team.roster.get(handle).is_some_and(|entry| {
+            entry.session == claim.actor_id
+                && entry.mode == SubagentMode::Resident
+                && entry.status == RosterStatus::Failed
+        }))
 }
 
 /// Count eligible subscribers of an already-resolved channel key and append the

@@ -666,7 +666,7 @@ async fn team_turn_budget_kill_before_first_turn_closes_initial_task() {
         engine.governor().unwrap().charge_team_turn(root),
         crate::TeamBudget::Ok
     );
-    let (child, _) = spawn(&supervisor, &engine, &agent, root, None)
+    let (child, handle) = spawn(&supervisor, &engine, &agent, root, None)
         .await
         .unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -683,6 +683,40 @@ async fn team_turn_budget_kill_before_first_turn_closes_initial_task() {
     .await
     .unwrap();
     assert_cancelled_task(&engine, child, FinishCause::Other).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while supervisor.team_cancel(root).is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    supervisor
+        .revive_child(root, "main", &handle, "new task".into())
+        .await
+        .unwrap();
+    assert!(
+        engine
+            .read_projection(root)
+            .await
+            .unwrap()
+            .team
+            .roster
+            .contains_key(&handle)
+    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let projection = engine.read_projection(child).await.unwrap();
+            if projection.session.messages.last().is_some_and(|message| {
+                message.role == Role::Assistant && message.finish == Some(FinishReason::Stop)
+            }) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    supervisor.team_cancel(root).unwrap().cancel();
 }
 
 #[tokio::test]
@@ -717,4 +751,60 @@ async fn team_message_budget_kill_before_first_turn_closes_initial_task() {
     .unwrap();
     drop(lease);
     assert_cancelled_task(&engine, child, FinishCause::Other).await;
+}
+
+#[tokio::test]
+async fn terminal_archive_rechecks_mail_after_report_gate() {
+    let (engine, supervisor, agent, root) = fixture(SubagentLimits::default(), None).await;
+    let (child, lease) = armed_child(&engine, &supervisor, &agent, root).await;
+    supervisor.report_gate(root, "main/worker").await.unwrap();
+    engine
+        .store()
+        .append_harness_mail(root, "main/worker", "late directive".into())
+        .await
+        .unwrap();
+    let claim = engine
+        .store()
+        .recover_claim(child, OwnerRunId::new())
+        .await
+        .unwrap()
+        .claim;
+    let result = crate::resident::archive_reported_agent(
+        &engine,
+        root,
+        "main/worker",
+        child,
+        Some(&claim),
+        hya_proto::ReportOutcome::Done,
+        "finished".into(),
+        hya_proto::ArchiveReason::Reported,
+        false,
+    )
+    .await;
+    assert!(result.is_err(), "late mail must refuse archive");
+    engine.store().validate_actor_claim(&claim).await.unwrap();
+    assert!(
+        engine
+            .read_projection(child)
+            .await
+            .unwrap()
+            .session
+            .handoff
+            .is_none()
+    );
+
+    let projection = engine.read_projection(root).await.unwrap();
+    assert!(projection.team.roster.contains_key("main/worker"));
+    assert!(
+        projection.team.inboxes["main/worker"]
+            .iter()
+            .any(|mail| mail.body == "late directive")
+    );
+    drop(lease);
+    engine
+        .store()
+        .finalize_resident_stop(&claim, root, "main/worker")
+        .await
+        .unwrap();
+    supervisor.team_cancel(root).unwrap().cancel();
 }
