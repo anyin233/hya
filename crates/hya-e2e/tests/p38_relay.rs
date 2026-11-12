@@ -32,8 +32,8 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use futures::{SinkExt as _, StreamExt as _};
-use hya_client::Client;
 use hya_e2e::{E2eEnv, E2eEnvBuilder, fake_requests_from, text_step, tool_step};
+use hya_sdk_v1::Client;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::{TcpListener, TcpStream};

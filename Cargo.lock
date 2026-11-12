@@ -1138,26 +1138,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hya-client"
-version = "0.0.0"
-dependencies = [
- "axum 0.7.9",
- "hya-api",
- "hya-bundle",
- "hya-core",
- "hya-proto",
- "hya-provider",
- "hya-server",
- "hya-store",
- "hya-tool",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
-]
-
-[[package]]
 name = "hya-core"
 version = "0.0.0"
 dependencies = [
@@ -1196,9 +1176,9 @@ dependencies = [
  "futures",
  "hya-api",
  "hya-bundle",
- "hya-client",
  "hya-core",
  "hya-proto",
+ "hya-sdk-v1",
  "libc",
  "rcgen",
  "reqwest",

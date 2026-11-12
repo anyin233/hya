@@ -77,17 +77,6 @@ pub(crate) fn require_local_owner(
     Ok(())
 }
 
-/// Refuse a request that arrived through the relay (process stop/upgrade).
-pub(crate) fn refuse_relay_origin(extensions: &Extensions, what: &str) -> Result<(), V1Error> {
-    if Origin::of(extensions) == Origin::Relay {
-        return Err(V1Error::new(
-            Code::PermissionDenied,
-            format!("{what} is refused for a request that arrived through the relay"),
-        ));
-    }
-    Ok(())
-}
-
 impl From<RelayHostError> for V1Error {
     fn from(error: RelayHostError) -> Self {
         let code = match &error {

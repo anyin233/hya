@@ -1,11 +1,11 @@
-//! High-level E2E environment: FakeLlm + BackendProcess + hya-client + HTTP helpers.
+//! High-level E2E environment: FakeLlm + BackendProcess + hya-sdk-v1 + HTTP helpers.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use hya_api::v1 as pb;
-use hya_client::Client;
 use hya_proto::SessionId;
+use hya_sdk_v1::Client;
 use serde_json::Value;
 
 use crate::backend::{

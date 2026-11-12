@@ -1,16 +1,5 @@
-//! Small typed `reqwest` client for the hya v1 HTTP API.
-//!
-//! Create sessions, run event-driven turns (admit + wait), replay events
-//! (curated wire events and, for tooling, the raw durable envelopes), and
-//! answer pending interactions. This is **not** the frontend SDK surface
-//! (`hya-sdk`); use this crate for integration tests and tooling.
+//! Typed tooling and process-harness HTTP calls.
 
-//!
-//! This crate has no stream wrapper or automatic reconnect policy. Consumers
-//! of SSE/WebSocket routes MUST reconnect themselves after transport closure or
-//! `serverStopping`, then read/replay durable state. Provider-stream deltas
-//! with `seq == 0` are live-only and may be lost across a process restart;
-//! completed durable transcript parts are the recovery boundary.
 use hya_api::v1 as pb;
 use hya_proto::{Envelope, SessionId};
 use serde_json::Value;

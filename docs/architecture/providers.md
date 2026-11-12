@@ -199,7 +199,7 @@ optional Hya auth. The app then publishes one immutable
 states, the row-backed default, and the canonical offline notice when needed.
 
 `ProviderRouter`, `SessionEngine`, `hya models`, server catalog and
-bootstrap routes, and Rust clients (`hya-client` / `hya-sdk-v1`) all consume
+bootstrap routes, and Rust clients (`hya-sdk-v1`) all consume
 that snapshot or a direct wire projection of it. They do not re-fetch, re-flatten
 config, or
 synthesize active/default/session rows. When there are no live rows the snapshot

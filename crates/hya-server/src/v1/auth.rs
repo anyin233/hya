@@ -3,8 +3,7 @@
 //! Keys are written by the app-owned [`crate::ProviderControl`] through
 //! `hya_app::auth` (atomic, mode 0600, `type: api`), which then rebuilds the
 //! provider's route and the catalog live — no restart. Provider OAuth flows
-//! over HTTP are not wired for v1 yet and answer `unavailable` honestly
-//! rather than faking a flow.
+//! are performed by the launcher auth command.
 
 use axum::Router;
 use axum::extract::{Path as AxumPath, State};
@@ -24,14 +23,6 @@ pub(crate) fn router() -> Router<ServerState> {
         .route(
             "/v1/auth/:provider_id",
             put(set_provider_auth).delete(remove_provider_auth),
-        )
-        .route(
-            "/v1/auth/:provider_id/oauth/start",
-            axum::routing::post(start_oauth),
-        )
-        .route(
-            "/v1/auth/:provider_id/oauth/callback",
-            axum::routing::post(complete_oauth),
         )
 }
 
@@ -101,24 +92,4 @@ async fn remove_provider_auth(
             None
         },
     }))
-}
-
-async fn start_oauth(
-    AxumPath(provider_id): AxumPath<String>,
-    Json(_request): Json<pb::StartOauthRequest>,
-) -> Result<Json<pb::StartOauthResponse>, V1Error> {
-    check_provider_id(&provider_id)?;
-    Err(V1Error::unavailable(format!(
-        "provider oauth start is not wired for {provider_id}; use the launcher auth command"
-    )))
-}
-
-async fn complete_oauth(
-    AxumPath(provider_id): AxumPath<String>,
-    Json(_request): Json<pb::CompleteOauthRequest>,
-) -> Result<Json<pb::CompleteOauthResponse>, V1Error> {
-    check_provider_id(&provider_id)?;
-    Err(V1Error::unavailable(format!(
-        "provider oauth completion is not wired for {provider_id}; use the launcher auth command"
-    )))
 }

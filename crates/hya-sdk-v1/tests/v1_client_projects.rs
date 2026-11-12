@@ -1,4 +1,4 @@
-//! `hya-client` Project calls against the in-process `/v1` router.
+//! `hya-sdk-v1` Project calls against the in-process `/v1` router.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use hya_api::v1 as pb;
 use hya_bundle::BundleCatalog;
-use hya_client::{Client, ClientError};
 use hya_core::{AgentSpec, EventBus, RuntimeRegistry, SessionEngine};
 use hya_proto::{AgentName, ModelRef};
 use hya_provider::{FakeProvider, ProviderRouter};
+use hya_sdk_v1::{Client, ClientError};
 use hya_server::{AppState, router};
 use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};

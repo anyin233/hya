@@ -3,7 +3,7 @@
 Track P runs the **production** backend binary against a temp XDG config and a
 local scripted OpenAI-compatible chat-completions server (FakeLlm). No live
 model keys are required. Every product assertion goes through the `hya.v1`
-contract (the typed `hya-client` plus raw `/v1` JSON), so the matrix exercises
+contract (the typed `hya-sdk-v1` plus raw `/v1` JSON), so the matrix exercises
 the same API real frontends consume.
 
 ## Layout

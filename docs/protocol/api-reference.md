@@ -90,8 +90,6 @@ third-party service connectors, which are out of scope for v1.
 | `ListProviderAuth` | `GET /v1/auth` | `hya.v1.Auth.ListProviderAuth` | `ListProviderAuthRequest` | `ListProviderAuthResponse` |
 | `SetProviderAuth` | `PUT /v1/auth/{provider_id}` | `hya.v1.Auth.SetProviderAuth` | `SetProviderAuthRequest` | `SetProviderAuthResponse` |
 | `RemoveProviderAuth` | `DELETE /v1/auth/{provider_id}` | `hya.v1.Auth.RemoveProviderAuth` | `RemoveProviderAuthRequest` | `RemoveProviderAuthResponse` |
-| `StartOauth` | `POST /v1/auth/{provider_id}/oauth/start` | `hya.v1.Auth.StartOauth` | `StartOauthRequest` | `StartOauthResponse` |
-| `CompleteOauth` | `POST /v1/auth/{provider_id}/oauth/callback` | `hya.v1.Auth.CompleteOauth` | `CompleteOauthRequest` | `CompleteOauthResponse` |
 
 ### `Auth.ListProviderAuth`
 
@@ -109,16 +107,6 @@ models also fetches its model list.
 
 Delete the stored credentials for a provider and rebuild its route live
 (an inline config `api_key`, if any, applies again).
-
-
-### `Auth.StartOauth`
-
-Begin a provider OAuth flow; returns the authorization URL to open.
-
-
-### `Auth.CompleteOauth`
-
-Complete a provider OAuth flow with the callback code.
 
 
 ## Service `BundleApi`
@@ -526,8 +514,6 @@ process disposal/upgrade, and the one-round-trip bootstrap snapshot.
 | `GetLocation` | `GET /v1/location` | `hya.v1.Process.GetLocation` | `GetLocationRequest` | `LocationInfo` |
 | `GetConfig` | `GET /v1/config` | `hya.v1.Process.GetConfig` | `GetConfigRequest` | `GetConfigResponse` |
 | `UpdateConfig` | `PATCH /v1/config` | `hya.v1.Process.UpdateConfig` | `UpdateConfigRequest` | `GetConfigResponse` |
-| `DisposeProcess` | `POST /v1/process/dispose` | `hya.v1.Process.DisposeProcess` | `DisposeProcessRequest` | `DisposeProcessResponse` |
-| `UpgradeProcess` | `POST /v1/process/upgrade` | `hya.v1.Process.UpgradeProcess` | `UpgradeProcessRequest` | `UpgradeProcessResponse` |
 | `GetBootstrap` | `GET /v1/bootstrap` | `hya.v1.Process.GetBootstrap` | `GetBootstrapRequest` | `Bootstrap` |
 
 ### `Process.GetHealth`
@@ -548,16 +534,6 @@ Read the effective runtime configuration bag for a directory.
 ### `Process.UpdateConfig`
 
 Deep-merge a JSON object into the runtime configuration bag.
-
-
-### `Process.DisposeProcess`
-
-Ask the backend process to shut down gracefully.
-
-
-### `Process.UpgradeProcess`
-
-Ask the backend to self-update via the verified updater.
 
 
 ### `Process.GetBootstrap`
@@ -1130,39 +1106,6 @@ OAuth tokens captured from a completed provider flow.
 | Field | Type | Description |
 |---|---|---|
 | `provider` (1) | `ProviderInfo` | The provider after the live rebuild; unset when the id is not a configured provider. |
-
-### `StartOauthRequest`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `directory` (1) | `string` | Directory context for auth resolution. |
-| `provider_id` (2) | `string` | Provider identifier to authenticate. |
-
-### `StartOauthResponse`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `authorization_url` (1) | `string` | Authorization URL the client must open in a browser. |
-| `state` (2) | `string` | State value to echo back in `CompleteOauth`. |
-
-### `CompleteOauthRequest`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `directory` (1) | `string` | Directory context for auth resolution. |
-| `provider_id` (2) | `string` | Provider identifier completing the flow. |
-| `code` (3) | `string` | Authorization code returned by the provider callback. |
-| `state` (4) | `string` | State value from `StartOauth` when the provider requires it. |
-
-### `CompleteOauthResponse`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `status` (1) | `AuthStatus` | Resulting auth status for the provider. |
 
 ### `ListBundleApisRequest`
 
@@ -2646,13 +2589,6 @@ Where this backend runs and which directory it serves.
 |---|---|---|
 | `directory` (1) | `string` | Ignored: this rpc does not depend on a directory. |
 | `patch` (2) | `google.protobuf.Struct` | JSON object deep-merged into the stored config. |
-
-### `UpgradeProcessResponse`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `status` (1) | `string` | Human-readable outcome of the upgrade attempt. |
 
 ### `GetBootstrapRequest`
 
