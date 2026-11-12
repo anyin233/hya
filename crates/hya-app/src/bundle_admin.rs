@@ -341,10 +341,7 @@ async fn run_self_check_in(
 /// Built-in agent ids an installed bundle must not claim.
 #[must_use]
 pub fn reserved_agent_ids() -> Vec<&'static str> {
-    hya_core::builtin_agents()
-        .iter()
-        .map(|agent| agent.id)
-        .collect()
+    hya_core::builtin_agent_ids()
 }
 
 /// The registry candidate of an inspected package.

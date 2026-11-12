@@ -113,9 +113,9 @@ process and returns a `CoreAgentsPreset` view (or the load error):
 - `digest() -> &'static str` returns its 64-character SHA-256 hex digest.
 - `agents() -> &'static [PreparedAgent]` returns agents in stable-id order.
 
-`hya_core::builtin_agents() -> &'static [BuiltinAgent]` (replacing the old
-`BUILTIN_AGENTS` constant) returns the same roster as a compatibility view for
-callers that do not need the full preset.
+`hya_core::builtin_agents::preset_agents() -> &'static [PreparedAgent]`
+returns the same roster for callers that read it directly; `preset_agent(id)`
+resolves one by exact id and `builtin_agent_ids()` lists every id.
 
 `AgentOrigin::Builtin` is the compatibility spelling for this trusted preset
 origin. `is_preset()` identifies it and `preset_bundle_id()` returns

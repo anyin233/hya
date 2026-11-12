@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use hya_core::completion::IterationExecutor;
 use hya_core::{
     CoreError, EvidenceQuality, LoopConfig, LoopPlanner, LoopVerifier, PlannerOutput, RunOutcome,
-    VerifierVerdict, cost_preflight, drive_loop,
+    VerifierVerdict, drive_loop, validate_budget,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -318,27 +318,26 @@ async fn repeated_directive_without_strategy_change_stops() {
 }
 
 #[test]
-fn cost_preflight_enforces_ceiling() {
+fn validate_budget_enforces_ceiling() {
     assert!(
-        cost_preflight(&LoopConfig {
+        validate_budget(&LoopConfig {
             budget: 101,
             ..LoopConfig::default()
         })
         .is_err()
     );
     assert!(
-        cost_preflight(&LoopConfig {
+        validate_budget(&LoopConfig {
             budget: 0,
             ..LoopConfig::default()
         })
         .is_err()
     );
     assert!(
-        cost_preflight(&LoopConfig {
+        validate_budget(&LoopConfig {
             budget: 10,
             ..LoopConfig::default()
         })
-        .unwrap()
-            > 0
+        .is_ok()
     );
 }

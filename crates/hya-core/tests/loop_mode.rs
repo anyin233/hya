@@ -21,7 +21,7 @@ use hya_core::hooks::{
 use hya_core::loop_mode::{
     EvidenceQuality, HookLoopPlanner, HookLoopVerifier, LoopConfig, LoopGate, LoopPredicate,
     ModelLoopPlanner, ModelLoopVerifier, PlannerOutput, PredicateMode, VerifierVerdict,
-    clamp_budget, cost_preflight,
+    clamp_budget, validate_budget,
 };
 use hya_core::{
     AgentSpec, CoreError, CreateSession, GateOutcome, IterationGate, LoopPlanner, LoopVerifier,
@@ -513,8 +513,8 @@ async fn broken_predicate_wins_over_should_stop_hook() {
     );
 }
 
-/// `clamp_budget` maps any requested budget into the range `cost_preflight`
-/// enforces (1..=HARD_MAX_ITERATIONS), and the clamped value passes preflight.
+/// `clamp_budget` maps any requested budget into the range `validate_budget`
+/// enforces (1..=HARD_MAX_ITERATIONS), and the clamped value validates.
 #[test]
 fn clamp_budget_maps_into_preflight_range() {
     assert_eq!(clamp_budget(0), 1, "zero budget clamps to the minimum");
@@ -529,8 +529,8 @@ fn clamp_budget_maps_into_preflight_range() {
         ..LoopConfig::default()
     };
     assert!(
-        cost_preflight(&config).is_ok(),
-        "a clamped budget must always pass cost_preflight"
+        validate_budget(&config).is_ok(),
+        "a clamped budget must always pass validate_budget"
     );
 }
 

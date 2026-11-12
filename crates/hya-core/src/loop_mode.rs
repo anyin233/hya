@@ -277,25 +277,24 @@ impl LoopPredicate {
 
 const HARD_MAX_ITERATIONS: u32 = 100;
 
-/// Clamp a requested loop budget into the range [`cost_preflight`] enforces
+/// Clamp a requested loop budget into the range [`validate_budget`] enforces
 /// (1..=[`HARD_MAX_ITERATIONS`]). Entry points may clamp CLI/config requests
-/// up front; [`cost_preflight`] remains the authoritative engine-side gate.
+/// up front; [`validate_budget`] remains the authoritative engine-side gate.
 #[must_use]
 pub fn clamp_budget(requested: u32) -> u32 {
     requested.clamp(1, HARD_MAX_ITERATIONS)
 }
 
 /// Reject an unservable loop before any worker runs (engine authority): an
-/// explicit budget within the hard ceiling. Returns a worst-case token estimate.
-pub fn cost_preflight(config: &LoopConfig) -> Result<u64, CoreError> {
+/// explicit budget within the hard ceiling.
+pub fn validate_budget(config: &LoopConfig) -> Result<(), CoreError> {
     if config.budget == 0 || config.budget > HARD_MAX_ITERATIONS {
         return Err(CoreError::Invalid(format!(
             "loop budget must be 1..={HARD_MAX_ITERATIONS}, got {}",
             config.budget
         )));
     }
-    let per_iteration = 500_000u64 + 256 + 2_000;
-    Ok(u64::from(config.budget) * per_iteration)
+    Ok(())
 }
 
 fn fingerprint(items: &[String]) -> u64 {
@@ -555,7 +554,7 @@ pub async fn run_loop(
     cancel: CancellationToken,
     should_stop: Option<Arc<dyn HookDispatcher>>,
 ) -> Result<RunOutcome, CoreError> {
-    cost_preflight(&config)?;
+    validate_budget(&config)?;
     let binding = engine
         .bind_session_runtime(lead_session, &agent.workdir)
         .await?;

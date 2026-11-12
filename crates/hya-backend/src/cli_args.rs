@@ -463,7 +463,7 @@ pub(crate) enum Command {
 /// Resolve the effective loop budget from the parsed flags: `--budget`
 /// outranks the `--max-iterations` alias, the default mirrors
 /// [`hya_core::LoopConfig::default`], and every request is clamped into the
-/// range `cost_preflight` enforces.
+/// range `validate_budget` enforces.
 #[must_use]
 pub(crate) fn loop_budget(budget: Option<u32>, max_iterations: Option<u32>) -> u32 {
     let default = hya_core::LoopConfig::default().budget;
@@ -980,22 +980,22 @@ mod tests {
 
     #[test]
     fn loop_budget_resolves_alias_default_and_clamps() {
-        use hya_core::loop_mode::{LoopConfig, cost_preflight};
+        use hya_core::loop_mode::{LoopConfig, validate_budget};
         // Default mirrors `LoopConfig::default().budget`.
         assert_eq!(super::loop_budget(None, None), LoopConfig::default().budget);
         // `--budget` outranks the `--max-iterations` alias.
         assert_eq!(super::loop_budget(Some(5), Some(9)), 5);
         assert_eq!(super::loop_budget(None, Some(9)), 9);
-        // Any request is clamped into the range `cost_preflight` enforces
-        // (HARD_MAX_ITERATIONS / minimum 1), so the resolved value preflights.
+        // Any request is clamped into the range `validate_budget` enforces
+        // (HARD_MAX_ITERATIONS / minimum 1), so the resolved value validates.
         let clamped = super::loop_budget(None, Some(500));
         assert!(
-            cost_preflight(&LoopConfig {
+            validate_budget(&LoopConfig {
                 budget: clamped,
                 ..LoopConfig::default()
             })
             .is_ok(),
-            "clamped budget {clamped} must pass cost_preflight"
+            "clamped budget {clamped} must pass validate_budget"
         );
         assert_eq!(super::loop_budget(Some(0), None), 1);
     }
