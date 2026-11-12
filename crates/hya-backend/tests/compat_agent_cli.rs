@@ -10,33 +10,17 @@ use hya_store::{AdmissionClaim, AdmissionState, SessionStore};
 use serde_json::Value;
 
 #[test]
-fn agent_list_prints_compat_native_agent_shape() -> Result<(), Box<dyn std::error::Error>> {
+fn agent_list_prints_the_catalog_without_composing_a_runtime()
+-> Result<(), Box<dyn std::error::Error>> {
     let env = IsolatedEnv::new("hya-agent-list")?;
     let output = hya_command(&env).args(["agent", "list"]).output()?;
 
     assert_success("agent list", &output);
-    assert_eq!(
-        String::from_utf8(output.stdout)?,
-        concat!(
-            "hya-main (primary)\n",
-            "  [\n",
-            "  {\n",
-            "    \"permission\": \"read\",\n",
-            "    \"pattern\": \"*\",\n",
-            "    \"action\": \"allow\"\n",
-            "  },\n",
-            "  {\n",
-            "    \"permission\": \"glob\",\n",
-            "    \"pattern\": \"*\",\n",
-            "    \"action\": \"allow\"\n",
-            "  },\n",
-            "  {\n",
-            "    \"permission\": \"grep\",\n",
-            "    \"pattern\": \"*\",\n",
-            "    \"action\": \"allow\"\n",
-            "  }\n",
-            "]\n",
-        )
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("hya-main ("), "{stdout}");
+    assert!(
+        !env.xdg_config.join("hya").exists(),
+        "`hya agent list` must not bootstrap runtime config"
     );
     Ok(())
 }
@@ -65,17 +49,6 @@ fn models_command_creates_default_config_when_missing() -> Result<(), Box<dyn st
 #[test]
 fn update_commands_run_without_composing_the_runtime() -> Result<(), Box<dyn std::error::Error>> {
     let env = IsolatedEnv::new("hya-update-cli")?;
-    let roots = env.root.join("updater/trust_roots.json");
-    std::fs::create_dir_all(env.root.join("updater"))?;
-    let key = format!("release={}", "ab".repeat(32));
-
-    let init = hya_command(&env)
-        .args(["update", "init-roots", "--path"])
-        .arg(&roots)
-        .args(["--root", &key])
-        .output()?;
-    assert_success("update init-roots", &init);
-    assert!(roots.is_file(), "init-roots must write {}", roots.display());
 
     let version = hya_command(&env).args(["update", "version"]).output()?;
     assert_success("update version", &version);
@@ -207,26 +180,6 @@ fn exec_starts_the_root_session_under_the_configured_default_agent()
         agent, "hya-plan",
         "hya exec must start the root session under the configured `default_agent`, \
          not the built-in `hya-main` agent:\n{stdout}"
-    );
-
-    Ok(())
-}
-
-#[test]
-fn run_honors_configured_default_agent_like_exec() -> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("hya-run-default-agent")?;
-    write_config_with_default_agent(&env, "hya-main")?;
-
-    let output = hya_command(&env)
-        .args(["run", "--json", "hello"])
-        .output()?;
-    assert_success("run --json (default_agent: hya-main)", &output);
-
-    let stdout = String::from_utf8(output.stdout)?;
-    let agent = session_created_agent(&stdout)?.ok_or("missing session_created event")?;
-    assert_eq!(
-        agent, "hya-main",
-        "hya run (the exec alias) must honor `default_agent` the same way exec does:\n{stdout}"
     );
 
     Ok(())

@@ -67,8 +67,8 @@ ADR-0019 removed.
   `node_modules`. The TUI's `/api` catalog is generated into the package
   (`src/operations.json`, by `gen-api`) instead of importing
   `docs/protocol/openapi.json`.
-- `hya --port` is a bare-only flag. `hya serve --port` keeps its own meaning,
-  and `--port` together with a subcommand or `-p` is an error.
+- `hya --port` is a bare-only flag: together with a subcommand or `-p` it is an
+  error. The server's own address is `hya serve --bind`.
 - Scripts that run `hya` with no arguments and no terminal still get the
   banner and exit 0.
 - A `hya` killed with SIGKILL cannot clean up. The web host then outlives it

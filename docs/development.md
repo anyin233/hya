@@ -219,7 +219,6 @@ actionlint .github/workflows/release.yml
 bash tests/hya_install_script.sh
 cargo run -p xtask -- release-rehearsal \
   --component backend \
-  --workflow .github/workflows/release.yml \
   --version <backend-semver> \
   --target "$(rustc -vV | sed -n 's/^host: //p')" \
   --no-publish
@@ -271,7 +270,7 @@ remaining argument is forwarded verbatim. The currently supported tasks are
 | `package-native-tool-bundle` | Adds a built target-specific Rust executable and exact policy tool declarations to one tool-family source, then writes a deterministic public package. |
 | `package-native-tool-library` | Adds a built tool-family dynamic library and exact policy tool declarations to one tool-family source, then writes a deterministic public package. |
 | `stage-first-party-bundles` | Packages the eleven trusted first-party bundles into a backend package's `<package-root>/bundles/` and fails if any bundle version differs from the backend release version. With `--target` and `--assets`, it also writes versioned standalone release assets. |
-| `release-rehearsal` | Runs the pinned, non-publishing release build/package/smoke rehearsal for one target of one release side. Backend rehearsals cover the binary, Bun adapter, first-party bundles, checksums, unified installer contract, and headless smoke; frontend rehearsals cover Bun, TUI/WebUI assets, production dependencies, checksums, unified installer contract, and frontend smoke. Run it on a host of that target (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`). |
+| `release-rehearsal` | Runs the pinned, non-publishing release build/package/smoke rehearsal for one target of one release side. It checks the aggregate version contract, then builds, packages, and smokes; the release workflow's own text is `actionlint`'s and the workflow's business, not a Rust linter's. Backend rehearsals cover the binary, Bun adapter, first-party bundles, checksums, unified installer contract, and headless smoke; frontend rehearsals cover Bun, TUI/WebUI assets, production dependencies, checksums, unified installer contract, and frontend smoke. Run it on a host of that target (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`). |
 
 ```sh
 cargo run -p xtask -- matrix-check
@@ -280,8 +279,8 @@ cargo run -p xtask -- package-bundle <source-dir> <output.hyabundle>
 cargo run -p xtask -- package-native-tool-bundle <tool-family-source-dir> <built-executable> <output.hyabundle>
 cargo run -p xtask -- package-native-tool-library <tool-family-source-dir> <built-library> <output.hyabundle>
 cargo run -p xtask -- stage-first-party-bundles --library-dir target/release --package-root dist/hya [--version <backend-semver>] [--target <triple> --assets dist]
-cargo run -p xtask -- release-rehearsal --component backend --workflow .github/workflows/release.yml --version <backend-semver> --target "$(rustc -vV | sed -n 's/^host: //p')" --no-publish
-cargo run -p xtask -- release-rehearsal --component frontend --workflow .github/workflows/release.yml --version <frontend-semver> --target "$(rustc -vV | sed -n 's/^host: //p')" --no-publish
+cargo run -p xtask -- release-rehearsal --component backend --version <backend-semver> --target "$(rustc -vV | sed -n 's/^host: //p')" --no-publish
+cargo run -p xtask -- release-rehearsal --component frontend --version <frontend-semver> --target "$(rustc -vV | sed -n 's/^host: //p')" --no-publish
 ```
 
 ## Crate Selection

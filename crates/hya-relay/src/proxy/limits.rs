@@ -7,7 +7,8 @@ use tokio::time::Instant;
 /// Resource limits the proxy core enforces (ADR-0025 D8).
 ///
 /// Every field has a conservative default (see [`ProxyLimits::default`]);
-/// `hya proxy` exposes them as flags. Nothing is persisted.
+/// `hya proxy` exposes four of them as flags and leaves the rest at their
+/// defaults. Nothing is persisted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyLimits {
     /// Maximum registered rooms. A registration that replaces an existing

@@ -29,7 +29,6 @@ mod provider_cmd;
 mod proxy_cmd;
 mod relay_doctor;
 mod routed;
-mod rpc;
 mod self_check;
 mod serve;
 mod serve_relay;
@@ -112,11 +111,10 @@ fn state_dir() -> std::path::PathBuf {
     dir
 }
 
-/// `hya exec`/`run` on `db`, respecting the database lock
+/// `hya exec` on `db`, respecting the database lock
 /// ([`db_writer`]): through the server that owns a file database, else
 /// in process while holding its lock (in-memory stores are not locked).
 async fn exec_entry(
-    command: &str,
     prompt: String,
     model_override: Option<String>,
     db: &str,
@@ -124,11 +122,11 @@ async fn exec_entry(
     json: bool,
     pure: bool,
 ) -> anyhow::Result<()> {
-    match db_writer::claim(db, command)? {
+    match db_writer::claim(db, "exec")? {
         db_writer::Writer::Server(server) => {
             if pure {
                 db_writer::exit_unroutable(
-                    command,
+                    "exec",
                     db,
                     &server,
                     "--pure cannot apply to a running server (it loaded its own context)",
@@ -399,132 +397,6 @@ fn exit_if_stopped(stop: Option<StopSignal>) {
         let _ = std::io::stdout().flush();
         std::process::exit(stop.exit_code());
     }
-}
-
-async fn cmd_rpc(model_override: Option<String>, yolo: bool, pure: bool) -> anyhow::Result<()> {
-    use std::io::BufRead as _;
-    first_run_config_bootstrap(false)?;
-    let has_explicit_model = model_override.is_some();
-    // A temp file-backed store, not `connect_memory`: long worker turns (real
-    // cargo test runs) can idle out the single in-memory pooled connection,
-    // which drops every table mid-run. A file also enables `tail-session`.
-    let goal_db = std::env::temp_dir().join(format!(
-        "hya-goal-{}.db",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    let store = SessionStore::connect(goal_db.to_string_lossy().as_ref())
-        .await
-        .context("open goal store")?;
-    let runtime = resolve_runtime(model_override)
-        .await
-        .with_yolo(yolo)
-        .with_pure(pure);
-    let mut agent = if pure {
-        agent_with_model_pure(&runtime.model, None)
-    } else {
-        agent_with_model(&runtime.model, None)
-    };
-    let mut built = if pure {
-        build_session_engine_pure(
-            store,
-            runtime.router,
-            &agent,
-            runtime.mcp,
-            runtime.plugins,
-            (runtime.websearch, runtime.permission),
-        )
-        .await?
-    } else {
-        build_session_engine(
-            store,
-            runtime.router,
-            &agent,
-            runtime.mcp,
-            runtime.plugins,
-            (runtime.websearch, runtime.permission),
-        )
-        .await?
-    };
-    let engine = built.engine();
-    let project_id = ensure_project_for_workdir(engine.store(), &agent.workdir)
-        .await
-        .context("ensure project for cwd")?;
-    // Same `default_agent` precedence/failure mode as `serve` and `exec`.
-    agent.name = resolve_headless_agent_name(
-        &engine,
-        &agent.workdir,
-        None,
-        runtime.default_agent.as_deref(),
-    )
-    .await
-    .context("resolve default agent")?;
-    let session_model = if has_explicit_model {
-        agent.model.clone()
-    } else {
-        built
-            .effective_root_model(&agent, &agent.workdir)
-            .await
-            .context("resolve RPC root Agent model")?
-    };
-    let asks = built
-        .take_asks()
-        .ok_or_else(|| anyhow::anyhow!("asks receiver missing"))?;
-    let _ = built.take_questions();
-    let _mcp_manager = built.mcp_control();
-    let _plugin_host = built.plugin_host();
-    let _responder = spawn_reject_responder(asks);
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: agent.name.clone(),
-            model: session_model,
-            workdir: agent.workdir.to_string_lossy().into_owned(),
-            project: Some(project_id),
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .context("create session")?;
-    let mut emitted = 0usize;
-    let stdin = std::io::stdin();
-    let mut out = std::io::stdout().lock();
-    for line in stdin.lock().lines() {
-        let line = line.context("read stdin")?;
-        match rpc::parse_rpc(&line) {
-            Some(rpc::RpcRequest::Quit) => break,
-            Some(rpc::RpcRequest::Prompt { text }) => {
-                engine
-                    .admit_user_prompt(session, text)
-                    .await
-                    .context("admit prompt")?;
-                if let Err(error) = engine
-                    .run_turn(session, &agent, CancellationToken::new())
-                    .await
-                {
-                    // Drain members before surfacing the failure.
-                    built.drain(FinishCause::LeaderFailed).await;
-                    let _ = built.shutdown().await;
-                    return Err(error).context("run turn");
-                }
-                let envelopes = engine.replay(session).await.context("replay session")?;
-                for env in envelopes.iter().skip(emitted) {
-                    let line = serde_json::to_string(env).context("serialize envelope")?;
-                    writeln!(out, "{line}").context("write envelope")?;
-                }
-                emitted = envelopes.len();
-                writeln!(out, "{{\"type\":\"done\"}}").context("write done marker")?;
-                out.flush().context("flush stdout")?;
-            }
-            None => {}
-        }
-    }
-    built
-        .shutdown()
-        .await
-        .context("shutdown spawn supervisor")?;
-    Ok(())
 }
 
 async fn cmd_goal(
@@ -1037,24 +909,8 @@ async fn run(
             );
             Ok(())
         }
-        Some(Command::Run {
-            message,
-            format,
-            json,
-        }) => {
-            exec_entry(
-                "run",
-                message.join(" "),
-                model,
-                &db,
-                yolo,
-                json || format == "json",
-                pure,
-            )
-            .await
-        }
         Some(Command::Exec { prompt, json }) => {
-            exec_entry("exec", prompt, model, &db, yolo, json, pure).await
+            exec_entry(prompt, model, &db, yolo, json, pure).await
         }
         Some(Command::Serve {
             action: Some(action),
@@ -1081,9 +937,6 @@ async fn run(
         }
         Some(Command::Serve {
             bind,
-            hostname,
-            port,
-            mdns,
             db: command_db,
             action: None,
             relay,
@@ -1091,7 +944,7 @@ async fn run(
             ..
         }) => {
             serve::cmd_serve(
-                cli_args::serve_bind(bind, hostname, port, mdns),
+                bind,
                 inherited_listener,
                 inherited_lock,
                 command_db.unwrap_or_else(|| db.clone()),
@@ -1196,7 +1049,6 @@ async fn run(
             };
             sessions_cmd::run(resolve_interactive_db(&path), action, listing).await
         }
-        Some(Command::Rpc) => cmd_rpc(model, yolo, pure).await,
         // The update TCB runs without composing any runtime: no config,
         // bundles, providers, plugins, MCP, or session store.
         Some(Command::Update { command, install }) => match command {

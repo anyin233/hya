@@ -136,7 +136,7 @@ the same name exists:
 | Name | Purpose (summary) |
 | --- | --- |
 | `agent-bundle-authoring` | Authoring and packaging public AgentBundles (static or Bun sidecars). |
-| `secure-self-update` | Verifying, staging, and owner-activating independent hya releases via `hya update`. |
+| `secure-self-update` | Installing and updating hya releases via `hya update` (embedded installer, per-side rollback), and the source-checkout rebuild-and-restart flow. |
 
 A user-authored skill with a matching `name` **shadows the built-in entirely**.
 

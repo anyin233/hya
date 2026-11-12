@@ -9,12 +9,12 @@ standalone `hya-updater` binary are gone.
 | Area | Subcommands |
 | --- | --- |
 | Interactive TUI and WebUI | bare `hya` when the separately installed frontend is present (see [Bare `hya`](#bare-hya)) |
-| Headless agent runs | `exec`, `run`, `-p/--prompt` (goal mode), `loop` |
-| Server and wire protocols | `serve` (and `serve start`/`status`/`stop`/`restart` for the backend daemon), `rpc` |
+| Headless agent runs | `exec`, `-p/--prompt` (goal mode), `loop` |
+| Server and wire protocols | `serve` (and `serve start`/`status`/`stop`/`restart` for the backend daemon) |
 | Sessions | `sessions`, `tail-session` |
 | Providers and auth | `provider` (alias `providers`: `add`, `list`, `remove`, `logout`), `login`, `oauth`, `models` |
 | Agents, bundles, Workflows | `agent`, `bundle`, `workflow` |
-| Update | `update` installs the latest backend and frontend releases; `--backend-only` or `--tui-only` selects one side (also `--version`, `--prefix`, `--force`; see [`docs/install.md`](install.md)); self-update TCB commands remain separate |
+| Update | `update` installs the latest backend and frontend releases; `--backend-only` or `--tui-only` selects one side (also `--version`, `--prefix`, `--force`; see [`docs/install.md`](install.md)) |
 | Secure relay | `proxy`, `bridge`, `relay doctor`, `serve --relay`, `serve relay connect\|disconnect\|status\|link\|rotate`, bare `hya --connect` (see [`docs/relay.md`](relay.md)) |
 
 ```sh
@@ -37,7 +37,7 @@ hya [--model <MODEL>] [--effort <LEVEL>] [--prompt <GOAL>] [--max-iterations <N>
 | `--effort <LEVEL>` | Append a validated reasoning effort suffix to `--model` (for example `--model openai/gpt --effort high`); errors when `--model` already contains `#`. |
 | `-p, --prompt <GOAL>` | Run headless goal mode instead of a subcommand. |
 | `--max-iterations <N>` | Iteration cap for goal mode. Defaults to `6` in the CLI. |
-| `--port <PORT>` | WebUI port of [bare `hya`](#bare-hya) on `127.0.0.1`. Default `3250`; `0` picks a free port. Only valid without a subcommand and without `-p` (`hya --port 1 sessions` is an error); `hya serve --port` is the server's own flag. |
+| `--port <PORT>` | WebUI port of [bare `hya`](#bare-hya) on `127.0.0.1`. Default `3250`; `0` picks a free port. Only valid without a subcommand and without `-p` (`hya --port 1 sessions` is an error); `hya serve --bind` sets the server's address. |
 | `--backend <URL>` | [Bare `hya`](#bare-hya) only: use this running server (`http://host:port`) instead of the database's backend daemon — no discovery, no auto-start. An unreachable URL is an error (exit **1**). |
 | `--connect [<LINK>]` | [Bare `hya`](#bare-hya) only: reach a remote backend through a relay link with an in-process bridge; no local daemon. `-` reads the link from the terminal without echo, no value reads `$HYA_RELAY_LINK`. See [Secure relay](relay.md#connecting-from-a-client). |
 | `--relay-ca <PEM>` | With `--connect` only: extra trusted CA certificates for the relay's TLS. |
@@ -46,17 +46,14 @@ hya [--model <MODEL>] [--effort <LEVEL>] [--prompt <GOAL>] [--max-iterations <N>
 | `--resume [<ID>]` | [Bare `hya`](#bare-hya) only: the terminal TUI opens that session and unarchives it; without an id it opens a picker of the sessions of the Project that contains the current directory, archived ones included. Before another flag it takes no id (`hya --resume --port 0`). |
 | `--yolo` | Auto-approve every tool action. This applies to headless and server composition. |
 | `--db <PATH>` | SQLite database path. Semantics of an empty value depend on the command (see below). |
-| `--print-logs` | Compat-compatible global flag. Parsed, then ignored (no-op). |
-| `--log-level <LEVEL>` | Compat-compatible global flag. `LEVEL` must be one of `DEBUG`, `INFO`, `WARN`, `ERROR` (clap rejects any other value). The value is discarded after parsing — it does not enable logging. |
-| `--pure` | Compat-compatible global flag. Parsed, then ignored (no-op). |
+| `--pure` | Load no external project or user context: no `AGENTS.md` discovery, MCP servers, plugins, or external skills (see [`--pure`](#--pure)). Kept for Compat/OpenCode command lines. |
 
-`--print-logs`, `--log-level`, and `--pure` exist only so Compat/OpenCode command
-lines are accepted unchanged. They are never read after clap parse. hya
-does not expose a CLI switch for verbose tracing today. Many operational notices
-go to stderr; the serve readiness line
-`hya server listening on <url>` is printed on **stdout** (see
-[`serve`](#hya-serve)). Bare `hya` on a terminal sends its stdout and
-stderr to a log file instead (see [Bare `hya`](#bare-hya)).
+`--pure` keeps its whole meaning (load no external project or user context);
+it is also what Compat/OpenCode command lines that pass it expect. hya does not
+expose a CLI switch for verbose tracing today. Many operational notices go to
+stderr; the serve readiness line `hya server listening on <url>` is printed on
+**stdout** (see [`serve`](#hya-serve)). Bare `hya` on a terminal sends its
+stdout and stderr to a log file instead (see [Bare `hya`](#bare-hya)).
 
 ### `--db` empty-string semantics
 
@@ -64,7 +61,7 @@ Empty `--db` is **not** always in-memory:
 
 | Command path | Empty `--db` means |
 | --- | --- |
-| `exec`, `run`, `serve` | In-memory store (`open_store("")` → `SessionStore::connect_memory`). |
+| `exec`, `serve` | In-memory store (`open_store("")` → `SessionStore::connect_memory`). |
 | bare `hya` (TUI + WebUI), `serve start`/`status`/`stop`/`restart`, `sessions`, `tail-session` | Remapped to `$XDG_STATE_HOME/hya/sessions.db`, falling back to `$HOME/.local/state/hya/sessions.db` (or `./.local/state/hya/sessions.db` when neither is set). The directory is created if missing. |
 
 `resolve_interactive_db` performs that remap so the session-backed subcommands
@@ -107,18 +104,18 @@ writes a file database checks the lock first:
   starting, or another command below): exit **75** with
   `hya <command>: database <db> is in use by pid <pid> and it does not serve HTTP yet; try again or stop it`.
 
-In-memory stores (`--db ""`, the default of `exec`/`run`/`serve`) and SQLite
+In-memory stores (`--db ""`, the default of `exec`/`serve`) and SQLite
 URIs are never locked.
 
 | Command | Store | Server holds the file `--db` | Nobody holds it |
 | --- | --- | --- | --- |
-| `exec`, `run` | `--db`, else in-memory | Through the server: a new root session in the current directory, one prompt turn, the same stdout. `--model` sets the session's model, `--yolo` its permission mode. `--pure` exits 75. | Lock held for the run |
+| `exec` | `--db`, else in-memory | Through the server: a new root session in the current directory, one prompt turn, the same stdout. `--model` sets the session's model, `--yolo` its permission mode. `--pure` exits 75. | Lock held for the run |
 | `workflow use`, `workflow state` | `--db`, else in-memory | Through the server (`/v1/sessions/{id}/workflow`) | Lock held for the command |
 | `workflow run` | `--db`, else in-memory | Through the server; a run without `--session` creates the session there. `--revision`, `--pure`, and `--yolo` exit 75 (no `/v1` field for them). | Lock held for the run |
 | `workflow list`, `workflow info` | In-memory always | Not affected | Not affected |
 | `sessions archive`/`unarchive` | Durable default or `--db` | Through the server (`PATCH /v1/sessions/{id}`) | Lock held for the write |
 | `sessions` (list), `tail-session` | Durable default or `--db` | Read directly, never write, no lock | Read directly, no lock |
-| `-p` goal mode, `loop`, `rpc` | A private temporary database per run | Not affected (`--db` is ignored) | Not affected |
+| `-p` goal mode, `loop` | A private temporary database per run | Not affected (`--db` is ignored) | Not affected |
 | `serve` | `--db`, else in-memory | Exits 75 | Takes the lock (it is the server) |
 | `agent`, `bundle`, `models`, `provider`, `update` | No session store | Not affected | Not affected |
 
@@ -134,7 +131,7 @@ configuration, providers, plugins, and context apply, not the command's own.
 The command has no `--pure` or `--yolo` runtime of its own. It rejects the
 permission asks and questions of its session tree, as it would in process.
 
-- `exec`/`run`: the command returns when the lead's turn ends. Team members,
+- `exec`: the command returns when the lead's turn ends. Team members,
   subagents, or a synthesis turn still running on the server keep running and
   are not drained. `--json` output is polled every 250 ms and ends with the
   same final flush from the durable log, in ascending `seq` order. SIGINT or
@@ -661,7 +658,7 @@ To run the frontends by hand instead (development, a remote server), see
 
 ## `--pure`
 
-Global flag for `exec`, `run`, `rpc`, `-p` goal mode, `workflow`, and `serve`:
+Global flag for `exec`, `-p` goal mode, `workflow`, and `serve`:
 load no external project or user context — no `AGENTS.md`/context-file
 discovery (startup-baked in direct modes, per-turn guidance on `serve`), no
 MCP servers, no plugins, and no external skill directories (the built-in
@@ -683,7 +680,7 @@ When `exec` runs in process (not routed through a server that already holds
 catalog — the same find-or-create-in-one-transaction the server does for a
 routed session's workdir — so the directory's `.hya/bundles` project bundles,
 project plugins, and skills apply through the Project catalog scope, and the
-new session's `project` field names it. `hya run`, `-p` goal mode, `loop`, and
+new session's `project` field names it. `-p` goal mode, `loop`, and
 a `workflow` command that creates a new Session all ensure a Project the same
 way. The command uses the global `--db <PATH>` SQLite store when supplied; otherwise it uses an in-memory
 store. With `--db`, the database stores the full canonical event log for replay,
@@ -714,7 +711,7 @@ applies only to that invocation and is not written as an Agent preference.
 built-in `hya-main` agent. There is no per-invocation `--agent` flag yet. An
 unresolvable `default_agent` (not a selectable agent id in the bound catalog)
 fails the run with a clear `UnknownAgentId` error instead of silently falling
-back to `hya-main`. `hya run`, `hya -p` goal mode, `hya loop`, `hya rpc`, and
+back to `hya-main`. `hya -p` goal mode, `hya loop`, and
 `hya workflow run` (when it creates a new Session) all resolve the root Agent
 the same way.
 
@@ -738,8 +735,8 @@ The drain waits at most **5 s** (`DRAIN_DEADLINE`) for cancelled turns to
 close themselves, then closes any still-open message itself. A process killed
 outright (SIGKILL, crash) leaves turns open; the next `hya` process that opens
 the same `--db` closes them at startup with `cause: interrupted`, once. The same
-stop handling applies to `hya run`, `hya -p`, and `hya loop`; `hya rpc` and
-`hya workflow` drain at their normal end. Example:
+stop handling applies to `-p` goal mode and `hya loop`; `hya workflow` drains at
+its normal end. Example:
 
 ```sh
 hya --db run.db exec --json "long task" & pid=$!
@@ -748,17 +745,6 @@ hya --db run.db tail-session <session> | tail -1
 # {"seq":12,…,"event":{"type":"message_finished",…,"finish":"cancelled","cause":"user_cancel"}}
 ```
 
-## `hya run`
-
-```sh
-hya run "summarize this repo"
-hya run --format json "summarize this repo"
-```
-
-Compat-compatible alias for `exec`. Message words are joined with spaces.
-and resolves its root Agent the same way (config `default_agent`, else the
-built-in `hya-main` agent — see [`hya exec`](#hya-exec)).
-`--format json` and `--json` both emit event JSONL.
 
 ## `hya -p`
 
@@ -794,7 +780,7 @@ startup-directory reads left are project bundles and plugins under
 `./.hya/` (see [Bundle Commands](#bundle-commands)); a backend daemon starts
 in your home directory, so for it that is `~/.hya/` (run `hya serve --db
 <db>` in a project yourself to serve that project's). Bare `hya` passes its
-cwd to the TUI as `--dir`, and `hya exec`/`run`/`-p`/`loop` record the
+cwd to the TUI as `--dir`, and `hya exec`/`-p`/`loop` record the
 caller's cwd as their session's workdir.
 
 For a supervisor-owned listener, pass the inherited descriptor directly:
@@ -822,11 +808,6 @@ loopback host names remain allowed by default.
 | `--handoff-journal <PATH>` | Internal successor journal path. The successor waits for the predecessor's `released` stage before opening the store, then records `ready`. |
 | `--inherit-status <MILLIS>` | Internal successor startup timestamp inherited from the predecessor discovery record. |
 | `--grpc-listen-fd <FD>` | Internal Unix-only inherited extra gRPC listener descriptor. |
-| `--hostname <HOST>` | Compat-compatible alias for the host part of `--bind`. |
-| `--port <PORT>` | Compat-compatible alias for the port part of `--bind`. |
-| `--mdns` | Bind to `0.0.0.0` when no hostname is supplied. hya does not advertise mDNS yet. |
-| `--mdns-domain <NAME>` | Accepted for Compat CLI compatibility. |
-| `--cors <ORIGIN>` | Accepted for Compat CLI compatibility; hya mirrors CORS origins globally. |
 | `--allow-host <HOST>` | Also accept requests whose `Host` names `HOST` (a host name or IP address, no port; repeatable; also after `start`/`restart`). See [Allowed Host names](#allowed-host-names). |
 | `--db <PATH>` | SQLite path. Empty string uses an in-memory store. A file database is locked for this process (see "One server per database" below); a second `serve` on it exits **75**. |
 | `--relay <URL>` | Join the secure relay published at this public URL (`https://host[:port][/prefix]`, or `http://…` for plaintext on a LAN or tailnet) and print the relay link once on stderr as `hya relay link: <link>`. The link is a **secret**: whoever holds it controls this backend. See [Hosting a backend on a relay](relay.md#hosting-a-backend-on-a-relay). |
@@ -870,7 +851,7 @@ by `hya serve start`, is recorded in the discovery file as `allowHosts`, and
 is kept by `hya serve restart` unless new names are given; `hya serve
 status` shows them (`hosts`).
 
-**LAN migration.** A wildcard bind (`--bind 0.0.0.0:8080`, `--mdns`) used to
+**LAN migration.** A wildcard bind (`--bind 0.0.0.0:8080`) used to
 answer any `Host`; now only loopback names pass until you list the LAN names
 clients use:
 
@@ -1217,7 +1198,7 @@ hya login <provider> <token>
 hya oauth login --provider <name> --type <openai-codex|grok-build> [--loopback] [--no-browser] [--browser] [--model <id>] [--base-url <url>]
 hya oauth status [provider]
 hya models [provider] [--verbose] [--refresh]
-hya agent list [--all]
+hya agent list
 ```
 
 `login` writes a plain provider token under `~/.config/hya/auth`. Prefer
@@ -1300,16 +1281,15 @@ Unfiltered offline output is exactly `hya/offline`; a filter with no rows exits
 with `Provider not found: <id>`. Provider declarations that resolved no rows do
 not fabricate output.
 
-**`agent list`.** Default output is Compat-parity: only the built-in primary
-agent, printed as `hya-main (primary)` followed by its permission rules as
-pretty-printed JSON. Pass `--all` to also list ordinary agents reachable from
-the built-in catalog. Deliberate limitation: `agent list` **never**
-inspects on-disk agent files under `.hya/`, `.claude/`, or `.opencode/`, nor
-config-declared agents — it reflects the built-in catalog only. System agents
-(compaction / title / summary) are excluded because they are not ordinarily
-spawnable via catalog `can_spawn` reachability.
+**`agent list`.** Prints the built-in catalog's selectable agents, one block
+per agent: `id (mode) [builtin|bundle]`, then its description when it has one.
+Deliberate limitation: `agent list` **never** inspects on-disk agent files under
+`.hya/`, `.claude/`, or `.opencode/`, nor config-declared agents — it reflects
+the built-in catalog only. System agents (compaction / title / summary) are
+excluded because they are not ordinarily spawnable via catalog `can_spawn`
+reachability.
 
-## Session and RPC Commands
+## Session Commands
 
 ```sh
 hya sessions --db hya.db
@@ -1317,7 +1297,6 @@ hya sessions --all            # archived root sessions too
 hya sessions --archived       # only archived root sessions
 hya sessions archive <session-id>
 hya sessions unarchive <session-id>
-hya rpc
 ```
 
 `sessions` lists persisted sessions in a SQLite database, including sessions
@@ -1339,10 +1318,7 @@ fails (exit 1). When a server holds the database (bare `hya`'s daemon or
 connected clients see it live; if the holder does not serve HTTP yet, the
 command exits 75. Otherwise it takes the database lock and writes the
 `session_archived` / `session_unarchived` event directly (no session hooks
-run then). `rpc` reads
-JSONL requests on stdin, accepts `{"type":"prompt","text":"..."}` and
-`{"type":"quit"}`, and emits new session events plus a `{"type":"done"}` marker
-using an in-memory store; `rpc` does not persist to the global `--db` database.
+run then).
 
 ## `hya tail-session`
 
@@ -1369,49 +1345,10 @@ headless commands without the frontend, while bare `hya` tells the user to run
 `hya update --tui-only` when the frontend is missing. See
 [Install and update](install.md).
 
-The subcommands below are the self-update TCB. They verify signed release
-metadata, stage immutable generations,
-optionally smoke them, and activate only with explicit owner authorization.
-It replaces the former standalone `hya-updater` binary. The commands are
-implemented in the independent `hya-updater` library crate, and `hya`
-dispatches them before composing any runtime: no config bootstrap, bundles,
-providers, plugins, MCP, or session store are loaded. Global flags such as
-`--model` or `--db` are accepted but ignored. See
-[Secure self-update](self-update.md).
-
-| Command | Purpose |
-| --- | --- |
-| `hya update version` | Print the updater version (the backend release version) and supported metadata protocol. |
-| `hya update status --root DIR` | Show selector, accepted floor, and layout paths. |
-| `hya update recover --root DIR` | Recover interrupted prepare/commit journal state. |
-| `hya update apply --root DIR --metadata FILE --package DIR --platform TRIPLE [--smoke CMD] [--trust-roots FILE] [--authorization FILE]` | Verify, stage, optionally smoke, and activate only with an owner-issued capability (`--authorization`). |
-| `hya update authorize --root DIR --sequence N --out FILE [--yes]` | Owner only: bind release `N` to the active generation and write the capability `apply --authorization` needs. |
-| `hya update discard --root DIR --sequence N` | Discard a staged-but-not-accepted candidate. |
-| `hya update init-roots --path FILE --root KEY_ID=HEX32...` | Write a bootstrap `trust_roots.json`. |
-
-```sh
-hya update version
-hya update status --root /var/lib/hya/updater
-hya update recover --root /var/lib/hya/updater
-hya update apply \
-  --root /var/lib/hya/updater \
-  --metadata release.metadata.json \
-  --package ./package-dir \
-  --platform x86_64-unknown-linux-gnu \
-  --smoke smoke.sh
-hya update authorize --root /var/lib/hya/updater --sequence 42 --out ./activation.authorization.json
-hya update apply ... --authorization ./activation.authorization.json
-hya update discard --root /var/lib/hya/updater --sequence 42
-hya update init-roots \
-  --path /var/lib/hya/updater/trust_roots.json \
-  --root KEY_ID=HEX32
-```
-
-Network download is outside the TCB. Pass a local package directory or
-`file://` path. `install.sh` remains break-glass recovery. `init-roots`
-requires `--path` and at least one `--root KEY_ID=HEX32` (repeatable).
-`apply --trust-roots` overrides `<root>/trust_roots.json`. The complete
-flag list is in [Secure self-update](self-update.md).
+`hya update version` prints the updater's package version (the backend release
+version). `hya` dispatches every `update` command before composing any runtime:
+no config bootstrap, bundles, providers, plugins, MCP, or session store are
+loaded. Global flags such as `--model` or `--db` are accepted but ignored.
 
 ## `hya proxy`
 
@@ -1442,7 +1379,7 @@ empty. Source: [`proxy_cmd.rs`](../crates/hya-backend/src/proxy_cmd.rs).
 | `--tls-cert <PEM>` / `--tls-key <PEM>` | none | TLS certificate/key; both or neither. |
 | `--path-prefix <PREFIX>` | none | Serve both bindings under a path prefix. |
 | `--trust-forwarded <HEADER>` | off | Identify clients by the address in exactly one forwarding header instead of the socket address: `cf-connecting-ip`, `x-real-ip`, or `x-forwarded-for` (its rightmost entry, appended by your hop). Only behind a hop that sets that header; see the [recipes](relay.md#deployment-recipes). |
-| `--max-rooms`, `--max-streams-per-room`, `--max-streams-per-peer`, `--max-streams`, `--max-rooms-per-peer`, `--max-pending-registrations-per-peer`, `--max-pending-registrations`, `--idle-timeout-secs`, `--stream-rate-bytes-per-sec`, `--stream-rate-burst-bytes`, `--max-chunk-data`, `--early-data-limit`, `--max-early-data-bytes`, `--accept-timeout-secs`, `--handshake-timeout-secs` | library defaults | One flag per `ProxyLimits` field (durations in whole seconds); see [docs/relay.md](relay.md#hya-proxy) for the full table. |
+| `--max-rooms`, `--max-streams-per-room`, `--idle-timeout-secs`, `--stream-rate-bytes-per-sec` | library defaults | The four `ProxyLimits` knobs an operator chooses; every other limit keeps its library default (durations in whole seconds). See [docs/relay.md](relay.md#hya-proxy). |
 | `--drain-timeout-secs <N>` | `10` | How long shutdown waits for streams and connections to drain. |
 
 **Shutdown.** SIGINT or SIGTERM stops accepting new connections, drains
@@ -1519,4 +1456,4 @@ advice table per failure kind.
 
 | Binary | Success | Failure / notes |
 | --- | --- | --- |
-| `hya` | **0** on success (including the bare guidance banner, `serve` graceful signal shutdown, `serve stop` with nothing running, `proxy` and `bridge` graceful SIGINT/SIGTERM shutdown, and `tail-session` broken-pipe). **75** from `serve` on a database another process holds. **1** from `serve status` and `serve relay …` when no server runs (and from `serve relay …` when its rpc fails). **130** / **143** when `exec`/`run`/`-p`/`loop` was stopped by SIGINT / SIGTERM (after the drain). Bare `hya` on a terminal exits with the terminal TUI's status, or `128 + signal` (130 / 143 / 129) when `hya` was stopped by SIGINT / SIGTERM / SIGHUP. | **1** with the full `anyhow` error chain printed to stderr on any error — CLI validation failures use the same path; `hya relay doctor` also exits **1** (with its report still printed) when neither relay binding works. |
+| `hya` | **0** on success (including the bare guidance banner, `serve` graceful signal shutdown, `serve stop` with nothing running, `proxy` and `bridge` graceful SIGINT/SIGTERM shutdown, and `tail-session` broken-pipe). **75** from `serve` on a database another process holds. **1** from `serve status` and `serve relay …` when no server runs (and from `serve relay …` when its rpc fails). **130** / **143** when `exec`/`-p`/`loop` was stopped by SIGINT / SIGTERM (after the drain). Bare `hya` on a terminal exits with the terminal TUI's status, or `128 + signal` (130 / 143 / 129) when `hya` was stopped by SIGINT / SIGTERM / SIGHUP. | **1** with the full `anyhow` error chain printed to stderr on any error — CLI validation failures use the same path; `hya relay doctor` also exits **1** (with its report still printed) when neither relay binding works. |

@@ -430,12 +430,11 @@ engine.refresh_runtime(|candidate| {
   schedule, and `workflow_dispatch` refresh dependency caches only; only the
   side tags publish packages and GitHub Releases.
 - Non-publishing rehearsal on a host of the rehearsed target (requires Bun
-  `1.4.2`, `actionlint`, 7-Zip `7z`, and `shasum` on `PATH`):
+  `1.4.2`, 7-Zip `7z`, and `shasum` on `PATH`):
 
 ```sh
 cargo run -p xtask -- release-rehearsal \
   --component backend \
-  --workflow .github/workflows/release.yml \
   --version <backend-semver> \
   --target "$(rustc -vV | sed -n 's/^host: //p')" \
   --no-publish

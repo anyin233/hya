@@ -1,44 +1,49 @@
 ---
 name: secure-self-update
 description: >-
-  Use when verifying, staging, recovering, or owner-activating an independent hya release with `hya update`: signed metadata, local package fetch, immutable staging, smoke subprocess, activation journal/selector, anti-rollback floor, and install.sh break-glass. Do not use for bundle install, plugin load, or to skip the owner activation gate.
+  Use when installing or updating a hya release with `hya update`: the embedded release installer, `--backend-only`/`--tui-only`, pinned versions, `SHA256SUMS` verification and per-side rollback, plus the source-checkout rebuild-and-restart flow. Do not use for bundle install or plugin load.
 ---
 <!-- Trusted core Skill; its metadata and body are prepared from this bundle. -->
 
-# Secure self-update
+# Update hya
 
-Use this skill when verifying, staging, recovering, or owner-activating an
-independent hya release with `hya update` (0.38.0+; formerly the `hya-updater` binary). Do **not** use it for
-bundle install, plugin load, or ordinary `install.sh` source installs unless the
-user is comparing break-glass recovery.
+Use this skill when installing or updating an independent hya release with
+`hya update`. Do **not** use it for bundle install or plugin load.
+
+## What `hya update` does
+
+`hya update` pipes the installer embedded from `scripts/hya-install.sh` to `sh`
+for the running hya's prefix. That is exactly the script
+`https://hya.ed-aisys.com/install.sh` serves: it downloads each selected side's
+release archive, verifies it against that release's `SHA256SUMS`, and rolls the
+side back when it fails.
+
+- Bare `hya update` updates the backend and the frontend.
+- `--backend-only` installs/updates `bin/hya`, the bundles, and the Bun adapter.
+- `--tui-only` installs/updates Bun, the TUI, and the WebUI.
+- `--version <v>` pins each selected side, `--force` reinstalls the current
+  versions, and `--prefix <dir>` targets a prefix other than the running hya's.
+- `hya update version` prints the updater's package version.
 
 ## Hard rules
 
-- The updater TCB must not depend on runtime, plugin, MCP, bundle, app, or session DB code.
-- Signatures alone never activate. Production activation needs an explicit owner capability (`--authorization PATH`) bound to the exact candidate sequence and expected active generation.
-- The capability is a trusted-filesystem handoff, not a same-UID sandbox; processes able to write the updater root share its trust boundary.
-- Never lower `accepted_floor`. Recovery of older bits requires a new higher signed sequence.
-- `install.sh` remains break-glass bootstrap/manual recovery.
+- `hya update` refuses a build-tree `hya`: only an installed `<prefix>/bin/hya`
+  beside `<prefix>/lib/hya` can update itself.
+- Never bypass the installer's `SHA256SUMS` verification by copying archives by
+  hand.
+- `install.sh` at the repository root remains break-glass bootstrap/manual
+  recovery.
 
 ## References
 
-- Guide: `docs/self-update.md`
-- Example: `docs/examples/self-update/`
+- Guide: `docs/install.md`
+- Script: `scripts/hya-install.sh`
 - Crate: `crates/hya-updater`
-
-## Operator flow
-
-1. Ensure `trust_roots.json` exists under the updater root.
-2. Obtain signed `release.metadata.json` and a local package directory of artifacts.
-3. `hya update apply --root … --metadata … --package … --platform … [--smoke smoke.sh]` for stage-only.
-4. The owner (never the agent) runs `hya update authorize --root … --sequence N --out capability.json` at a terminal and confirms; then `apply … --authorization capability.json` activates. Do not pass `--yes` on the owner's behalf.
-5. On failed smoke before activation: `hya update discard --root … --sequence N`.
-6. On crash mid-update: `hya update recover --root …` then `status`.
 
 ## Source-checkout flow (rebuild and restart)
 
 To replace the running backend with code you changed in a hya source checkout
-(no signed release involved):
+(no release involved):
 
 1. Build: `cargo build -p hya-backend --bin hya`.
 2. Restart from the new build with the tests that prove the change:
@@ -52,5 +57,5 @@ To replace the running backend with code you changed in a hya source checkout
 
 ## Agent boundaries
 
-Do not invent signing keys, waive anti-rollback, load candidate code in-process,
-or claim production activation without documented owner authorization.
+Do not waive the installer's checksum verification, copy archives in by hand, or
+claim an update happened without the installer's own output.

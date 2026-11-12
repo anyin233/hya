@@ -93,15 +93,11 @@ pub(crate) struct Cli {
     /// Auto-approve every tool action (edit/write/shell anywhere). Use with care.
     #[arg(long, global = true)]
     pub(crate) yolo: bool,
-    #[arg(long = "print-logs", global = true)]
-    pub(crate) print_logs: bool,
-    #[arg(long = "log-level", global = true, value_parser = ["DEBUG", "INFO", "WARN", "ERROR"])]
-    pub(crate) log_level: Option<String>,
     #[arg(long, global = true)]
     pub(crate) pure: bool,
-    /// SQLite database path. Applies to headless exec/run persistence, serve,
+    /// SQLite database path. Applies to headless exec persistence, serve,
     /// bare `hya`, sessions, and replay. Empty: an in-memory store for
-    /// exec/run/serve; `$XDG_STATE_HOME/hya/sessions.db` for bare `hya`,
+    /// exec/serve; `$XDG_STATE_HOME/hya/sessions.db` for bare `hya`,
     /// sessions, and tail-session.
     #[arg(long, global = true, default_value = "")]
     pub(crate) db: String,
@@ -279,17 +275,6 @@ pub(crate) enum ServeRelayAction {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub(crate) enum Command {
-    /// Compat-compatible alias for headless prompt execution.
-    Run {
-        /// Message words to send to the agent.
-        message: Vec<String>,
-        /// Format: default transcript or JSONL event stream.
-        #[arg(long, value_parser = ["default", "json"], default_value = "default")]
-        format: String,
-        /// Emit the event stream as JSONL instead of a rendered transcript.
-        #[arg(long)]
-        json: bool,
-    },
     /// Run a single prompt headlessly and print the resulting transcript.
     Exec {
         /// The user prompt to send to the agent.
@@ -305,11 +290,7 @@ pub(crate) enum Command {
         bind: String,
         /// Use an already-open Unix listener file descriptor from a supervisor.
         /// This is foreground-only; the descriptor must be >= 3 and is owned by hya.
-        #[arg(
-            long,
-            value_name = "FD",
-            conflicts_with_all = ["hostname", "port", "mdns"]
-        )]
+        #[arg(long, value_name = "FD")]
         listen_fd: Option<u32>,
         /// Inherited database lock descriptor supplied by a restart successor.
         #[arg(long, value_name = "FD", requires = "listen_fd", hide = true)]
@@ -326,26 +307,11 @@ pub(crate) enum Command {
         /// generation), transferred with the handoff.
         #[arg(long, value_name = "FD", requires = "listen_fd", hide = true)]
         grpc_listen_fd: Option<u32>,
-        /// Hostname to listen on. Compat-compatible alias for the host part of `--bind`.
-        #[arg(long)]
-        hostname: Option<String>,
-        /// Port to listen on. Compat-compatible alias for the port part of `--bind`.
-        #[arg(long)]
-        port: Option<u16>,
-        /// Enable Compat mDNS-compatible wildcard binding when hostname is not set.
-        #[arg(long)]
-        mdns: bool,
-        /// Accepted for Compat CLI compatibility; hya does not advertise mDNS yet.
-        #[arg(long = "mdns-domain", default_value = "compat.local")]
-        mdns_domain: String,
-        /// Accepted for Compat CLI compatibility; hya mirrors CORS origins globally.
-        #[arg(long)]
-        cors: Vec<String>,
         /// Accept requests whose Host names HOST (a host name or IP
         /// address, no port) besides `localhost`, `127.0.0.1`, and `[::1]`
         /// (repeatable; also after `start`/`restart`). Every other Host is
         /// refused with 403 (DNS rebinding); a non-wildcard `--bind` host is
-        /// accepted by itself, a wildcard bind (`0.0.0.0`, `--mdns`) needs
+        /// accepted by itself, a wildcard bind (`0.0.0.0`) needs
         /// the LAN names here.
         #[arg(long = "allow-host", value_name = "HOST", global = true)]
         allow_host: Vec<String>,
@@ -432,12 +398,10 @@ pub(crate) enum Command {
         #[command(subcommand)]
         action: Option<crate::sessions_cmd::SessionsAction>,
     },
-    /// JSONL RPC over stdin/stdout: read {"type":"prompt","text":...} lines, emit event JSONL.
-    Rpc,
     /// Update hya: bare `hya update` reinstalls the latest GitHub backend and
     /// frontend releases into this hya's prefix (`--backend-only`/`--tui-only`
-    /// select one side; docs/install.md); the subcommands verify, stage,
-    /// activate, or recover signed releases (update TCB, docs/self-update.md).
+    /// select one side; docs/install.md); `hya update version` prints the
+    /// updater's package version.
     #[command(args_conflicts_with_subcommands = true)]
     Update {
         #[command(subcommand)]
@@ -539,11 +503,11 @@ pub(crate) const DEFAULT_WEB_PORT: u16 = 3250;
 ///
 /// `--port` is a top-level flag of the bare invocation only; with a
 /// subcommand or `-p` goal mode it is an error rather than silently ignored
-/// (`serve --port` is the serve subcommand's own flag).
+/// (`hya serve --bind` sets the server's address).
 pub(crate) fn bare_web_port(cli: &Cli) -> anyhow::Result<u16> {
     if cli.port.is_some() && (cli.command.is_some() || cli.prompt.is_some()) {
         anyhow::bail!(
-            "--port only applies to bare `hya` (the WebUI port); use `hya serve --port` for the server"
+            "--port only applies to bare `hya` (the WebUI port); use `hya serve --bind` for the server"
         );
     }
     Ok(cli.port.unwrap_or(DEFAULT_WEB_PORT))
@@ -685,23 +649,6 @@ pub(crate) fn merge_model_effort(
     }
     Ok(Some(format!("{model}#{effort}")))
 }
-pub(crate) fn serve_bind(
-    bind: String,
-    hostname: Option<String>,
-    port: Option<u16>,
-    mdns: bool,
-) -> String {
-    if hostname.is_none() && port.is_none() && !mdns {
-        return bind;
-    }
-    let (default_host, default_port) = bind.rsplit_once(':').unwrap_or((&bind, "8080"));
-    let host = hostname.unwrap_or_else(|| {
-        let host = if mdns { "0.0.0.0" } else { default_host };
-        host.to_string()
-    });
-    let port = port.map_or_else(|| default_port.to_string(), |port| port.to_string());
-    format!("{host}:{port}")
-}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -754,50 +701,45 @@ mod tests {
     }
 
     #[test]
-    fn parses_update_subcommands() {
-        let cases: &[&[&str]] = &[
-            &["hya", "update", "version"],
-            &["hya", "update", "status", "--root", "/tmp/updater"],
-            &["hya", "update", "recover", "--root", "/tmp/updater"],
-            &[
-                "hya",
-                "update",
-                "discard",
-                "--root",
-                "/tmp/updater",
-                "--sequence",
-                "4",
-            ],
-            &[
-                "hya",
-                "update",
-                "apply",
-                "--root",
-                "/tmp/updater",
-                "--metadata",
-                "m.json",
-                "--package",
-                "pkg",
-                "--platform",
-                "x86_64-unknown-linux-gnu",
-                "--authorization",
-                "auth.json",
-            ],
-            &[
-                "hya",
-                "update",
-                "init-roots",
-                "--path",
-                "t.json",
-                "--root",
-                "k=00",
-            ],
-        ];
-        for args in cases {
-            let cli = parse_slice(args);
+    fn parses_update_version_and_install_flags() {
+        use hya_updater::cli::UpdateCommand;
+
+        let cli = parse_slice(&["hya", "update", "version"]);
+        assert!(
+            matches!(
+                cli.command,
+                Some(super::Command::Update {
+                    command: Some(UpdateCommand::Version),
+                    ..
+                })
+            ),
+            "`hya update version` must parse as the updater command"
+        );
+
+        let cli = parse_slice(&["hya", "update", "--backend-only", "--version", "0.43.23"]);
+        assert!(
+            matches!(
+                cli.command,
+                Some(super::Command::Update {
+                    command: None,
+                    install,
+                }) if install.backend_only && install.version.as_deref() == Some("0.43.23")
+            ),
+            "bare `hya update` must parse the installer flags"
+        );
+
+        // The signed-metadata command set is gone.
+        for retired in [
+            "status",
+            "recover",
+            "apply",
+            "authorize",
+            "discard",
+            "init-roots",
+        ] {
             assert!(
-                matches!(cli.command, Some(super::Command::Update { .. })),
-                "{args:?} must parse as `hya update`"
+                Cli::try_parse_from(["hya", "update", retired, "--root", "/tmp/u"]).is_err(),
+                "`hya update {retired}` must be rejected"
             );
         }
     }
@@ -1092,23 +1034,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_compat_run_alias() {
-        let cli = parse(["hya", "run", "--format", "json", "hello", "world"]);
-        match cli.command {
-            Some(super::Command::Run {
-                message,
-                json,
-                format,
-            }) => {
-                assert!(!json);
-                assert_eq!(format, "json");
-                assert_eq!(message, ["hello", "world"]);
-            }
-            _ => panic!("expected run command"),
-        }
-    }
-
-    #[test]
     fn bare_port_defaults_to_3250_and_accepts_overrides() {
         assert_eq!(super::bare_web_port(&parse(["hya"])).unwrap(), 3250);
         assert_eq!(
@@ -1139,10 +1064,6 @@ mod tests {
             error.contains("--port only applies to bare `hya`"),
             "{error}"
         );
-        // `serve --port` stays the serve subcommand's own flag.
-        let cli = parse(["hya", "serve", "--port", "4096"]);
-        assert!(cli.port.is_none());
-        assert_eq!(super::bare_web_port(&cli).unwrap(), 3250);
     }
 
     #[test]
@@ -1511,61 +1432,6 @@ mod tests {
         // The standalone form parses as a subcommand.
         let cli = parse(["hya", "bridge", "-", "--json", "--listen", "127.0.0.1:0"]);
         assert!(matches!(cli.command, Some(super::Command::Bridge { .. })));
-    }
-
-    #[test]
-    fn parses_compat_serve_network_aliases() {
-        let cli = parse(["hya", "serve", "--hostname", "0.0.0.0", "--port", "4096"]);
-        match cli.command {
-            Some(super::Command::Serve {
-                bind,
-                hostname,
-                port,
-                ..
-            }) => {
-                assert_eq!(bind, "127.0.0.1:8080");
-                assert_eq!(hostname.as_deref(), Some("0.0.0.0"));
-                assert_eq!(port, Some(4096));
-                assert_eq!(
-                    super::serve_bind(bind, hostname, port, false),
-                    "0.0.0.0:4096"
-                );
-            }
-            _ => panic!("expected serve command"),
-        }
-    }
-
-    #[test]
-    fn parses_compat_serve_cors_and_mdns_flags() {
-        let cli = parse([
-            "hya",
-            "serve",
-            "--mdns",
-            "--mdns-domain",
-            "hya.local",
-            "--cors",
-            "https://app.test",
-        ]);
-        match cli.command {
-            Some(super::Command::Serve {
-                bind,
-                hostname,
-                port,
-                mdns,
-                mdns_domain,
-                cors,
-                ..
-            }) => {
-                assert!(mdns);
-                assert_eq!(mdns_domain, "hya.local");
-                assert_eq!(cors, ["https://app.test"]);
-                assert_eq!(
-                    super::serve_bind(bind, hostname, port, mdns),
-                    "0.0.0.0:8080"
-                );
-            }
-            _ => panic!("expected serve command"),
-        }
     }
 
     #[test]

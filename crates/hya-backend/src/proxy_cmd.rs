@@ -8,11 +8,7 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use hya_relay::proxy::{
-    DEFAULT_ACCEPT_TIMEOUT, DEFAULT_EARLY_DATA_LIMIT, DEFAULT_HANDSHAKE_TIMEOUT,
-    DEFAULT_IDLE_TIMEOUT, DEFAULT_MAX_CHUNK_DATA, DEFAULT_MAX_EARLY_DATA_BYTES,
-    DEFAULT_MAX_PENDING_REGISTRATIONS, DEFAULT_MAX_PENDING_REGISTRATIONS_PER_PEER,
-    DEFAULT_MAX_ROOMS, DEFAULT_MAX_ROOMS_PER_PEER, DEFAULT_MAX_STREAMS,
-    DEFAULT_MAX_STREAMS_PER_PEER, DEFAULT_MAX_STREAMS_PER_ROOM, DEFAULT_STREAM_RATE_BURST_BYTES,
+    DEFAULT_IDLE_TIMEOUT, DEFAULT_MAX_ROOMS, DEFAULT_MAX_STREAMS_PER_ROOM,
     DEFAULT_STREAM_RATE_BYTES_PER_SEC, ProxyLimits,
 };
 use hya_relay::server::{
@@ -24,9 +20,10 @@ pub(crate) const DEFAULT_PROXY_HOST: &str = "0.0.0.0";
 /// Default `hya proxy` bind port.
 pub(crate) const DEFAULT_PROXY_PORT: u16 = 8766;
 
-/// `--tls-cert`/`--tls-key`, `--path-prefix`, `--trust-forwarded <header>`, and every
-/// [`ProxyLimits`] field, one flag each (kebab-case; durations in whole
-/// seconds since nothing in the codebase parses `10s`-style durations yet).
+/// `--tls-cert`/`--tls-key`, `--path-prefix`, `--trust-forwarded <header>`, and
+/// the four [`ProxyLimits`] knobs an operator can meaningfully choose; every
+/// other limit keeps its library default (durations in whole seconds since
+/// nothing in the codebase parses `10s`-style durations yet).
 #[derive(clap::Args, Debug, Clone)]
 pub(crate) struct ProxyArgs {
     /// Bind host. The proxy has no local trust boundary (Noise end-to-end
@@ -59,21 +56,6 @@ pub(crate) struct ProxyArgs {
     /// Maximum concurrent streams per room.
     #[arg(long, default_value_t = DEFAULT_MAX_STREAMS_PER_ROOM)]
     pub(crate) max_streams_per_room: usize,
-    /// Maximum concurrent streams opened by one client identity.
-    #[arg(long, default_value_t = DEFAULT_MAX_STREAMS_PER_PEER)]
-    pub(crate) max_streams_per_peer: usize,
-    /// Maximum concurrent streams on the whole proxy.
-    #[arg(long, default_value_t = DEFAULT_MAX_STREAMS)]
-    pub(crate) max_streams: usize,
-    /// Maximum rooms registered by one client identity.
-    #[arg(long, default_value_t = DEFAULT_MAX_ROOMS_PER_PEER)]
-    pub(crate) max_rooms_per_peer: usize,
-    /// Maximum unfinished host registrations per client identity.
-    #[arg(long, default_value_t = DEFAULT_MAX_PENDING_REGISTRATIONS_PER_PEER)]
-    pub(crate) max_pending_registrations_per_peer: usize,
-    /// Maximum unfinished host registrations on the whole proxy.
-    #[arg(long, default_value_t = DEFAULT_MAX_PENDING_REGISTRATIONS)]
-    pub(crate) max_pending_registrations: usize,
     /// A stream leg or control stream idle this long (seconds; heartbeats
     /// count as activity) is closed with `DEADLINE_EXCEEDED`.
     #[arg(long, default_value_t = DEFAULT_IDLE_TIMEOUT.as_secs())]
@@ -81,25 +63,6 @@ pub(crate) struct ProxyArgs {
     /// Byte-rate cap per stream and direction; `0` disables it.
     #[arg(long, default_value_t = DEFAULT_STREAM_RATE_BYTES_PER_SEC)]
     pub(crate) stream_rate_bytes_per_sec: u64,
-    /// Token-bucket burst for `--stream-rate-bytes-per-sec`.
-    #[arg(long, default_value_t = DEFAULT_STREAM_RATE_BURST_BYTES)]
-    pub(crate) stream_rate_burst_bytes: u64,
-    /// Largest accepted `data` payload; a larger chunk fails the stream.
-    #[arg(long, default_value_t = DEFAULT_MAX_CHUNK_DATA)]
-    pub(crate) max_chunk_data: usize,
-    /// Opener `data` bytes buffered before the host accepts the stream.
-    #[arg(long, default_value_t = DEFAULT_EARLY_DATA_LIMIT)]
-    pub(crate) early_data_limit: usize,
-    /// Opener `data` bytes buffered before accept, over all streams.
-    #[arg(long, default_value_t = DEFAULT_MAX_EARLY_DATA_BYTES)]
-    pub(crate) max_early_data_bytes: usize,
-    /// Seconds an `Open` waits for the host's `Accept` before `UNAVAILABLE`.
-    #[arg(long, default_value_t = DEFAULT_ACCEPT_TIMEOUT.as_secs())]
-    pub(crate) accept_timeout_secs: u64,
-    /// Seconds allowed for the first frame of every stream (registration,
-    /// `open`, `accept`) before `DEADLINE_EXCEEDED`.
-    #[arg(long, default_value_t = DEFAULT_HANDSHAKE_TIMEOUT.as_secs())]
-    pub(crate) handshake_timeout_secs: u64,
     /// Seconds shutdown waits for streams and connections to drain before
     /// cutting them.
     #[arg(long, default_value_t = DEFAULT_DRAIN_TIMEOUT.as_secs())]
@@ -111,19 +74,9 @@ impl ProxyArgs {
         ProxyLimits {
             max_rooms: self.max_rooms,
             max_streams_per_room: self.max_streams_per_room,
-            max_streams_per_peer: self.max_streams_per_peer,
-            max_streams: self.max_streams,
-            max_rooms_per_peer: self.max_rooms_per_peer,
-            max_pending_registrations_per_peer: self.max_pending_registrations_per_peer,
-            max_pending_registrations: self.max_pending_registrations,
             idle_timeout: Duration::from_secs(self.idle_timeout_secs),
             stream_rate_bytes_per_sec: self.stream_rate_bytes_per_sec,
-            stream_rate_burst_bytes: self.stream_rate_burst_bytes,
-            max_chunk_data: self.max_chunk_data,
-            early_data_limit: self.early_data_limit,
-            max_early_data_bytes: self.max_early_data_bytes,
-            accept_timeout: Duration::from_secs(self.accept_timeout_secs),
-            handshake_timeout: Duration::from_secs(self.handshake_timeout_secs),
+            ..ProxyLimits::default()
         }
     }
 
@@ -236,56 +189,53 @@ mod tests {
     }
 
     #[test]
-    fn overrides_every_limit_flag() {
+    fn overrides_the_four_limit_flags_and_defaults_the_rest() {
         let cli = parse(&[
             "--max-rooms",
             "1",
             "--max-streams-per-room",
             "2",
-            "--max-streams-per-peer",
-            "3",
-            "--max-rooms-per-peer",
-            "4",
-            "--max-pending-registrations-per-peer",
-            "5",
             "--idle-timeout-secs",
             "6",
             "--stream-rate-bytes-per-sec",
             "7",
-            "--stream-rate-burst-bytes",
-            "8",
-            "--max-chunk-data",
-            "9",
-            "--early-data-limit",
-            "10",
-            "--accept-timeout-secs",
-            "11",
-            "--handshake-timeout-secs",
-            "12",
-            "--max-streams",
-            "13",
-            "--max-pending-registrations",
-            "14",
-            "--max-early-data-bytes",
-            "15",
         ])
-        .expect("all limit flags parse");
+        .expect("every limit flag parses");
         let limits = cli.proxy.limits();
         assert_eq!(limits.max_rooms, 1);
         assert_eq!(limits.max_streams_per_room, 2);
-        assert_eq!(limits.max_streams_per_peer, 3);
-        assert_eq!(limits.max_rooms_per_peer, 4);
-        assert_eq!(limits.max_pending_registrations_per_peer, 5);
         assert_eq!(limits.idle_timeout, std::time::Duration::from_secs(6));
         assert_eq!(limits.stream_rate_bytes_per_sec, 7);
-        assert_eq!(limits.stream_rate_burst_bytes, 8);
-        assert_eq!(limits.max_chunk_data, 9);
-        assert_eq!(limits.early_data_limit, 10);
-        assert_eq!(limits.accept_timeout, std::time::Duration::from_secs(11));
-        assert_eq!(limits.handshake_timeout, std::time::Duration::from_secs(12));
-        assert_eq!(limits.max_streams, 13);
-        assert_eq!(limits.max_pending_registrations, 14);
-        assert_eq!(limits.max_early_data_bytes, 15);
+        // Everything else keeps the library policy.
+        assert_eq!(
+            limits,
+            hya_relay::proxy::ProxyLimits {
+                max_rooms: 1,
+                max_streams_per_room: 2,
+                idle_timeout: std::time::Duration::from_secs(6),
+                stream_rate_bytes_per_sec: 7,
+                ..hya_relay::proxy::ProxyLimits::default()
+            }
+        );
+    }
+
+    #[test]
+    fn retired_limit_flags_are_rejected() {
+        for flag in [
+            "--max-streams-per-peer",
+            "--max-streams",
+            "--max-rooms-per-peer",
+            "--max-pending-registrations-per-peer",
+            "--max-pending-registrations",
+            "--stream-rate-burst-bytes",
+            "--max-chunk-data",
+            "--early-data-limit",
+            "--max-early-data-bytes",
+            "--accept-timeout-secs",
+            "--handshake-timeout-secs",
+        ] {
+            assert!(parse(&[flag, "1"]).is_err(), "{flag} must be gone");
+        }
     }
 
     #[test]

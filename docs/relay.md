@@ -61,25 +61,18 @@ stops accepting, drains every stream (`RelayServer`'s graceful shutdown, see
 | `--trust-forwarded <HEADER>` | off | Identify clients by the address in exactly one forwarding header instead of the socket address: `cf-connecting-ip`, `x-real-ip`, or `x-forwarded-for` (its **rightmost** entry, the one your hop appended). Other forwarding headers are ignored. Only safe when every client reaches the proxy through a hop that sets exactly that header; see [Client identity](#bindings) and the [recipes](#deployment-recipes). |
 | `--max-rooms <N>` | `1024` | [`ProxyLimits::max_rooms`](#proxy-behavior). |
 | `--max-streams-per-room <N>` | `64` | `ProxyLimits::max_streams_per_room`. |
-| `--max-streams-per-peer <N>` | `256` | `ProxyLimits::max_streams_per_peer`. |
-| `--max-streams <N>` | `8192` | `ProxyLimits::max_streams` (the whole proxy). |
-| `--max-rooms-per-peer <N>` | `16` | `ProxyLimits::max_rooms_per_peer`. |
-| `--max-pending-registrations-per-peer <N>` | `8` | `ProxyLimits::max_pending_registrations_per_peer`. |
-| `--max-pending-registrations <N>` | `256` | `ProxyLimits::max_pending_registrations` (the whole proxy). |
 | `--idle-timeout-secs <N>` | `120` | `ProxyLimits::idle_timeout`. |
 | `--stream-rate-bytes-per-sec <N>` | `8388608` | `ProxyLimits::stream_rate_bytes_per_sec` (`0` = unlimited). |
-| `--stream-rate-burst-bytes <N>` | `1048576` | `ProxyLimits::stream_rate_burst_bytes`. |
-| `--max-chunk-data <N>` | `262144` | `ProxyLimits::max_chunk_data`. |
-| `--early-data-limit <N>` | `65536` | `ProxyLimits::early_data_limit`. |
-| `--max-early-data-bytes <N>` | `67108864` | `ProxyLimits::max_early_data_bytes` (the whole proxy). |
-| `--accept-timeout-secs <N>` | `10` | `ProxyLimits::accept_timeout`. |
-| `--handshake-timeout-secs <N>` | `10` | `ProxyLimits::handshake_timeout`. |
 | `--drain-timeout-secs <N>` | `10` | `RelayServerConfig::drain_timeout`. |
 
-Every limit flag mirrors a [`ProxyLimits`](#proxy-behavior) field one for
-one; durations are given in whole seconds (nothing else in `hya` parses
-`10s`-style durations yet). See [Deployment recipes](#deployment-recipes)
-for complete configs in front of `hya proxy`.
+`--max-rooms`, `--max-streams-per-room`, `--idle-timeout-secs`, and
+`--stream-rate-bytes-per-sec` are the four [`ProxyLimits`](#proxy-behavior)
+knobs worth choosing per deployment; every other limit (peer caps, pending
+registrations, early data, the token-bucket burst, chunk size, accept and
+handshake timeouts) keeps its library default. Durations are given in whole
+seconds (nothing else in `hya` parses `10s`-style durations yet). See
+[Deployment recipes](#deployment-recipes) for complete configs in front of
+`hya proxy`.
 
 ### `hya relay doctor`
 

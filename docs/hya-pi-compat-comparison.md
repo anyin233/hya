@@ -231,7 +231,7 @@ different stream-permit paths; `AdmissionMemberIdentity` attributes nested
 spawns to the parent member. Background `task` is limited to a single member;
 multi-member background is rejected. Resident spawns are non-blocking and wake
 only on mail. The shipped CLI surfaces headless runs, goal mode,
-server, replay, session, auth/catalog, and JSONL RPC (there is no interactive
+server, replay, session, and auth/catalog (there is no interactive
 frontend since the legacy TUI was removed); the underlying team
 machinery is more developed than the end-user team UI.
 

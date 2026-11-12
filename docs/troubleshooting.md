@@ -262,7 +262,7 @@ or acceptable trailing whitespace.
 
 ## Mutating Tools Fail in Headless Mode
 
-Headless **`exec`**, **`run`**, **goal mode** (`-p`), and **`rpc`** install
+Headless **`exec`**, **goal mode** (`-p`), and **`loop`** install
 `spawn_reject_responder`: every residual permission **ask** is answered with
 `Decision::Reject` and no feedback. Nothing is auto-approved by that responder.
 Tools that still need an interactive allow/ask decision will fail closed.

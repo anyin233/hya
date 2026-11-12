@@ -13,9 +13,7 @@ use std::process::{Command, Output, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result, bail, ensure};
-use serde_norway::Value;
 
-const ACTIONLINT_VERSION: &str = "1.7.12";
 const BUN_VERSION: &str = "1.4.2";
 /// Highest text-lockfile version [`BUN_VERSION`] can read.
 const BUN_LOCKFILE_VERSION: u64 = 2;
@@ -84,7 +82,6 @@ fn host_target(root: &Path) -> Result<String> {
         .context("rustc -vV did not report a host target")
 }
 const BINARY_NAME: &str = "hya";
-const RELEASE_JOB: &str = "release";
 /// Crates whose release `cdylib` the native tool-family bundles package.
 const TOOL_FAMILY_CRATES: [&str; 5] = [
     "hya-base-tools",
@@ -93,34 +90,8 @@ const TOOL_FAMILY_CRATES: [&str; 5] = [
     "hya-channel-tools",
     "hya-todo-tools",
 ];
-const BUILD_JOB: &str = "build";
 const BUN_ADAPTER: &str = "crates/hya-plugin-bun/adapter";
 const ARGUS_PACKAGE_SCRIPT: &str = "scripts/package-argus-example.sh";
-const WORKFLOW_BUN_SOURCE_COPY: &str =
-    "cp -R crates/hya-plugin-bun/adapter/src/. \"dist/$package_dir/lib/hya/bun-adapter/src/\"";
-const WORKFLOW_TUI_SOURCE_COPY: &str =
-    "cp -R packages/hya-tui/src/. \"dist/$package_dir/lib/hya/tui/src/\"";
-const WORKFLOW_TUI_INSTALL: &str = "(cd \"dist/$package_dir/lib/hya/tui\" && \"$HOME/.bun/bin/bun\" install --frozen-lockfile --production)";
-const WORKFLOW_TUI_BUILD: &str =
-    "(cd \"dist/$package_dir/lib/hya/tui\" && \"$HOME/.bun/bin/bun\" run build)";
-const WORKFLOW_TUI_WEB_SOURCE_COPY: &str =
-    "cp -R packages/hya-tui-web/src/. \"dist/$package_dir/lib/hya/tui-web/src/\"";
-const WORKFLOW_FRONTEND_VERSION_COPY: &str =
-    "cp packages/hya-tui/frontend-version.ts \"dist/$package_dir/lib/hya/tui/frontend-version.ts\"";
-const WORKFLOW_TUI_WEB_PAGE_COPY: &str =
-    "cp -R packages/hya-tui-web/web/. \"dist/$package_dir/lib/hya/tui-web/web/\"";
-const WORKFLOW_TUI_WEB_INSTALL: &str = "(cd \"dist/$package_dir/lib/hya/tui-web\" && \"$HOME/.bun/bin/bun\" install --frozen-lockfile --production)";
-const WORKFLOW_TUI_SDK_SOURCE_COPY: &str =
-    "cp -R packages/hya-tui-sdk/src/. \"dist/$package_dir/lib/hya/tui-sdk/src/\"";
-const WORKFLOW_TUI_SDK_INSTALL: &str = "(cd \"dist/$package_dir/lib/hya/tui-sdk\" && \"$HOME/.bun/bin/bun\" install --frozen-lockfile --production)";
-const WORKFLOW_FIRST_PARTY_STAGE: &str = "cargo run --locked -p xtask -- stage-first-party-bundles --target \"$TARGET\" --version \"$VERSION\" --library-dir \"target/$TARGET/release\" --package-root \"dist/$package_dir\" --assets dist";
-const WORKFLOW_CHECKSUMS: &str =
-    "(cd dist && shasum -a 256 \"$archive\" ./*.hyabundle > SHA256SUMS)";
-/// The pinned Bun ships inside the archive, so an installed `hya` needs no
-/// separately installed Bun.
-const WORKFLOW_BUN_RUNTIME_COPY: &str =
-    "install -m 0755 \"$HOME/.bun/bin/bun\" \"dist/$package_dir/lib/hya/bin/bun\"";
-/// Package-relative path of the bundled Bun executable.
 const PACKAGED_BUN: &str = "lib/hya/bin/bun";
 
 /// One Bun program the archive ships under `lib/hya` with production dependencies.
@@ -251,7 +222,6 @@ impl Component {
 /// Command-line options for one non-publishing rehearsal.
 #[derive(Debug)]
 struct Options {
-    workflow: PathBuf,
     version: String,
     target: String,
     component: Component,
@@ -312,8 +282,13 @@ impl Drop for ScratchDirectory {
 /// Run `release-rehearsal` with the supplied arguments.
 ///
 /// # Errors
-/// Returns an error when arguments, workflow structure, release metadata, or
-/// any release command fails. The command never performs a publishing action.
+/// Returns an error when arguments, release metadata, or any release command
+/// fails. The command never performs a publishing action.
+///
+/// The release workflow's own correctness (action pins, trigger tags, job
+/// structure, embedded shell) belongs to `actionlint` in the workflow and to a
+/// real trial release; this task checks only what CI cannot check cheaply: the
+/// aggregate version contract and the packaged layout.
 pub fn run(args: Vec<String>) -> Result<()> {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         print_usage();
@@ -321,25 +296,8 @@ pub fn run(args: Vec<String>) -> Result<()> {
     }
     let options = parse_args(&args)?;
     let root = repo_root()?;
-    let workflow_path = resolve_workflow_path(&root, &options.workflow);
-    let workflow_source = fs::read_to_string(&workflow_path)
-        .with_context(|| format!("read release workflow {}", workflow_path.display()))?;
-    let workflow: Value = serde_norway::from_str(&workflow_source)
-        .with_context(|| format!("parse release workflow {} as YAML", workflow_path.display()))?;
-    let run_blocks = validate_workflow(&workflow, &options.target, options.component)?;
-    validate_release_metadata(
-        &root,
-        &options.version,
-        &options.target,
-        options.component,
-        &workflow,
-    )?;
+    validate_release_metadata(&root, &options.version, &options.target, options.component)?;
     require_host_target(&options.target, &host_target(&root)?)?;
-
-    run_actionlint(&workflow_path, &root)?;
-    for (index, script) in run_blocks.iter().enumerate() {
-        check_bash_syntax(index + 1, script)?;
-    }
     prepare_and_build(&root, &options.target, options.component)?;
     rehearse_package(&root, &options.version, &options.target, options.component)?;
 
@@ -355,14 +313,13 @@ pub fn run(args: Vec<String>) -> Result<()> {
 /// Print the command usage without touching the repository or running tools.
 fn print_usage() {
     println!(
-        "usage: cargo xtask release-rehearsal --workflow <path> \
+        "usage: cargo xtask release-rehearsal \
          --version <semver> --target <target> [--component backend|frontend] --no-publish"
     );
 }
 
 /// Parse and validate the release rehearsal command-line arguments.
 fn parse_args(args: &[String]) -> Result<Options> {
-    let mut workflow = None;
     let mut version = None;
     let mut target = None;
     let mut no_publish = false;
@@ -371,9 +328,6 @@ fn parse_args(args: &[String]) -> Result<Options> {
 
     while index < args.len() {
         match args[index].as_str() {
-            "--workflow" => {
-                workflow = Some(next_argument(args, &mut index, "--workflow")?);
-            }
             "--version" => {
                 version = Some(next_argument(args, &mut index, "--version")?);
             }
@@ -398,13 +352,11 @@ fn parse_args(args: &[String]) -> Result<Options> {
     }
 
     ensure!(no_publish, "release-rehearsal requires --no-publish");
-    let workflow = workflow.context("release-rehearsal requires --workflow <path>")?;
     let version = version.context("release-rehearsal requires --version <semver>")?;
     let target = target.context("release-rehearsal requires --target <target>")?;
     ensure!(is_safe_target(&target), "invalid release target `{target}`");
 
     Ok(Options {
-        workflow: PathBuf::from(workflow),
         version,
         target,
         component,
@@ -424,15 +376,6 @@ fn next_argument(args: &[String], index: &mut usize, option: &str) -> Result<Str
     Ok(value.clone())
 }
 
-/// Resolve a workflow path relative to the workspace root, as CI does.
-fn resolve_workflow_path(root: &Path, workflow: &Path) -> PathBuf {
-    if workflow.is_absolute() {
-        workflow.to_path_buf()
-    } else {
-        root.join(workflow)
-    }
-}
-
 /// Return the workspace root from this crate's manifest directory.
 fn repo_root() -> Result<PathBuf> {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -443,460 +386,20 @@ fn repo_root() -> Result<PathBuf> {
         .context("resolve workspace root from CARGO_MANIFEST_DIR")
 }
 
-/// Validate the typed workflow shape and return every embedded `run` block.
-fn validate_workflow(workflow: &Value, target: &str, _component: Component) -> Result<Vec<String>> {
-    let root = mapping(workflow, "workflow root")?;
-    let jobs = mapping(
-        field(root, "jobs").context("release workflow must contain jobs")?,
-        "workflow jobs",
-    )?;
-    ensure!(
-        !jobs.is_empty(),
-        "release workflow must contain at least one job"
-    );
-
-    let root_env = mapping(
-        field(root, "env").context("release workflow must contain top-level env")?,
-        "workflow env",
-    )?;
-    ensure_string_field(root_env, "BINARY_NAME", BINARY_NAME, "workflow env")?;
-
-    for (job_name, job) in jobs {
-        let job_label = key_label(job_name, "workflow job")?;
-        let job_map = mapping(job, &format!("job `{job_label}`"))?;
-        let steps = sequence(
-            field(job_map, "steps")
-                .with_context(|| format!("job `{job_label}` must contain steps"))?,
-            &format!("job `{job_label}` steps"),
-        )?;
-        ensure!(
-            !steps.is_empty(),
-            "job `{job_label}` must contain at least one step"
-        );
-        for (step_index, step) in steps.iter().enumerate() {
-            mapping(step, &format!("job `{job_label}` step {}", step_index + 1))?;
-        }
-    }
-
-    let build = mapping(
-        field(jobs, BUILD_JOB).context("release workflow must contain build job")?,
-        "build job",
-    )?;
-    validate_build_matrix(build, target)?;
-    let release = mapping(
-        field(jobs, RELEASE_JOB).context("release workflow must contain release job")?,
-        "release job",
-    )?;
-    ensure_string_value(
-        field(release, "environment").context("release job must declare environment")?,
-        "release",
-        "release job environment",
-    )?;
-    let mut run_blocks = Vec::new();
-    collect_step_contracts(workflow, "workflow", &mut run_blocks)?;
-    let on = mapping(
-        field(root, "on").context("workflow on trigger")?,
-        "workflow on trigger",
-    )?;
-    let push = mapping(
-        field(on, "push").context("workflow on.push trigger")?,
-        "workflow on.push trigger",
-    )?;
-    let tags = sequence(
-        field(push, "tags").context("workflow on.push.tags")?,
-        "workflow on.push.tags",
-    )?;
-    for required in ["backend/*", "frontend/*"] {
-        ensure!(
-            tags.iter()
-                .any(|tag| string_value(tag, "workflow tag").ok() == Some(required)),
-            "release workflow on.push.tags is missing tag trigger `{required}`"
-        );
-    }
-    let joined = run_blocks.join("\n");
-    for marker in [
-        "https://hya.ed-aisys.com/install.sh",
-        "frontend-version.ts",
-        "CHANGELOG_${COMPONENT^^}.md",
-        "hya-${COMPONENT}-${VERSION}-${TARGET}",
-        "if grep -q -- \"$package_dir/bin/hya\" \"$listing\"; then",
-        "if grep -q -- \"$package_dir/bundles/\" \"$listing\"; then",
-    ] {
-        ensure!(
-            joined.contains(marker),
-            "release workflow is missing side-specific marker `{marker}`"
-        );
-    }
-    // Releases do not carry the installer: hya.ed-aisys.com/install.sh serves
-    // `scripts/hya-install.sh` from the main branch.
-    ensure!(
-        !joined.contains("hya-install.sh") && !joined.contains("hya-tui-install.sh"),
-        "release workflow must not publish an installer script as a release asset"
-    );
-    ensure!(
-        run_blocks.iter().any(
-            |run| run.contains("cargo build --release --locked -p hya-backend --bins --target")
-        ),
-        "release workflow must keep the locked hya target build command"
-    );
-    ensure!(
-        run_blocks.iter().any(|run| run.contains("shasum -a 256")),
-        "release workflow must keep SHA256SUMS generation"
-    );
-    ensure!(
-        run_blocks
-            .iter()
-            .any(|run| run.contains(ARGUS_PACKAGE_SCRIPT)),
-        "release workflow must keep the existing example package script"
-    );
-    ensure_workflow_run_contract(
-        &run_blocks,
-        WORKFLOW_BUN_SOURCE_COPY,
-        "recursively copy the complete Bun adapter source tree",
-    )?;
-    for (marker, purpose) in [
-        (
-            WORKFLOW_TUI_SOURCE_COPY,
-            "recursively copy the complete TUI source tree",
-        ),
-        (
-            WORKFLOW_FRONTEND_VERSION_COPY,
-            "copy the aggregate frontend version into the self-contained TUI runtime",
-        ),
-        (
-            WORKFLOW_TUI_INSTALL,
-            "install the TUI's production dependencies on the target runner",
-        ),
-        (WORKFLOW_TUI_BUILD, "precompile the TUI before packaging"),
-        (
-            WORKFLOW_TUI_WEB_SOURCE_COPY,
-            "recursively copy the complete WebUI host source tree",
-        ),
-        (
-            WORKFLOW_TUI_WEB_PAGE_COPY,
-            "recursively copy the complete WebUI page tree",
-        ),
-        (
-            WORKFLOW_TUI_WEB_INSTALL,
-            "install the WebUI host's production dependencies",
-        ),
-        (
-            WORKFLOW_TUI_SDK_SOURCE_COPY,
-            "recursively copy the complete TUI extension SDK source tree",
-        ),
-        (
-            WORKFLOW_TUI_SDK_INSTALL,
-            "install the TUI extension SDK's production dependencies (the QuickJS VM)",
-        ),
-    ] {
-        ensure_workflow_run_contract(&run_blocks, marker, purpose)?;
-    }
-    ensure_workflow_run_contract(
-        &run_blocks,
-        WORKFLOW_FIRST_PARTY_STAGE,
-        "stage the eleven first-party bundles into the archive and as release assets",
-    )?;
-    ensure_workflow_run_contract(
-        &run_blocks,
-        WORKFLOW_BUN_RUNTIME_COPY,
-        "ship the pinned Bun in the archive",
-    )?;
-    ensure_workflow_run_contract(
-        &run_blocks,
-        WORKFLOW_CHECKSUMS,
-        "checksum the archive and every first-party bundle asset",
-    )?;
-    validate_first_party_lists(&run_blocks)?;
-    Ok(run_blocks)
-}
-
-/// Require every `first_party=(…)` list in the workflow to name exactly
-/// [`hya_bundle::FIRST_PARTY_BUNDLES`], in order, so the smoke counts and
-/// per-bundle checks follow the bundle set instead of a stale copy.
-fn validate_first_party_lists(run_blocks: &[String]) -> Result<()> {
-    let names: Vec<&str> = hya_bundle::FIRST_PARTY_BUNDLES
-        .iter()
-        .map(|identity| identity.trim_start_matches("hya/"))
-        .collect();
-    let expected = format!("first_party=({})", names.join(" "));
-    let lists: Vec<&str> = run_blocks
-        .iter()
-        .flat_map(|run| run.lines())
-        .map(str::trim)
-        .filter(|line| line.starts_with("first_party=("))
-        .collect();
-    if lists.is_empty() {
-        // The side-specific workflow delegates the authoritative bundle set to
-        // stage-first-party-bundles instead of duplicating a shell array.
-        return Ok(());
-    }
-    for list in lists {
-        ensure!(
-            list == expected,
-            "release workflow first-party list `{list}` must be `{expected}`"
-        );
-    }
-    Ok(())
-}
-
-/// Require the build job to run one native job per release target.
-///
-/// The matrix must list exactly [`RELEASE_TARGETS`], each with a runner, and
-/// the job must take `TARGET` and `runs-on` from the matrix entry.
-fn validate_build_matrix(build: &serde_norway::Mapping, target: &str) -> Result<()> {
-    ensure_string_value(
-        field(build, "runs-on").context("build job must declare runs-on")?,
-        "${{ matrix.runner }}",
-        "build job runs-on",
-    )?;
-    let job_env = mapping(
-        field(build, "env").context("build job must declare env")?,
-        "build job env",
-    )?;
-    ensure_string_field(job_env, "TARGET", "${{ matrix.target }}", "build job env")?;
-    let strategy = mapping(
-        field(build, "strategy").context("build job must declare a target matrix")?,
-        "build job strategy",
-    )?;
-    let matrix = mapping(
-        field(strategy, "matrix").context("build job strategy must declare a matrix")?,
-        "build job matrix",
-    )?;
-    let include = sequence(
-        field(matrix, "include").context("build job matrix must list include entries")?,
-        "build job matrix include",
-    )?;
-    let mut targets = Vec::with_capacity(include.len());
-    for (index, entry) in include.iter().enumerate() {
-        let location = format!("build job matrix include[{index}]");
-        let entry = mapping(entry, &location)?;
-        let entry_target = string_value(
-            field(entry, "target").with_context(|| format!("{location} lacks target"))?,
-            &location,
-        )?;
-        let runner = string_value(
-            field(entry, "runner").with_context(|| format!("{location} lacks runner"))?,
-            &location,
-        )?;
-        ensure!(!runner.is_empty(), "{location} has an empty runner");
-        targets.push(entry_target.to_owned());
-    }
-    let mut expected = RELEASE_TARGETS.map(str::to_owned).to_vec();
-    expected.sort();
-    targets.sort();
-    ensure!(
-        targets == expected,
-        "build job matrix must build exactly {expected:?}, found {targets:?}"
-    );
-    ensure!(
-        RELEASE_TARGETS.contains(&target),
-        "release target `{target}` is not in the build job matrix {expected:?}"
-    );
-    Ok(())
-}
-
-/// Require one exact shell marker in the parsed release workflow.
-///
-/// `run_blocks` contains parsed workflow scripts, `marker` is the required
-/// trimmed command line, and `purpose` describes the actionable failure.
-/// Returns an error when no script contains that exact command line.
-fn ensure_workflow_run_contract(run_blocks: &[String], marker: &str, purpose: &str) -> Result<()> {
-    ensure!(
-        run_blocks
-            .iter()
-            .flat_map(|run| run.lines())
-            .any(|line| line.trim() == marker),
-        "release workflow must {purpose}: `{marker}`"
-    );
-    Ok(())
-}
-
-/// Recursively inspect parsed workflow maps for action pins and shell blocks.
-fn collect_step_contracts(
-    value: &Value,
-    location: &str,
-    run_blocks: &mut Vec<String>,
-) -> Result<()> {
-    match value {
-        Value::Mapping(map) => {
-            for (key, child) in map {
-                let key = key_label(key, location)?;
-                let child_location = format!("{location}.{key}");
-                match key.as_str() {
-                    "uses" => validate_action_pin(child, &child_location)?,
-                    "run" => {
-                        let script = string_value(child, &child_location)?;
-                        run_blocks.push(script.to_owned());
-                    }
-                    _ => {}
-                }
-                collect_step_contracts(child, &child_location, run_blocks)?;
-            }
-        }
-        Value::Sequence(sequence) => {
-            for (index, child) in sequence.iter().enumerate() {
-                collect_step_contracts(child, &format!("{location}[{index}]"), run_blocks)?;
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Tagged(_) => {}
-    }
-    Ok(())
-}
-
-/// Require a third-party GitHub action to use a full immutable commit SHA.
-fn validate_action_pin(value: &Value, location: &str) -> Result<()> {
-    let action = string_value(value, location)?;
-    if action.starts_with("./") {
-        return Ok(());
-    }
-    let (name, pin) = action
-        .rsplit_once('@')
-        .with_context(|| format!("{location} must use an immutable commit SHA"))?;
-    ensure!(!name.is_empty(), "{location} has an empty action name");
-    ensure!(
-        pin.len() == 40 && pin.bytes().all(|byte| byte.is_ascii_hexdigit()),
-        "{location} action `{action}` is not pinned to a 40-character commit SHA"
-    );
-    Ok(())
-}
-
-/// Return a YAML mapping or report the expected structural location.
-fn mapping<'a>(value: &'a Value, location: &str) -> Result<&'a serde_norway::Mapping> {
-    match value {
-        Value::Mapping(map) => Ok(map),
-        _ => bail!("{location} must be a mapping"),
-    }
-}
-
-/// Return a YAML sequence or report the expected structural location.
-fn sequence<'a>(value: &'a Value, location: &str) -> Result<&'a Vec<Value>> {
-    match value {
-        Value::Sequence(sequence) => Ok(sequence),
-        _ => bail!("{location} must be a sequence"),
-    }
-}
-
-/// Look up one string key in a YAML mapping.
-fn field<'a>(map: &'a serde_norway::Mapping, key: &str) -> Option<&'a Value> {
-    map.get(key)
-}
-
-/// Convert one YAML map key to a bounded diagnostic label.
-fn key_label(value: &Value, location: &str) -> Result<String> {
-    match value {
-        Value::String(value) => Ok(value.clone()),
-        _ => bail!("{location} contains a non-string key"),
-    }
-}
-
-/// Return a YAML string value with a structural error context.
-fn string_value<'a>(value: &'a Value, location: &str) -> Result<&'a str> {
-    match value {
-        Value::String(value) => Ok(value),
-        _ => bail!("{location} must be a string"),
-    }
-}
-
-/// Require one mapping field to equal an expected string.
-fn ensure_string_field(
-    map: &serde_norway::Mapping,
-    key: &str,
-    expected: &str,
-    location: &str,
-) -> Result<()> {
-    let value = field(map, key).with_context(|| format!("{location} must contain {key}"))?;
-    ensure_string_value(value, expected, &format!("{location}.{key}"))
-}
-
-/// Require one YAML value to equal an expected string.
-fn ensure_string_value(value: &Value, expected: &str, location: &str) -> Result<()> {
-    let actual = string_value(value, location)?;
-    ensure!(
-        actual == expected,
-        "{location} must be `{expected}`, found `{actual}`"
-    );
-    Ok(())
-}
-
-/// Run the pinned actionlint executable from `PATH` against the workflow.
-fn run_actionlint(workflow: &Path, root: &Path) -> Result<()> {
-    let version = run_process(
-        OsStr::new("actionlint"),
-        &arg_list(&["-version"]),
-        root,
-        &[],
-        &[],
-    )
-    .context("run actionlint -version from PATH")?;
-    ensure!(
-        version.status.success(),
-        "actionlint -version failed with status {}",
-        status_label(&version)
-    );
-    let version_text = combined_output(&version);
-    ensure!(
-        version_text.contains(ACTIONLINT_VERSION),
-        "actionlint from PATH must report version {ACTIONLINT_VERSION}"
-    );
-
-    let output = run_process(
-        OsStr::new("actionlint"),
-        &[workflow.display().to_string()],
-        root,
-        &[],
-        &[],
-    )
-    .with_context(|| format!("run actionlint on {}", workflow.display()))?;
-    ensure!(
-        output.status.success(),
-        "actionlint rejected {} with status {}",
-        workflow.display(),
-        status_label(&output)
-    );
-    Ok(())
-}
-
-/// Syntax-check one embedded workflow shell block with `bash -n`.
-fn check_bash_syntax(index: usize, script: &str) -> Result<()> {
-    let output = run_process_with_input(
-        OsStr::new("bash"),
-        &arg_list(&["-n"]),
-        Path::new("."),
-        &[],
-        &[],
-        script.as_bytes(),
-    )
-    .with_context(|| format!("syntax-check workflow run block {index} with bash -n"))?;
-    ensure!(
-        output.status.success(),
-        "workflow run block {index} failed bash -n"
-    );
-    Ok(())
-}
-
 /// Validate the semver, version files, and side-specific newest-only changelog contract.
 fn validate_release_metadata(
     root: &Path,
     version: &str,
     target: &str,
     component: Component,
-    workflow: &Value,
 ) -> Result<()> {
     ensure!(
         is_semver(version),
         "release version `{version}` is not semver-shaped"
     );
-    let representative_tag = format!("{}/{version}", component.as_str());
-    validate_release_tag_trigger(workflow, &representative_tag)?;
-    let other_component = if component == Component::Backend {
-        "frontend"
-    } else {
-        "backend"
-    };
-    validate_release_tag_trigger(workflow, &format!("{other_component}/{version}"))?;
     ensure!(
         RELEASE_TARGETS.contains(&target),
-        "release target `{target}` is not in the build job matrix {RELEASE_TARGETS:?}"
+        "release target `{target}` is not one of the release targets {RELEASE_TARGETS:?}"
     );
     let (backend_version, frontend_version, minimum_backend_version) = aggregate_versions(root)?;
     ensure!(
@@ -964,56 +467,6 @@ fn validate_newest_changelog(source: &str, path: &str, version: &str) -> Result<
         bail!("{path} must be newest-only; found extra heading `{heading}`");
     }
     Ok(())
-}
-
-/// Require the workflow push trigger to admit the representative release tag.
-fn validate_release_tag_trigger(workflow: &Value, tag: &str) -> Result<()> {
-    let root = mapping(workflow, "workflow root")?;
-    let triggers = mapping(
-        field(root, "on").context("release workflow must contain an on trigger")?,
-        "workflow on trigger",
-    )?;
-    let push = mapping(
-        field(triggers, "push").context("workflow on trigger must contain push")?,
-        "workflow on.push trigger",
-    )?;
-    let tags = sequence(
-        field(push, "tags").context("workflow on.push trigger must contain tags")?,
-        "workflow on.push.tags",
-    )?;
-    let mut admitted = false;
-    for (index, pattern) in tags.iter().enumerate() {
-        let pattern = string_value(pattern, &format!("workflow on.push.tags[{index}"))?;
-        if tag_pattern_matches(pattern, tag) {
-            admitted = true;
-            break;
-        }
-    }
-    ensure!(
-        admitted,
-        "workflow on.push.tags does not admit representative release tag `{tag}`"
-    );
-    Ok(())
-}
-
-/// Match the small `*` glob syntax used by GitHub tag filters.
-fn tag_pattern_matches(pattern: &str, tag: &str) -> bool {
-    let mut remainder = tag;
-    let mut first_literal = true;
-    for literal in pattern.split('*').filter(|literal| !literal.is_empty()) {
-        if first_literal {
-            if !remainder.starts_with(literal) {
-                return false;
-            }
-            remainder = &remainder[literal.len()..];
-            first_literal = false;
-        } else if let Some(index) = remainder.find(literal) {
-            remainder = &remainder[index + literal.len()..];
-        } else {
-            return false;
-        }
-    }
-    pattern.ends_with('*') || remainder.is_empty()
 }
 
 /// Validate the aggregate backend package and placeholder component versions.
@@ -2325,58 +1778,18 @@ mod tests {
     use super::*;
     use anyhow::{Context, Result};
 
-    /// Exact-line packaging contracts that must stay in the checked-in workflow.
-    const WORKFLOW_CONTRACTS: &[&str] = &[
-        WORKFLOW_BUN_SOURCE_COPY,
-        WORKFLOW_BUN_RUNTIME_COPY,
-        WORKFLOW_TUI_SOURCE_COPY,
-        WORKFLOW_TUI_INSTALL,
-        WORKFLOW_TUI_BUILD,
-        WORKFLOW_TUI_WEB_SOURCE_COPY,
-        WORKFLOW_FRONTEND_VERSION_COPY,
-        WORKFLOW_TUI_WEB_PAGE_COPY,
-        WORKFLOW_TUI_WEB_INSTALL,
-        WORKFLOW_TUI_SDK_SOURCE_COPY,
-        WORKFLOW_TUI_SDK_INSTALL,
-        WORKFLOW_FIRST_PARTY_STAGE,
-        WORKFLOW_CHECKSUMS,
-    ];
-
-    /// Require the checked-in workflow to satisfy every release package contract.
+    /// Reject a release target the rehearsal does not build.
     #[test]
-    fn validate_checked_in_workflow_release_contracts() -> Result<()> {
-        let source = canonical_workflow_source()?;
-        let workflow: Value = serde_norway::from_str(&source).context("parse release workflow")?;
-        for target in RELEASE_TARGETS {
-            validate_workflow(&workflow, target, Component::Backend)?;
-        }
-        Ok(())
-    }
-
-    /// Reject a target the release matrix does not build.
-    #[test]
-    fn validate_workflow_rejects_a_target_outside_the_matrix() -> Result<()> {
-        let workflow: Value =
-            serde_norway::from_str(&canonical_workflow_source()?).context("parse workflow")?;
-        let error = validate_workflow(&workflow, "x86_64-pc-windows-msvc", Component::Backend)
-            .expect_err("unlisted target accepted");
-        assert!(error.to_string().contains("matrix"), "{error:#}");
-        Ok(())
-    }
-
-    /// The matrix must build exactly the targets the rehearsal supports.
-    #[test]
-    fn validate_workflow_rejects_a_matrix_missing_a_release_target() -> Result<()> {
-        let source = canonical_workflow_source()?;
-        let modified = source.replacen(
-            "aarch64-unknown-linux-gnu",
-            "riscv64gc-unknown-linux-gnu",
-            1,
-        );
-        let workflow: Value = serde_norway::from_str(&modified).context("parse workflow")?;
-        let error = validate_workflow(&workflow, "x86_64-unknown-linux-gnu", Component::Backend)
-            .expect_err("incomplete matrix accepted");
-        assert!(error.to_string().contains("matrix"), "{error:#}");
+    fn release_metadata_rejects_an_unknown_target() -> Result<()> {
+        let root = repo_root()?;
+        let error = validate_release_metadata(
+            &root,
+            hya_version::BACKEND_VERSION,
+            "x86_64-pc-windows-msvc",
+            Component::Backend,
+        )
+        .expect_err("unlisted target accepted");
+        assert!(error.to_string().contains("release target"), "{error:#}");
         Ok(())
     }
 
@@ -2610,44 +2023,5 @@ mod tests {
         let error = require_host_target("x86_64-unknown-linux-gnu", "aarch64-apple-darwin")
             .expect_err("foreign target accepted");
         assert!(error.to_string().contains("host"), "{error:#}");
-    }
-
-    /// Require each independent release contract omission to fail closed.
-    #[test]
-    fn validate_workflow_rejects_each_missing_release_contract() -> Result<()> {
-        let source = canonical_workflow_source()?;
-        for &marker in WORKFLOW_CONTRACTS {
-            let modified = source.replace(marker, "");
-            ensure!(
-                modified != source,
-                "workflow fixture did not contain contract marker `{marker}`"
-            );
-            let workflow: Value = serde_norway::from_str(&modified)
-                .with_context(|| format!("parse workflow fixture without `{marker}`"))?;
-            let error = match validate_workflow(&workflow, RELEASE_TARGETS[0], Component::Backend) {
-                Ok(_) => {
-                    panic!("workflow validation accepted a missing release contract `{marker}`")
-                }
-                Err(error) => error,
-            };
-            assert!(
-                error.to_string().contains(marker),
-                "missing `{marker}` produced an unrelated error: {error:#}"
-            );
-        }
-        Ok(())
-    }
-
-    /// Read the canonical workflow and require every exact contract marker.
-    fn canonical_workflow_source() -> Result<String> {
-        let source = fs::read_to_string(repo_root()?.join(".github/workflows/release.yml"))
-            .context("read release workflow fixture")?;
-        for &marker in WORKFLOW_CONTRACTS {
-            ensure!(
-                source.contains(marker),
-                "checked-in release workflow is missing `{marker}`"
-            );
-        }
-        Ok(source)
     }
 }

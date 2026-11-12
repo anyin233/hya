@@ -171,7 +171,7 @@ async fn server_sessions(url: &str) -> Result<Vec<String>, Box<dyn std::error::E
 }
 
 #[tokio::test]
-async fn exec_and_run_go_through_the_server_that_holds_the_database() -> TestResult {
+async fn exec_goes_through_the_server_that_holds_the_database() -> TestResult {
     let scratch = Scratch::new("exec-routed")?;
     let server = serve(&scratch)?;
 
@@ -187,7 +187,7 @@ async fn exec_and_run_go_through_the_server_that_holds_the_database() -> TestRes
         "the exec session is the server's: {first:?}"
     );
 
-    let output = scratch.run(&["run", "--format", "json", "hello", "routed", "json"])?;
+    let output = scratch.run(&["exec", "--json", "hello routed json"])?;
     assert!(output.status.success(), "{}", text(&output));
     let sessions = server_sessions(&server.url).await?;
     assert_eq!(sessions.len(), 2, "{sessions:?}");

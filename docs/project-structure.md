@@ -51,8 +51,8 @@ hya / hya-server
 | `hya-api` | [`../crates/hya-api/src/lib.rs`](../crates/hya-api/src/lib.rs) | The v1 dual-protocol contract crate: generated proto types, stable error-code table (HTTP status + gRPC code), cursor helpers. |
 | `hya-client` | [`../crates/hya-client/src/lib.rs`](../crates/hya-client/src/lib.rs) | Typed reqwest client for the v1 API. |
 | `hya-sdk-v1` | [`../crates/hya-sdk-v1/src/lib.rs`](../crates/hya-sdk-v1/src/lib.rs) | Typed SDK for new frontends on the v1 API: bootstrap, event-driven turns, transcript reads, interactions, SSE subscription, `V1SessionMirror`. |
-| `hya-updater` | [`../crates/hya-updater`](../crates/hya-updater) | Independent self-update TCB; see [self-update.md](self-update.md). |
-| `hya` | [`../crates/hya-backend/src/main.rs`](../crates/hya-backend/src/main.rs) | Unified `hya` executable (package `hya-backend`) and the only shipped binary; subcommands select the area: `run`/`exec`, goal mode, `loop`, server, tail-session, config/auth, bundles, Workflows, session listing, JSONL RPC, and `update` (self-update TCB); bare startup prints a guidance banner. |
+| `hya-updater` | [`../crates/hya-updater`](../crates/hya-updater) | `hya update` installer shell-out: pipes the embedded `scripts/hya-install.sh` to `sh`; see [install.md](install.md). |
+| `hya` | [`../crates/hya-backend/src/main.rs`](../crates/hya-backend/src/main.rs) | Unified `hya` executable (package `hya-backend`) and the only shipped binary; subcommands select the area: `exec`, goal mode, `loop`, server, tail-session, config/auth/agents, bundles, Workflows, session listing, and `update` (release installer); bare startup prints a guidance banner. |
 | `hya-app` | [`../crates/hya-app/src/lib.rs`](../crates/hya-app/src/lib.rs) | Runtime composition: config load, provider/MCP/plugin wiring, session engine build, installed-bundle refresh, and `WorkflowControl` admission/orchestration. |
 | `hya-bundle` | [`../crates/hya-bundle/src/lib.rs`](../crates/hya-bundle/src/lib.rs) | Plugin, AgentBundle, AgentSetBundle, and WorkflowBundle prepare/validate/catalog types and package fixtures used by install CLI and process E2E. Catalog builders: `from_prepared` / `from_verified_catalogs` / `with_verified_catalogs` index agents by stable id and `bundle:<id>/agent/<local_id>`, resources by `(ExportKind, stable id)` plus bundle-local names/aliases; reads include `resolve_agent`, `resolve_resource`, `bundle_resources`, `resolve_spawn`, `spawnable_agents`. |
 | `hya-e2e` | [`../crates/hya-e2e`](../crates/hya-e2e) | Process-level agent E2E: real `hya` + FakeLlm (Track P). See [docs/testing](testing/README.md). |
@@ -267,11 +267,12 @@ with SSE `StreamFrame` subscription and `V1SessionMirror`). See
 
 ## `hya-updater`
 
-Independent self-update TCB (signed metadata, staged generations, smoke,
-owner-gated activation) library, plus the `hya update` command surface
-(`hya_updater::cli`). It has no runtime dependencies; `hya` dispatches
-`update` before composing any runtime. See
-[self-update.md](self-update.md).
+`hya update`'s release installer: the crate embeds `scripts/hya-install.sh`
+and pipes it to `sh` for this hya's prefix, so updating runs exactly what
+`https://hya.ed-aisys.com/install.sh` installs (`hya_updater::release_install`),
+plus the `hya update` command surface (`hya_updater::cli`, `version`). It has
+no runtime dependencies; `hya` dispatches `update` before composing any
+runtime. See [install.md](install.md).
 
 The interactive frontend lives outside the Cargo workspace:
 
