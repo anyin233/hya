@@ -122,7 +122,8 @@ pub(crate) struct PluginConn {
     pub(crate) timeout: Duration,
     spec: PluginSpec,
     host_info: HostInfo,
-    live: Mutex<Option<LiveClient>>,
+    live: std::sync::Mutex<Option<LiveClient>>,
+    connecting: Mutex<()>,
     restarts: Mutex<Vec<Instant>>,
     disabled: AtomicBool,
     stopped: AtomicBool,
@@ -141,9 +142,11 @@ impl PluginConn {
     }
 
     pub(crate) fn activation_is_lost(&self) -> bool {
-        self.activation_loss
-            .as_ref()
-            .is_some_and(|token| token.is_cancelled())
+        !self.stopped.load(Ordering::Relaxed)
+            && self
+                .activation_loss
+                .as_ref()
+                .is_some_and(|token| token.is_cancelled())
     }
 
     pub(crate) fn has_hook(&self, hook: HookName) -> bool {
@@ -159,11 +162,7 @@ impl PluginConn {
         match client.call(&hook.method(), params, self.timeout).await {
             Ok(value) => Ok(value),
             Err(error) => {
-                if !self.spec.is_activation()
-                    && matches!(error, PluginError::Closed | PluginError::OversizedLine(_))
-                {
-                    *self.live.lock().await = None;
-                }
+                self.invalidate_client(&client);
                 Err(error)
             }
         }
@@ -199,11 +198,7 @@ impl PluginConn {
         match reply {
             Ok(reply) => Ok(reply),
             Err(error) => {
-                if !self.spec.is_activation()
-                    && matches!(error, PluginError::Closed | PluginError::OversizedLine(_))
-                {
-                    *self.live.lock().await = None;
-                }
+                self.invalidate_client(&client);
                 Err(error)
             }
         }
@@ -241,9 +236,7 @@ impl PluginConn {
         match client.request_api(params, capability, self.timeout).await {
             Ok(result) => Ok(result),
             Err(error) => {
-                if matches!(error, PluginError::Closed | PluginError::OversizedLine(_)) {
-                    *self.live.lock().await = None;
-                }
+                self.invalidate_client(&client);
                 Err(error)
             }
         }
@@ -254,14 +247,42 @@ impl PluginConn {
             PluginStatus::Disabled
         } else if self.declaration_drift.load(Ordering::Relaxed) {
             PluginStatus::DeclarationDrift
-        } else if self.live.lock().await.is_some() {
+        } else if self
+            .lock_live()
+            .as_ref()
+            .is_some_and(|live| !live.client.is_closed())
+        {
             PluginStatus::Alive
         } else {
             PluginStatus::Dead
         }
     }
 
+    fn lock_live(&self) -> std::sync::MutexGuard<'_, Option<LiveClient>> {
+        self.live
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn invalidate_client(&self, used: &PluginClient) {
+        if used.is_closed() {
+            let mut live = self.lock_live();
+            if live
+                .as_ref()
+                .is_some_and(|current| current.client.same_connection(used))
+            {
+                live.take();
+            }
+        }
+    }
+
+    fn stop(&self) -> Option<LiveClient> {
+        self.stopped.store(true, Ordering::Relaxed);
+        self.lock_live().take()
+    }
+
     async fn ensure_client(&self) -> Result<PluginClient, PluginError> {
+        let _connecting = self.connecting.lock().await;
         if self.disabled.load(Ordering::Relaxed) {
             return Err(PluginError::Disabled);
         }
@@ -270,12 +291,17 @@ impl PluginConn {
                 plugin: self.id.clone(),
             });
         }
-        let mut live = self.live.lock().await;
-        if self.stopped.load(Ordering::Relaxed) {
-            return Err(PluginError::Closed);
-        }
-        if let Some(current) = live.as_ref() {
-            return Ok(current.client.clone());
+        {
+            let mut live = self.lock_live();
+            if self.stopped.load(Ordering::Relaxed) {
+                return Err(PluginError::Closed);
+            }
+            if let Some(current) = live.as_ref()
+                && !current.client.is_closed()
+            {
+                return Ok(current.client.clone());
+            }
+            live.take();
         }
         // Session-private state must be recovered by the session supervisor.
         if self.spec.is_activation() {
@@ -294,6 +320,10 @@ impl PluginConn {
             });
         }
         let client = started.client.clone();
+        let mut live = self.lock_live();
+        if self.stopped.load(Ordering::Relaxed) {
+            return Err(PluginError::Closed);
+        }
         *live = Some(started);
         tracing::info!(plugin = %self.id, "plugin respawned");
         Ok(client)
@@ -320,12 +350,7 @@ impl PluginConn {
     }
 
     async fn notify_event(&self, envelope: Envelope) {
-        let client = self
-            .live
-            .lock()
-            .await
-            .as_ref()
-            .map(|live| live.client.clone());
+        let client = self.lock_live().as_ref().map(|live| live.client.clone());
         if let Some(client) = client {
             match serde_json::to_value(EventNotificationParams { envelope }) {
                 Ok(params) => {
@@ -422,6 +447,16 @@ fn canonical_json(value: &Value) -> Value {
 }
 
 impl PluginHost {
+    /// Stop connections and take their child guards synchronously, even when views survive.
+    /// Kills immediately and reaps asynchronously when a runtime is available.
+    pub fn stop_now(&self) {
+        for conn in &self.plugins {
+            if let Some(mut live) = conn.stop() {
+                live.guard.stop_now();
+            }
+        }
+    }
+
     /// Gracefully stop and reap this owner's processes. Retained views cannot respawn them.
     pub async fn shutdown(&self) -> Result<(), PluginError> {
         self.stop(false).await
@@ -434,8 +469,7 @@ impl PluginHost {
 
     async fn stop(&self, force: bool) -> Result<(), PluginError> {
         for conn in &self.plugins {
-            conn.stopped.store(true, Ordering::Relaxed);
-            if let Some(mut live) = conn.live.lock().await.take() {
+            if let Some(mut live) = conn.stop() {
                 if force {
                     live.guard.terminate().await?;
                 } else {
@@ -614,6 +648,13 @@ impl hya_core::BundleApiProvider for PluginHost {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use std::future::{Future, poll_fn};
+    use std::task::Poll;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::{TcpListener, TcpStream};
+
     use hya_proto::WorkspaceAdapterInfo;
     use serde_json::json;
 
@@ -622,6 +663,173 @@ mod tests {
         HookName, HookRegistration, InitializeResult, PROTOCOL_VERSION, PluginContributionSet,
         PluginInfo, PluginKindWire, ToolInfo,
     };
+
+    async fn control(listener: &TcpListener, mode: &str) -> BufReader<TcpStream> {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        socket
+            .write_all(format!("{mode}\n").as_bytes())
+            .await
+            .unwrap();
+        BufReader::new(socket)
+    }
+
+    async fn controlled_connection(
+        timeout_ms: u64,
+    ) -> (
+        std::sync::Arc<super::PluginConn>,
+        TcpListener,
+        BufReader<TcpStream>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let script = r#"
+import json, socket, sys, os, threading
+control = socket.create_connection(('127.0.0.1', int(sys.argv[1]))).makefile('rw')
+mode = control.readline().strip()
+threading.Thread(target=lambda: (control.readline(), os._exit(1)), daemon=True).start()
+for line in sys.stdin:
+    req = json.loads(line)
+    if req.get('method') == 'initialize':
+        result = {'protocol_version': 1, 'plugin': {'id': 'controlled', 'version': '1', 'kind': 'rust'}, 'hooks': [{'name': 'tool.execute.before'}]}
+    elif req.get('method') == 'shutdown':
+        print(json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'result': {}}), flush=True)
+        break
+    elif mode == 'hold':
+        control.write('call\n')
+        control.flush()
+        continue
+    else:
+        result = {}
+    print(json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'result': result}), flush=True)
+"#;
+        let spec = crate::config::PluginSpec {
+            id: "controlled".into(),
+            kind: PluginKindWire::Rust,
+            command: vec![
+                "python3".into(),
+                "-c".into(),
+                script.into(),
+                listener.local_addr().unwrap().port().to_string(),
+            ],
+            timeout_ms: Some(timeout_ms),
+            env: Default::default(),
+            plugin_dir: None,
+            launch: crate::config::ProcessLaunch::Bundle {
+                root: std::env::current_dir().unwrap(),
+                activation: None,
+            },
+        };
+        let (conn, control) = tokio::join!(
+            super::connection::connect_one(
+                spec,
+                crate::messages::HostInfo {
+                    name: "test".into(),
+                    version: "1".into()
+                },
+                None
+            ),
+            control(&listener, "hold"),
+        );
+        (conn.unwrap(), listener, control)
+    }
+
+    #[tokio::test]
+    async fn concurrent_old_failures_do_not_invalidate_replacement() {
+        concurrent_failed_calls(true).await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_timeout_failures_do_not_invalidate_replacement() {
+        concurrent_failed_calls(false).await;
+    }
+
+    async fn concurrent_failed_calls(crash: bool) {
+        let (conn, listener, mut child) =
+            controlled_connection(if crash { 5000 } else { 100 }).await;
+        let mut calls = (0..8)
+            .map(|_| Box::pin(conn.call_hook(HookName::ToolExecuteBefore, json!({}))))
+            .collect::<Vec<_>>();
+        for call in &mut calls {
+            poll_fn(|cx| {
+                assert!(call.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+        }
+        let mut line = String::new();
+        for _ in 0..8 {
+            child.read_line(&mut line).await.unwrap();
+        }
+        if crash {
+            child.get_mut().write_all(b"exit\n").await.unwrap();
+            assert!(matches!(
+                calls.remove(0).await,
+                Err(crate::PluginError::Closed)
+            ));
+        } else {
+            assert!(matches!(
+                calls.remove(0).await,
+                Err(crate::PluginError::Timeout { .. })
+            ));
+        }
+        let (fresh, _child) = tokio::join!(
+            conn.call_hook(HookName::ToolExecuteBefore, json!({})),
+            control(&listener, "reply"),
+        );
+        fresh.unwrap();
+        for call in calls {
+            assert!(matches!(call.await, Err(crate::PluginError::Closed)));
+        }
+        let status = conn.status().await;
+        let restarts = conn.restarts.lock().await.len();
+        let host = super::PluginHost {
+            plugins: vec![conn],
+        };
+        host.terminate().await.unwrap();
+        assert_eq!(
+            status,
+            super::PluginStatus::Alive,
+            "stale failures must leave the replacement alive"
+        );
+        assert_eq!(restarts, 1, "one crash must cost one restart");
+    }
+
+    #[tokio::test]
+    async fn ensure_client_replaces_timeout_tainted_client_before_dispatch() {
+        let (conn, listener, mut child) = controlled_connection(100).await;
+        let old = conn.ensure_client().await.unwrap();
+        let mut call = Box::pin(old.call(
+            "hook/tool.execute.before",
+            json!({}),
+            std::time::Duration::from_millis(100),
+        ));
+        poll_fn(|cx| {
+            assert!(call.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        child.read_line(&mut String::new()).await.unwrap();
+        assert!(matches!(
+            call.await,
+            Err(crate::PluginError::Timeout { .. })
+        ));
+        assert!(old.is_closed());
+        let replacement = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            tokio::join!(conn.ensure_client(), control(&listener, "reply"))
+        })
+        .await;
+        let closed = replacement
+            .as_ref()
+            .map(|(client, _)| client.as_ref().unwrap().is_closed())
+            .unwrap_or(true);
+        let host = super::PluginHost {
+            plugins: vec![conn],
+        };
+        host.terminate().await.unwrap();
+        assert!(
+            !closed,
+            "ensure_client must replace a timeout-tainted client"
+        );
+    }
 
     fn declaration() -> InitializeResult {
         InitializeResult {
