@@ -1575,33 +1575,16 @@ impl SessionEngine {
                         committed_summary_tokens = Some(body.len() / 4);
                         // Persist so subsequent rounds re-inject the compact window
                         // and drop pre-marker history via HYA_COMPACTED_CONTEXT.
-                        let injected = match actor_claim {
-                            Some(claim) => {
-                                self.inject_system_message_for_actor(claim, session, body)
-                                    .await
-                            }
-                            None => self.inject_system_message(session, body).await,
-                        };
-                        let Ok(marker) = injected else {
-                            continue;
-                        };
-                        if let Some((from_message, to_message, folded_count)) = folded {
-                            self.emit_for_actor(
-                                actor_claim,
-                                session,
-                                Event::ContextCompacted {
-                                    session,
-                                    message: marker,
-                                    strategy: CompactionStrategy::Native,
-                                    from_message,
-                                    to_message,
-                                    folded_count,
-                                    input_tokens_est,
-                                    threshold,
-                                },
-                            )
-                            .await?;
-                        }
+                        self.commit_compaction(
+                            actor_claim,
+                            session,
+                            body,
+                            CompactionStrategy::Native,
+                            folded,
+                            input_tokens_est,
+                            threshold,
+                        )
+                        .await?;
                         (projection, messages, tokens) = self
                             .reload_after_compaction(session, &live_agent, &model)
                             .await?;
@@ -1624,29 +1607,18 @@ impl SessionEngine {
                         let archive = crate::compaction::snapcompact_archive(&messages[start..end]);
                         let body = format!("{}\n{}", hya_provider::COMPACT_CONTEXT_MARKER, archive);
                         committed_summary_tokens = Some(body.len() / 4);
-                        let injected = match actor_claim {
-                            Some(claim) => {
-                                self.inject_system_message_for_actor(claim, session, body)
-                                    .await
-                            }
-                            None => self.inject_system_message(session, body).await,
-                        };
-                        let Ok(marker) = injected else {
-                            continue;
-                        };
-                        self.emit_for_actor(
+                        self.commit_compaction(
                             actor_claim,
                             session,
-                            Event::ContextCompacted {
-                                session,
-                                message: marker,
-                                strategy: CompactionStrategy::SnapCompact,
-                                from_message: from.id(),
-                                to_message: to.id(),
-                                folded_count: u32::try_from(end - start).unwrap_or(u32::MAX),
-                                input_tokens_est,
-                                threshold,
-                            },
+                            body,
+                            CompactionStrategy::SnapCompact,
+                            Some((
+                                from.id(),
+                                to.id(),
+                                u32::try_from(end - start).unwrap_or(u32::MAX),
+                            )),
+                            input_tokens_est,
+                            threshold,
                         )
                         .await?;
                         (projection, messages, tokens) = self
@@ -1696,29 +1668,14 @@ impl SessionEngine {
                         let body =
                             format!("{}\n{}", hya_provider::COMPACT_CONTEXT_MARKER, plan.summary);
                         committed_summary_tokens = Some(body.len() / 4);
-                        let injected = match actor_claim {
-                            Some(claim) => {
-                                self.inject_system_message_for_actor(claim, session, body)
-                                    .await
-                            }
-                            None => self.inject_system_message(session, body).await,
-                        };
-                        let Ok(marker) = injected else {
-                            continue;
-                        };
-                        self.emit_for_actor(
+                        self.commit_compaction(
                             actor_claim,
                             session,
-                            Event::ContextCompacted {
-                                session,
-                                message: marker,
-                                strategy: CompactionStrategy::Handoff,
-                                from_message: plan.from_message,
-                                to_message: plan.to_message,
-                                folded_count: plan.folded_count,
-                                input_tokens_est,
-                                threshold,
-                            },
+                            body,
+                            CompactionStrategy::Handoff,
+                            Some((plan.from_message, plan.to_message, plan.folded_count)),
+                            input_tokens_est,
+                            threshold,
                         )
                         .await?;
                         (projection, messages, tokens) = self
@@ -1772,29 +1729,14 @@ impl SessionEngine {
                         let body =
                             format!("{}\n{}", hya_provider::COMPACT_CONTEXT_MARKER, plan.summary);
                         committed_summary_tokens = Some(body.len() / 4);
-                        let injected = match actor_claim {
-                            Some(claim) => {
-                                self.inject_system_message_for_actor(claim, session, body)
-                                    .await
-                            }
-                            None => self.inject_system_message(session, body).await,
-                        };
-                        let Ok(marker) = injected else {
-                            continue;
-                        };
-                        self.emit_for_actor(
+                        self.commit_compaction(
                             actor_claim,
                             session,
-                            Event::ContextCompacted {
-                                session,
-                                message: marker,
-                                strategy: CompactionStrategy::LocalSummarizer,
-                                from_message: plan.from_message,
-                                to_message: plan.to_message,
-                                folded_count: plan.folded_count,
-                                input_tokens_est,
-                                threshold,
-                            },
+                            body,
+                            CompactionStrategy::LocalSummarizer,
+                            Some((plan.from_message, plan.to_message, plan.folded_count)),
+                            input_tokens_est,
+                            threshold,
                         )
                         .await?;
                         (projection, messages, tokens) = self

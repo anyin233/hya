@@ -139,3 +139,69 @@ fn collect_text(parts: &[PartProjection]) -> String {
     }
     out
 }
+
+impl SessionEngine {
+    /// Persist the marker and its fold range before publishing either.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn commit_compaction(
+        &self,
+        actor_claim: Option<&hya_store::ActorClaim>,
+        session: SessionId,
+        content: String,
+        strategy: CompactionStrategy,
+        folded: Option<(MessageId, MessageId, u32)>,
+        input_tokens_est: u64,
+        threshold: u64,
+    ) -> Result<MessageId, CoreError> {
+        let message = MessageId::new();
+        let part = hya_proto::PartId::new();
+        let mut events = vec![
+            Event::MessageStarted {
+                session,
+                message,
+                role: Role::System,
+                agent: None,
+                model: None,
+            },
+            Event::TextStart {
+                session,
+                message,
+                part,
+            },
+            Event::TextDelta {
+                session,
+                message,
+                part,
+                delta: content,
+            },
+            Event::TextEnd {
+                session,
+                message,
+                part,
+            },
+            Event::MessageFinished {
+                session,
+                message,
+                role: Role::System,
+                finish: hya_proto::FinishReason::Stop,
+                tokens: None,
+                cause: None,
+            },
+        ];
+        if let Some((from_message, to_message, folded_count)) = folded {
+            events.push(Event::ContextCompacted {
+                session,
+                message,
+                strategy,
+                from_message,
+                to_message,
+                folded_count,
+                input_tokens_est,
+                threshold,
+            });
+        }
+        self.emit_batch_for_actor(actor_claim, session, events)
+            .await?;
+        Ok(message)
+    }
+}

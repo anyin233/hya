@@ -492,3 +492,53 @@ impl hya_provider::Provider for SelectiveFakeProvider {
         )))
     }
 }
+
+#[tokio::test]
+async fn compaction_commit_failure_is_atomic_and_fails_turn() {
+    let seen_system = Arc::new(Mutex::new(Vec::new()));
+    let summarizer = Arc::new(RecordingSummarizer {
+        seen_system: seen_system.clone(),
+    });
+    let hooks = ScriptedHook::with_decisions(vec![CompactionDecision::Replace {
+        instructions: "SUMMARIZE AS LIMERICKS".to_string(),
+    }]);
+    let engine = compacting_engine(summarizer, hooks.clone()).await;
+    let dir = tempdir();
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    for i in 0..3 {
+        engine
+            .admit_user_prompt(session, format!("PROMPT_{i} {}", "p".repeat(3000)))
+            .await
+            .unwrap();
+    }
+
+    let mut tx = engine.store().begin_transaction().await.unwrap();
+    sqlx::query("CREATE TRIGGER reject_compaction BEFORE INSERT ON event_log WHEN NEW.payload LIKE '%context_compacted%' BEGIN SELECT RAISE(ABORT, 'compaction commit rejected'); END")
+        .execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let error = engine
+        .run_turn(session, &agent(&dir), CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("compaction commit rejected"),
+        "{error}"
+    );
+    let events = engine.replay(session).await.unwrap();
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e.event, Event::ContextCompacted { .. }))
+    );
+    assert!(!events.iter().any(|e| matches!(&e.event, Event::TextDelta { delta, .. } if delta.contains(hya_provider::COMPACT_CONTEXT_MARKER))));
+}
