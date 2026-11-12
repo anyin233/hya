@@ -257,13 +257,6 @@ After `initialize`, the plugin must reply with an `InitializeResult`:
       }
     }
   ],
-  "workspaceAdapters": [
-    {
-      "type": "example",
-      "name": "Example adapter",
-      "description": "Surfaced at GET /experimental/workspace/adapter"
-    }
-  ],
   "apis": [
     { "name": "usage", "description": "Token usage of the session tree" }
   ]
@@ -278,7 +271,7 @@ After `initialize`, the plugin must reply with an `InitializeResult`:
 | `plugin.kind` | **Required** on the initialize reply (no `#[serde(default)]` on `PluginInfo.kind`). Wire snake_case: `rust`, `bun`, `claude`, `other`. Omitting `kind` fails deserialization and aborts the handshake. (`#[default] Rust` on `PluginKindWire` applies to YAML config / `plugin.toml` entries that do have `#[serde(default)]`, not to this wire field.) |
 | `hooks` | Only hooks listed here are ever dispatched to this plugin. Each registration is exactly `{ "name": "<hook>" }`. |
 | `tools` | Each entry becomes a first-class hya `Tool`. Field name is camelCase **`inputSchema`**. |
-| `workspaceAdapters` | Aggregated across all loaded plugins and served verbatim at `GET /experimental/workspace/adapter`. Shape: `{ type, name, description }`. |
+| `workspaceAdapters` | Shape `{ type, name, description }`, parsed but unsupported: no route serves them. A bundle process that declares one fails to start (`process workspace adapters have no bundle resource contract`), and a Project plugin's adapters are ignored with a warning. |
 | `apis` | Optional. API endpoints answered over `api/request`: `{ name, description? }`, names unique and non-empty. A bundle process must list exactly its manifest `apis:` ids (otherwise the bundle fails to start); configured plugins' endpoints are ignored. |
 
 ---

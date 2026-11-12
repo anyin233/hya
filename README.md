@@ -92,7 +92,7 @@ export PATH="$HOME/.local/bin:$PATH"
 hya serve
 ```
 
-The source installer places `bin/hya`, the eleven first-party backend bundles
+The source installer places `bin/hya`, the twelve first-party backend bundles
 under `bundles/`, and the three Bun programs with their production dependencies
 under `lib/hya/`: `bun-adapter/` (JavaScript bundle extensions), `tui/` (the
 terminal UI), and `tui-web/` (the WebUI host). Bun must be on `PATH`. Release

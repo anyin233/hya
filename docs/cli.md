@@ -217,7 +217,7 @@ loads:
 | User (default) | `--user` | The installed-bundle registry, `$XDG_DATA_HOME/hya/bundles/registry.sqlite3` (fallback `~/.local/share/hya/bundles/registry.sqlite3`). | Shadows first-party bundles with the same id or namespace. |
 | Project | `--project` | Bundle source directories under `./.hya/bundles/<dir>/` in the current directory. The runtime loads them for sessions of the registered Project that has this directory as a root (not from the directory a server was started in). | Highest: shadows user-installed and first-party bundles with the same id or namespace. |
 
-`--user` and `--project` are mutually exclusive. The eleven bundles shipped with
+`--user` and `--project` are mutually exclusive. The twelve bundles shipped with
 hya have scope `builtin`: they are listed but cannot be installed over as presets
 or removed.
 

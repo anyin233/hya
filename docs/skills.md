@@ -87,13 +87,9 @@ When HOME is set, hya walks these roots **in order**
 1. `<workdir>/.hya/skills`
 2. `$HOME/.config/hya/skills`
 3. `$HOME/.claude/skills`
-4. `$HOME/.config/opencode/skills`
-5. `$HOME/.config/opencode/skill` (singular)
-6. `<workdir>/.opencode/skills`
-7. `<workdir>/.opencode/skill` (singular)
-8. `<workdir>/.agents/skills`
-9. `$HOME/.codex/skills`
-10. `$HOME/.agents/skills`
+4. `<workdir>/.agents/skills`
+5. `$HOME/.codex/skills`
+6. `$HOME/.agents/skills`
 
 HOME-based entries are omitted when `HOME` is unset. Within each root, immediate
 subdirectories are sorted by path, then each `SKILL.md` is parsed.
@@ -101,16 +97,13 @@ subdirectories are sorted by path, then each `SKILL.md` is parsed.
 **First occurrence of a given skill `name` wins.** Later directories cannot
 override an earlier skill of the same name (`HashSet` insert on name).
 
-Both the singular `skill` and plural `skills` spellings are scanned for the
-OpenCode-style roots.
-
 ### Multi-root (Project) discovery order
 
 [`skill_dirs_for(workdir, roots)`](../crates/hya-tool/src/skill_catalog.rs) and
 [`discover_skills_for_roots_with_builtins`](../crates/hya-tool/src/skill_catalog.rs)
-extend the same first-name-wins rule across a Project's additional roots (not
-yet wired into the engine's scope binding — this documents the order for when
-it is):
+extend the same first-name-wins rule across a Project's additional roots. The
+engine's per-scope binding composes its Skill catalog through
+`discover_skills_for_roots_with_builtins`, so this is the order in effect:
 
 1. `<workdir>/.hya/skills`
 2. `<root>/.hya/skills` for each Project root, in root order
