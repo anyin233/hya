@@ -311,32 +311,55 @@ impl SessionStore {
                     "resident recovery work epoch mismatch".to_string(),
                 ));
             }
-            envelopes.extend(
-                append_resident_effects_in_transaction(
-                    &self.projections,
-                    &mut tx,
-                    recovered.claim.actor_id,
-                    recovery_reason,
-                    FinishCause::Interrupted,
-                )
-                .await?,
-            );
-            envelopes.push(
-                append_event_in_transaction(
-                    &mut tx,
-                    root,
-                    Event::AgentActivityChanged {
-                        session: root,
-                        handle: handle.to_string(),
-                        status: RosterStatus::Failed,
-                        current_task: Some(recovery_reason.to_string()),
-                    },
-                )
-                .await?,
-            );
-            RecoveredResidentWork::AbortedRunning {
-                inbox_cursor: resident_work.inbox_through,
-                queued_after: inbox_len > resident_work.inbox_through,
+            if entry.status == RosterStatus::Idle {
+                if inbox_len > entry.resident_cursor || resident_work.inbox_through != 0 {
+                    RecoveredResidentWork::Queued {
+                        inbox_cursor: entry.resident_cursor,
+                    }
+                } else {
+                    RecoveredResidentWork::Idle
+                }
+            } else {
+                envelopes.extend(
+                    append_resident_effects_in_transaction(
+                        &self.projections,
+                        &mut tx,
+                        recovered.claim.actor_id,
+                        recovery_reason,
+                        FinishCause::Interrupted,
+                    )
+                    .await?,
+                );
+                envelopes.push(
+                    append_event_in_transaction(
+                        &mut tx,
+                        root,
+                        Event::AgentActivityChanged {
+                            session: root,
+                            handle: handle.to_string(),
+                            status: RosterStatus::Failed,
+                            current_task: Some(recovery_reason.to_string()),
+                        },
+                    )
+                    .await?,
+                );
+                envelopes.push(
+                    append_event_in_transaction(
+                        &mut tx,
+                        root,
+                        Event::ResidentWorkFinished {
+                            session: root,
+                            handle: handle.into(),
+                            epoch: resident_work.epoch,
+                            inbox_through: resident_work.inbox_through,
+                        },
+                    )
+                    .await?,
+                );
+                RecoveredResidentWork::AbortedRunning {
+                    inbox_cursor: resident_work.inbox_through,
+                    queued_after: inbox_len > resident_work.inbox_through,
+                }
             }
         } else {
             let actor_projection =

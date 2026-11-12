@@ -231,6 +231,35 @@ change observed by the terminal transaction.
 - The lead never reports (the supervisor rejects `report` from `main`), so its
   turns are unaffected.
 
+### User cancellation and owed work
+
+A completed resident turn commits `ResidentWorkFinished { session: root, handle,
+epoch, inbox_through }` with its Idle activity. The reducer acknowledges that
+boundary and clears the matching work. Explicit in-turn `MailConsumed` events
+advance the mail cursor monotonically without settling the admitted wake.
+
+A user cancel keeps the episode live and held, displays Idle, and retains
+`resident_work` and its unconsumed inbox boundary. Resume reuses the existing
+user `MessageId` through `begin_work(ResidentWorkPrompt::Admitted { message,
+append })`; only later mail is hooked and appended. It never admits the earlier
+prompt twice. For example, after `engine.cancel_user_turn(root)`,
+`engine.resume_after_user_stop(root)` resumes the owed mail wake using the same
+admitted prompt. A wake cancelled before `begin_work` commits is re-armed with its
+mail still unread. A cancelled initial directive with no inbox mail owes no
+autonomous wake and stays idle until mailed. The coalesced user-text hook is raced with the leased turn's
+cancellation, so an ending need not wait for the straggler deadline to stop it.
+
+Forced endings and Failed episodes do not acknowledge unfinished wake mail;
+their handoff retains it as Pending. A successful Reported turn has already
+settled its wake; later mail refuses the report and creates another wake.
+Recovery requeues Idle pending work with its existing prompt. Work that was
+Busy when the process crashed keeps the existing aborted-work policy: settle
+that boundary, classify `AbortedRunning`, and queue only later mail.
+
+Sidecar death ends an episode as Failed only if loss interrupted the turn.
+Loss noticed after a user cancellation disposes the dead handle while retaining
+the live, user-held episode.
+
 ### 3.2 Handoff pipeline
 
 The handoff call is the existing compaction handoff machinery with a

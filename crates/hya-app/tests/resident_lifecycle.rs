@@ -724,11 +724,21 @@ async fn i15_cancelled_coalesced_hook_leaves_mail_unread() {
             .any(|e| matches!(&e.event, Event::TextDelta { delta, .. } if delta.contains("HOOK_"))),
         "blocked hooks must hold no admitted prompt"
     );
-    output(&h.tool("archive", json!({"target": handle})).await);
+    let archived = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        h.tool("archive", json!({"target": handle})),
+    )
+    .await;
+    let root = h.engine.read_projection(h.root).await.unwrap();
+    let actor = h.engine.read_projection(child).await.unwrap();
     plugin.gate.release();
     h.shutdown().await;
     drop(h);
     plugin.shutdown().await;
+    output(&archived.expect("archive must complete before releasing the coalesced hook"));
+    assert!(root.team.archived.contains_key(&handle));
+    assert_eq!(root.team.inboxes[&handle].len(), 2);
+    assert!(!actor.session.messages.iter().any(|message| message.parts.iter().any(|part| matches!(part, hya_proto::PartProjection::Text { text, .. } if text.contains("HOOK_")))));
 }
 
 #[tokio::test]
@@ -2577,4 +2587,199 @@ async fn i8_running_sidecar_loss_removes_episode_before_archive_publication() {
         |e| matches!(&e.event, Event::TextReplace { text, .. } if text == "flush before failure")
     ));
     h.shutdown().await;
+}
+
+#[tokio::test]
+async fn m45_r1_user_cancel_retains_mail_and_resumes_its_existing_prompt_once() {
+    let mut h = Harness::new().await;
+    let (child, handle) = h.spawn(vec![Round::text("initial work")]).await;
+    h.idle(child, &handle).await;
+    let gate = Arc::new(Gate::default());
+    let marker = h.provider.script(vec![
+        Round::text("cancelled work").stream_gated(gate.clone()),
+        Round::text("resumed work"),
+    ]);
+    h.mail(&handle, format!("CANCELLED_WAKE {marker}"))
+        .await
+        .unwrap();
+    gate.arrived().await;
+    assert!(h.engine.cancel_user_turn(h.root));
+    h.until(h.root, |projection| {
+        projection
+            .team
+            .roster
+            .get(&handle)
+            .is_some_and(|entry| entry.status == hya_proto::RosterStatus::Idle)
+    })
+    .await;
+    let root = h.engine.read_projection(h.root).await.unwrap();
+    let before = h.engine.read_projection(child).await.unwrap();
+    let prompt = before.session.messages.iter().find(|message| message.role == hya_proto::Role::User && message.parts.iter().any(|part| matches!(part, hya_proto::PartProjection::Text { text, .. } if text.contains("CANCELLED_WAKE")))).unwrap().id;
+    if root.team.roster[&handle].resident_cursor != 0 {
+        h.shutdown().await;
+        panic!(
+            "cancelled wake was consumed: {:?}",
+            root.team.roster[&handle]
+        );
+    }
+    assert!(root.team.roster[&handle].resident_work.is_some());
+    h.engine.resume_after_user_stop(h.root);
+    h.until(child, |projection| projection.session.messages.iter().any(|message| message.parts.iter().any(|part| matches!(part, hya_proto::PartProjection::Text { text, .. } if text == "resumed work")))).await;
+    h.idle(child, &handle).await;
+    let actor = h.engine.read_projection(child).await.unwrap();
+    let root = h.engine.read_projection(h.root).await.unwrap();
+    h.shutdown().await;
+    let prompts = actor.session.messages.iter().filter(|message| message.role == hya_proto::Role::User && message.parts.iter().any(|part| matches!(part, hya_proto::PartProjection::Text { text, .. } if text.contains("CANCELLED_WAKE")))).collect::<Vec<_>>();
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].id, prompt);
+    assert_eq!(root.team.roster[&handle].resident_cursor, 1);
+    assert!(root.team.roster[&handle].resident_work.is_none());
+}
+
+#[tokio::test]
+async fn m45_r1_user_cancel_before_begin_work_rearms_mail_for_resume() {
+    let plugin = support::lifecycle::BlockingPlugin::for_hook("message.user.before").await;
+    let mut h = Harness::with_plugins(vec![plugin.spec.clone()]).await;
+    let (child, handle) = h.spawn(vec![Round::text("initial work")]).await;
+    h.idle(child, &handle).await;
+    plugin.arm_session(child);
+    let marker = h
+        .provider
+        .script(vec![Round::text("resumed pre-admission wake")]);
+    h.mail(&handle, marker.clone()).await.unwrap();
+    plugin.gate.arrived().await;
+    assert!(h.engine.cancel_user_turn(h.root));
+    let idle = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        h.until(h.root, |projection| {
+            projection
+                .team
+                .roster
+                .get(&handle)
+                .is_some_and(|entry| entry.status == hya_proto::RosterStatus::Idle)
+        }),
+    )
+    .await;
+    plugin.gate.release();
+    if idle.is_err() {
+        h.shutdown().await;
+        drop(h);
+        plugin.shutdown().await;
+        panic!("user cancel did not release the blocked pre-admission hook");
+    }
+    let root = h.engine.read_projection(h.root).await.unwrap();
+    assert_eq!(root.team.roster[&handle].resident_cursor, 0);
+    assert!(root.team.roster[&handle].resident_work.is_none());
+    h.engine.resume_after_user_stop(h.root);
+    h.until(child, |projection| projection.session.messages.iter().any(|message| message.parts.iter().any(|part| matches!(part, hya_proto::PartProjection::Text { text, .. } if text == "resumed pre-admission wake")))).await;
+    h.idle(child, &handle).await;
+    let actor = h.engine.read_projection(child).await.unwrap();
+    h.shutdown().await;
+    drop(h);
+    plugin.shutdown().await;
+    assert_eq!(actor.session.messages.iter().filter(|message| message.role == hya_proto::Role::User && message.parts.iter().any(|part| matches!(part, hya_proto::PartProjection::Text { text, .. } if text.contains(&marker)))).count(), 1);
+}
+
+#[derive(Clone)]
+struct LateLossSidecar {
+    fail_stop: bool,
+    dead: Arc<std::sync::atomic::AtomicBool>,
+    stopped: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait::async_trait]
+impl hya_core::BoundSidecarFactory for LateLossSidecar {
+    async fn start(
+        &self,
+        _: hya_core::SidecarStart,
+    ) -> Result<Box<dyn hya_core::SidecarHandle>, hya_core::CoreError> {
+        Ok(Box::new(self.clone()))
+    }
+}
+#[async_trait::async_trait]
+impl hya_core::SidecarHandle for LateLossSidecar {
+    async fn ready(&mut self) -> Result<(), hya_core::CoreError> {
+        Ok(())
+    }
+    async fn shutdown(&mut self) -> Result<(), hya_core::CoreError> {
+        self.stopped.notify_one();
+        if self.fail_stop {
+            return Err(hya_core::CoreError::Invalid("late loss stop failed".into()));
+        }
+        Ok(())
+    }
+    fn is_healthy(&self) -> bool {
+        !self.dead.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[tokio::test]
+async fn m45_r3_sidecar_death_after_user_cancel_keeps_the_episode_held() {
+    let mut h = Harness::new().await;
+    let sidecar = LateLossSidecar {
+        fail_stop: false,
+        dead: Arc::default(),
+        stopped: Arc::default(),
+    };
+    let gate = Arc::new(Gate::default());
+    let (child, handle) = h
+        .spawn_with_sidecar(
+            vec![Round::text("user-cancelled stream").stream_gated(gate.clone())],
+            Arc::new(sidecar.clone()),
+        )
+        .await
+        .unwrap();
+    gate.arrived().await;
+    assert!(h.engine.cancel_user_turn(h.root));
+    sidecar
+        .dead
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    tokio::time::timeout(support::lifecycle::BOUND, sidecar.stopped.notified())
+        .await
+        .unwrap();
+    h.until(h.root, |projection| {
+        projection.team.archived.contains_key(&handle)
+            || projection
+                .team
+                .roster
+                .get(&handle)
+                .is_some_and(|entry| entry.status == hya_proto::RosterStatus::Idle)
+    })
+    .await;
+    let root = h.engine.read_projection(h.root).await.unwrap();
+    let held = h.engine.stopped_by_user(child);
+    let events = h.engine.replay(h.root).await.unwrap();
+    h.shutdown().await;
+    assert!(
+        !root.team.archived.contains_key(&handle),
+        "sidecar death converted user stop into failure"
+    );
+    assert!(held);
+    assert!(!events.iter().any(|envelope| matches!(&envelope.event, Event::SubagentReported { child: reported, .. } if *reported == child)));
+}
+
+#[tokio::test]
+async fn m45_r3_forced_ending_keeps_a_late_dead_sidecars_stop_diagnostic() {
+    let mut h = Harness::new().await;
+    let sidecar = LateLossSidecar {
+        fail_stop: true,
+        dead: Arc::default(),
+        stopped: Arc::default(),
+    };
+    let gate = Arc::new(Gate::default());
+    let (child, handle) = h
+        .spawn_with_sidecar(
+            vec![Round::text("interrupted by archive").stream_gated(gate.clone())],
+            Arc::new(sidecar.clone()),
+        )
+        .await
+        .unwrap();
+    gate.arrived().await;
+    sidecar
+        .dead
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    output(&h.tool("archive", json!({"target": handle})).await);
+    let events = h.engine.replay(h.root).await.unwrap();
+    h.shutdown().await;
+    assert!(events.iter().any(|envelope| matches!(&envelope.event, Event::MemberFinished { child: Some(member), summary, .. } if *member == child && summary.contains("sidecar did not stop") && summary.contains("late loss stop failed"))), "forced ending discarded its sidecar stop diagnostic: {events:?}");
 }

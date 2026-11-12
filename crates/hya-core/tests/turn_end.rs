@@ -980,8 +980,7 @@ async fn quiesced_notices(engine: &SessionEngine, root: SessionId) -> usize {
         .messages
         .iter()
         .filter(|message| {
-            message.role == Role::System
-                && message.parts.iter().any(|part| {
+            message.parts.iter().any(|part| {
                     matches!(part, PartProjection::Text { text, .. } if text.contains("TEAM QUIESCED"))
                 })
         })
