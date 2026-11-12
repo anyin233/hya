@@ -486,10 +486,20 @@ fn cli_use_and_state_share_an_existing_session_across_processes()
         combined_text(&sessions)
     );
     let sessions_stdout = String::from_utf8(sessions.stdout)?;
+    // The listing also holds the run's archived stage sessions; the root
+    // Session is the one that started first.
     let session = sessions_stdout
         .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().next())
+        .filter_map(|line| {
+            let started = line
+                .split_whitespace()
+                .find_map(|field| field.strip_prefix("started_ms="))?
+                .parse::<u64>()
+                .ok()?;
+            Some((started, line.split_whitespace().next()?))
+        })
+        .min_by_key(|(started, _)| *started)
+        .map(|(_, id)| id)
         .ok_or("durable Workflow run did not create a listed Session")?;
 
     let selected = workflow_command(&env)
