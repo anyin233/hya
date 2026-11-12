@@ -320,19 +320,6 @@ async fn rounds_on_different_models_record_the_serving_model_per_round() {
         .find(|m| m.id == message)
         .unwrap();
     assert_eq!(assistant.tokens, Some(sum));
-
-    // The ledger names the serving model and counts the whole prompt.
-    let ledger = fixture
-        .engine
-        .store()
-        .read_usage(fixture.session)
-        .await
-        .unwrap();
-    assert_eq!(ledger.len(), 1);
-    assert_eq!(ledger[0].confidence, "provider");
-    assert_eq!(ledger[0].model.as_deref(), Some("model-b"));
-    assert_eq!(ledger[0].prompt_tokens, 140 + 6 + 4);
-    assert_eq!(ledger[0].completion_tokens, 29);
 }
 
 #[tokio::test]
@@ -379,14 +366,6 @@ async fn cancelled_message_keeps_the_usage_of_billed_rounds() {
         projection.session.usage.by_model[&ModelRef::new("model-a")].output,
         11
     );
-    let ledger = fixture
-        .engine
-        .store()
-        .read_usage(fixture.session)
-        .await
-        .unwrap();
-    assert_eq!(ledger[0].confidence, "provider");
-    assert_eq!(ledger[0].completion_tokens, 11);
 }
 
 #[tokio::test]

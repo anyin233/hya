@@ -141,8 +141,7 @@ async fn fresh_schema_reopens_and_contains_only_current_tables() {
             "projection_snapshot",
             "resident_actor_claim",
             "saved_permission",
-            "session",
-            "token_ledger"
+            "session"
         ]
     );
     let versions: Vec<i64> = sqlx::query_scalar("SELECT version FROM _sqlx_migrations")

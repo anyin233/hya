@@ -86,7 +86,6 @@ history and SQLite's sequence table):
 | --- | --- |
 | `session` | Placement/parent index: `id BLOB PK`, `parent_id BLOB` FK → `session(id)`, `agent`, `model`, `workdir` TEXT NOT NULL, nullable `title TEXT`, `permission TEXT NOT NULL DEFAULT '{}'`, `created_at`/`updated_at INTEGER NOT NULL`, nullable `project_id TEXT`, `kind TEXT NOT NULL DEFAULT 'project'` (`project` or `temporary`). Indexed by parent and Project. Only `session_created` inserts rows. |
 | `event_log` | Canonical Events; see [Event log](#event-log). |
-| `token_ledger` | Auxiliary usage records; see [Token ledger](#token-ledger). |
 | `saved_permission` | `id TEXT PK`, `project_id`, `action`, `resource` TEXT NOT NULL, nullable `time_created INTEGER` (unix ms); unique `(project_id, action, resource)`, indexed by Project. |
 | `admission_journal` | One operation per row; see [Admission and governor](admission-and-governor.md). |
 | `resident_actor_claim` | Actor/epoch/owner fence; see [Resident actor claims](#resident-actor-claims). |
@@ -311,11 +310,11 @@ row is not required for a session to be listed.
 
 One transaction:
 
-1. `DELETE FROM token_ledger WHERE session_id = ?`
+1. `DELETE FROM event_log WHERE session_id = ?`
 2. `DELETE FROM open_assistant_message WHERE session_id = ?`
-3. `DELETE FROM projection_snapshot WHERE session_id = ?`
-4. `DELETE FROM file_blob WHERE session_id = ?`
-5. `DELETE FROM event_log WHERE session_id = ?`
+3. `DELETE FROM pending_resume WHERE session_id = ?`
+4. `DELETE FROM projection_snapshot WHERE session_id = ?`
+5. `DELETE FROM file_blob WHERE session_id = ?`
 
 After the commit the session's in-process cached projection is dropped.
 Returns whether any **event_log** rows were removed.
@@ -440,43 +439,33 @@ assistant message lifecycle events. Registration, mail, member spawn, and
 reports write only to `event_log`; reads fold the shared projection. They
 create no placeholder session rows or relational team/mail/task rows.
 
-## Token Ledger
+## Usage
 
-The engine records one row per finished assistant message — every turn, every
-session kind (root, subagent, resident actor): `SessionEngine::emit` hooks the
-assistant `MessageFinished` event, and resident mutations get the same hook in
-`commit_resident_mutation`. Recording is best-effort: a ledger failure is
-logged and never fails the finished turn.
+Usage is part of the event-sourced session projection, so replay and live
+reads share the same account. The engine appends `UsageRecorded` for provider
+calls; finishing a message does not write a second usage record or count its
+transcript text. Missing provider usage is not replaced with an estimate or
+a downloaded tokenizer.
 
-`record_usage` inserts into `token_ledger` with:
+Read usage through `SessionStore::read_projection(session)` (or
+`read_projection_shared` / `with_projection`), for example:
 
-- `session_id` (storage key)
-- `iteration`
-- `completion_run_id`
-- `role` (the session's agent name)
-- `prompt_tokens`, `completion_tokens`
-- `confidence` — how the numbers were obtained (below)
-- `provider`, `model` — the model that served the message's latest attributed
-  round (`MessageProjection.usage.model`), else the session's model ref
-- `ts` (now)
+```rust
+let projection = store.read_projection(session).await?;
+let usage = &projection.session.usage;
+let total = usage.total();
+// total.prompt() = input + cache_read + cache_write; output includes thinking.
+```
 
-`read_usage` returns those fields for a session ordered by timestamp.
-
-The ledger is a best-effort side table. The replayable per-model account is
-`SessionProjection.usage`, folded from `UsageRecorded` events (see
-[event-model.md](event-model.md#session-usage-fold)); a message whose rounds
-ran on several models records only the latest round's model here.
-
-### Confidence levels
-
-| `confidence` | Meaning |
-| --- | --- |
-| `provider` | The provider reported usage on the wire: the sum of the message's `UsageRecorded` rounds (also on a cancelled or errored message), else the legacy `MessageFinished.tokens`. `prompt_tokens` is the whole prompt `input + cache_read + cache_write`, `completion_tokens` is `output` (thinking included). |
-| `hf:<repo>` | The provider reported nothing; the turn's texts were counted with the model family's real `tokenizer.json` (GPT, Claude, DeepSeek, GLM, Kimi, Qwen initially adapted; resolved lazily from the hya cache → local HF cache → one-time download, then cached per process). |
-| `estimated` | No family matched or no tokenizer resolved; the structure-aware `CalibratedTokenizer` estimate was used. |
-
-The remaining optional columns (`turn`, `team_id`, `category`) are still not
-populated by this path.
+`SessionProjection.usage: SessionUsage` exposes `by_model:
+BTreeMap<ModelRef, UsageTotals>` and `by_purpose:
+BTreeMap<UsagePurpose, UsageTotals>`. Each `UsageRecorded` contains
+`session: SessionId`, `message: Option<MessageId>`, `step: Option<u32>`,
+`model: ModelRef`, `purpose: UsagePurpose`, and `tokens: TokenUsage`.
+See [Usage attribution](runtime.md#usage-attribution) for the recording paths
+and [Session usage fold](event-model.md#session-usage-fold) for the complete
+counter contracts and retained legacy event fallback. There is no separate
+usage table or store accounting API.
 
 ## Saved permissions
 

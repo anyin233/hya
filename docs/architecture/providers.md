@@ -726,8 +726,8 @@ reasoning_unknown: true`.
 Live HTTP routes declare `usage_reporting: true`. The engine records each
 round's usage as `UsageRecorded` with the model that served the round (see
 [runtime.md](runtime.md#usage-attribution)), which folds into
-`SessionProjection.usage`; the best-effort token ledger (`record_usage`) keeps
-one row per finished assistant message. Window occupancy
+`SessionProjection.usage`. Calls without reported usage add no estimated
+billing record. Window occupancy
 (`measured_tokens`/`tokens_in_use`) uses the whole prompt,
 `input + cache_read + cache_write`.
 
