@@ -519,7 +519,7 @@ async fn delete_session(
         .session
         .project
         .is_some();
-    let deleted = st.engine.delete_session(session).await?;
+    let deleted = st.delete_session(session).await?;
     if !deleted {
         return Err(V1Error::session_not_found(&id));
     }

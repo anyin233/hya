@@ -184,6 +184,9 @@ async fn execute_reserved(
     command: WorkflowCommand,
     delivery: WorkflowDelivery,
 ) -> Result<WorkflowCommandResult, ApiError> {
+    if !st.engine.session_exists(session).await? {
+        return Err(ApiError::session_not_found(&session.to_string()));
+    }
     st.workflow_control
         .execute(session, command, delivery)
         .await

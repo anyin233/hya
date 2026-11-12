@@ -2036,16 +2036,35 @@ impl SessionEngine {
         }
     }
 
+    /// Refuse deletion of a registered member, whose identity remains revivable
+    /// on its root even after archival. Delete the root to remove the whole team.
+    ///
+    /// # Errors
+    /// Returns an invalid-operation error for members, or store failures.
+    pub async fn ensure_session_delete_allowed(&self, session: SessionId) -> Result<(), CoreError> {
+        let (root, depth) = self.session_lineage(session).await?;
+        if depth > 0 && self.replay(root).await?.iter().any(|envelope| {
+            matches!(envelope.event, Event::AgentRegistered { agent_session, .. } if agent_session == session)
+        }) {
+            return Err(CoreError::Invalid(
+                "cannot delete a team member session; archive the subagent or delete the root".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Delete a session log from the store.
     ///
     /// # Errors
     /// Returns store failures.
     pub async fn delete_session(&self, session: SessionId) -> Result<bool, CoreError> {
+        self.ensure_session_delete_allowed(session).await?;
         // Root-turn teardown (ADR-0015 §1): deleting a team root force-archives
         // every live descendant (claims release, roster exits) before the log
         // goes away. A failed ending must not leave tasks writing a deleted log.
         if let Ok((root, 0)) = self.session_lineage(session).await {
-            self.force_archive_team(root).await?;
+            tokio::time::timeout(DRAIN_DEADLINE, self.force_archive_team(root)).await
+                .map_err(|_| CoreError::Invalid("session deletion timed out waiting for resident endings; no sessions were deleted".into()))??;
         }
         let deleted = self.store.delete_session(session).await?;
         if deleted {

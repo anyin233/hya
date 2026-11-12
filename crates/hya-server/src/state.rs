@@ -457,6 +457,72 @@ impl ServerState {
             || self.engine.turn_active(session)
     }
 
+    /// Public deletion owns the writer -> resident -> store ordering for both
+    /// transports. Admission remains fenced until the rows have gone.
+    pub(crate) async fn delete_session(
+        &self,
+        session: hya_proto::SessionId,
+    ) -> Result<bool, crate::ApiError> {
+        self.engine.ensure_session_delete_allowed(session).await?;
+        let mut parents = Vec::new();
+        for row in self.engine.store().list_sessions().await? {
+            let projection = self.engine.read_projection_shared(row.session).await?;
+            parents.push((row.session, projection.session.parent));
+        }
+        let mut sessions = vec![session];
+        loop {
+            let before = sessions.len();
+            for (child, parent) in &parents {
+                if parent.is_some_and(|parent| sessions.contains(&parent))
+                    && !sessions.contains(child)
+                {
+                    sessions.push(*child);
+                }
+            }
+            if before == sessions.len() {
+                break;
+            }
+        }
+        let _deleting = self
+            .runs
+            .begin_delete(sessions.clone())
+            .ok_or_else(crate::ApiError::session_busy)?;
+        let settle = async {
+            for session in &sessions {
+                self.cancel_run(*session);
+            }
+            self.runs.wait_sessions_idle(&sessions).await;
+            // A reserved Workflow request may have handed off its background
+            // run after the first cancellation, but before releasing its slot.
+            for session in &sessions {
+                self.workflow_control.cancel(*session);
+            }
+            for session in &sessions {
+                self.workflow_control
+                    .wait_idle(*session)
+                    .await
+                    .map_err(crate::ApiError::workflow)?;
+            }
+            for session in &sessions {
+                self.engine.cancel_user_turn(*session);
+                if !self
+                    .engine
+                    .wait_turn_idle(*session, hya_core::DRAIN_DEADLINE)
+                    .await
+                {
+                    return Err(crate::ApiError::unavailable(
+                        "session deletion timed out waiting for turn writers; no sessions were deleted",
+                    ));
+                }
+            }
+            Ok(())
+        };
+        tokio::time::timeout(hya_core::DRAIN_DEADLINE, settle).await.map_err(|_| {
+            crate::ApiError::unavailable("session deletion timed out waiting for active writers; no sessions were deleted")
+        })??;
+        Ok(self.engine.delete_session(session).await?)
+    }
+
     /// Cancel every execution surface for a Session: the engine turn first
     /// (recording `cause: user_cancel` on its closing `MessageFinished`) along
     /// with every subagent's below it, which stay stopped until the user acts
