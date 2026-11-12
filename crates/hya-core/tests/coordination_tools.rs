@@ -201,12 +201,17 @@ async fn a_narrow_bundle_member_reads_its_dm_and_reports_after_its_lead_mails_it
         .with_lifecycle(lifecycle)
         .with_governor(SubagentGovernor::new(SubagentLimits::default())),
     );
-    tokio::spawn(run_mailbox_service(engine.clone(), mailbox_rx));
+    tokio::spawn(run_mailbox_service(
+        engine.clone(),
+        mailbox_rx,
+        tokio_util::sync::CancellationToken::new(),
+    ));
     let supervisor = ResidentSupervisor::start(engine.clone());
     tokio::spawn(run_lifecycle_service(
         engine.clone(),
         supervisor.clone(),
         lifecycle_rx,
+        tokio_util::sync::CancellationToken::new(),
     ));
 
     // Root: the bundle `lead` (role main, can_spawn [scout], narrow view).

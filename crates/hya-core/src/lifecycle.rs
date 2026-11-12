@@ -11,18 +11,34 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use crate::engine::SessionEngine;
 use crate::resident::ResidentSupervisor;
 
-/// Run the lifecycle service until the plane (and all its clones) are dropped.
+/// Run the lifecycle service until cancellation or the request channel closes; joins all handlers.
 pub async fn run_lifecycle_service(
     engine: Arc<SessionEngine>,
     supervisor: Arc<ResidentSupervisor>,
     mut rx: UnboundedReceiver<LifecycleRequest>,
+    stop: tokio_util::sync::CancellationToken,
 ) {
-    while let Some(request) = rx.recv().await {
+    let mut requests = tokio::task::JoinSet::new();
+    loop {
+        let request = tokio::select! {
+            biased;
+            () = stop.cancelled() => break,
+            joined = requests.join_next(), if !requests.is_empty() => {
+                if let Some(Err(error)) = joined {
+                    tracing::error!(%error, "lifecycle request task failed");
+                }
+                continue;
+            }
+            request = rx.recv() => match request {
+                Some(request) => request,
+                None => break,
+            },
+        };
         let engine = engine.clone();
         let supervisor = supervisor.clone();
         // One task per request so a slow gate check cannot head-of-line block
         // the others.
-        tokio::spawn(async move {
+        requests.spawn(async move {
             match request {
                 LifecycleRequest::Report {
                     session,
@@ -75,6 +91,14 @@ pub async fn run_lifecycle_service(
                 }
             }
         });
+    }
+    requests.abort_all();
+    while let Some(joined) = requests.join_next().await {
+        if let Err(error) = joined
+            && !error.is_cancelled()
+        {
+            tracing::error!(%error, "request task failed during shutdown");
+        }
     }
 }
 

@@ -1441,75 +1441,38 @@ fn validate_unsupported_inline_agent_fields(member: &SpawnMember) -> Result<(), 
     Ok(())
 }
 
-/// Return whether request-local routing fully suppresses an Agent default.
-/// Private supervisor ownership for foreground admission handlers.
-///
-/// Explicit [`shutdown`](SpawnSupervisorLifecycle::shutdown) drains handlers.
-/// [`Drop`] is nonblocking: it only signals stop and aborts the supervisor task.
-struct SpawnSupervisorLifecycle {
-    stop: tokio_util::sync::CancellationToken,
-    join: Option<tokio::task::JoinHandle<()>>,
-    /// Adjacent worker loops sharing the same stop token (workflow runs,
-    /// catalog scope sweeps).
-    extra_joins: Vec<tokio::task::JoinHandle<()>>,
+/// Owns composition services and admitted handlers until explicit shutdown.
+#[must_use]
+pub struct RuntimeTaskOwner {
+    pub(crate) stop: tokio_util::sync::CancellationToken,
+    pub(crate) tasks: tokio_util::task::TaskTracker,
 }
 
-impl SpawnSupervisorLifecycle {
-    async fn shutdown(&mut self) -> Result<(), CoreError> {
-        self.stop.cancel();
-        if let Some(join) = self.join.take() {
-            match join.await {
-                Ok(()) => {}
-                Err(error) if error.is_cancelled() => {
-                    return Err(CoreError::Invalid(
-                        "spawn supervisor cancelled during shutdown".to_string(),
-                    ));
-                }
-                Err(error) => {
-                    return Err(CoreError::Invalid(format!(
-                        "spawn supervisor failed during shutdown: {error}"
-                    )));
-                }
-            }
+impl RuntimeTaskOwner {
+    fn new() -> Self {
+        Self {
+            stop: tokio_util::sync::CancellationToken::new(),
+            tasks: tokio_util::task::TaskTracker::new(),
         }
-        for join in self.extra_joins.drain(..) {
-            match join.await {
-                Ok(()) => {}
-                Err(error) if error.is_cancelled() => {
-                    return Err(CoreError::Invalid(
-                        "background worker cancelled during shutdown".to_string(),
-                    ));
-                }
-                Err(error) => {
-                    return Err(CoreError::Invalid(format!(
-                        "background worker failed during shutdown: {error}"
-                    )));
-                }
-            }
-        }
-        Ok(())
     }
 
-    fn drop_stop(&mut self) {
+    /// Cancel intake and wait for every tracked service and handler to exit.
+    pub async fn shutdown(&mut self) {
         self.stop.cancel();
-        if let Some(join) = self.join.take() {
-            join.abort();
-        }
-        for join in self.extra_joins.drain(..) {
-            join.abort();
-        }
+        self.tasks.close();
+        self.tasks.wait().await;
     }
 }
 
-impl Drop for SpawnSupervisorLifecycle {
+impl Drop for RuntimeTaskOwner {
     fn drop(&mut self) {
-        self.drop_stop();
+        self.stop.cancel();
     }
 }
 
 /// Public aggregate returned by [`build_session_engine`].
 ///
-/// Owns engine products plus the private spawn-supervisor lifecycle. Not `Clone`.
+/// Owns engine products plus composition services and request handlers. Not `Clone`.
 /// Callers must keep this value until they finish using the engine and then call
 /// [`shutdown`](BuiltSessionEngine::shutdown) (or drop for a nonblocking fallback).
 #[must_use]
@@ -1521,7 +1484,7 @@ pub struct BuiltSessionEngine {
     asks: Option<tokio::sync::mpsc::UnboundedReceiver<AskRequest>>,
     questions: Option<tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>>,
     mcp_control: Arc<dyn hya_server::McpControl>,
-    lifecycle: SpawnSupervisorLifecycle,
+    lifecycle: RuntimeTaskOwner,
 }
 
 impl BuiltSessionEngine {
@@ -1599,20 +1562,15 @@ impl BuiltSessionEngine {
         self.resident_supervisor.drain(cause, DRAIN_DEADLINE).await
     }
 
-    /// Drain in-flight turns (cause `shutdown` unless an earlier
-    /// [`drain`](Self::drain) chose one), then stop intake, abort handlers,
-    /// and drain the supervisor JoinSet.
+    /// Stop intake, cancel and join admitted handlers, then drain turns and
+    /// residents so no late registration can escape the drain. Safe to call repeatedly.
     pub async fn shutdown(&mut self) -> Result<(), CoreError> {
+        self.lifecycle.shutdown().await;
         self.drain(FinishCause::Shutdown).await;
-        self.lifecycle.shutdown().await
+        Ok(())
     }
 }
 
-impl Drop for BuiltSessionEngine {
-    fn drop(&mut self) {
-        self.lifecycle.drop_stop();
-    }
-}
 /// Adapt the app-owned Workflow control to the dependency-inverted server port.
 impl hya_server::WorkflowControl for crate::WorkflowControl {
     fn execute(
@@ -1699,63 +1657,47 @@ where
 
 /// Spawn the background task that admits multi-agent team/member spawn requests.
 ///
-/// Consumes `rx` for the lifetime of the process (or until the channel closes).
+/// Keep the returned owner alive; call its `shutdown().await` before teardown.
 pub fn spawn_team_supervisor(
     rx: tokio::sync::mpsc::Receiver<BoundSpawnRequest>,
     engine: Arc<SessionEngine>,
     base: AgentSpec,
     categories: Arc<CategoryRegistry>,
     resident_supervisor: Arc<ResidentSupervisor>,
-) {
-    let _lifecycle = spawn_team_supervisor_with_environment(
+) -> RuntimeTaskOwner {
+    spawn_team_supervisor_with_environment(
         rx,
         engine,
         base,
         categories,
         resident_supervisor,
         Arc::new(BundleSidecarEnvironment::production()),
-    );
-    // Test/helper entry: lifecycle is intentionally detached; production uses
-    // BuiltSessionEngine ownership. Drop still nonblocking-aborts on process end.
-    std::mem::forget(_lifecycle);
+        RuntimeTaskOwner::new(),
+    )
 }
 
-/// Serve queued `workflow` tool requests for the lifetime of the engine.
-///
-/// One worker loop, one in-flight run: user DAGs are long-lived multi-agent
-/// executions and the governor's per-run budget already bounds each run's total
-/// fan-out, so extra intra-process parallelism would only add contention.
+/// Receive Workflow requests without waiting for another Session's run.
 fn spawn_workflow_supervisor(
     mut rx: tokio::sync::mpsc::Receiver<BoundWorkflowRequest>,
     control: crate::WorkflowControl,
     stop: tokio_util::sync::CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
+    let tasks = control.tasks.clone();
+    tasks.spawn(async move {
         loop {
             let bound_request = tokio::select! {
                 biased;
                 _ = stop.cancelled() => break,
-                bound_request = rx.recv() => match bound_request {
+                request = rx.recv() => match request {
                     Some(request) => request,
                     None => break,
                 },
             };
             let (binding, request) = bound_request.into_parts();
-            let request_cancel = request.cancel.clone();
-            let execution = handle_workflow_request(&control, binding, request);
-            tokio::pin!(execution);
-            tokio::select! {
-                biased;
-                _ = stop.cancelled() => {
-                    // Shutdown must not wait forever behind a stalled provider or
-                    // verifier. Cancel cooperatively, then await the governed run
-                    // so it can finish member/session cleanup before this worker exits.
-                    request_cancel.cancel();
-                    execution.await;
-                    break;
-                }
-                _ = &mut execution => {}
-            }
+            let control = control.clone();
+            control.tasks.clone().spawn(async move {
+                handle_workflow_request(&control, binding, request).await;
+            });
         }
     })
 }
@@ -1797,10 +1739,11 @@ fn spawn_team_supervisor_with_environment(
     categories: Arc<CategoryRegistry>,
     resident_supervisor: Arc<ResidentSupervisor>,
     sidecar_environment: Arc<BundleSidecarEnvironment>,
-) -> SpawnSupervisorLifecycle {
-    let stop = tokio_util::sync::CancellationToken::new();
-    let stop_child = stop.child_token();
-    let join = tokio::spawn(async move {
+    lifecycle: RuntimeTaskOwner,
+) -> RuntimeTaskOwner {
+    let stop_child = lifecycle.stop.clone();
+    let tasks = lifecycle.tasks.clone();
+    lifecycle.tasks.spawn(async move {
         loop {
             let bound_request = tokio::select! {
                 biased;
@@ -1921,140 +1864,154 @@ fn spawn_team_supervisor_with_environment(
             }
             let engine = engine.clone();
             let resident_supervisor = resident_supervisor.clone();
-            tokio::spawn(async move {
-                let parent = req.parent;
-                let operation_cancel = req.cancel;
-                let mut reply = Some(req.reply);
-                let mut spawn_failed = false;
+            let stop = stop_child.clone();
+            tasks.spawn(async move {
+                let cancel = req.cancel.clone();
+                let execution = async move {
+                    let parent = req.parent;
+                    let operation_cancel = req.cancel;
+                    let mut reply = Some(req.reply);
+                    let mut spawn_failed = false;
 
-                // Unified path (ADR-0015): every member is a resident actor.
-                // Register the team root as the main actor so child mail,
-                // reports, and quiescence wake it.
-                let main_activation_result = if let Some(MainActivationContext {
-                    root,
-                    agent: main_agent,
-                    binding: main_binding,
-                    agents: main_agents,
-                    resources: main_resources,
-                    guidance: main_guidance,
-                }) = main_activation
-                {
-                    resident_supervisor
-                        .ensure_main(
-                            root,
-                            main_agent,
-                            (main_binding, main_agents, main_resources),
-                            actor_claim.as_ref(),
-                            main_guidance,
-                        )
-                        .await
-                } else {
-                    Ok(())
-                };
-                let mut outcomes = Vec::new();
-                if let Err(err) = main_activation_result {
-                    let summary = err.to_string();
-                    eprintln!("hya: ensure_main failed ({summary})");
-                    spawn_failed = true;
-                    for _ in 0..resolved.len() {
-                        outcomes.push(MemberOutcome {
-                            member: "-".to_string(),
-                            session: "-".to_string(),
-                            status: "failed".to_string(),
-                            summary: summary.clone(),
-                            model: None,
-                        });
-                    }
-                } else {
-                    // Register members concurrently: one slow child must not delay the
-                    // other residents in the same task batch.
-                    let spawn_futures = resolved.into_iter().map(|resolved| {
-                        let resident_supervisor = resident_supervisor.clone();
-                        async move {
-                            let ResolvedSpawnMember {
-                                request: member,
-                                authorized_target,
-                                agent,
-                                binding,
-                                agents,
-                                resources,
-                                guidance,
-                                sidecar_factory,
-                                ..
-                            } = resolved;
-                            let model = agent.model.to_string();
-                            let result = resident_supervisor
-                                .spawn_resident_typed(
-                                    parent,
-                                    agent,
-                                    (binding, agents, resources, sidecar_factory),
-                                    member.prompt,
-                                    TaskSpawnOrigin {
-                                        subagent_type: authorized_target.as_str().to_string(),
-                                        description: member.description,
-                                        tool_call: Some(source_tool_call),
-                                    },
-                                    actor_claim.as_ref(),
-                                    guidance,
-                                )
-                                .await;
-                            (result, model)
+                    // Unified path (ADR-0015): every member is a resident actor.
+                    // Register the team root as the main actor so child mail,
+                    // reports, and quiescence wake it.
+                    let main_activation_result = if let Some(MainActivationContext {
+                        root,
+                        agent: main_agent,
+                        binding: main_binding,
+                        agents: main_agents,
+                        resources: main_resources,
+                        guidance: main_guidance,
+                    }) = main_activation
+                    {
+                        resident_supervisor
+                            .ensure_main(
+                                root,
+                                main_agent,
+                                (main_binding, main_agents, main_resources),
+                                actor_claim.as_ref(),
+                                main_guidance,
+                            )
+                            .await
+                    } else {
+                        Ok(())
+                    };
+                    let mut outcomes = Vec::new();
+                    if let Err(err) = main_activation_result {
+                        let summary = err.to_string();
+                        eprintln!("hya: ensure_main failed ({summary})");
+                        spawn_failed = true;
+                        for _ in 0..resolved.len() {
+                            outcomes.push(MemberOutcome {
+                                member: "-".to_string(),
+                                session: "-".to_string(),
+                                status: "failed".to_string(),
+                                summary: summary.clone(),
+                                model: None,
+                            });
                         }
-                    });
-                    for (result, model) in join_all(spawn_futures).await {
-                        match result {
-                            Ok((session, handle)) => outcomes.push(MemberOutcome {
-                                member: handle.clone(),
-                                session: session.to_string(),
-                                status: "running".to_string(),
-                                summary: format!(
-                                    "Resident {handle} is live; results arrive as its report."
-                                ),
-                                model: Some(model),
-                            }),
-                            Err(err) => {
-                                spawn_failed = true;
-                                outcomes.push(MemberOutcome {
-                                    member: "-".to_string(),
-                                    session: "-".to_string(),
-                                    status: "failed".to_string(),
-                                    summary: err.to_string(),
-                                    model: None,
-                                });
+                    } else {
+                        // Register members concurrently: one slow child must not delay the
+                        // other residents in the same task batch.
+                        let spawn_futures = resolved.into_iter().map(|resolved| {
+                            let resident_supervisor = resident_supervisor.clone();
+                            async move {
+                                let ResolvedSpawnMember {
+                                    request: member,
+                                    authorized_target,
+                                    agent,
+                                    binding,
+                                    agents,
+                                    resources,
+                                    guidance,
+                                    sidecar_factory,
+                                    ..
+                                } = resolved;
+                                let model = agent.model.to_string();
+                                let result = resident_supervisor
+                                    .spawn_resident_typed(
+                                        parent,
+                                        agent,
+                                        (binding, agents, resources, sidecar_factory),
+                                        member.prompt,
+                                        TaskSpawnOrigin {
+                                            subagent_type: authorized_target.as_str().to_string(),
+                                            description: member.description,
+                                            tool_call: Some(source_tool_call),
+                                        },
+                                        actor_claim.as_ref(),
+                                        guidance,
+                                    )
+                                    .await;
+                                (result, model)
+                            }
+                        });
+                        for (result, model) in join_all(spawn_futures).await {
+                            match result {
+                                Ok((session, handle)) => outcomes.push(MemberOutcome {
+                                    member: handle.clone(),
+                                    session: session.to_string(),
+                                    status: "running".to_string(),
+                                    summary: format!(
+                                        "Resident {handle} is live; results arrive as its report."
+                                    ),
+                                    model: Some(model),
+                                }),
+                                Err(err) => {
+                                    spawn_failed = true;
+                                    outcomes.push(MemberOutcome {
+                                        member: "-".to_string(),
+                                        session: "-".to_string(),
+                                        status: "failed".to_string(),
+                                        summary: err.to_string(),
+                                        model: None,
+                                    });
+                                }
                             }
                         }
                     }
-                }
 
-                // The spawn operation completes at registration (ADR-0015 §2):
-                // the admission journal covers spawn idempotency, not task
-                // completion, which now travels as the child's report.
-                let (terminal, reason) = if operation_cancel.is_cancelled() {
-                    (AdmissionTerminal::Cancelled, "spawn operation cancelled")
-                } else if spawn_failed {
-                    (AdmissionTerminal::Aborted, "spawn operation failed")
-                } else {
-                    (AdmissionTerminal::Completed, "spawn operation completed")
+                    // The spawn operation completes at registration (ADR-0015 §2):
+                    // the admission journal covers spawn idempotency, not task
+                    // completion, which now travels as the child's report.
+                    let (terminal, reason) = if operation_cancel.is_cancelled() {
+                        (AdmissionTerminal::Cancelled, "spawn operation cancelled")
+                    } else if spawn_failed {
+                        (AdmissionTerminal::Aborted, "spawn operation failed")
+                    } else {
+                        (AdmissionTerminal::Completed, "spawn operation completed")
+                    };
+                    if let Err(error) = engine
+                        .finalize_spawn_admission(
+                            operation_id,
+                            terminal,
+                            reason,
+                            actor_claim.as_ref(),
+                        )
+                        .await
+                    {
+                        eprintln!("hya: failed to finalize spawn admission ({error})");
+                        let _ = reply.take();
+                        return;
+                    }
+                    if let Some(reply) = reply.take() {
+                        let _ = reply.send(Ok(outcomes));
+                    }
                 };
-                if let Err(error) = engine
-                    .finalize_spawn_admission(operation_id, terminal, reason, actor_claim.as_ref())
-                    .await
-                {
-                    eprintln!("hya: failed to finalize spawn admission ({error})");
-                    let _ = reply.take();
-                    return;
-                }
-                if let Some(reply) = reply.take() {
-                    let _ = reply.send(Ok(outcomes));
+                tokio::pin!(execution);
+                tokio::select! {
+                    biased;
+                    () = stop.cancelled() => {
+                        cancel.cancel();
+                        execution.await;
+                    }
+                    () = &mut execution => {}
                 }
             });
         }
     });
-    SpawnSupervisorLifecycle {
-        stop,
-        join: Some(join),
-        extra_joins: Vec::new(),
-    }
+    lifecycle
 }
 
 /// When true (default), MCP connect runs after the engine is built so HTTP can
@@ -2165,6 +2122,7 @@ async fn build_session_engine_with_mcp_defer(
     tool_config: (WebSearchConfig, InvocationPolicy, config::EngineSettings),
     options: EngineBuildOptions,
 ) -> anyhow::Result<BuiltSessionEngine> {
+    let lifecycle = RuntimeTaskOwner::new();
     let owner_run_id = process_owner_run_id();
     store
         .claim_runtime_owner(owner_run_id)
@@ -2264,7 +2222,7 @@ async fn build_session_engine_with_mcp_defer(
     let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(spawn_queue_capacity);
     let (workflow_sender, workflow_rx) = BoundWorkflowSender::with_capacity(spawn_queue_capacity);
     let (mailbox, mailbox_rx) = MailboxPlane::new();
-    let (lifecycle, lifecycle_rx) = LifecyclePlane::new();
+    let (lifecycle_plane, lifecycle_rx) = LifecyclePlane::new();
     let summarizer: Arc<dyn Summarizer> =
         Arc::new(ModelSummarizer::new(router.clone(), agent.model.clone()));
     let bus = EventBus::new(crate::config::resolve_event_bus_capacity());
@@ -2289,32 +2247,15 @@ async fn build_session_engine_with_mcp_defer(
         .with_lsp(settings.lsp()?)
         .with_websearch(WebSearchPlane::configured(websearch))
         .with_interaction(interaction)
-        // INVARIANT (spawn-intake liveness): the engine *owns* this sender for its
-        // whole life -- `SessionEngine::spawner` is a plain field, only ever set by
-        // this builder, never taken back out -- and the team supervisor spawned
-        // below holds an `Arc<SessionEngine>` for as long as it runs. Therefore the
-        // supervisor's `rx.recv()` can never observe a closed intake: the last
-        // sender cannot drop while a receiver-owning task is still alive.
-        //
-        // That invariant is load-bearing. The supervisor's drain branch (see
-        // `spawn_team_supervisor_with_environment`) waits for in-flight foreground
-        // handlers without watching `stop_child`, which is only safe because a
-        // `None` from `rx.recv()` is unreachable in production; today it is reached
-        // only from the `spawn_team_supervisor` test helper, which hands the
-        // receiver to a supervisor that does not own the sender. A handler stuck in
-        // `fail_after_claim`'s `std::future::pending::<()>()` would otherwise make
-        // `shutdown()` hang forever instead of aborting.
-        //
-        // If this ownership ever changes -- engine holding a `Weak`, the sender
-        // moving out of the engine, or the supervisor stopping holding the engine
-        // -- the drain branch must be made stop-aware in the same change.
+        // Explicit cancellation closes intake: the engine owns each sender while
+        // its receiver service retains the engine.
         .with_spawn_sender(spawn_sender)
         // INVARIANT (workflow-intake liveness): mirrors `with_spawn_sender` --
         // the engine owns this sender and the workflow worker owns an
         // `Arc<SessionEngine>`, so queued requests always find a live executor.
         .with_workflow_sender(workflow_sender)
         .with_mailbox(mailbox)
-        .with_lifecycle(lifecycle)
+        .with_lifecycle(lifecycle_plane)
         .with_governor(governor);
 
     let engine = Arc::new(engine_builder);
@@ -2349,7 +2290,10 @@ async fn build_session_engine_with_mcp_defer(
         let plugin_plan = reconciler
             .replace_desired(plugin_desired.clone())
             .context("plan startup plugin reconciliation")?;
-        if let Err(error) = mcp_control.reconcile_plan(plugin_plan).await {
+        if let Err(error) = mcp_control
+            .reconcile_plan(plugin_plan, lifecycle.stop.clone())
+            .await
+        {
             eprintln!("hya: plugin reconciliation rejected ({error})");
         }
 
@@ -2359,8 +2303,9 @@ async fn build_session_engine_with_mcp_defer(
             .replace_desired(desired)
             .context("plan deferred MCP reconciliation")?;
         let control_bg = mcp_control.clone();
-        tokio::spawn(async move {
-            if let Err(error) = control_bg.reconcile_plan(deferred_plan).await {
+        let stop = lifecycle.stop.clone();
+        lifecycle.tasks.spawn(async move {
+            if let Err(error) = control_bg.reconcile_plan(deferred_plan, stop).await {
                 eprintln!("hya: MCP runtime refresh rejected ({error})");
             }
         });
@@ -2370,7 +2315,10 @@ async fn build_session_engine_with_mcp_defer(
         let plan = reconciler
             .replace_desired(desired)
             .context("plan startup runtime reconciliation")?;
-        if let Err(error) = mcp_control.reconcile_plan(plan).await {
+        if let Err(error) = mcp_control
+            .reconcile_plan(plan, lifecycle.stop.clone())
+            .await
+        {
             eprintln!("hya: startup runtime reconciliation rejected ({error})");
         }
     }
@@ -2484,36 +2432,43 @@ async fn build_session_engine_with_mcp_defer(
         resident_supervisor.clone(),
         owner_run_id,
         categories.clone(),
+        &lifecycle,
     );
-    let mut lifecycle = spawn_team_supervisor_with_environment(
+    let lifecycle = spawn_team_supervisor_with_environment(
         spawn_rx,
         engine.clone(),
         agent.clone(),
         categories,
         resident_supervisor.clone(),
         sidecar_environment,
+        lifecycle,
     );
     // Serve `workflow` tool requests from a dedicated worker loop sharing the
     // team supervisor's stop token; runs go through the governed core executor.
-    lifecycle.extra_joins.push(spawn_workflow_supervisor(
+    spawn_workflow_supervisor(
         workflow_rx,
         workflow_control.clone(),
         lifecycle.stop.clone(),
-    ));
+    );
     // Drive the event-sourced mailbox: append MailSent/Channel*/AgentRegistered to
     // the team-root log and serve roster/channel reads (ADR-0001).
     // Release idle Project scopes (and their plugin/bundle processes) even
     // when nothing binds.
-    lifecycle.extra_joins.push(spawn_catalog_scope_sweeper(
+    lifecycle.tasks.spawn(run_catalog_scope_sweeper(
         Arc::downgrade(&engine),
         lifecycle.stop.clone(),
         CATALOG_SCOPE_SWEEP_PERIOD,
     ));
-    tokio::spawn(run_mailbox_service(engine.clone(), mailbox_rx));
-    tokio::spawn(run_lifecycle_service(
+    lifecycle.tasks.spawn(run_mailbox_service(
+        engine.clone(),
+        mailbox_rx,
+        lifecycle.stop.clone(),
+    ));
+    lifecycle.tasks.spawn(run_lifecycle_service(
         engine.clone(),
         resident_supervisor.clone(),
         lifecycle_rx,
+        lifecycle.stop.clone(),
     ));
     Ok(BuiltSessionEngine {
         engine,
@@ -2547,28 +2502,26 @@ const CATALOG_SCOPE_SWEEP_PERIOD: std::time::Duration = std::time::Duration::fro
 
 /// Periodically evict idle and over-capacity catalog scopes until `stop`
 /// fires or the engine is gone.
-fn spawn_catalog_scope_sweeper(
+async fn run_catalog_scope_sweeper(
     engine: std::sync::Weak<SessionEngine>,
     stop: tokio_util::sync::CancellationToken,
     period: std::time::Duration,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut ticks = tokio::time::interval(period);
-        ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        // The first tick completes immediately; start sweeping one period in.
-        ticks.tick().await;
-        loop {
-            tokio::select! {
-                biased;
-                () = stop.cancelled() => break,
-                _ = ticks.tick() => {}
-            }
-            let Some(engine) = engine.upgrade() else {
-                break;
-            };
-            engine.sweep_catalog_scopes();
+) {
+    let mut ticks = tokio::time::interval(period);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // The first tick completes immediately; start sweeping one period in.
+    ticks.tick().await;
+    loop {
+        tokio::select! {
+            biased;
+            () = stop.cancelled() => break,
+            _ = ticks.tick() => {}
         }
-    })
+        let Some(engine) = engine.upgrade() else {
+            break;
+        };
+        engine.sweep_catalog_scopes();
+    }
 }
 
 /// Inputs for [`HyaRuntime::start`] (store path, model, and safety flags).
@@ -2906,11 +2859,174 @@ mod tests {
             .shutdown()
             .await
             .expect("explicit shutdown must drain the spawn supervisor");
+        assert!(
+            built.lifecycle.tasks.is_empty(),
+            "runtime-owned services survived shutdown"
+        );
         // Second shutdown is idempotent (no supervisor join left).
         built
             .shutdown()
             .await
             .expect("idempotent shutdown after drain");
+    }
+
+    #[tokio::test]
+    async fn built_shutdown_cancels_and_joins_deferred_mcp_preparation() {
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+        let (entered, handshake) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0; 4096];
+            assert!(socket.read(&mut buffer).await.unwrap() > 0);
+            entered.send(()).unwrap();
+            std::future::pending::<()>().await;
+        });
+        let (router, model) = offline_router(None);
+        let agent = agent_with_model(&model, None);
+        let mut built = build_session_engine_with_mcp_defer(
+            SessionStore::connect_memory().await.unwrap(),
+            router,
+            &agent,
+            BTreeMap::from([(
+                "gated".into(),
+                McpServerConfig {
+                    url: Some(endpoint),
+                    ..Default::default()
+                },
+            )]),
+            Vec::new(),
+            (
+                WebSearchConfig::default(),
+                InvocationPolicy::default(),
+                config::EngineSettings::default(),
+            ),
+            EngineBuildOptions {
+                defer_mcp: true,
+                pure: true,
+            },
+        )
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), handshake)
+            .await
+            .unwrap()
+            .unwrap();
+        let stopped = tokio::time::timeout(Duration::from_secs(2), built.shutdown()).await;
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+        stopped
+            .expect("shutdown must cancel MCP preparation")
+            .unwrap();
+        assert!(built.lifecycle.tasks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn built_shutdown_cancels_and_joins_started_workflow() {
+        let workdir = tempdir();
+        let workflow_dir = workdir.join(".hya/workflows");
+        std::fs::create_dir_all(&workflow_dir).unwrap();
+        std::fs::write(
+            workflow_dir.join("hold.hya.md"),
+            r#"---
+kind: Workflow
+name: hold
+description: Hold a provider until runtime shutdown.
+nodes:
+  hold:
+    agent: hya-scout
+    directive: WAIT FOR SHUTDOWN
+---
+flowchart TD
+  hold
+"#,
+        )
+        .unwrap();
+        let gate = Arc::new(ProviderGate {
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let router = ProviderRouter::new().with(Arc::new(CountingDevProvider {
+            calls: Arc::new(AtomicUsize::new(0)),
+            inner: DevProvider::new(),
+            gate: Some(gate.clone()),
+        }));
+        let mut agent = agent_with_model("hya/offline", None);
+        agent.workdir = workdir.clone();
+        let mut built = build_session_engine_with_mcp_defer(
+            SessionStore::connect_memory().await.unwrap(),
+            router,
+            &agent,
+            BTreeMap::new(),
+            Vec::new(),
+            (
+                WebSearchConfig::default(),
+                InvocationPolicy::compile(hya_tool::PermissionModel::Danger, Vec::new()).unwrap(),
+                config::EngineSettings::default(),
+            ),
+            EngineBuildOptions {
+                defer_mcp: false,
+                pure: true,
+            },
+        )
+        .await
+        .unwrap();
+        let engine = built.engine();
+        let lead = engine
+            .create(CreateSession {
+                parent: None,
+                agent: agent.name.clone(),
+                model: agent.model.clone(),
+                workdir: workdir.to_string_lossy().into_owned(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
+            })
+            .await
+            .unwrap();
+        let control = built.workflow_control();
+        control
+            .execute(
+                lead,
+                crate::WorkflowInvocation {
+                    delivery: WorkflowDelivery::Started,
+                    ..Default::default()
+                },
+                hya_proto::WorkflowCommand::Run {
+                    name: Some("hold".into()),
+                    expected_revision: None,
+                    inputs: BTreeMap::new(),
+                    run: None,
+                },
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), gate.entered.notified())
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), built.shutdown())
+            .await
+            .expect("shutdown must cancel and join Started delivery")
+            .unwrap();
+        assert!(built.lifecycle.tasks.is_empty());
+        assert!(control.active_run(lead).unwrap().is_none());
+        let rejected = control
+            .execute(
+                lead,
+                Default::default(),
+                hya_proto::WorkflowCommand::List,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(rejected.code(), "WORKFLOW_RUNTIME_UNAVAILABLE");
+        assert!(built.lifecycle.tasks.is_empty());
+        let state = engine.read_projection(lead).await.unwrap();
+        assert_eq!(
+            state.session.workflow.unwrap().run.unwrap().status,
+            hya_proto::WorkflowRunStatus::Cancelled
+        );
     }
 
     /// Building a new runtime owner closes every assistant turn a dead process
@@ -3057,8 +3173,7 @@ mod tests {
         built.shutdown().await.unwrap();
     }
 
-    /// Lifecycle stop must cancel and drain the Workflow request that currently
-    /// owns the single worker slot, even when its provider never returns.
+    /// Reads remain responsive during a gated run; shutdown cancels and joins it.
     #[tokio::test]
     async fn workflow_supervisor_stop_drains_an_in_flight_run() {
         let workdir = tempdir();
@@ -3136,7 +3251,8 @@ flowchart TD
         let workflows = workflow_sender
             .for_binding(&binding)
             .for_session_with_agents(lead, agents);
-        let stop = CancellationToken::new();
+        let mut tasks = RuntimeTaskOwner::new();
+        let stop = tasks.stop.clone();
         let owner = process_owner_run_id();
         let resident_supervisor = ResidentSupervisor::start_with_owner(Arc::clone(&engine), owner);
         let control = crate::WorkflowControl::new_with_routing(
@@ -3145,10 +3261,24 @@ flowchart TD
             resident_supervisor,
             owner,
             Arc::new(CategoryRegistry::default()),
+            &tasks,
         );
         let supervisor = spawn_workflow_supervisor(workflow_rx, control, stop.clone());
         let (interaction, _interaction_rx) = InteractionPlane::new();
         let (spawner, _spawner_rx) = SpawnerPlane::new();
+        let read_workflows = workflows.clone();
+        let other = engine
+            .create(CreateSession {
+                parent: None,
+                agent: AgentName::new("hya-main"),
+                model: ModelRef::new("hya/offline"),
+                workdir: workdir.to_string_lossy().into_owned(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
+            })
+            .await
+            .unwrap();
+        let other_workflows = workflow_sender.for_binding(&binding).for_session(other);
         let ctx = ToolCtx {
             workflows,
             permission: permission.for_session(lead),
@@ -3183,6 +3313,25 @@ flowchart TD
         tokio::time::timeout(Duration::from_secs(2), provider_gate.entered.notified())
             .await
             .expect("Workflow member must reach the gated provider");
+        let mut read_results = Vec::new();
+        for plane in [read_workflows, other_workflows] {
+            for command in [
+                hya_proto::WorkflowCommand::List,
+                hya_proto::WorkflowCommand::State,
+            ] {
+                read_results.push(
+                    tokio::time::timeout(
+                        Duration::from_millis(250),
+                        plane.execute(
+                            ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
+                            command,
+                            CancellationToken::new(),
+                        ),
+                    )
+                    .await,
+                );
+            }
+        }
         stop.cancel();
         tokio::time::timeout(Duration::from_secs(2), supervisor)
             .await
@@ -3193,6 +3342,12 @@ flowchart TD
             .expect("cancelled Workflow tool request must receive a terminal reply")
             .expect("Workflow tool task must not panic")
             .expect("Workflow cancellation is a terminal run outcome");
+        tasks.shutdown().await;
+        assert!(tasks.tasks.is_empty());
+        for read in read_results {
+            read.expect("List/State must not wait behind a running Workflow")
+                .expect("Workflow read succeeds");
+        }
         assert_eq!(output["kind"], "run");
         assert_eq!(output["result"]["run"]["status"], "cancelled");
     }
@@ -9164,11 +9319,11 @@ for line in sys.stdin:
         assert!(runtime.scope_overlay(&scope.key()).is_some());
 
         let stop = tokio_util::sync::CancellationToken::new();
-        let sweeper = spawn_catalog_scope_sweeper(
+        let sweeper = tokio::spawn(run_catalog_scope_sweeper(
             Arc::downgrade(&engine),
             stop.clone(),
             std::time::Duration::from_millis(10),
-        );
+        ));
         let mut evicted = false;
         for _ in 0..200 {
             if runtime.scope_overlay(&scope.key()).is_none() {

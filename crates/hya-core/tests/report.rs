@@ -301,6 +301,7 @@ async fn refused_report_is_dropped_until_the_member_reports_again() {
         engine.clone(),
         supervisor.clone(),
         rx,
+        tokio_util::sync::CancellationToken::new(),
     ));
     let result = lifecycle
         .for_session(root)
@@ -714,7 +715,11 @@ async fn stopped_handoffs_are_searchable_by_the_members_directive() {
         spawn_idle_resident(&supervisor, &engine, root, "quartz investigation").await;
     supervisor.stop_resident(root, &handle).await.unwrap();
     let (mailbox, rx) = hya_tool::MailboxPlane::new();
-    tokio::spawn(hya_core::run_mailbox_service(engine.clone(), rx));
+    tokio::spawn(hya_core::run_mailbox_service(
+        engine.clone(),
+        rx,
+        tokio_util::sync::CancellationToken::new(),
+    ));
     let rows = mailbox
         .for_session(root)
         .search_agents("quartz".into())
@@ -1952,7 +1957,12 @@ async fn report_policy_denial_rejects_the_real_lifecycle_request() {
     ensure_main(&supervisor, &engine, root).await;
     let (child, _) = spawn_idle_resident(&supervisor, &engine, root, "hya-scout").await;
     let (plane, rx) = hya_tool::LifecyclePlane::new();
-    tokio::spawn(run_lifecycle_service(engine, supervisor, rx));
+    tokio::spawn(run_lifecycle_service(
+        engine,
+        supervisor,
+        rx,
+        tokio_util::sync::CancellationToken::new(),
+    ));
 
     let result = plane
         .for_session(child)

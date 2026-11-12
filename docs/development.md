@@ -30,6 +30,34 @@ For multi-step work, use planning-with-files under
   context is needed.
 - This workflow has no Trellis runtime dependency.
 
+## Embedded runtime shutdown
+
+`hya_app::build_session_engine` returns a `BuiltSessionEngine` that owns the
+composition tasks. Keep it alive while using its engine, then call
+`built.shutdown().await?`, including on error paths. This cancels intake and
+admitted Workflow work and waits for the spawn/Workflow workers,
+mailbox/lifecycle services and their request handlers, deferred MCP preparation,
+and catalog scope sweeper. It then drains turns and residents, after every
+admitted registration has settled. Retaining an engine or control clone does not keep
+those services running after shutdown. Dropping the built value signals
+cancellation without waiting; explicit shutdown is the completion boundary.
+
+```rust,ignore
+let mut built = hya_app::build_session_engine(store, router, &agent, mcp, plugins, tools).await?;
+let result = use_engine(built.engine()).await;
+built.shutdown().await?;
+result
+```
+
+The lower-level `spawn_team_supervisor(...) -> RuntimeTaskOwner` also requires
+retaining its returned owner and awaiting `owner.shutdown()`. Core service
+contracts are `run_mailbox_service(engine, receiver, stop)` and
+`run_lifecycle_service(engine, supervisor, receiver, stop)`, with
+`stop: CancellationToken`. Cancellation stops intake, cancels pending handlers,
+and joins them before returning. Workflow control rejects commands after
+shutdown with the existing `WORKFLOW_RUNTIME_UNAVAILABLE` code. No CLI flags
+or wire schemas change.
+
 ## Build and Quality Gate
 
 Local verification is **per component**: run the checks for the crates and

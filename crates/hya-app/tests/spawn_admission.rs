@@ -39,6 +39,7 @@ const CHILD_SCAN_POISON: &str = "CHILD_WORKDIR_SCAN_MUST_NOT_APPEAR";
 const POST_SPAWN_MUTATION: &str = "POST_SPAWN_SOURCE_MUTATION_MARKER";
 
 struct AdmissionFixture {
+    _tasks: hya_app::runtime::RuntimeTaskOwner,
     engine: Arc<SessionEngine>,
     spawner: SpawnerPlane,
     sender: BoundSpawnSender,
@@ -470,7 +471,7 @@ async fn inline_child_spawns_through_its_authorized_base_roster() {
         reasoning: None,
     };
     let resident = ResidentSupervisor::start(engine.clone());
-    spawn_team_supervisor(
+    let _tasks = spawn_team_supervisor(
         spawn_rx,
         engine.clone(),
         base.clone(),
@@ -1065,7 +1066,7 @@ async fn admission_fixture_with_store_and_gate(
         reasoning: None,
     };
     let resident = ResidentSupervisor::start(engine.clone());
-    spawn_team_supervisor(
+    let _tasks = spawn_team_supervisor(
         spawn_rx,
         engine.clone(),
         agent.clone(),
@@ -1096,6 +1097,7 @@ async fn admission_fixture_with_store_and_gate(
     let agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
     let spawner = spawn_sender.for_binding(&binding);
     AdmissionFixture {
+        _tasks,
         engine,
         spawner,
         sender: spawn_sender,
@@ -1283,7 +1285,7 @@ async fn queued_spawn_uses_parent_turn_binding_after_catalog_publication() {
         .expect("forward retained queued request");
     drop(forward_tx);
     let resident = ResidentSupervisor::start(engine.clone());
-    spawn_team_supervisor(
+    let _tasks = spawn_team_supervisor(
         forward_rx,
         engine.clone(),
         base,
@@ -1352,6 +1354,7 @@ fn temp_child_workdir(label: &str) -> PathBuf {
 }
 
 struct GuidanceSpawnFixture {
+    _tasks: hya_app::runtime::RuntimeTaskOwner,
     engine: Arc<SessionEngine>,
     spawner: SpawnerPlane,
     parent: SessionId,
@@ -1405,7 +1408,7 @@ async fn guidance_spawn_fixture(
         reasoning: None,
     };
     let resident = ResidentSupervisor::start(engine.clone());
-    spawn_team_supervisor(
+    let _tasks = spawn_team_supervisor(
         spawn_rx,
         engine.clone(),
         agent.clone(),
@@ -1427,6 +1430,7 @@ async fn guidance_spawn_fixture(
     let roster = engine.agent_roster_for_binding(&binding, "build").unwrap();
     let spawner = spawn_sender.for_binding(&binding);
     GuidanceSpawnFixture {
+        _tasks,
         engine,
         spawner,
         parent,
@@ -2166,7 +2170,7 @@ async fn nested_first_resident_main_synthesis_uses_root_definition_not_caller() 
         reasoning: None,
     };
     let resident = ResidentSupervisor::start(engine.clone());
-    spawn_team_supervisor(
+    let _tasks = spawn_team_supervisor(
         spawn_rx,
         engine.clone(),
         base.clone(),
@@ -2418,7 +2422,7 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
         reasoning: None,
     };
     let resident = ResidentSupervisor::start(engine.clone());
-    spawn_team_supervisor(
+    let _tasks = spawn_team_supervisor(
         spawn_rx,
         engine.clone(),
         base,

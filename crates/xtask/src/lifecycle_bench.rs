@@ -214,7 +214,7 @@ async fn sample_in(n: usize, dir: &std::path::Path) -> anyhow::Result<Vec<Row>> 
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(root);
     let resident = ResidentSupervisor::start(engine.clone());
-    hya_app::spawn_team_supervisor(
+    let mut tasks = hya_app::spawn_team_supervisor(
         receiver,
         engine.clone(),
         agent.clone(),
@@ -320,6 +320,7 @@ async fn sample_in(n: usize, dir: &std::path::Path) -> anyhow::Result<Vec<Row>> 
     resident
         .drain(FinishCause::Shutdown, Duration::from_secs(10))
         .await;
+    tasks.shutdown().await;
     result??;
     Ok(rows)
 }

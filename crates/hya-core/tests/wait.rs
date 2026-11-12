@@ -164,6 +164,7 @@ async fn team_with_limits(limits: hya_core::SubagentLimits) -> Team {
         engine.clone(),
         supervisor.clone(),
         rx,
+        tokio_util::sync::CancellationToken::new(),
     ));
     Team {
         engine,

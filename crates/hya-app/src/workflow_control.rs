@@ -631,6 +631,8 @@ pub struct WorkflowControl {
     owner: OwnerRunId,
     categories: Arc<CategoryRegistry>,
     active_runs: Arc<std::sync::Mutex<BTreeMap<SessionId, ActiveWorkflowRun>>>,
+    pub(crate) tasks: tokio_util::task::TaskTracker,
+    stop: CancellationToken,
 }
 
 impl WorkflowControl {
@@ -642,6 +644,7 @@ impl WorkflowControl {
         resident_supervisor: Arc<ResidentSupervisor>,
         owner: OwnerRunId,
         categories: Arc<CategoryRegistry>,
+        tasks: &crate::runtime::RuntimeTaskOwner,
     ) -> Self {
         Self {
             engine,
@@ -650,6 +653,8 @@ impl WorkflowControl {
             owner,
             categories,
             active_runs: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
+            tasks: tasks.tasks.clone(),
+            stop: tasks.stop.clone(),
         }
     }
 
@@ -669,64 +674,81 @@ impl WorkflowControl {
         command: WorkflowCommand,
         cancel: CancellationToken,
     ) -> Result<WorkflowCommandResult, WorkflowControlError> {
-        match command {
-            WorkflowCommand::List => {
-                let (workdir, binding) = self.session_binding(session, invocation.binding).await?;
-                let catalog = WorkflowCatalog::build(
-                    WorkflowCatalogRoots::for_scope(binding.scope(), &workdir),
-                    &binding,
-                )?;
-                Ok(WorkflowCommandResult::List {
-                    workflows: catalog.list(),
-                })
+        let _request = self.tasks.token();
+        if self.stop.is_cancelled() {
+            return Err(WorkflowControlError::RuntimeUnavailable);
+        }
+        let execution = async {
+            match command {
+                WorkflowCommand::List => {
+                    let (workdir, binding) =
+                        self.session_binding(session, invocation.binding).await?;
+                    let catalog = WorkflowCatalog::build(
+                        WorkflowCatalogRoots::for_scope(binding.scope(), &workdir),
+                        &binding,
+                    )?;
+                    Ok(WorkflowCommandResult::List {
+                        workflows: catalog.list(),
+                    })
+                }
+                WorkflowCommand::Info { name } => {
+                    let (workdir, binding) =
+                        self.session_binding(session, invocation.binding).await?;
+                    let catalog = WorkflowCatalog::build(
+                        WorkflowCatalogRoots::for_scope(binding.scope(), &workdir),
+                        &binding,
+                    )?;
+                    Ok(WorkflowCommandResult::Info {
+                        workflow: catalog.info(&name)?,
+                    })
+                }
+                WorkflowCommand::Select {
+                    name,
+                    expected_revision,
+                } => Ok(WorkflowCommandResult::Selected {
+                    state: self
+                        .select_inner(
+                            session,
+                            &name,
+                            expected_revision.as_ref(),
+                            invocation.operation,
+                            invocation.binding,
+                        )
+                        .await?,
+                }),
+                WorkflowCommand::State => Ok(WorkflowCommandResult::State {
+                    state: self.state_inner(session, invocation.binding).await?,
+                }),
+                WorkflowCommand::Run {
+                    name,
+                    expected_revision,
+                    inputs,
+                    run,
+                } => Ok(WorkflowCommandResult::Run {
+                    result: self
+                        .run_inner(
+                            session,
+                            invocation,
+                            RunRequest {
+                                workflow: name,
+                                expected_revision,
+                                inputs,
+                                requested_run: run,
+                                cancel: cancel.clone(),
+                            },
+                        )
+                        .await?,
+                }),
             }
-            WorkflowCommand::Info { name } => {
-                let (workdir, binding) = self.session_binding(session, invocation.binding).await?;
-                let catalog = WorkflowCatalog::build(
-                    WorkflowCatalogRoots::for_scope(binding.scope(), &workdir),
-                    &binding,
-                )?;
-                Ok(WorkflowCommandResult::Info {
-                    workflow: catalog.info(&name)?,
-                })
+        };
+        tokio::pin!(execution);
+        tokio::select! {
+            biased;
+            () = self.stop.cancelled() => {
+                cancel.cancel();
+                execution.await
             }
-            WorkflowCommand::Select {
-                name,
-                expected_revision,
-            } => Ok(WorkflowCommandResult::Selected {
-                state: self
-                    .select_inner(
-                        session,
-                        &name,
-                        expected_revision.as_ref(),
-                        invocation.operation,
-                        invocation.binding,
-                    )
-                    .await?,
-            }),
-            WorkflowCommand::State => Ok(WorkflowCommandResult::State {
-                state: self.state_inner(session, invocation.binding).await?,
-            }),
-            WorkflowCommand::Run {
-                name,
-                expected_revision,
-                inputs,
-                run,
-            } => Ok(WorkflowCommandResult::Run {
-                result: self
-                    .run_inner(
-                        session,
-                        invocation,
-                        RunRequest {
-                            workflow: name,
-                            expected_revision,
-                            inputs,
-                            requested_run: run,
-                            cancel,
-                        },
-                    )
-                    .await?,
-            }),
+            result = &mut execution => result,
         }
     }
 
@@ -1035,18 +1057,25 @@ impl WorkflowControl {
         if invocation.delivery == WorkflowDelivery::Started {
             let control = self.clone();
             let background_binding = finish_binding.clone();
-            tokio::spawn(async move {
+            self.tasks.spawn(async move {
                 let _admission_guard = admission_guard;
-                control
-                    .finish_prepared_run(
-                        session,
-                        run,
-                        operation,
-                        prepared,
-                        background_binding,
-                        cancel,
-                    )
-                    .await
+                let execution = control.finish_prepared_run(
+                    session,
+                    run,
+                    operation,
+                    prepared,
+                    background_binding,
+                    cancel.clone(),
+                );
+                tokio::pin!(execution);
+                tokio::select! {
+                    biased;
+                    () = control.stop.cancelled() => {
+                        cancel.cancel();
+                        execution.await
+                    }
+                    result = &mut execution => result,
+                }
             });
             let current = self
                 .state_inner(session, Some(finish_binding))

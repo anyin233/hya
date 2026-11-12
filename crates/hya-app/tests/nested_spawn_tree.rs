@@ -59,7 +59,7 @@ async fn nested_spawn() -> NestedSpawn {
         reasoning: None,
     };
     let resident = ResidentSupervisor::start(engine.clone());
-    spawn_team_supervisor(
+    let _tasks = spawn_team_supervisor(
         spawn_rx,
         engine.clone(),
         agent.clone(),
