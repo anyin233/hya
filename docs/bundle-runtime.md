@@ -284,8 +284,12 @@ Project bundles (`.hya/bundles/<dir>/`, written by `hya bundle install
 
 - A Project loads `<root>/.hya/bundles` of every Project root, in root order.
   The first root wins: a later bundle whose id or namespace an earlier one
-  already claims is skipped with a warning. Project bundles shadow installed
-  and first-party bundles with the same id or namespace, as before.
+  already claims is skipped. Precedence is decided from manifest identity before
+  preparing processes: a shadowed directory starts no process and contributes no
+  refresh error. A directory that becomes shadowed releases its retained source;
+  an active binding can keep that process alive until the binding is released.
+  Project bundles shadow installed and first-party bundles with the same id or
+  namespace, as before.
 - Only sessions and catalog reads bound to that Project see its bundles. The
   global scope, directories outside every Project, and temporary sessions bind
   installed and first-party bundles only; they never start project bundle code.

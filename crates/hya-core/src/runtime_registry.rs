@@ -2091,9 +2091,10 @@ impl TurnBinding {
     /// A bundle agent (AgentBundle, AgentSetBundle,
     /// WorkflowBundle) additionally gets its own bundle's process hooks,
     /// filtered to the agent's `hook_refs`, after the Plugin hooks. An unknown
-    /// agent gets none. Plugin entries are the retained source dispatchers
-    /// themselves, so callers that merge chains can deduplicate by pointer.
-    /// No live registry read occurs.
+    /// agent gets none. Global config plugin entries omit events, which the
+    /// engine publishes independently. Other Plugin entries are the retained
+    /// source dispatchers, so callers can deduplicate them by pointer. No live
+    /// registry read occurs.
     #[must_use]
     pub fn bundle_hooks_for_agent(
         &self,
@@ -2114,12 +2115,21 @@ impl TurnBinding {
             return Vec::new();
         };
         let owner = agent.origin.bundle_id();
+        let global = self.global_plugin_hooks();
         let mut hooks = self
             .plugin_bundle_hooks(owner)
             .into_iter()
             .map(|dispatcher| BoundAgentHook {
                 source: Arc::clone(&dispatcher),
-                dispatcher,
+                // Global events have one unconditional delivery path in
+                // publish_envelope; bindings retain ordered non-event hooks.
+                dispatcher: if global.iter().any(|hooks| Arc::ptr_eq(hooks, &dispatcher)) {
+                    Arc::new(crate::bundle_hooks::ScopedBundleHooks::without_events(
+                        dispatcher,
+                    ))
+                } else {
+                    dispatcher
+                },
                 hook_ids: None,
             })
             .collect::<Vec<_>>();

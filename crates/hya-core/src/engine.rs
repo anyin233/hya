@@ -1752,17 +1752,16 @@ impl SessionEngine {
         if let Some(hooks) = &self.hooks {
             hooks.dispatch_event(&envelope);
         }
+        for hooks in self.runtime.global_plugin_hooks() {
+            hooks.dispatch_event(&envelope);
+        }
         let session = envelope.event.session();
         let active = session.and_then(activation_hook_for);
         if let Some(hooks) = active {
             hooks.dispatch_event(&envelope);
-        } else {
-            for hooks in self.runtime.global_plugin_hooks() {
-                hooks.dispatch_event(&envelope);
-            }
-            if let Some(hooks) = session.and_then(|session| self.captured_session_hooks(session)) {
-                hooks.dispatch_event(&envelope);
-            }
+        } else if let Some(hooks) = session.and_then(|session| self.captured_session_hooks(session))
+        {
+            hooks.dispatch_event(&envelope);
         }
         self.bus.publish(envelope);
     }

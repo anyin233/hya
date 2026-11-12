@@ -665,8 +665,12 @@ setting its boolean `enabled` field to `false` removes the source. The daemon
 PID stays the same. Active turn bindings retain the old process until released;
 idle sessions do not pin removed global plugins. Global event and lifecycle
 hooks use the current published global sources independently of Project cache
-eviction. Hook and `permission.ask` order is user-global config plugins,
-installed plugin bundles, then project plugins.
+eviction. Every live envelope reaches global `event` hooks exactly once,
+including child prompt admission while a sidecar is active, before the first
+assistant event. Activation chains retain global plugins for ordered non-event
+hooks while omitting their event delivery; captured session chains contain only
+scoped hooks. Non-event hook and `permission.ask` order is user-global config
+plugins, installed plugin bundles, then project plugins.
 
 Automatic binds do not retry unchanged failed declarations. Explicit refresh
 retries failures, including a repaired plugin executable with unchanged
