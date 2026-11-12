@@ -286,5 +286,5 @@ handle: &str, cause: FinishCause)` returns
 contract with an explicit cause for an unstarted task: `UserCancel` for ordinary
 stop, `Archived` for parent archive, and `Shutdown` for graceful drain. Failure
 uses `Other`; takeover recovery uses `Interrupted`. Returned envelopes are
-published after commit. Archive/revive's other transaction boundaries remain
-separate.
+published after commit. Handoff, optional report/mail, archive and claim release
+now share that terminal transaction; revival remains a separate transaction.

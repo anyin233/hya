@@ -325,7 +325,7 @@ async fn resident_stop_finalization_commits_mail_admission_and_claim_release_tog
         .await
         .unwrap();
 
-    assert_eq!(events.len(), 4);
+    assert_eq!(events.len(), 6);
     assert!(matches!(
         &events[0].event,
         Event::MemberFinished {
@@ -397,11 +397,25 @@ async fn resident_stop_finalization_commits_mail_admission_and_claim_release_tog
     assert!(admissions[0].logical_released);
 
     let projection = store.read_projection(root).await.unwrap();
-    let entry = projection.team.roster.get(path).unwrap();
-    assert_eq!(entry.status, RosterStatus::Failed);
+    assert!(!projection.team.roster.contains_key(path));
+    assert_eq!(projection.team.archived[path].session, actor);
     let inbox_len = projection.team.inboxes.get(path).map_or(0, Vec::len);
     assert_eq!(inbox_len, 1);
-    assert_eq!(entry.resident_cursor, inbox_len as u64);
+    let mut before_archive = hya_proto::Projection::default();
+    for envelope in store.replay(root).await.unwrap() {
+        if matches!(&envelope.event, Event::AgentArchived { child, .. } if *child == actor) {
+            break;
+        }
+        before_archive.apply(&envelope);
+    }
+    assert_eq!(
+        before_archive.team.roster[path].status,
+        RosterStatus::Failed
+    );
+    assert_eq!(
+        before_archive.team.roster[path].resident_cursor,
+        inbox_len as u64
+    );
     assert!(!store.active_actor_ids().await.unwrap().contains(&actor));
     assert!(matches!(
         store.validate_actor_claim(&actor_claim).await,
@@ -533,7 +547,8 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
 
     let projection = store.read_projection(root).await.unwrap();
     assert_eq!(projection.team.inboxes.get(path).unwrap().len(), 1);
-    assert_eq!(projection.team.roster.get(path).unwrap().resident_cursor, 1);
+    assert!(!projection.team.roster.contains_key(path));
+    assert_eq!(projection.team.archived[path].session, actor);
 
     let (events, admissions) = store
         .finalize_resident_stop(&recovered.claim, root, path)
@@ -589,6 +604,14 @@ async fn resident_stop_finalizer_rolls_back_at_each_write_boundary_and_is_exactl
             r#"BEFORE INSERT ON event_log
                WHEN instr(NEW.payload, '"type":"agent_activity_changed"') > 0
                  AND instr(NEW.payload, '"current_task":"resident stopped"') > 0"#,
+        ),
+        (
+            "handoff",
+            r#"BEFORE INSERT ON event_log WHEN instr(NEW.payload, '"type":"handoff_committed"') > 0"#,
+        ),
+        (
+            "archive",
+            r#"BEFORE INSERT ON event_log WHEN instr(NEW.payload, '"type":"agent_archived"') > 0"#,
         ),
         (
             "claim_release",
@@ -659,7 +682,7 @@ async fn resident_stop_finalizer_rolls_back_at_each_write_boundary_and_is_exactl
             .finalize_resident_stop(&fixture.claim, fixture.root, &fixture.handle)
             .await
             .unwrap();
-        assert_eq!(events.len(), 4, "{boundary} retry terminalizes once");
+        assert_eq!(events.len(), 6, "{boundary} retry terminalizes once");
         assert_eq!(admissions.len(), 1);
         assert_eq!(
             events

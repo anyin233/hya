@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use hya_proto::{
-    ActorClaim, Event, MailEndpoint, MailKind, MemberId, ModelRef, RosterStatus, SessionId,
-    WorkflowMemberRole, WorkflowRunId, WorkflowStageStatus,
+    ActorClaim, ArchiveReason, Event, MailEndpoint, MailKind, MemberId, MemberRunStatus, ModelRef,
+    RosterStatus, SessionId, WorkflowMemberRole, WorkflowRunId, WorkflowStageStatus,
 };
 use hya_provider::ReasoningEffort;
 use hya_tool::AgentDef;
@@ -1049,7 +1049,7 @@ fn final_assistant_text(projection: &hya_proto::Projection) -> String {
 }
 
 /// Deliver one resident Stage as durable mail and wait until Projection proves
-/// that exact inbox boundary reached idle or failed.
+/// that exact inbox boundary reached idle or the actor terminated.
 async fn activate_resident_stage(
     engine: Arc<SessionEngine>,
     lead: SessionId,
@@ -1100,6 +1100,39 @@ async fn activate_resident_stage(
     let report = async {
         loop {
             let projection = engine.read_projection(root).await?;
+            if let Some(archived) = projection
+                .team
+                .archived
+                .get(&actor.handle)
+                .filter(|entry| entry.session == actor.session)
+            {
+                let parent = engine.read_projection(lead).await?;
+                let member = parent
+                    .session
+                    .members
+                    .iter()
+                    .find(|row| row.member == actor.member)
+                    .ok_or_else(|| {
+                        CoreError::Invalid(
+                            "archived Workflow actor has no parent member row".into(),
+                        )
+                    })?;
+                return Ok(StageReport {
+                    stage: stage.id().to_string(),
+                    agent: stage.agent().to_string(),
+                    status: if stop_requested {
+                        StageStatus::Cancelled
+                    } else if archived.reason == ArchiveReason::Reported
+                        && member.status == MemberRunStatus::Done
+                    {
+                        StageStatus::Done
+                    } else {
+                        StageStatus::Failed
+                    },
+                    session: Some(actor.session.to_string()),
+                    output: clamp(member.summary.clone()),
+                });
+            }
             if let Some(entry) = projection.team.roster.get(&actor.handle)
                 && entry.resident_cursor >= boundary
                 && entry.resident_work.is_none()

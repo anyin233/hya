@@ -2395,25 +2395,23 @@ async fn explicit_idle_resident_stop_is_final_idempotent_and_releases_claim() {
     );
 
     let projection = engine.read_projection(root).await.unwrap();
-    let entry = projection.team.roster.get(handle.as_str()).unwrap();
-    assert_eq!(entry.status, RosterStatus::Failed);
-    assert_eq!(entry.current_task.as_deref(), Some("resident stopped"));
+    assert!(!projection.team.roster.contains_key(handle.as_str()));
+    assert_eq!(projection.team.archived[handle.as_str()].session, child);
     assert!(supervisor.team_cancel(root).is_none());
 
     let error = engine
-        .mail_send(
+        .store()
+        .append_direct_mail(
             root,
-            MailEndpoint::Handle(handle.clone()),
+            "main".into(),
+            handle.clone(),
             MailKind::Message,
             "after stop".to_string(),
+            None,
         )
         .await
         .expect_err("stopped resident must reject new mail");
-    assert!(matches!(
-        error,
-        CoreError::Store(hya_store::StoreError::MailboxRejected(message))
-            if message.contains("stopped") || message.contains("terminal")
-    ));
+    assert!(matches!(error, hya_store::StoreError::MailboxRejected(_)));
 }
 
 #[tokio::test]
@@ -2649,12 +2647,7 @@ async fn failed_running_stop_cleanup_cannot_become_ok_after_team_kill() {
     ));
 
     engine
-        .mail_send(
-            root,
-            MailEndpoint::Channel("trip".to_string()),
-            MailKind::Message,
-            "budget trip".to_string(),
-        )
+        .mail_announce(root, "budget trip".to_string())
         .await
         .unwrap();
     terminated.notified().await;
@@ -2678,9 +2671,8 @@ async fn failed_running_stop_cleanup_cannot_become_ok_after_team_kill() {
             .contains(&child)
     );
     let projection = engine.read_projection(root).await.unwrap();
-    let entry = projection.team.roster.get(handle.as_str()).unwrap();
-    assert_eq!(entry.status, RosterStatus::Failed);
-    assert_eq!(entry.current_task.as_deref(), Some("resident stopped"));
+    assert!(!projection.team.roster.contains_key(handle.as_str()));
+    assert_eq!(projection.team.archived[handle.as_str()].session, child);
     let stop_events = engine
         .store()
         .replay(root)
@@ -3220,11 +3212,22 @@ async fn resident_direct_send_committed_before_stop_is_durably_cancelled() {
     ));
 
     let projection = primary.read_projection(root).await.unwrap();
-    let entry = projection.team.roster.get(handle.as_str()).unwrap();
-    assert_eq!(entry.status, RosterStatus::Failed);
+    assert!(!projection.team.roster.contains_key(handle.as_str()));
+    assert_eq!(projection.team.archived[handle.as_str()].session, child);
     let inbox_len = projection.team.inboxes.get(&handle).map_or(0, Vec::len);
     assert_eq!(inbox_len, 1);
-    assert_eq!(entry.resident_cursor, inbox_len as u64);
+    let mut before_archive = hya_proto::Projection::default();
+    for envelope in primary.replay(root).await.unwrap() {
+        if matches!(&envelope.event, Event::AgentArchived { handle: archived, .. } if archived == &handle)
+        {
+            break;
+        }
+        before_archive.apply(&envelope);
+    }
+    assert_eq!(
+        before_archive.team.roster[&handle].resident_cursor,
+        inbox_len as u64
+    );
 }
 
 #[tokio::test]
@@ -3342,13 +3345,19 @@ async fn message_budget_kill_terminates_sidecar_and_removes_resident_slot() {
             .contains(&child)
     );
     let projection = engine.read_projection(root).await.unwrap();
-    let entry = projection.team.roster.get(handle.as_str()).unwrap();
-    assert_eq!(entry.status, RosterStatus::Failed);
+    assert!(!projection.team.roster.contains_key(handle.as_str()));
+    assert_eq!(projection.team.archived[handle.as_str()].session, child);
     assert!(
-        entry
-            .current_task
-            .as_deref()
-            .is_some_and(|task| task.contains("message budget exceeded"))
+        engine
+            .replay(root)
+            .await
+            .unwrap()
+            .iter()
+            .any(|envelope| matches!(
+                &envelope.event,
+                Event::AgentActivityChanged { handle: event_handle, current_task: Some(task), .. }
+                if event_handle == &handle && task.contains("message budget exceeded")
+            ))
     );
     assert!(supervisor.team_cancel(root).is_none());
 }
@@ -3892,8 +3901,8 @@ async fn explicit_running_resident_stop_is_idempotent_fences_and_drops_queued_ma
     assert!(supervisor.team_cancel(root).is_none());
 
     let projection = engine.read_projection(root).await.unwrap();
-    let entry = projection.team.roster.get(handle.as_str()).unwrap();
-    assert_eq!(entry.status, RosterStatus::Failed);
+    assert!(!projection.team.roster.contains_key(handle.as_str()));
+    assert_eq!(projection.team.archived[handle.as_str()].session, child);
     let child_projection = engine.read_projection(child).await.unwrap();
     assert!(!child_projection.session.messages.iter().any(|message| {
         message.parts.iter().any(|part| {
@@ -3909,19 +3918,18 @@ async fn explicit_running_resident_stop_is_idempotent_fences_and_drops_queued_ma
     );
 
     let error = engine
-        .mail_send(
+        .store()
+        .append_direct_mail(
             root,
-            MailEndpoint::Handle(handle.clone()),
+            "main".into(),
+            handle.clone(),
             MailKind::Message,
             "after stop".to_string(),
+            None,
         )
         .await
         .expect_err("stopped resident must reject new mail");
-    assert!(matches!(
-        error,
-        CoreError::Store(hya_store::StoreError::MailboxRejected(message))
-            if message.contains("stopped") || message.contains("terminal")
-    ));
+    assert!(matches!(error, hya_store::StoreError::MailboxRejected(_)));
 }
 
 #[tokio::test]
@@ -4032,17 +4040,19 @@ async fn resident_replacement_declaration_drift_disables_once_and_releases_claim
     assert!(supervisor.team_cancel(root).is_none());
 
     let third = engine
-        .mail_send(
+        .store()
+        .append_direct_mail(
             root,
-            MailEndpoint::Handle(handle.clone()),
+            "main".into(),
+            handle.clone(),
             MailKind::Message,
             "resident declaration drift third".to_string(),
+            None,
         )
         .await;
     assert!(matches!(
         third,
-        Err(CoreError::Store(hya_store::StoreError::MailboxRejected(message)))
-            if message.contains("stopped") || message.contains("terminal")
+        Err(hya_store::StoreError::MailboxRejected(_))
     ));
     assert_eq!(starts.load(Ordering::SeqCst), 2);
     let child_projection = engine.read_projection(child).await.unwrap();
@@ -5578,19 +5588,18 @@ async fn resident_running_loss_terminate_failure_disables_and_releases_claim() {
     assert!(supervisor.team_cancel(root).is_none());
 
     let error = engine
-        .mail_send(
+        .store()
+        .append_direct_mail(
             root,
-            MailEndpoint::Handle(handle),
+            "main".into(),
+            handle,
             MailKind::Message,
             "after terminate failure".to_string(),
+            None,
         )
         .await
         .expect_err("disabled resident must reject new mail");
-    assert!(matches!(
-        error,
-        CoreError::Store(hya_store::StoreError::MailboxRejected(message))
-            if message.contains("stopped") || message.contains("terminal")
-    ));
+    assert!(matches!(error, hya_store::StoreError::MailboxRejected(_)));
 }
 
 #[tokio::test]

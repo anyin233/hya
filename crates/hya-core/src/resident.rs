@@ -43,9 +43,9 @@ use std::time::{Duration, Instant};
 
 use hya_bundle::{ChannelCapability, ChannelParticipantRole, ChannelTemplateKind};
 use hya_proto::{
-    ActorClaim, ActorEpoch, ArchiveReason, ChannelKind, Event, FinishCause, MailEndpoint, MailKind,
-    MemberId, MemberRunStatus, ModelRef, OwnerRunId, ReportOutcome, RosterStatus, SessionId,
-    SubagentMode, ToolCallId, scope,
+    ActorClaim, ActorEpoch, ArchiveReason, ChannelKind, Event, FinishCause, MailEndpoint, MemberId,
+    MemberRunStatus, ModelRef, OwnerRunId, ReportOutcome, RosterStatus, SessionId, SubagentMode,
+    ToolCallId, scope,
 };
 use hya_tool::{AgentDef, ArchiveReceipt, ResolvedTool};
 use tokio::sync::{Notify, oneshot};
@@ -2088,14 +2088,6 @@ async fn resident_task(team: Arc<TeamActor>, session: SessionId, notify: Arc<Not
                             // report — degraded handoff, archive, exit. The
                             // parent can revive with the handoff context.
                             let reason = format!("turn error: {err}");
-                            let _ = team
-                                .record_activity(
-                                    claim.as_ref(),
-                                    handle.clone(),
-                                    RosterStatus::Failed,
-                                    Some(reason.clone()),
-                                )
-                                .await;
                             let _ = archive_reported_agent(
                                 &team.engine,
                                 team.root,
@@ -2209,10 +2201,8 @@ pub struct ResidentSupervisor {
     wait_stalls: Mutex<HashMap<(SessionId, SessionId), Option<hya_proto::MessageId>>>,
 }
 
-/// The shared terminal sequence (ADR-0015): handoff → report marker on the
-/// parent log → report mail (child still live, so the scope gate accepts it)
-/// → claim release → archive marker. Ordered so nothing can be lost; the
-/// caller owns the gate and the slot teardown.
+/// Prepare a handoff, then commit report/mail/archive and claim release in
+/// one fenced store transaction. The caller owns slot teardown.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn archive_reported_agent(
     engine: &SessionEngine,
@@ -2237,113 +2227,42 @@ pub(crate) async fn archive_reported_agent(
         .await?
         .ok_or(CoreError::Cancelled)?;
     let projection = engine.read_projection(root).await?;
-
-    // 1. Terminal handoff (never fails; degrades deterministically). Force-
-    //    degraded paths (kill, budget) never wait on a model call.
+    let expected_work = projection
+        .team
+        .roster
+        .get(canonical)
+        .map(|entry| (entry.resident_cursor, entry.resident_work));
     let handoff = if force_degraded {
         engine.degraded_terminal_handoff(child).await
     } else {
         engine.terminal_handoff_claimed(child).await
     };
-    engine
-        .emit_for_actor(
-            None,
-            child,
-            Event::HandoffCommitted {
-                session: child,
-                handle: canonical.to_string(),
-                generation: handoff.generation,
-                doc: handoff.doc.clone(),
-                degraded: handoff.degraded,
-            },
-        )
-        .await?;
 
-    // 2. Report marker on the PARENT log (member row goes terminal).
-    let parent_path = scope::parent_path(canonical).unwrap_or(scope::ROOT_HANDLE);
-    let parent_session = projection
-        .team
-        .roster
-        .get(parent_path)
-        .map_or(root, |entry| entry.session);
-    let parent_projection = engine.read_projection(parent_session).await?;
-    let member = parent_projection
-        .session
-        .members
-        .iter()
-        .find(|row| row.child == Some(child))
-        .map_or_else(MemberId::new, |row| row.member);
-    engine
-        .emit_for_actor(
-            None,
-            parent_session,
-            Event::SubagentReported {
-                session: parent_session,
-                member,
-                child,
-                handle: canonical.to_string(),
-                outcome,
-                report: report.clone(),
-            },
-        )
-        .await?;
-
-    // 3. Report mail to the parent on the pair's persistent DM channel —
-    //    while the child is still on the roster, so the scope gate accepts
-    //    the send and the wake fans out to the parent.
-    let dm_channel = projection
-        .team
-        .channels
-        .iter()
-        .find(|(_, channel)| {
-            channel.kind == ChannelKind::Dm
-                && channel.members.contains(canonical)
-                && channel.members.contains(parent_path)
-        })
-        .map(|(key, _)| key.clone())
-        .unwrap_or_else(|| parent_path.to_string());
-    engine
-        .mail_send_for_actor(
-            child,
-            MailEndpoint::Channel(dm_channel),
-            MailKind::Message,
-            report,
+    let finalized = engine
+        .store()
+        .finalize_resident_archive(
             claim,
-        )
-        .await?;
-
-    // 4. Durable claim release FIRST — its store-side registration check
-    //    requires the roster row to still exist, and its terminal activity
-    //    event lands on a row the next marker removes.
-    if let Some(claim) = claim {
-        engine
-            .store()
-            .finalize_resident_stop(claim, root, canonical)
-            .await?;
-    }
-
-    // 5. The archive marker: sole exit from the live roster.
-    engine
-        .emit_for_actor(
-            None,
             root,
-            Event::AgentArchived {
-                session: root,
-                handle: canonical.to_string(),
-                child,
+            canonical,
+            hya_store::ResidentArchive {
+                actor: child,
+                generation: handoff.generation,
+                doc: handoff.doc,
+                degraded: handoff.degraded,
                 reason,
+                note: report.clone(),
+                report: Some((outcome, report)),
+                check_gate: !force_degraded,
+                expected_work,
             },
+            FinishCause::UserCancel,
         )
         .await?;
+    engine.publish_resident_finalization(finalized);
     Ok(())
 }
 
-/// The stop-and-archive terminal sequence (the `archive` tool and a
-/// graceful drain): degraded handoff → the member row on the parent log goes
-/// `cancelled` → claim release → archive marker. Unlike a report there is no
-/// report marker and no mail to the parent: the archiver already knows, and a
-/// drain has nobody left to read it. The caller has stopped the member's turn
-/// and owns the slot teardown.
+/// Explicit stop uses the same terminal transaction without parent report mail.
 pub(crate) async fn archive_stopped_agent(
     engine: &SessionEngine,
     root: SessionId,
@@ -2358,70 +2277,34 @@ pub(crate) async fn archive_stopped_agent(
             "the team lead is never archived".to_string(),
         ));
     }
-    let projection = engine.read_projection_shared(root).await?;
     let handoff = engine.degraded_terminal_handoff(child).await;
-    engine
-        .emit_for_actor(
-            None,
-            child,
-            Event::HandoffCommitted {
-                session: child,
-                handle: canonical.to_string(),
+
+    let cause = if reason == ArchiveReason::Shutdown {
+        FinishCause::Shutdown
+    } else {
+        FinishCause::Archived
+    };
+    let finalized = engine
+        .store()
+        .finalize_resident_archive(
+            claim,
+            root,
+            canonical,
+            hya_store::ResidentArchive {
+                actor: child,
                 generation: handoff.generation,
                 doc: handoff.doc,
                 degraded: handoff.degraded,
-            },
-        )
-        .await?;
-    let parent_path = scope::parent_path(canonical).unwrap_or(scope::ROOT_HANDLE);
-    let parent_session = projection
-        .team
-        .roster
-        .get(parent_path)
-        .map_or(root, |entry| entry.session);
-    let parent_projection = engine.read_projection_shared(parent_session).await?;
-    for row in &parent_projection.session.members {
-        if row.child == Some(child)
-            && matches!(
-                row.status,
-                MemberRunStatus::Spawning | MemberRunStatus::Running
-            )
-        {
-            engine
-                .record_member_finished(
-                    parent_session,
-                    row.member,
-                    MemberRunStatus::Cancelled,
-                    note.to_string(),
-                    Some(child),
-                )
-                .await?;
-        }
-    }
-    if let Some(claim) = claim {
-        let cause = if reason == ArchiveReason::Shutdown {
-            FinishCause::Shutdown
-        } else {
-            FinishCause::Archived
-        };
-        let finalized = engine
-            .store()
-            .finalize_resident_stop_with_cause(claim, root, canonical, cause)
-            .await?;
-        engine.publish_resident_finalization(finalized);
-    }
-    engine
-        .emit_for_actor(
-            None,
-            root,
-            Event::AgentArchived {
-                session: root,
-                handle: canonical.to_string(),
-                child,
                 reason,
+                note: note.into(),
+                report: None,
+                check_gate: false,
+                expected_work: None,
             },
+            cause,
         )
         .await?;
+    engine.publish_resident_finalization(finalized);
     Ok(())
 }
 
@@ -2715,6 +2598,15 @@ impl TurnBoundaryObserver for ResidentSupervisor {
 /// supervisor is the engine's [`ArchiveReviver`].
 #[async_trait::async_trait]
 impl ArchiveReviver for ResidentSupervisor {
+    fn resident_claim(&self, root: SessionId, child: SessionId) -> Option<ActorClaim> {
+        self.teams().get(&root).and_then(|team| {
+            team.lock()
+                .residents
+                .get(&child)
+                .and_then(|slot| slot.claim)
+        })
+    }
+
     async fn revive(
         &self,
         root: SessionId,
@@ -2907,7 +2799,14 @@ impl ResidentSupervisor {
 
     /// Get or create the team actor for `root`, sharing the team-wide cancellation.
     fn team_for(&self, root: SessionId) -> Arc<TeamActor> {
-        self.teams()
+        let mut teams = self.teams();
+        if teams.get(&root).is_some_and(|team| {
+            let state = team.lock();
+            state.killed && state.residents.is_empty()
+        }) {
+            teams.remove(&root);
+        }
+        teams
             .entry(root)
             .or_insert_with(|| {
                 Arc::new(TeamActor {
@@ -3154,6 +3053,9 @@ impl ResidentSupervisor {
         handle: &str,
     ) -> Result<(), CoreError> {
         let projection = self.engine.read_projection(root).await?;
+        if projection.team.archived.contains_key(handle) {
+            return Ok(());
+        }
         let Some(entry) = projection.team.roster.get(handle) else {
             return Err(CoreError::Invalid(format!("unknown resident `{handle}`")));
         };
@@ -3196,13 +3098,9 @@ impl ResidentSupervisor {
 
     /// Terminal report + immediate archive (ADR-0015).
     ///
-    /// The gate is checked against durable projection truth (inbox drained ∧
-    /// no live children) and the sequence is ordered so nothing can be lost:
-    /// handoff → report marker on the parent log → report mail (child still
-    /// live, so the scope gate accepts it) → archive marker → claim release →
-    /// slot teardown. Only the model-issued path calls this directly; the
-    /// `report` tool performs the same gate check at call time and routes the
-    /// archive here after its turn ends.
+    /// The precheck provides prompt feedback; the store rechecks the gate after
+    /// handoff preparation and commits all terminal effects before publication.
+    /// The caller then tears down the live slot.
     ///
     /// # Errors
     /// Returns [`CoreError::Invalid`] for every gate failure (not live, main

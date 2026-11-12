@@ -407,8 +407,7 @@ team budget before its first assistant turn, the terminal transaction writes a
 nonempty cancelled assistant answer. For example, archiving `inspect the parser`
 then reviving with `inspect the tests instead` retains the old task as cancelled
 history rather than an open directive. This uses existing message events; it
-does not introduce an episode model or combine the remaining archive/revive
-transactions.
+does not introduce an episode model or change the revive transaction.
 
 Store contract: `commit_resident_registration(actor_id: SessionId,
 owner_run_id: OwnerRunId, parent_claim: Option<&ActorClaim>, events: Vec<Event>)`
@@ -432,3 +431,34 @@ model preference and category resolution. Adding or refreshing a provider needs
 no supervisor restart. For example, after adding a provider and saving its model
 as an Agent default, the next `task` request for that Agent uses that model.
 The `task` request schema and response handles above are unchanged.
+
+## Atomic Resident Termination
+
+Resident report, stop, turn error, budget kill and sidecar startup failure use
+one store terminal transition. It fences the claim, checks the handoff generation
+and expected resident cursor/work, and for voluntary reports rechecks unread mail
+and live children under the SQLite writer reservation. Mail arriving during
+handoff generation refuses the report archive; the member remains live and can
+read that mail before reporting again.
+
+`finalize_resident_archive(claim: Option<&ActorClaim>, root: SessionId, handle: &str,
+archive: ResidentArchive, cause: FinishCause)` returns committed envelopes and
+released admission records. `ResidentArchive` carries `actor: SessionId`, `generation: u32`,
+`doc: String`, `degraded: bool`, `reason: ArchiveReason`, `note: String`,
+`report: Option<(ReportOutcome, String)>`, `check_gate: bool`, and
+`expected_work: Option<(u64, Option<ResidentWorkProjection>)>`. Handoff, optional
+parent report/mail, cancellation cleanup, terminal activity, archive marker and
+claim release commit together. When no process owns the actor, temporary claim
+acquisition also happens inside this transaction. `publish_resident_finalization` publishes and
+refunds only after commit. Stop/failure entry points choose terminal reasons and
+use this same transaction, including cancellation of unstarted directives.
+
+For example, after a budget kill, send a new directive to the archived child to
+revive it through the existing mail revival path. An empty killed team gets a
+fresh cancellation token on its next activation. Revival still retains the
+existing transcript; bounded episode context is separate work.
+
+Root teardown obtains its owned capability through
+`ArchiveReviver::resident_claim(root: SessionId, child: SessionId) -> Option<ActorClaim>`.
+The supervisor returns the slot's claim; an unsupervised, already-claimed actor
+is refused rather than taken over by an ordinary archive.

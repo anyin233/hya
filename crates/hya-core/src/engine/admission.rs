@@ -304,12 +304,15 @@ impl SessionEngine {
         paths.sort_by_key(|path| std::cmp::Reverse(path.len()));
         for path in paths {
             let child = projection.team.roster[path].session;
+            let claim = self
+                .archive_reviver()
+                .and_then(|reviver| reviver.resident_claim(root, child));
             crate::resident::archive_reported_agent(
                 self,
                 root,
                 path,
                 child,
-                None,
+                claim.as_ref(),
                 hya_proto::ReportOutcome::Failed,
                 "root turn teardown".to_string(),
                 hya_proto::ArchiveReason::RootTeardown,

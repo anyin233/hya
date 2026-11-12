@@ -541,6 +541,11 @@ pub trait ArchiveReviver: Send + Sync {
     /// before this is called.
     async fn teardown_root(&self, root: SessionId) -> Result<(), CoreError>;
 
+    /// Current capability for a resident owned by this supervisor.
+    fn resident_claim(&self, _root: SessionId, _child: SessionId) -> Option<ActorClaim> {
+        None
+    }
+
     /// Archive `target` (a handle or session id) on behalf of `caller`, as
     /// the `archive` tool does: cancel its turn, archive live descendants
     /// first, then the target itself.
