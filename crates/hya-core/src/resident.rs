@@ -2395,10 +2395,16 @@ pub(crate) async fn archive_stopped_agent(
         }
     }
     if let Some(claim) = claim {
-        engine
+        let cause = if reason == ArchiveReason::Shutdown {
+            FinishCause::Shutdown
+        } else {
+            FinishCause::Archived
+        };
+        let finalized = engine
             .store()
-            .finalize_resident_stop(claim, root, canonical)
+            .finalize_resident_stop_with_cause(claim, root, canonical, cause)
             .await?;
+        engine.publish_resident_finalization(finalized);
     }
     engine
         .emit_for_actor(
@@ -4038,28 +4044,12 @@ impl ResidentSupervisor {
                 resources,
             } => (binding, Some(agents), Some(resources)),
         };
-        self.engine
-            .capture_session_bundle_hooks(session, &binding, agent.name.as_str())
-            .await;
         let handle = scope::join_path(&parent_path, &leaf);
-        // ADR-0016 channel plane: resolve (or mint) the unit's group channel
-        // and mint the pair's persistent DM channel. Both are event facts
-        // committed in the same registration transaction.
+        // The store resolves the unit's group channel under the writer lock;
+        // simultaneous first siblings must join the same broadcast channel.
         let projection = self.engine.read_projection(root).await?;
-        let group_channel = projection
-            .team
-            .channels
-            .iter()
-            .find(|(_, channel)| {
-                channel.kind == ChannelKind::Group
-                    && channel.unit.as_deref() == Some(parent_path.as_str())
-            })
-            .map(|(key, _)| key.clone())
-            .unwrap_or_else(|| hya_proto::mint_channel_id(ChannelKind::Group));
+        let group_channel = hya_proto::mint_channel_id(ChannelKind::Group);
         let dm_channel = hya_proto::mint_channel_id(ChannelKind::Dm);
-        let created = events
-            .iter()
-            .any(|event| matches!(event, Event::SessionCreated { .. }));
         events.extend([
             Event::AgentRegistered {
                 session: root,
@@ -4092,11 +4082,7 @@ impl ResidentSupervisor {
         let initial = initial.filter(|text| !text.trim().is_empty());
         let has_initial = initial.is_some();
         if let Some(text) = initial {
-            events.extend(
-                self.engine
-                    .prepare_initial_resident_prompt(session, text, &binding, agent.name.as_str())
-                    .await?,
-            );
+            events.extend(self.engine.prepare_initial_resident_prompt(session, text));
         }
         let channel_policy =
             ChannelPolicy::from_binding(&binding)?.snapshot_for(agent.name.as_str());
@@ -4105,31 +4091,17 @@ impl ResidentSupervisor {
             .store()
             .commit_resident_registration(session, self.owner_run_id, parent_claim.as_ref(), events)
             .await?;
-        for envelope in envelopes {
-            self.engine.publish_envelope(envelope);
-        }
         self.engine
             .update_session_channel_policy(session, channel_policy);
-        if created {
-            self.engine.notify_session_start(session).await;
-        }
-        // Notify `agent.spawn` (best-effort observation point) for the
-        // resident member that was just registered under its parent.
         let parent_session = projection
             .team
             .roster
             .get(&parent_path)
             .map_or(root, |entry| entry.session);
-        if let Some(hooks) = self.engine.session_hook_dispatcher(parent_session) {
-            hooks
-                .agent_spawn(AgentSpawnInput {
-                    parent: root,
-                    child: session,
-                })
-                .await;
-        }
         let team = self.team_for(root);
         let notify = Arc::new(Notify::new());
+        let task_binding = binding.clone();
+        let task_agent = agent.name.clone();
         {
             let mut st = team.lock();
             // New work exists (the initial directive), so a later quiescence fires.
@@ -4137,7 +4109,7 @@ impl ResidentSupervisor {
             st.residents.insert(
                 session,
                 SlotState {
-                    handle,
+                    handle: handle.clone(),
                     agent,
                     binding,
                     agents,
@@ -4163,10 +4135,99 @@ impl ResidentSupervisor {
                 },
             );
         }
-        tokio::spawn(resident_task(team.clone(), session, notify.clone()));
-        if has_initial {
-            notify.notify_one();
-        }
+        // No await between commit, slot installation and spawning this owner.
+        // Dropping the caller during a plugin RPC cannot strand the child.
+        let (ready, initialized) = oneshot::channel();
+        tokio::spawn(async move {
+            let result =
+                async {
+                    let created = envelopes.iter().any(|envelope| matches!(
+                    envelope.event, Event::SessionCreated { session: id, .. } if id == session
+                ));
+                    let initial = envelopes.iter().find_map(|envelope| match &envelope.event {
+                        Event::TextDelta {
+                            session: id,
+                            message,
+                            part,
+                            delta,
+                        } if *id == session => Some((*message, *part, delta.clone())),
+                        _ => None,
+                    });
+                    if created {
+                        team.engine.notify_session_start(session).await;
+                    }
+                    team.engine
+                        .capture_session_bundle_hooks(session, &task_binding, task_agent.as_str())
+                        .await;
+                    for envelope in envelopes {
+                        team.engine.publish_envelope(envelope);
+                    }
+                    if let Some((message, part, original)) = initial {
+                        let text = team
+                            .engine
+                            .user_text_after_hooks(
+                                &task_binding,
+                                task_agent.as_str(),
+                                session,
+                                original.clone(),
+                            )
+                            .await;
+                        if text != original {
+                            team.engine
+                                .commit_resident_mutation(
+                                    &claim,
+                                    session,
+                                    vec![Event::TextReplace {
+                                        session,
+                                        message,
+                                        part,
+                                        text,
+                                    }],
+                                )
+                                .await?;
+                        }
+                    }
+                    Ok::<(), CoreError>(())
+                }
+                .await;
+            if let Err(error) = result {
+                let reason = format!("resident initialization failed: {error}");
+                let finalized = team
+                    .engine
+                    .finalize_resident_failure(&claim, root, &handle, &reason)
+                    .await;
+                let _ = ready.send(Err(error));
+                if finalized.is_ok() {
+                    let _ = team.remove_slot(session);
+                    return;
+                }
+                if let Some(slot) = team.lock().residents.get_mut(&session)
+                    && slot.claim == Some(claim)
+                {
+                    slot.archiving = true;
+                }
+            } else {
+                if let Some(hooks) = team.engine.session_hook_dispatcher(parent_session) {
+                    hooks
+                        .agent_spawn(AgentSpawnInput {
+                            parent: root,
+                            child: session,
+                        })
+                        .await;
+                }
+                let _ = ready.send(Ok(()));
+            }
+            // Yield lets a successful caller observe the armed registration
+            // before its first turn; the driver survives a dropped receiver.
+            tokio::task::yield_now().await;
+            if has_initial {
+                notify.notify_one();
+            }
+            resident_task(team, session, notify).await;
+        });
+        initialized
+            .await
+            .map_err(|_| CoreError::Invalid("resident initialization task exited".into()))??;
         Ok(())
     }
 

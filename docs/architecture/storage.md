@@ -279,6 +279,17 @@ global abort only for non-actor rows, then aborts old actor rows through each
 recovered claim. A logical release recorded during restart never credits the
 new process's empty in-memory governor.
 
+`commit_resident_registration` commits child creation, member/roster/channel
+events, the actor claim and the raw initial user message in one writer
+transaction. `begin_transaction()` uses `BEGIN IMMEDIATE`; group-channel
+lookup-or-create for a unit is performed under that reservation. Hooks and
+envelope publication run after commit. Stop/failure finalization closes an
+unanswered initial directive with a nonempty cancelled assistant answer in the
+same transaction as terminal activity and claim release. The text keeps that
+answer in later model requests, which omit empty assistant messages. See the
+[store signatures and cancellation causes](../spec/backend/database-guidelines.md)
+and [registration usage](../spec/backend/task-tool.md#scenario-atomic-resident-registration-and-arming).
+
 ## Event Log
 
 Schema (`0001`):

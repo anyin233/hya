@@ -44,6 +44,10 @@ use crate::catalog_scope::ScopeKey;
 use crate::hooks::{HookChain, HookDispatcher, SessionLifecycleInput};
 use crate::runtime_registry::{BoundAgentHook, TurnBinding};
 
+#[cfg(test)]
+#[path = "session_hooks_registration_tests.rs"]
+mod registration_tests;
+
 /// Identity of one captured chain entry. The `Weak` pins the allocation
 /// (never the process), so a later dispatcher cannot reuse its address.
 struct CapturedIdentity {

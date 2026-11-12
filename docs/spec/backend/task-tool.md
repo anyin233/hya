@@ -383,11 +383,32 @@ the supervisor and tool reply to become terminal. Replacing the in-flight
 
 A successful `task` spawn commits the child `SessionCreated`, parent's
 `MemberSpawned`, root roster/channel events, actor claim and initial user message
-in one SQLite transaction. The initial prompt passes through message hooks before
-commit. There is no volatile initial-directive queue. For example, spawning a
+in one SQLite transaction. The raw initial prompt is committed before plugin
+calls. There is no volatile initial-directive queue. For example, spawning a
 worker with prompt `inspect the parser` persists that user message before the
 spawn returns; takeover before its first turn sees queued work and executes it.
 Parked registrations omit the initial message and await durable mail as before.
+
+After commit, registration installs the slot and an owned task without awaiting
+a plugin. That task sends global and scoped `session.start` before publishing
+the registration envelopes, then runs `message.user.before`; any rewrite is
+persisted with `TextReplace` before the first turn. Finally it notifies the
+parent's `agent.spawn` hook and starts the resident loop. Dropping the spawning
+future during a hook does not drop this task. A failed registration transaction
+creates no session hook/policy map entry and makes no child plugin call.
+
+Concurrent sibling registrations resolve their unit's group channel under the
+same SQLite writer reservation. A single `announce` therefore reaches every
+registered sibling. For example, a batch of eight first children joins one
+`main` group, with one persistent DM channel per child.
+
+If an armed task is archived, stopped, fails sidecar startup, or is killed by a
+team budget before its first assistant turn, the terminal transaction writes a
+nonempty cancelled assistant answer. For example, archiving `inspect the parser`
+then reviving with `inspect the tests instead` retains the old task as cancelled
+history rather than an open directive. This uses existing message events; it
+does not introduce an episode model or combine the remaining archive/revive
+transactions.
 
 Store contract: `commit_resident_registration(actor_id: SessionId,
 owner_run_id: OwnerRunId, parent_claim: Option<&ActorClaim>, events: Vec<Event>)`
@@ -399,4 +420,7 @@ SessionId, OwnerRunId)` allows claim rows in that caller-owned transaction.
 
 `registered_initial_task_survives_supervisor_loss` covers recovery after
 registration and before the first worker turn. This does not promise replay of
-work that already crossed `ResidentWorkStarted`.
+work that already crossed `ResidentWorkStarted`. The
+`engine::session_hooks::registration_tests` regressions cover stale-parent and
+database rollback, hook ordering, dropped spawns, concurrent announcements, and
+all pre-first-turn stop paths including archive followed by revival.

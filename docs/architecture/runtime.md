@@ -768,6 +768,26 @@ Stage runner). The child path does not query the bundle registry database
 for a generation or bind whichever runtime is current when a queued request
 runs.
 
+Resident registration commits the child, parent member, roster/channels, claim,
+and raw initial user directive together. It then installs the slot and its owned
+task before awaiting plugins. The task sends global and scoped `session.start`,
+publishes the committed registration events, applies `message.user.before`
+rewrites with `TextReplace`, notifies `agent.spawn`, then enters the resident
+loop. Cancelling the spawning future during either hook leaves the owned task
+running. Failed commits produce no child hook calls or captured hook/policy
+entries. Concurrent siblings join one group channel, resolved inside the writer
+transaction, so one `announce` reaches the whole unit.
+
+If the initial directive is cancelled before an assistant turn starts, stop,
+archive, sidecar startup failure, and team-budget termination durably append an
+explicit cancelled assistant answer with the terminal activity and claim
+release. For example, archive `inspect the parser` before it runs, then revive
+with `inspect the tests instead`: the model sees the old task followed by its
+cancellation answer before the new directive. No extra tool arguments are
+needed. See the [task registration contract](../spec/backend/task-tool.md#scenario-atomic-resident-registration-and-arming)
+for the store interface and ordering. The remaining archive/revive transactions
+are unchanged.
+
 ## AgentBundle activation sidecars (0.34.11)
 
 `RuntimeSnapshot` retains the sole `Arc<BundleCatalog>` authority and the

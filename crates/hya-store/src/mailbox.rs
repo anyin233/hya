@@ -1,6 +1,7 @@
 use hya_proto::{
-    ActorClaim, Envelope, Event, MailEndpoint, MailKind, MemberRunStatus, Projection, Role,
-    RosterEntry, RosterStatus, SessionId, SubagentMode, now_millis, scope,
+    ActorClaim, Envelope, Event, FinishCause, FinishReason, MailEndpoint, MailKind,
+    MemberRunStatus, MessageId, PartId, Projection, Role, RosterEntry, RosterStatus, SessionId,
+    SubagentMode, now_millis, scope,
 };
 
 use crate::{
@@ -228,6 +229,7 @@ impl SessionStore {
                     &mut tx,
                     recovered.claim.actor_id,
                     recovery_reason,
+                    FinishCause::Interrupted,
                 )
                 .await?,
             );
@@ -283,12 +285,26 @@ impl SessionStore {
         root: SessionId,
         handle: &str,
     ) -> Result<(Vec<Envelope>, Vec<AdmissionRecord>), StoreError> {
+        self.finalize_resident_stop_with_cause(claim, root, handle, FinishCause::UserCancel)
+            .await
+    }
+
+    /// Stop with the caller's terminal cause, including an unstarted initial
+    /// task in the same transaction as the terminal activity and claim release.
+    pub async fn finalize_resident_stop_with_cause(
+        &self,
+        claim: &ActorClaim,
+        root: SessionId,
+        handle: &str,
+        cause: FinishCause,
+    ) -> Result<(Vec<Envelope>, Vec<AdmissionRecord>), StoreError> {
         self.finalize_resident_with_reason(
             claim,
             root,
             handle,
             "resident stopped",
             MemberRunStatus::Cancelled,
+            cause,
         )
         .await
     }
@@ -305,8 +321,15 @@ impl SessionStore {
         handle: &str,
         reason: &str,
     ) -> Result<(Vec<Envelope>, Vec<AdmissionRecord>), StoreError> {
-        self.finalize_resident_with_reason(claim, root, handle, reason, MemberRunStatus::Failed)
-            .await
+        self.finalize_resident_with_reason(
+            claim,
+            root,
+            handle,
+            reason,
+            MemberRunStatus::Failed,
+            FinishCause::Other,
+        )
+        .await
     }
 
     async fn finalize_resident_with_reason(
@@ -316,6 +339,7 @@ impl SessionStore {
         handle: &str,
         reason: &str,
         member_status: MemberRunStatus,
+        cause: FinishCause,
     ) -> Result<(Vec<Envelope>, Vec<AdmissionRecord>), StoreError> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         if let Err(error) = fence_actor_claim(&mut tx, claim).await {
@@ -350,6 +374,7 @@ impl SessionStore {
             &mut tx,
             claim.actor_id,
             reason,
+            cause,
         )
         .await?;
         envelopes.extend(
@@ -435,9 +460,56 @@ async fn append_resident_effects_in_transaction(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     actor: SessionId,
     reason: &str,
+    cause: FinishCause,
 ) -> Result<Vec<Envelope>, StoreError> {
     let projection = replay_projection(cache, tx, actor).await?;
-    let events = resident_effect_terminal_events(actor, &projection, reason);
+    let mut events = resident_effect_terminal_events(actor, &projection, reason);
+    if projection
+        .session
+        .messages
+        .last()
+        .is_some_and(|message| message.role == Role::User)
+    {
+        let message = MessageId::new();
+        let part = PartId::new();
+        // Empty assistant messages are omitted from model requests. Keep an
+        // explicit cancellation answer so the old directive is visibly closed.
+        events.extend([
+            Event::MessageStarted {
+                session: actor,
+                message,
+                role: Role::Assistant,
+                agent: None,
+                model: None,
+            },
+            Event::TextStart {
+                session: actor,
+                message,
+                part,
+            },
+            Event::TextDelta {
+                session: actor,
+                message,
+                part,
+                delta: format!(
+                    "Task cancelled before execution: {reason}. Do not execute the preceding task."
+                ),
+            },
+            Event::TextEnd {
+                session: actor,
+                message,
+                part,
+            },
+            Event::MessageFinished {
+                session: actor,
+                message,
+                role: Role::Assistant,
+                finish: FinishReason::Cancelled,
+                tokens: None,
+                cause: Some(cause),
+            },
+        ]);
+    }
     let mut envelopes = Vec::with_capacity(events.len());
     for event in events {
         envelopes.push(append_event_in_transaction(tx, actor, event).await?);
