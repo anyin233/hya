@@ -287,3 +287,16 @@ test("assistant text blocks have a blank row between each output block", () => {
   expect(messageBlockGap(first, second)).toBe(true)
   expect(messageBlockGap(first, { kind: "tool", id: "t", card: { tool: "read", status: "done" as const, summary: "", args: "{}", body: [], output: [] } })).toBe(false)
 })
+
+
+test("a revived episode has a handoff boundary instead of a compaction divider", () => {
+  const store = createAppStore()
+  store.openSession({ id: "child", parent: "root", agent: "hya-task", workdir: "/w" })
+  store.setMessages("child", [summary("handoff", "PRIOR HANDOFF (generation 3)\nContinue the task."), summary("compact")])
+  const views = transcriptViews(store.state)
+  expect(views.map((view) => view.role)).toEqual(["divider", "system", "divider", "system"])
+  expect(views[0]!.blocks[0]).toMatchObject({ text: "resumed from handoff (generation 3)" })
+  expect(views[1]!.compaction).toBeUndefined()
+  expect(views[1]!.blocks[0]).toMatchObject({ text: "PRIOR HANDOFF (generation 3)\nContinue the task." })
+  expect(views[2]!.blocks[0]).toMatchObject({ text: "── context compacted ──" })
+})

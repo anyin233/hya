@@ -55,6 +55,8 @@ export interface PickerAction {
   prompt: "value" | "confirm" | "none"
   /** Confirmation text template for `prompt: "confirm"`; `{label}` is replaced by the row's label. */
   confirmText?: string
+  /** A reason this action is unavailable for the highlighted row. */
+  disabled?: (row: PickerRow) => string | undefined
 }
 
 export type PickerMode = "list" | "rename" | "confirm"
@@ -191,6 +193,8 @@ export function pickerKey(state: PickerState, key: KeyLike): PickerOutcome {
     // A toggle does not need a row (the filter may match none).
     if (action.prompt === "none") return { type: "commit", id: action.id, row: row ?? { id: "", label: "" } }
     if (!row) return { type: "none" }
+    const disabled = action.disabled?.(row)
+    if (disabled) return { type: "update", state: { ...state, hint: disabled } }
     if (action.prompt === "value") {
       return { type: "update", state: { ...state, mode: "rename", actionRow: row.id, actionId: action.id, editValue: row.name ?? row.label } }
     }

@@ -112,7 +112,9 @@ async function openSessionsPicker(context: CommandContext, showArchived = true):
     // terminals are common (`min(96, 80 - 4) - 4 = 72`).
     // Enter-to-open is left implicit to make room for F3.
     hint: `F2 rename · Ctrl+D del · Ctrl+A ${showArchived ? "hides" : "shows"} archived · F3 all · Esc closes`,
-    actions: sessionPickerActions,
+    actions: sessionPickerActions.map((action) => action.id === "delete"
+      ? { ...action, disabled: (row) => sessions.find((session) => session.id === row.id)?.parent ? "Archive the subagent or delete the root" : undefined }
+      : action),
     onSelect: async (row) => {
       if (row.id === "__new__") { await actions.newSession(); return }
       if (archived.has(row.id)) { await actions.resume(row.id); return }
@@ -137,6 +139,10 @@ async function openSessionsPicker(context: CommandContext, showArchived = true):
         store.setStatus(`Renamed to ${title}`)
         await openSessionsPicker(context, showArchived)
       } else if (id === "delete") {
+        if (sessions.find((session) => session.id === row.id)?.parent) {
+          store.setStatus("Archive the subagent or delete the root")
+          return
+        }
         await actions.deleteSession(row.id)
         const wasOpen = store.state.selected?.id === row.id
         await actions.refresh()
