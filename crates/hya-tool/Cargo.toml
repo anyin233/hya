@@ -33,3 +33,13 @@ hya-todo-tools = { workspace = true }
 hya-extended-tools = { workspace = true }
 hya-channel-tools = { workspace = true }
 hya-network-tools = { workspace = true }
+
+[[example]]
+name = "replacement_tools"
+path = "tests/fixtures/replacement_tools.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "wrong_abi_tools"
+path = "tests/fixtures/wrong_abi_tools.rs"
+crate-type = ["cdylib"]
