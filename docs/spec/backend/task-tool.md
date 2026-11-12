@@ -552,8 +552,15 @@ schemas above. A dropped caller never cancels the ending. A failed terminal writ
 removes the episode, returns its error to archive waiters and leaves an orphan;
 a later archive reconciles it with Takeover under the registration lock.
 
-Direct user prompts and turns on a live resident return `CoreError::Invalid`
-telling the caller to steer the subagent with mail. For example, send new work
-with `send({"to":"main/hya-task-scout","body":"review the tests"})` instead of
-starting a turn on its child session id. Empty or duplicate mail notifications
+Direct user prompts and turns on any registered team member, live or archived,
+return `CoreError::Invalid` telling the caller to steer the subagent with mail.
+For example, send new work
+with `send({"channel":"main/hya-task-scout","body":"review the tests"})` instead of
+starting a turn on its child session id. Model/agent switches and revert/unrevert
+are refused too; forks remain independent roots and leave the member unchanged.
+HTTP refusals are `400 invalid_argument`; gRPC returns `INVALID_ARGUMENT`, both
+with the mail guidance. Root/main sessions, never-registered sessions, restore
+prompts and internal bound Workflow entry points remain allowed. See
+[the client mutation contract](../../architecture/subagent-orchestration.md)
+for the admission predicate and API routes. Empty or duplicate mail notifications
 never cause a provider request without a directive, unread mail or synthesis.
