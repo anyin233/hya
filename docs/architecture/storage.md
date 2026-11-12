@@ -3,6 +3,32 @@
 The storage layer lives in [`../../crates/hya-store`](../../crates/hya-store)
 and persists canonical Events plus narrow auxiliary control state in SQLite.
 
+## Event append transactions
+
+`SessionStore::append_events(session: SessionId, events: Vec<Event>)` consumes
+an ordered batch and returns `Result<Vec<Envelope>, StoreError>` after one
+transaction commits. Ordinary user messages append their existing five events
+in one batch. Completed text boundaries batch `TextStart`, `TextReplace`, and
+`TextEnd`; completed reasoning boundaries batch `ReasoningReplace` and
+`ReasoningEnd` (the reasoning start remains durable when received).
+Live stream deltas and event ordering are unchanged.
+
+All event append paths use
+`append_event_in_transaction(&mut Transaction<Sqlite>, SessionId, Event)`:
+the sole row writer serializes the event, inserts `event_log`, updates its
+materialized indexes, and returns `Result<Envelope, StoreError>`.
+`SessionStore::begin_transaction()` returns a transaction for composing that
+writer with auxiliary rows. For example, begin a transaction, append an event,
+write its auxiliary row using the same transaction, then commit and publish the
+returned envelope. Never publish before commit; dropping or rolling back the
+transaction discards both writes.
+
+Resident batches validate the actor claim within the transaction; attachment
+batches store their blobs within it. Both consume `Vec<Event>` and return
+committed envelopes. Restart cancellation and its pending resume row reuse the
+same row writer. The engine publishes committed batches through
+`publish_envelope`, including hooks and live subscribers.
+
 ## Connections
 
 `SessionStore::connect(path)` opens a file-backed SQLite database with:

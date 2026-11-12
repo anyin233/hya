@@ -1653,12 +1653,26 @@ impl SessionEngine {
     }
 
     async fn emit(&self, session: SessionId, event: Event) -> Result<(), CoreError> {
-        let (seq, ts_millis) = self.store.append_event(session, &event).await?;
-        self.publish_envelope(Envelope {
-            seq,
-            ts_millis,
-            event,
-        });
+        self.emit_batch_for_actor(None, session, vec![event]).await
+    }
+
+    async fn emit_batch_for_actor(
+        &self,
+        actor_claim: Option<&ActorClaim>,
+        session: SessionId,
+        events: Vec<Event>,
+    ) -> Result<(), CoreError> {
+        let envelopes = match actor_claim {
+            Some(claim) => {
+                self.store
+                    .commit_resident_mutation(claim, session, events)
+                    .await?
+            }
+            None => self.store.append_events(session, events).await?,
+        };
+        for envelope in envelopes {
+            self.publish_envelope(envelope);
+        }
         Ok(())
     }
 
@@ -1723,14 +1737,8 @@ impl SessionEngine {
         session: SessionId,
         events: Vec<Event>,
     ) -> Result<(), CoreError> {
-        let envelopes = self
-            .store
-            .commit_resident_mutation(claim, session, &events)
-            .await?;
-        for envelope in envelopes {
-            self.publish_envelope(envelope);
-        }
-        Ok(())
+        self.emit_batch_for_actor(Some(claim), session, events)
+            .await
     }
 
     fn publish_live(&self, event: Event) {
