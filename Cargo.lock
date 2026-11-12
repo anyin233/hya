@@ -1261,6 +1261,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "hya-core",
+ "hya-mcp",
  "hya-proto",
  "hya-provider",
  "hya-tool",
