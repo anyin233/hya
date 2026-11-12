@@ -1033,22 +1033,19 @@ impl SessionEngine {
                     sidecar_hooks,
                 }),
             };
-            match sidecar_loss {
-                Some(loss_token) => {
-                    tokio::select! {
-                        biased;
-                        _ = cancel.cancelled() => Ok(FinishReason::Cancelled),
-                        _ = loss_token.cancelled() => Err(CoreError::Cancelled),
-                        outcome = Box::pin(self.run_turn_rounds(session, message, &agent, execution)) => outcome,
+            let mut rounds = Box::pin(self.run_turn_rounds(session, message, &agent, execution));
+            if let Some(loss_token) = sidecar_loss {
+                tokio::select! {
+                    biased;
+                    () = loss_token.cancelled() => {
+                        cancel.cancel();
+                        rounds.await?;
+                        Err(CoreError::Cancelled)
                     }
+                    outcome = &mut rounds => outcome,
                 }
-                None => {
-                    tokio::select! {
-                        biased;
-                        _ = cancel.cancelled() => Ok(FinishReason::Cancelled),
-                        outcome = Box::pin(self.run_turn_rounds(session, message, &agent, execution)) => outcome,
-                    }
-                }
+            } else {
+                rounds.await
             }
         };
         let outcome = if apply_default_overlays {
@@ -1834,32 +1831,39 @@ impl SessionEngine {
             let mut round_retries = 0;
             let stream_round = loop {
                 self.validate_actor_claim(actor_claim).await?;
-                let (stream, served_model) = if let Some(route) = workflow_route {
-                    match self
-                        .stream_with_workflow_route(request.clone(), session, message, route)
-                        .await
-                    {
-                        Ok(opened) => opened,
-                        Err(error) => {
-                            if let Some(route) = workflow_route {
-                                route
-                                    .finalize(Some(workflow_provider_failure_class(&error)))
-                                    .await?;
+                let open_stream = async {
+                    Ok::<_, CoreError>(if let Some(route) = workflow_route {
+                        match self
+                            .stream_with_workflow_route(request.clone(), session, message, route)
+                            .await
+                        {
+                            Ok(opened) => opened,
+                            Err(error) => {
+                                if let Some(route) = workflow_route {
+                                    route
+                                        .finalize(Some(workflow_provider_failure_class(&error)))
+                                        .await?;
+                                }
+                                return Err(error.into());
                             }
-                            return Err(error.into());
                         }
-                    }
-                } else {
-                    self.stream_with_model_fallback(
-                        request.clone(),
-                        session,
-                        message,
-                        RequestLineage {
-                            agent: stable_id.as_str(),
-                            root_session_cache: &mut root_session_cache,
-                        },
-                    )
-                    .await?
+                    } else {
+                        self.stream_with_model_fallback(
+                            request.clone(),
+                            session,
+                            message,
+                            RequestLineage {
+                                agent: stable_id.as_str(),
+                                root_session_cache: &mut root_session_cache,
+                            },
+                        )
+                        .await?
+                    })
+                };
+                let (stream, served_model) = tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => return Ok(FinishReason::Cancelled),
+                    result = open_stream => result?,
                 };
                 let step = rounds + round_retries;
                 self.emit_for_actor(
@@ -1882,6 +1886,7 @@ impl SessionEngine {
                             step,
                             model: served_model,
                         },
+                        cancel,
                     )
                     .await
                 {
@@ -1955,18 +1960,17 @@ impl SessionEngine {
             // await child subagents that need permits of their own).
             drop(stream_permit);
 
+            if stream_round.finish == FinishReason::Cancelled {
+                return Ok(FinishReason::Cancelled);
+            }
             if stream_round.tool_calls.is_empty() {
-                self.emit_for_actor(
+                self.close_turn_message_with_tokens(
                     actor_claim,
                     session,
-                    Event::MessageFinished {
-                        session,
-                        message,
-                        role: Role::Assistant,
-                        finish: stream_round.finish,
-                        tokens: total_tokens,
-                        cause: None,
-                    },
+                    message,
+                    stream_round.finish,
+                    None,
+                    total_tokens,
                 )
                 .await?;
                 return Ok(stream_round.finish);
@@ -2037,116 +2041,133 @@ impl SessionEngine {
                     }
                     None => super::file_snapshot::FileCapture::None,
                 };
-                let (result, result_policy) = match resources.resolve_tool(&tc.name) {
-                    Some(resolved) => {
-                        let result_policy = resolved.tool.result_policy();
-                        // Read the tree's permission mode at every call, so a
-                        // switch applies to the next check even mid-turn.
-                        let mode_plane = self
-                            .mode_permission_plane(binding, session, Some(&live_agent.name))
-                            .await?;
-                        let mut permission =
-                            permission_for_session(&mode_plane, session, external_dirs)
-                                .with_grant_scope(workspace.grant_scope.clone());
-                        if let Some(hooks) = &activation_hooks {
-                            permission = permission.prepend_interceptor(Arc::new(
-                                crate::bundle_hooks::BundlePermissionInterceptor::new(Arc::clone(
-                                    hooks,
-                                )),
-                            ));
-                        }
-                        let authorized = {
-                            authorize_tool_call(&resolved, &tc.input, permission, message, tc.call)
-                                .await
-                        };
-                        let result = match authorized {
-                            Ok(permission) => {
-                                let channel_policy = crate::ChannelPolicy::from_binding(binding)?
-                                    .snapshot_for(live_agent.name.as_str());
-                                let ctx = ToolCtx {
-                                    workflows: self
-                                        .workflows
-                                        .for_binding(binding)
-                                        .for_session_with_agents(session, agents.clone()),
-                                    permission,
-                                    interaction: self.interaction.for_session(session),
-                                    spawner: self
-                                        .spawner
-                                        .for_binding(binding)
-                                        .for_session_with_agents_and_guidance(
-                                            session,
-                                            agents.clone(),
-                                            guidance.clone(),
-                                        ),
-                                    operation: hya_tool::ToolOperation::from_tool_call(tc.call)
-                                        .with_actor_claim(actor_claim.copied()),
-                                    mailbox: self
-                                        .mailbox
-                                        .for_session_with_actor(session, actor_claim.copied())
-                                        .with_channel_policy(channel_policy),
-                                    lifecycle: self
-                                        .lifecycle
-                                        .for_session(session)
-                                        .with_channel_policy(channel_policy)
-                                        .with_report_latch(report_latch.clone()),
-                                    project_activity: self.project_activity.for_session(session),
-                                    session: Some(session),
-                                    parent_session: projection.session.parent,
-                                    todo: self.todo.clone(),
-                                    skills: resources.skill_plane(),
-                                    artifacts: self.artifacts.clone(),
-                                    agents: agents.clone(),
-                                    websearch: self.websearch.clone(),
-                                    lsp: self.lsp.clone(),
-                                    formatter: self.formatter.clone(),
-                                    workdir: binding.workdir().to_path_buf(),
-                                    roots: workspace.roots.clone(),
-                                    cancel: cancel.clone(),
-                                };
-                                // Permission and plugin hooks can await. Recheck at the
-                                // actual dispatch boundary so takeover cannot turn a
-                                // previously valid resident into an unfenced launch.
-                                self.validate_actor_claim(actor_claim).await?;
-                                self.execute_tool_maybe_backgrounded(
-                                    Arc::clone(&resolved.tool),
-                                    ctx,
-                                    tc.input,
-                                    &tc.name,
-                                    BackgroundOrigin {
-                                        permission: resolved.permission,
-                                        binding: binding.clone(),
-                                        stable_agent_id: stable_id.clone(),
-                                    },
-                                    ToolCallSite {
-                                        session,
-                                        message,
-                                        part: tc.part,
-                                        call: tc.call,
-                                    },
+                let collect_tool = async {
+                    Ok::<_, CoreError>(match resources.resolve_tool(&tc.name) {
+                        Some(resolved) => {
+                            let result_policy = resolved.tool.result_policy();
+                            // Read the tree's permission mode at every call, so a
+                            // switch applies to the next check even mid-turn.
+                            let mode_plane = self
+                                .mode_permission_plane(binding, session, Some(&live_agent.name))
+                                .await?;
+                            let mut permission =
+                                permission_for_session(&mode_plane, session, external_dirs)
+                                    .with_grant_scope(workspace.grant_scope.clone());
+                            if let Some(hooks) = &activation_hooks {
+                                permission = permission.prepend_interceptor(Arc::new(
+                                    crate::bundle_hooks::BundlePermissionInterceptor::new(
+                                        Arc::clone(hooks),
+                                    ),
+                                ));
+                            }
+                            let authorized = {
+                                authorize_tool_call(
+                                    &resolved, &tc.input, permission, message, tc.call,
                                 )
                                 .await
-                            }
-                            Err(error) => Err(error),
-                        };
-                        (result, result_policy)
-                    }
-                    None => (
-                        Err(ToolError::Other(format!("unknown tool: {}", tc.name))),
-                        hya_tool::ToolResultPolicy::Default,
-                    ),
+                            };
+                            let result = match authorized {
+                                Ok(permission) => {
+                                    let channel_policy =
+                                        crate::ChannelPolicy::from_binding(binding)?
+                                            .snapshot_for(live_agent.name.as_str());
+                                    let ctx = ToolCtx {
+                                        workflows: self
+                                            .workflows
+                                            .for_binding(binding)
+                                            .for_session_with_agents(session, agents.clone()),
+                                        permission,
+                                        interaction: self.interaction.for_session(session),
+                                        spawner: self
+                                            .spawner
+                                            .for_binding(binding)
+                                            .for_session_with_agents_and_guidance(
+                                                session,
+                                                agents.clone(),
+                                                guidance.clone(),
+                                            ),
+                                        operation: hya_tool::ToolOperation::from_tool_call(tc.call)
+                                            .with_actor_claim(actor_claim.copied()),
+                                        mailbox: self
+                                            .mailbox
+                                            .for_session_with_actor(session, actor_claim.copied())
+                                            .with_channel_policy(channel_policy),
+                                        lifecycle: self
+                                            .lifecycle
+                                            .for_session(session)
+                                            .with_channel_policy(channel_policy)
+                                            .with_report_latch(report_latch.clone()),
+                                        project_activity: self
+                                            .project_activity
+                                            .for_session(session),
+                                        session: Some(session),
+                                        parent_session: projection.session.parent,
+                                        todo: self.todo.clone(),
+                                        skills: resources.skill_plane(),
+                                        artifacts: self.artifacts.clone(),
+                                        agents: agents.clone(),
+                                        websearch: self.websearch.clone(),
+                                        lsp: self.lsp.clone(),
+                                        formatter: self.formatter.clone(),
+                                        workdir: binding.workdir().to_path_buf(),
+                                        roots: workspace.roots.clone(),
+                                        cancel: cancel.clone(),
+                                    };
+                                    // Permission and plugin hooks can await. Recheck at the
+                                    // actual dispatch boundary so takeover cannot turn a
+                                    // previously valid resident into an unfenced launch.
+                                    self.validate_actor_claim(actor_claim).await?;
+                                    self.execute_tool_maybe_backgrounded(
+                                        Arc::clone(&resolved.tool),
+                                        ctx,
+                                        tc.input,
+                                        &tc.name,
+                                        BackgroundOrigin {
+                                            permission: resolved.permission,
+                                            binding: binding.clone(),
+                                            stable_agent_id: stable_id.clone(),
+                                        },
+                                        ToolCallSite {
+                                            session,
+                                            message,
+                                            part: tc.part,
+                                            call: tc.call,
+                                        },
+                                    )
+                                    .await
+                                }
+                                Err(error) => Err(error),
+                            };
+                            (result, result_policy)
+                        }
+                        None => (
+                            Err(ToolError::Other(format!("unknown tool: {}", tc.name))),
+                            hya_tool::ToolResultPolicy::Default,
+                        ),
+                    })
                 };
+                let (result, result_policy) = tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => (Err(ToolError::Cancelled), hya_tool::ToolResultPolicy::Default),
+                    result = collect_tool => result?,
+                };
+                Box::pin(self.record_file_changes(
+                    actor_claim,
+                    session,
+                    message,
+                    tc.call,
+                    file_capture,
+                ))
+                .await?;
+                if cancel.is_cancelled() {
+                    return Ok(FinishReason::Cancelled);
+                }
                 let mut artifact_guard = BashArtifactGuard::capture(
                     tc.name.as_str(),
                     result.as_ref().ok(),
                     binding.workdir(),
                 );
                 let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-                if actor_claim.is_some()
-                    && matches!(&result, Err(ToolError::Cancelled))
-                    && cancel.is_cancelled()
-                {
-                    return Err(CoreError::Cancelled);
-                }
                 self.validate_actor_claim(actor_claim).await?;
                 let result = if self.hooks.is_some() || activation_hooks.is_some() {
                     let was_permission_err = matches!(&result, Err(ToolError::Permission(_)));
@@ -2246,14 +2267,6 @@ impl SessionEngine {
                     _ => None,
                 };
                 self.emit_for_actor(actor_claim, session, event).await?;
-                Box::pin(self.record_file_changes(
-                    actor_claim,
-                    session,
-                    message,
-                    tc.call,
-                    file_capture,
-                ))
-                .await?;
                 // A todo tool's result carries the whole list; record the
                 // change so the projection (and `todoUpdated`) follow it.
                 if let Some(output) = todo_output
@@ -2277,17 +2290,13 @@ impl SessionEngine {
             // other tool calls have completed and are recorded; no further
             // model call is made.
             if report_latch.is_set() {
-                self.emit_for_actor(
+                self.close_turn_message_with_tokens(
                     actor_claim,
                     session,
-                    Event::MessageFinished {
-                        session,
-                        message,
-                        role: Role::Assistant,
-                        finish: FinishReason::Stop,
-                        tokens: total_tokens,
-                        cause: None,
-                    },
+                    message,
+                    FinishReason::Stop,
+                    None,
+                    total_tokens,
                 )
                 .await?;
                 return Ok(FinishReason::Stop);

@@ -82,3 +82,18 @@ changed and rule 2 when the backend binary changed.
   `pending_interaction_reply` table, and `continue_after_handoff_*` are deleted.
 - The exit-75 reload supervision in the frontend launcher is reduced to
   reconnecting after a daemon restart.
+
+## Cancellation results
+
+User cancellation, shutdown, and replacement stop collection at a cancellation
+boundary. Before closing the assistant message, the engine persists the text
+and reasoning already streamed and records captured file changes from tools
+that already ran. A partial answer is therefore retained in replay. Use the
+normal turn cancellation operation (or `hya serve stop` for shutdown); no
+additional configuration is needed.
+
+Stream collection returns `FinishReason::Cancelled`; tool collection returns
+`ToolError::Cancelled`. Completed, failed, and cancelled turns use the same
+message-closing implementation. The existing `MessageFinished` finish/cause
+contract and shutdown restore indexing remain unchanged. Cancellation does not
+undo disk writes; their `FilesChanged` events remain available for session revert.
