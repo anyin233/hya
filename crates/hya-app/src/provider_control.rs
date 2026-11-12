@@ -126,13 +126,18 @@ impl ProviderManager {
         }
     }
 
-    fn key_source(provider_id: &str, inline_api_key: bool) -> ProviderKeySource {
-        match crate::auth::load_credential(provider_id) {
-            Some(credential) if credential.oauth().is_some() => ProviderKeySource::Oauth,
-            Some(_) => ProviderKeySource::Saved,
-            None if inline_api_key => ProviderKeySource::Config,
-            None => ProviderKeySource::None,
-        }
+    fn key_source(
+        provider_id: &str,
+        inline_api_key: bool,
+    ) -> Result<ProviderKeySource, ProviderControlError> {
+        Ok(
+            match crate::auth::load_credential(provider_id).map_err(failure)? {
+                Some(credential) if credential.oauth().is_some() => ProviderKeySource::Oauth,
+                Some(_) => ProviderKeySource::Saved,
+                None if inline_api_key => ProviderKeySource::Config,
+                None => ProviderKeySource::None,
+            },
+        )
     }
 }
 
@@ -148,15 +153,17 @@ impl ProviderControl for ProviderManager {
     fn list_settings(&self) -> ProviderControlFuture<'_, Vec<ProviderSettings>> {
         Box::pin(async {
             let declared = config::provider_declarations().map_err(failure)?;
-            Ok(declared
+            declared
                 .into_iter()
-                .map(|provider| ProviderSettings {
-                    key_source: Self::key_source(&provider.id, provider.inline_api_key),
-                    id: provider.id,
-                    kind: provider.kind,
-                    base_url: provider.base_url,
+                .map(|provider| {
+                    Ok(ProviderSettings {
+                        key_source: Self::key_source(&provider.id, provider.inline_api_key)?,
+                        id: provider.id,
+                        kind: provider.kind,
+                        base_url: provider.base_url,
+                    })
                 })
-                .collect())
+                .collect()
         })
     }
 

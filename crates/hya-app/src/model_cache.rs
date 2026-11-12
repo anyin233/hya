@@ -10,11 +10,6 @@
 //! v1 `RefreshProvider`/`UpsertProvider` routes) replaces one provider's rows.
 //! The effective model list merges these rows with the provider's config
 //! `models:` entries (see [`crate::config`]).
-//!
-//! The cache replaces the YAML `models.yml.cache` beside `config.yaml`: the
-//! first open of an empty database imports that file once, and nothing writes
-//! it any more. This is a pure cache — deleting the file only costs one
-//! discovery request per provider.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -26,14 +21,7 @@ use hya_provider::DiscoveredModel;
 use sqlx::Row as _;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
-/// Meta key recording that the legacy YAML import already ran.
-const LEGACY_IMPORT_KEY: &str = "legacy_models_yml_imported";
-
 const SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS cache_meta (
-    key   TEXT PRIMARY KEY NOT NULL,
-    value TEXT NOT NULL
-);
 CREATE TABLE IF NOT EXISTS provider_models (
     provider_id        TEXT    NOT NULL,
     model_id           TEXT    NOT NULL,
@@ -125,8 +113,7 @@ pub struct ModelCache {
 }
 
 impl ModelCache {
-    /// Open (creating when missing) the cache at [`model_cache_path`] and run
-    /// the one-time `models.yml.cache` import.
+    /// Open (creating when missing) the cache at [`model_cache_path`].
     ///
     /// # Errors
     /// Returns when no cache location is known or the database cannot be
@@ -134,12 +121,7 @@ impl ModelCache {
     pub async fn open_default() -> anyhow::Result<Self> {
         let path =
             model_cache_path().context("no model cache location (set XDG_CACHE_HOME or HOME)")?;
-        let cache = Self::open(&path).await?;
-        let legacy = crate::models_cache::legacy_models_cache_path();
-        if let Err(error) = cache.import_legacy_once(&legacy).await {
-            tracing::warn!(%error, "model cache: legacy models.yml.cache import failed");
-        }
-        Ok(cache)
+        Self::open(&path).await
     }
 
     /// Open (creating when missing) a cache database at `path`.
@@ -258,62 +240,6 @@ impl ModelCache {
         tx.commit().await.context("commit model cache write")?;
         Ok(())
     }
-
-    /// Import `models.yml.cache` once: only when the database has no rows
-    /// and the import never ran; afterwards the YAML file is ignored.
-    /// Returns whether rows were imported.
-    ///
-    /// # Errors
-    /// Returns query or write failures (a missing or unparsable YAML file is
-    /// not an error; it is recorded as imported).
-    pub async fn import_legacy_once(&self, legacy_path: &Path) -> anyhow::Result<bool> {
-        let done = sqlx::query("SELECT value FROM cache_meta WHERE key = ?1")
-            .bind(LEGACY_IMPORT_KEY)
-            .fetch_optional(&self.pool)
-            .await
-            .context("read model cache meta")?
-            .is_some();
-        if done {
-            return Ok(false);
-        }
-        let has_rows = sqlx::query("SELECT 1 FROM provider_models LIMIT 1")
-            .fetch_optional(&self.pool)
-            .await
-            .context("probe model cache")?
-            .is_some();
-        let mut imported = false;
-        if !has_rows && legacy_path.is_file() {
-            let fetched_at_ms = std::fs::metadata(legacy_path)
-                .and_then(|meta| meta.modified())
-                .ok()
-                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                .map_or_else(now_ms, |duration| {
-                    i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
-                });
-            match crate::models_cache::read_legacy_models_cache(legacy_path) {
-                Ok(file) => {
-                    for (provider_id, entries) in &file.providers {
-                        let rows = entries
-                            .iter()
-                            .map(|entry| entry.to_cached_model(fetched_at_ms))
-                            .collect::<Vec<_>>();
-                        self.replace_provider(provider_id, &rows).await?;
-                        imported |= !rows.is_empty();
-                    }
-                }
-                Err(error) => {
-                    tracing::warn!(%error, "model cache: skipping unreadable models.yml.cache");
-                }
-            }
-        }
-        sqlx::query("INSERT OR REPLACE INTO cache_meta (key, value) VALUES (?1, ?2)")
-            .bind(LEGACY_IMPORT_KEY)
-            .bind(now_ms().to_string())
-            .execute(&self.pool)
-            .await
-            .context("record legacy import")?;
-        Ok(imported)
-    }
 }
 
 fn decode_row(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<CachedModel> {
@@ -407,34 +333,6 @@ mod tests {
         cache.replace_provider("gw", &rows[1..]).await.unwrap();
         assert_eq!(cache.provider_models("gw").await.unwrap(), rows[1..]);
         cache.replace_provider("gw", &[]).await.unwrap();
-        assert!(cache.provider_models("gw").await.unwrap().is_empty());
-        cache.close().await;
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[tokio::test]
-    async fn legacy_yaml_imports_once_into_an_empty_database() {
-        let dir = temp_path("legacy");
-        std::fs::create_dir_all(&dir).unwrap();
-        let legacy = dir.join("models.yml.cache");
-        std::fs::write(
-            &legacy,
-            "version: 1\nproviders:\n  gw:\n    - id: old-model\n      limit:\n        context: 64000\n        output: 4096\n      reasoning_default: medium\n      reasoning_variants: [low, medium]\n",
-        )
-        .unwrap();
-        let cache = ModelCache::open(&dir.join("model_cache.db")).await.unwrap();
-        assert!(cache.import_legacy_once(&legacy).await.unwrap());
-        let rows = cache.provider_models("gw").await.unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].id, "old-model");
-        assert_eq!(rows[0].context_limit, 64_000);
-        assert_eq!(rows[0].output_limit, 4_096);
-        assert_eq!(rows[0].reasoning_default.as_deref(), Some("medium"));
-        assert_eq!(rows[0].reasoning_variants, vec!["low", "medium"]);
-
-        // Once only: a later refresh that clears the provider is not undone.
-        cache.replace_provider("gw", &[]).await.unwrap();
-        assert!(!cache.import_legacy_once(&legacy).await.unwrap());
         assert!(cache.provider_models("gw").await.unwrap().is_empty());
         cache.close().await;
         let _ = std::fs::remove_dir_all(dir);

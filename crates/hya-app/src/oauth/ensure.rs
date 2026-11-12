@@ -85,7 +85,7 @@ async fn ensure_access_token_in_async_ref(
     dir: &Path,
     provider: &str,
 ) -> Result<String, OAuthError> {
-    let cred = load_credential_in(dir, provider).ok_or_else(|| OAuthError::NeedsLogin {
+    let cred = load_credential_in(dir, provider)?.ok_or_else(|| OAuthError::NeedsLogin {
         provider: provider.to_string(),
         oauth_type: "unknown".into(),
         reason: "no saved credentials".into(),
@@ -111,7 +111,7 @@ async fn refresh_and_store(
     let _guard = refresh_lock().lock().await;
 
     // Re-read: another task may have refreshed while we waited.
-    if let Some(AuthCredential::OAuth(latest)) = load_credential_in(dir, provider) {
+    if let Some(AuthCredential::OAuth(latest)) = load_credential_in(dir, provider)? {
         if !is_expired(&latest.expires_at, DEFAULT_SKEW).unwrap_or(true) {
             return Ok(latest.access_token.clone());
         }
@@ -134,7 +134,7 @@ where
     F: Fn(OAuthCredential) -> Fut,
     Fut: std::future::Future<Output = Result<OAuthCredential, OAuthError>>,
 {
-    let cred = load_credential_in(dir, provider).ok_or_else(|| OAuthError::NeedsLogin {
+    let cred = load_credential_in(dir, provider)?.ok_or_else(|| OAuthError::NeedsLogin {
         provider: provider.to_string(),
         oauth_type: "unknown".into(),
         reason: "no saved credentials".into(),
@@ -152,7 +152,7 @@ where
     // skew check but token identity: when storage already moved past the exact
     // access token that failed upstream, some other stream refreshed for us,
     // so skip the network refresh entirely and reuse its result.
-    if let Some(AuthCredential::OAuth(latest)) = load_credential_in(dir, provider) {
+    if let Some(AuthCredential::OAuth(latest)) = load_credential_in(dir, provider)? {
         if latest.access_token != stale_access_token {
             return Ok(latest.access_token);
         }
@@ -205,7 +205,7 @@ pub fn oauth_status_in(dir: &Path, provider: Option<&str>) -> Result<Vec<OAuthSt
     };
     let mut out = Vec::new();
     for p in providers {
-        let Some(cred) = load_credential_in(dir, &p) else {
+        let Some(cred) = load_credential_in(dir, &p)? else {
             continue;
         };
         match cred {
@@ -396,7 +396,7 @@ mod tests {
 
         assert!(tokens.iter().all(|token| token == "rotated-stale-t0"));
         assert_eq!(network_calls.load(Ordering::SeqCst), 1);
-        match load_credential_in(&dir, "codex") {
+        match load_credential_in(&dir, "codex").unwrap() {
             Some(AuthCredential::OAuth(stored)) => {
                 assert_eq!(stored.access_token, "rotated-stale-t0")
             }

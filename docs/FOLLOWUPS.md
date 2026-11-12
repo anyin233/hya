@@ -27,7 +27,7 @@ Reference for work intentionally left for a future pass. The pi-parity waves
 - **OAuth interactive login** — full Rust flow in `crates/hya-app/src/oauth/`
   (device-code and loopback/PKCE for `openai-codex`, Grok Build, browser open,
   poll/refresh). CLI: `hya oauth login --provider … --type openai-codex|grok-build`
-  with `--device` / `--loopback` / `--browser` flags; see `docs/cli.md` and
+  with `--loopback` / `--browser` flags; see `docs/cli.md` and
   `docs/configuration.md`.
 - **`find` workdir scoping fix** — resolved against the confirmed defect below:
   `FindTool` now resolves its optional `path` through
