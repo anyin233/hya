@@ -1671,36 +1671,33 @@ async fn stop_cancels_root_and_child_turns_but_only_queues_the_root() {
     let (engine, agent, provider) = engine_with_script().await;
     let root = make_session(&engine, None, "hya-main").await;
     let child = make_session(&engine, Some(root), "hya-task").await;
+    provider.script(root, Script::Hang);
+    provider.script(child, Script::Hang);
     engine
-        .store()
-        .append_event(
+        .admit_user_prompt(root, "continue working".into())
+        .await
+        .unwrap();
+    let task = {
+        let engine = engine.clone();
+        let agent = agent.clone();
+        tokio::spawn(async move {
+            engine
+                .run_turn(root, &agent, CancellationToken::new())
+                .await
+        })
+    };
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    register_main(&supervisor, &engine, &agent, root).await;
+    supervisor
+        .register_existing_resident(
             root,
-            &Event::AgentRegistered {
-                session: root,
-                agent_session: child,
-                handle: "worker".into(),
-                parent: Some("main".into()),
-                agent_type: AgentName::new("hya-task"),
-                mode: hya_proto::SubagentMode::Transient,
-            },
+            child,
+            "worker".into(),
+            agent.clone(),
+            Some("continue working".into()),
         )
         .await
         .unwrap();
-    let mut tasks = Vec::new();
-    for session in [root, child] {
-        provider.script(session, Script::Hang);
-        engine
-            .admit_user_prompt(session, "continue working".into())
-            .await
-            .unwrap();
-        let engine = engine.clone();
-        let agent = agent.clone();
-        tasks.push(tokio::spawn(async move {
-            engine
-                .run_turn(session, &agent, CancellationToken::new())
-                .await
-        }));
-    }
     assert!(
         eventually(|| async {
             open_tool_parts(&engine, root).await == 1 && open_tool_parts(&engine, child).await == 1
@@ -1713,25 +1710,13 @@ async fn stop_cancels_root_and_child_turns_but_only_queues_the_root() {
         .unwrap();
     assert_eq!(report.cancelled.len(), 2);
     assert!(report.stragglers.is_empty());
-    for task in tasks {
-        assert_eq!(task.await.unwrap().unwrap(), FinishReason::Cancelled);
-    }
+    assert_eq!(task.await.unwrap().unwrap(), FinishReason::Cancelled);
     let pending = engine.store().list_pending_resumes().await.unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].session, root);
-    engine
-        .store()
-        .append_event(
-            root,
-            &Event::AgentArchived {
-                session: root,
-                handle: "main/worker".into(),
-                child,
-                reason: ArchiveReason::Shutdown,
-            },
-        )
-        .await
-        .unwrap();
+    supervisor
+        .drain(FinishCause::Shutdown, Duration::from_secs(2))
+        .await;
     let prompt = pending_prompt(&engine, root).await;
     assert!(prompt.contains("bash (call "));
     assert!(prompt.contains("Interrupted subagents: main/worker."));

@@ -380,6 +380,17 @@ async fn update_session(
 ) -> Result<Json<pb::SessionInfo>, V1Error> {
     let session = parse_session(&id)?;
     session_exists(&st, session).await?;
+    if request
+        .model
+        .as_ref()
+        .is_some_and(|model| !model.is_empty())
+        || request
+            .agent
+            .as_ref()
+            .is_some_and(|agent| !agent.is_empty())
+    {
+        st.engine.ensure_external_turn_allowed(session).await?;
+    }
     // Validate the mode before applying any other field, so an unknown mode
     // leaves the session unchanged.
     if let Some(mode) = request.permission_mode.as_deref()
@@ -681,6 +692,7 @@ async fn revert_session(
 ) -> Result<Json<pb::RevertSessionResponse>, V1Error> {
     let session = parse_session(&id)?;
     session_exists(&st, session).await?;
+    st.engine.ensure_external_turn_allowed(session).await?;
     if !request.undo && request.until_seq != 0 {
         return Err(V1Error::invalid_argument(
             "untilSeq is not supported by RevertSession; pass messageId",

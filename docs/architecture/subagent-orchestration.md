@@ -721,9 +721,29 @@ The next archive takes over that orphan under the same lock held across
 registration/revival's claim commit and episode installation. Takeover is never
 used for a live episode. This lock is not held across initialization hooks.
 
-Direct prompt admission or turn execution on a live resident is refused with
-`invalid: this subagent's live episode owns its turns; steer this subagent with mail`.
-Use `send` or the user steer API; the TUI's child view remains read-only.
+A registered team member's episodes own its execution state, even while archived.
+Direct prompt, command (including slash Workflow interception), and shell turns,
+model/agent switches, and revert/unrevert are refused before preparation or mutation.
+This prevents client turns from racing an episode or reviving an archived member.
+Use `send` to the member's DM (for example, `send({"channel":"main/hya-task-scout",
+"body":"review the parser"})`) or the user steer API. Mail can revive an archived
+member; a direct turn cannot. Fork remains allowed: it copies a transcript snapshot
+into an independent root without changing the member. Root/main sessions, sessions
+never registered as members, restart restore prompts, and internal bound Workflow
+entry points keep their existing behavior.
+
+`SessionEngine::ensure_external_turn_allowed(session: SessionId) -> Result<(), CoreError>`
+uses the root log's permanent `AgentRegistered.agent_session` identity, independent of
+claims and the live/archived roster. External engine entry points return
+`CoreError::Invalid("this subagent's episodes own its turns; steer this subagent with mail")`.
+`POST /v1/sessions/{id}/turns` (`CreateTurnRequest`, prompt/command/shell kinds),
+model/agent edits through `PATCH /v1/sessions/{id}` (`UpdateSessionRequest`), and
+`POST /v1/sessions/{id}/revert` (`RevertSessionRequest`, including `undo: true`)
+return HTTP 400 with `{ "error": { "code": "invalid_argument", "message": string } }`
+and the mail guidance. The `hya.v1` gRPC methods `Turn.CreateTurn`,
+`Session.UpdateSession` and `Session.RevertSession` return `INVALID_ARGUMENT`
+with the same guidance. Rejected turns leave the user stop and archive state intact
+and append no prompt, command, or model-switch events.
 The internal completion contract is `watch<Option<Result<(), CoreError>>>`:
 `None` while the episode exists, then its one terminal result after removal.
 `ResidentSupervisor::end_member(root, handle)` requests an archive with note
@@ -732,7 +752,7 @@ The internal completion contract is `watch<Option<Result<(), CoreError>>>`:
 
 `ResidentSupervisor::episode_count() -> usize` counts in-memory member episodes,
 excluding the lead. `ArchiveReviver::has_episode(session: SessionId) -> bool`
-backs client-turn admission. Its internal
+queries the current in-memory episode. Its internal
 `reconcile_orphan(root: SessionId, handle: &str, archive: ResidentArchive,
 cause: FinishCause) -> Result<ResidentArchiveOutcome, CoreError>` takes the
 registration lock, refuses an existing episode, then calls the store finalizer
@@ -745,6 +765,7 @@ path until Workflow moves to episode activations; it is not a client entry.
 Startup recovery treats an unanswered initial user directive as owed input and
 passes that admitted prompt into the recovered episode's first turn.
 
-The client guard also checks the durable live roster, so it covers an orphan
-and the interval between registration commit and in-memory installation.
+The client guard checks durable registration history, so it covers archived
+members, orphans and the interval between registration commit and in-memory
+installation.
 Public command-prompt admission uses the same guard as text prompts.

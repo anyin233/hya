@@ -332,6 +332,7 @@ async fn create_turn(
 ) -> Result<Json<pb::CreateTurnResponse>, V1Error> {
     let session = parse_session(&id)?;
     ensure_session(&st, session).await?;
+    st.engine.ensure_external_turn_allowed(session).await?;
 
     match request.kind {
         Some(Kind::Prompt(prompt)) => {
