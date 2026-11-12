@@ -2,7 +2,7 @@
 //! `Event` stream. One provider per upstream route (OpenAI-compatible or
 //! Anthropic), selected by the model id it serves.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -37,14 +37,9 @@ const BASE_RETRY_DELAY: Duration = Duration::from_secs(1);
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
 const ERROR_BODY_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Bounded replay budget for one streamed completion.
-///
-/// The budget is shared by the pre-stream attempt loop (transport errors,
-/// 429/5xx statuses, auth refresh) and the zero-event replay window: if an
-/// established stream dies before delivering any event to the consumer, the
-/// whole request is re-issued transparently while budget remains. Once any
-/// event has been delivered the strict no-replay boundary holds and errors
-/// surface exactly once.
+/// Bounded request budget before successful response headers establish a stream.
+/// Transport, HTTP 429/5xx and one forced auth refresh share this budget.
+/// Established streams are never replayed here.
 ///
 /// Retry tuning is deliberately excluded from `configured_identity_v1`: like
 /// the timeout overrides it tunes liveness, not what the route serves.
@@ -81,10 +76,7 @@ impl RetryConfig {
     }
 }
 
-/// Clonable per-route request state: everything needed to re-issue a streamed
-/// completion from inside the pump task when the zero-event replay window
-/// applies.
-#[derive(Clone)]
+/// HTTP transport, credentials and pre-stream request policy.
 struct RouteCore {
     client: reqwest::Client,
     auth: AuthStyle,
@@ -101,7 +93,7 @@ struct RouteCore {
 /// pre-header latency while keeping a hung route bounded and operator-visible.
 /// A deadline miss becomes [`ProviderError::Transport`], which the existing
 /// `is_retryable_before_stream()` classification feeds back through the normal
-/// attempt/backoff/router-failover path unchanged. Configurable per route via
+/// attempt/backoff path unchanged. Configurable per route via
 /// [`HttpProvider::with_response_header_timeout`].
 const RESPONSE_HEADER_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -194,6 +186,18 @@ enum AuthStyle {
     Google(Option<SecretString>),
 }
 
+#[derive(Default)]
+struct RouteModel {
+    served: bool,
+    reasoning_variants: Option<Vec<String>>,
+    reasoning_default: Option<ReasoningEffort>,
+    limit: Option<ModelLimitOverride>,
+    reasoning_declared: Option<bool>,
+    image_input: Option<bool>,
+    display_name: Option<String>,
+    source: Option<ModelCatalogSource>,
+}
+
 /// One configured HTTP route: reqwest client + [`Protocol`] + SSE → [`EventStream`].
 ///
 /// Owns SSE framing; the protocol decoder only sees data payloads. Redirects are
@@ -206,22 +210,7 @@ pub struct HttpProvider {
     core: RouteCore,
     endpoint: String,
     google_base: Option<String>,
-    models: HashSet<String>,
-    model_reasoning_variants: BTreeMap<String, Vec<String>>,
-    model_reasoning_defaults: BTreeMap<String, ReasoningEffort>,
-    /// Optional per-model context/output limits (configured `limit` blocks or
-    /// `models.yml.cache` rows).
-    model_limits: BTreeMap<String, ModelLimitOverride>,
-    /// Reasoning support declared by each model's metadata (catalog display
-    /// only; runtime effort support uses the variant maps).
-    model_reasoning_declared: BTreeMap<String, bool>,
-    /// Per-model image-input support from config `modalities.input`;
-    /// absent models report unknown (`Capabilities::image_input = None`).
-    model_image_input: BTreeMap<String, bool>,
-    /// Optional per-model display names published on catalog rows.
-    model_display_names: BTreeMap<String, String>,
-    /// Optional per-model catalog provenance overriding `catalog_source`.
-    model_sources: BTreeMap<String, ModelCatalogSource>,
+    models: BTreeMap<String, RouteModel>,
     caps: Capabilities,
     kind: ProviderKind,
     catalog_source: ModelCatalogSource,
@@ -327,14 +316,18 @@ impl HttpProvider {
             },
             endpoint,
             google_base,
-            models: models.into_iter().collect(),
-            model_reasoning_variants: BTreeMap::new(),
-            model_reasoning_defaults: BTreeMap::new(),
-            model_limits: BTreeMap::new(),
-            model_reasoning_declared: BTreeMap::new(),
-            model_image_input: BTreeMap::new(),
-            model_display_names: BTreeMap::new(),
-            model_sources: BTreeMap::new(),
+            models: models
+                .into_iter()
+                .map(|id| {
+                    (
+                        id,
+                        RouteModel {
+                            served: true,
+                            ..RouteModel::default()
+                        },
+                    )
+                })
+                .collect(),
             kind,
             catalog_source: ModelCatalogSource::Configured,
             prompt_caching: kind == ProviderKind::Anthropic,
@@ -426,7 +419,12 @@ impl HttpProvider {
         mut self,
         variants: impl IntoIterator<Item = (String, Vec<String>)>,
     ) -> Self {
-        self.model_reasoning_variants = variants.into_iter().collect();
+        for row in self.models.values_mut() {
+            row.reasoning_variants = None;
+        }
+        for (id, value) in variants {
+            self.models.entry(id).or_default().reasoning_variants = Some(value);
+        }
         self
     }
     /// Attach configured per-model reasoning defaults.
@@ -439,10 +437,15 @@ impl HttpProvider {
         mut self,
         defaults: impl IntoIterator<Item = (String, Option<ReasoningEffort>)>,
     ) -> Self {
-        self.model_reasoning_defaults = defaults
+        for row in self.models.values_mut() {
+            row.reasoning_default = None;
+        }
+        for (id, value) in defaults
             .into_iter()
-            .filter_map(|(model, effort)| effort.map(|effort| (model, effort)))
-            .collect();
+            .filter_map(|(id, value)| value.map(|value| (id, value)))
+        {
+            self.models.entry(id).or_default().reasoning_default = Some(value);
+        }
         self
     }
 
@@ -455,7 +458,12 @@ impl HttpProvider {
         mut self,
         declared: impl IntoIterator<Item = (String, bool)>,
     ) -> Self {
-        self.model_reasoning_declared = declared.into_iter().collect();
+        for row in self.models.values_mut() {
+            row.reasoning_declared = None;
+        }
+        for (id, value) in declared {
+            self.models.entry(id).or_default().reasoning_declared = Some(value);
+        }
         self
     }
 
@@ -467,7 +475,12 @@ impl HttpProvider {
         mut self,
         limits: impl IntoIterator<Item = (String, ModelLimitOverride)>,
     ) -> Self {
-        self.model_limits = limits.into_iter().collect();
+        for row in self.models.values_mut() {
+            row.limit = None;
+        }
+        for (id, value) in limits {
+            self.models.entry(id).or_default().limit = Some(value);
+        }
         self
     }
 
@@ -478,7 +491,12 @@ impl HttpProvider {
         mut self,
         support: impl IntoIterator<Item = (String, bool)>,
     ) -> Self {
-        self.model_image_input = support.into_iter().collect();
+        for row in self.models.values_mut() {
+            row.image_input = None;
+        }
+        for (id, value) in support {
+            self.models.entry(id).or_default().image_input = Some(value);
+        }
         self
     }
 
@@ -496,10 +514,15 @@ impl HttpProvider {
         mut self,
         names: impl IntoIterator<Item = (String, String)>,
     ) -> Self {
-        self.model_display_names = names
+        for row in self.models.values_mut() {
+            row.display_name = None;
+        }
+        for (id, value) in names
             .into_iter()
-            .filter(|(_, name)| !name.trim().is_empty())
-            .collect();
+            .filter(|(_, value)| !value.trim().is_empty())
+        {
+            self.models.entry(id).or_default().display_name = Some(value);
+        }
         self
     }
 
@@ -511,7 +534,12 @@ impl HttpProvider {
         mut self,
         sources: impl IntoIterator<Item = (String, ModelCatalogSource)>,
     ) -> Self {
-        self.model_sources = sources.into_iter().collect();
+        for row in self.models.values_mut() {
+            row.source = None;
+        }
+        for (id, value) in sources {
+            self.models.entry(id).or_default().source = Some(value);
+        }
         self
     }
 
@@ -533,10 +561,7 @@ impl HttpProvider {
         self
     }
 
-    /// Override the replay budget (attempts + backoff shape) for this route.
-    ///
-    /// The budget governs both the pre-stream attempt loop and the zero-event
-    /// replay window; see [`RetryConfig`].
+    /// Override the pre-stream attempt budget and backoff; see [`RetryConfig`].
     #[must_use]
     pub fn with_retry(mut self, retry: RetryConfig) -> Self {
         self.core.retry = retry.normalized();
@@ -676,9 +701,7 @@ impl RouteCore {
     /// Issue one streamed-completion request, retrying retryable pre-stream
     /// failures (transport, 429/5xx) with jittered exponential backoff.
     ///
-    /// `max_attempts` bounds this call's attempt loop; the returned count is
-    /// the attempts actually consumed so callers can share one
-    /// [`RetryConfig`] budget with the zero-event replay window.
+    /// `max_attempts` bounds the attempt loop before returning the response.
     async fn send_stream_request(
         &self,
         url: &str,
@@ -686,7 +709,7 @@ impl RouteCore {
         extra_headers: &BTreeMap<String, String>,
         model_override: Option<&str>,
         max_attempts: usize,
-    ) -> Result<(reqwest::Response, usize), ProviderError> {
+    ) -> Result<reqwest::Response, ProviderError> {
         let max_attempts = max_attempts.max(1);
         let started = Instant::now();
         // Auth-recovery level: the forced-refresh retry fires at most once per
@@ -708,7 +731,7 @@ impl RouteCore {
             .await;
             let error = match result {
                 Ok(Ok(response)) if response.status().is_success() => {
-                    return Ok((response, attempt + 1));
+                    return Ok(response);
                 }
                 Ok(Ok(response)) => {
                     let status = response.status().as_u16();
@@ -743,7 +766,7 @@ impl RouteCore {
                 Ok(Err(error)) => ProviderError::Transport(error.to_string()),
                 // Headers never arrived within the deadline: classify exactly
                 // like other pre-stream transport failures so the remaining
-                // attempts and router failover still run.
+                // attempts still run.
                 Err(_elapsed) => ProviderError::Transport(format!(
                     "no response headers within {:#?}",
                     self.response_header_timeout
@@ -816,17 +839,27 @@ impl HttpProvider {
     /// Merge route defaults with any per-model limit overrides.
     fn caps_for_model(&self, model_id: &str) -> Capabilities {
         let mut caps = self.caps.clone();
-        if let Some(limit) = self.model_limits.get(model_id) {
+        if let Some(limit) = self.models.get(model_id).and_then(|row| row.limit.as_ref()) {
             if limit.context > 0 {
                 caps.max_context = limit.context;
             }
             caps.max_output = limit.output;
         }
-        if let Some(image_input) = self.model_image_input.get(model_id) {
+        if let Some(image_input) = self
+            .models
+            .get(model_id)
+            .and_then(|row| row.image_input.as_ref())
+        {
             caps.image_input = Some(*image_input);
         }
-        if !self.model_reasoning_variants.is_empty()
-            || self.model_reasoning_defaults.contains_key(model_id)
+        if self
+            .models
+            .values()
+            .any(|row| row.reasoning_variants.is_some())
+            || self
+                .models
+                .get(model_id)
+                .is_some_and(|row| row.reasoning_default.is_some())
         {
             caps.reasoning_request = true;
         }
@@ -839,8 +872,9 @@ impl HttpProvider {
     fn catalog_caps_for_model(&self, model_id: &str) -> Capabilities {
         let mut caps = self.caps_for_model(model_id);
         caps.max_context = self
-            .model_limits
+            .models
             .get(model_id)
+            .and_then(|row| row.limit.as_ref())
             .map_or(0, |limit| limit.context);
         caps
     }
@@ -878,12 +912,12 @@ impl HttpProvider {
             Some((head, variant)) if !variant.is_empty() => head,
             _ => model.as_str(),
         };
-        if self.models.contains(base) {
+        if self.models.get(base).is_some_and(|row| row.served) {
             return Some(base);
         }
         if let Some((provider_id, model_id)) = base.split_once('/')
             && provider_id == self.id
-            && self.models.contains(model_id)
+            && self.models.get(model_id).is_some_and(|row| row.served)
         {
             return Some(model_id);
         }
@@ -904,50 +938,38 @@ impl HttpProvider {
         append_identity_bytes(&mut identity, self.endpoint.as_bytes())?;
         append_identity_optional_bytes(&mut identity, self.google_base.as_deref())?;
 
-        let mut models = self.models.iter().collect::<Vec<_>>();
-        models.sort_unstable();
-        append_identity_count(&mut identity, models.len())?;
-        for model in &models {
+        append_identity_count(&mut identity, self.models.len())?;
+        for (model, row) in &self.models {
             append_identity_bytes(&mut identity, model.as_bytes())?;
-        }
-
-        append_identity_count(&mut identity, self.model_reasoning_variants.len())?;
-        for (model, variants) in &self.model_reasoning_variants {
-            append_identity_bytes(&mut identity, model.as_bytes())?;
-            append_identity_count(&mut identity, variants.len())?;
-            for variant in variants {
-                append_identity_bytes(&mut identity, variant.as_bytes())?;
+            identity.push(u8::from(row.served));
+            if let Some(variants) = &row.reasoning_variants {
+                identity.push(1);
+                append_identity_count(&mut identity, variants.len())?;
+                for variant in variants {
+                    append_identity_bytes(&mut identity, variant.as_bytes())?;
+                }
+            } else {
+                identity.push(0);
             }
-        }
-
-        append_identity_bytes(&mut identity, b"model-reasoning-defaults")?;
-        append_identity_count(&mut identity, models.len())?;
-        for model in &models {
-            append_identity_bytes(&mut identity, model.as_bytes())?;
-            let default = self
-                .model_reasoning_defaults
-                .get(*model)
-                .copied()
-                .unwrap_or(ReasoningEffort::Off);
-            append_identity_bytes(&mut identity, default.as_str().as_bytes())?;
-        }
-
-        // Known limits shape the encoded max-tokens field, so they are part of
-        // what the route serves.
-        append_identity_bytes(&mut identity, b"model-limits")?;
-        append_identity_count(&mut identity, self.model_limits.len())?;
-        for (model, limit) in &self.model_limits {
-            append_identity_bytes(&mut identity, model.as_bytes())?;
-            identity.extend_from_slice(&limit.context.to_be_bytes());
-            identity.extend_from_slice(&limit.output.to_be_bytes());
-        }
-
-        // Image-input support decides whether prompts may carry images.
-        append_identity_bytes(&mut identity, b"model-image-input")?;
-        append_identity_count(&mut identity, self.model_image_input.len())?;
-        for (model, image_input) in &self.model_image_input {
-            append_identity_bytes(&mut identity, model.as_bytes())?;
-            identity.push(u8::from(*image_input));
+            append_identity_bytes(
+                &mut identity,
+                row.reasoning_default
+                    .unwrap_or(ReasoningEffort::Off)
+                    .as_str()
+                    .as_bytes(),
+            )?;
+            if let Some(limit) = &row.limit {
+                identity.push(1);
+                identity.extend_from_slice(&limit.context.to_be_bytes());
+                identity.extend_from_slice(&limit.output.to_be_bytes());
+            } else {
+                identity.push(0);
+            }
+            identity.push(match row.image_input {
+                None => 0,
+                Some(false) => 1,
+                Some(true) => 2,
+            });
         }
 
         append_capabilities_identity(&mut identity, &self.caps)?;
@@ -1105,7 +1127,10 @@ impl Provider for HttpProvider {
 
     fn reasoning_default(&self, model: &ModelRef) -> Option<ReasoningEffort> {
         let served_model = self.served_model_name(model)?;
-        self.model_reasoning_defaults.get(served_model).copied()
+        self.models
+            .get(served_model)
+            .and_then(|row| row.reasoning_default.as_ref())
+            .copied()
     }
 
     fn supports_reasoning_effort(&self, model: &ModelRef, effort: ReasoningEffort) -> Option<bool> {
@@ -1116,7 +1141,11 @@ impl Provider for HttpProvider {
         if !self.caps.reasoning_request {
             return Some(false);
         }
-        if let Some(variants) = self.model_reasoning_variants.get(served_model) {
+        if let Some(variants) = self
+            .models
+            .get(served_model)
+            .and_then(|row| row.reasoning_variants.as_ref())
+        {
             return Some(
                 variants
                     .iter()
@@ -1143,21 +1172,36 @@ impl Provider for HttpProvider {
         };
         self.models
             .iter()
-            .map(|model| ProviderModel {
+            .filter(|(_, row)| row.served)
+            .map(|(model, _)| ProviderModel {
                 provider_id: self.id.clone(),
                 model_id: model.clone(),
                 capabilities: self.catalog_caps_for_model(model),
                 reasoning_variants: self
-                    .model_reasoning_variants
+                    .models
                     .get(model)
+                    .and_then(|row| row.reasoning_variants.as_ref())
                     .cloned()
                     .unwrap_or_else(|| variants.clone()),
-                reasoning_default: self.model_reasoning_defaults.get(model).copied(),
-                reasoning: self.model_reasoning_declared.get(model).copied(),
-                display_name: self.model_display_names.get(model).cloned(),
-                source: self
-                    .model_sources
+                reasoning_default: self
+                    .models
                     .get(model)
+                    .and_then(|row| row.reasoning_default.as_ref())
+                    .copied(),
+                reasoning: self
+                    .models
+                    .get(model)
+                    .and_then(|row| row.reasoning_declared.as_ref())
+                    .copied(),
+                display_name: self
+                    .models
+                    .get(model)
+                    .and_then(|row| row.display_name.as_ref())
+                    .cloned(),
+                source: self
+                    .models
+                    .get(model)
+                    .and_then(|row| row.source.as_ref())
                     .copied()
                     .unwrap_or(self.catalog_source),
             })
@@ -1180,7 +1224,7 @@ impl Provider for HttpProvider {
         };
         let model_override =
             matches!(self.core.auth, AuthStyle::GrokSession { .. }).then_some(req.model.as_str());
-        let (resp, attempts_used) = self
+        let resp = self
             .core
             .send_stream_request(
                 &url,
@@ -1190,25 +1234,12 @@ impl Provider for HttpProvider {
                 self.core.retry.max_attempts,
             )
             .await?;
-        let plan = stream::ReissuePlan {
-            core: self.core.clone(),
-            protocol: Arc::clone(&self.protocol),
-            url,
-            body,
-            extra_headers: req.headers,
-            model_override: model_override.map(str::to_owned),
-            idle_timeout: self.stream_idle_timeout,
-            attempts_used,
-        };
+        let decoder = self.protocol.decoder(session, message, req.reasoning);
+        let idle_timeout = self.stream_idle_timeout;
         let (tx, rx) = mpsc::channel::<Result<Event, ProviderError>>(64);
-        tokio::spawn(stream::pump_with_reissue(
-            plan,
-            resp,
-            session,
-            message,
-            req.reasoning,
-            tx,
-        ));
+        tokio::spawn(async move {
+            stream::pump(resp, decoder, tx, idle_timeout).await;
+        });
         Ok(Box::pin(ReceiverStream::new(rx)))
     }
 
@@ -1386,6 +1417,28 @@ mod tests {
             .unwrap();
         assert_eq!(claude.display_name, None);
         assert_eq!(claude.source, ModelCatalogSource::Overridden);
+        Ok(())
+    }
+
+    #[test]
+    fn metadata_builders_filter_empty_values_without_registering_models()
+    -> Result<(), ProviderError> {
+        let provider = provider()?
+            .with_model_display_names([
+                ("gpt-5.5".to_string(), "GPT".to_string()),
+                ("gpt-5.5".to_string(), " ".to_string()),
+                ("unserved".to_string(), "Other".to_string()),
+            ])
+            .with_model_reasoning_defaults([
+                ("gpt-5.5".to_string(), Some(ReasoningEffort::High)),
+                ("gpt-5.5".to_string(), None),
+            ]);
+        let rows = provider.catalog();
+        let row = rows.iter().find(|row| row.model_id == "gpt-5.5").unwrap();
+        assert_eq!(row.display_name.as_deref(), Some("GPT"));
+        assert_eq!(row.reasoning_default, Some(ReasoningEffort::High));
+        assert!(provider.capabilities(&ModelRef::new("unserved")).is_none());
+        assert!(!rows.iter().any(|row| row.model_id == "unserved"));
         Ok(())
     }
 

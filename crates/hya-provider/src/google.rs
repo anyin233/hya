@@ -72,26 +72,15 @@ fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) -> Result<(), ProviderEr
 }
 
 fn user_parts(parts: &[Part]) -> Result<Vec<Value>, ProviderError> {
-    let mut out = Vec::new();
-    for part in parts {
-        match part {
-            Part::Text { text, .. } => {
-                if !text.is_empty() {
-                    out.push(json!({ "text": text }));
-                }
-            }
-            Part::Media {
-                media_type, data, ..
-            } => {
-                let (mime, base64) = validate_media(media_type, data)?;
-                out.push(json!({
-                    "inlineData": { "mimeType": mime, "data": base64 }
-                }));
-            }
-            Part::Reasoning { .. } | Part::Tool { .. } => {}
-        }
-    }
-    Ok(out)
+    let (_, blocks, _) = crate::wire::user_content(
+        parts,
+        |text| json!({"text":text}),
+        |mime, data| {
+            let (mime, base64) = validate_media(mime, data)?;
+            Ok(json!({"inlineData":{"mimeType":mime,"data":base64}}))
+        },
+    )?;
+    Ok(blocks)
 }
 
 fn validate_media(media_type: &str, data: &str) -> Result<(String, String), ProviderError> {

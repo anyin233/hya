@@ -1,8 +1,6 @@
 use std::collections::BTreeMap;
 
-use hya_proto::{
-    Event, FinishReason, MessageId, PartId, Role, SessionId, TokenUsage, ToolCallId, ToolName,
-};
+use hya_proto::{Event, FinishReason, MessageId, PartId, Role, SessionId, TokenUsage, ToolName};
 use serde_json::{Value, json};
 
 use crate::{Decoder, ProviderError};
@@ -11,25 +9,7 @@ use crate::{Decoder, ProviderError};
 /// `delta.reasoning_content`; the chat encoder replays exactly these parts.
 pub(crate) const REASONING_CONTENT_TYPE: &str = "reasoning_content";
 
-struct ToolAsm {
-    part: PartId,
-    call: ToolCallId,
-    name: String,
-    args: String,
-    started: bool,
-}
-
-impl ToolAsm {
-    fn new() -> Self {
-        Self {
-            part: PartId::new(),
-            call: ToolCallId::new(),
-            name: String::new(),
-            args: String::new(),
-            started: false,
-        }
-    }
-}
+use crate::wire::ToolAsm;
 
 /// Stateful decoder for OpenAI Chat Completions SSE chunks.
 ///
@@ -94,7 +74,7 @@ impl OpenAiChatDecoder {
         self.end_reasoning(&mut out);
         self.end_text(&mut out);
         for (_, entry) in std::mem::take(&mut self.tools) {
-            let input = serde_json::from_str(&entry.args).unwrap_or(Value::Null);
+            let input = entry.input();
             out.push(Event::ToolCallRequested {
                 session,
                 message,
@@ -231,15 +211,7 @@ impl Decoder for OpenAiChatDecoder {
                 if let Some(args) = tc.pointer("/function/arguments").and_then(Value::as_str)
                     && !args.is_empty()
                 {
-                    entry.args.push_str(args);
-                    out.push(Event::ToolInputDelta {
-                        session,
-                        message,
-                        part: entry.part,
-                        call: entry.call,
-                        name: ToolName::new(&entry.name),
-                        delta: args.to_string(),
-                    });
+                    out.push(entry.delta(session, message, args));
                 }
             }
         }

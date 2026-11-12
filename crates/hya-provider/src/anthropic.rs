@@ -200,29 +200,11 @@ fn content_blocks(content: Value) -> Vec<Value> {
 }
 
 fn user_content(parts: &[Part]) -> Result<Value, ProviderError> {
-    let mut text = String::new();
-    let mut content = Vec::new();
-    let mut has_media = false;
-    for part in parts {
-        match part {
-            Part::Text { text: part, .. } => {
-                text.push_str(part);
-                if !part.is_empty() {
-                    content.push(json!({"type": "text", "text": part}));
-                }
-            }
-            Part::Media {
-                media_type, data, ..
-            } => {
-                has_media = true;
-                content.push(json!({
-                    "type": "image",
-                    "source": anthropic_image_source(media_type, data)?,
-                }));
-            }
-            Part::Reasoning { .. } | Part::Tool { .. } => {}
-        }
-    }
+    let (text, content, has_media) = crate::wire::user_content(
+        parts,
+        |text| json!({"type":"text","text":text}),
+        |mime, data| Ok(json!({"type":"image","source":anthropic_image_source(mime, data)?})),
+    )?;
     if has_media {
         Ok(Value::Array(content))
     } else {
@@ -241,70 +223,58 @@ fn emit_assistant(
     is_final_message: bool,
 ) -> Result<(), ProviderError> {
     let mut clusters: Vec<(Vec<Value>, String, Vec<&Part>)> = Vec::new();
-    let mut reasoning = Vec::new();
-    let mut text = String::new();
-    let mut tools = Vec::new();
-    for part in parts {
-        match part {
-            Part::Reasoning {
-                text: reasoning_text,
-                provider_data,
-                ..
-            } => {
-                if !tools.is_empty() {
-                    clusters.push((
-                        std::mem::take(&mut reasoning),
-                        std::mem::take(&mut text),
-                        std::mem::take(&mut tools),
-                    ));
-                }
-                if crate::ReasoningReplayPolicy::SignedCurrentTurn.replays(
-                    turn_start,
-                    message_index,
-                    part,
-                ) && let Some(data) = provider_data
-                {
-                    match (
-                        data.get("type").and_then(Value::as_str),
-                        data.get("signature").and_then(Value::as_str),
-                        data.get("data").and_then(Value::as_str),
-                    ) {
-                        (Some("thinking"), Some(signature), _) => {
-                            reasoning.push(json!({
-                                "type": "thinking",
-                                "thinking": reasoning_text,
-                                "signature": signature,
-                            }));
+    for parts in crate::wire::assistant_clusters(parts, |_| true) {
+        let mut reasoning = Vec::new();
+        let mut text = String::new();
+        let mut tools = Vec::new();
+        for part in parts {
+            match part {
+                Part::Reasoning {
+                    text: reasoning_text,
+                    provider_data,
+                    ..
+                } => {
+                    if crate::ReasoningReplayPolicy::SignedCurrentTurn.replays(
+                        turn_start,
+                        message_index,
+                        part,
+                    ) && let Some(data) = provider_data
+                    {
+                        match (
+                            data.get("type").and_then(Value::as_str),
+                            data.get("signature").and_then(Value::as_str),
+                            data.get("data").and_then(Value::as_str),
+                        ) {
+                            (Some("thinking"), Some(signature), _) => {
+                                reasoning.push(json!({
+                                    "type": "thinking",
+                                    "thinking": reasoning_text,
+                                    "signature": signature,
+                                }));
+                            }
+                            (Some("redacted_thinking"), _, Some(data)) => {
+                                reasoning.push(json!({
+                                    "type": "redacted_thinking",
+                                    "data": data,
+                                }));
+                            }
+                            _ => {}
                         }
-                        (Some("redacted_thinking"), _, Some(data)) => {
-                            reasoning.push(json!({
-                                "type": "redacted_thinking",
-                                "data": data,
-                            }));
-                        }
-                        _ => {}
                     }
                 }
-            }
-            Part::Text { text: t, .. } => {
-                if !tools.is_empty() {
-                    clusters.push((
-                        std::mem::take(&mut reasoning),
-                        std::mem::take(&mut text),
-                        std::mem::take(&mut tools),
-                    ));
+                Part::Text { text: t, .. } => {
+                    text.push_str(t);
                 }
-                text.push_str(t);
-            }
-            Part::Tool { .. } => tools.push(part),
-            Part::Media { media_type, .. } => {
-                return Err(ProviderError::Incompatible(format!(
-                    "Anthropic messages does not support assistant media type {media_type}"
-                )));
+                Part::Tool { .. } => tools.push(part),
+                Part::Media { media_type, .. } => {
+                    return Err(ProviderError::Incompatible(format!(
+                        "Anthropic messages does not support assistant media type {media_type}"
+                    )));
+                }
             }
         }
+        clusters.push((reasoning, text, tools));
     }
-    clusters.push((reasoning, text, tools));
     // Legacy final text after tools would be an Anthropic assistant prefill;
     // retain it before that step's tool_use blocks instead.
     if is_final_message && clusters.len() > 1 {

@@ -1,4 +1,4 @@
-//! Ordered [`Provider`] routes with first-match resolution and safe pre-stream failover.
+//! Ordered [`Provider`] routes with first-match resolution.
 
 use std::sync::Arc;
 
@@ -9,7 +9,7 @@ use crate::{
     ProviderError, ProviderModel,
 };
 
-/// Multiplexes providers; matching routes are attempted in registration order.
+/// Multiplexes providers; the first matching route is selected in registration order.
 #[derive(Default, Clone)]
 pub struct ProviderRouter {
     providers: Vec<Arc<dyn Provider>>,
@@ -131,40 +131,26 @@ impl ProviderRouter {
         models
     }
 
-    /// Stream through matching routes in registration order.
-    ///
-    /// A route is eligible for failover only when it fails before returning an
-    /// [`EventStream`] with an error classified by
-    /// [`ProviderError::is_retryable_before_stream`]. Once a stream is returned,
-    /// ownership passes to the caller and this router never replays the request.
+    /// Stream through the first matching route after preflight.
+    /// Errors are returned to the caller without trying another provider.
     pub async fn stream(
         &self,
         req: CompletionRequest,
         session: SessionId,
         message: MessageId,
     ) -> Result<EventStream, ProviderError> {
-        let mut last_retryable_error = None;
-        for provider in &self.providers {
-            let Some(caps) = provider.capabilities(&req.model) else {
-                continue;
-            };
-            crate::preflight(&caps, &req)?;
-            let mut routed = req.clone();
-            if !caps.reasoning_request {
-                routed.reasoning = None;
-            }
-            match provider.stream(routed, session, message).await {
-                Ok(stream) => return Ok(stream),
-                Err(error) if error.is_retryable_before_stream() => {
-                    last_retryable_error = Some(error);
-                }
-                Err(error) => return Err(error),
-            }
+        let provider = self
+            .resolve(&req.model)
+            .ok_or_else(|| ProviderError::UnknownModel(req.model.to_string()))?;
+        let caps = provider
+            .capabilities(&req.model)
+            .ok_or_else(|| ProviderError::UnknownModel(req.model.to_string()))?;
+        crate::preflight(&caps, &req)?;
+        let mut routed = req;
+        if !caps.reasoning_request {
+            routed.reasoning = None;
         }
-        last_retryable_error.map_or_else(
-            || Err(ProviderError::UnknownModel(req.model.to_string())),
-            Err,
-        )
+        provider.stream(routed, session, message).await
     }
 
     /// Compact via the resolved provider's `/responses/compact` when available.

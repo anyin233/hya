@@ -99,7 +99,7 @@ fn text_of(events: &[Result<Event, ProviderError>]) -> String {
 }
 
 #[tokio::test]
-async fn in_stream_rate_limit_before_any_event_is_retried_and_succeeds() {
+async fn in_stream_rate_limit_before_any_event_surfaces_once() {
     let (base_url, connections) = start_scripted_server(vec![
         sse_response(&[anthropic_error_frame(
             "rate_limit_error",
@@ -112,17 +112,16 @@ async fn in_stream_rate_limit_before_any_event_is_retried_and_succeeds() {
 
     let events = collect(&provider).await;
 
-    assert!(events.iter().all(Result::is_ok), "events: {events:?}");
-    assert_eq!(text_of(&events), "recovered");
+    assert!(matches!(events.as_slice(), [Err(_)]), "{events:?}");
     assert_eq!(
         connections.load(Ordering::SeqCst),
-        2,
-        "one retry, then success"
+        1,
+        "established streams are never replayed"
     );
 }
 
 #[tokio::test]
-async fn untyped_gateway_retry_later_error_before_any_event_is_retried() {
+async fn untyped_gateway_retry_later_error_before_any_event_surfaces_once() {
     // The observed gateway shape: no `type`, only a message asking to retry.
     let untyped = format!("data: {{\"error\":{{\"message\":\"{CONCURRENCY_MESSAGE}\"}}}}");
     let (base_url, connections) = start_scripted_server(vec![
@@ -134,13 +133,12 @@ async fn untyped_gateway_retry_later_error_before_any_event_is_retried() {
 
     let events = collect(&provider).await;
 
-    assert!(events.iter().all(Result::is_ok), "events: {events:?}");
-    assert_eq!(text_of(&events), "ok");
-    assert_eq!(connections.load(Ordering::SeqCst), 2);
+    assert!(matches!(events.as_slice(), [Err(_)]), "{events:?}");
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
-async fn in_stream_overloaded_before_any_event_is_retried() {
+async fn in_stream_overloaded_before_any_event_surfaces_once() {
     let (base_url, connections) = start_scripted_server(vec![
         sse_response(&[anthropic_error_frame("overloaded_error", "Overloaded")]),
         sse_response(&anthropic_success_frames("ok")),
@@ -150,8 +148,8 @@ async fn in_stream_overloaded_before_any_event_is_retried() {
 
     let events = collect(&provider).await;
 
-    assert!(events.iter().all(Result::is_ok), "events: {events:?}");
-    assert_eq!(connections.load(Ordering::SeqCst), 2);
+    assert!(matches!(events.as_slice(), [Err(_)]), "{events:?}");
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -174,7 +172,7 @@ async fn in_stream_rate_limit_after_a_delivered_delta_surfaces_without_retry() {
     assert_eq!(
         connections.load(Ordering::SeqCst),
         1,
-        "a delivered event closes the replay window"
+        "established streams are never replayed"
     );
     assert_eq!(text_of(&events), "partial");
     let errors: Vec<_> = events.iter().filter_map(|e| e.as_ref().err()).collect();
@@ -211,7 +209,7 @@ async fn non_retryable_in_stream_error_is_not_retried() {
 }
 
 #[tokio::test]
-async fn in_stream_retries_respect_max_attempts() {
+async fn in_stream_failures_do_not_consume_remaining_attempts() {
     let rate_limited = sse_response(&[anthropic_error_frame(
         "rate_limit_error",
         CONCURRENCY_MESSAGE,
@@ -229,8 +227,8 @@ async fn in_stream_retries_respect_max_attempts() {
 
     assert_eq!(
         connections.load(Ordering::SeqCst),
-        3,
-        "the shared attempt budget bounds in-stream retries"
+        1,
+        "the attempt budget only applies before stream establishment"
     );
     assert!(
         matches!(
@@ -242,7 +240,7 @@ async fn in_stream_retries_respect_max_attempts() {
 }
 
 #[tokio::test]
-async fn responses_failed_with_server_error_code_before_any_event_is_retried() {
+async fn responses_failed_with_server_error_code_before_any_event_surfaces_once() {
     let failed = r#"data: {"type":"response.failed","response":{"error":{"code":"server_error","message":"The server had an error"}}}"#.to_string();
     let completed = [
         r#"data: {"type":"response.output_text.delta","output_index":0,"delta":"done"}"#
@@ -283,8 +281,8 @@ async fn responses_failed_with_server_error_code_before_any_event_is_retried() {
     .await
     .unwrap();
 
-    assert!(events.iter().all(Result::is_ok), "events: {events:?}");
-    assert_eq!(connections.load(Ordering::SeqCst), 2);
+    assert!(matches!(events.as_slice(), [Err(_)]), "{events:?}");
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
 }
 
 /// Sequential scripted-response server: connection N receives `responses[N]`.

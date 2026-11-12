@@ -4,7 +4,7 @@
 //! Upstreams and gateways report throttling and outages in-band — Anthropic
 //! sends `{"type":"error","error":{"type":"overloaded_error",…}}`, Gemini
 //! sends `{"error":{"code":429,"status":"RESOURCE_EXHAUSTED",…}}`, Responses
-//! sends `response.failed` with `response.error.code`, and gateways often send
+//! sends `response.failed` with `response.error.code`, and gateways sometimes send
 //! only `{"error":{"message":"… please retry later"}}`. Recognized classes
 //! become the [`ProviderError::HttpStatus`] their out-of-band HTTP response
 //! would have carried, so the existing retryability rules
@@ -45,9 +45,7 @@ pub(crate) fn classify_error_frame(error: &Value, frame: &Value, fallback: &str)
             break;
         }
     }
-    let status = status
-        .or_else(|| numeric_status(error))
-        .or_else(|| status_for_message(message));
+    let status = status.or_else(|| numeric_status(error));
     let Some(status) = status else {
         return ProviderError::Http(message.to_string());
     };
@@ -97,27 +95,6 @@ fn numeric_status(error: &Value) -> Option<u16> {
         .filter_map(|key| error.get(key).and_then(Value::as_u64))
         .filter_map(|code| u16::try_from(code).ok())
         .find(|code| (400..=599).contains(code))
-}
-
-/// Last resort for untyped gateway frames: transient-sounding messages.
-fn status_for_message(message: &str) -> Option<u16> {
-    let message = message.to_ascii_lowercase();
-    let has = |needle: &str| message.contains(needle);
-    if has("overloaded") {
-        Some(529)
-    } else if has("rate limit")
-        || has("rate-limit")
-        || has("too many requests")
-        || has("concurrency limit")
-        || has("retry later")
-        || has("try again later")
-    {
-        Some(429)
-    } else if has("temporarily unavailable") || has("service unavailable") {
-        Some(503)
-    } else {
-        None
-    }
 }
 
 /// In-band retry hint in seconds (`retry_after`), bounded like `Retry-After`.
@@ -172,8 +149,8 @@ mod tests {
             ),
             (
                 json!({"error":{"message":"Concurrency limit exceeded for account, please retry later"}}),
-                Some(429),
-                true,
+                None,
+                false,
             ),
             (
                 json!({"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"quota"}}),

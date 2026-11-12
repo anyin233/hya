@@ -111,29 +111,11 @@ impl Protocol for OpenAiChatProtocol {
 }
 
 fn user_content(parts: &[Part]) -> Result<Value, ProviderError> {
-    let mut text = String::new();
-    let mut content = Vec::new();
-    let mut has_media = false;
-    for part in parts {
-        match part {
-            Part::Text { text: part, .. } => {
-                text.push_str(part);
-                if !part.is_empty() {
-                    content.push(json!({"type": "text", "text": part}));
-                }
-            }
-            Part::Media {
-                media_type, data, ..
-            } => {
-                has_media = true;
-                content.push(json!({
-                    "type": "image_url",
-                    "image_url": {"url": image_url(media_type, data)?},
-                }));
-            }
-            Part::Reasoning { .. } | Part::Tool { .. } => {}
-        }
-    }
+    let (text, content, has_media) = crate::wire::user_content(
+        parts,
+        |text| json!({"type":"text","text":text}),
+        |mime, data| Ok(json!({"type":"image_url","image_url":{"url":image_url(mime, data)?}})),
+    )?;
     if has_media {
         Ok(Value::Array(content))
     } else {
@@ -163,32 +145,28 @@ fn emit_assistant(
     parts: &[Part],
     thinking: bool,
 ) -> Result<(), ProviderError> {
-    let mut cluster = Cluster::default();
-    for part in parts {
-        match part {
-            Part::Text { text, .. } => {
-                if !cluster.tools.is_empty() {
-                    flush_cluster(out, &std::mem::take(&mut cluster), thinking);
+    for parts in crate::wire::assistant_clusters(parts, replays_reasoning) {
+        let mut cluster = Cluster::default();
+        for part in parts {
+            match part {
+                Part::Text { text, .. } => {
+                    cluster.text.push_str(text);
                 }
-                cluster.text.push_str(text);
-            }
-            Part::Tool { .. } => cluster.tools.push(part),
-            Part::Reasoning { text, .. } if replays_reasoning(part) => {
-                if !cluster.tools.is_empty() {
-                    flush_cluster(out, &std::mem::take(&mut cluster), thinking);
+                Part::Tool { .. } => cluster.tools.push(part),
+                Part::Reasoning { text, .. } if replays_reasoning(part) => {
+                    cluster.reasoning.push_str(text);
                 }
-                cluster.reasoning.push_str(text);
-            }
-            Part::Reasoning { .. } => {}
-            Part::Media { media_type, .. } => {
-                return Err(ProviderError::Incompatible(format!(
-                    "OpenAI chat does not support assistant media type {media_type}"
-                )));
+                Part::Reasoning { .. } => {}
+                Part::Media { media_type, .. } => {
+                    return Err(ProviderError::Incompatible(format!(
+                        "OpenAI chat does not support assistant media type {media_type}"
+                    )));
+                }
             }
         }
-    }
-    if !cluster.tools.is_empty() || !cluster.text.is_empty() || !cluster.reasoning.is_empty() {
-        flush_cluster(out, &cluster, thinking);
+        if !cluster.tools.is_empty() || !cluster.text.is_empty() || !cluster.reasoning.is_empty() {
+            flush_cluster(out, &cluster, thinking);
+        }
     }
     Ok(())
 }

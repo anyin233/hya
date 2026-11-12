@@ -32,7 +32,7 @@ pub mod http;
 mod media;
 /// OpenAI Chat Completions and Responses protocols and decoders.
 pub mod openai;
-/// Ordered model routing with safe pre-stream provider failover.
+/// Ordered model routing with first-match resolution.
 pub mod router;
 mod stream_error;
 mod wire;
