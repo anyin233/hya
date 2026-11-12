@@ -274,11 +274,9 @@ pub(crate) async fn run(
     // `list`/`info` never open the database. Every other command writes it
     // (a Session, a selection, a run, crash recovery on open), so it holds
     // the database lock, or goes through the server that owns the database.
-    let lock = if read_only {
-        None
-    } else {
+    if !read_only {
         match crate::db_writer::claim(db, "workflow")? {
-            Writer::Direct(lock) => lock,
+            Writer::Direct => {}
             Writer::Server(server) => {
                 let route = match command {
                     ControlCommand::Select {
@@ -327,7 +325,6 @@ pub(crate) async fn run(
     .await?;
     let result = runtime.execute(command).await;
     let shutdown = runtime.shutdown().await;
-    drop(lock);
     let result = result.map_err(control_error)?;
     shutdown?;
     finish(&result, json_output, is_run)
