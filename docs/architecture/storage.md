@@ -274,12 +274,13 @@ Index `resident_actor_claim_state` on `(state, actor_id)`.
 
 Claim acquisition, takeover, release, resident event append, and actor-bound
 admission transitions use indexed point checks inside SQLite transactions.
-Release terminalizes the exact actor/epoch's nonterminal admission rows before
-marking the full claim tuple reusable. Startup enumerates active resident
-claims once, advances their epochs before runtime readiness, runs the existing
-global abort only for non-actor rows, then aborts old actor rows through each
-recovered claim. A logical release recorded during restart never credits the
-new process's empty in-memory governor.
+Terminal archive finalization aborts the actor's nonterminal admissions through
+the final epoch, including earlier epochs left by recovery, before releasing the
+claim. Ordinary `release_claim` terminalizes only its exact actor/epoch. Startup
+enumerates active resident claims once, advances their epochs before runtime
+readiness, runs the existing global abort only for non-actor rows, then aborts
+old actor rows through each recovered claim. A logical release recorded during
+restart never credits the new process's empty in-memory governor.
 
 `commit_resident_registration` commits child creation, member/roster/channel
 events, the actor claim and the raw initial user message in one writer
