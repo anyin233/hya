@@ -8,23 +8,24 @@ use super::{SessionEngine, TurnDrainReport};
 use crate::error::CoreError;
 
 impl SessionEngine {
-    /// Inject a queued restore once. `true` also covers an injected prompt
-    /// whose assistant turn did not start before the previous process died.
+    /// Inject a queued restore once and return the restore prompt the next
+    /// turn answers: the new prompt, or the one injected by a previous process
+    /// that died before its assistant turn started. `None`: nothing to restore.
     pub async fn inject_restart_prompt(
         &self,
         session: hya_proto::SessionId,
-    ) -> Result<bool, CoreError> {
-        let Some(envelopes) = self
+    ) -> Result<Option<hya_proto::MessageId>, CoreError> {
+        let Some((prompt, envelopes)) = self
             .store
             .take_restart_resume(session, self.runtime_owner)
             .await?
         else {
-            return Ok(false);
+            return Ok(None);
         };
         for envelope in envelopes {
             self.publish_envelope(envelope);
         }
-        Ok(true)
+        Ok(Some(prompt))
     }
 
     /// Cancel active turns; the store indexes their shutdown finishes for restore.

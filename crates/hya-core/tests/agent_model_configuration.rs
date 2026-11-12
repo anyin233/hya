@@ -278,6 +278,7 @@ async fn session_override_drives_omitted_requests_but_explicit_model_stays_local
             &[],
             None,
             Some(model("explicit")),
+            None,
         )
         .await
         .unwrap();

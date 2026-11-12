@@ -109,8 +109,14 @@ impl RunRegistry {
         self.lock_runs().contains_key(&session)
     }
 
+    /// Refuse every new run from now on (`start` returns `None`).
     pub(crate) fn begin_drain(&self) {
         self.inner.draining.store(true, Ordering::Release);
+    }
+
+    /// Whether a drain began. A run reserved before it must not admit work.
+    pub(crate) fn draining(&self) -> bool {
+        self.inner.draining.load(Ordering::Acquire)
     }
 
     pub(crate) async fn wait_idle(&self, deadline: tokio::time::Instant) -> bool {

@@ -1038,6 +1038,7 @@ async fn steer_surfaces_mail_inside_a_root_turn_tool_result() {
             &[],
             None,
             None,
+            None,
         )
         .await;
     let _ = finish;

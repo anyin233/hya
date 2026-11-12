@@ -1,8 +1,9 @@
 //! `/v1` turn domain: the unified event-driven admission surface and turn
 //! control.
 //!
-//! `CreateTurn` admits work and returns a handle immediately; the turn runs
-//! on a spawned task and its progress arrives through the event streams.
+//! `CreateTurn` prepares the turn, reserves the session, and hands both to a
+//! spawned task that admits the prompt and runs the turn; the call returns
+//! once the prompt is admitted and progress arrives through the event streams.
 //! `WaitTurn` exists for synchronous clients only.
 
 use std::path::PathBuf;
@@ -20,40 +21,151 @@ use crate::runs::RunGuard;
 use hya_api::v1 as pb;
 use hya_api::v1::create_turn_request::Kind;
 use hya_core::attachments::PromptAttachment;
-use hya_proto::{ModelRef, SessionId};
+use hya_proto::{MessageId, ModelRef, SessionId};
 
 use super::V1Error;
 use super::session::parse_session;
 
-/// Spawn `session`'s already-admitted turn on a server run: `run`'s
-/// run-registry entry is held by the spawned task until the turn ends, so
-/// clients see the session busy for exactly the turn's duration. The shared
-/// tail of every `create_turn` kind and restart restore.
-async fn spawn_turn_run(
-    st: &ServerState,
-    session: SessionId,
-    run: RunGuard,
+/// Turn inputs prepared before the run is reserved: everything slow or
+/// fallible a turn needs runs before anything is admitted, so a failure
+/// admits nothing and a stop never waits on it.
+struct PreparedTurn {
     agent: hya_core::AgentSpec,
     guidance: Option<Arc<str>>,
     external_dirs: Vec<PathBuf>,
     explicit_model: Option<ModelRef>,
-) {
+}
+
+async fn prepare_turn(
+    st: &ServerState,
+    session: SessionId,
+    explicit_model: Option<ModelRef>,
+) -> Result<PreparedTurn, V1Error> {
+    let turn = crate::support::reference::session_agent_with_guidance(
+        st,
+        session,
+        explicit_model.as_ref(),
+    )
+    .await?;
+    let external_dirs =
+        crate::support::reference::external_directories_at(st, &turn.agent.workdir).await;
+    Ok(PreparedTurn {
+        agent: turn.agent,
+        guidance: turn.guidance,
+        external_dirs,
+        explicit_model,
+    })
+}
+
+/// What a reserved run's turn task commits before it runs the turn.
+enum Admission {
+    /// A client prompt, under the id the response already names.
+    Prompt {
+        message: MessageId,
+        text: String,
+        attachments: Vec<PromptAttachment>,
+    },
+    /// An expanded slash command, under the id the response already names.
+    Command {
+        message: MessageId,
+        command: String,
+        arguments: String,
+        text: String,
+    },
+    /// The session's pending restart restore, if it still applies.
+    Restore,
+}
+
+/// A run reserved before the server began to stop admits nothing.
+fn refuse_if_stopping(st: &ServerState) -> Result<(), V1Error> {
+    if st.runs.draining() {
+        return Err(V1Error::unavailable("the server is stopping"));
+    }
+    Ok(())
+}
+
+/// Commit the run's prompt: the client prompt or command (bringing an
+/// archived session back and lifting a user stop first), or the restore
+/// prompt. `None`: no restore applies any more.
+async fn admit(
+    st: &ServerState,
+    session: SessionId,
+    admission: Admission,
+    turn: &PreparedTurn,
+) -> Result<Option<MessageId>, V1Error> {
+    refuse_if_stopping(st)?;
+    let message = match admission {
+        Admission::Restore => return Ok(st.engine.inject_restart_prompt(session).await?),
+        Admission::Prompt {
+            message,
+            text,
+            attachments,
+        } => {
+            super::session::unarchive_for_turn(st, session).await?;
+            st.engine.resume_after_user_stop(session);
+            st.engine
+                .admit_user_prompt_with_attachments(session, message, text, attachments)
+                .await?
+        }
+        Admission::Command {
+            message,
+            command,
+            arguments,
+            text,
+        } => {
+            super::session::unarchive_for_turn(st, session).await?;
+            st.engine.resume_after_user_stop(session);
+            if let Some(model) = &turn.explicit_model {
+                st.engine.switch_model(session, model.clone()).await?;
+            }
+            st.engine
+                .admit_command_prompt_with_id(session, message, command, arguments, text)
+                .await?
+        }
+    };
+    spawn_auto_title(st, session, &turn.agent.model);
+    Ok(Some(message))
+}
+
+/// Hand a reserved run to its turn task and wait until the task admitted its
+/// prompt. The task owns everything from admission to the turn's closing
+/// assistant pair, and holds `run` until the turn ends (clients see the
+/// session busy for exactly that time; a stop waits for it), so dropping the
+/// caller strands nothing. `false`: a restore found nothing to restore.
+async fn spawn_turn_run(
+    st: &ServerState,
+    session: SessionId,
+    run: RunGuard,
+    turn: PreparedTurn,
+    admission: Admission,
+) -> Result<bool, V1Error> {
     if let Some((paused, barrier)) = &st.turn_spawn_barrier
         && *paused == session
     {
         barrier.wait().await;
         barrier.wait().await;
     }
-    let engine = st.engine.clone();
+    let (admitted, admission_result) = tokio::sync::oneshot::channel();
+    let st = st.clone();
     tokio::spawn(async move {
-        if let Err(error) = engine
+        let prompt = match admit(&st, session, admission, &turn).await {
+            Ok(Some(prompt)) => prompt,
+            result => {
+                let _ = admitted.send(result.map(|_| false));
+                return;
+            }
+        };
+        let _ = admitted.send(Ok(true));
+        if let Err(error) = st
+            .engine
             .run_turn_with_external_dirs_and_guidance(
                 session,
-                &agent,
+                &turn.agent,
                 run.token(),
-                &external_dirs,
-                guidance,
-                explicit_model,
+                &turn.external_dirs,
+                turn.guidance,
+                turn.explicit_model,
+                Some(prompt),
             )
             .await
         {
@@ -61,6 +173,9 @@ async fn spawn_turn_run(
         }
         drop(run);
     });
+    admission_result
+        .await
+        .map_err(|_| V1Error::internal("the turn task ended before admitting its prompt"))?
 }
 
 impl crate::AppState {
@@ -94,24 +209,9 @@ async fn resume_turn(st: &ServerState, session: SessionId) -> Result<bool, V1Err
     if st.is_busy(session) {
         return Err(V1Error::session_busy());
     }
+    let turn = prepare_turn(st, session, None).await?;
     let run = st.start_run(session).ok_or_else(V1Error::session_busy)?;
-    if !st.engine.inject_restart_prompt(session).await? {
-        return Ok(false);
-    }
-    let turn = crate::support::reference::session_agent_with_guidance(st, session).await?;
-    let external_dirs =
-        crate::support::reference::external_directories_at(st, &turn.agent.workdir).await;
-    spawn_turn_run(
-        st,
-        session,
-        run,
-        turn.agent,
-        turn.guidance,
-        external_dirs,
-        None,
-    )
-    .await;
-    Ok(true)
+    spawn_turn_run(st, session, run, turn, Admission::Restore).await
 }
 
 pub(crate) fn router() -> Router<ServerState> {
@@ -236,32 +336,18 @@ async fn create_turn(
     match request.kind {
         Some(Kind::Prompt(prompt)) => {
             let attachments = prompt_attachments(prompt.attachments)?;
-            let turn = crate::support::reference::session_agent_with_guidance(&st, session).await?;
+            let turn = prepare_turn(&st, session, None).await?;
             if !attachments.is_empty() {
                 ensure_image_input(&st, session, &turn.agent).await?;
             }
             let run = st.start_run(session).ok_or_else(V1Error::session_busy)?;
-            // A new turn brings an archived session back.
-            super::session::unarchive_for_turn(&st, session).await?;
-            // The user acts on the team again: lift a cancel's stop.
-            st.engine.resume_after_user_stop(session);
-            let message = st
-                .engine
-                .admit_user_prompt_with_attachments(session, prompt.text, attachments)
-                .await?;
-            spawn_auto_title(&st, session, &turn.agent.model);
-            let external_dirs =
-                crate::support::reference::external_directories_at(&st, &turn.agent.workdir).await;
-            spawn_turn_run(
-                &st,
-                session,
-                run,
-                turn.agent,
-                turn.guidance,
-                external_dirs,
-                None,
-            )
-            .await;
+            let message = MessageId::new();
+            let admission = Admission::Prompt {
+                message,
+                text: prompt.text,
+                attachments,
+            };
+            spawn_turn_run(&st, session, run, turn, admission).await?;
             Ok(Json(running_turn(session, &message.to_string())))
         }
         Some(Kind::Command(command)) => {
@@ -282,16 +368,8 @@ async fn create_turn(
                     }),
                 }));
             }
-            let run = st.start_run(session).ok_or_else(V1Error::session_busy)?;
-            // A new turn brings an archived session back.
-            super::session::unarchive_for_turn(&st, session).await?;
-            // The user acts on the team again: lift a cancel's stop.
-            st.engine.resume_after_user_stop(session);
             let explicit_model =
                 (!command.model.trim().is_empty()).then(|| ModelRef::new(command.model.trim()));
-            if let Some(model) = &explicit_model {
-                st.engine.switch_model(session, model.clone()).await?;
-            }
             // Custom slash commands from the session's catalog (its workdir,
             // then its Project's roots) expand server-side; unknown commands
             // keep the literal slash.
@@ -313,29 +391,16 @@ async fn create_turn(
                     }
                 })
             };
-            let message = st
-                .engine
-                .admit_command_prompt(
-                    session,
-                    command.command.clone(),
-                    command.arguments.clone(),
-                    text,
-                )
-                .await?;
-            let turn = crate::support::reference::session_agent_with_guidance(&st, session).await?;
-            spawn_auto_title(&st, session, &turn.agent.model);
-            let external_dirs =
-                crate::support::reference::external_directories_at(&st, &turn.agent.workdir).await;
-            spawn_turn_run(
-                &st,
-                session,
-                run,
-                turn.agent,
-                turn.guidance,
-                external_dirs,
-                explicit_model,
-            )
-            .await;
+            let turn = prepare_turn(&st, session, explicit_model).await?;
+            let run = st.start_run(session).ok_or_else(V1Error::session_busy)?;
+            let message = MessageId::new();
+            let admission = Admission::Command {
+                message,
+                command: command.command,
+                arguments: command.arguments,
+                text,
+            };
+            spawn_turn_run(&st, session, run, turn, admission).await?;
             Ok(Json(running_turn(session, &message.to_string())))
         }
         Some(Kind::Shell(shell)) => {
@@ -345,14 +410,22 @@ async fn create_turn(
                     V1Error::new(hya_api::error::Code::Internal, error.text().to_owned())
                 })?;
             let run = st.start_run(session).ok_or_else(V1Error::session_busy)?;
-            // A new turn brings an archived session back.
-            super::session::unarchive_for_turn(&st, session).await?;
-            let engine = st.engine.clone();
-            let command = shell.command;
-            let (message, _finish) = engine
-                .run_shell(session, &agent, command, run.token())
-                .await?;
-            drop(run);
+            // The task owns the shell turn from its note's admission to its
+            // closing pair; the handler only waits for the outcome.
+            let task = st.clone();
+            let (message, _finish) = tokio::spawn(async move {
+                refuse_if_stopping(&task)?;
+                // A new turn brings an archived session back.
+                super::session::unarchive_for_turn(&task, session).await?;
+                let outcome = task
+                    .engine
+                    .run_shell(session, &agent, shell.command, run.token())
+                    .await;
+                drop(run);
+                Ok::<_, V1Error>(outcome?)
+            })
+            .await
+            .map_err(|error| V1Error::internal(format!("shell turn task failed: {error}")))??;
             Ok(Json(pb::CreateTurnResponse {
                 turn: Some(pb::TurnInfo {
                     id: message.to_string(),

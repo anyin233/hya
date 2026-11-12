@@ -1897,6 +1897,7 @@ async fn root_turn_task_tool_propagates_guidance_to_child_provider_once() {
             &[],
             Some(guidance),
             None,
+            None,
         )
         .await
         .expect("parent turn with task tool");

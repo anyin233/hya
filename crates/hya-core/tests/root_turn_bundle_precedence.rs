@@ -1501,7 +1501,7 @@ async fn root_sidecar_loss_after_ack_fails_before_dispatch_and_model_poll() {
         })
         .await
         .unwrap();
-    engine
+    let prompt = engine
         .admit_user_prompt(session, "transport loss after ACK".to_string())
         .await
         .unwrap();
@@ -1514,7 +1514,15 @@ async fn root_sidecar_loss_after_ack_fails_before_dispatch_and_model_poll() {
     };
 
     let error = engine
-        .run_turn(session, &agent, CancellationToken::new())
+        .run_turn_with_external_dirs_and_guidance(
+            session,
+            &agent,
+            CancellationToken::new(),
+            &[],
+            None,
+            None,
+            Some(prompt),
+        )
         .await
         .expect_err("transport loss after ACK must cancel before dispatch");
     assert!(matches!(error, CoreError::Cancelled));
@@ -1543,7 +1551,7 @@ async fn root_sidecar_loss_after_ack_fails_before_dispatch_and_model_poll() {
     assert_eq!(
         starts.len(),
         1,
-        "the admitted prompt gets one terminal answer"
+        "the prompt the turn owns gets one terminal answer"
     );
     let finishes: Vec<_> = events
         .iter()

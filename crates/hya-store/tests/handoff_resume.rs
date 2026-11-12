@@ -63,7 +63,7 @@ async fn restore_is_appended_once_and_survives_a_new_owner() {
     store.release_runtime_owner(owner).unwrap();
     let next = OwnerRunId::new();
     store.claim_runtime_owner(next).unwrap();
-    let envelopes = store
+    let (prompt, envelopes) = store
         .take_restart_resume(session, next)
         .await
         .unwrap()
@@ -74,13 +74,14 @@ async fn restore_is_appended_once_and_survives_a_new_owner() {
         1,
         "a restore must remain pending until its assistant turn starts"
     );
-    assert!(
+    assert_eq!(
         store
             .take_restart_resume(session, next)
             .await
             .unwrap()
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        (prompt, Vec::new()),
+        "a second start reuses the injected prompt"
     );
     let projection = store.read_projection(session).await.unwrap();
     assert_eq!(projection.session.messages.len(), 2);
@@ -194,7 +195,7 @@ async fn another_cancel_replaces_an_unconsumed_restore() {
             .unwrap();
     }
     assert_eq!(store.list_pending_resumes().await.unwrap().len(), 1);
-    let injected = store
+    let (_, injected) = store
         .take_restart_resume(session, owner)
         .await
         .unwrap()
@@ -266,7 +267,7 @@ async fn restore_is_derived_from_the_indexed_messages_noncompleted_tools() {
         store.list_pending_resumes().await.unwrap()[0].message,
         message
     );
-    let envelopes = store
+    let (_, envelopes) = store
         .take_restart_resume(session, owner)
         .await
         .unwrap()
@@ -326,7 +327,7 @@ async fn restore_lists_children_interrupted_before_the_root_message_started() {
         .close_open_turns(root, FinishCause::Shutdown, "root closes later")
         .await
         .unwrap();
-    let prompt = store
+    let (_, prompt) = store
         .take_restart_resume(root, owner)
         .await
         .unwrap()
@@ -355,7 +356,7 @@ async fn restore_lists_children_interrupted_before_the_root_message_started() {
         .close_open_turns(root, FinishCause::Shutdown, "next interruption")
         .await
         .unwrap();
-    let prompt = store
+    let (_, prompt) = store
         .take_restart_resume(root, owner)
         .await
         .unwrap()
