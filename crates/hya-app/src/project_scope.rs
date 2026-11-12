@@ -34,6 +34,7 @@ struct ProjectSources {
     base_revision: u64,
     roots: Vec<PathBuf>,
     attempted: Option<[u8; 32]>,
+    bundle_inputs: Option<[u8; 32]>,
     plugins: ProjectPlugins,
     bundles: BTreeMap<PathBuf, BundleRecord>,
 }
@@ -154,7 +155,20 @@ impl ProjectScopeRefresh {
             (0, Some(error)) => return Err(error),
             (_, error) => error,
         };
-        let inputs = ScopeInputs::scan(&base, roots.to_vec(), self.plugins.enabled()).await?;
+        let scan_bundles = explicit || state.bundle_inputs.is_none() || state.roots != roots;
+        let cached_bundles = if scan_bundles {
+            None
+        } else {
+            state.bundle_inputs
+        };
+        let inputs = ScopeInputs::scan(
+            &base,
+            roots.to_vec(),
+            self.plugins.enabled(),
+            cached_bundles,
+        )
+        .await?;
+        state.bundle_inputs = Some(inputs.bundle_inputs);
         if !explicit
             && state.attempted == Some(inputs.fingerprint)
             && runtime.scope_overlay(&key).is_some()
@@ -162,13 +176,6 @@ impl ProjectScopeRefresh {
             return Ok(false);
         }
         state.attempted = Some(inputs.fingerprint);
-        if !inputs.has_tiers() {
-            let changed = runtime.scope_overlay(&key).is_some();
-            runtime.drop_scope(&key);
-            state.bundles.clear();
-            state.plugins = ProjectPlugins::default();
-            return Ok(changed);
-        }
         let mut changed = runtime.scope_overlay(&key).is_none()
             || state.base_revision != base.revision
             || state.roots != roots;
@@ -193,7 +200,21 @@ impl ProjectScopeRefresh {
             }
         }
         changed |= plugins_changed;
-        let dirs = project_bundle_dirs(roots, &state.bundles, &mut errors);
+        let dirs = if scan_bundles {
+            project_bundle_dirs(roots, &state.bundles, &mut errors)
+        } else {
+            roots
+                .iter()
+                .flat_map(|root| {
+                    let directory = root_bundles_dir(root);
+                    state
+                        .bundles
+                        .keys()
+                        .filter(move |dir| dir.starts_with(&directory))
+                        .cloned()
+                })
+                .collect()
+        };
         let present = dirs.iter().cloned().collect::<BTreeSet<_>>();
         state.bundles.retain(|dir, record| {
             let keep = present.contains(dir);
@@ -209,11 +230,16 @@ impl ProjectScopeRefresh {
                 published: None,
                 error: None,
             });
-            let identity = hya_bundle::read_bundle_identity(dir)
-                .map_err(|error| CoreError::Invalid(error.to_string()));
+            let identity = if scan_bundles {
+                hya_bundle::read_bundle_identity(dir).ok()
+            } else {
+                record.published.as_ref().map(|published| {
+                    let bundle = &published.catalog.bundles()[0];
+                    (bundle.identity().id.clone(), bundle.namespace().to_string())
+                })
+            };
             let declared = identity
                 .as_ref()
-                .ok()
                 .map(|(id, namespace)| (id.as_str(), namespace.as_str()));
             let retained = record.published.as_ref().map(|published| {
                 let bundle = &published.catalog.bundles()[0];
@@ -246,17 +272,19 @@ impl ProjectScopeRefresh {
                 published.sources.clear();
                 changed = true;
             }
-            let digest = bundle_input_digest(dir);
-            let attempted = digest.as_ref().ok().copied();
+            let digest = scan_bundles.then(|| bundle_input_digest(dir));
+            let attempted = match &digest {
+                Some(digest) => digest.as_ref().ok().copied(),
+                None => record.attempted,
+            };
             if enabled_changed
-                || record.attempted != attempted
-                || record.attempted.is_none()
+                || (scan_bundles && (record.attempted != attempted || record.attempted.is_none()))
                 || (explicit && record.error.is_some())
             {
                 record.attempted = attempted;
                 let prepared = match digest {
-                    Ok(_) => self.prepare_bundle(dir, &base.disabled).await,
-                    Err(error) => Err(error),
+                    Some(Err(error)) => Err(error),
+                    _ => self.prepare_bundle(dir, &base.disabled).await,
                 };
                 match prepared {
                     Ok(bundle) => {
@@ -539,21 +567,14 @@ fn bundle_input_digest(dir: &std::path::Path) -> Result<[u8; 32], CoreError> {
     Ok(digest.finalize().into())
 }
 
-/// Change detector for one Project scope, computed at every bind without
-/// preparing anything.
-///
-/// Extension point: every tier the overlay carries must fold its inputs into
-/// `fingerprint` (and report itself through [`Self::has_tiers`]) so a change
-/// republishes the Project. Project plugins add their `plugin.toml` digests
-/// here.
+/// Binding inputs: live plugin declarations and the last explicitly scanned
+/// bundle sources. Bundle bytes are read only on first use, root changes or
+/// explicit refresh.
 struct ScopeInputs {
     /// Digest of the base revision, the root list, and every tier's inputs;
     /// published as [`ScopeOverlay::fingerprint`].
     fingerprint: [u8; 32],
-    /// Whether any root has a project bundle directory.
-    bundles: bool,
-    /// Whether any root has a `plugin.toml` (and project plugins are on).
-    plugins: bool,
+    bundle_inputs: [u8; 32],
 }
 
 impl ScopeInputs {
@@ -561,12 +582,12 @@ impl ScopeInputs {
         base: &BaseCatalogs,
         roots: Vec<PathBuf>,
         plugins_enabled: bool,
+        cached_bundles: Option<[u8; 32]>,
     ) -> Result<Self, CoreError> {
         let revision = base.revision;
         tokio::task::spawn_blocking(move || {
             let mut plugin_hasher = sha2::Sha256::new();
             plugin_hasher.update(b"hya-project-plugins-v1\0");
-            let mut plugins = false;
             if plugins_enabled {
                 for id in crate::config::load_configured_plugin_ids() {
                     plugin_hasher.update(id.as_bytes());
@@ -575,28 +596,27 @@ impl ScopeInputs {
                 for root in &roots {
                     plugin_hasher.update(b"root\0");
                     plugin_hasher.update(root.as_os_str().as_encoded_bytes());
-                    plugins |= crate::plugins::project_plugins_digest(root, &mut plugin_hasher);
+                    crate::plugins::project_plugins_digest(root, &mut plugin_hasher);
                 }
             }
             let plugin_digest: [u8; 32] = plugin_hasher.finalize().into();
             let mut hasher = sha2::Sha256::new();
             hasher.update(b"hya-project-scope-v1\0");
             hasher.update(revision.to_le_bytes());
-            let bundles = project_roots_digest(&roots, &mut hasher);
+            let bundle_inputs = cached_bundles.unwrap_or_else(|| {
+                let mut digest = sha2::Sha256::new();
+                project_roots_digest(&roots, &mut digest);
+                <[u8; 32]>::from(digest.finalize())
+            });
+            hasher.update(bundle_inputs);
             hasher.update(plugin_digest);
             Ok(Self {
                 fingerprint: hasher.finalize().into(),
-                bundles,
-                plugins,
+                bundle_inputs,
             })
         })
         .await
         .map_err(|error| CoreError::Invalid(format!("scan Project roots: {error}")))?
-    }
-
-    /// Whether the Project has anything to overlay on the base.
-    fn has_tiers(&self) -> bool {
-        self.bundles || self.plugins
     }
 }
 

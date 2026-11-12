@@ -4,7 +4,7 @@
 //! Project: they load from `<root>/.hya/bundles` of every Project root in
 //! order (first root wins on id or namespace), a project bundle shadows an
 //! installed bundle with the same identity id **or** the same namespace, and
-//! content changes are republished at that Project's next bind via a content
+//! content changes are republished by explicit refresh via a content
 //! fingerprint (see [`crate::ProjectScopeRefresh`]).
 //!
 //! [`install_project_bundle`] and [`remove_project_bundle`] manage this tier
@@ -168,17 +168,15 @@ pub(crate) fn load_project_bundle_dirs_for_roots(
     Ok((kept, fingerprint))
 }
 
-/// Cheap change detector for the project bundles of `roots`: the root list,
+/// Explicit refresh change detector for the project bundles of `roots`: the root list,
 /// every bundle directory's content digest, and every bundle `config.yml`
 /// digest (configuration changes models and restarts spawning bundles).
 /// Nothing is prepared; equal digests mean [`load_project_bundle_dirs_for_roots`]
 /// and the bundles' configuration would load the same.
 ///
-/// Folds everything into `hasher`; returns whether any root has a bundle
-/// directory.
-pub(crate) fn project_roots_digest(roots: &[PathBuf], hasher: &mut sha2::Sha256) -> bool {
+/// Fold the source inputs into `hasher`.
+pub(crate) fn project_roots_digest(roots: &[PathBuf], hasher: &mut sha2::Sha256) {
     use sha2::Digest as _;
-    let mut any = false;
     for root in roots {
         hasher.update(b"root\0");
         hasher.update(root.as_os_str().as_encoded_bytes());
@@ -187,7 +185,6 @@ pub(crate) fn project_roots_digest(roots: &[PathBuf], hasher: &mut sha2::Sha256)
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => {
-                any = true;
                 hasher.update(error.to_string());
                 continue;
             }
@@ -198,14 +195,12 @@ pub(crate) fn project_roots_digest(roots: &[PathBuf], hasher: &mut sha2::Sha256)
                 Ok(entry) if entry.path().is_dir() => dirs.push(entry.path()),
                 Ok(_) => {}
                 Err(error) => {
-                    any = true;
                     hasher.update(error.to_string());
                 }
             }
         }
         dirs.sort();
         for dir in dirs {
-            any = true;
             hasher.update(b"bundle\0");
             hasher.update(dir.as_os_str().as_encoded_bytes());
             match directory_digest(&dir) {
@@ -226,7 +221,6 @@ pub(crate) fn project_roots_digest(roots: &[PathBuf], hasher: &mut sha2::Sha256)
     }
     // Failed reads are inputs too. The per-source loader reports the error
     // and retains that source; discovery must still visit the other sources.
-    any
 }
 
 /// Build a [`BundleSource`] from a directory: every regular file below it,

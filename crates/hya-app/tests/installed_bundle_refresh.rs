@@ -1032,11 +1032,23 @@ resources:
 
     std::fs::create_dir_all(&config_dir).unwrap();
     std::fs::write(config_dir.join("config.yml"), "mode: first\n").unwrap();
-    assert!(refresh.refresh_if_changed(&runtime).await.unwrap());
+    assert!(!refresh.refresh_if_changed(&runtime).await.unwrap());
+    assert_eq!(describe(), expected("absent"));
+    assert!(
+        hya_core::RuntimeCatalogRefresh::refresh_explicit(&refresh, &runtime)
+            .await
+            .unwrap()
+    );
     assert_eq!(describe(), expected("mode: first"));
 
     std::fs::write(config_dir.join("config.yml"), "mode: second\n").unwrap();
-    assert!(refresh.refresh_if_changed(&runtime).await.unwrap());
+    assert!(!refresh.refresh_if_changed(&runtime).await.unwrap());
+    assert_eq!(describe(), expected("mode: first"));
+    assert!(
+        hya_core::RuntimeCatalogRefresh::refresh_explicit(&refresh, &runtime)
+            .await
+            .unwrap()
+    );
     assert_eq!(describe(), expected("mode: second"));
     assert!(!refresh.refresh_if_changed(&runtime).await.unwrap());
     drop(refresh);
