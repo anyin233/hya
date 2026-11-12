@@ -91,27 +91,23 @@ tool result. The upstream requirement is described in
 
 ### Capabilities
 
-`Capabilities` has nine fields:
+`Capabilities` has seven fields:
 
 | Field | Meaning |
 | --- | --- |
 | `streaming_tool_calls` | Route may stream tool-call assembly mid-turn. |
-| `parallel_tool_calls` | Multiple tool calls in one assistant turn are allowed. |
 | `usage_reporting` | Stream may emit token usage on finish. |
-| `json_output` | Structured JSON output mode (not used by current HTTP defaults). |
-| `reasoning_stream` | Provider streams separate reasoning parts as first-class stream events (flag only; HTTP default is off). |
 | `reasoning_request` | Route accepts a reasoning-effort parameter on the request. |
 | `max_context` | Advertised context window (tokens). |
 | `max_output` | Advertised max output tokens (`0` means unspecified / unknown). Participates in identity hashing with the other caps. |
+| `image_input` | `Some(true)` / `Some(false)` when the model's config declares `modalities.input`, `None` when unknown. Prompt admission rejects image attachments only on `Some(false)`. |
 | `prompt_caching` | Anthropic route may emit ephemeral prompt-cache breakpoints. |
+
 **HTTP default** (`HttpProvider::new`, every kind and model):
 
 - `streaming_tool_calls` = true
-- `parallel_tool_calls` = true
 - `usage_reporting` = true
 - `reasoning_request` = true
-- `json_output` = false
-- `reasoning_stream` = false
 - `max_context` = **200_000**
 - `max_output` = 0
 
@@ -754,12 +750,13 @@ For `HttpProvider` the identity bytes include
   `anthropic`, `google`)
 - endpoint string
 - optional Google base
-- alias rules markers
 - sorted model set
 - per-model reasoning variants
 - per-model reasoning defaults
 - per-model limits (tag `model-limits`, count, then model id + context +
   output per row, sorted by model id) — they shape the encoded max-tokens field
+- per-model image-input support (tag `model-image-input`, count, then model id
+  + support byte per row, sorted by model id)
 - full `Capabilities` bits
 - auth **shape** (style tag + non-secret fields)
 - **bearer-resolver slot:** literal `bearer-resolver-slot`, then a presence byte

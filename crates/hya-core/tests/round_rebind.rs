@@ -70,7 +70,6 @@ impl Provider for RoundRecorder {
     fn capabilities(&self, _model: &ModelRef) -> Option<Capabilities> {
         Some(Capabilities {
             streaming_tool_calls: true,
-            parallel_tool_calls: true,
             usage_reporting: true,
             max_context: 200_000,
             ..Capabilities::default()
