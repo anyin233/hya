@@ -86,51 +86,62 @@ impl SessionStore {
         }
 
         let projection = replay_projection(&self.projections, &mut tx, root).await?;
+        let reject = |reason: String| StoreError::MailAuthorizationRejected {
+            sender: from.clone(),
+            channel: format!("direct:{address}"),
+            reason,
+        };
         if from != scope::ROOT_HANDLE && !projection.team.roster.contains_key(&from) {
-            return Err(StoreError::MailAuthorizationRejected {
-                sender: from,
-                channel: address,
-                reason: "sender is not a live team member".into(),
-            });
+            return Err(reject("sender is not a live team member".into()));
         }
+        let handle = projection
+            .team
+            .resolve_in_scope(&from, &address)
+            .or_else(|| {
+                // Preserve canonical-handle revival; relative leaves resolve only
+                // against the live roster until handle/channel unification.
+                projection
+                    .team
+                    .archived
+                    .get_key_value(&address)
+                    .and_then(|(handle, _)| {
+                        (!projection.team.roster.contains_key(handle)
+                            && scope::parent_path(handle) == Some(from.as_str()))
+                        .then(|| handle.clone())
+                    })
+            })
+            .ok_or_else(|| {
+                reject(format!(
+                    "`{address}` is not a teammate you can message; you may message \
+                 your parent and the agents you lead — run `list_channel` to see them"
+                ))
+            })?;
         if policy.is_some_and(|policy| {
-            let bits = if scope::parent_path(&from) == Some(address.as_str()) {
+            let bits = if scope::parent_path(&from) == Some(handle.as_str()) {
                 policy.dm_child
             } else {
                 policy.dm_parent
             };
             bits & 1 == 0
         }) {
-            return Err(StoreError::MailAuthorizationRejected {
-                sender: from.clone(),
-                channel: address.clone(),
-                reason: "direction denied by policy".into(),
-            });
+            return Err(reject("direction denied by policy".into()));
         }
-        let Some(handle) = projection.team.resolve_in_scope(&from, &address) else {
-            return Err(StoreError::MailboxRejected(format!(
-                "sender `{from}` to channel `direct:{address}`: `{address}` is not a teammate you can message; you may message \
-                 your parent, your same-parent teammates, and the agents you \
-                 lead — run `list_channel` to see them"
-            )));
-        };
-        // resolve_in_scope only returns roster keys, so this cannot miss.
         let Some(entry) = projection.team.roster.get(&handle) else {
-            return Err(StoreError::MailboxRejected(format!(
-                "sender `{from}` to channel `direct:{address}`: unknown mail target `{handle}`"
-            )));
+            return Err(StoreError::MailRevivalRequired {
+                sender: from,
+                channel: format!("direct:{address}"),
+                target: handle,
+            });
         };
         if entry.session != root && entry.mode == SubagentMode::Transient {
-            return Err(StoreError::MailboxRejected(format!(
-                "sender `{from}` to channel `direct:{address}`: mail target `{handle}` is transient"
-            )));
+            return Err(reject(format!("mail target `{handle}` is transient")));
         }
         if entry.session != root
             && entry.mode == SubagentMode::Resident
             && !resident_member_is_eligible(&mut tx, entry).await?
         {
-            return Err(StoreError::MailboxRejected(format!(
-                "sender `{from}` to channel `direct:{address}`: mail target `{handle}` is stopped or terminal"
+            return Err(reject(format!(
+                "mail target `{handle}` is stopped or terminal"
             )));
         }
 
@@ -154,7 +165,7 @@ impl SessionStore {
     /// resident that is not the team root.
     ///
     /// # Errors
-    /// [`StoreError::MailboxRejected`] when `handle` is not such a member, or
+    /// [`StoreError::MailAuthorizationRejected`] when `handle` is not such a member, or
     /// SQLite failures.
     pub async fn append_harness_mail(
         &self,
@@ -164,17 +175,20 @@ impl SessionStore {
     ) -> Result<Envelope, StoreError> {
         let mut tx = self.begin_transaction().await?;
         let projection = replay_projection(&self.projections, &mut tx, root).await?;
+        let reject = |reason: String| StoreError::MailAuthorizationRejected {
+            sender: scope::HARNESS_HANDLE.to_string(),
+            channel: format!("direct:{handle}"),
+            reason,
+        };
         let Some(entry) = projection.team.roster.get(handle) else {
-            return Err(StoreError::MailboxRejected(format!(
-                "sender `harness` to channel `direct:{handle}`: unknown mail target `{handle}`"
-            )));
+            return Err(reject(format!("unknown mail target `{handle}`")));
         };
         if entry.session == root
             || entry.mode != SubagentMode::Resident
             || !resident_member_is_eligible(&mut tx, entry).await?
         {
-            return Err(StoreError::MailboxRejected(format!(
-                "sender `harness` to channel `direct:{handle}`: mail target `{handle}` is not a live resident member"
+            return Err(reject(format!(
+                "mail target `{handle}` is not a live resident member"
             )));
         }
         let event = Event::MailSent {
@@ -730,7 +744,7 @@ async fn released_resident_matches(
 /// post. Shared by the ordinary channel path and the announce path so both use
 /// one eligibility rule and one append.
 ///
-/// A send is still appended when nobody is eligible: the channel keeps its own
+/// A group post is still appended when nobody is eligible: the channel keeps its own
 /// ordered log independently of who happened to be alive at post time.
 #[allow(clippy::too_many_arguments)]
 async fn append_resolved_channel_mail(
@@ -778,7 +792,9 @@ async fn append_resolved_channel_mail(
     }
     if !group {
         for peer in state.members.iter().filter(|peer| **peer != from) {
-            if projection.team.archived.contains_key(peer) {
+            if projection.team.archived.contains_key(peer)
+                && !projection.team.roster.contains_key(peer)
+            {
                 if scope::parent_path(peer) == Some(from.as_str()) {
                     return Err(StoreError::MailRevivalRequired {
                         sender: from,
@@ -789,40 +805,42 @@ async fn append_resolved_channel_mail(
                 return Err(reject("archived recipient is not a direct child"));
             }
         }
-    }
-    let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
-        "SELECT actor_id FROM resident_actor_claim WHERE state = 'active' AND actor_id IN (",
-    );
-    {
-        let mut ids = query.separated(", ");
-        for member in &state.members {
-            if let Some(entry) = projection.team.roster.get(member) {
-                ids.push_bind(entry.session.storage_key());
+        let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+            "SELECT actor_id FROM resident_actor_claim WHERE state = 'active' AND actor_id IN (",
+        );
+        {
+            let mut ids = query.separated(", ");
+            for member in &state.members {
+                if let Some(entry) = projection.team.roster.get(member) {
+                    ids.push_bind(entry.session.storage_key());
+                }
             }
         }
-    }
-    query.push(")");
-    let active: std::collections::HashSet<Vec<u8>> = query
-        .build_query_scalar()
-        .fetch_all(&mut **tx)
-        .await?
-        .into_iter()
-        .collect();
-    let mut recipients = 0;
-    for member in &state.members {
-        if let Some(entry) = projection.team.roster.get(member)
-            && entry.session != root
-            && entry.mode.is_resident()
-        {
+        query.push(")");
+        let active: std::collections::HashSet<Vec<u8>> = query
+            .build_query_scalar()
+            .fetch_all(&mut **tx)
+            .await?
+            .into_iter()
+            .collect();
+        for member in &state.members {
             if !projection.team.mail_recipient_is_live(member) {
-                continue;
+                return Err(reject("recipient is stopped or terminal"));
             }
-            if !active.contains(&entry.session.storage_key()) {
+            if let Some(entry) = projection.team.roster.get(member)
+                && entry.session != root
+                && entry.mode.is_resident()
+                && !active.contains(&entry.session.storage_key())
+            {
                 return Err(reject("recipient has no active actor claim"));
             }
         }
-        recipients += 1;
     }
+    let recipients = state
+        .members
+        .iter()
+        .filter(|member| projection.team.mail_recipient_is_live(member))
+        .count();
     let kind = if group { MailKind::Announcement } else { kind };
 
     let envelope = append_event_in_transaction(

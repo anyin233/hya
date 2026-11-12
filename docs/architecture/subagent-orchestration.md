@@ -640,18 +640,42 @@ A group accepts posts only from its unit leader and records them as announcement
 The admitted `ChannelPolicySnapshot` send bits (`unit_leader`, `unit_member`,
 `dm_parent`, `dm_child`: `u8`) are checked by the store, using the channel's actual
 kind and sender role. `append_direct_mail` checks its resolved hierarchy endpoint
-and the corresponding DM send bit in that same transaction. Harness-authored mail
+and the corresponding DM send bit in that same transaction: a depth-2 child
+addressing its parent by relative leaf uses `dm_child`, just as the full path does.
+Harness-authored mail
 bypasses agent send policy and still requires a live resident recipient.
 
 For example, a parent can send to its child's `DM-…` channel; an unrelated agent
 sending to that id receives `StoreError::MailAuthorizationRejected { channel,
 sender, reason }` and appends no event. An authorized DM to an archived direct
-child returns `MailRevivalRequired { channel, sender, target }`; the engine invokes
-revival after the transaction, preserving `engine.mail_send` as the entry point.
+child returns `MailRevivalRequired { channel, sender, target }`; both channel and
+canonical-handle appends decide this under the writer lock. The engine invokes
+revival from that typed result after the transaction, preserving `engine.mail_send`
+as the entry point. Relative-leaf handle revival remains unsupported.
+The live roster wins over the archive index: during revival, registration can be
+committed before `AgentRestarted`, and a DM to that live member delivers normally.
 
 Recipient counts and replay share `TeamProjection::mail_recipient_is_live`.
-For live resident subscribers the transaction checks active actor claims in one
-batch. A missing claim rejects the entire append rather than recording a receipt
-whose count differs from replay. Resident-mail and follow-up capabilities still
+For live resident DM recipients the transaction checks active actor claims in one
+batch. A missing claim rejects the DM rather than recording a receipt
+whose count differs from replay. Group posts use the replay predicate alone:
+resident rows marked `done` or `failed` are skipped; a released claim with a
+remaining nonterminal roster row does not stop the announcement or remove that
+row's durable inbox delivery. Claim state controls execution ownership, not
+group replay. The receipt counts all delivered inboxes, including the sender's
+when subscribed. Resident-mail and follow-up capabilities still
 control when an accepted inbox message wakes or steers an actor; they do not grant
 permission to append mail.
+
+Direct and harness append rejections also return
+`MailAuthorizationRejected { sender: String, channel: String, reason: String }`;
+their address field is `direct:<input address>`. The `send` tool exposes a mail
+refusal as `ToolError::Input` (`error.type: "input"`) so the agent can correct
+its request. HTTP and gRPC use the single stable API error table:
+`MailAuthorizationRejected` maps to `permission_denied` (HTTP 403 / gRPC
+`PERMISSION_DENIED`), while `MailboxRejected` report/episode preconditions and a
+`MailRevivalRequired` without a supervisor map to `failed_precondition` (HTTP 409 /
+gRPC `FAILED_PRECONDITION`). For example,
+`POST /v1/sessions/<child>/steer` with `{"text":"continue"}` returns 403 for a
+transient child or a resident without an active claim, with sender and address
+in the diagnostic.

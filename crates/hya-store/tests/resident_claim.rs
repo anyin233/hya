@@ -811,7 +811,13 @@ async fn resident_stop_finalizer_rolls_back_at_each_write_boundary_and_is_exactl
                 None,
             )
             .await;
-        assert!(matches!(postcommit, Err(StoreError::MailboxRejected(_))));
+        assert!(
+            matches!(postcommit, Err(StoreError::MailRevivalRequired {
+                ref sender, ref channel, ref target,
+            }) if sender == "main" && channel == &format!("direct:{}", fixture.handle)
+                && target == &fixture.handle),
+            "{postcommit:?}"
+        );
         assert_eq!(
             fixture.store.replay(fixture.root).await.unwrap(),
             replay_after_retry,
