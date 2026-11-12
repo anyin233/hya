@@ -263,6 +263,17 @@ async fn cli_catalog_matches_run_from_project_subdirectory()
 }
 
 #[tokio::test]
+async fn cli_catalog_matches_run_in_an_unregistered_directory()
+-> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("catalog-unregistered")?;
+    write_catalog_bundle(&env.workdir)?;
+    // The database exists but holds no Project for this directory.
+    let db = env.root.join("sessions.db");
+    drop(hya_store::SessionStore::connect(&db.to_string_lossy()).await?);
+    assert_catalog_matches_run(&env, &env.workdir, None)
+}
+
+#[tokio::test]
 async fn cli_catalog_matches_run_from_second_project_root() -> Result<(), Box<dyn std::error::Error>>
 {
     let env = IsolatedEnv::new("catalog-second-root")?;

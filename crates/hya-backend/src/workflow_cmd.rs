@@ -117,9 +117,12 @@ async fn catalog(db: &str) -> anyhow::Result<hya_app::WorkflowCatalog> {
             installed.push(bundle_admin::decode_installed_catalog(&record)?);
         }
     }
+    // `use`/`run` register an unregistered directory as a one-root Project,
+    // so its own `.hya/bundles` belong to the catalog here too.
     let roots = match &scope {
         CatalogScope::Project { roots, .. } => roots.as_slice(),
-        CatalogScope::Global | CatalogScope::Directory(_) => &[],
+        CatalogScope::Directory(directory) => std::slice::from_ref(directory),
+        CatalogScope::Global => &[],
     };
     let (bundles, warnings) = hya_app::ProjectScopeRefresh::catalog_for_roots(
         roots,
