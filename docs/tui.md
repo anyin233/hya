@@ -376,15 +376,15 @@ keeps retrying that URL.
 During a provider round, assistant deltas with `seq == 0` are live-only and
 process-local. A restart may lose those in-flight deltas, and reconnect does
 not retry a provider round or repeat its tool/file side effects. The durable
-transcript and terminal round events are authoritative; after moving to a
-successor the TUI re-reads messages and folds only durable replay plus new live
+transcript and terminal round events are authoritative; after the backend
+restarts the TUI re-reads messages and folds only durable replay plus new live
 frames. A `resync` frame means the stream gap itself is not replayed: the TUI
 re-reads the projection (or replays `ListEvents` from the last durable seq).
 
 ### Hot update after `hya serve restart`
 
 `hya serve restart` is how a running backend takes new code
-([cli.md](cli.md#self-proof-and-rollback)); the TUIs attached to it
+([cli.md](cli.md#backend-daemon)); the TUIs attached to it
 take theirs in the same step. Once a TUI has attached to the new daemon
 after a `restart`, it starts itself again from the TUI files on disk: the
 source tree in a checkout, or the installed `lib/hya/tui` next to `hya`. New

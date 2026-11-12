@@ -2,7 +2,7 @@
 
 `hya-extra/*` are optional bundles shipped alongside hya, under
 `bundles/extra/`. They are not installed by default and are not part of the
-`eleven trusted [first-party bundles](bundle-runtime.md#first-party-bundles);
+`twelve trusted [first-party bundles](bundle-runtime.md#first-party-bundles);
 each one is an ordinary public `.hyabundle` package that you build and
 install like any other bundle described in
 [AgentBundle Authoring](agent-bundle-authoring.md). They exist for two

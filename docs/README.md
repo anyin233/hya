@@ -4,7 +4,7 @@ hya is an event-sourced coding agent. Rust owns the runtime, server, and
 persistence boundaries. The Bun/OpenTUI frontend in `packages/hya-tui` drives the
 backend through the `hya.v1` HTTP/JSON+SSE contract, and `packages/hya-tui-web`
 renders it in a browser as the WebUI. Other clients use `hya-sdk-v1`,
-`hya-sdk-v1`, HTTP/WebSocket, or gRPC. Workflow compilation, durable
+HTTP/WebSocket, or gRPC. Workflow compilation, durable
 execution, package models, and the consolidated `hya.v1` HTTP/gRPC contract
 are documented separately below.
 
@@ -78,8 +78,9 @@ If you want to understand the codebase:
 12. [Plugin protocol](plugin-protocol.md)
 13. [Development](development.md)
 14. [Testing](testing/README.md) (process E2E, agent matrix, CI snippet)
-15. [Supervisor-owned listener handoff](adr/0028-inherited-listener-handoff.md)
+15. [Supervisor-owned listener handoff](adr/0028-inherited-listener-handoff.md) (superseded by [ADR-0031](adr/0031-hot-reload-and-stop-start-restart.md))
 16. [Config model entries override the model cache](adr/0029-config-model-entries-override-the-model-cache.md)
+17. [Hot reload and stop/start restart](adr/0031-hot-reload-and-stop-start-restart.md)
 
 ## Docs Map
 
@@ -103,8 +104,9 @@ If you want to understand the codebase:
 | [Agent channels](agent-channels.md) | Declarative unit and parent-DM policies. |
 | [Extra bundles](extra-bundles.md) | Optional `hya-extra/*` packages (zvec-grep MCP, scout subagent, model routing) that double as bundle-coverage fixtures. |
 | [Install and update](install.md) | Release packages per platform, the hosted `curl … \| sh` installer (`hya.ed-aisys.com/install.sh`, `--backend-only`/`--tui-only`), bare `hya update`, mirrors, archive layout. |
-| [Supervisor-owned listener handoff](adr/0028-inherited-listener-handoff.md) | Foreground Unix listener FD handoff primitive and successor-process follow-up plan. |
+| [Supervisor-owned listener handoff](adr/0028-inherited-listener-handoff.md) | Superseded by [ADR-0031](adr/0031-hot-reload-and-stop-start-restart.md); historical record of the foreground Unix listener FD handoff primitive. |
 | [Config model entries override the model cache](adr/0029-config-model-entries-override-the-model-cache.md) | A `models:` entry for a fetched model wins field by field; unset fields fall back to the cached metadata. |
+| [Hot reload and stop/start restart](adr/0031-hot-reload-and-stop-start-restart.md) | Extensions hot-reload without a restart; a binary change is `stop` then `start` with a restore prompt for interrupted root sessions. |
 | [Project Structure](project-structure.md) | Map repository paths, crates, modules, tests, and data flow. |
 | [Architecture Overview](architecture/overview.md) | Explain the crate boundary model and end-to-end request path. |
 | [Runtime](architecture/runtime.md) | Explain `SessionEngine`, turn execution, goal mode, loop mode, teams, and worktrees. |
@@ -142,4 +144,4 @@ If you want to understand the codebase:
 - Server/routes: [`../crates/hya-server/src/lib.rs`](../crates/hya-server/src/lib.rs)
 - v1 contract crate: [`../crates/hya-api/src/lib.rs`](../crates/hya-api/src/lib.rs)
 - v1 frontend SDK: [`../crates/hya-sdk-v1/src/lib.rs`](../crates/hya-sdk-v1/src/lib.rs)
-- Self-update TCB: [`../crates/hya-updater`](../crates/hya-updater)
+- Release installer for `hya update`: [`../crates/hya-updater`](../crates/hya-updater)
