@@ -102,6 +102,17 @@ Bodies follow canonical protojson:
 - `bytes` fields are standard base64 strings.
 - Timestamps are RFC 3339 strings.
 
+## Pagination across transports
+
+List requests with `PageRequest page` accept `page.limit` (uint32) and
+`page.cursor` (string) in HTTP query parameters. gRPC clients set the same
+nested fields, for example `page: { limit: 1, cursor: "" }` for the first
+page of `ListSessions`. Pass the response's `page.nextCursor` unchanged as
+`page.cursor` for the next request. Both transports return the same items
+and `PageInfo` (`nextCursor: string`, `hasMore: bool`). An empty next cursor
+means the list is exhausted. RPCs without `PageRequest` retain their own
+request contract; `ListEvents` uses `limit` and `sinceSeq`/`nextSeq`.
+
 ## Errors
 
 Every failure renders:

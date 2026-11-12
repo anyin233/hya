@@ -258,6 +258,7 @@ fn body_len(body: &[u8]) -> String {
 
 /// Serialize a request into non-empty query parameters. A repeated string
 /// field becomes one `key=value` pair per element (`?paths=a&paths=b`).
+/// Nested messages use dotted keys, matching the HTTP query contract.
 fn query_of<Req: Serialize>(request: &Req) -> Vec<(String, String)> {
     let mut query = Vec::new();
     let Ok(Value::Object(map)) = serde_json::to_value(request) else {
@@ -275,6 +276,12 @@ fn query_of<Req: Serialize>(request: &Req) -> Vec<(String, String)> {
                     {
                         query.push((key.clone(), text));
                     }
+                }
+                continue;
+            }
+            Value::Object(fields) => {
+                for (nested_key, nested_value) in query_of(&fields) {
+                    query.push((format!("{key}.{nested_key}"), nested_value));
                 }
                 continue;
             }
