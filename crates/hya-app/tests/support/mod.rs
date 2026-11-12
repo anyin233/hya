@@ -118,10 +118,10 @@ pub fn test_runtime(
             AgentRole::Subagent => "subagent",
         };
         let mut manifest = format!(
-            "kind: AgentBundle\nidentity:\n  id: hya/app-tests-{stable_id}\n  version: 0.0.0\n  publisher: hya-tests\nagent:\n  id: {stable_id}\n  role: {role}\n  prompt: prompts/{stable_id}.md\n"
+            "kind: Bundle\nidentity:\n  id: hya/app-tests-{stable_id}\n  version: 0.0.0\n  publisher: hya-tests\nagents:\n  - id: {stable_id}\n    role: {role}\n    prompt: prompts/{stable_id}.md\n"
         );
         if !can_spawn.is_empty() {
-            manifest.push_str("  can_spawn: [");
+            manifest.push_str("    can_spawn: [");
             manifest.push_str(&can_spawn.join(", "));
             manifest.push_str("]\n");
         }

@@ -13,7 +13,7 @@ fn source(channels: &str, agents: &str) -> BundleSource {
         vec![SourceFile::new(
             "bundle.yaml",
             format!(
-                "kind: AgentSetBundle\nidentity: {{ id: hya/agent-channels, version: 1.0.0, publisher: hya }}\nagents: {agents}\nchannels:\n{channels}\n"
+                "kind: Bundle\nidentity: {{ id: hya/agent-channels, version: 1.0.0, publisher: hya }}\nagents: {agents}\nchannels:\n{channels}\n"
             ),
         )],
     )
@@ -39,9 +39,7 @@ fn channel_only_agent_set_prepares_and_round_trips_canonically() {
     scope: vertical
     retention: team_session"#;
     let prepared = prepare_package(source(channels, "[]")).expect("prepare channel preset");
-    let bundle = prepared.bundles()[0]
-        .agent_set_bundle()
-        .expect("agent set payload");
+    let bundle = &prepared.bundles()[0];
     assert!(bundle.agents.is_empty());
     assert_eq!(bundle.channels.len(), 2);
     assert_eq!(bundle.channels[0].kind, ChannelTemplateKind::ParentDm);
@@ -63,7 +61,6 @@ fn channel_only_agent_set_prepares_and_round_trips_canonically() {
 #[test]
 fn channel_contract_rejects_unknown_duplicates_types_and_references() {
     let cases = [
-        ("", "[]"),
         (
             "  - { id: same, kind: unit, participants: [{kind: role, role: unit_leader}], capabilities: [], scope: unit, retention: team_session }\n  - { id: same, kind: unit, participants: [{kind: role, role: direct_reports}], capabilities: [], scope: unit, retention: team_session }",
             "[]",
@@ -110,15 +107,15 @@ fn channel_contract_rejects_unknown_duplicates_types_and_references() {
 }
 
 #[test]
-fn agent_set_without_agents_or_channels_still_rejects() {
+fn bundle_without_agents_or_channels_prepares() {
     let source = BundleSource::new(
         "empty",
         vec![SourceFile::new(
             "bundle.yaml",
-            b"kind: AgentSetBundle\nidentity: { id: acme/empty, version: 1.0.0, publisher: acme }\nagents: []\n",
+            b"kind: Bundle\nidentity: { id: acme/empty, version: 1.0.0, publisher: acme }\nagents: []\n",
         )],
     );
-    assert!(prepare_package(source).is_err());
+    assert!(prepare_package(source).is_ok());
 }
 
 #[test]
@@ -130,7 +127,7 @@ fn prepared_decode_rejects_noncanonical_channel_policy_with_valid_outer_digest()
     .expect("prepare source");
     let mut document: serde_json::Value =
         serde_json::from_slice(prepared.bytes()).expect("prepared JSON");
-    document["bundles"][0]["channels"][0]["capabilities"] = serde_json::json!(["send", "send"]);
+    document["channels"][0]["capabilities"] = serde_json::json!(["send", "send"]);
     let forged = serde_json::to_vec(&document).expect("encode forged catalog");
     let digest = format!("{:x}", Sha256::digest(&forged));
     assert!(PreparedCatalog::decode(&forged, &digest).is_err());
@@ -144,9 +141,7 @@ fn first_party_agent_channel_preset_is_a_channel_only_agent_set() {
     )
     .expect("read first-party preset");
     let prepared = prepare_package(source).expect("prepare first-party preset");
-    let bundle = prepared.bundles()[0]
-        .agent_set_bundle()
-        .expect("agent channel preset kind");
+    let bundle = &prepared.bundles()[0];
     assert_eq!(bundle.identity.id, "hya/agent-channels");
     assert!(bundle.agents.is_empty());
     assert_eq!(bundle.channels.len(), 2);

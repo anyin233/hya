@@ -16,14 +16,14 @@ fn markdown(
 }
 
 fn manifest_markers() -> &'static str {
-    r#"kind: AgentBundle
+    r#"kind: Bundle
 identity:
   id: hya/markdown
   version: 1.0.0
   publisher: hya
-agent:
-  id: markdown-lead
-  role: main"#
+agents:
+  - id: markdown-lead
+    role: main"#
 }
 
 #[test]
@@ -51,11 +51,11 @@ fn single_markdown_requires_the_exact_filename_and_the_kind_marker() {
     );
     assert!(matches!(
         stale_api_version,
-        Err(BundleError::RemovedManifestKey { ref key, .. }) if key == "api_version"
+        Err(BundleError::InvalidManifest { .. })
     ));
 
     let missing_kind = markdown(
-        &manifest_markers().replace("kind: AgentBundle\n", ""),
+        &manifest_markers().replace("kind: Bundle\n", ""),
         "bundle.hya.md",
     );
     assert!(matches!(
@@ -74,15 +74,15 @@ fn empty_body_markdown_is_allowed_when_the_agent_names_a_prompt_file() {
             SourceFile::new(
                 "bundle.hya.md",
                 br#"---
-kind: AgentBundle
+kind: Bundle
 identity:
   id: hya/markdown-explicit-prompt
   version: 1.0.0
   publisher: hya
-agent:
-  id: markdown-alpha
-  role: main
-  prompt: prompts/alpha.md
+agents:
+  - id: markdown-alpha
+    role: main
+    prompt: prompts/alpha.md
 ---
 
 "#,

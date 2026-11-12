@@ -23,7 +23,11 @@ declaring a library resource.
 
 ## Prepared install format
 
-Prepared catalog envelopes and bundle payloads use `format_version: 3` (`u32`).
+Each package stores one complete `Bundle` with `format_version: 4` (`u32`).
+Its `agents[]`, optional `workflow`, `channels[]`, resources, process command,
+URI schemes, APIs, permission modes, and TUI declarations all enter its digest.
+Changing only process argv changes both bundle digest and Workflow revision.
+Derived catalog indexes are rebuilt on load and are never stored.
 The removed `spawn_lifecycle` field is no longer part of `PreparedAgent`.
 Older install records fail with a **please reinstall** diagnostic; they are
 never migrated or decoded through a compatibility path. Move the old registry
@@ -220,7 +224,7 @@ templates whose headings the engine parses.
 Package each required UTF-8 support file explicitly. For example:
 
 ```yaml
-kind: Plugin
+kind: Bundle
 identity: { id: acme/search, version: 1.0.0, publisher: acme }
 extensions:
   process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/provider.py'] }
@@ -238,7 +242,7 @@ To ship the executable itself, place the compiled binary at `bin/provider` and
 declare it in the same bundle:
 
 ```yaml
-kind: Plugin
+kind: Bundle
 identity: { id: acme/search-native, version: 1.0.0, publisher: acme }
 extensions:
   rust: [{ id: provider, path: bin/provider }]
@@ -265,8 +269,8 @@ hya bundle info acme/search
 hya bundle remove acme/search
 ```
 
-A Full-plane agent can call `search__lookup`. For an AgentBundle or
-AgentSetBundle, select `lookup` in the owning agent's `resource_view.allow`;
+A Full-plane agent can call `search__lookup`. For an Bundle or
+Bundle, select `lookup` in the owning agent's `resource_view.allow`;
 that agent calls it as `lookup`. Other agents do not inherit private exports.
 
 An MCP resource points to a JSON `McpServerConfig`, for example
@@ -399,7 +403,7 @@ Project bundles (`.hya/bundles/<dir>/`, written by `hya bundle install
 A bundle with an explicit `extensions.process` may register its own HTTP
 endpoints (`apis: [{ id, method, scope, path, description?, request_schema?,
 response_schema? }]`, see
-[AgentBundle authoring](agent-bundle-authoring.md#api-endpoints-apis) for the
+[Bundle authoring](agent-bundle-authoring.md#api-endpoints-apis) for the
 fields and the path template grammar). The lifecycle:
 
 - **Prepare** rejects endpoints without an explicit `extensions.process`,

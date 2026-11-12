@@ -1,9 +1,9 @@
-kind: AgentBundle
+kind: Bundle
 identity:
   id: hya/directory-fixture
   version: 1.0.0
   publisher: hya
-agent:
-  id: directory-lead
-  role: main
-  prompt: prompts/lead.md
+agents:
+  - id: directory-lead
+    role: main
+    prompt: prompts/lead.md

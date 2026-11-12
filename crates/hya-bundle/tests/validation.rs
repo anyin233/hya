@@ -16,15 +16,15 @@ fn agent_source(root: &str, bundle_id: &str, stable_id: &str, can_spawn: &[&str]
             .join("\n")
     };
     let manifest = format!(
-        r#"kind: AgentBundle
+        r#"kind: Bundle
 identity:
   id: {bundle_id}
   version: 1.0.0
   publisher: hya
-agent:
-  id: {stable_id}
-  role: main
-  can_spawn:
+agents:
+  - id: {stable_id}
+    role: main
+    can_spawn:
 {can_spawn}
 "#,
     );
@@ -36,7 +36,7 @@ agent:
 
 #[test]
 fn resource_view_alias_cannot_occupy_a_bundle_local_short_name() {
-    let manifest = br#"kind: AgentBundle
+    let manifest = br#"kind: Bundle
 identity:
   id: hya/test
   version: 1.0.0
@@ -45,12 +45,12 @@ resources:
   skills:
     - id: local-docs
       path: resources/skills/local-docs.md
-agent:
-  id: lead
-  role: main
-  resource_view:
-    aliases:
-      local-docs: bundle:hya/test/skill/local-docs
+agents:
+  - id: lead
+    role: main
+    resource_view:
+      aliases:
+        local-docs: bundle:hya/test/skill/local-docs
 "#;
     let result = prepare_package(BundleSource::new(
         "alias-conflict",
@@ -128,17 +128,17 @@ fn stable_agent_id_cannot_shadow_a_qualified_catalog_id() {
 
 #[test]
 fn unsupported_resource_profile_is_rejected_as_a_feature_not_ignored() {
-    let manifest = br#"kind: AgentBundle
+    let manifest = br#"kind: Bundle
 identity:
   id: hya/profile
   version: 1.0.0
   publisher: hya
-agent:
-  id: lead
-  role: main
-  resource_profile:
-    max_depth: 2
-    per_team_turn_budget: 8
+agents:
+  - id: lead
+    role: main
+    resource_profile:
+      max_depth: 2
+      per_team_turn_budget: 8
 "#;
     let result = prepare_package(BundleSource::new(
         "resource-profile",
@@ -160,17 +160,17 @@ agent:
 fn resource_view_targets_must_name_this_bundle_s_own_resources() {
     // A bundle agent's plane admits only its OWN bundle resources, so a
     // `bundle:<other>/...` reference cannot resolve — at prepare or at runtime.
-    let alpha = br#"kind: AgentBundle
+    let alpha = br#"kind: Bundle
 identity:
   id: hya/alpha
   version: 1.0.0
   publisher: hya
-agent:
-  id: alpha-lead
-  role: main
-  resource_view:
-    aliases:
-      beta-docs: bundle:hya/beta/skill/docs
+agents:
+  - id: alpha-lead
+    role: main
+    resource_view:
+      aliases:
+        beta-docs: bundle:hya/beta/skill/docs
 "#;
     let invalid = prepare_package(BundleSource::new(
         "alpha",
@@ -191,7 +191,7 @@ agent:
 
 #[test]
 fn resolved_resource_view_references_are_canonicalized_after_lookup() {
-    let manifest = br#"kind: AgentBundle
+    let manifest = br#"kind: Bundle
 identity:
   id: hya/canonical-view
   version: 1.0.0
@@ -200,15 +200,15 @@ resources:
   skills:
     - id: docs
       path: resources/skills/docs.md
-agent:
-  id: canonical-lead
-  role: main
-  resource_view:
-    allow:
-      - docs
-      - bundle:hya/canonical-view/skill/docs
-    deny:
-      - docs
+agents:
+  - id: canonical-lead
+    role: main
+    resource_view:
+      allow:
+        - docs
+        - bundle:hya/canonical-view/skill/docs
+      deny:
+        - docs
 "#;
     let prepared = prepare_package(BundleSource::new(
         "canonical-view",
@@ -227,15 +227,19 @@ agent:
 }
 
 fn minimal_manifest(extra: &str) -> Vec<u8> {
+    let extra = extra
+        .lines()
+        .map(|line| format!("  {line}\n"))
+        .collect::<String>();
     format!(
-        r#"kind: AgentBundle
+        r#"kind: Bundle
 identity:
   id: hya/minimal
   version: 1.0.0
   publisher: hya
-agent:
-  id: minimal-lead
-  role: main
+agents:
+  - id: minimal-lead
+    role: main
 {extra}"#,
     )
     .into_bytes()
@@ -291,7 +295,7 @@ fn invalid_schema_references_and_executable_features_fail_typed() {
     // `resources.mcp` is now declarable (each entry validated against the
     // `McpServerConfig` shape); `extensions.rust` stays reserved.
     let declaration = "extensions:\n  rust:\n    - id: runtime\n      path: extensions/runtime\n";
-    let manifest = base_manifest.replace("agent:\n", &format!("{declaration}agent:\n"));
+    let manifest = base_manifest.replace("agents:\n", &format!("{declaration}\nagents:\n"));
     let result = prepare_package(BundleSource::new(
         "extensions.rust",
         vec![SourceFile::new("bundle.yaml", manifest.into_bytes())],
@@ -330,7 +334,7 @@ fn helper_dependency_and_import_fields_are_rejected_by_source_schema() {
 fn executable_resource_requires_exact_path_extension_join() {
     let manifest = |tool_path: &str, extension_path: &str| {
         format!(
-            r#"kind: AgentBundle
+            r#"kind: Bundle
 identity:
   id: hya/executable
   version: 1.0.0
@@ -343,12 +347,12 @@ extensions:
   js:
     - id: runtime
       path: {extension_path}
-agent:
-  id: lead
-  role: main
-  resource_view:
-    allow:
-      - echo
+agents:
+  - id: lead
+    role: main
+    resource_view:
+      allow:
+        - echo
 "#,
         )
     };
@@ -394,7 +398,7 @@ agent:
 
 #[test]
 fn executable_resource_rejects_ambiguous_extension_path_join() {
-    let manifest = br#"kind: AgentBundle
+    let manifest = br#"kind: Bundle
 identity:
   id: hya/executable
   version: 1.0.0
@@ -409,12 +413,12 @@ extensions:
       path: extensions/runtime.js
     - id: runtime-b
       path: extensions/runtime.js
-agent:
-  id: lead
-  role: main
-  resource_view:
-    allow:
-      - echo
+agents:
+  - id: lead
+    role: main
+    resource_view:
+      allow:
+        - echo
 "#;
     let result = prepare_package(BundleSource::new(
         "ambiguous-extension-path-join",
@@ -438,7 +442,7 @@ agent:
 
 #[test]
 fn unreachable_extension_is_rejected_during_prepare() {
-    let manifest = br#"kind: AgentBundle
+    let manifest = br#"kind: Bundle
 identity:
   id: hya/executable
   version: 1.0.0
@@ -447,9 +451,9 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agent:
-  id: lead
-  role: main
+agents:
+  - id: lead
+    role: main
 "#;
     let result = prepare_package(BundleSource::new(
         "unreachable-extension",
@@ -473,7 +477,7 @@ agent:
 
 #[test]
 fn js_bundle_resources_prepare_decode_and_resolve_canonically() {
-    let manifest = br#"kind: AgentBundle
+    let manifest = br#"kind: Bundle
 identity:
   id: hya/executable
   version: 1.0.0
@@ -491,14 +495,14 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agent:
-  id: lead
-  role: main
-  resource_view:
-    allow:
-      - echo
-  hook_refs:
-    - bundle:hya/executable/hook/event
+agents:
+  - id: lead
+    role: main
+    resource_view:
+      allow:
+        - echo
+    hook_refs:
+      - bundle:hya/executable/hook/event
 "#;
     let prepared = prepare_package(BundleSource::new(
         "js-resources",
@@ -578,7 +582,7 @@ agent:
 fn hook_local_ids_are_limited_to_supported_protocol_names() {
     let prepare_hook = |local_id: &str, source_path: &str| {
         let manifest = format!(
-            r#"kind: AgentBundle
+            r#"kind: Bundle
 identity:
   id: hya/executable
   version: 1.0.0
@@ -591,11 +595,11 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agent:
-  id: lead
-  role: main
-  hook_refs:
-    - {local_id}
+agents:
+  - id: lead
+    role: main
+    hook_refs:
+      - {local_id}
 "#,
         );
         prepare_package(BundleSource::new(
@@ -635,7 +639,7 @@ agent:
 
 #[test]
 fn unreferenced_unsupported_hook_local_id_is_rejected_before_publication() {
-    let manifest = br#"kind: AgentBundle
+    let manifest = br#"kind: Bundle
 identity:
   id: hya/unreferenced-hook
   version: 1.0.0
@@ -648,9 +652,9 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agent:
-  id: lead
-  role: main
+agents:
+  - id: lead
+    role: main
 "#;
     let result = prepare_package(BundleSource::new(
         "unreferenced-hook",
@@ -676,7 +680,7 @@ agent:
 fn hook_refs_are_canonicalized_from_local_alias_and_stable_spellings() {
     for hook_ref in ["event", "notify", "bundle:hya/executable/hook/event"] {
         let manifest = format!(
-            r#"kind: AgentBundle
+            r#"kind: Bundle
 identity:
   id: hya/executable
   version: 1.0.0
@@ -691,11 +695,11 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agent:
-  id: lead
-  role: main
-  hook_refs:
-    - {hook_ref}
+agents:
+  - id: lead
+    role: main
+    hook_refs:
+      - {hook_ref}
 "#,
         );
         let prepared = prepare_package(BundleSource::new(
@@ -718,7 +722,7 @@ agent:
 
 #[test]
 fn unqualified_hook_ref_is_rejected_when_short_name_is_cross_kind_ambiguous() {
-    let manifest = br#"kind: AgentBundle
+    let manifest = br#"kind: Bundle
 identity:
   id: hya/executable
   version: 1.0.0
@@ -736,11 +740,11 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agent:
-  id: lead
-  role: main
-  hook_refs:
-    - shared
+agents:
+  - id: lead
+    role: main
+    hook_refs:
+      - shared
 "#;
     let result = prepare_package(BundleSource::new(
         "ambiguous-hook-ref",
@@ -766,7 +770,7 @@ agent:
 
 #[test]
 fn hook_refs_reject_unknown_and_wrong_kind_as_hook_references() {
-    let unknown_local = br#"kind: AgentBundle
+    let unknown_local = br#"kind: Bundle
 identity:
   id: hya/executable
   version: 1.0.0
@@ -779,11 +783,11 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agent:
-  id: lead
-  role: main
-  hook_refs:
-    - missing
+agents:
+  - id: lead
+    role: main
+    hook_refs:
+      - missing
 "#;
     let unknown_local_result = prepare_package(BundleSource::new(
         "unknown-local-hook",
@@ -801,7 +805,7 @@ agent:
         })
     );
 
-    let wrong_kind = br#"kind: AgentBundle
+    let wrong_kind = br#"kind: Bundle
 identity:
   id: hya/executable
   version: 1.0.0
@@ -814,11 +818,11 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agent:
-  id: lead
-  role: main
-  hook_refs:
-    - bundle:hya/executable/tool/echo
+agents:
+  - id: lead
+    role: main
+    hook_refs:
+      - bundle:hya/executable/tool/echo
 "#;
     let wrong_kind_result = prepare_package(BundleSource::new(
         "wrong-kind-hook",
@@ -851,16 +855,16 @@ fn harness_prefixed_hook_refs_are_rejected_as_unknown_bundle_hooks() {
     .enumerate()
     {
         let manifest = format!(
-            r#"kind: AgentBundle
+            r#"kind: Bundle
 identity:
   id: hya/executable
   version: 1.0.0
   publisher: hya
-agent:
-  id: lead
-  role: main
-  hook_refs:
-    - "{raw_hook_ref}"
+agents:
+  - id: lead
+    role: main
+    hook_refs:
+      - "{raw_hook_ref}"
 "#,
         );
         let result = prepare_package(BundleSource::new(
@@ -910,7 +914,7 @@ fn duplicate_hook_refs_are_rejected_after_canonicalization() {
     {
         let [first, second] = hook_refs;
         let manifest = format!(
-            r#"kind: AgentBundle
+            r#"kind: Bundle
 identity:
   id: hya/executable
   version: 1.0.0
@@ -925,12 +929,12 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agent:
-  id: lead
-  role: main
-  hook_refs:
-    - {first}
-    - {second}
+agents:
+  - id: lead
+    role: main
+    hook_refs:
+      - {first}
+      - {second}
 "#,
         );
         let result = prepare_package(BundleSource::new(
@@ -975,7 +979,7 @@ fn duplicate_stable_ids_wrong_kind_and_parent_paths_are_rejected() {
     );
 
     let wrong_kind = String::from_utf8(minimal_manifest(""))
-        .map(|manifest| manifest.replace("kind: AgentBundle", "kind: UnsupportedBundle"));
+        .map(|manifest| manifest.replace("kind: Bundle", "kind: UnsupportedBundle"));
     let Ok(wrong_kind) = wrong_kind else {
         panic!("fixture is not UTF-8");
     };
@@ -996,21 +1000,21 @@ fn duplicate_stable_ids_wrong_kind_and_parent_paths_are_rejected() {
 /// actor). Each manifest kind that declares agents rejects it by name.
 #[test]
 fn spawn_lifecycle_is_a_removed_manifest_key_in_every_agent_manifest() {
-    let agent_bundle = r#"kind: AgentBundle
+    let agent_bundle = r#"kind: Bundle
 identity: { id: acme/solo, version: 1.0.0, publisher: acme }
-agent:
-  id: solo
-  role: subagent
-  spawn_lifecycle: transient
+agents:
+  - id: solo
+    role: subagent
+    spawn_lifecycle: transient
 "#;
-    let agent_set = r#"kind: AgentSetBundle
+    let agent_set = r#"kind: Bundle
 identity: { id: acme/set, version: 1.0.0, publisher: acme }
 agents:
   - id: worker
     role: subagent
     spawn_lifecycle: resident
 "#;
-    let workflow = r#"kind: WorkflowBundle
+    let workflow = r#"kind: Bundle
 identity: { id: acme/flow, version: 1.0.0, publisher: acme }
 workflow:
   id: flow
@@ -1060,9 +1064,8 @@ fn old_prepared_catalog_requires_reinstall() {
         .unwrap_or_else(|error| panic!("fixture must prepare: {error:?}"));
     let mut document: serde_json::Value = serde_json::from_slice(prepared.bytes())
         .unwrap_or_else(|error| panic!("fixture JSON: {error}"));
-    document["format_version"] = serde_json::json!(2);
-    document["bundles"][0]["format_version"] = serde_json::json!(2);
-    document["bundles"][0]["agent"]["spawn_lifecycle"] = serde_json::json!("transient");
+    document["format_version"] = serde_json::json!(3);
+    document["agents"][0]["spawn_lifecycle"] = serde_json::json!("transient");
     let bytes = serde_json::to_vec(&document).unwrap_or_default();
     let digest = Sha256::digest(&bytes)
         .iter()
@@ -1071,6 +1074,6 @@ fn old_prepared_catalog_requires_reinstall() {
     let error = PreparedCatalog::decode(&bytes, &digest)
         .err()
         .unwrap_or_else(|| panic!("old install record decoded"));
-    assert_eq!(error, BundleError::UnsupportedPreparedFormat { found: 2 });
+    assert_eq!(error, BundleError::UnsupportedPreparedFormat { found: 3 });
     assert!(error.to_string().contains("please reinstall"));
 }

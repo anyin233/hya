@@ -1353,8 +1353,7 @@ mod tests {
 
     use async_trait::async_trait;
     use hya_bundle::{
-        AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-        PreparedInstallableBundle, ResourceView,
+        AgentRole, Bundle, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, ResourceView,
     };
     use hya_core::{AgentCatalog, RuntimeRegistry};
     use hya_mcp::McpServerConfig;
@@ -1742,7 +1741,7 @@ for line in sys.stdin:
             "child",
             vec![hya_bundle::SourceFile::new(
                 "bundle.hya.md",
-                "---\nkind: AgentBundle\nidentity: { id: acme/child, version: 1.0.0, publisher: acme }\nagent: { id: hooked-child, role: subagent }\n---\nChild prompt.\n",
+                "---\nkind: Bundle\nidentity: { id: acme/child, version: 1.0.0, publisher: acme }\nagents: [{ id: hooked-child, role: subagent }]\n---\nChild prompt.\n",
             )],
         ))?;
         let runtime = h.engine.runtime_registry().clone();
@@ -1938,7 +1937,7 @@ for line in sys.stdin:
         std::fs::create_dir_all(&bundle)?;
         std::fs::write(
             bundle.join("bundle.hya.md"),
-            "---\nkind: AgentBundle\nidentity: { id: acme/local, version: 1.0.0, publisher: test }\nagent: { id: local, role: main }\n---\nLocal.\n",
+            "---\nkind: Bundle\nidentity: { id: acme/local, version: 1.0.0, publisher: test }\nagents: [{ id: local, role: main }]\n---\nLocal.\n",
         )?;
         let project = h
             .engine
@@ -2794,10 +2793,10 @@ for line in sys.stdin:
             can_spawn: Vec::new(),
             hook_refs: Vec::new(),
         };
-        let bundle = PreparedAgentBundle {
+        let bundle = Bundle {
             check: None,
             tui: None,
-            format_version: 3,
+            format_version: 4,
             identity: BundleIdentity {
                 id: bundle_id.to_string(),
                 version: "1.0.0".to_string(),
@@ -2805,15 +2804,21 @@ for line in sys.stdin:
             },
             namespace: None,
             digest: "test-only".to_string(),
-            agent,
+            agents: vec![agent],
             tools: Vec::new(),
             skills: vec![prepared.clone()],
             mcp: Vec::new(),
             hooks: Vec::new(),
             extensions: Vec::new(),
+
+            workflow: None,
+            channels: vec![],
+            schemas: vec![],
+            process: None,
+            apis: vec![],
+            permission_modes: vec![],
         };
-        let bundles =
-            BundleCatalog::from_prepared(&[PreparedInstallableBundle::Agent(Box::new(bundle))])?;
+        let bundles = BundleCatalog::from_prepared(&[bundle])?;
         let catalog = Arc::new(AgentCatalog::new(Arc::new(bundles))?);
         let registry = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog));
         let source_id = SourceId::bundle(bundle_id);

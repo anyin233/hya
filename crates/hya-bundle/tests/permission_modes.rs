@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 /// One bundle source of `kind` with an optional `extensions.process`, an
 /// optional `permission.approve` hook resource, and an optional
 /// `permission_modes` block (a YAML fragment indented for its parent key).
-fn mode_bundle(kind: &str, process: bool, hook: bool, modes: Option<&str>) -> BundleSource {
+fn mode_bundle(with_agents: bool, process: bool, hook: bool, modes: Option<&str>) -> BundleSource {
     let process = if process {
         "extensions:\n  process:\n    kind: bun\n    command: [bun, run, '${BUNDLE_ROOT}/approver.ts']\n  files:\n    - id: approver\n      path: approver.ts\n"
     } else {
@@ -20,12 +20,13 @@ fn mode_bundle(kind: &str, process: bool, hook: bool, modes: Option<&str>) -> Bu
         ""
     };
     let modes = modes.map_or_else(String::new, |block| format!("permission_modes:\n{block}"));
-    let body = match kind {
-        "AgentSetBundle" => "agents:\n  - id: mode-lead\n    role: main\n",
-        _ => "",
+    let body = if with_agents {
+        "agents:\n  - id: mode-lead\n    role: main\n"
+    } else {
+        ""
     };
     let manifest = format!(
-        "kind: {kind}\nidentity:\n  id: hya/approver\n  version: 1.0.0\n  publisher: hya\n{process}{hook}{modes}{body}"
+        "kind: Bundle\nidentity:\n  id: hya/approver\n  version: 1.0.0\n  publisher: hya\n{process}{hook}{modes}{body}"
     );
     BundleSource::new(
         "approver",
@@ -69,7 +70,7 @@ fn plugin_permission_modes_prepare_sorted_and_round_trip() {
         "  - id: careful\n    title: Careful\n    description: Approves read-only commands\n{}",
         mode("ci", "CI")
     );
-    let catalog = prepared(mode_bundle("Plugin", true, true, Some(&block)));
+    let catalog = prepared(mode_bundle(false, true, true, Some(&block)));
     let modes = catalog.bundle_permission_modes("hya/approver");
     let ids = modes
         .iter()
@@ -88,38 +89,36 @@ fn plugin_permission_modes_prepare_sorted_and_round_trip() {
     assert_eq!(decoded.bundle_permission_modes("hya/approver"), modes);
 
     let document = document(&catalog);
-    assert_eq!(
-        document["permission_modes"][0]["bundle_id"], "hya/approver",
-        "modes are a document-level section keyed by bundle id"
-    );
-    assert_eq!(document["permission_modes"][0]["modes"][1]["id"], "ci");
+    assert_eq!(document["permission_modes"][1]["id"], "ci");
 }
 
 #[test]
 fn permission_modes_change_the_digest_and_are_skipped_when_empty() {
-    let plain = prepared(mode_bundle("Plugin", true, true, None));
+    let plain = prepared(mode_bundle(false, true, true, None));
     let with_modes = prepared(mode_bundle(
-        "Plugin",
+        false,
         true,
         true,
         Some(&mode("careful", "Careful")),
     ));
     assert_ne!(plain.digest(), with_modes.digest());
     assert!(
-        document(&plain).get("permission_modes").is_none(),
+        document(&plain)["permission_modes"]
+            .as_array()
+            .is_some_and(Vec::is_empty),
         "the section is skipped when no bundle declares a mode"
     );
     let a = mode("a", "A");
     let b = mode("b", "B");
-    let reordered = prepared(mode_bundle("Plugin", true, true, Some(&format!("{b}{a}"))));
-    let sorted = prepared(mode_bundle("Plugin", true, true, Some(&format!("{a}{b}"))));
+    let reordered = prepared(mode_bundle(false, true, true, Some(&format!("{b}{a}"))));
+    let sorted = prepared(mode_bundle(false, true, true, Some(&format!("{a}{b}"))));
     assert_eq!(reordered.digest(), sorted.digest());
 }
 
 #[test]
-fn every_process_backed_kind_may_declare_permission_modes() {
+fn agent_bearing_bundle_may_declare_permission_modes() {
     let catalog = prepared(mode_bundle(
-        "AgentSetBundle",
+        true,
         true,
         true,
         Some(&mode("careful", "Careful")),
@@ -130,7 +129,7 @@ fn every_process_backed_kind_may_declare_permission_modes() {
 #[test]
 fn permission_modes_require_a_process_and_the_approve_hook() {
     let detail = invalid_detail(mode_bundle(
-        "Plugin",
+        false,
         false,
         false,
         Some(&mode("careful", "Careful")),
@@ -140,7 +139,7 @@ fn permission_modes_require_a_process_and_the_approve_hook() {
         "the diagnostic must name the missing process: {detail}"
     );
     let detail = invalid_detail(mode_bundle(
-        "Plugin",
+        false,
         true,
         false,
         Some(&mode("careful", "Careful")),
@@ -182,7 +181,7 @@ fn invalid_ids_titles_duplicates_and_counts_are_rejected() {
             "at most 16",
         ),
     ] {
-        let detail = invalid_detail(mode_bundle("Plugin", true, true, Some(&block)));
+        let detail = invalid_detail(mode_bundle(false, true, true, Some(&block)));
         assert!(
             detail.contains("permission_modes") && detail.contains(needle),
             "`{needle}` expected in: {detail}"
@@ -193,7 +192,7 @@ fn invalid_ids_titles_duplicates_and_counts_are_rejected() {
 #[test]
 fn unknown_mode_fields_are_rejected() {
     let source = mode_bundle(
-        "Plugin",
+        false,
         true,
         true,
         Some("  - { id: careful, title: Careful, allow: all }\n"),
@@ -204,16 +203,27 @@ fn unknown_mode_fields_are_rejected() {
 #[test]
 fn non_canonical_permission_mode_rows_are_rejected_on_decode() {
     let catalog = prepared(mode_bundle(
-        "Plugin",
+        false,
         true,
         true,
         Some(&format!("{}{}", mode("alpha", "A"), mode("beta", "B"))),
     ));
     let mut document = document(&catalog);
-    let Some(modes) = document["permission_modes"][0]["modes"].as_array_mut() else {
+    let Some(modes) = document["permission_modes"].as_array_mut() else {
         panic!("modes row must be an array");
     };
     modes.reverse();
+    let mut content = document.clone();
+    content
+        .as_object_mut()
+        .unwrap_or_else(|| panic!("prepared bundle must be an object"))
+        .remove("digest");
+    document["digest"] = serde_json::json!(format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(&content).unwrap_or_else(|error| panic!("encode bundle: {error}"))
+        )
+    ));
     let bytes = match serde_json::to_vec(&document) {
         Ok(bytes) => bytes,
         Err(error) => panic!("encode tampered document: {error}"),
@@ -231,7 +241,7 @@ fn non_canonical_permission_mode_rows_are_rejected_on_decode() {
 #[test]
 fn permission_approve_is_an_allowed_hook_id() {
     // A process bundle may declare the hook without declaring a mode.
-    let catalog = prepared(mode_bundle("Plugin", true, true, None));
+    let catalog = prepared(mode_bundle(false, true, true, None));
     assert_eq!(
         catalog.bundles()[0].hooks()[0].local_id,
         "permission.approve"

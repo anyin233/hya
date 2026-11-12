@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    BundleError, PreparedAgent, PreparedCatalog, PreparedChannelTemplate,
-    PreparedInstallableBundle, PreparedResource, PreparedWorkflow, prepare::validate_hook_local_id,
+    Bundle, BundleError, PreparedAgent, PreparedCatalog, PreparedChannelTemplate, PreparedResource,
+    PreparedWorkflow, prepare::validate_hook_local_id,
 };
 
 const SEMANTIC_IDENTITY_DOMAIN_V1: &[u8] = b"hya.bundle-catalog.semantic-identity/v1";
@@ -38,7 +38,7 @@ impl ExportKind {
 /// Pure immutable catalog built only from prepared installable bundle data.
 #[derive(Debug)]
 pub struct BundleCatalog {
-    bundles: Vec<PreparedInstallableBundle>,
+    bundles: Vec<Bundle>,
     agents: BTreeMap<String, (usize, usize)>,
     workflows: BTreeMap<String, (usize, usize)>,
     workflow_names: BTreeMap<String, Vec<(usize, usize)>>,
@@ -52,7 +52,7 @@ impl BundleCatalog {
     ///
     /// Rejects duplicate bundle/Agent ids, namespace/alias collisions, and
     /// unsupported hook declarations. Empty input is valid.
-    pub fn from_prepared(bundles: &[PreparedInstallableBundle]) -> Result<Self, BundleError> {
+    pub fn from_prepared(bundles: &[Bundle]) -> Result<Self, BundleError> {
         let mut catalog = Self {
             bundles: bundles.to_vec(),
             agents: BTreeMap::new(),
@@ -174,7 +174,7 @@ impl BundleCatalog {
 
     /// All prepared installable payloads held by this catalog.
     #[must_use]
-    pub fn bundles(&self) -> &[PreparedInstallableBundle] {
+    pub fn bundles(&self) -> &[Bundle] {
         &self.bundles
     }
 
@@ -201,7 +201,7 @@ impl BundleCatalog {
         self.bundles
             .iter()
             .find(|bundle| bundle.identity().id == bundle_id)
-            .map_or(&[], PreparedInstallableBundle::channels)
+            .map_or(&[], Bundle::channels)
     }
 
     /// Resolve a Workflow by its exact qualified id or an unambiguous bare id.
@@ -326,10 +326,7 @@ fn encode_semantic_identity_v1(records: &[Vec<u8>]) -> Result<Vec<u8>, BundleErr
     Ok(identity)
 }
 
-fn compare_bundle_identity(
-    left: &PreparedInstallableBundle,
-    right: &PreparedInstallableBundle,
-) -> std::cmp::Ordering {
+fn compare_bundle_identity(left: &Bundle, right: &Bundle) -> std::cmp::Ordering {
     left.identity()
         .id
         .as_bytes()

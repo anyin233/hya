@@ -45,23 +45,23 @@ fn inventory_exposes_immutable_noninstallable_core_and_tool_presets() {
         ]
     );
     assert_eq!(inventory[0].id, "hya/agent-channels");
-    assert_eq!(inventory[0].kind, "AgentSetBundle");
+    assert_eq!(inventory[0].kind, "Bundle");
     assert_eq!(
         inventory[0].resource_ids,
         ["parent-dm-default", "unit-default"]
     );
     assert_eq!(inventory[1].id, "hya/base-tools");
-    assert_eq!(inventory[1].kind, "Plugin");
-    assert_eq!(inventory[2].kind, "Plugin");
-    assert_eq!(inventory[3].kind, "AgentSetBundle");
-    assert_eq!(inventory[4].kind, "Plugin");
+    assert_eq!(inventory[1].kind, "Bundle");
+    assert_eq!(inventory[2].kind, "Bundle");
+    assert_eq!(inventory[3].kind, "Bundle");
+    assert_eq!(inventory[4].kind, "Bundle");
     assert_eq!(inventory[4].resource_ids, ["init", "review"]);
-    assert_eq!(inventory[5].kind, "Plugin");
+    assert_eq!(inventory[5].kind, "Bundle");
     assert_eq!(
         inventory[5].resource_ids,
         ["agent-bundle-authoring", "secure-self-update"]
     );
-    assert!(inventory[6..].iter().all(|item| item.kind == "Plugin"));
+    assert!(inventory[6..].iter().all(|item| item.kind == "Bundle"));
     for preset in inventory {
         assert!(preset.immutable);
         assert!(!preset.installable);

@@ -85,7 +85,7 @@ async fn removed_plugin_hooks_leave_fresh_bindings_but_remain_live_on_old_bindin
         "plugin",
         vec![SourceFile::new(
             "bundle.yaml",
-            "kind: Plugin\nidentity: { id: acme/rewrite, version: 1.0.0, publisher: acme }\n",
+            "kind: Bundle\nidentity: { id: acme/rewrite, version: 1.0.0, publisher: acme }\n",
         )],
     ))
     .expect("prepare Plugin");

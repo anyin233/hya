@@ -15,8 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-    PreparedInstallableBundle, ResourceView,
+    AgentRole, Bundle, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, ResourceView,
 };
 use hya_core::{
     AgentCatalog, AgentSpec, BoundSidecarFactory, ChatParamsInput, ChatParamsOutcome,
@@ -637,42 +636,47 @@ fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
         .iter()
         // Built-in ids are compiled in; a fixture asking for one just gets it.
         .filter(|agent| hya_core::preset_agent(&agent.stable_id).is_none())
-        .map(|agent| {
-            PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
-                check: None,
-                format_version: 3,
-                identity: BundleIdentity {
-                    id: format!("hya/root-turn-precedence-{}", agent.stable_id),
-                    version: "0.0.0".to_string(),
-                    publisher: "hya-tests".to_string(),
+        .map(|agent| Bundle {
+            check: None,
+            format_version: 4,
+            identity: BundleIdentity {
+                id: format!("hya/root-turn-precedence-{}", agent.stable_id),
+                version: "0.0.0".to_string(),
+                publisher: "hya-tests".to_string(),
+            },
+            namespace: None,
+            digest: format!("test-only-{}", agent.stable_id),
+            agents: vec![PreparedAgent {
+                id: AgentName::new(&agent.stable_id),
+                description: None,
+                role: AgentRole::Main,
+                color: None,
+                prompt: agent.prompt.clone(),
+                prompt_source: None,
+                prompt_digest: None,
+                model_policy: ModelPolicy {
+                    model: agent.model.clone(),
+                    category: agent.category.clone(),
+                    reasoning: agent.reasoning.clone(),
                 },
-                namespace: None,
-                digest: format!("test-only-{}", agent.stable_id),
-                agent: PreparedAgent {
-                    id: AgentName::new(&agent.stable_id),
-                    description: None,
-                    role: AgentRole::Main,
-                    color: None,
-                    prompt: agent.prompt.clone(),
-                    prompt_source: None,
-                    prompt_digest: None,
-                    model_policy: ModelPolicy {
-                        model: agent.model.clone(),
-                        category: agent.category.clone(),
-                        reasoning: agent.reasoning.clone(),
-                    },
-                    workdir: agent.workdir.clone(),
-                    resource_view: ResourceView::default(),
-                    can_spawn: Vec::new(),
-                    hook_refs: Vec::new(),
-                },
-                tools: Vec::new(),
-                skills: Vec::new(),
-                mcp: Vec::new(),
-                hooks: Vec::new(),
-                extensions: Vec::new(),
-                tui: None,
-            }))
+                workdir: agent.workdir.clone(),
+                resource_view: ResourceView::default(),
+                can_spawn: Vec::new(),
+                hook_refs: Vec::new(),
+            }],
+            tools: Vec::new(),
+            skills: Vec::new(),
+            mcp: Vec::new(),
+            hooks: Vec::new(),
+            extensions: Vec::new(),
+            tui: None,
+
+            workflow: None,
+            channels: vec![],
+            schemas: vec![],
+            process: None,
+            apis: vec![],
+            permission_modes: vec![],
         })
         .collect::<Vec<_>>();
     let bundles = BundleCatalog::from_prepared(&bundles).expect("valid bundle catalog");

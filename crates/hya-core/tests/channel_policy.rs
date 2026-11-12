@@ -17,7 +17,7 @@ fn catalog_with_id(identity: &str, channels: &str) -> BundleCatalog {
         vec![SourceFile::new(
             "bundle.yaml",
             format!(
-                "kind: AgentSetBundle\nidentity: {{ id: {identity}, version: 1.0.0, publisher: acme }}\nagents: [{{id: reviewer, role: subagent}}]\nchannels:\n{channels}\n"
+                "kind: Bundle\nidentity: {{ id: {identity}, version: 1.0.0, publisher: acme }}\nagents: [{{id: reviewer, role: subagent}}]\nchannels:\n{channels}\n"
             ),
         )],
     );

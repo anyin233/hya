@@ -971,7 +971,7 @@ mod tests {
                 vec![hya_bundle::SourceFile::new(
                     "bundle.yaml",
                     format!(
-                        "kind: AgentSetBundle\nidentity: {{ id: acme/channel-restriction, version: 1.0.0, publisher: acme }}\nchannels:\n{channels}\n"
+                        "kind: Bundle\nidentity: {{ id: acme/channel-restriction, version: 1.0.0, publisher: acme }}\nchannels:\n{channels}\n"
                     ),
                 )],
             );
@@ -979,12 +979,10 @@ mod tests {
             runtime_with_extra(prepared.bundles().to_vec())
         }
 
-        fn runtime_with_extra(
-            mut extra: Vec<hya_bundle::PreparedInstallableBundle>,
-        ) -> Arc<crate::RuntimeRegistry> {
-            let bundle = hya_bundle::PreparedAgentBundle {
+        fn runtime_with_extra(mut extra: Vec<hya_bundle::Bundle>) -> Arc<crate::RuntimeRegistry> {
+            let bundle = hya_bundle::Bundle {
                 check: None,
-                format_version: 3,
+                format_version: 4,
                 identity: hya_bundle::BundleIdentity {
                     id: "hya/mailbox-unit-tests-resident".to_string(),
                     version: "0.0.0".to_string(),
@@ -992,7 +990,7 @@ mod tests {
                 },
                 namespace: None,
                 digest: "test-only-resident".to_string(),
-                agent: hya_bundle::PreparedAgent {
+                agents: vec![hya_bundle::PreparedAgent {
                     id: AgentName::new("resident"),
                     description: None,
                     role: hya_bundle::AgentRole::Subagent,
@@ -1005,17 +1003,22 @@ mod tests {
                     resource_view: hya_bundle::ResourceView::default(),
                     can_spawn: Vec::new(),
                     hook_refs: Vec::new(),
-                },
+                }],
                 tools: Vec::new(),
                 skills: Vec::new(),
                 mcp: Vec::new(),
                 hooks: Vec::new(),
                 extensions: Vec::new(),
                 tui: None,
+
+                workflow: None,
+                channels: vec![],
+                schemas: vec![],
+                process: None,
+                apis: vec![],
+                permission_modes: vec![],
             };
-            extra.push(hya_bundle::PreparedInstallableBundle::Agent(Box::new(
-                bundle,
-            )));
+            extra.push(bundle);
             let catalog = hya_bundle::BundleCatalog::from_prepared(&extra).expect("catalog valid");
             let catalog = crate::AgentCatalog::new(Arc::new(catalog)).expect("agent catalog valid");
             Arc::new(crate::RuntimeRegistry::new(

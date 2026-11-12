@@ -102,8 +102,8 @@ fn stage_native(
     let root = manifest
         .as_object_mut()
         .context("bundle manifest must be a mapping")?;
-    if root.get("kind").and_then(Value::as_str) != Some("Plugin") {
-        bail!("native tool-family source must be a Plugin");
+    if root.get("kind").and_then(Value::as_str) != Some("Bundle") {
+        bail!("native tool-family source must be a Bundle");
     }
     let extensions = root
         .get_mut("extensions")
@@ -209,7 +209,7 @@ mod native_tests {
             std::env::temp_dir().join(format!("hya-native-package-test-{}", std::process::id()));
         let source = root.join("source");
         std::fs::create_dir_all(&source).unwrap();
-        std::fs::write(source.join("bundle.yaml"), "kind: Plugin\nidentity: { id: hya/test-tools, version: 1.0.0, publisher: hya }\nnamespace: test-tools\nextensions:\n  files: [{ id: exposure, path: exposure.yaml }]\n").unwrap();
+        std::fs::write(source.join("bundle.yaml"), "kind: Bundle\nidentity: { id: hya/test-tools, version: 1.0.0, publisher: hya }\nnamespace: test-tools\nextensions:\n  files: [{ id: exposure, path: exposure.yaml }]\n").unwrap();
         std::fs::write(source.join("exposure.yaml"), "schema_version: 1\nidentity: hya/test-tools\nprotected_names: []\ntools:\n  - { name: alpha, schema_version: 1, permission: read_only }\n  - { name: beta, schema_version: 1, permission: tool }\n").unwrap();
         let binary = root.join("native-tool");
         std::fs::write(&binary, [0xff, 0x00, 0x7f, 0x45, 0x4c, 0x46]).unwrap();
@@ -252,7 +252,7 @@ mod native_tests {
         ));
         let source = root.join("source");
         std::fs::create_dir_all(&source).unwrap();
-        std::fs::write(source.join("bundle.yaml"), "kind: Plugin\nidentity: { id: hya/todo-tools, version: 1.0.0, publisher: hya }\nnamespace: todo-tools\nextensions:\n  files: [{ id: exposure, path: exposure.yaml }]\n").unwrap();
+        std::fs::write(source.join("bundle.yaml"), "kind: Bundle\nidentity: { id: hya/todo-tools, version: 1.0.0, publisher: hya }\nnamespace: todo-tools\nextensions:\n  files: [{ id: exposure, path: exposure.yaml }]\n").unwrap();
         std::fs::write(source.join("exposure.yaml"), "schema_version: 1\nidentity: hya/todo-tools\nprotected_names: []\ntools:\n  - { name: todo__read, schema_version: 1, permission: read_only }\n").unwrap();
         let library = root.join(format!("libhya_todo_tools{}", std::env::consts::DLL_SUFFIX));
         let bytes = [0xcf, 0xfa, 0xed, 0xfe, 0, 0xff];

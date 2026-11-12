@@ -1,14 +1,14 @@
 //! Catalog assembly: bundle sources, duplicate detection, and the spawn graph.
 
 use hya_bundle::{
-    BundleCatalog, BundleError, BundleSource, ExportKind, PreparedCatalog,
-    PreparedInstallableBundle, PreparedResource, SourceFile, prepare_package,
+    BundleCatalog, BundleError, BundleSource, ExportKind, PreparedResource, SourceFile,
+    prepare_package,
 };
 use sha2::{Digest, Sha256};
 
 fn source(root: &str, bundle_id: &str, stable_agent_id: &str, content: &str) -> BundleSource {
     let manifest = format!(
-        r#"kind: AgentBundle
+        r#"kind: Bundle
 identity:
   id: {bundle_id}
   version: 1.0.0
@@ -17,9 +17,9 @@ resources:
   skills:
     - id: docs
       path: resources/skills/docs.md
-agent:
-  id: {stable_agent_id}
-  role: main
+agents:
+  - id: {stable_agent_id}
+    role: main
 "#,
     );
     BundleSource::new(
@@ -33,14 +33,14 @@ agent:
 
 fn installed_duplicate_package_source(root: &str, stable_agent_id: &str) -> BundleSource {
     let manifest = format!(
-        r#"kind: AgentBundle
+        r#"kind: Bundle
 identity:
   id: hya/duplicate-package
   version: 1.0.0
   publisher: hya
-agent:
-  id: {stable_agent_id}
-  role: main
+agents:
+  - id: {stable_agent_id}
+    role: main
 "#,
     );
     BundleSource::new(
@@ -69,26 +69,6 @@ fn empty_prepared_catalog_is_accepted() {
     };
     assert!(catalog.bundles().is_empty());
     assert!(catalog.resolve_agent("anything").is_none());
-}
-
-#[test]
-fn zero_bundle_prepared_document_yields_an_empty_catalog() {
-    // Canonical empty prepared document: matching digest, valid shape, zero bundles.
-    let bytes = br#"{"format_version":3,"bundles":[],"index":[]}"#;
-    let expected_digest = digest(bytes);
-    let prepared = PreparedCatalog::decode(bytes, &expected_digest);
-    let Ok(prepared) = prepared else {
-        panic!("empty prepared document should still decode as prepared data: {prepared:?}");
-    };
-    assert!(
-        prepared.bundles().is_empty(),
-        "fixture must remain a zero-bundle prepared document"
-    );
-    let catalog = BundleCatalog::from_prepared(prepared.bundles());
-    let Ok(catalog) = catalog else {
-        panic!("zero bundles must be a valid catalog: {catalog:?}");
-    };
-    assert!(catalog.bundles().is_empty());
 }
 
 #[test]
@@ -138,7 +118,7 @@ fn catalog_indexes_declared_bundle_mcp_from_prepared_data() {
     let Ok(prepared) = prepared else {
         panic!("preparation failed: {prepared:?}");
     };
-    let [PreparedInstallableBundle::Agent(prepared_bundle)] = prepared.bundles() else {
+    let [prepared_bundle] = prepared.bundles() else {
         panic!("fixture must prepare exactly one AgentBundle");
     };
     let mut bundle = prepared_bundle.clone();
@@ -153,7 +133,7 @@ fn catalog_indexes_declared_bundle_mcp_from_prepared_data() {
         aliases: Vec::new(),
     });
 
-    let catalog = BundleCatalog::from_prepared(&[PreparedInstallableBundle::Agent(bundle)]);
+    let catalog = BundleCatalog::from_prepared(&[bundle]);
     let Ok(catalog) = catalog else {
         panic!("declared MCP resources must index: {catalog:?}");
     };
@@ -173,7 +153,7 @@ fn catalog_rejects_unsupported_hook_local_id_from_prepared_data() {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: AgentBundle
+                br#"kind: Bundle
 identity:
   id: hya/catalog-hook
   version: 1.0.0
@@ -186,11 +166,11 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agent:
-  id: catalog-hook
-  role: main
-  hook_refs:
-    - bundle:hya/catalog-hook/hook/event
+agents:
+  - id: catalog-hook
+    role: main
+    hook_refs:
+      - bundle:hya/catalog-hook/hook/event
 "#
                 .as_slice(),
             ),
@@ -200,7 +180,7 @@ agent:
     let Ok(prepared) = prepared else {
         panic!("preparation failed: {prepared:?}");
     };
-    let [PreparedInstallableBundle::Agent(prepared_bundle)] = prepared.bundles() else {
+    let [prepared_bundle] = prepared.bundles() else {
         panic!("fixture must prepare exactly one AgentBundle");
     };
     let mut bundle = prepared_bundle.clone();
@@ -208,7 +188,7 @@ agent:
     bundle.hooks[0].stable_id = "bundle:hya/catalog-hook/hook/audit".to_string();
 
     assert_eq!(
-        BundleCatalog::from_prepared(&[PreparedInstallableBundle::Agent(bundle)]).err(),
+        BundleCatalog::from_prepared(&[bundle]).err(),
         Some(BundleError::UnsupportedBundleFeature {
             bundle_id: "hya/catalog-hook".to_string(),
             feature: "hook:audit".to_string(),
@@ -287,7 +267,7 @@ fn bundle_id_with_kind_segments_resolves_structurally() {
             SourceFile::new(
                 "bundle.yaml",
                 format!(
-                    r#"kind: AgentBundle
+                    r#"kind: Bundle
 identity:
   id: {bundle_id}
   version: 1.0.0
@@ -296,9 +276,9 @@ resources:
   skills:
     - id: docs
       path: resources/skills/docs.md
-agent:
-  id: nested-lead
-  role: main
+agents:
+  - id: nested-lead
+    role: main
 "#
                 )
                 .into_bytes(),
@@ -328,7 +308,7 @@ agent:
 
 fn workflow_source(bundle_id: &str, workflow_id: &str, agent_id: &str) -> BundleSource {
     let manifest = format!(
-        r#"kind: WorkflowBundle
+        r#"kind: Bundle
 identity:
   id: {bundle_id}
   version: 1.0.0
@@ -378,7 +358,7 @@ fn workflow_source_with_model_route(
     agent_id: &str,
 ) -> BundleSource {
     let manifest = format!(
-        r#"kind: WorkflowBundle
+        r#"kind: Bundle
 identity:
   id: {bundle_id}
   version: 1.0.0

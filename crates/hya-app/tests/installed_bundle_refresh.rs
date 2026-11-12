@@ -59,7 +59,7 @@ fn installed_source() -> BundleSource {
             SourceFile::new(
                 "bundle.hya.md",
                 br#"---
-kind: AgentBundle
+kind: Bundle
 identity:
   id: hya/installed-test
   version: 1.0.0
@@ -68,9 +68,9 @@ resources:
   skills:
     - id: installed-skill
       path: resources/skills/installed-skill.md
-agent:
-  id: installed-agent
-  role: main
+agents:
+  - id: installed-agent
+    role: main
 ---
 You are the installed agent.
 "#,
@@ -89,7 +89,7 @@ fn installed_plugin_source() -> BundleSource {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Plugin
+                br#"kind: Bundle
 identity: { id: hya/installed-plugin, version: 1.0.0, publisher: hya }
 resources:
   skills:
@@ -111,7 +111,7 @@ fn goal_loop_override_source() -> BundleSource {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Plugin
+                br#"kind: Bundle
 identity: { id: hya/goal-loop, version: 9.0.0, publisher: test }
 namespace: goal-loop
 resources:
@@ -135,7 +135,7 @@ fn installed_workflow_source() -> BundleSource {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: WorkflowBundle
+                br#"kind: Bundle
 identity:
   id: hya/installed-workflow-test
   version: 1.0.0
@@ -510,7 +510,7 @@ fn schema_bundle_source() -> BundleSource {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: AgentBundle
+                br#"kind: Bundle
 identity:
   id: hya/schema-refresh
   version: 1.0.0
@@ -527,12 +527,12 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agent:
-  id: schema-lead
-  role: main
-  resource_view:
-    allow:
-      - query
+agents:
+  - id: schema-lead
+    role: main
+    resource_view:
+      allow:
+        - query
 "#,
             ),
             SourceFile::new("extensions/runtime.js", b"export default {}".to_vec()),
@@ -643,7 +643,7 @@ for line in sys.stdin:
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Plugin
+                br#"kind: Bundle
 identity: { id: acme/process-fixture, version: 1.0.0, publisher: acme }
 extensions:
   process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
@@ -701,7 +701,7 @@ async fn failed_bundle_process_start_preserves_the_published_generation() {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Plugin
+                br#"kind: Bundle
 identity: { id: acme/old-process, version: 1.0.0, publisher: acme }
 extensions:
   process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
@@ -758,7 +758,7 @@ for line in sys.stdin:
         "bad-process",
         vec![SourceFile::new(
             "bundle.yaml",
-            br#"kind: Plugin
+            br#"kind: Bundle
 identity: { id: acme/bad-process, version: 1.0.0, publisher: acme }
 extensions:
   process: { kind: rust, command: [/nonexistent/hya-bundle-test-process] }
@@ -833,7 +833,7 @@ async fn retained_bundle_hook_keeps_materialized_files_after_uninstall() {
     );
     let refresh = hya_app::InstalledBundleRefresh::new(registry_path);
     let prepared = prepare_package(BundleSource::new("hook-files", vec![
-        SourceFile::new("bundle.yaml", br#"kind: Plugin
+        SourceFile::new("bundle.yaml", br#"kind: Bundle
 identity: { id: acme/hook-files, version: 1.0.0, publisher: acme }
 extensions:
   process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
@@ -925,7 +925,7 @@ for line in sys.stdin:
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Plugin
+                br#"kind: Bundle
 identity: { id: acme/config-fixture, version: 1.0.0, publisher: acme }
 extensions:
   process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
@@ -1016,9 +1016,8 @@ async fn old_install_record_fails_refresh_with_reinstall_instruction() {
         .unwrap();
 
     let mut old: serde_json::Value = serde_json::from_slice(prepared.bytes()).unwrap();
-    old["format_version"] = serde_json::json!(2);
-    old["bundles"][0]["format_version"] = serde_json::json!(2);
-    old["bundles"][0]["agent"]["spawn_lifecycle"] = serde_json::json!("transient");
+    old["format_version"] = serde_json::json!(3);
+    old["agents"][0]["spawn_lifecycle"] = serde_json::json!("transient");
     let bytes = serde_json::to_vec(&old).unwrap();
     let digest = Sha256::digest(&bytes)
         .iter()

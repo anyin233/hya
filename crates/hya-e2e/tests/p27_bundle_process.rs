@@ -23,7 +23,7 @@ for line in sys.stdin:
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Plugin
+                br#"kind: Bundle
 identity: { id: acme/process-fixture, version: 1.0.0, publisher: acme }
 extensions:
   process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
@@ -221,7 +221,7 @@ for line in sys.stdin:
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: AgentSetBundle
+                br#"kind: Bundle
 identity: { id: acme/private-process, version: 1.0.0, publisher: acme }
 extensions:
   process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
@@ -313,7 +313,7 @@ async fn agentless_javascript_plugin_executes_without_a_synthetic_agent() {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Plugin
+                br#"kind: Bundle
 identity: { id: acme/js-plugin, version: 1.0.0, publisher: acme }
 resources:
   tools: [{ id: echo, path: extensions/runtime.js }]
@@ -383,7 +383,7 @@ for line in sys.stdin:
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Plugin
+                br#"kind: Bundle
 identity: { id: acme/lineage, version: 1.0.0, publisher: acme }
 extensions:
   process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
@@ -401,7 +401,7 @@ resources:
         "team",
         vec![SourceFile::new(
             "bundle.yaml",
-            br#"kind: AgentSetBundle
+            br#"kind: Bundle
 identity: { id: acme/team, version: 1.0.0, publisher: acme }
 agents:
   - id: team-agent
@@ -479,7 +479,7 @@ for line in sys.stdin:
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Plugin
+                br#"kind: Bundle
 identity: { id: acme/fallback, version: 1.0.0, publisher: acme }
 extensions:
   process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }

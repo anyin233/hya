@@ -12,19 +12,20 @@ const SCHEMA: &str = r#"{"type":"object","properties":{"n":{"type":"integer"}}}"
 /// blocks (YAML fragments indented for their parent key). The process
 /// declares `schemas/in.json` (valid) and `schemas/bad.json` (not JSON) as
 /// support files.
-fn api_bundle(kind: &str, process: bool, apis: Option<&str>) -> BundleSource {
+fn api_bundle(with_agents: bool, process: bool, apis: Option<&str>) -> BundleSource {
     let process = if process {
         "extensions:\n  process:\n    kind: bun\n    command: [bun, run, '${BUNDLE_ROOT}/api.ts']\n  files:\n    - id: api\n      path: api.ts\n    - id: in-schema\n      path: schemas/in.json\n    - id: bad-schema\n      path: schemas/bad.json\n"
     } else {
         ""
     };
     let apis = apis.map_or_else(String::new, |block| format!("apis:\n{block}"));
-    let body = match kind {
-        "AgentSetBundle" => "agents:\n  - id: api-lead\n    role: main\n",
-        _ => "",
+    let body = if with_agents {
+        "agents:\n  - id: api-lead\n    role: main\n"
+    } else {
+        ""
     };
     let manifest = format!(
-        "kind: {kind}\nidentity:\n  id: hya/api-demo\n  version: 1.0.0\n  publisher: hya\n{process}{apis}{body}"
+        "kind: Bundle\nidentity:\n  id: hya/api-demo\n  version: 1.0.0\n  publisher: hya\n{process}{apis}{body}"
     );
     BundleSource::new(
         "api-demo",
@@ -63,7 +64,7 @@ fn plugin_apis_prepare_sorted_and_round_trip() {
         api("create", "POST", "global", "/items/{id}"),
         api("remove", "DELETE", "global", "/items/{id}"),
     );
-    let catalog = prepared(api_bundle("Plugin", true, Some(&block)));
+    let catalog = prepared(api_bundle(false, true, Some(&block)));
     let apis = catalog.bundle_apis("hya/api-demo");
     let ids = apis.iter().map(|api| api.id.as_str()).collect::<Vec<_>>();
     assert_eq!(ids, ["create", "remove", "usage"], "apis are sorted by id");
@@ -86,19 +87,15 @@ fn plugin_apis_prepare_sorted_and_round_trip() {
         Ok(document) => document,
         Err(error) => panic!("prepared bytes must be JSON: {error}"),
     };
-    assert_eq!(
-        document["apis"][0]["bundle_id"], "hya/api-demo",
-        "apis are a document-level section keyed by bundle id"
-    );
-    assert_eq!(document["apis"][0]["apis"][0]["method"], "POST");
-    assert_eq!(document["apis"][0]["apis"][0]["scope"], "global");
+    assert_eq!(document["apis"][0]["method"], "POST");
+    assert_eq!(document["apis"][0]["scope"], "global");
 }
 
 #[test]
 fn apis_change_the_catalog_digest_and_are_skipped_when_empty() {
-    let plain = prepared(api_bundle("Plugin", true, None));
+    let plain = prepared(api_bundle(false, true, None));
     let with_apis = prepared(api_bundle(
-        "Plugin",
+        false,
         true,
         Some(&api("usage", "GET", "session", "/usage")),
     ));
@@ -108,20 +105,20 @@ fn apis_change_the_catalog_digest_and_are_skipped_when_empty() {
         Err(error) => panic!("prepared bytes must be JSON: {error}"),
     };
     assert!(
-        document.get("apis").is_none(),
+        document["apis"].as_array().is_some_and(Vec::is_empty),
         "the apis section is skipped when no bundle declares any"
     );
     let a = api("a", "GET", "session", "/a");
     let b = api("b", "GET", "session", "/b");
-    let reordered = prepared(api_bundle("Plugin", true, Some(&format!("{b}{a}"))));
-    let sorted = prepared(api_bundle("Plugin", true, Some(&format!("{a}{b}"))));
+    let reordered = prepared(api_bundle(false, true, Some(&format!("{b}{a}"))));
+    let sorted = prepared(api_bundle(false, true, Some(&format!("{a}{b}"))));
     assert_eq!(reordered.digest(), sorted.digest());
 }
 
 #[test]
-fn every_process_backed_kind_may_declare_apis() {
+fn agent_bearing_bundle_may_declare_apis() {
     let catalog = prepared(api_bundle(
-        "AgentSetBundle",
+        true,
         true,
         Some(&api("usage", "GET", "session", "/usage")),
     ));
@@ -131,7 +128,7 @@ fn every_process_backed_kind_may_declare_apis() {
 #[test]
 fn apis_without_an_explicit_process_are_rejected() {
     let detail = invalid_detail(api_bundle(
-        "Plugin",
+        false,
         false,
         Some(&api("usage", "GET", "session", "/usage")),
     ));
@@ -145,7 +142,7 @@ fn apis_without_an_explicit_process_are_rejected() {
 fn invalid_ids_templates_and_duplicates_are_rejected() {
     for id in ["''", "a/b", "-lead", "'has space'", "per%cent"] {
         let detail = invalid_detail(api_bundle(
-            "Plugin",
+            false,
             true,
             Some(&api(id, "GET", "session", "/x")),
         ));
@@ -153,14 +150,14 @@ fn invalid_ids_templates_and_duplicates_are_rejected() {
     }
     for path in ["usage", "/", "/a/", "/a/{x}/{x}", "/a/*", "/a{b}", "/a/.."] {
         let detail = invalid_detail(api_bundle(
-            "Plugin",
+            false,
             true,
             Some(&api("x", "GET", "session", path)),
         ));
         assert!(detail.contains("path"), "{path}: {detail}");
     }
     let detail = invalid_detail(api_bundle(
-        "Plugin",
+        false,
         true,
         Some(&format!(
             "{}{}",
@@ -176,7 +173,7 @@ fn unknown_methods_and_scopes_are_rejected() {
     for (method, scope) in [("get", "session"), ("HEAD", "session"), ("GET", "tree")] {
         assert!(
             prepare_package(api_bundle(
-                "Plugin",
+                false,
                 true,
                 Some(&api("x", method, scope, "/x")),
             ))
@@ -189,7 +186,7 @@ fn unknown_methods_and_scopes_are_rejected() {
 #[test]
 fn overlapping_templates_under_one_method_and_scope_are_rejected() {
     let detail = invalid_detail(api_bundle(
-        "Plugin",
+        false,
         true,
         Some(&format!(
             "{}{}",
@@ -202,7 +199,7 @@ fn overlapping_templates_under_one_method_and_scope_are_rejected() {
         "{detail}"
     );
     let detail = invalid_detail(api_bundle(
-        "Plugin",
+        false,
         true,
         Some(&format!(
             "{}{}",
@@ -213,7 +210,7 @@ fn overlapping_templates_under_one_method_and_scope_are_rejected() {
     assert!(detail.contains("overlaps"), "{detail}");
     // The same template under another method or scope is a distinct endpoint.
     let catalog = prepared(api_bundle(
-        "Plugin",
+        false,
         true,
         Some(&format!(
             "{}{}{}",
@@ -233,7 +230,7 @@ fn schema_files_must_be_declared_json_files() {
         )
     };
     let catalog = prepared(api_bundle(
-        "Plugin",
+        false,
         true,
         Some(&with("request_schema", "./schemas/in.json")),
     ));
@@ -245,7 +242,7 @@ fn schema_files_must_be_declared_json_files() {
         "schema paths are normalized"
     );
     let detail = invalid_detail(api_bundle(
-        "Plugin",
+        false,
         true,
         Some(&with("request_schema", "schemas/missing.json")),
     ));
@@ -254,7 +251,7 @@ fn schema_files_must_be_declared_json_files() {
         "{detail}"
     );
     let detail = invalid_detail(api_bundle(
-        "Plugin",
+        false,
         true,
         Some(&with("response_schema", "schemas/bad.json")),
     ));
@@ -267,7 +264,7 @@ fn schema_files_must_be_declared_json_files() {
 #[test]
 fn non_canonical_api_rows_are_rejected_on_decode() {
     let catalog = prepared(api_bundle(
-        "Plugin",
+        false,
         true,
         Some(&format!(
             "{}{}",
@@ -279,10 +276,21 @@ fn non_canonical_api_rows_are_rejected_on_decode() {
         Ok(document) => document,
         Err(error) => panic!("prepared bytes must be JSON: {error}"),
     };
-    let Some(apis) = document["apis"][0]["apis"].as_array_mut() else {
+    let Some(apis) = document["apis"].as_array_mut() else {
         panic!("apis row must be an array");
     };
     apis.reverse();
+    let mut content = document.clone();
+    content
+        .as_object_mut()
+        .unwrap_or_else(|| panic!("prepared bundle must be an object"))
+        .remove("digest");
+    document["digest"] = serde_json::json!(format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(&content).unwrap_or_else(|error| panic!("encode bundle: {error}"))
+        )
+    ));
     let bytes = match serde_json::to_vec(&document) {
         Ok(bytes) => bytes,
         Err(error) => panic!("encode tampered document: {error}"),
@@ -299,7 +307,7 @@ fn non_canonical_api_rows_are_rejected_on_decode() {
 
 #[test]
 fn agent_bundle_with_explicit_process_may_declare_apis() {
-    let manifest = r#"kind: AgentBundle
+    let manifest = r#"kind: Bundle
 identity:
   id: hya/decl-demo
   version: 1.0.0
@@ -314,9 +322,9 @@ extensions:
   process:
     kind: bun
     command: [bun, run, extensions/runtime.ts]
-agent:
-  id: decl-lead
-  role: main
+agents:
+  - id: decl-lead
+    role: main
 "#;
     let catalog = prepared(BundleSource::new(
         "decl-demo",
