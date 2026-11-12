@@ -235,12 +235,6 @@ track = "P"
 path = "crates/hya-e2e/tests/p22_dispatch_model_resolution.rs"
 
 [[scenario]]
-id = "T2.18"
-title = "long MCP call auto-backgrounds and steers reclaim"
-track = "P"
-path = "crates/hya-e2e/tests/p23_mcp_background.rs"
-
-[[scenario]]
 id = "T2.19"
 title = "installed bundle schemas surface through CLI and runtime API"
 track = "P"
@@ -427,3 +421,7 @@ reason = "never defined — no scenario, PRD, or doc in this repository's histor
 [[retired]]
 id = "T1.6"
 reason = "never defined — same as T1.1; the tier list it came from was not committed, so the intent is unrecoverable"
+
+[[retired]]
+id = "T2.18"
+reason = "automatic MCP backgrounding and reclaim were removed; MCP calls remain in their originating turn"

@@ -878,8 +878,7 @@ stopped member is refused (`invalid_argument`, naming the member), and its
 `wait` lists the member as `stopped_by_user` instead of `stalled`, and does not
 keep waiting on it: a wait whose remaining targets are all stopped returns
 `nothing_to_wait_for`, and an `all` wait completes once the others finished.
-Nothing is archived, and a backgrounded MCP completion starts no reclaim turn on a
-stopped session. `CreateTurn` on a session lifts the stop from it and its
+Nothing is archived. `CreateTurn` on a session lifts the stop from it and its
 subtree, and a delivered `SteerSubagent` from that member and its subtree;
 mail queued before or during the stop then wakes them, and the others stay
 idle until mailed. When neither the session nor any member below it is running
