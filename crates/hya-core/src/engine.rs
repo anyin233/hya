@@ -387,6 +387,7 @@ impl hya_tool::WorkflowRequestSink for BoundWorkflowSink {
 /// Clone shares execution handles and snapshots the current resource bindings.
 pub struct SessionEngine {
     store: SessionStore,
+    base_system_prompt: String,
     providers: RwLock<Arc<ProviderRouter>>,
     catalog: RwLock<Arc<ProviderCatalogSnapshot>>,
     /// Cross-model failover plane: preferred [`ModelRef`] → its ordered
@@ -448,6 +449,7 @@ impl Clone for SessionEngine {
     fn clone(&self) -> Self {
         Self {
             store: self.store.clone(),
+            base_system_prompt: self.base_system_prompt.clone(),
             providers: RwLock::new(
                 self.providers
                     .read()
@@ -627,6 +629,7 @@ impl SessionEngine {
         let engine = Self {
             store,
             providers: RwLock::new(providers),
+            base_system_prompt: String::new(),
             catalog: RwLock::new(catalog),
             global_reasoning: None,
             model_fallbacks: HashMap::new(),
@@ -719,6 +722,18 @@ impl SessionEngine {
     pub fn with_model_categories(mut self, categories: Arc<CategoryRegistry>) -> Self {
         self.model_categories = categories;
         self
+    }
+
+    /// Set the host prompt retained when a catalog agent omits its own prompt.
+    /// Applies to resident revival and autonomous main reconstruction.
+    #[must_use]
+    pub fn with_base_system_prompt(mut self, prompt: String) -> Self {
+        self.base_system_prompt = prompt;
+        self
+    }
+
+    pub(crate) fn base_system_prompt(&self) -> &str {
+        &self.base_system_prompt
     }
 
     /// Install the process-wide reasoning fallback.

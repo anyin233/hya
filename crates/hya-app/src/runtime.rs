@@ -2235,6 +2235,7 @@ async fn build_session_engine_with_mcp_defer(
     let sidecar_environment = Arc::new(BundleSidecarEnvironment::production());
     let context_settings = settings.context();
     let engine_builder = SessionEngine::new(store, router, runtime, permission, bus)
+        .with_base_system_prompt(agent.system_prompt.clone())
         // Stop/start records use this store's runtime-owner claim.
         .with_runtime_owner(owner_run_id)
         .with_global_reasoning(settings.reasoning())
