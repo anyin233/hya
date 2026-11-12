@@ -80,7 +80,6 @@ impl Provider for ScriptedModelProvider {
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
         (model.as_str() == self.claimed_model).then(|| Capabilities {
             streaming_tool_calls: true,
-            parallel_tool_calls: true,
             usage_reporting: true,
             max_context: 200_000,
             reasoning_request: true,

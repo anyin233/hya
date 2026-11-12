@@ -117,7 +117,6 @@ impl Provider for RecordingProvider {
     fn capabilities(&self, _model: &ModelRef) -> Option<Capabilities> {
         Some(Capabilities {
             streaming_tool_calls: true,
-            parallel_tool_calls: true,
             usage_reporting: true,
             max_context: 200_000,
             ..Capabilities::default()
@@ -229,7 +228,6 @@ impl Provider for BarrierProvider {
     fn capabilities(&self, _model: &ModelRef) -> Option<Capabilities> {
         Some(Capabilities {
             streaming_tool_calls: true,
-            parallel_tool_calls: true,
             max_context: 200_000,
             ..Capabilities::default()
         })
@@ -295,7 +293,6 @@ impl Provider for ResidentHangingProvider {
     fn capabilities(&self, _model: &ModelRef) -> Option<Capabilities> {
         Some(Capabilities {
             streaming_tool_calls: true,
-            parallel_tool_calls: true,
             max_context: 200_000,
             ..Capabilities::default()
         })
@@ -1622,7 +1619,6 @@ impl Provider for ProbeProvider {
     fn capabilities(&self, _model: &ModelRef) -> Option<Capabilities> {
         Some(Capabilities {
             streaming_tool_calls: true,
-            parallel_tool_calls: true,
             usage_reporting: true,
             max_context: 200_000,
             ..Capabilities::default()

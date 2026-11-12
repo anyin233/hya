@@ -52,7 +52,6 @@ impl Provider for SelectiveFakeProvider {
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
         (model.as_str() == "fake").then_some(Capabilities {
             streaming_tool_calls: true,
-            parallel_tool_calls: true,
             usage_reporting: true,
             max_context: 200_000,
             ..Capabilities::default()
@@ -93,7 +92,6 @@ impl Provider for AckProbeProvider {
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
         (model.as_str() == "fake").then_some(Capabilities {
             streaming_tool_calls: true,
-            parallel_tool_calls: true,
             usage_reporting: true,
             max_context: 200_000,
             ..Capabilities::default()
@@ -137,7 +135,6 @@ impl Provider for ResidentStopBarrierProvider {
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
         (model.as_str() == "fake").then_some(Capabilities {
             streaming_tool_calls: true,
-            parallel_tool_calls: true,
             usage_reporting: true,
             max_context: 200_000,
             ..Capabilities::default()
@@ -183,7 +180,6 @@ impl Provider for TransientLossProvider {
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
         (model.as_str() == "fake").then_some(Capabilities {
             streaming_tool_calls: true,
-            parallel_tool_calls: true,
             usage_reporting: true,
             max_context: 200_000,
             ..Capabilities::default()
@@ -399,7 +395,6 @@ impl Provider for SidecarPermissionProvider {
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
         (model.as_str() == "fake").then_some(Capabilities {
             streaming_tool_calls: true,
-            parallel_tool_calls: true,
             usage_reporting: true,
             max_context: 200_000,
             ..Capabilities::default()
@@ -1187,7 +1182,6 @@ impl Provider for PerSessionRecorder {
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
         (model.as_str() == "fake").then_some(Capabilities {
             streaming_tool_calls: true,
-            parallel_tool_calls: true,
             usage_reporting: true,
             max_context: 200_000,
             ..Capabilities::default()
@@ -1557,7 +1551,6 @@ impl Provider for ConcurrencyProbeProvider {
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
         (model.as_str() == "fake").then_some(Capabilities {
             streaming_tool_calls: true,
-            parallel_tool_calls: true,
             usage_reporting: true,
             max_context: 200_000,
             ..Capabilities::default()

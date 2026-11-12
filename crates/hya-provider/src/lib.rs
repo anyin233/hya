@@ -154,14 +154,8 @@ impl ProviderError {
 pub struct Capabilities {
     /// Route may stream tool-call assembly mid-turn.
     pub streaming_tool_calls: bool,
-    /// Multiple tool calls in one assistant turn are allowed.
-    pub parallel_tool_calls: bool,
     /// Stream may emit token usage on finish.
     pub usage_reporting: bool,
-    /// Structured JSON output mode (unused by current HTTP defaults).
-    pub json_output: bool,
-    /// Provider streams separate reasoning parts as first-class events (HTTP default off).
-    pub reasoning_stream: bool,
     /// Route accepts a reasoning-effort parameter on the request.
     pub reasoning_request: bool,
     /// Advertised context window in tokens.
@@ -209,10 +203,7 @@ pub(crate) fn append_capabilities_identity(
 ) -> Option<()> {
     output.extend_from_slice(&[
         u8::from(caps.streaming_tool_calls),
-        u8::from(caps.parallel_tool_calls),
         u8::from(caps.usage_reporting),
-        u8::from(caps.json_output),
-        u8::from(caps.reasoning_stream),
         u8::from(caps.prompt_caching),
         u8::from(caps.reasoning_request),
     ]);

@@ -84,7 +84,6 @@ impl Provider for ScriptProvider {
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
         (model.as_str() == "hya/offline").then_some(Capabilities {
             streaming_tool_calls: true,
-            parallel_tool_calls: true,
             usage_reporting: true,
             max_context: 200_000,
             ..Capabilities::default()

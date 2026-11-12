@@ -465,7 +465,6 @@ impl hya_provider::Provider for SelectiveFakeProvider {
     fn capabilities(&self, model: &ModelRef) -> Option<hya_provider::Capabilities> {
         (model.as_str() == "fake").then_some(hya_provider::Capabilities {
             streaming_tool_calls: true,
-            parallel_tool_calls: true,
             usage_reporting: true,
             max_context: 200_000,
             ..hya_provider::Capabilities::default()
