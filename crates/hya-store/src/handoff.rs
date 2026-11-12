@@ -42,12 +42,15 @@ impl SessionStore {
     }
 
     /// Append a pending prompt once, retaining the row until an assistant starts.
-    /// Missing messages, missing/archived/child sessions lose their restore.
+    /// Returns the prompt's id and the appended events (none when an earlier
+    /// process already injected it). Missing messages, missing/archived/child
+    /// sessions, and an injected prompt that is no longer visible (reverted)
+    /// lose their restore.
     pub async fn take_restart_resume(
         &self,
         session: SessionId,
         owner: OwnerRunId,
-    ) -> Result<Option<Vec<Envelope>>, StoreError> {
+    ) -> Result<Option<(MessageId, Vec<Envelope>)>, StoreError> {
         self.require_runtime_owner(owner)?;
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let row = sqlx::query(
@@ -61,7 +64,16 @@ impl SessionStore {
         };
         let projection = replay_projection(&self.projections, &mut tx, session).await?;
         let interrupted: String = row.try_get("message_id")?;
-        let Some(interrupted) = projection
+        let injected = row
+            .try_get::<Option<Vec<u8>>, _>("prompt_message_id")?
+            .map(|bytes| {
+                uuid::Uuid::from_slice(&bytes)
+                    .map(MessageId::from_uuid)
+                    .map_err(|error| sqlx::Error::Decode(Box::new(error)))
+            })
+            .transpose()?;
+        let visible = |id: MessageId| projection.session.messages.iter().any(|m| m.id == id);
+        let interrupted = projection
             .session
             .messages
             .iter()
@@ -70,8 +82,9 @@ impl SessionStore {
                 projection.session.id.is_some()
                     && projection.session.parent.is_none()
                     && !projection.session.is_archived()
-            })
-        else {
+                    && injected.is_none_or(visible)
+            });
+        let Some(interrupted) = interrupted else {
             sqlx::query("DELETE FROM pending_resume WHERE session_id = ?")
                 .bind(session.storage_key())
                 .execute(&mut *tx)
@@ -79,12 +92,9 @@ impl SessionStore {
             tx.commit().await?;
             return Ok(None);
         };
-        if row
-            .try_get::<Option<Vec<u8>>, _>("prompt_message_id")?
-            .is_some()
-        {
+        if let Some(prompt) = injected {
             tx.commit().await?;
-            return Ok(Some(Vec::new()));
+            return Ok(Some((prompt, Vec::new())));
         }
         let unfinished = interrupted
             .parts
@@ -193,7 +203,7 @@ impl SessionStore {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
-        Ok(Some(envelopes))
+        Ok(Some((message, envelopes)))
     }
 }
 
@@ -259,6 +269,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap()
+                .1
                 .is_empty()
         );
     }

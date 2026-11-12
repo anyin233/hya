@@ -1,8 +1,10 @@
 //! Turn termination: the end-event invariant, the graceful drain, and the
 //! leader-failed broadcast.
 //!
-//! Invariant: every admitted prompt gets an assistant start/finish pair, even
-//! when stopped during preparation. Every assistant message ends exactly once,
+//! Invariant: the turn that admitted a prompt answers it with an assistant
+//! start/finish pair, even when stopped or failed before its message started;
+//! a turn that admitted nothing never answers. Every assistant message ends
+//! exactly once,
 //! every non-terminal tool part reaches a terminal state, and every member
 //! reaches a terminal status. A turn that does not end on its own (cancel,
 //! provider/runtime error) is closed here with a [`FinishCause`]; a process
@@ -98,12 +100,41 @@ pub(crate) fn error_text(error: &CoreError) -> String {
     format!("{}…", &text[..end])
 }
 
+/// The empty assistant start/finish pair that answers an admitted prompt
+/// whose turn ended before its assistant message started; `error` records a
+/// failure between the two.
+pub(crate) fn unstarted_answer(
+    session: SessionId,
+    message: MessageId,
+    finish: FinishReason,
+    cause: Option<FinishCause>,
+    error: Option<Event>,
+) -> Vec<Event> {
+    let mut events = vec![Event::MessageStarted {
+        session,
+        message,
+        role: Role::Assistant,
+        agent: None,
+        model: None,
+    }];
+    events.extend(error);
+    events.push(Event::MessageFinished {
+        session,
+        message,
+        role: Role::Assistant,
+        finish,
+        tokens: None,
+        cause,
+    });
+    events
+}
+
 impl SessionEngine {
     /// Close a turn's still-open assistant message after `error` failed the
     /// turn: first a durable `Error { failed_message }` carrying the error's
     /// code and text (folded onto the message as `MessageProjection.error`),
-    /// then `MessageFinished { finish: error, cause }`. An unanswered admitted
-    /// prompt gets an assistant start first; finished messages are left alone.
+    /// then `MessageFinished { finish: error, cause }`. The prompt the turn
+    /// admitted gets an assistant start first; finished messages are left alone.
     pub(crate) async fn fail_turn_message(
         &self,
         actor_claim: Option<&ActorClaim>,
@@ -306,6 +337,7 @@ impl SessionEngine {
         error: Option<&CoreError>,
     ) -> Result<(), CoreError> {
         let _message_guard = self.turn_gate.message_guard(session).await;
+        let answers_prompt = self.turn_gate.answers_prompt(session, message);
         let projection = self.store.read_projection(session).await?;
         let error_event = error.map(|error| Event::Error {
             session: Some(session),
@@ -319,34 +351,13 @@ impl SessionEngine {
             .iter()
             .find(|entry| entry.id == message)
         else {
-            // Only an unanswered prompt admits a synthetic answer. Internal
-            // turns with no prompt, or an already answered prompt, owe no pair.
-            if projection
-                .session
-                .messages
-                .iter()
-                .rev()
-                .find(|entry| matches!(entry.role, Role::User | Role::Assistant))
-                .is_some_and(|entry| entry.role == Role::User)
-            {
-                let mut events = vec![Event::MessageStarted {
+            if answers_prompt {
+                self.emit_batch_for_actor(
+                    actor_claim,
                     session,
-                    message,
-                    role: Role::Assistant,
-                    agent: None,
-                    model: None,
-                }];
-                events.extend(error_event);
-                events.push(Event::MessageFinished {
-                    session,
-                    message,
-                    role: Role::Assistant,
-                    finish,
-                    tokens,
-                    cause,
-                });
-                self.emit_batch_for_actor(actor_claim, session, events)
-                    .await?;
+                    unstarted_answer(session, message, finish, cause, error_event),
+                )
+                .await?;
             }
             return Ok(());
         };

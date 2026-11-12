@@ -232,6 +232,7 @@ async fn text_file_reference_stays_file_context_with_native_guidance() {
             std::slice::from_ref(&dir),
             Some(Arc::<str>::from("NATIVE_GUIDANCE_MARKER")),
             None,
+            None,
         )
         .await
         .unwrap();

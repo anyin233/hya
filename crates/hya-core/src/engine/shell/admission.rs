@@ -10,55 +10,42 @@ impl SessionEngine {
     ) -> Result<MessageId, CoreError> {
         let message = MessageId::new();
         let part = PartId::new();
-        self.emit(
+        self.emit_batch_for_actor(
+            None,
             session,
-            Event::MessageStarted {
-                session,
-                message,
-                role: Role::User,
-                agent: None,
-                model: None,
-            },
-        )
-        .await?;
-        self.emit(
-            session,
-            Event::TextStart {
-                session,
-                message,
-                part,
-            },
-        )
-        .await?;
-        self.emit(
-            session,
-            Event::TextDelta {
-                session,
-                message,
-                part,
-                delta: "The following tool was executed by the user".to_string(),
-            },
-        )
-        .await?;
-        self.emit(
-            session,
-            Event::TextEnd {
-                session,
-                message,
-                part,
-            },
-        )
-        .await?;
-        self.emit(
-            session,
-            Event::MessageFinished {
-                session,
-                message,
-                role: Role::User,
-                finish: FinishReason::Stop,
-                tokens: None,
-                cause: None,
-            },
+            vec![
+                Event::MessageStarted {
+                    session,
+                    message,
+                    role: Role::User,
+                    agent: None,
+                    model: None,
+                },
+                Event::TextStart {
+                    session,
+                    message,
+                    part,
+                },
+                Event::TextDelta {
+                    session,
+                    message,
+                    part,
+                    delta: "The following tool was executed by the user".to_string(),
+                },
+                Event::TextEnd {
+                    session,
+                    message,
+                    part,
+                },
+                Event::MessageFinished {
+                    session,
+                    message,
+                    role: Role::User,
+                    finish: FinishReason::Stop,
+                    tokens: None,
+                    cause: None,
+                },
+            ],
         )
         .await?;
         Ok(message)

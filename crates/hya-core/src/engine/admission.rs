@@ -587,14 +587,15 @@ impl SessionEngine {
             .await
     }
 
-    /// Admit a user prompt with image attachments (see [`crate::attachments`]).
+    /// Admit a user prompt with image attachments (see [`crate::attachments`])
+    /// under the caller-supplied `message` id.
     ///
     /// The images are stored in the session's blob table and the user
     /// message (`MessageStarted`, its text part, `UserPromptContextRecorded`
     /// naming the blobs, `MessageFinished`) is appended in the same
     /// transaction, so the prompt is never visible without its images and a
     /// failure admits nothing. Without attachments this is
-    /// [`Self::admit_user_prompt`].
+    /// [`Self::admit_user_prompt_with_id`].
     ///
     /// # Errors
     /// [`CoreError::Invalid`] when the attachments fail
@@ -603,11 +604,12 @@ impl SessionEngine {
     pub async fn admit_user_prompt_with_attachments(
         &self,
         session: SessionId,
+        message: MessageId,
         text: String,
         mut attachments: Vec<crate::attachments::PromptAttachment>,
     ) -> Result<MessageId, CoreError> {
         if attachments.is_empty() {
-            return self.admit_user_prompt(session, text).await;
+            return self.admit_user_prompt_with_id(session, message, text).await;
         }
         crate::attachments::validate_prompt_attachments(&mut attachments)
             .map_err(|error| CoreError::Invalid(error.to_string()))?;
@@ -616,7 +618,6 @@ impl SessionEngine {
         let text = self
             .user_text_after_hooks(&binding, &stable_id, session, text)
             .await;
-        let message = MessageId::new();
         let part = PartId::new();
         let mut blobs = Vec::with_capacity(attachments.len());
         let mut files = Vec::with_capacity(attachments.len());

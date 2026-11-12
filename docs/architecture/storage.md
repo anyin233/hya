@@ -135,14 +135,16 @@ on a non-archived root. It deletes the session's row unconditionally on
 `MessageStarted { role: Assistant }`, including turns outside server restore.
 `list_pending_resumes() -> Vec<PendingResume>` returns
 `PendingResume { session: SessionId, message: MessageId }` in creation order.
-`take_restart_resume(session: SessionId, owner: OwnerRunId) -> Option<Vec<Envelope>>`
+`take_restart_resume(session: SessionId, owner: OwnerRunId) -> Option<(MessageId, Vec<Envelope>)>`
 builds prompt text from the indexed message's non-`Completed` tool parts and
 the shutdown-interrupted subagents identified by the roster, then appends
 `MessageStarted(User)`, `TextStart`, `TextDelta`, `TextEnd`, and
 `MessageFinished(User, Stop)` and records `prompt_message_id` in one
-transaction. An already injected prompt returns `Some([])` so startup can
-still start its turn after a crash. Missing rows return `None`; missing,
-archived, or child sessions have their rows deleted and also return `None`.
+transaction, returning the prompt's id with the appended envelopes. An already
+injected prompt returns its id with no envelopes so startup can still start its
+turn after a crash. Missing rows return `None`; missing, archived, or child
+sessions, and an injected prompt no longer among the visible messages (reverted),
+have their rows deleted and also return `None`.
 The first assistant `MessageStarted` deletes the row in the same transaction.
 Another shutdown cancellation inserts a fresh unmarked row: each interruption
 gets one prompt. Session deletion also removes the row. Permission/question

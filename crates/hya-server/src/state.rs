@@ -64,7 +64,9 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Drain engine turns and admitted server runs against one deadline.
+    /// Stop for a restart: refuse new server runs, drain engine turns, then
+    /// wait for the server runs already reserved, all against one deadline. A
+    /// reserved run that has not admitted its prompt yet admits nothing.
     pub async fn stop_for_restart(
         &self,
         deadline: std::time::Duration,
@@ -78,7 +80,8 @@ impl AppState {
         Ok(report)
     }
 
-    /// Pause admitted turns before spawning, for lifecycle regression tests.
+    /// Pause a reserved run before its turn task spawns (nothing admitted
+    /// yet), for lifecycle regression tests.
     #[doc(hidden)]
     pub fn with_turn_spawn_barrier(
         mut self,

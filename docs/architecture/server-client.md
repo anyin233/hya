@@ -52,11 +52,13 @@ git) lives under `hya_server::support`.
 
 `AppState::stop_for_restart(deadline: Duration) -> Result<TurnDrainReport,
 CoreError>` refuses new server runs, drains the engine, then waits for the
-shared run registry to empty using the same deadline. A request already
-admitted but still preparing its engine turn remains registered until that
-turn closes. `hya serve stop` uses this path before releasing the runtime owner.
-The start/finish events include an empty assistant cancellation answer when
-the user cancels an admitted prompt before its assistant starts; see
+shared run registry to empty using the same deadline. `CreateTurn` prepares
+the turn before it reserves the session, and the reserved run's detached task
+admits the prompt and runs the turn that owns it; a run reserved before the
+stop began admits nothing and its request fails with `unavailable`. `hya serve
+stop` uses this path before releasing the runtime owner. The start/finish
+events include an empty assistant cancellation answer when the user cancels an
+admitted prompt before its assistant starts; see
 [ADR-0031](../adr/0031-hot-reload-and-stop-start-restart.md).
 
 ## The v1 surface

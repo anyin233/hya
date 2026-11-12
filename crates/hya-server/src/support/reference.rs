@@ -41,9 +41,11 @@ pub(crate) async fn session_workdir(
 // engine already resolves the model per session; this overrides agent identity).
 //
 // Pre-renders reference guidance once for the turn; does not put it on AgentSpec.
+// `model` is the model the turn will switch the session to, when it does.
 pub(crate) async fn session_agent_with_guidance(
     st: &ServerState,
     session: SessionId,
+    model: Option<&hya_proto::ModelRef>,
 ) -> Result<SessionTurnAgent, CoreError> {
     let projection = st.engine.store().read_projection(session).await?;
     let workdir = projection
@@ -64,10 +66,9 @@ pub(crate) async fn session_agent_with_guidance(
     // suffix, Agent policy, stored preference, the active model's configured
     // default, then the global default. A startup Agent effort belongs to the
     // startup model, so a switched session drops it rather than carry it over.
-    let active_model = projection
-        .session
-        .model
-        .clone()
+    let active_model = model
+        .or(projection.session.model.as_ref())
+        .cloned()
         .unwrap_or_else(|| agent.model.clone());
     if active_model != agent.model {
         agent.reasoning = None;
@@ -211,7 +212,7 @@ pub(crate) async fn shell_agent(
                 .await?;
         }
     }
-    let mut turn = session_agent_with_guidance(st, session).await?;
+    let mut turn = session_agent_with_guidance(st, session, None).await?;
     let agent = req.agent.trim();
     if !agent.is_empty() {
         turn.agent.name = AgentName::new(agent);

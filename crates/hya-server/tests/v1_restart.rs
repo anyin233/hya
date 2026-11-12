@@ -170,32 +170,161 @@ async fn restore_count(store: &SessionStore, session: SessionId) -> usize {
     )).count()
 }
 
+fn messages(
+    projection: &hya_proto::Projection,
+) -> Vec<(Role, Option<FinishReason>, Option<FinishCause>)> {
+    projection
+        .session
+        .messages
+        .iter()
+        .map(|message| (message.role, message.finish, message.cause))
+        .collect()
+}
+
 #[tokio::test]
-async fn shutdown_between_admission_and_spawn_closes_the_admitted_prompt() {
+async fn stop_while_a_run_is_reserved_waits_for_it_and_nothing_is_admitted() {
     let (store, provider, engine, agent, session) = fixture().await;
     let barrier = Arc::new(Barrier::new(2));
-    let state = AppState::new(engine.clone(), agent.clone())
-        .with_turn_spawn_barrier(session, barrier.clone());
-    let app = router(state);
+    let state = AppState::new(engine, agent).with_turn_spawn_barrier(session, barrier.clone());
+    let app = router(state.clone());
     let request = tokio::spawn(post_prompt(app.clone(), session));
     barrier.wait().await;
-    assert!(!engine.turn_active(session));
-    engine
-        .stop_for_restart(Duration::from_secs(1))
+    let mut stop =
+        tokio::spawn(async move { state.stop_for_restart(Duration::from_secs(2)).await });
+    let returned_early = tokio::time::timeout(Duration::from_millis(50), &mut stop).await;
+    assert!(
+        returned_early.is_err(),
+        "stop returned while a reserved server run was still held"
+    );
+    barrier.wait().await;
+    assert_eq!(request.await.unwrap(), StatusCode::SERVICE_UNAVAILABLE);
+    tokio::time::timeout(Duration::from_secs(1), stop)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(messages(&store.read_projection(session).await.unwrap()).is_empty());
+    assert!(store.list_pending_resumes().await.unwrap().is_empty());
+    assert!(provider.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn stop_returns_at_its_deadline_and_a_late_run_admits_nothing() {
+    let (store, _, engine, agent, session) = fixture().await;
+    let barrier = Arc::new(Barrier::new(2));
+    let state = AppState::new(engine, agent).with_turn_spawn_barrier(session, barrier.clone());
+    let app = router(state.clone());
+    let request = tokio::spawn(post_prompt(app.clone(), session));
+    barrier.wait().await;
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        state.stop_for_restart(Duration::from_millis(30)),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    barrier.wait().await;
+    assert_eq!(request.await.unwrap(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(messages(&store.read_projection(session).await.unwrap()).is_empty());
+    assert!(store.list_pending_resumes().await.unwrap().is_empty());
+    assert_eq!(post_prompt(app, session).await, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn a_dropped_handler_leaves_no_unanswered_prompt() {
+    let (store, _, engine, agent, session) = fixture().await;
+    let barrier = Arc::new(Barrier::new(2));
+    let state = AppState::new(engine, agent).with_turn_spawn_barrier(session, barrier.clone());
+    let request = tokio::spawn(post_prompt(router(state), session));
+    // The handler holds its reservation here; the client goes away.
+    barrier.wait().await;
+    request.abort();
+    assert!(request.await.unwrap_err().is_cancelled());
+    let messages = messages(&store.read_projection(session).await.unwrap());
+    assert!(
+        matches!(messages.last(), None | Some((Role::Assistant, Some(_), _))),
+        "an admitted prompt without its answer: {messages:?}"
+    );
+}
+
+#[derive(Clone, Default)]
+struct GatedSidecar {
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+impl SidecarEnvironment for GatedSidecar {
+    fn factory_for(
+        &self,
+        _: &TurnBinding,
+        _: &str,
+    ) -> Result<Option<Arc<dyn BoundSidecarFactory>>, CoreError> {
+        Ok(Some(Arc::new(self.clone())))
+    }
+}
+
+#[async_trait]
+impl BoundSidecarFactory for GatedSidecar {
+    async fn start(&self, _: SidecarStart) -> Result<Box<dyn SidecarHandle>, CoreError> {
+        Ok(Box::new(self.clone()))
+    }
+}
+
+#[async_trait]
+impl SidecarHandle for GatedSidecar {
+    async fn ready(&mut self) -> Result<(), CoreError> {
+        self.entered.notify_one();
+        self.release.notified().await;
+        Ok(())
+    }
+    async fn shutdown(&mut self) -> Result<(), CoreError> {
+        Ok(())
+    }
+}
+
+fn gated_engine(
+    store: &SessionStore,
+    provider: &Arc<WaitingProvider>,
+    owner: OwnerRunId,
+) -> (Arc<SessionEngine>, Arc<GatedSidecar>) {
+    let sidecar = Arc::new(GatedSidecar::default());
+    let engine = Arc::new(
+        next_engine(store, provider.clone(), owner).with_sidecar_environment(sidecar.clone()),
+    );
+    (engine, sidecar)
+}
+
+async fn entered(notify: &Notify) {
+    tokio::time::timeout(Duration::from_secs(5), notify.notified())
         .await
         .unwrap();
-    barrier.wait().await;
-    assert_eq!(request.await.unwrap(), StatusCode::OK);
-    wait_idle(app, session).await;
-    let projection = store.read_projection(session).await.unwrap();
-    let last = projection.session.messages.last().unwrap();
+}
+
+#[tokio::test]
+async fn stop_after_admission_closes_the_prompt_with_one_shutdown_pair() {
+    let (store, provider, engine, agent, session) = fixture().await;
+    let (engine, sidecar) = gated_engine(&store, &provider, engine.runtime_owner());
+    let state = AppState::new(engine.clone(), agent.clone());
+    let app = router(state.clone());
+    assert_eq!(post_prompt(app.clone(), session).await, StatusCode::OK);
+    entered(&sidecar.entered).await;
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        state.stop_for_restart(Duration::from_secs(1)),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(
-        (last.role, last.finish, last.cause),
-        (
-            Role::Assistant,
-            Some(FinishReason::Cancelled),
-            Some(FinishCause::Shutdown)
-        )
+        messages(&store.read_projection(session).await.unwrap()),
+        vec![
+            (Role::User, Some(FinishReason::Stop), None),
+            (
+                Role::Assistant,
+                Some(FinishReason::Cancelled),
+                Some(FinishCause::Shutdown)
+            ),
+        ]
     );
     assert_eq!(store.list_pending_resumes().await.unwrap().len(), 1);
     let next = AppState::new(
@@ -207,35 +336,58 @@ async fn shutdown_between_admission_and_spawn_closes_the_admitted_prompt() {
         agent,
     );
     assert_eq!(next.resume_interrupted_turns().await, vec![session]);
-    tokio::time::timeout(Duration::from_secs(5), provider.entered.notified())
-        .await
-        .unwrap();
+    entered(&provider.entered).await;
     assert_eq!(restore_count(&store, session).await, 1);
-    next.engine
-        .stop_for_restart(Duration::from_secs(1))
-        .await
-        .unwrap();
-    wait_idle(router(next), session).await;
+    next.stop_for_restart(Duration::from_secs(1)).await.unwrap();
 }
 
 #[tokio::test]
-async fn second_shutdown_before_restore_spawn_gets_one_new_prompt() {
+async fn stop_before_a_restore_injects_keeps_the_original_interruption() {
     let (store, provider, engine, agent, session) = fixture().await;
     let original = seed_interruption(&store, session).await;
     let barrier = Arc::new(Barrier::new(2));
     let state = AppState::new(engine.clone(), agent.clone())
         .with_turn_spawn_barrier(session, barrier.clone());
-    let app = router(state.clone());
-    let restore = tokio::spawn(async move { state.resume_interrupted_turns().await });
+    let restore = tokio::spawn({
+        let state = state.clone();
+        async move { state.resume_interrupted_turns().await }
+    });
     barrier.wait().await;
+    let stop = tokio::spawn(async move { state.stop_for_restart(Duration::from_secs(1)).await });
+    barrier.wait().await;
+    assert!(restore.await.unwrap().is_empty());
+    stop.await.unwrap().unwrap();
+    assert_eq!(restore_count(&store, session).await, 0);
+    let rows = store.list_pending_resumes().await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].message, original);
+    let next = AppState::new(
+        Arc::new(next_engine(
+            &store,
+            provider.clone(),
+            engine.runtime_owner(),
+        )),
+        agent,
+    );
+    assert_eq!(next.resume_interrupted_turns().await, vec![session]);
+    entered(&provider.entered).await;
     assert_eq!(restore_count(&store, session).await, 1);
-    engine
+    next.stop_for_restart(Duration::from_secs(1)).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_restored_turn_stopped_before_its_message_is_a_new_interruption() {
+    let (store, provider, engine, agent, session) = fixture().await;
+    let original = seed_interruption(&store, session).await;
+    let (engine, sidecar) = gated_engine(&store, &provider, engine.runtime_owner());
+    let state = AppState::new(engine.clone(), agent.clone());
+    assert_eq!(state.resume_interrupted_turns().await, vec![session]);
+    entered(&sidecar.entered).await;
+    assert_eq!(restore_count(&store, session).await, 1);
+    state
         .stop_for_restart(Duration::from_secs(1))
         .await
         .unwrap();
-    barrier.wait().await;
-    assert_eq!(restore.await.unwrap(), vec![session]);
-    wait_idle(app, session).await;
     let rows = store.list_pending_resumes().await.unwrap();
     assert_eq!(rows.len(), 1);
     assert_ne!(
@@ -251,63 +403,62 @@ async fn second_shutdown_before_restore_spawn_gets_one_new_prompt() {
         agent,
     );
     assert_eq!(next.resume_interrupted_turns().await, vec![session]);
-    tokio::time::timeout(Duration::from_secs(5), provider.entered.notified())
-        .await
-        .unwrap();
+    entered(&provider.entered).await;
     assert_eq!(restore_count(&store, session).await, 2);
-    next.engine
-        .stop_for_restart(Duration::from_secs(1))
+    next.stop_for_restart(Duration::from_secs(1)).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_cancelled_second_caller_does_not_answer_a_prompt_another_turn_owns() {
+    let (store, provider, engine, agent, session) = fixture().await;
+    let (engine, sidecar) = gated_engine(&store, &provider, engine.runtime_owner());
+    let app = router(AppState::new(engine.clone(), agent.clone()));
+    assert_eq!(post_prompt(app.clone(), session).await, StatusCode::OK);
+    entered(&sidecar.entered).await;
+    // A lease-less caller queues behind the turn that owns the prompt.
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let second = tokio::spawn({
+        let (engine, agent, cancel) = (engine.clone(), agent.clone(), cancel.clone());
+        async move { engine.run_turn(session, &agent, cancel).await }
+    });
+    tokio::task::yield_now().await;
+    cancel.cancel();
+    assert_eq!(second.await.unwrap().unwrap(), FinishReason::Cancelled);
+    sidecar.release.notify_one();
+    entered(&provider.entered).await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post(format!("/v1/sessions/{session}/turns/test/cancel"))
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
-    wait_idle(router(next), session).await;
-}
-
-#[derive(Clone, Default)]
-struct StartingSidecar(Arc<Notify>);
-
-impl SidecarEnvironment for StartingSidecar {
-    fn factory_for(
-        &self,
-        _: &TurnBinding,
-        _: &str,
-    ) -> Result<Option<Arc<dyn BoundSidecarFactory>>, CoreError> {
-        Ok(Some(Arc::new(self.clone())))
-    }
-}
-
-#[async_trait]
-impl BoundSidecarFactory for StartingSidecar {
-    async fn start(&self, _: SidecarStart) -> Result<Box<dyn SidecarHandle>, CoreError> {
-        Ok(Box::new(self.clone()))
-    }
-}
-
-#[async_trait]
-impl SidecarHandle for StartingSidecar {
-    async fn ready(&mut self) -> Result<(), CoreError> {
-        self.0.notify_one();
-        std::future::pending().await
-    }
-    async fn shutdown(&mut self) -> Result<(), CoreError> {
-        Ok(())
-    }
+    assert_eq!(response.status(), StatusCode::OK);
+    wait_idle(app, session).await;
+    assert_eq!(
+        messages(&store.read_projection(session).await.unwrap()),
+        vec![
+            (Role::User, Some(FinishReason::Stop), None),
+            (
+                Role::Assistant,
+                Some(FinishReason::Cancelled),
+                Some(FinishCause::UserCancel)
+            ),
+        ]
+    );
 }
 
 #[tokio::test]
 async fn user_cancel_before_restored_assistant_start_clears_the_restore() {
     let (store, provider, engine, agent, session) = fixture().await;
     seed_interruption(&store, session).await;
-    let sidecar = Arc::new(StartingSidecar::default());
-    let engine = Arc::new(
-        next_engine(&store, provider.clone(), engine.runtime_owner())
-            .with_sidecar_environment(sidecar.clone()),
-    );
+    let (engine, sidecar) = gated_engine(&store, &provider, engine.runtime_owner());
     let state = AppState::new(engine.clone(), agent.clone());
     let app = router(state.clone());
     assert_eq!(state.resume_interrupted_turns().await, vec![session]);
-    tokio::time::timeout(Duration::from_secs(5), sidecar.0.notified())
-        .await
-        .unwrap();
+    entered(&sidecar.entered).await;
     let response = app
         .clone()
         .oneshot(
@@ -384,31 +535,47 @@ async fn failure_before_restored_assistant_start_closes_the_prompt_with_its_erro
     assert!(provider.requests.lock().unwrap().is_empty());
 }
 
+/// `/undo` (`LastUserMessage`) hides the injected restore prompt when the
+/// previous process died after injecting it, or the interrupted turn itself
+/// when nothing was injected yet: either way the next start runs nothing and
+/// the pending revert stays.
 #[tokio::test]
-async fn reverting_past_interrupted_message_drops_its_restore() {
-    for marked in [false, true] {
+async fn undo_after_an_interruption_drops_its_restore() {
+    for injected in [false, true] {
         let (store, provider, engine, agent, session) = fixture().await;
-        let user = engine
+        engine
             .admit_user_prompt(session, "work".into())
             .await
             .unwrap();
         seed_interruption(&store, session).await;
-        if marked {
-            assert!(engine.inject_restart_prompt(session).await.unwrap());
+        if injected {
+            assert!(
+                engine
+                    .inject_restart_prompt(session)
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
         }
-        store
-            .append_event(
-                session,
-                &Event::SessionReverted {
-                    session,
-                    message: user,
-                    files: Vec::new(),
-                },
+        let response = router(AppState::new(engine.clone(), agent.clone()))
+            .oneshot(
+                Request::post(format!("/v1/sessions/{session}/revert"))
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
             )
             .await
             .unwrap();
-        let state = AppState::new(engine, agent);
-        assert!(state.resume_interrupted_turns().await.is_empty());
+        assert_eq!(response.status(), StatusCode::OK);
+        let next = AppState::new(
+            Arc::new(next_engine(
+                &store,
+                provider.clone(),
+                engine.runtime_owner(),
+            )),
+            agent,
+        );
+        assert!(next.resume_interrupted_turns().await.is_empty());
         assert!(store.list_pending_resumes().await.unwrap().is_empty());
         assert!(
             store
@@ -421,28 +588,6 @@ async fn reverting_past_interrupted_message_drops_its_restore() {
         );
         assert!(provider.requests.lock().unwrap().is_empty());
     }
-}
-
-#[tokio::test]
-async fn server_stop_waits_for_an_admitted_run_before_spawn() {
-    let (store, _, engine, agent, session) = fixture().await;
-    let barrier = Arc::new(Barrier::new(2));
-    let state = AppState::new(engine, agent).with_turn_spawn_barrier(session, barrier.clone());
-    let app = router(state.clone());
-    let request = tokio::spawn(post_prompt(app.clone(), session));
-    barrier.wait().await;
-    let mut stop =
-        tokio::spawn(async move { state.stop_for_restart(Duration::from_secs(2)).await });
-    let returned_early = tokio::time::timeout(Duration::from_millis(50), &mut stop).await;
-    barrier.wait().await;
-    assert_eq!(request.await.unwrap(), StatusCode::OK);
-    wait_idle(app, session).await;
-    assert!(
-        returned_early.is_err(),
-        "stop returned while its admitted server run was still held"
-    );
-    stop.await.unwrap().unwrap();
-    assert_eq!(store.list_pending_resumes().await.unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -466,6 +611,8 @@ async fn cancel_before_spawn_keeps_user_cause_even_if_shutdown_follows() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         if shutdown {
+            // The engine drain alone: the server's own stop refuses the
+            // admission instead (`stop_while_a_run_is_reserved_...`).
             engine
                 .stop_for_restart(Duration::from_secs(1))
                 .await
@@ -486,28 +633,6 @@ async fn cancel_before_spawn_keeps_user_cause_even_if_shutdown_follows() {
         );
         assert!(store.list_pending_resumes().await.unwrap().is_empty());
     }
-}
-
-#[tokio::test]
-async fn server_run_wait_is_bounded_by_the_drain_deadline() {
-    let (store, _, engine, agent, session) = fixture().await;
-    let barrier = Arc::new(Barrier::new(2));
-    let state = AppState::new(engine, agent).with_turn_spawn_barrier(session, barrier.clone());
-    let app = router(state.clone());
-    let request = tokio::spawn(post_prompt(app.clone(), session));
-    barrier.wait().await;
-    tokio::time::timeout(
-        Duration::from_secs(1),
-        state.stop_for_restart(Duration::from_millis(30)),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    barrier.wait().await;
-    assert_eq!(request.await.unwrap(), StatusCode::OK);
-    wait_idle(app.clone(), session).await;
-    assert_eq!(store.list_pending_resumes().await.unwrap().len(), 1);
-    assert_eq!(post_prompt(app, session).await, StatusCode::CONFLICT);
 }
 
 #[tokio::test]
@@ -604,7 +729,13 @@ async fn restored_turn_has_guidance_and_rejects_a_concurrent_client_turn() {
     let busy_request = tokio::spawn(post_prompt(app.clone(), busy));
     barrier.wait().await;
     // Simulate dying after prompt injection, before any assistant starts.
-    assert!(engine.inject_restart_prompt(session).await.unwrap());
+    assert!(
+        engine
+            .inject_restart_prompt(session)
+            .await
+            .unwrap()
+            .is_some()
+    );
     assert_eq!(store.list_pending_resumes().await.unwrap().len(), 2);
     assert_eq!(state.resume_interrupted_turns().await, vec![session]);
     tokio::time::timeout(Duration::from_secs(5), provider.entered.notified())

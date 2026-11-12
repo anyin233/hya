@@ -224,8 +224,8 @@ empty — a prompt with no `@mentions` leaves no context event in the log, and
 consumers must not expect one per user message. When present, that metadata is
 replayed through the projection and provider request builder.
 
-`admit_user_prompt_with_attachments(session, text, attachments)` admits a
-prompt with images ([`attachments.rs`](../../crates/hya-core/src/attachments.rs)):
+`admit_user_prompt_with_attachments(session, message, text, attachments)`
+admits a prompt with images under the caller's message id ([`attachments.rs`](../../crates/hya-core/src/attachments.rs)):
 it validates them (PNG/JPEG/GIF/WebP by signature, 10 MiB each, 20 MiB per
 turn), then in **one** store transaction
 (`SessionStore::append_events_with_blobs`) writes each image to the session's
@@ -313,7 +313,7 @@ remain visible as stale or unavailable.
 | --- | --- | --- |
 | `run_turn` | `Root` | Interactive / top-level path |
 | `run_turn_with_external_dirs` | `Root` | Adds external-directory permission rules |
-| `run_turn_with_external_dirs_and_guidance` | `Root` | Also attaches request-scoped guidance |
+| `run_turn_with_external_dirs_and_guidance` | `Root` | Also attaches request-scoped guidance; `admitted_prompt` makes the turn own the prompt its caller admitted |
 | `run_bound_turn` | `Bound` | Child path reusing parent binding |
 | `run_bound_turn_for_actor` | `Bound` | Resident path with `ActorClaim` |
 | `run_resolved_turn_with_sidecar_tools` | `Resolved` | Child with pre-resolved sidecar tools |
@@ -967,7 +967,8 @@ that interruption. A second shutdown cancellation is a new interruption and
 gets one more prompt. Any assistant start, including an ordinary engine turn,
 deletes the row. Prompt text is built at startup from the interrupted message's
 tool parts that are not `Completed`, including errors and denials.
-Missing, archived, and child sessions are discarded; failures are logged per
+Missing, archived, and child sessions, and an injected prompt reverted with
+`/undo`, are discarded; failures are logged per
 session and do not abort other restores or startup. The model decides what to
 redo. An unanswered permission or question never becomes a synthetic successful
 tool result.
@@ -977,7 +978,8 @@ A new process binds fresh listeners and publishes new discovery metadata
 ```rust
 impl SessionEngine {
     pub async fn stop_for_restart(&self, deadline: Duration) -> Result<TurnDrainReport, CoreError>;
-    pub async fn inject_restart_prompt(&self, session: SessionId) -> Result<bool, CoreError>;
+    /// The restore prompt the next turn answers (new or already injected); `None`: nothing to restore.
+    pub async fn inject_restart_prompt(&self, session: SessionId) -> Result<Option<MessageId>, CoreError>;
 }
 impl AppState {
     pub async fn resume_interrupted_turns(&self) -> Vec<SessionId>;

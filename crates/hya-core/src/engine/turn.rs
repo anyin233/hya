@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::shell::BashArtifactGuard;
 use super::tool_error::{tool_error_message_value, tool_error_value};
+use super::turn_end::unstarted_answer;
 use super::turn_gate::{TurnLease, scope_held_turn};
 use super::{
     AgentSpec, FixedSystemAgent, SessionEngine, agent_roster, agent_with_bound_skills,
@@ -116,6 +117,9 @@ pub(crate) struct TurnRequestContext<'a> {
     /// Turn claim already taken by the caller (resident wakes claim under the
     /// team lock). `None` claims — queueing behind an active turn — on entry.
     lease: Option<TurnLease>,
+    /// The prompt this turn's caller admitted for it. Only a turn that owns
+    /// its prompt answers it when it ends before its assistant message starts.
+    admitted_prompt: Option<MessageId>,
 }
 
 impl<'a> TurnRequestContext<'a> {
@@ -135,6 +139,7 @@ impl<'a> TurnRequestContext<'a> {
             explicit_model: None,
             workflow_route,
             lease: None,
+            admitted_prompt: None,
         }
     }
 
@@ -567,8 +572,11 @@ impl SessionEngine {
     ///
     /// `guidance` is pre-rendered by the caller and composed once after Bundle
     /// agent_base resolution (and before skill prompt material). Absence is an
-    /// empty layer. Existing [`Self::run_turn`] / [`Self::run_turn_with_external_dirs`]
-    /// callers stay source-compatible with no guidance.
+    /// empty layer. `admitted_prompt` is the prompt the caller admitted for
+    /// this turn: the turn then owns it and answers it with an assistant
+    /// start/finish pair however it ends, even refused or stopped before its
+    /// message starts. Without it a turn that never started answers nothing.
+    #[allow(clippy::too_many_arguments)]
     pub async fn run_turn_with_external_dirs_and_guidance(
         &self,
         session: SessionId,
@@ -577,9 +585,11 @@ impl SessionEngine {
         external_dirs: &[PathBuf],
         guidance: Option<Arc<str>>,
         explicit_model: Option<ModelRef>,
+        admitted_prompt: Option<MessageId>,
     ) -> Result<FinishReason, CoreError> {
         let mut request = TurnRequestContext::new(cancel, external_dirs, guidance, None, None);
         request.explicit_model = explicit_model;
+        request.admitted_prompt = admitted_prompt;
         self.run_turn_with_external_dirs_and_claim(session, agent, TurnActivation::Root, request)
             .await
     }
@@ -691,8 +701,8 @@ impl SessionEngine {
     /// The single turn choke point: claim the session's one active turn
     /// (single-active-turn invariant), then run it. A caller-held lease is
     /// used as-is; otherwise the claim queues behind an active turn and a
-    /// cancel while queued ends the request as `Cancelled`, closing any
-    /// unanswered admitted prompt without executing the turn.
+    /// cancel (or drain) while queued ends the request as `Cancelled`,
+    /// answering the prompt it admitted, if any, without executing the turn.
     async fn run_turn_with_external_dirs_and_claim(
         &self,
         session: SessionId,
@@ -711,23 +721,30 @@ impl SessionEngine {
             None => match self.begin_turn(session, &request.cancel).await? {
                 Some(lease) => lease,
                 None => {
-                    self.close_turn_message(
-                        request.actor_claim,
-                        session,
-                        message,
-                        FinishReason::Cancelled,
-                        if request.cancel.is_cancelled() {
+                    if request.admitted_prompt.is_some() {
+                        let cause = if request.cancel.is_cancelled() {
                             Some(hya_proto::FinishCause::UserCancel)
                         } else {
                             self.draining()
-                        },
-                    )
-                    .await?;
+                        };
+                        self.emit_batch_for_actor(
+                            request.actor_claim,
+                            session,
+                            unstarted_answer(
+                                session,
+                                message,
+                                FinishReason::Cancelled,
+                                cause,
+                                None,
+                            ),
+                        )
+                        .await?;
+                    }
                     return Ok(FinishReason::Cancelled);
                 }
             },
         };
-        lease.set_message(message);
+        lease.set_message(message, request.admitted_prompt.is_some());
         // The turn's effective cancel: the caller's token, or the engine
         // (user abort via `cancel_turn`, process drain).
         let caller_cancel = request.cancel.clone();
@@ -849,6 +866,7 @@ impl SessionEngine {
             workflow_route,
             explicit_model,
             lease: _,
+            admitted_prompt: _,
         } = request;
         self.validate_actor_claim(actor_claim).await?;
         let mut projection = self.store.read_projection(session).await?;
