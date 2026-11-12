@@ -883,7 +883,7 @@ mod tests {
                 },
                 namespace: None,
                 digest: "test-only-resident".to_string(),
-                agents: ["build", "resident"]
+                agents: ["resident"]
                     .into_iter()
                     .map(|id| hya_bundle::PreparedAgent {
                         id: AgentName::new(id),

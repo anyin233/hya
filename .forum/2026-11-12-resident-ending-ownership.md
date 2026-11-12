@@ -50,3 +50,22 @@ make unrelated episode endings wait on a binding hook.
 Shutdown snapshots existing orphans before requesting live endings. It uses
 Takeover only for those actors; a terminal write that fails during the drain
 remains an orphan for a later request, preserving the failed-write crash boundary.
+
+## Why must registration reserve its selected team?
+
+M4-3 fix instrumentation confirmed selection → claim-write await → idle
+retirement → install into the cancelled team, yielding `Cancelled` from mail
+revival. `TeamRegistration` reserves under the supervisor map lock and excludes
+retirement through initialization; explicit kills still request endings.
+`mail_revival_reserves_the_team_before_claim_registration` forces this gap at
+mail's real entry point. Root main resolution now shares root turns' durable
+missing-agent fallback; missing child definitions remain errors.
+
+## Who owns main progress during a Workflow?
+
+The core runner holds `WorkflowActivity`: it suppresses autonomous main wakes
+while stages run and consumes their synthesis mark at completion. A cold root
+has no model turn to resume, so it stays non-autonomous until a user root turn
+or explicit main activation. Workflow tests must not manufacture root turn
+leases. Drain endings carry their actual `FinishCause`; a user cancel and a
+failed leader must not become restartable shutdowns.

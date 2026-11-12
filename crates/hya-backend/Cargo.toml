@@ -41,6 +41,7 @@ reqwest = { workspace = true }
 futures = { workspace = true }
 
 [dev-dependencies]
+async-trait = { workspace = true }
 serde_norway = { workspace = true }
 hya-relay = { workspace = true }
 ed25519-dalek = { workspace = true }

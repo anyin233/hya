@@ -866,4 +866,133 @@ mod tests {
         assert!(Arc::ptr_eq(&ordered[2], &selected));
         assert!(Arc::ptr_eq(&ordered[3], &intelligent));
     }
+
+    struct InterruptProvider(tokio::sync::mpsc::UnboundedSender<SessionId>);
+
+    #[async_trait::async_trait]
+    impl hya_provider::Provider for InterruptProvider {
+        fn id(&self) -> &str {
+            "hya"
+        }
+        fn capabilities(&self, model: &ModelRef) -> Option<hya_provider::Capabilities> {
+            hya_provider::Provider::capabilities(&hya_provider::DevProvider::new(), model)
+        }
+        async fn stream(
+            &self,
+            _request: hya_provider::CompletionRequest,
+            session: SessionId,
+            _message: hya_proto::MessageId,
+        ) -> Result<hya_provider::EventStream, hya_provider::ProviderError> {
+            let _ = self.0.send(session);
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn headless_interrupt_drain_preserves_user_cancel_without_restore() {
+        let (entered, mut requests) = tokio::sync::mpsc::unbounded_channel();
+        let router = hya_provider::ProviderRouter::new().with(Arc::new(InterruptProvider(entered)));
+        let agent = agent_with_model_pure("hya/offline", None);
+        let mut built = hya_app::build_session_engine_pure(
+            SessionStore::connect_memory().await.unwrap(),
+            router,
+            &agent,
+            Default::default(),
+            Vec::new(),
+            (
+                WebSearchConfig::default(),
+                InvocationPolicy::default(),
+                config::EngineSettings::default(),
+            ),
+        )
+        .await
+        .unwrap();
+        let engine = built.engine();
+        let root = engine
+            .create(hya_core::CreateSession {
+                parent: None,
+                agent: agent.name.clone(),
+                model: agent.model.clone(),
+                workdir: agent.workdir.to_string_lossy().into_owned(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
+            })
+            .await
+            .unwrap();
+        let binding = engine.bind_runtime(&agent.workdir).unwrap();
+        let worker = engine
+            .agent_spec_for_binding(&binding, &agent, "hya-scout")
+            .unwrap();
+        let resources = binding.agent_resource_policy("hya-scout").unwrap();
+        let (child, _) = built
+            .resident_supervisor()
+            .spawn_resident(
+                root,
+                worker,
+                (binding, Arc::from([]), resources, None),
+                "member work".into(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let prompt = engine
+            .admit_user_prompt(root, "root work".into())
+            .await
+            .unwrap();
+        let turn = tokio::spawn({
+            let engine = engine.clone();
+            async move {
+                engine
+                    .run_turn_with_external_dirs_and_guidance(
+                        root,
+                        &agent,
+                        CancellationToken::new(),
+                        &[],
+                        None,
+                        None,
+                        Some(prompt),
+                    )
+                    .await
+            }
+        });
+        for _ in 0..2 {
+            tokio::time::timeout(std::time::Duration::from_secs(5), requests.recv())
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        built.drain(StopSignal::Interrupt.cause()).await;
+        turn.await.unwrap().unwrap();
+        assert!(
+            engine
+                .store()
+                .list_pending_resumes()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        for session in [root, child] {
+            let projection = engine.read_projection(session).await.unwrap();
+            let answer = projection
+                .session
+                .messages
+                .iter()
+                .rev()
+                .find(|message| message.role == hya_proto::Role::Assistant)
+                .unwrap();
+            assert_eq!(answer.cause, Some(FinishCause::UserCancel));
+        }
+        let member = engine
+            .read_projection(root)
+            .await
+            .unwrap()
+            .session
+            .members
+            .pop()
+            .unwrap();
+        assert_eq!(member.summary, "stopped: cancelled by the user");
+        built.shutdown().await.unwrap();
+    }
 }
