@@ -971,7 +971,10 @@ pub async fn append_event_in_transaction(
             cause: Some(hya_proto::FinishCause::Shutdown),
             ..
         } => {
-            let projection = projection_cache::fold(tx, session, None).await?.projection;
+            let base = projection_cache::load_snapshot(tx, session)
+                .await?
+                .map(Arc::new);
+            let projection = projection_cache::fold(tx, session, base).await?.projection;
             if projection.session.id.is_some()
                 && projection.session.parent.is_none()
                 && !projection.session.is_archived()

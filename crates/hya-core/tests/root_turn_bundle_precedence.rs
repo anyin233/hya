@@ -1529,15 +1529,36 @@ async fn root_sidecar_loss_after_ack_fails_before_dispatch_and_model_poll() {
     assert_eq!(shutdowns.load(Ordering::SeqCst), 0);
 
     let events = engine.replay(session).await.unwrap();
-    assert!(!events.iter().any(|envelope| {
-        matches!(
-            envelope.event,
+    let starts: Vec<_> = events
+        .iter()
+        .filter_map(|envelope| match envelope.event {
             Event::MessageStarted {
+                message,
                 role: Role::Assistant,
                 ..
-            }
-        )
-    }));
+            } => Some(message),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        starts.len(),
+        1,
+        "the admitted prompt gets one terminal answer"
+    );
+    let finishes: Vec<_> = events
+        .iter()
+        .filter_map(|envelope| match envelope.event {
+            Event::MessageFinished {
+                message,
+                role: Role::Assistant,
+                finish,
+                cause,
+                ..
+            } => Some((message, finish, cause)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(finishes, vec![(starts[0], FinishReason::Cancelled, None)]);
     assert!(
         !events
             .iter()
@@ -1651,6 +1672,19 @@ async fn root_sidecar_loss_during_model_terminates_before_released_output() {
             })
             .count(),
         1
+    );
+    assert!(
+        engine
+            .read_projection(session)
+            .await
+            .unwrap()
+            .session
+            .messages
+            .last()
+            .unwrap()
+            .cause
+            .is_none(),
+        "sidecar transport loss is not a user cancellation"
     );
 }
 

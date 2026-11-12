@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use hya_proto::SessionId;
-use tokio::sync::broadcast;
+use tokio::sync::{Notify, broadcast};
 use tokio_util::sync::CancellationToken;
 
 /// Process-local registry of server-started runs, one per session. Every
@@ -16,6 +16,8 @@ pub(crate) struct RunRegistry {
 struct RunRegistryInner {
     next: AtomicU64,
     runs: Mutex<HashMap<SessionId, ActiveRun>>,
+    draining: AtomicBool,
+    released: Notify,
     /// The session of every run that started or ended (busy re-check signal).
     changes: broadcast::Sender<SessionId>,
 }
@@ -26,6 +28,8 @@ impl Default for RunRegistryInner {
         Self {
             next: AtomicU64::default(),
             runs: Mutex::default(),
+            draining: AtomicBool::default(),
+            released: Notify::default(),
             changes,
         }
     }
@@ -58,7 +62,7 @@ impl RunRegistry {
 
     fn start_with(&self, session: SessionId, quiet: bool) -> Option<RunGuard> {
         let mut runs = self.lock_runs();
-        if runs.contains_key(&session) {
+        if self.inner.draining.load(Ordering::Acquire) || runs.contains_key(&session) {
             return None;
         }
         let id = self.inner.next.fetch_add(1, Ordering::Relaxed);
@@ -105,6 +109,24 @@ impl RunRegistry {
         self.lock_runs().contains_key(&session)
     }
 
+    pub(crate) fn begin_drain(&self) {
+        self.inner.draining.store(true, Ordering::Release);
+    }
+
+    pub(crate) async fn wait_idle(&self, deadline: tokio::time::Instant) -> bool {
+        loop {
+            let released = self.inner.released.notified();
+            tokio::pin!(released);
+            released.as_mut().enable();
+            if self.lock_runs().is_empty() {
+                return true;
+            }
+            if tokio::time::timeout_at(deadline, released).await.is_err() {
+                return self.lock_runs().is_empty();
+            }
+        }
+    }
+
     fn lock_runs(&self) -> MutexGuard<'_, HashMap<SessionId, ActiveRun>> {
         match self.inner.runs.lock() {
             Ok(guard) => guard,
@@ -130,8 +152,11 @@ impl Drop for RunGuard {
                 false
             }
         };
-        if removed && !self.quiet {
-            let _ = self.registry.inner.changes.send(self.session);
+        if removed {
+            self.registry.inner.released.notify_waiters();
+            if !self.quiet {
+                let _ = self.registry.inner.changes.send(self.session);
+            }
         }
     }
 }

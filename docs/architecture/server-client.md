@@ -50,6 +50,15 @@ adding run tokens for busy/abort behavior plus the process-local config
 bag and PTY state. Helper machinery (catalogs, guidance, PTY, worktree,
 git) lives under `hya_server::support`.
 
+`AppState::stop_for_restart(deadline: Duration) -> Result<TurnDrainReport,
+CoreError>` refuses new server runs, drains the engine, then waits for the
+shared run registry to empty using the same deadline. A request already
+admitted but still preparing its engine turn remains registered until that
+turn closes. `hya serve stop` uses this path before releasing the runtime owner.
+The start/finish events include an empty assistant cancellation answer when
+the user cancels an admitted prompt before its assistant starts; see
+[ADR-0031](../adr/0031-hot-reload-and-stop-start-restart.md).
+
 ## The v1 surface
 
 Eighteen services, 107 rpcs: AgentModels (durable per-agent model

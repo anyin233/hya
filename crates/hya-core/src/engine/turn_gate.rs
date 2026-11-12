@@ -1,13 +1,15 @@
 //! Engine-owned single-active-turn invariant.
 //!
 //! A session is one agent, and an agent runs at most ONE turn at any time.
-//! Every path that opens an assistant turn — `run_turn*` (exec, serve, goal and
+//! Every path that executes an assistant turn — `run_turn*` (exec, serve, goal and
 //! loop drivers, Workflow stages, subagents), shell turns, and resident actor
 //! wakes — first takes the session's [`TurnLease`] from the engine's
 //! [`TurnGate`]. A second claim on a busy session is refused with
 //! [`CoreError::TurnAlreadyActive`] (non-blocking claims) or waits for the
 //! active turn to end (queued `run_turn*` calls). Separate sessions — team
 //! members, subagents — hold separate leases and stream concurrently.
+//! A refused turn may still close an admitted prompt with an empty assistant
+//! start/finish pair, without executing or acquiring a lease.
 //!
 //! When a lease is released the gate wakes queued `run_turn*` callers and
 //! notifies the installed [`TurnBoundaryObserver`] (the resident supervisor),
@@ -89,7 +91,6 @@ pub(crate) struct TurnGate {
     state: Mutex<GateState>,
     next_id: AtomicU64,
     released: Notify,
-    pub(super) drain_cancel: CancellationToken,
     observer: RwLock<Option<Weak<dyn TurnBoundaryObserver>>>,
 }
 
@@ -239,7 +240,6 @@ impl TurnGate {
         for token in tokens {
             token.cancel();
         }
-        self.drain_cancel.cancel();
         // Queued claims re-check and observe the drain.
         self.released.notify_waiters();
         sessions

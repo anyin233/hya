@@ -692,7 +692,8 @@ impl SessionEngine {
     /// The single turn choke point: claim the session's one active turn
     /// (single-active-turn invariant), then run it. A caller-held lease is
     /// used as-is; otherwise the claim queues behind an active turn and a
-    /// cancel while queued ends the request as `Cancelled` with no turn.
+    /// cancel while queued ends the request as `Cancelled`, closing any
+    /// unanswered admitted prompt without executing the turn.
     async fn run_turn_with_external_dirs_and_claim(
         &self,
         session: SessionId,
@@ -701,7 +702,6 @@ impl SessionEngine {
         mut request: TurnRequestContext<'_>,
     ) -> Result<FinishReason, CoreError> {
         let message = MessageId::new();
-        let draining_on_entry = self.draining();
         let lease = match request.lease.take() {
             Some(lease) if lease.session() == session => lease,
             Some(_) => {
@@ -712,18 +712,18 @@ impl SessionEngine {
             None => match self.begin_turn(session, &request.cancel).await? {
                 Some(lease) => lease,
                 None => {
-                    if draining_on_entry.is_none()
-                        && self.draining() == Some(hya_proto::FinishCause::Shutdown)
-                    {
-                        self.close_turn_message(
-                            request.actor_claim,
-                            session,
-                            message,
-                            FinishReason::Cancelled,
-                            self.draining(),
-                        )
-                        .await?;
-                    }
+                    self.close_turn_message(
+                        request.actor_claim,
+                        session,
+                        message,
+                        FinishReason::Cancelled,
+                        if request.cancel.is_cancelled() {
+                            Some(hya_proto::FinishCause::UserCancel)
+                        } else {
+                            self.draining()
+                        },
+                    )
+                    .await?;
                     return Ok(FinishReason::Cancelled);
                 }
             },
@@ -731,7 +731,8 @@ impl SessionEngine {
         lease.set_message(message);
         // The turn's effective cancel: the caller's token, or the engine
         // (user abort via `cancel_turn`, process drain).
-        request.cancel = lease.bind_cancel(&request.cancel);
+        let caller_cancel = request.cancel.clone();
+        request.cancel = lease.bind_cancel(&caller_cancel);
         let actor_claim = request.actor_claim;
         let cancel = request.cancel.clone();
         let workflow_route = request.workflow_route.clone();
@@ -744,7 +745,11 @@ impl SessionEngine {
             self.run_claimed_turn(session, message, agent, activation, request),
         )
         .await;
-        let cause = self.turn_gate.cancel_cause(session);
+        let cause = self.turn_gate.cancel_cause(session).or_else(|| {
+            caller_cancel
+                .is_cancelled()
+                .then_some(hya_proto::FinishCause::UserCancel)
+        });
         if matches!(outcome, Err(CoreError::Cancelled))
             && cause == Some(hya_proto::FinishCause::Shutdown)
         {
@@ -857,7 +862,7 @@ impl SessionEngine {
                 TurnActivation::Root => {
                     let binding = tokio::select! {
                         biased;
-                        () = self.turn_gate.drain_cancel.cancelled() => return Ok(FinishReason::Cancelled),
+                        () = cancel.cancelled() => return Ok(FinishReason::Cancelled),
                         binding = self.bind_session_runtime(session, &workdir) => binding?,
                     };
                     if self
@@ -987,7 +992,7 @@ impl SessionEngine {
                 &agent,
             );
             let message_guard = self.turn_gate.message_guard(session).await;
-            if self.turn_gate.cancel_cause(session) == Some(hya_proto::FinishCause::Shutdown) {
+            if cancel.is_cancelled() {
                 return Ok(FinishReason::Cancelled);
             }
             self.emit_for_actor(

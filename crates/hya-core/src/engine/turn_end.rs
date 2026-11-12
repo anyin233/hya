@@ -1,7 +1,8 @@
 //! Turn termination: the end-event invariant, the graceful drain, and the
 //! leader-failed broadcast.
 //!
-//! Invariant: every assistant message ends with exactly one `MessageFinished`,
+//! Invariant: every admitted prompt gets an assistant start/finish pair, even
+//! when stopped during preparation. Every assistant message ends exactly once,
 //! every non-terminal tool part reaches a terminal state, and every member
 //! reaches a terminal status. A turn that does not end on its own (cancel,
 //! provider/runtime error) is closed here with a [`FinishCause`]; a process
@@ -101,8 +102,8 @@ impl SessionEngine {
     /// Close a turn's still-open assistant message after `error` failed the
     /// turn: first a durable `Error { failed_message }` carrying the error's
     /// code and text (folded onto the message as `MessageProjection.error`),
-    /// then `MessageFinished { finish: error, cause }`. No-op for a message
-    /// that never started or already finished.
+    /// then `MessageFinished { finish: error, cause }`. An unanswered admitted
+    /// prompt gets an assistant start first; finished messages are left alone.
     pub(crate) async fn fail_turn_message(
         &self,
         actor_claim: Option<&ActorClaim>,
@@ -110,37 +111,14 @@ impl SessionEngine {
         message: MessageId,
         error: &CoreError,
     ) -> Result<(), CoreError> {
-        let open = self
-            .store
-            .read_projection(session)
-            .await?
-            .session
-            .messages
-            .iter()
-            .any(|entry| entry.id == message && entry.finish.is_none());
-        if open
-            && let Err(record) = self
-                .emit_for_actor(
-                    actor_claim,
-                    session,
-                    Event::Error {
-                        session: Some(session),
-                        code: error_code(error).to_string(),
-                        message: error_text(error),
-                        failed_message: Some(message),
-                    },
-                )
-                .await
-        {
-            // The finish below is what clients wait for; never skip it.
-            tracing::warn!(%session, "turn error record was not appended: {record:#}");
-        }
-        self.close_turn_message(
+        self.end_turn_message(
             actor_claim,
             session,
             message,
             FinishReason::Error,
             error_cause(error),
+            None,
+            Some(error),
         )
         .await
     }
@@ -312,44 +290,74 @@ impl SessionEngine {
         cause: Option<FinishCause>,
         tokens: Option<hya_proto::TokenUsage>,
     ) -> Result<(), CoreError> {
+        self.end_turn_message(actor_claim, session, message, finish, cause, tokens, None)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn end_turn_message(
+        &self,
+        actor_claim: Option<&ActorClaim>,
+        session: SessionId,
+        message: MessageId,
+        finish: FinishReason,
+        cause: Option<FinishCause>,
+        tokens: Option<hya_proto::TokenUsage>,
+        error: Option<&CoreError>,
+    ) -> Result<(), CoreError> {
         let _message_guard = self.turn_gate.message_guard(session).await;
         let projection = self.store.read_projection(session).await?;
+        let error_event = error.map(|error| Event::Error {
+            session: Some(session),
+            code: error_code(error).to_string(),
+            message: error_text(error),
+            failed_message: Some(message),
+        });
         let Some(entry) = projection
             .session
             .messages
             .iter()
             .find(|entry| entry.id == message)
         else {
-            // An admitted turn can be stopped before runtime/sidecar preparation
-            // opens its message. Shutdown must still leave its event pair.
-            if finish == FinishReason::Cancelled && cause == Some(FinishCause::Shutdown) {
-                self.emit_batch_for_actor(
-                    actor_claim,
+            // Only an unanswered prompt admits a synthetic answer. Internal
+            // turns with no prompt, or an already answered prompt, owe no pair.
+            if projection
+                .session
+                .messages
+                .iter()
+                .rev()
+                .find(|entry| matches!(entry.role, Role::User | Role::Assistant))
+                .is_some_and(|entry| entry.role == Role::User)
+            {
+                let mut events = vec![Event::MessageStarted {
                     session,
-                    vec![
-                        Event::MessageStarted {
-                            session,
-                            message,
-                            role: Role::Assistant,
-                            agent: None,
-                            model: None,
-                        },
-                        Event::MessageFinished {
-                            session,
-                            message,
-                            role: Role::Assistant,
-                            finish,
-                            tokens,
-                            cause,
-                        },
-                    ],
-                )
-                .await?;
+                    message,
+                    role: Role::Assistant,
+                    agent: None,
+                    model: None,
+                }];
+                events.extend(error_event);
+                events.push(Event::MessageFinished {
+                    session,
+                    message,
+                    role: Role::Assistant,
+                    finish,
+                    tokens,
+                    cause,
+                });
+                self.emit_batch_for_actor(actor_claim, session, events)
+                    .await?;
             }
             return Ok(());
         };
         if entry.finish.is_some() {
             return Ok(());
+        }
+        if let Some(error_event) = error_event
+            && let Err(record) = self.emit_for_actor(actor_claim, session, error_event).await
+        {
+            // The finish is what clients wait for; never skip it.
+            tracing::warn!(%session, "turn error record was not appended: {record:#}");
         }
         let (reason, code) = match finish {
             FinishReason::Error => (
