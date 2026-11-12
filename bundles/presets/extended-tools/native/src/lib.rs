@@ -74,3 +74,14 @@ pub unsafe extern "C" fn hya_tool_bundle_with_runtime_v1(
     // SAFETY: the checked host ABI guarantees the live handle and callback.
     unsafe { hya_tool::native_bundle::with_runtime_v1(handle, callback, state) };
 }
+
+/// Read the host's run deadline from this library's copy of `hya-tool`.
+///
+/// # Safety
+///
+/// `cell` must be the host's deadline cell from the matching lockstep build.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hya_tool_bundle_share_deadline_v1(cell: *const std::ffi::c_void) {
+    // SAFETY: the checked host passes its 'static cell.
+    unsafe { hya_tool::native_bundle::share_deadline_v1(cell) };
+}

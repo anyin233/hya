@@ -15,7 +15,8 @@ First-party in-process tool families can carry a Rust dynamic library under
 `hya_tool_bundle_register_v1` registers tools after the bundle identity and
 declared names are checked. `hya_tool_bundle_with_runtime_v1` enters the
 bundle's Tokio runtime on each tool future poll while the host runtime
-remains available to host services. The backend and library must be built from the
+remains available to host services. `hya_tool_bundle_share_deadline_v1` hands
+the library the host's run deadline (`exec --time-budget`) once at load. The backend and library must be built from the
 same workspace and toolchain; Rust trait objects have no stable plugin ABI.
 The release asset stores each trusted family package under `bundles/` beside
 `bin/`. Installed third-party bundles do not gain in-process execution by

@@ -210,3 +210,28 @@ async fn e7_no_continuation_past_the_grace() {
     assert_eq!(requests.len(), 1, "{}", env.diagnostics());
     assert_eq!(env.fake.route_remaining(ROOT).unwrap(), Some(1));
 }
+
+/// A budgeted run shortens a long `bash` timeout to the time left minus the
+/// grace (40 s budget, 30 s grace: about 10 s), and says so.
+#[tokio::test]
+async fn e6_bash_timeouts_are_capped_to_the_time_left() {
+    // `sleep 120` returning inside run_exec's 90 s limit is the cap at work.
+    let (env, output, requests) = run_lead(
+        vec![
+            tool_step("bash", json!({ "command": "sleep 120", "timeout": 300 })),
+            text_step("FINAL_ANSWER"),
+            text_step("ROOT_EXTRA"),
+        ],
+        &["--time-budget", "40"],
+    )
+    .await;
+    assert_eq!(requests.len(), 2, "{}", env.diagnostics());
+    assert!(
+        requests[1].contains("Timeout shortened to"),
+        "cap not explained: {}",
+        requests[1]
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(r#""deadlineCapped":true"#), "{stdout}");
+    assert!(stdout.contains(r#""timedOut":true"#), "{stdout}");
+}
