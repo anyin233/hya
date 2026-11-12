@@ -1386,10 +1386,20 @@ Read by the bundled Bun extension adapter
 | Variable | Effect | Default / notes | Source |
 | --- | --- | --- | --- |
 | `HYA_BUNDLE_CONFIG_DIR` / `HYA_BUNDLE_CONFIG_FILE` | The bundle's configuration directory and `config.yml` (see [Bundle configuration files](#bundle-configuration-files)), visible to loaded extensions via `process.env`; the factory argument itself is always a frozen empty object. | set by the host for bundle processes and sidecars | `initialize.ts` |
-| `HYA_DIRECTORY` | Extension working directory context. | `process.cwd()` | `initialize.ts` |
-| `HYA_WORKTREE` | Worktree root context. | same as directory | same |
-| `HYA_SERVER_URL` | `serverUrl` context for extensions that call back into the v1 API. | `http://127.0.0.1:0` | same |
-| `HYA_PROJECT_ID` | Project id context. | worktree path | same |
+
+### Adapter initialization and hook validation
+
+Both adapters require a successful `initialize` request before admitting hooks or
+other calls. Before that reply, requests receive JSON-RPC error `-32602` and
+notifications are ignored with a stderr diagnostic. `shutdown` remains available.
+Initialization runs alone; a failed initialize may be retried. For example, send
+`initialize`, await its successful reply, then send `hook/chat.params`.
+
+Generated TypeScript optional `Option` fields accept both omission and `null`,
+matching Rust serde decoding (including fields omitted when serializing `None`).
+Invalid non-`undefined` returns from `chat.params` and `tool.execute.after` preserve
+the previous value and log the hook name and extension path to stderr.
+
 
 ### Related non-`HYA_` variables
 

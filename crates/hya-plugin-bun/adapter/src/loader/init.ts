@@ -20,6 +20,12 @@ import {
  */
 export type ExtensionHooks = Readonly<Record<string, unknown>>
 
+const extensionSpecs = new WeakMap<ExtensionHooks, string>()
+
+export function extensionSpec(hooks: ExtensionHooks): string | undefined {
+  return extensionSpecs.get(hooks)
+}
+
 export type ExtensionLoadError = {
   readonly spec: string
   readonly message: string
@@ -152,6 +158,7 @@ async function initServer(
     if (!parsedAdapters.ok) {
       return error(spec, parsedAdapters.message, "declaration")
     }
+    extensionSpecs.set(result, spec)
     return {
       hooks: [result],
       skills: parsedSkills.skills,
