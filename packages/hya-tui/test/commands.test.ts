@@ -1,3 +1,5 @@
+import { openModelPicker, selectAgent, selectEffort, openEffortPicker } from "../src/commands/native"
+import { revertReadOnlyStatus } from "../src/app/revert"
 import { afterEach, expect, test } from "bun:test"
 import { customKeybindings, setCustomKeybindings } from "../src/keys/custom"
 import { HttpError, type HyaClient } from "../src/client"
@@ -1006,4 +1008,33 @@ test("/subagents archived toggles or explicitly sets visibility and validates ar
   expect(h.registry.complete("/subagents archived ", h.store.completionContext())).toEqual([
     "/subagents archived hide", "/subagents archived show", "/subagents archived toggle",
   ])
+})
+
+for (const archived of [false, true]) {
+  test(`member execution commands are disabled (archived=${archived})`, async () => {
+    const h = harness()
+    h.store.setSelected({ id: "child", parent: "root", agent: "hya-task", workdir: "/w", archived, model: { providerId: "test", modelId: "model", variant: "high" } })
+    for (const command of ["/model", "/model test/other", "/agent hya-main", "/effort", "/effort low", "/think high", "/backend-skill args"]) {
+      h.store.setStatus("")
+      await h.run(command)
+      expect(h.store.state.status).toBe(revertReadOnlyStatus)
+    }
+    const context = { store: h.store, client: {} as HyaClient, actions: h.actions }
+    openModelPicker(context)
+    openEffortPicker(context)
+    await selectAgent(context, "hya-main")
+    await selectEffort(context, "low")
+    expect(h.pickers).toEqual([])
+    expect(h.calls).toEqual([])
+  })
+}
+
+test("a model picker opened on a root cannot switch a subsequently viewed child", async () => {
+  const h = harness()
+  h.store.setProviderCatalog([], [{ id: "test/model", modelId: "model", providerId: "test" }])
+  openModelPicker({ store: h.store, client: {} as HyaClient, actions: h.actions })
+  h.store.setSelected({ id: "child", parent: "root", agent: "hya-task", workdir: "/w" })
+  await h.pickers[0]!.onSelect(h.pickers[0]!.rows[0]!)
+  expect(h.store.state.status).toBe(revertReadOnlyStatus)
+  expect(h.calls).toEqual([])
 })
