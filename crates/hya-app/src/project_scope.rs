@@ -235,6 +235,10 @@ impl ScopeInputs {
             plugin_hasher.update(b"hya-project-plugins-v1\0");
             let mut plugins = false;
             if plugins_enabled {
+                for id in crate::config::load_configured_plugin_ids() {
+                    plugin_hasher.update(id.as_bytes());
+                    plugin_hasher.update(b"\0");
+                }
                 for root in &roots {
                     plugin_hasher.update(b"root\0");
                     plugin_hasher.update(root.as_os_str().as_encoded_bytes());
@@ -245,17 +249,18 @@ impl ScopeInputs {
             let mut hasher = sha2::Sha256::new();
             hasher.update(b"hya-project-scope-v1\0");
             hasher.update(revision.to_le_bytes());
-            let bundles = project_roots_digest(&roots, &mut hasher);
+            let bundles = project_roots_digest(&roots, &mut hasher)
+                .map_err(|error| CoreError::Invalid(error.to_string()))?;
             hasher.update(plugin_digest);
-            Self {
+            Ok(Self {
                 fingerprint: hasher.finalize().into(),
                 bundles,
                 plugin_digest,
                 plugins,
-            }
+            })
         })
         .await
-        .map_err(|error| CoreError::Invalid(format!("scan Project roots: {error}")))
+        .map_err(|error| CoreError::Invalid(format!("scan Project roots: {error}")))?
     }
 
     /// Whether the Project has anything to overlay on the base.
@@ -277,7 +282,8 @@ struct ProjectTier {
 impl ProjectTier {
     async fn load(roots: Vec<PathBuf>) -> Result<Self, CoreError> {
         tokio::task::spawn_blocking(move || {
-            let (catalogs, _) = load_project_bundle_dirs_for_roots(&roots);
+            let (catalogs, _) = load_project_bundle_dirs_for_roots(&roots)
+                .map_err(|error| CoreError::Invalid(error.to_string()))?;
             let project_bundle_dirs = catalogs
                 .iter()
                 .filter_map(|(catalog, dir)| {
@@ -292,22 +298,22 @@ impl ProjectTier {
                         bundle_models.insert(bundle_id.clone(), models);
                     }
                     Ok(_) => {}
-                    Err(error) => tracing::warn!(
-                        bundle_id = %bundle_id,
-                        dir = %dir.display(),
-                        error = %format!("{error:#}"),
-                        "ignoring the project bundle's malformed model configuration"
-                    ),
+                    Err(error) => {
+                        return Err(CoreError::Invalid(format!(
+                            "project bundle {bundle_id} config {}: {error:#}",
+                            dir.display()
+                        )));
+                    }
                 }
             }
-            Self {
+            Ok(Self {
                 catalogs,
                 project_bundle_dirs,
                 bundle_models,
-            }
+            })
         })
         .await
-        .map_err(|error| CoreError::Invalid(format!("load Project bundles: {error}")))
+        .map_err(|error| CoreError::Invalid(format!("load Project bundles: {error}")))?
     }
 }
 

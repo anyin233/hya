@@ -1433,6 +1433,15 @@ When both `url` and `command` are set, `url` wins. Unknown `transport` values
 fail the connection; the v1 `AddMcpServer` route with a `Url` transport always
 selects Streamable HTTP.
 
+Disabled MCP declarations remain visible in `GET /v1/mcp` with state
+`DISCONNECTED`; `POST /v1/mcp/<name>/connect` enables and prepares them.
+The same connect call retries a failed enabled source. `AddMcpServer`
+(`POST /v1/mcp`) compares the complete declaration, including `url`,
+`transport`, `enabled`, `command`, `env`, and `timeout_ms`; replacing one
+server does not invalidate another server's pending connection. Each source's
+complete tools/resources publish together. An unsuccessful replacement keeps
+the previous effective source and reports the new failure in MCP status.
+
 ### Connection handshake
 
 When connecting an enabled server, hya:
@@ -1705,10 +1714,26 @@ Hooks are declared only in the initialize reply as `{ "name": "<hook>" }`.
 Manifest `[[hooks]]` overrides and registration `posture` are rejected. Error
 handling is fixed by hook class; see [Plugin protocol](plugin-protocol.md#hook-failure-behavior).
 
+### Reloading configured plugins
+
+Editing `plugins:` in `config.yaml` takes effect in a running backend at the
+next turn/catalog bind, or immediately through `POST /v1/bundles:refresh` with
+`{"directory":""}`. No daemon restart is needed. For example, set
+`plugins.memory.enabled: false`, save the file, then start another turn: its
+tool schemas and hook chain no longer contain that plugin. Set it back to
+`true` to prepare and publish a new process.
+
+Each plugin publishes one complete source containing its tools, Skills, and
+hooks (including `permission.ask`). Preparation or publication failure keeps
+that source's previous contribution; hooks from the rejected process never
+become active. Other sources can still publish. An existing turn binding keeps
+the process it captured until the binding is released. Invalid YAML rejects
+the configuration refresh and preserves the published sources.
+
 ### Config-over-manifest merge
 
 Config plugins and project manifests are resolved separately (config
-plugins process-wide at startup, manifests per Project at its first bind), with
+plugins in the global catalog, manifests per Project at its first bind), with
 the same rules as [`hya_plugin::config::merge`](../crates/hya-plugin/src/config.rs):
 
 1. Config entries are used **first** (skipping any with `enabled: false`).

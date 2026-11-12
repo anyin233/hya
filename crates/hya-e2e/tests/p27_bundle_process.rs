@@ -59,19 +59,46 @@ resources:
             text_step("BOTH_FINISHED"),
             tool_step("process-fixture__echo", json!({})),
             text_step("REMOVED"),
+            tool_step("live-config__echo", json!({})),
+            text_step("CONFIG_RELOADED"),
+            text_step("CONFIG_DISABLED"),
         ])
         .build()
         .await
         .unwrap();
+    let original_pid = env.backend.pid();
+    let running_pid = || {
+        let discovery: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(format!("{}.server.json", env.backend.db.display())).unwrap(),
+        )
+        .unwrap();
+        discovery["pid"].as_u64().unwrap() as u32
+    };
+    assert_eq!(running_pid(), original_pid);
     let install = env
         .backend
-        .bundle_cli(&["bundle", "install", "-y", package.to_str().unwrap()])
+        .bundle_cli(&[
+            "--db",
+            env.backend.db.to_str().unwrap(),
+            "bundle",
+            "install",
+            "-y",
+            package.to_str().unwrap(),
+        ])
         .unwrap();
     assert!(
         install.status.success(),
         "{}",
         String::from_utf8_lossy(&install.stderr)
     );
+    let activation = String::from_utf8_lossy(&install.stdout);
+    assert!(
+        activation.contains(&format!(
+            "activation: active in the backend (pid {original_pid})"
+        )),
+        "{activation}"
+    );
+    assert_eq!(running_pid(), original_pid);
     std::fs::remove_file(&package).unwrap();
     let session = env.create_session().await.unwrap();
     env.prompt(session, "execute installed native and MCP tools")
@@ -89,9 +116,17 @@ resources:
         "{followup}; {}",
         env.diagnostics()
     );
+    assert_eq!(running_pid(), original_pid);
     let uninstall = env
         .backend
-        .bundle_cli(&["bundle", "uninstall", "-y", "acme/process-fixture"])
+        .bundle_cli(&[
+            "--db",
+            env.backend.db.to_str().unwrap(),
+            "bundle",
+            "uninstall",
+            "-y",
+            "acme/process-fixture",
+        ])
         .unwrap();
     assert!(
         uninstall.status.success(),
@@ -109,6 +144,59 @@ resources:
             || followup.contains("not found"),
         "{followup}"
     );
+    assert_eq!(running_pid(), original_pid);
+
+    // Editing config publishes tools and hooks together at the next bind.
+    let config_path = env.backend.xdg_config_home.join("hya/config.yaml");
+    let original_config = std::fs::read_to_string(&config_path).unwrap();
+    let plugin_path = env.backend.project.join("live-plugin.py");
+    let live_script = script.replace("process-fixture", "live-config")
+        .replace("'hooks':[]", "'hooks':[{'name':'message.user.before'}]")
+        .replace(" elif r.get('method') == 'tool/call':", " elif r.get('method') == 'hook/message.user.before': result={'outcome':'continue','text':r['params']['text'] + ' CONFIG_HOOK_ACTIVE'}\n elif r.get('method') == 'tool/call':");
+    std::fs::write(&plugin_path, live_script).unwrap();
+    let declaration = format!(
+        "plugins:\n  live-config:\n    command: [python3, {}]",
+        serde_json::to_string(&plugin_path).unwrap()
+    );
+    std::fs::write(
+        &config_path,
+        original_config.replace("plugins: {}", &declaration),
+    )
+    .unwrap();
+    env.prompt(session, "use newly configured tool")
+        .await
+        .unwrap();
+    let requests = env.fake.requests().unwrap();
+    let first = &requests[5];
+    assert!(
+        first["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["function"]["name"] == "live-config__echo")
+    );
+    assert!(
+        serde_json::to_string(&first["messages"])
+            .unwrap()
+            .contains("use newly configured tool CONFIG_HOOK_ACTIVE")
+    );
+    assert_eq!(running_pid(), original_pid);
+
+    std::fs::write(&config_path, original_config).unwrap();
+    env.prompt(session, "after config removal").await.unwrap();
+    let requests = env.fake.requests().unwrap();
+    let after = requests.last().unwrap();
+    assert!(
+        !after["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["function"]["name"] == "live-config__echo")
+    );
+    let messages = serde_json::to_string(&after["messages"]).unwrap();
+    assert!(messages.contains("after config removal"));
+    assert!(!messages.contains("after config removal CONFIG_HOOK_ACTIVE"));
+    assert_eq!(running_pid(), original_pid);
     std::fs::remove_dir_all(root).unwrap();
 }
 

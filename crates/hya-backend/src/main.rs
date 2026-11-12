@@ -241,7 +241,6 @@ async fn cmd_exec(
         .ok_or_else(|| anyhow::anyhow!("asks receiver missing"))?;
     let _ = built.take_questions();
     let _mcp_manager = built.mcp_control();
-    let _plugin_host = built.plugin_host();
     let _responder = spawn_reject_responder(asks);
     let session = engine
         .create(CreateSession {
@@ -491,7 +490,6 @@ async fn cmd_goal(
         .ok_or_else(|| anyhow::anyhow!("asks receiver missing"))?;
     let _ = built.take_questions();
     let _mcp_manager = built.mcp_control();
-    let _plugin_host = built.plugin_host();
     let _responder = spawn_reject_responder(asks);
     let session = engine
         .create(CreateSession {
@@ -518,7 +516,7 @@ async fn cmd_goal(
                     .unwrap_or("You are an independent goal verifier. No tools."),
             ),
     );
-    let dispatcher = goal_loop_hook_chain(&binding, agent.name.as_str(), built.plugin_host());
+    let dispatcher = goal_loop_hook_chain(&binding, agent.name.as_str());
     let evaluator: Arc<dyn GoalEvaluator> = if dispatcher.has_goal_evaluate() {
         Arc::new(PluginGoalEvaluator::new(dispatcher).with_fallback(Arc::clone(&fallback)))
     } else {
@@ -651,7 +649,6 @@ async fn cmd_loop(
         .ok_or_else(|| anyhow::anyhow!("asks receiver missing"))?;
     let _ = built.take_questions();
     let _mcp_manager = built.mcp_control();
-    let _plugin_host = built.plugin_host();
     let _responder = spawn_reject_responder(asks);
     let session = engine
         .create(CreateSession {
@@ -675,8 +672,7 @@ async fn cmd_loop(
     // The engine-supplied `loop.should_stop` consult: registered plugin
     // providers may force a legitimate stop; without registrations the
     // dispatcher answers `None` and the gate falls through untouched.
-    let evaluator_dispatcher =
-        goal_loop_hook_chain(&binding, agent.name.as_str(), built.plugin_host());
+    let evaluator_dispatcher = goal_loop_hook_chain(&binding, agent.name.as_str());
     let verifier_fallback: Arc<dyn hya_core::LoopVerifier> = Arc::new(
         ModelLoopVerifier::new(Arc::new(evaluator_router.clone()), ModelRef::new(&evaluator_model))
             .with_system_prompt(binding.bundle_skill_content("hya/goal-loop", "loop-verifier-prompt").map(skill_prompt_body).unwrap_or("You are an independent loop verifier. You have no stake in the work and no tools.")),
@@ -748,19 +744,16 @@ fn skill_prompt_body(content: &str) -> &str {
         .unwrap_or(content)
 }
 
-fn goal_loop_hook_chain(
-    binding: &TurnBinding,
-    stable_agent_id: &str,
-    global: Arc<dyn HookDispatcher>,
-) -> Arc<dyn HookDispatcher> {
+fn goal_loop_hook_chain(binding: &TurnBinding, stable_agent_id: &str) -> Arc<dyn HookDispatcher> {
     let active_is_goal_loop = binding
         .resolve_agent(stable_agent_id)
         .is_some_and(|agent| agent.origin.bundle_id() == Some("hya/goal-loop"));
-    let selected = if active_is_goal_loop {
-        Vec::new()
+    // The goal-loop owner is appended unfiltered below; retain global/plugin hooks.
+    let selected = binding.bundle_hooks_for_agent(if active_is_goal_loop {
+        hya_core::MAIN_AGENT_ID
     } else {
-        binding.bundle_hooks_for_agent(stable_agent_id)
-    };
+        stable_agent_id
+    });
     let agentless = binding
         .bundle_catalog()
         .bundles()
@@ -771,7 +764,6 @@ fn goal_loop_hook_chain(
         .filter_map(|bundle| binding.bundle_hooks(&bundle.identity().id))
         .collect();
     Arc::new(HookChain::new(ordered_evaluator_hooks(
-        global,
         agentless,
         selected,
         binding.bundle_hooks("hya/goal-loop"),
@@ -779,12 +771,11 @@ fn goal_loop_hook_chain(
 }
 
 fn ordered_evaluator_hooks(
-    global: Arc<dyn HookDispatcher>,
     agentless: Vec<Arc<dyn HookDispatcher>>,
     selected: Vec<Arc<dyn HookDispatcher>>,
     intelligent: Option<Arc<dyn HookDispatcher>>,
 ) -> Vec<Arc<dyn HookDispatcher>> {
-    let mut hooks = vec![global];
+    let mut hooks = Vec::new();
     for hook in agentless.into_iter().chain(selected).chain(intelligent) {
         if !hooks.iter().any(|existing| Arc::ptr_eq(existing, &hook)) {
             hooks.push(hook);
@@ -1100,21 +1091,18 @@ mod tests {
     use hya_core::hooks::NoopHookHost;
 
     #[test]
-    fn evaluator_hook_order_is_global_agentless_selected_intelligent_and_deduplicated() {
-        let global: Arc<dyn HookDispatcher> = Arc::new(NoopHookHost);
+    fn evaluator_hook_order_is_agentless_selected_intelligent_and_deduplicated() {
         let agentless: Arc<dyn HookDispatcher> = Arc::new(NoopHookHost);
         let selected: Arc<dyn HookDispatcher> = Arc::new(NoopHookHost);
         let intelligent: Arc<dyn HookDispatcher> = Arc::new(NoopHookHost);
         let ordered = ordered_evaluator_hooks(
-            Arc::clone(&global),
             vec![Arc::clone(&agentless)],
             vec![Arc::clone(&selected), Arc::clone(&intelligent)],
             Some(Arc::clone(&intelligent)),
         );
-        assert_eq!(ordered.len(), 4);
-        assert!(Arc::ptr_eq(&ordered[0], &global));
-        assert!(Arc::ptr_eq(&ordered[1], &agentless));
-        assert!(Arc::ptr_eq(&ordered[2], &selected));
-        assert!(Arc::ptr_eq(&ordered[3], &intelligent));
+        assert_eq!(ordered.len(), 3);
+        assert!(Arc::ptr_eq(&ordered[0], &agentless));
+        assert!(Arc::ptr_eq(&ordered[1], &selected));
+        assert!(Arc::ptr_eq(&ordered[2], &intelligent));
     }
 }

@@ -54,8 +54,8 @@ use std::io::Write;
 use crate::agent_model_control::PersistentAgentModelControl;
 use crate::config;
 use crate::runtime_reconcile::{
-    DesiredSource, PreparedFailure, PreparedResult, RuntimeMcpControl, RuntimeReconciler, SourceId,
-    adapt_prepared_bundle_skills, prepare_desired_source, prepared_plugin_source,
+    DesiredSource, RuntimeExtensionsRefresh, RuntimeMcpControl, RuntimeReconciler, SourceId,
+    adapt_prepared_bundle_skills,
 };
 use crate::{InstalledBundleRefresh, bundle_registry_path, formatter_config, plugins};
 
@@ -1602,7 +1602,6 @@ pub struct BuiltSessionEngine {
     asks: Option<tokio::sync::mpsc::UnboundedReceiver<AskRequest>>,
     questions: Option<tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>>,
     mcp_control: Arc<dyn hya_server::McpControl>,
-    plugin_host: Arc<hya_plugin::PluginHost>,
     lifecycle: SpawnSupervisorLifecycle,
     /// Process base agent identity, for paths that need it outside a turn
     /// (the restart handoff's in-process continuation of checkpointed
@@ -1674,12 +1673,6 @@ impl BuiltSessionEngine {
     #[must_use]
     pub fn mcp_control(&self) -> Arc<dyn hya_server::McpControl> {
         Arc::clone(&self.mcp_control)
-    }
-
-    /// Plugin host handle.
-    #[must_use]
-    pub fn plugin_host(&self) -> Arc<hya_plugin::PluginHost> {
-        Arc::clone(&self.plugin_host)
     }
 
     /// Graceful stop of every in-flight turn in every session (see
@@ -2346,29 +2339,17 @@ async fn build_session_engine_with_mcp_defer(
         registry.remove("websearch");
     }
 
-    // Config-file plugin hooks remain startup-bound and process-wide. Their
-    // tool declarations are prepared here but become effective only through
-    // RuntimeReconciler publication. Project plugins load per Project scope
-    // (ProjectScopeRefresh) at the Project's first bind.
-    let plugin_specs = plugins.clone();
     let project_plugins = if options.pure {
         crate::project_plugins::ProjectPluginSettings::disabled()
     } else {
+        let configured = crate::config::load_configured_plugin_ids();
         crate::project_plugins::ProjectPluginSettings::new(host_info()).with_configured_ids(
             plugins
                 .iter()
                 .map(|spec| spec.id.clone())
-                .chain(crate::config::load_configured_plugin_ids()),
+                .filter(|id| !configured.contains(id)),
         )
     };
-    let (plugin_host, plugin_failures) =
-        hya_plugin::PluginHost::connect_all_observed(plugins, host_info()).await;
-    let plugin_host = Arc::new(plugin_host);
-    let prepared_plugins = plugin_host
-        .prepared_plugins()
-        .into_iter()
-        .map(|plugin| (plugin.id().to_string(), plugin))
-        .collect::<BTreeMap<_, _>>();
     let defer_mcp = options.defer_mcp && !mcp.is_empty();
     let catalog = builtin_agent_catalog()?;
     // The startup catalog holds only the first-party bundle, so its schema
@@ -2403,13 +2384,17 @@ async fn build_session_engine_with_mcp_defer(
     ))
     .await
     .context("load Agent model configuration before engine readiness")?;
-    let catalog_refresh = Arc::new(
+    let reconciler = Arc::new(RuntimeReconciler::new(runtime.clone()));
+    let mcp_control = Arc::new(RuntimeMcpControl::new(reconciler.clone()));
+    let catalog_refresh = Arc::new(RuntimeExtensionsRefresh::new(
         crate::ProjectScopeRefresh::new(Arc::new(
             InstalledBundleRefresh::new(bundle_registry_path())
                 .with_host_reads(Arc::new(hya_core::StoreSessionReads::new(store.clone()))),
         ))
         .with_project_plugins(project_plugins),
-    );
+        reconciler.clone(),
+        options.pure,
+    )?);
 
     let rules = PermissionRules::new(vec![
         Rule::new(Action::Read, "*", Mode::Allow),
@@ -2417,13 +2402,6 @@ async fn build_session_engine_with_mcp_defer(
         Rule::new(Action::Grep, "*", Mode::Allow),
     ]);
     let (permission, asks) = PermissionPlane::new_with_policy(rules, invocation_policy);
-    let permission = if plugin_host.is_empty() {
-        permission
-    } else {
-        permission.with_interceptor(Arc::new(hya_plugin::PermissionBridge::new(
-            plugin_host.clone(),
-        )))
-    };
     let (interaction, questions) = InteractionPlane::new();
     let subagent_limits = crate::config::load_subagent_limits();
     let spawn_queue_capacity = usize::try_from(subagent_limits.per_run_budget)
@@ -2491,9 +2469,6 @@ async fn build_session_engine_with_mcp_defer(
     if let Some(budget) = mcp_background_after_from_env() {
         engine_builder = engine_builder.with_mcp_background_after(budget);
     }
-    if !plugin_host.is_empty() {
-        engine_builder = engine_builder.with_hooks(plugin_host.clone());
-    }
     let engine = Arc::new(engine_builder);
     // Providers added or refreshed at runtime replace the engine's router;
     // model saves must accept their models too.
@@ -2508,9 +2483,7 @@ async fn build_session_engine_with_mcp_defer(
             .load_efforts()
             .context("load Agent effort configuration before engine readiness")?,
         );
-    let reconciler = Arc::new(RuntimeReconciler::new(engine.runtime_registry()));
-    let mcp_control = Arc::new(RuntimeMcpControl::new(reconciler.clone()));
-    let plugin_desired = plugin_specs
+    let plugin_desired = plugins
         .into_iter()
         .map(|spec| DesiredSource::plugin(SourceId::plugin(spec.id.clone()), spec))
         .collect::<Vec<_>>();
@@ -2523,10 +2496,8 @@ async fn build_session_engine_with_mcp_defer(
         let plugin_plan = reconciler
             .replace_desired(plugin_desired.clone())
             .context("plan startup plugin reconciliation")?;
-        let plugin_results =
-            prepared_plugin_results(plugin_plan.sources(), &prepared_plugins, &plugin_failures);
-        if let Err(error) = reconciler.finish_revision(&plugin_plan, plugin_results) {
-            eprintln!("hya: plugin tool reconciliation rejected ({error})");
+        if let Err(error) = mcp_control.reconcile_plan(plugin_plan).await {
+            eprintln!("hya: plugin reconciliation rejected ({error})");
         }
 
         let mut desired = plugin_desired;
@@ -2546,14 +2517,7 @@ async fn build_session_engine_with_mcp_defer(
         let plan = reconciler
             .replace_desired(desired)
             .context("plan startup runtime reconciliation")?;
-        let mut results =
-            prepared_plugin_results(plan.sources(), &prepared_plugins, &plugin_failures);
-        results.extend(
-            prepare_mcp_results(plan.sources())
-                .await
-                .context("prepare startup MCP reconciliation")?,
-        );
-        if let Err(error) = reconciler.finish_revision(&plan, results) {
+        if let Err(error) = mcp_control.reconcile_plan(plan).await {
             eprintln!("hya: startup runtime reconciliation rejected ({error})");
         }
     }
@@ -2707,7 +2671,6 @@ async fn build_session_engine_with_mcp_defer(
         asks: Some(asks),
         questions: Some(questions),
         mcp_control,
-        plugin_host,
         lifecycle,
         agent_model_control,
         agent: agent.clone(),
@@ -2758,72 +2721,6 @@ fn spawn_catalog_scope_sweeper(
     })
 }
 
-fn prepared_plugin_results(
-    desired: &[DesiredSource],
-    prepared: &BTreeMap<String, hya_plugin::PreparedPlugin>,
-    failures: &BTreeMap<String, hya_plugin::PluginError>,
-) -> Vec<PreparedResult> {
-    desired
-        .iter()
-        .filter(|source| source.id().kind() == hya_core::RuntimeSourceKind::Plugin)
-        .map(|source| {
-            let id = source.id().configured_id();
-            if let Some(plugin) = prepared.get(id) {
-                match prepared_plugin_source(plugin.clone()) {
-                    Ok(prepared) => PreparedResult::from(prepared),
-                    Err(error) => PreparedResult::from(PreparedFailure::new(
-                        source.id().clone(),
-                        format!("PLUGIN_CONTRIBUTION_INVALID: {error}"),
-                    )),
-                }
-            } else {
-                let error = failures.get(id).map_or_else(
-                    || "PLUGIN_START_FAILED: no observed result".to_string(),
-                    |error| format!("PLUGIN_START_FAILED: {error}"),
-                );
-                PreparedResult::from(PreparedFailure::new(source.id().clone(), error))
-            }
-        })
-        .collect()
-}
-
-async fn prepare_mcp_results(
-    desired: &[DesiredSource],
-) -> Result<Vec<PreparedResult>, crate::runtime_reconcile::ReconcileError> {
-    let mut set = tokio::task::JoinSet::new();
-    let mut tasks = BTreeMap::new();
-    for source in desired
-        .iter()
-        .filter(|source| source.id().kind() == hya_core::RuntimeSourceKind::Mcp)
-        .cloned()
-    {
-        let id = source.id().clone();
-        let handle = set.spawn(prepare_desired_source(source));
-        tasks.insert(handle.id(), id);
-    }
-    let mut results = Vec::new();
-    while let Some(joined) = set.join_next_with_id().await {
-        match joined {
-            Ok((id, result)) => {
-                tasks.remove(&id);
-                results.push(result);
-            }
-            Err(error) => {
-                let Some(source) = tasks.remove(&error.id()) else {
-                    return Err(crate::runtime_reconcile::ReconcileError::InvalidPrepared(
-                        format!("MCP preparation task {} had no source ticket", error.id()),
-                    ));
-                };
-                results.push(PreparedResult::from(PreparedFailure::new(
-                    source,
-                    format!("MCP_PREPARE_TASK_FAILED: {error}"),
-                )));
-            }
-        }
-    }
-    Ok(results)
-}
-
 /// Inputs for [`HyaRuntime::start`] (store path, model, and safety flags).
 pub struct RuntimeOptions {
     /// Override default model; `None` uses config / offline default.
@@ -2838,15 +2735,12 @@ pub struct RuntimeOptions {
     pub force_offline: bool,
 }
 
-/// Process entry point: session engine + axum router ready to serve or embed.
-///
-/// Holds the plugin host and built engine for the process lifetime so side
+/// Holds the built engine for the process lifetime so side
 /// planes stay connected until the runtime is dropped.
 pub struct HyaRuntime {
     router: axum::Router,
     engine: Arc<SessionEngine>,
     app_state: hya_server::AppState,
-    _plugin_host: Arc<hya_plugin::PluginHost>,
     _built: BuiltSessionEngine,
 }
 
@@ -2896,7 +2790,6 @@ impl HyaRuntime {
         let mcp_control = built.mcp_control();
         let workflow_control = Arc::new(built.workflow_control());
         let agent_model_control = Arc::new(built.agent_model_control());
-        let plugin_host = built.plugin_host();
         let mut state = hya_server::AppState::new(engine.clone(), agent)
             .with_provider_control(Arc::new(crate::ProviderManager::new(engine.clone())))
             .with_bundle_control(Arc::new(crate::bundle_admin::BundleManager))
@@ -2918,7 +2811,6 @@ impl HyaRuntime {
             router,
             engine,
             app_state,
-            _plugin_host: plugin_host,
             _built: built,
         })
     }
@@ -3722,7 +3614,6 @@ for line in sys.stdin:
         let _asks = built.take_asks();
         let _questions = built.take_questions();
         let _mcp = built.mcp_control();
-        let _plugins = built.plugin_host();
         let _built = built;
 
         assert!(
@@ -3757,7 +3648,6 @@ for line in sys.stdin:
         let _asks = built.take_asks();
         let _questions = built.take_questions();
         let _mcp = built.mcp_control();
-        let _plugins = built.plugin_host();
         let _built = built;
         assert!(!registry_path.exists());
 
@@ -4066,7 +3956,6 @@ You are the runtime-installed agent.
         let _asks = built.take_asks();
         let _questions = built.take_questions();
         let _mcp = built.mcp_control();
-        let _plugins = built.plugin_host();
         let _built = built;
 
         let running = store.read_projection(running_root).await.unwrap();
@@ -4252,7 +4141,6 @@ You are the installed resident agent.
         let _asks = built.take_asks();
         let _questions = built.take_questions();
         let _mcp = built.mcp_control();
-        let _plugins = built.plugin_host();
         let _built = built;
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
@@ -4319,7 +4207,6 @@ You are the installed resident agent.
         let _asks = built.take_asks();
         let _questions = built.take_questions();
         let mcp_control = built.mcp_control();
-        let _plugins = built.plugin_host();
         let _built = built;
         let elapsed = started.elapsed();
         assert!(
@@ -4333,7 +4220,42 @@ You are the installed resident agent.
     }
 
     #[tokio::test]
-    async fn startup_mixed_mcp_plugin_publishes_one_complete_generation() {
+    async fn hot_reload_global_plugin_publishes_hooks_in_source() {
+        let (router, model) = offline_router(None);
+        let agent = agent_with_model(&model, None);
+        let mut command = plugin_fixture("source-hooks");
+        command[2] = command[2].replace(
+            "\"hooks\":[]",
+            "\"hooks\":[{\"name\":\"message.user.before\"}]",
+        );
+        let built = build_session_engine(
+            SessionStore::connect_memory().await.unwrap(),
+            router,
+            &agent,
+            BTreeMap::new(),
+            vec![PluginSpec {
+                id: "source-hooks".into(),
+                kind: hya_plugin::messages::PluginKindWire::Rust,
+                command,
+                timeout_ms: Some(1_000),
+                env: BTreeMap::new(),
+                plugin_dir: None,
+            }],
+            (WebSearchConfig::default(), InvocationPolicy::default()),
+        )
+        .await
+        .unwrap();
+        let binding = built
+            .engine()
+            .runtime_registry()
+            .bind_turn(&std::env::temp_dir())
+            .unwrap();
+        assert!(binding.resolve_tool("source-hooks__plugin_ping").is_some());
+        assert_eq!(binding.bundle_hooks_for_agent(agent.name.as_str()).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn startup_mixed_mcp_plugin_publishes_complete_sources() {
         let mut mcp = BTreeMap::new();
         mcp.insert(
             "mixed".to_string(),
@@ -4372,11 +4294,10 @@ You are the installed resident agent.
         let _ = built.take_questions();
         let _built = built;
         let manifest = engine.runtime_registry().effective_manifest();
-        // +1 for the goal-loop first-party bundle's skills, +1 for the
-        // eager MCP server + plugin (published together in one revision).
+        // The static bundle, MCP server, and plugin each publish one source.
         assert_eq!(
             manifest.generation.get(),
-            hya_proto::ConfigGeneration::INITIAL.get() + 2
+            hya_proto::ConfigGeneration::INITIAL.get() + 3
         );
         assert!(manifest.sources.contains_key(&SourceId::mcp("mixed")));
         assert!(
