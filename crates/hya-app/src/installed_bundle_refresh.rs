@@ -170,7 +170,7 @@ pub(crate) struct BaseCatalogs {
     /// Every first-party catalog, before any shadowing.
     pub(crate) first_party: Vec<Arc<PreparedCatalog>>,
     /// Rows skipped at the last publication, also reported by explicit refresh.
-    unreadable_errors: Vec<String>,
+    unreadable_errors: Vec<(String, String)>,
 }
 
 /// One composed catalog tier: the Bundle catalog, every Bundle-kind runtime
@@ -465,11 +465,16 @@ impl InstalledBundleRefresh {
                 .as_ref()
                 .map_or(0, |snapshot| snapshot.bundles.len()),
         );
+        let disabled = match &self.registry.get() {
+            Some(registry) => registry.disabled_bundle_ids().await?,
+            None => BTreeSet::new(),
+        };
         let unreadable_errors = snapshot.as_ref().map_or_else(Vec::new, |snapshot| {
             snapshot
                 .unreadable
                 .iter()
-                .map(|row| format!("installed bundle {}: {}", row.bundle_id, row.error))
+                .filter(|row| !disabled.contains(&row.bundle_id))
+                .map(|row| (row.bundle_id.clone(), row.error.clone()))
                 .collect::<Vec<_>>()
         });
         if let Some(snapshot) = &snapshot {
@@ -482,10 +487,6 @@ impl InstalledBundleRefresh {
             .into_iter()
             .map(Arc::new)
             .collect::<Vec<_>>();
-        let disabled = match &self.registry.get() {
-            Some(registry) => registry.disabled_bundle_ids().await?,
-            None => BTreeSet::new(),
-        };
         let installed_refs = installed.iter().map(Arc::as_ref).collect::<Vec<_>>();
         let first_party_refs = first_party.iter().map(Arc::as_ref).collect::<Vec<_>>();
         let composition = compose(
@@ -529,7 +530,7 @@ impl InstalledBundleRefresh {
         if unreadable_errors.is_empty() {
             Ok(true)
         } else {
-            Err(CoreError::Invalid(unreadable_errors.join("; ")))
+            Err(CoreError::BundleRefresh(unreadable_errors))
         }
     }
 
@@ -610,7 +611,7 @@ impl RuntimeCatalogRefresh for InstalledBundleRefresh {
         if base.unreadable_errors.is_empty() {
             Ok(changed)
         } else {
-            Err(CoreError::Invalid(base.unreadable_errors.join("; ")))
+            Err(CoreError::BundleRefresh(base.unreadable_errors.clone()))
         }
     }
 }

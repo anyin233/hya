@@ -126,10 +126,16 @@ turn/catalog bind); see [Configuration](configuration.md#reloading-configured-pl
 | request `directory` | string | Scope: its Project's bundles are refreshed too; empty for global. |
 | `generation` | uint64 | Runtime generation now bound for the scope. |
 | `bundles[]` | `{id, version, preparedDigest, scope}` | Every published bundle; `scope` is `user` (registry, first-party included) or `project`. |
-| `errors[]` | `{bundleId, message}` | Refresh failures, each of which kept that source’s previous publication. Independent successes can advance the generation. `bundleId` names the bundle whose runtime could not be prepared (process start, declarations, configuration); it is empty for failures that belong to no single bundle (registry or Project scan). The CLI reports these messages and exits with an error. |
+| `errors[]` | `{bundleId: string, message: string}` | Per-source refresh failures. `bundleId` identifies the bundle, source path for a failed scan, or scope for a scope-wide failure (`global` for the global scope). Unreadable registry rows have separate entries with their stored ids. Independent successes can advance the generation; failed replacements retain their previous publication when one exists. The CLI fails for its target's errors and prints other sources' errors as warnings on stderr. |
 | `scope` | string | `global`, `directory` (not in a registered Project), or `project`. |
 
 `catalog.updated` is emitted when the refresh published a new generation.
+
+The installed base still publishes as a whole when preparing enabled runtime
+processes: one process failure keeps the previous base generation. Consequently,
+a new enabled installation can still fail its activation proof if an unrelated
+installed process prevents publication. Unreadable registry rows are skipped
+independently and do not have this effect.
 
 ### Management API
 
@@ -148,6 +154,17 @@ request's scope and returns that refresh in `BundleChange.refresh`.
 An unreadable installed row still appears in `ListBundles` with its stored
 `id`, `version`, `publisher`, `scope: "user"`, `state: "unreadable"`, and an
 `error` string containing the validation failure and reinstall instruction.
+`enabled` still reflects the user's choice; a disabled unreadable row is not
+loaded and is omitted from refresh errors. The CLI's `info` and `schema` report
+the row's decode failure and reinstall hint without resolving a first-party
+bundle with the same id. `remove`, `enable`, and `disable` accept its id.
+
+Replacing an installation preserves its enabled/disabled choice. A disabled
+install reports `activation: installed, disabled` and succeeds without expecting
+publication by the daemon. An unreadable row has no validated version to
+compare, so reinstalling it does not require `--overwrite` for a downgrade.
+Uninstall and namespace takeover remove the displaced id's disabled flag too.
+
 Unpreparable Project manifest directories also appear as `unreadable`, with
 `scope: "project"`, their id when readable (otherwise their directory path),
 and the preparation error; repair their source files in place.
