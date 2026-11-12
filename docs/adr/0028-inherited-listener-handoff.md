@@ -1,7 +1,7 @@
 # ADR-0028: Supervisor-owned listener handoff
 
 Date: 2026-09-28
-Status: Accepted
+Status: Superseded by [ADR-0031](0031-hot-reload-and-stop-start-restart.md)
 
 ## Context
 
