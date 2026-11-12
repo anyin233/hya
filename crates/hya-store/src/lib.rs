@@ -406,7 +406,7 @@ impl SessionStore {
             let seq: i64 = r.try_get("seq")?;
             let ts: i64 = r.try_get("ts")?;
             let payload: String = r.try_get("payload")?;
-            let event: Event = serde_json::from_str(&payload)?;
+            let event = decode_event(&payload, session, seq)?;
             out.push(Envelope {
                 seq: EventSeq(seq.max(0) as u64),
                 ts_millis: ts,
@@ -500,6 +500,10 @@ impl SessionStore {
         .bind(key)
         .fetch_all(&mut *tx)
         .await?;
+        let sessions = tree_keys
+            .iter()
+            .map(|key| decode_session_key(key))
+            .collect::<Result<Vec<_>, _>>()?;
         for tree_key in &tree_keys {
             for table in [
                 "event_log",
@@ -515,8 +519,7 @@ impl SessionStore {
             }
         }
         tx.commit().await?;
-        self.projections
-            .remove_all(tree_keys.iter().filter_map(|k| decode_session_key(k)));
+        self.projections.remove_all(sessions);
         Ok(deleted)
     }
 
@@ -716,9 +719,7 @@ impl SessionStore {
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             let key: Vec<u8> = row.try_get("session_id")?;
-            let Some(session) = decode_session_key(&key) else {
-                continue;
-            };
+            let session = decode_session_key(&key)?;
             let before_kind: Option<String> = row.try_get("before_kind")?;
             out.push(ProjectActivityFile {
                 path: row.try_get("path")?,
@@ -797,7 +798,7 @@ pub(crate) async fn replay_projection(
 }
 
 /// Decode `list_sessions`-shaped rows (`session_id`, `started`, `updated`,
-/// `n`), skipping undecodable session keys.
+/// `n`), rejecting malformed session keys.
 fn session_infos(rows: Vec<sqlx::sqlite::SqliteRow>) -> Result<Vec<SessionInfo>, StoreError> {
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
@@ -805,21 +806,86 @@ fn session_infos(rows: Vec<sqlx::sqlite::SqliteRow>) -> Result<Vec<SessionInfo>,
         let started: i64 = r.try_get("started")?;
         let updated: i64 = r.try_get("updated")?;
         let n: i64 = r.try_get("n")?;
-        if let Some(session) = decode_session_key(&key) {
-            out.push(SessionInfo {
-                session,
-                started_millis: started,
-                updated_millis: updated,
-                events: n.max(0) as u64,
-            });
-        }
+        let session = decode_session_key(&key)?;
+        out.push(SessionInfo {
+            session,
+            started_millis: started,
+            updated_millis: updated,
+            events: n.max(0) as u64,
+        });
     }
     Ok(out)
 }
 
-pub(crate) fn decode_session_key(key: &[u8]) -> Option<SessionId> {
-    if let Ok(raw) = std::str::from_utf8(key) {
-        return raw.parse().ok();
+pub(crate) fn decode_session_key(key: &[u8]) -> Result<SessionId, StoreError> {
+    let raw = std::str::from_utf8(key).map_err(|error| {
+        StoreError::SessionKeyData(format!("invalid UTF-8 key {key:?}: {error}"))
+    })?;
+    raw.parse()
+        .map_err(|error| StoreError::SessionKeyData(format!("invalid key {raw:?}: {error}")))
+}
+
+pub(crate) fn decode_event(
+    payload: &str,
+    session: SessionId,
+    seq: i64,
+) -> Result<Event, StoreError> {
+    serde_json::from_str(payload).map_err(|source| StoreError::EventDecode {
+        session,
+        seq,
+        source: Arc::new(source),
+    })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod event_contract_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn unknown_event_tags_fail_replay_with_row_context() {
+        let store = SessionStore::connect_memory().await.unwrap();
+        let session = SessionId::new();
+        let seq = sqlx::query("INSERT INTO event_log (session_id, ts, payload) VALUES (?, 1, ?)")
+            .bind(session.storage_key())
+            .bind(format!(
+                r#"{{"type":"future_event","session":"{session}"}}"#
+            ))
+            .execute(&store.pool)
+            .await
+            .unwrap()
+            .last_insert_rowid();
+
+        for error in [
+            store.replay(session).await.unwrap_err(),
+            store.read_projection(session).await.unwrap_err(),
+        ] {
+            assert!(
+                matches!(error, StoreError::EventDecode { session: owner, seq: row, .. } if owner == session && row == seq)
+            );
+            let text = error.to_string();
+            assert!(text.contains("future_event"), "{text}");
+            assert!(text.contains(&session.to_string()), "{text}");
+            assert!(text.contains(&format!("sequence {seq}")), "{text}");
+        }
     }
-    uuid::Uuid::from_slice(key).ok().map(SessionId::from_uuid)
+
+    #[tokio::test]
+    async fn invalid_session_keys_fail_listing_instead_of_disappearing() {
+        let store = SessionStore::connect_memory().await.unwrap();
+        // This legacy binary UUID is valid UTF-8, but is not a hysec text key.
+        let key = uuid::Uuid::parse_str("41414141-4141-40c2-8041-414141414141")
+            .unwrap()
+            .as_bytes()
+            .to_vec();
+        sqlx::query("INSERT INTO event_log (session_id, ts, payload) VALUES (?, 1, '{}')")
+            .bind(key)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        let error = store.list_sessions().await.unwrap_err();
+        assert!(matches!(error, StoreError::SessionKeyData(_)), "{error}");
+        assert!(error.to_string().contains("hysec_"), "{error}");
+        assert!(decode_session_key(&[0xff; 16]).is_err());
+    }
 }

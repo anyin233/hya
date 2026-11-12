@@ -98,19 +98,12 @@ pub enum Event {
     /// Appended to the lineage root; descendants (subagent sessions) inherit
     /// it. `mode` is `manual`, `yolo`, or `<bundle-id>/<mode-id>` for a mode
     /// declared by an installed bundle's `permission_modes:`. The last write
-    /// wins. Older binaries fold this variant as `Unknown`.
+    /// wins.
     SessionPermissionModeSet {
         /// Root Session whose descendant tree uses this mode.
         session: SessionId,
         /// Mode identifier (`manual`, `yolo`, or `<bundle-id>/<mode-id>`).
         mode: String,
-    },
-    /// Session workdir changed.
-    SessionMoved {
-        /// Session this event belongs to.
-        session: SessionId,
-        /// New absolute workdir.
-        workdir: String,
     },
     /// Session title set or updated.
     SessionTitled {
@@ -126,18 +119,10 @@ pub enum Event {
         /// Full metadata object (replaces prior metadata).
         metadata: serde_json::Value,
     },
-    /// Session permission rule list replaced (does not merge).
-    SessionPermissionSet {
-        /// Session this event belongs to.
-        session: SessionId,
-        /// Full permission rule list after the set.
-        permission: Vec<serde_json::Value>,
-    },
     /// A root session was archived (hidden from default session lists).
     ///
     /// Folds `SessionProjection.archived` to the stamp. Archiving never
-    /// cancels a running turn. A zero stamp (written by the deleted Compat
-    /// surface to clear the archive) folds as not archived.
+    /// cancels a running turn. `SessionUnarchived` clears the archive.
     SessionArchived {
         /// Session this event belongs to.
         session: SessionId,
@@ -146,8 +131,7 @@ pub enum Event {
     },
     /// A root session left the archive: explicitly, or implicitly because a
     /// new prompt or shell turn was admitted on it. Folds
-    /// `SessionProjection.archived` to `None`. An older binary folds it as
-    /// `Unknown`.
+    /// `SessionProjection.archived` to `None`.
     SessionUnarchived {
         /// Session this event belongs to.
         session: SessionId,
@@ -157,33 +141,17 @@ pub enum Event {
     /// kept (`false`: a fork was taken from it). The server deletes an
     /// ephemeral session once it is still unused and no client watches it.
     /// Folds `SessionProjection.ephemeral`; the session's first message, a
-    /// title, or an archive also clear it for good. An older binary folds it
-    /// as `Unknown` (the session is then simply kept).
+    /// title, or an archive also clear it for good.
     SessionEphemeralSet {
         /// Session this event belongs to.
         session: SessionId,
         /// Whether the session is (still) ephemeral.
         ephemeral: bool,
     },
-    /// Share URL recorded for the session.
-    SessionShareSet {
-        /// Session this event belongs to.
-        session: SessionId,
-        /// Public share URL.
-        url: String,
-    },
-    /// Share URL cleared (reducer sets share to `None`).
-    SessionShareCleared {
-        /// Session this event belongs to.
-        session: SessionId,
-    },
     /// Active agent switched for the session.
     AgentSwitched {
         /// Session this event belongs to.
         session: SessionId,
-        /// Optional transcript anchor for when the switch occurred.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        message: Option<MessageId>,
         /// New agent name.
         agent: AgentName,
     },
@@ -191,9 +159,6 @@ pub enum Event {
     ModelSwitched {
         /// Session this event belongs to.
         session: SessionId,
-        /// Optional transcript anchor for when the switch occurred.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        message: Option<MessageId>,
         /// New model reference.
         model: ModelRef,
     },
@@ -367,17 +332,9 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tokens: Option<TokenUsage>,
         /// Why the harness ended the message (cancel, shutdown, crash
-        /// recovery, provider failure). Absent on model-ended messages and on
-        /// logs written before the field existed.
+        /// recovery, provider failure). Absent on model-ended messages.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cause: Option<FinishCause>,
-    },
-    /// Removes a whole message from the projected view.
-    MessageDeleted {
-        /// Session this event belongs to.
-        session: SessionId,
-        /// Message to drop.
-        message: MessageId,
     },
     /// Removes one part from a message in the projected view.
     PartDeleted {
@@ -646,7 +603,7 @@ pub enum Event {
     // Team-scoped comms. Every variant is appended to the TEAM-ROOT session's log
     // (`session` = the root of the team tree) so a single replay reconstructs the
     // whole team's inboxes/channels/roster, and the live bus carries them to the
-    // TUI for free. Additive variants — older binaries fold them via `Unknown`.
+    // TUI for free.
     /// Bind a team member's session to its stable handle within its unit.
     /// `agent_session` is the registered agent's own session; `session` is the
     /// team-root log the binding is recorded in.
@@ -660,10 +617,7 @@ pub enum Event {
         handle: String,
         /// Canonical path of this agent's parent, e.g. `main/lead-1`.
         ///
-        /// `None` means the team root. Combined with `skip_serializing_if`, a
-        /// root registration stays byte-identical on the wire, and a pre-scoping
-        /// log — which has no `parent` anywhere — folds as one flat unit under
-        /// `main`, preserving its original behavior (task 08-07, AC8).
+        /// `None` for the team root; child registrations carry their parent path.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         parent: Option<String>,
         /// Declared agent type for the roster.
@@ -741,15 +695,6 @@ pub enum Event {
         /// Channel name without leading `#`.
         channel: String,
         /// Member handle joining.
-        member: String,
-    },
-    /// A handle unsubscribed from a channel.
-    ChannelLeft {
-        /// Team-root log session.
-        session: SessionId,
-        /// Channel name without leading `#`.
-        channel: String,
-        /// Member handle leaving.
         member: String,
     },
 
@@ -953,7 +898,7 @@ pub enum Event {
     ///
     /// Folds into `SessionProjection.usage` only; `MessageFinished.tokens`
     /// keeps its legacy per-message sum and is not counted again for messages
-    /// that have records. An older binary folds this variant as `Unknown`.
+    /// that have records.
     UsageRecorded {
         /// Session billed for the call.
         session: SessionId,
@@ -978,7 +923,7 @@ pub enum Event {
     /// whose result carries a list different from the folded one (reads that
     /// change nothing append nothing). Folds into `SessionProjection.todos`.
     /// Sessions that predate this event have none; their list is read from
-    /// the todo tools' results instead. An older binary folds it as `Unknown`.
+    /// the todo tools' results instead.
     TodosUpdated {
         /// Session whose todo list changed.
         session: SessionId,
@@ -994,7 +939,7 @@ pub enum Event {
     /// apply_patch, and bash inside a git work tree). Contents live in the
     /// store's per-session blob table; the event carries only paths and blob
     /// keys. Folds onto `MessageProjection.file_changes` of `message` and is
-    /// what a revert restores from. An older binary folds it as `Unknown`.
+    /// what a revert restores from.
     FilesChanged {
         /// Session whose tool changed the files.
         session: SessionId,
@@ -1014,7 +959,7 @@ pub enum Event {
     /// Recorded after the engine restored the files the hidden turns changed
     /// (`files`). A revert while one is pending extends it further back. The
     /// next `MessageStarted` commits the pending revert (the hidden messages
-    /// are dropped for good). An older binary folds it as `Unknown`.
+    /// are dropped for good).
     SessionReverted {
         /// Reverted session.
         session: SessionId,
@@ -1027,8 +972,7 @@ pub enum Event {
 
     /// The pending revert was undone: hidden messages return to the
     /// transcript and the files it restored were written back (`files`).
-    /// A no-op fold when no revert is pending. An older binary folds it as
-    /// `Unknown`.
+    /// A no-op fold when no revert is pending.
     SessionUnreverted {
         /// Session whose revert was undone.
         session: SessionId,
@@ -1052,20 +996,10 @@ pub enum Event {
         message: String,
         /// Assistant message the error ended (a failed turn), appended just
         /// before that message's `MessageFinished { finish: error }`. Absent
-        /// for errors not tied to a message and in logs written before 0.41.0.
+        /// for errors not tied to a message.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         failed_message: Option<MessageId>,
     },
-
-    /// Forward-compatibility catch-all: any event whose `type` tag is not one of
-    /// the variants above deserializes here instead of failing. This lets an older
-    /// binary replay a log (or a client decode a stream) that contains newer event
-    /// variants without erroring. NOTE: this is a unit variant, so the original
-    /// payload is dropped — code that must forward unknown events losslessly should
-    /// decode the raw JSON (`serde_json::Value`) at the boundary rather than relying
-    /// on this round-tripping.
-    #[serde(other)]
-    Unknown,
 }
 /// Terminal outcome of a subagent's task report (ADR-0015).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1192,15 +1126,11 @@ impl Event {
             Event::SessionCreated { session, .. }
             | Event::SessionAgentModelOverrideSet { session, .. }
             | Event::SessionPermissionModeSet { session, .. }
-            | Event::SessionMoved { session, .. }
             | Event::SessionTitled { session, .. }
             | Event::SessionMetadataSet { session, .. }
-            | Event::SessionPermissionSet { session, .. }
             | Event::SessionArchived { session, .. }
             | Event::SessionUnarchived { session, .. }
             | Event::SessionEphemeralSet { session, .. }
-            | Event::SessionShareSet { session, .. }
-            | Event::SessionShareCleared { session, .. }
             | Event::AgentSwitched { session, .. }
             | Event::ModelSwitched { session, .. }
             | Event::SessionStatus { session, .. }
@@ -1216,7 +1146,6 @@ impl Event {
             | Event::TurnBindingRecorded { session, .. }
             | Event::UserPromptContextRecorded { session, .. }
             | Event::MessageFinished { session, .. }
-            | Event::MessageDeleted { session, .. }
             | Event::PartDeleted { session, .. }
             | Event::StepStarted { session, .. }
             | Event::StepFinished { session, .. }
@@ -1243,7 +1172,6 @@ impl Event {
             | Event::AgentHeartbeat { session, .. }
             | Event::MailSent { session, .. }
             | Event::ChannelJoined { session, .. }
-            | Event::ChannelLeft { session, .. }
             | Event::ChannelCreated { session, .. }
             | Event::SubagentReported { session, .. }
             | Event::HandoffCommitted { session, .. }
@@ -1260,7 +1188,6 @@ impl Event {
             | Event::SessionReverted { session, .. }
             | Event::SessionUnreverted { session, .. } => Some(*session),
             Event::Error { session, .. } => *session,
-            Event::Unknown => None,
         }
     }
 }
@@ -1325,27 +1252,6 @@ mod tests {
     }
 
     #[test]
-    fn unknown_event_type_deserializes_to_unknown() {
-        // A future/unknown `type` must not fail deserialization: it maps to
-        // Event::Unknown so old binaries can replay logs with newer variants.
-        let json = r#"{"type":"totally_made_up_future_event","session":"ses_x","x":1}"#;
-        let event: Event = serde_json::from_str(json).expect("unknown type must decode");
-        assert_eq!(event, Event::Unknown);
-        assert_eq!(event.session(), None);
-
-        // A known variant still decodes to its proper variant.
-        let known =
-            r#"{"type":"session_share_cleared","session":"ses_00000000000000000000000000000001"}"#;
-        let event: Event = serde_json::from_str(known).expect("known type decodes");
-        assert!(matches!(event, Event::SessionShareCleared { .. }));
-
-        // Envelope carrying an unknown event also decodes.
-        let env_json = format!(r#"{{"seq":7,"ts_millis":1,"event":{json}}}"#);
-        let env: Envelope = serde_json::from_str(&env_json).expect("envelope decodes");
-        assert_eq!(env.event, Event::Unknown);
-    }
-
-    #[test]
     fn mailbox_events_round_trip_through_json() {
         let root = SessionId::new();
         let agent = SessionId::new();
@@ -1386,11 +1292,6 @@ mod tests {
                 body: "hi".to_string(),
             },
             Event::ChannelJoined {
-                session: root,
-                channel: "build".to_string(),
-                member: "reviewer-1".to_string(),
-            },
-            Event::ChannelLeft {
                 session: root,
                 channel: "build".to_string(),
                 member: "reviewer-1".to_string(),
@@ -1596,37 +1497,6 @@ mod tests {
             before.session, after.session,
             "eviction is request-local; it must not change reduced state"
         );
-    }
-
-    #[test]
-    fn unknown_event_type_still_folds_for_older_binaries() {
-        // Forward compatibility: a binary predating ContextCompacted must not
-        // fail to replay a log that contains it.
-        let decoded: Event = serde_json::from_str(r#"{"type":"some_future_event"}"#)
-            .expect("unknown event type must decode as Unknown");
-        assert_eq!(decoded, Event::Unknown);
-        assert_eq!(decoded.session(), None);
-    }
-
-    /// A pre-scoping `agent_registered` payload carries no `parent` key at all.
-    /// It must still deserialize, with `parent` defaulting to `None` — the whole
-    /// basis of legacy-log replay (task 08-07, AC8).
-    #[test]
-    fn agent_registered_without_parent_deserializes_as_root_child() {
-        let root = SessionId::new();
-        let agent = SessionId::new();
-        let legacy = format!(
-            r#"{{"type":"agent_registered","session":"{root}","agent_session":"{agent}",
-                 "handle":"reviewer-1","agent_type":"reviewer","mode":"resident"}}"#
-        );
-        let event: Event = serde_json::from_str(&legacy).expect("legacy payload deserializes");
-        match event {
-            Event::AgentRegistered { parent, handle, .. } => {
-                assert_eq!(parent, None, "absent parent means the team root");
-                assert_eq!(handle, "reviewer-1");
-            }
-            other => panic!("expected AgentRegistered, got {other:?}"),
-        }
     }
 
     /// Orchestration events (ADR-0015/0016) round-trip and report the right
@@ -1962,5 +1832,30 @@ mod tests {
         let usage: TokenUsage = serde_json::from_str(json).expect("legacy usage decodes");
         assert!(!usage.reasoning_unknown);
         assert_eq!(usage.prompt(), 7);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod decode_contract_tests {
+    use super::{Envelope, Event};
+
+    #[test]
+    fn retired_and_unknown_event_tags_are_decode_errors() {
+        for tag in [
+            "session_moved",
+            "session_permission_set",
+            "session_share_set",
+            "session_share_cleared",
+            "message_deleted",
+            "channel_left",
+            "future_event",
+        ] {
+            let payload = format!(r#"{{"type":"{tag}"}}"#);
+            let error = serde_json::from_str::<Event>(&payload).unwrap_err();
+            assert!(error.to_string().contains(tag), "{error}");
+            let envelope = format!(r#"{{"seq":7,"ts_millis":1,"event":{payload}}}"#);
+            assert!(serde_json::from_str::<Envelope>(&envelope).is_err());
+        }
     }
 }

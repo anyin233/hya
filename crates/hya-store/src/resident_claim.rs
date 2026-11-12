@@ -27,9 +27,7 @@ impl SessionStore {
         rows.into_iter()
             .map(|row| {
                 let actor_id: Vec<u8> = row.try_get("actor_id")?;
-                decode_session_key(&actor_id).ok_or_else(|| {
-                    StoreError::ActorClaimData("invalid actor session key".to_string())
-                })
+                decode_session_key(&actor_id)
             })
             .collect()
     }
@@ -267,8 +265,7 @@ fn decode_claim(row: sqlx::sqlite::SqliteRow) -> Result<ActorClaim, StoreError> 
     let actor_id: Vec<u8> = row.try_get("actor_id")?;
     let epoch: i64 = row.try_get("epoch")?;
     let owner_run_id: Vec<u8> = row.try_get("owner_run_id")?;
-    let actor_id = decode_session_key(&actor_id)
-        .ok_or_else(|| StoreError::ActorClaimData("invalid actor session key".to_string()))?;
+    let actor_id = decode_session_key(&actor_id)?;
     let epoch = u64::try_from(epoch)
         .ok()
         .filter(|value| *value > 0)
