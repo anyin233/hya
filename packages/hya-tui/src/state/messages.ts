@@ -51,6 +51,7 @@ export interface MessageView {
   queued: boolean
   /** A compaction's summary system message (its text started with `compactedMarker`): a divider goes right before it. */
   compaction?: true
+  handoffGeneration?: string
   /** A notice drawn in the warning color (the pending-revert line, state/revert.ts). */
   tone?: "warning"
 }
@@ -140,7 +141,10 @@ function build(message: MessageInfo, fallback: Attribution, shell: string | unde
       ? { ...item, text: item.text.slice(compactedMarker.length).replace(/^\s*\n/, "") }
       : item)
   const notice = finishNotice(message)
-  const compaction = role === "system" && parts.some((part) => part.text?.text?.startsWith(compactedMarker))
+  const handoffGeneration = role === "system"
+    ? parts.map((part) => part.text?.text?.match(/^HYA_COMPACTED_CONTEXT\nPRIOR HANDOFF \(generation (\d+)\)(?:\n|$)/)?.[1]).find((generation) => generation !== undefined)
+    : undefined
+  const compaction = handoffGeneration === undefined && role === "system" && parts.some((part) => part.text?.text?.startsWith(compactedMarker))
   return {
     id: message.id,
     role,
@@ -151,6 +155,7 @@ function build(message: MessageInfo, fallback: Attribution, shell: string | unde
     streaming,
     queued: false,
     ...(compaction ? { compaction: true as const } : {}),
+    ...(handoffGeneration !== undefined ? { handoffGeneration } : {}),
   }
 }
 
@@ -236,8 +241,8 @@ export function dividerView(divider: { id: string; text: string }): MessageView 
 function withDividers(views: MessageView[], dividers: AppState["dividers"]): MessageView[] {
   const anchored = new Set(dividers.flatMap((divider) => divider.beforeMessageId ? [divider.beforeMessageId] : []))
   const history = views
-    .filter((view) => view.compaction && !anchored.has(view.id))
-    .map((view) => ({ id: `compaction-${view.id}`, text: historyCompactionText, beforeMessageId: view.id }))
+    .filter((view) => (view.compaction || view.handoffGeneration !== undefined) && !anchored.has(view.id))
+    .map((view) => ({ id: `${view.compaction ? "compaction" : "handoff"}-${view.id}`, text: view.handoffGeneration !== undefined ? `resumed from handoff (generation ${view.handoffGeneration})` : historyCompactionText, beforeMessageId: view.id }))
   if (history.length) dividers = [...history, ...dividers]
   if (!dividers.length) return views
   const result = [...views]
