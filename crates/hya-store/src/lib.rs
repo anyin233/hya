@@ -67,7 +67,7 @@ pub use paths::user_cache_dir;
 pub use permission::SavedPermission;
 pub use project::{Project, ProjectSummary, normalize_project_path};
 pub use recovery::{INTERRUPTED_REASON, InterruptedTurnRecovery};
-pub use resident_claim::RecoveredActorClaim;
+pub use resident_claim::{RecoveredActorClaim, ResidentWorkPrompt};
 pub use workflow::{WorkflowAdmissionOutcome, WorkflowSelectionOutcome};
 
 struct RuntimeOwnerState {

@@ -238,7 +238,7 @@ async fn has_quiesced_notice(engine: &SessionEngine, root: SessionId) -> bool {
         .messages
         .iter()
         .any(|message| {
-            matches!(message.role, Role::System)
+            matches!(message.role, Role::User)
                 && message.parts.iter().any(|part| {
                     matches!(part, PartProjection::Text { text, .. } if text.contains("TEAM QUIESCED"))
                 })
@@ -270,21 +270,21 @@ where
     false
 }
 
-/// Replay position of the TEAM QUIESCED system notice text.
-fn system_notice_seq(events: &[Envelope], session: SessionId) -> Option<usize> {
-    let mut system_messages = HashSet::new();
+/// Replay position of the TEAM QUIESCED owned prompt text.
+fn synthesis_prompt_seq(events: &[Envelope], session: SessionId) -> Option<usize> {
+    let mut prompts = HashSet::new();
     for (index, envelope) in events.iter().enumerate() {
         match &envelope.event {
             Event::MessageStarted {
                 session: s,
                 message,
-                role: Role::System,
+                role: Role::User,
                 ..
             } if *s == session => {
-                system_messages.insert(*message);
+                prompts.insert(*message);
             }
             Event::TextDelta { message, delta, .. }
-                if system_messages.contains(message) && delta.contains("TEAM QUIESCED") =>
+                if prompts.contains(message) && delta.contains("TEAM QUIESCED") =>
             {
                 return Some(index);
             }
@@ -415,7 +415,7 @@ async fn quiescence_wake_queues_behind_the_leads_active_turn() {
     );
     let events = engine.replay(root).await.unwrap();
     assert_eq!(max_open_assistant(&events, root), 1);
-    let notice = system_notice_seq(&events, root).expect("notice seq");
+    let notice = synthesis_prompt_seq(&events, root).expect("notice seq");
     let first_finish = first_assistant_finish_seq(&events, root).expect("first finish");
     assert!(
         notice > first_finish,

@@ -1272,6 +1272,19 @@ impl TeamActor {
             if cancel.is_cancelled() {
                 return Ok(TurnOutcome::NotStarted);
             }
+            if inbox_len > cursor {
+                self.engine
+                    .emit_for_actor(
+                        claim.as_ref(),
+                        self.root,
+                        Event::MailConsumed {
+                            session: self.root,
+                            handle: handle.clone(),
+                            through: inbox_len as u64,
+                        },
+                    )
+                    .await?;
+            }
 
             let mut st = self.lock();
             if let Some(slot) = st
@@ -1309,31 +1322,56 @@ impl TeamActor {
         } else {
             "working".to_string()
         };
-        if let Some(claim) = claim.as_ref() {
-            self.engine
-                .commit_resident_mutation(
-                    claim,
-                    self.root,
-                    vec![
-                        Event::ResidentWorkStarted {
-                            session: self.root,
-                            actor_session: session,
-                            handle: handle.clone(),
-                            epoch: claim.epoch,
-                            inbox_through: u64::try_from(inbox_len).unwrap_or(u64::MAX),
-                        },
-                        Event::AgentActivityChanged {
-                            session: self.root,
-                            handle: handle.clone(),
-                            status: RosterStatus::Busy,
-                            current_task: Some(task_label),
-                        },
-                    ],
-                )
-                .await?;
+        let mut sections = Vec::new();
+        if synth && is_main {
+            sections.push(SYNTHESIS_DIRECTIVE.to_string());
+        }
+        sections.extend(
+            new_mail
+                .iter()
+                .map(|(from, body)| format!("[mail from {from}] {body}")),
+        );
+        let text = if sections.is_empty() {
+            String::new()
         } else {
-            self.record_activity(None, handle.clone(), RosterStatus::Busy, Some(task_label))
-                .await?;
+            // Hooks see the whole wake before any delivery or consumption commits.
+            self.engine
+                .user_text_after_hooks(
+                    &binding,
+                    agent.name.as_str(),
+                    session,
+                    sections.join("\n\n"),
+                )
+                .await
+        };
+        if cancel.is_cancelled() {
+            return Err(CoreError::Cancelled);
+        }
+        let prompt = match initial_prompt {
+            Some(message) => hya_store::ResidentWorkPrompt::Admitted {
+                message,
+                append: text,
+            },
+            None => hya_store::ResidentWorkPrompt::Text(text),
+        };
+        let (admitted_prompt, envelopes) = self
+            .engine
+            .store()
+            .begin_work(
+                claim.as_ref(),
+                self.root,
+                &handle,
+                u64::try_from(inbox_len).unwrap_or(u64::MAX),
+                prompt,
+                task_label,
+            )
+            .await?;
+        self.engine.update_session_channel_policy(
+            session,
+            channel_policy.snapshot_for(agent.name.as_str()),
+        );
+        for envelope in envelopes {
+            self.engine.publish_envelope(envelope);
         }
         if !self.owns_slot(session, claim.as_ref()) {
             return Ok(TurnOutcome::NotStarted);
@@ -1341,58 +1379,8 @@ impl TeamActor {
         if !is_main {
             self.mark_member_running(session, claim.as_ref()).await;
         }
-        // Harness heartbeat at the turn boundary: liveness is visible the
-        // moment work starts, before any engine event lands on the bus.
         self.heartbeat_turn_start(session, claim.as_ref(), &handle)
             .await;
-        if synth && is_main {
-            match claim.as_ref() {
-                Some(claim) => {
-                    self.engine
-                        .inject_system_message_for_actor(
-                            claim,
-                            session,
-                            SYNTHESIS_DIRECTIVE.to_string(),
-                        )
-                        .await?;
-                }
-                None => {
-                    self.engine
-                        .inject_system_message(session, SYNTHESIS_DIRECTIVE.to_string())
-                        .await?;
-                }
-            }
-        }
-        let mut admitted_prompt = initial_prompt;
-        for (from, body) in &new_mail {
-            if !self.owns_slot(session, claim.as_ref()) {
-                return Ok(TurnOutcome::NotStarted);
-            }
-            let prompt = format!("[mail from {from}] {body}");
-            admitted_prompt = Some(match claim.as_ref() {
-                Some(claim) => {
-                    self.engine
-                        .admit_user_prompt_for_actor_with_binding(
-                            claim,
-                            session,
-                            prompt,
-                            &binding,
-                            agent.name.as_str(),
-                        )
-                        .await?
-                }
-                None => {
-                    self.engine
-                        .admit_user_prompt_with_binding(
-                            session,
-                            prompt,
-                            &binding,
-                            agent.name.as_str(),
-                        )
-                        .await?
-                }
-            });
-        }
         // Advance the cursor so a follow-up turn never re-injects the same mail.
         {
             let mut st = self.lock();
@@ -1415,7 +1403,7 @@ impl TeamActor {
                         &agent,
                         (binding, agents, resources, Arc::clone(&sidecar_tools)),
                         TurnRequestContext::new(cancel.clone(), &[], guidance, Some(claim), route)
-                            .with_admitted_prompt(admitted_prompt)
+                            .with_admitted_prompt(Some(admitted_prompt))
                             .with_lease(lease),
                     )
                     .await?
@@ -1427,7 +1415,7 @@ impl TeamActor {
                         &agent,
                         (binding, agents, resources, Arc::clone(&sidecar_tools)),
                         TurnRequestContext::new(cancel.clone(), &[], guidance, None, route)
-                            .with_admitted_prompt(admitted_prompt)
+                            .with_admitted_prompt(Some(admitted_prompt))
                             .with_lease(lease),
                     )
                     .await?
@@ -1439,7 +1427,7 @@ impl TeamActor {
                         &agent,
                         binding,
                         TurnRequestContext::new(cancel.clone(), &[], guidance, Some(claim), route)
-                            .with_admitted_prompt(admitted_prompt)
+                            .with_admitted_prompt(Some(admitted_prompt))
                             .with_lease(lease),
                     )
                     .await?
@@ -1451,7 +1439,7 @@ impl TeamActor {
                         &agent,
                         binding,
                         TurnRequestContext::new(cancel, &[], guidance, None, route)
-                            .with_admitted_prompt(admitted_prompt)
+                            .with_admitted_prompt(Some(admitted_prompt))
                             .with_lease(lease),
                     )
                     .await?
@@ -1606,32 +1594,36 @@ impl TeamActor {
                     .get_mut(&session)
                     .filter(|slot| slot.claim == claim)
                 {
-                    let (kind, role) = recipient_channel_role(&projection, to, &slot.handle, from);
-                    // Harness mail (leader-failed notice) is a control message:
-                    // it bypasses the channel policy.
-                    let allowed = from == scope::HARNESS_HANDLE
-                        || ChannelPolicy::from_binding(&slot.binding).is_ok_and(|policy| {
+                    let inbox = projection
+                        .team
+                        .inboxes
+                        .get(&slot.handle)
+                        .map_or(&[][..], Vec::as_slice);
+                    let inbox_len = inbox.len();
+                    let durable = projection.team.roster.get(&slot.handle).map_or(0, |entry| {
+                        usize::try_from(entry.resident_cursor).unwrap_or(usize::MAX)
+                    });
+                    let cursor = slot.cursor.max(durable);
+                    let allowed = ChannelPolicy::from_binding(&slot.binding).is_ok_and(|policy| {
+                        inbox.iter().skip(cursor).any(|mail| {
+                            if mail.from == scope::HARNESS_HANDLE {
+                                return true;
+                            }
+                            let (kind, role) = recipient_channel_role(
+                                &projection,
+                                &mail.to,
+                                &slot.handle,
+                                &mail.from,
+                            );
                             resident_delivery_allowed(&policy, slot.agent.name.as_str(), kind, role)
-                        });
+                        })
+                    });
                     if !allowed {
-                        let inbox_len = projection
-                            .team
-                            .inboxes
-                            .get(&slot.handle)
-                            .map_or(0, |inbox| inbox.len());
-                        if !slot.pending && inbox_len == slot.cursor.saturating_add(1) {
+                        if !slot.pending && inbox_len > cursor {
                             consumed.push((session, slot.claim, slot.handle.clone(), inbox_len));
                         }
                         continue;
                     }
-                    let inbox_len = projection
-                        .team
-                        .inboxes
-                        .get(&slot.handle)
-                        .map_or(0, Vec::len);
-                    let durable = projection.team.roster.get(&slot.handle).map_or(0, |entry| {
-                        usize::try_from(entry.resident_cursor).unwrap_or(usize::MAX)
-                    });
                     if inbox_len > slot.cursor.max(durable) {
                         slot.pending = true;
                         slot.notify.notify_one();

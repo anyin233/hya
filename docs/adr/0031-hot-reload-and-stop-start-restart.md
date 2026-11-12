@@ -135,8 +135,9 @@ restored turn while its sidecar is starting prevents the next
 
 A resident mail wake of the root lead also carries the id of the user-role
 prompt it admits. Stopping it during binding therefore creates the same
-shutdown pair and restore row. A synthesis-only wake admits only a system
-message and claims no user prompt; child sessions still receive no restore row.
+shutdown pair and restore row. A synthesis-only wake also admits and owns one
+user prompt, so stopping it during binding records the same shutdown pair and
+restore row. Child sessions still receive no restore row.
 
 The server prepares a turn first (agent, guidance, external directories,
 attachment checks) and commits nothing until preparation succeeded; a failed
