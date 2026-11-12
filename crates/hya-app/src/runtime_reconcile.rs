@@ -1686,6 +1686,248 @@ for line in sys.stdin:
         Ok(())
     }
 
+    struct HookedSidecar;
+
+    #[async_trait]
+    impl hya_core::BoundSidecarFactory for HookedSidecar {
+        async fn start(
+            &self,
+            _: hya_core::SidecarStart,
+        ) -> Result<Box<dyn hya_core::SidecarHandle>, hya_core::CoreError> {
+            Ok(Box::new(HookedSidecar))
+        }
+    }
+
+    #[async_trait]
+    impl hya_core::SidecarHandle for HookedSidecar {
+        async fn ready(&mut self) -> Result<(), hya_core::CoreError> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> Result<(), hya_core::CoreError> {
+            Ok(())
+        }
+
+        fn hook_dispatcher(&self) -> Option<Arc<dyn hya_core::HookDispatcher>> {
+            Some(Arc::new(hya_core::hooks::NoopHookHost))
+        }
+    }
+
+    async fn assert_global_events_with_child_sidecar(resident: bool) -> anyhow::Result<()> {
+        use hya_core::{AgentSpec, CreateSession, MemberSpec, ResidentSupervisor, SessionEngine};
+        use hya_proto::{Event, FinishCause, MemberId, ModelRef, Role, SessionKind};
+        use std::time::Duration;
+        use tokio_util::sync::CancellationToken;
+
+        let h = RefreshHarness::new().await?;
+        let events = h.root.join("events.log");
+        std::fs::write(
+            h.root.join("global.py"),
+            format!(
+                r#"import json,sys
+for line in sys.stdin:
+ r=json.loads(line)
+ if r.get('method')=='event':
+  with open({}, 'a') as f: f.write(json.dumps(r['params']['envelope'])+'\n')
+ if 'id' in r:
+  result={{'protocol_version':1,'plugin':{{'id':'global','version':'1.0.0','kind':'rust'}},'hooks':[{{'name':'event'}}]}} if r.get('method')=='initialize' else {{}}
+  print(json.dumps({{'jsonrpc':'2.0','id':r['id'],'result':result}}),flush=True)
+"#,
+                serde_json::to_string(&events)?
+            ),
+        )?;
+        h.config(&["global"])?;
+        h.bind().await?;
+        let prepared = hya_bundle::prepare_package(hya_bundle::BundleSource::new(
+            "child",
+            vec![hya_bundle::SourceFile::new(
+                "bundle.hya.md",
+                "---\nkind: AgentBundle\nidentity: { id: acme/child, version: 1.0.0, publisher: acme }\nagent: { id: hooked-child, role: subagent }\n---\nChild prompt.\n",
+            )],
+        ))?;
+        let runtime = h.engine.runtime_registry().clone();
+        let catalog = Arc::new(AgentCatalog::new(Arc::new(
+            BundleCatalog::from_verified_catalogs(&[&prepared])?,
+        ))?);
+        runtime.refresh(|candidate| {
+            candidate.replace_catalog(catalog);
+            Ok(())
+        })?;
+        let (permission, _) = hya_tool::PermissionPlane::new(hya_tool::PermissionRules::default());
+        let engine = Arc::new(SessionEngine::new(
+            hya_store::SessionStore::connect_memory().await?,
+            Arc::new(
+                hya_provider::ProviderRouter::new()
+                    .with(Arc::new(hya_provider::FakeProvider::scripted(Vec::new()))),
+            ),
+            runtime,
+            permission,
+            hya_core::EventBus::default(),
+        ));
+        let mut live = engine.bus().subscribe();
+        let root_agent = AgentSpec {
+            name: AgentName::new("hya-main"),
+            model: ModelRef::new("fake"),
+            system_prompt: String::new(),
+            workdir: h.root.clone(),
+            reasoning: None,
+        };
+        let root = engine
+            .create(CreateSession {
+                parent: None,
+                agent: root_agent.name.clone(),
+                model: root_agent.model.clone(),
+                workdir: h.root.display().to_string(),
+                project: None,
+                kind: SessionKind::Temporary,
+            })
+            .await?;
+        engine.admit_user_prompt(root, "root prompt".into()).await?;
+        engine
+            .run_turn(root, &root_agent, CancellationToken::new())
+            .await?;
+        let child_agent = AgentSpec {
+            name: AgentName::new("hooked-child"),
+            ..root_agent
+        };
+        let binding = engine.bind_runtime(&h.root)?;
+        let agents = engine.agent_roster_for_binding(&binding, "hooked-child")?;
+        let resources = engine.agent_resource_policy_for_binding(&binding, "hooked-child")?;
+        let child = if resident {
+            let supervisor = ResidentSupervisor::start(engine.clone());
+            let (child, handle) = supervisor
+                .spawn_resident(
+                    root,
+                    child_agent,
+                    (binding, agents, resources, Some(Arc::new(HookedSidecar))),
+                    "child prompt".into(),
+                    None,
+                    None,
+                )
+                .await?;
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let projection = engine.read_projection(child).await?;
+                    if projection
+                        .session
+                        .messages
+                        .iter()
+                        .any(|m| m.role == Role::Assistant)
+                        && !engine.turn_active(child)
+                    {
+                        return Ok::<_, anyhow::Error>(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await??;
+            engine
+                .mail_send(
+                    root,
+                    hya_proto::MailEndpoint::Handle(handle),
+                    hya_proto::MailKind::Message,
+                    "next child prompt".into(),
+                )
+                .await?;
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let projection = engine.read_projection(child).await?;
+                    if projection
+                        .session
+                        .messages
+                        .iter()
+                        .filter(|m| m.role == Role::Assistant)
+                        .count()
+                        >= 2
+                        && !engine.turn_active(child)
+                    {
+                        return Ok::<_, anyhow::Error>(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await??;
+            supervisor
+                .drain(FinishCause::Shutdown, Duration::from_secs(2))
+                .await;
+            child
+        } else {
+            let results = hya_core::run_team(
+                engine.clone(),
+                root,
+                vec![MemberSpec {
+                    id: MemberId::new(),
+                    agent: child_agent,
+                    binding,
+                    agents,
+                    resources: Some(resources),
+                    guidance: None,
+                    directive: "child prompt".into(),
+                    tool_call: None,
+                    description: String::new(),
+                    session: None,
+                    sidecar_factory: Some(Arc::new(HookedSidecar)),
+                }],
+                CancellationToken::new(),
+            )
+            .await;
+            assert_eq!(
+                results[0].status,
+                hya_core::MemberStatus::Done,
+                "{results:?}"
+            );
+            results[0].session.parse()?
+        };
+        // A final notification is a queue barrier for this plugin's event worker.
+        engine.set_title(root, "event barrier".into()).await?;
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if std::fs::read_to_string(&events)
+                    .unwrap_or_default()
+                    .contains("event barrier")
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+        let delivered = std::fs::read_to_string(&events)?
+            .lines()
+            .map(serde_json::from_str::<Value>)
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut expected = Vec::new();
+        while let Ok(envelope) = live.try_recv() {
+            expected.push(envelope);
+        }
+        assert!(
+            expected.iter().any(
+                |e| matches!(e.event, Event::SessionCreated { session, .. } if session == root)
+            )
+        );
+        assert!(expected.iter().any(|e| matches!(e.event, Event::MessageStarted { session, role: Role::User, .. } if session == child)));
+        assert!(expected.iter().any(|e| matches!(e.event, Event::MessageStarted { session, role: Role::Assistant, .. } if session == child)));
+        for envelope in expected {
+            let value = serde_json::to_value(&envelope)?;
+            assert_eq!(
+                delivered.iter().filter(|e| **e == value).count(),
+                1,
+                "every envelope exactly once: {value}; delivered={delivered:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hot_reload_global_events_include_subagent_sidecar_preturn() -> anyhow::Result<()> {
+        assert_global_events_with_child_sidecar(false).await
+    }
+
+    #[tokio::test]
+    async fn hot_reload_global_events_include_resident_sidecar_preturn() -> anyhow::Result<()> {
+        assert_global_events_with_child_sidecar(true).await
+    }
+
     #[tokio::test]
     async fn hot_reload_removed_global_plugin_stops_despite_idle_sessions() -> anyhow::Result<()> {
         let h = RefreshHarness::new().await?;

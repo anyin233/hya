@@ -510,6 +510,81 @@ async fn a_project_bundle_process_exits_once_its_scope_is_dropped() {
 }
 
 #[tokio::test]
+async fn shadowed_project_bundle_processes_never_start_or_report_errors() {
+    for same_id in [true, false] {
+        let state = temp_path("shadowed-state");
+        let first = temp_path("shadowed-first");
+        let second = temp_path("shadowed-second");
+        write_project_bundle_in(
+            &first,
+            "winner",
+            "acme/shared",
+            Some(if same_id { "winner" } else { "shared" }),
+            "FIRST",
+        );
+        let loser_id = if same_id {
+            "acme/shared"
+        } else {
+            "other/shared"
+        };
+        write_project_process(&second, "loser", loser_id);
+        let marker = second.join("started");
+        std::fs::write(
+            second.join(".hya/bundles/loser/runtime.py"),
+            format!(
+                "from pathlib import Path\nPath({:?}).touch()\nraise SystemExit(1)\n",
+                marker.to_str().unwrap()
+            ),
+        )
+        .unwrap();
+        let h = harness(&state).await;
+        let scope = project(&[&first, &second]);
+        let binding = h.bind(&scope).await;
+        assert_eq!(prompt_of(&binding, "winner-agent"), "FIRST");
+        let refreshed = h.engine.refresh_bundles(&scope, &first).await.unwrap();
+        assert!(refreshed.errors.is_empty(), "{:?}", refreshed.errors);
+        assert!(!marker.exists(), "a shadowed process must never start");
+        // Even invalid resources/config in the ignored directory are irrelevant.
+        std::fs::remove_file(second.join(".hya/bundles/loser/tool.json")).unwrap();
+        std::fs::write(second.join(".hya/bundles/loser/config.yml"), "[").unwrap();
+        let manifest = second.join(".hya/bundles/loser/bundle.yaml");
+        let text = std::fs::read_to_string(&manifest).unwrap();
+        std::fs::write(manifest, text.replace("version: 1.0.0", "version: []")).unwrap();
+        let refreshed = h.engine.refresh_bundles(&scope, &first).await.unwrap();
+        assert!(refreshed.errors.is_empty(), "{:?}", refreshed.errors);
+        assert!(!marker.exists());
+    }
+}
+
+#[tokio::test]
+async fn a_project_bundle_that_becomes_shadowed_releases_its_process() {
+    let state = temp_path("new-shadow-state");
+    let first = temp_path("new-shadow-first");
+    let second = temp_path("new-shadow-second");
+    write_project_process(&second, "loser", "acme/shared");
+    let h = harness(&state).await;
+    let scope = project(&[&first, &second]);
+    let binding = h.bind(&scope).await;
+    let pid = tool_pid(&binding, "shared__echo");
+    assert!(running(pid));
+    drop(binding);
+
+    write_project_bundle(&first, "winner", "acme/shared", "FIRST");
+    let refreshed = h.engine.refresh_bundles(&scope, &first).await.unwrap();
+    assert!(refreshed.errors.is_empty(), "{:?}", refreshed.errors);
+    assert_eq!(prompt_of(&refreshed.binding, "winner-agent"), "FIRST");
+    assert!(
+        wait_until_exited(pid).await,
+        "newly shadowed process {pid} must exit"
+    );
+
+    std::fs::remove_dir_all(first.join(".hya/bundles/winner")).unwrap();
+    let unshadowed = h.engine.refresh_bundles(&scope, &first).await.unwrap();
+    assert!(unshadowed.errors.is_empty(), "{:?}", unshadowed.errors);
+    assert_ne!(tool_pid(&unshadowed.binding, "shared__echo"), pid);
+}
+
+#[tokio::test]
 async fn an_installed_bundle_process_is_shared_across_scopes() {
     let state = temp_path("state");
     let root_a = temp_path("shared-a");

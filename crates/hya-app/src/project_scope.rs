@@ -141,6 +141,8 @@ impl ProjectScopeRefresh {
             changed |= !keep && record.published.is_some();
             keep
         });
+        let mut ids = BTreeSet::new();
+        let mut namespaces = BTreeSet::new();
         for dir in &dirs {
             let record = state.bundles.entry(dir.clone()).or_insert(BundleRecord {
                 enabled: None,
@@ -148,6 +150,28 @@ impl ProjectScopeRefresh {
                 published: None,
                 error: None,
             });
+            let identity = bundle_manifest_identity(dir);
+            let declared = identity
+                .as_ref()
+                .ok()
+                .map(|(id, namespace)| (id.as_str(), namespace.as_str()));
+            let retained = record.published.as_ref().map(|published| {
+                let bundle = &published.catalog.bundles()[0];
+                (bundle.identity().id.as_str(), bundle.namespace())
+            });
+            if let Some((id, namespace)) = declared.or(retained) {
+                if ids.contains(id) || namespaces.contains(namespace) {
+                    changed |= record.published.take().is_some();
+                    record.attempted = None;
+                    record.enabled = None;
+                    record.error = None;
+                    continue;
+                }
+                if !base.disabled.contains(id) {
+                    ids.insert(id.to_string());
+                    namespaces.insert(namespace.to_string());
+                }
+            }
             let enabled = record.published.as_ref().map(|published| {
                 !base
                     .disabled
@@ -189,6 +213,13 @@ impl ProjectScopeRefresh {
             }
             if let Some(error) = &record.error {
                 errors.push(format!("project bundle {}: {error}", dir.display()));
+            }
+            if let Some(published) = &record.published
+                && published.enabled
+            {
+                let bundle = &published.catalog.bundles()[0];
+                ids.insert(bundle.identity().id.clone());
+                namespaces.insert(bundle.namespace().to_string());
             }
         }
         if !changed {
@@ -330,6 +361,47 @@ impl ProjectScopeRefresh {
             models,
         })
     }
+}
+
+fn bundle_manifest_identity(dir: &std::path::Path) -> Result<(String, String), CoreError> {
+    #[derive(serde::Deserialize)]
+    struct Identity {
+        id: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Manifest {
+        identity: Identity,
+        namespace: Option<String>,
+    }
+
+    let text = match std::fs::read_to_string(dir.join("bundle.yaml")) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::read_to_string(dir.join("bundle.hya.md"))
+        }
+        result => result,
+    }
+    .map_err(|error| CoreError::Invalid(error.to_string()))?;
+    // Only read the first YAML document: Markdown bundles put their manifest
+    // before the closing frontmatter delimiter and prompt body.
+    let document = serde_norway::Deserializer::from_str(&text)
+        .next()
+        .ok_or_else(|| CoreError::Invalid("empty bundle manifest".into()))?;
+    let manifest = <Manifest as serde::Deserialize>::deserialize(document)
+        .map_err(|error| CoreError::Invalid(error.to_string()))?;
+    let namespace = manifest
+        .namespace
+        .filter(|namespace| !namespace.is_empty())
+        .unwrap_or_else(|| {
+            manifest
+                .identity
+                .id
+                .rsplit('/')
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        });
+    Ok((manifest.identity.id, namespace))
 }
 
 fn project_bundle_dirs(
