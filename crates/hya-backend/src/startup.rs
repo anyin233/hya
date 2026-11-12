@@ -84,7 +84,7 @@ pub(crate) struct HeadlessSession {
     pub(crate) session: SessionId,
     pub(crate) evaluator_router: ProviderRouter,
     pub(crate) evaluator_model: String,
-    _responder: RejectResponder,
+    responder: RejectResponder,
 }
 
 struct RejectResponder(tokio::task::JoinHandle<()>);
@@ -96,6 +96,24 @@ impl Drop for RejectResponder {
 }
 
 impl HeadlessSession {
+    pub(crate) async fn run<T>(
+        mut self,
+        command: impl std::ops::AsyncFnOnce(&mut Self) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        let result = command(&mut self).await;
+        let shutdown = self.shutdown().await;
+        let output = result?;
+        shutdown?;
+        Ok(output)
+    }
+
+    /// Stop permission intake before awaiting every runtime child, on both
+    /// successful and failed headless commands.
+    async fn shutdown(&mut self) -> anyhow::Result<()> {
+        self.responder.0.abort();
+        shutdown(&mut self.built).await
+    }
+
     pub(crate) async fn start(
         store: SessionStore,
         model: Option<String>,
@@ -112,43 +130,55 @@ impl HeadlessSession {
             evaluator_model,
             ..
         } = start(store, model, yolo, pure, Surface::Headless).await?;
-        let engine = built.engine();
-        let asks = built.take_asks().context("asks receiver missing")?;
-        let _ = built.take_questions();
-        let responder = RejectResponder(hya_app::permission::spawn_reject_responder(asks));
-        let session = if let Some(session) = session {
-            let projection = engine.read_projection(session).await?;
-            anyhow::ensure!(
-                projection.session.id.is_some(),
-                "workflow Session `{session}` was not found"
-            );
-            session
-        } else {
-            let project = crate::ensure_project_for_workdir(engine.store(), &agent.workdir).await?;
-            agent.name = hya_app::resolve_headless_agent_name(
-                &engine,
-                &agent.workdir,
-                None,
-                default_agent.as_deref(),
-            )
-            .await
-            .context("resolve default agent")?;
-            let model = if explicit_model {
-                agent.model.clone()
+        let prepared = async {
+            let engine = built.engine();
+            let asks = built.take_asks().context("asks receiver missing")?;
+            let _ = built.take_questions();
+            let responder = RejectResponder(hya_app::permission::spawn_reject_responder(asks));
+            let session = if let Some(session) = session {
+                let projection = engine.read_projection(session).await?;
+                anyhow::ensure!(
+                    projection.session.id.is_some(),
+                    "workflow Session `{session}` was not found"
+                );
+                session
             } else {
-                built.effective_root_model(&agent, &agent.workdir).await?
-            };
-            engine
-                .create(CreateSession {
-                    parent: None,
-                    agent: agent.name.clone(),
-                    model,
-                    workdir: agent.workdir.to_string_lossy().into_owned(),
-                    project: Some(project),
-                    kind: hya_proto::SessionKind::Project,
-                })
+                let project =
+                    crate::ensure_project_for_workdir(engine.store(), &agent.workdir).await?;
+                agent.name = hya_app::resolve_headless_agent_name(
+                    &engine,
+                    &agent.workdir,
+                    None,
+                    default_agent.as_deref(),
+                )
                 .await
-                .context("create session")?
+                .context("resolve default agent")?;
+                let model = if explicit_model {
+                    agent.model.clone()
+                } else {
+                    built.effective_root_model(&agent, &agent.workdir).await?
+                };
+                engine
+                    .create(CreateSession {
+                        parent: None,
+                        agent: agent.name.clone(),
+                        model,
+                        workdir: agent.workdir.to_string_lossy().into_owned(),
+                        project: Some(project),
+                        kind: hya_proto::SessionKind::Project,
+                    })
+                    .await
+                    .context("create session")?
+            };
+            Ok::<_, anyhow::Error>((session, responder))
+        }
+        .await;
+        let (session, responder) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                shutdown(&mut built).await?;
+                return Err(error);
+            }
         };
         Ok(Self {
             built,
@@ -156,7 +186,79 @@ impl HeadlessSession {
             session,
             evaluator_router,
             evaluator_model,
-            _responder: responder,
+            responder,
         })
+    }
+}
+
+async fn shutdown(built: &mut BuiltSessionEngine) -> anyhow::Result<()> {
+    built
+        .shutdown()
+        .await
+        .context("shutdown headless runtime")?;
+    let engine = built.engine();
+    engine
+        .store()
+        .release_runtime_owner(engine.runtime_owner())?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn headless_command_errors_still_stop_the_responder_and_runtime() -> anyhow::Result<()> {
+        if std::env::var_os("HYA_TEST_SHUTDOWN_CHILD").is_none() {
+            let root =
+                std::env::temp_dir().join(format!("hya-headless-shutdown-{}", std::process::id()));
+            std::fs::create_dir_all(&root)?;
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "startup::tests::headless_command_errors_still_stop_the_responder_and_runtime",
+                    "--nocapture",
+                ])
+                .env_clear()
+                .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+                .env("HOME", &root)
+                .env("XDG_CONFIG_HOME", root.join("config"))
+                .env("HYA_CONFIG_HOME", root.join("hya"))
+                .env("HYA_TEST_SHUTDOWN_CHILD", "1")
+                .current_dir(&root)
+                .output()?;
+            std::fs::remove_dir_all(&root)?;
+            anyhow::ensure!(
+                output.status.success(),
+                "shutdown child failed: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Ok(());
+        }
+        let headless = super::HeadlessSession::start(
+            hya_store::SessionStore::connect_memory().await?,
+            Some("hya/offline".into()),
+            false,
+            true,
+            None,
+        )
+        .await?;
+        let responder = headless.responder.0.abort_handle();
+        let engine = headless.built.engine();
+        let error = headless
+            .run(async |_| -> anyhow::Result<()> { anyhow::bail!("command failed") })
+            .await;
+        assert_eq!(
+            error.err().map(|error| error.to_string()).as_deref(),
+            Some("command failed")
+        );
+        assert!(
+            responder.is_finished(),
+            "responder must be stopped before cleanup returns"
+        );
+        assert!(
+            engine.draining().is_some(),
+            "runtime must have drained despite the command error"
+        );
+        Ok(())
     }
 }

@@ -171,95 +171,92 @@ async fn cmd_exec(
     json: bool,
     pure: bool,
 ) -> anyhow::Result<()> {
-    let mut headless =
-        startup::HeadlessSession::start(store, model_override, yolo, pure, None).await?;
-    let engine = headless.built.engine();
-    let session = headless.session;
-    let agent = &headless.agent;
-    let built = &mut headless.built;
-    // `--json` streams durable envelopes live from the event bus (db
-    // persistence is unchanged and per-event): an abnormally terminated run
-    // still leaves a usable partial trajectory on stdout.
-    let mut json_printer = json.then(|| {
-        let rx = engine.bus().subscribe();
-        let engine_for_stream = engine.clone();
-        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
-        let task = tokio::spawn(exec_stream::stream_until_done(
-            rx,
-            session,
-            done_rx,
-            move || {
-                let engine = engine_for_stream.clone();
-                async move { engine.replay(session).await.map_err(anyhow::Error::from) }
-            },
-            std::io::stdout(),
-        ));
-        (task, done_tx)
-    });
-    let prompt = engine
-        .admit_user_prompt(session, prompt)
-        .await
-        .context("admit prompt")?;
-    let cancel = CancellationToken::new();
-    let (turn, stop) = run_until_stopped(
-        built,
-        &cancel,
-        engine.run_turn_with_external_dirs_and_guidance(
-            session,
-            agent,
-            cancel.clone(),
-            &[],
-            None,
-            None,
-            Some(prompt),
-        ),
-    )
-    .await?;
-    // End of the run: nothing may keep streaming after `exec` returns. Every
-    // other in-flight turn (members, a deferred synthesis turn on the lead)
-    // is drained before the trajectory is flushed, so stdout and the log end
-    // on terminal events.
-    if stop.is_none() {
-        built
-            .drain(if turn.is_err() {
-                FinishCause::LeaderFailed
-            } else {
-                FinishCause::Shutdown
-            })
-            .await;
-    }
-    if let Some((task, done_tx)) = json_printer.take() {
-        let _ = done_tx.send(());
-        let printer = task
-            .await
-            .map_err(|e| anyhow::anyhow!("json stream task failed: {e}"))?
-            .context("stream json envelopes")?;
-        // Authoritative tail flush: anything the bus dropped or that was
-        // appended between the last broadcast and turn completion comes from
-        // the durable log, keeping stdout exactly equal to `tail-session`.
-        let envelopes = engine.replay(session).await.context("replay session")?;
-        let mut printer = printer;
-        for env in &envelopes {
-            printer.print(env, session).context("write json envelope")?;
-        }
-        printer.flush().context("flush json stream")?;
-    } else if turn.is_ok() {
-        let projection = engine
-            .read_projection(session)
-            .await
-            .context("read projection")?;
-        print!("{}", render_transcript(&projection));
-    }
-    let shutdown = built.shutdown().await.context("shutdown spawn supervisor");
-    if shutdown.is_ok() {
-        engine
-            .store()
-            .release_runtime_owner(engine.runtime_owner())?;
-    }
+    let headless = startup::HeadlessSession::start(store, model_override, yolo, pure, None).await?;
+    let (turn, stop) = headless
+        .run(async move |headless| {
+            let engine = headless.built.engine();
+            let session = headless.session;
+            let agent = &headless.agent;
+            let built = &mut headless.built;
+            // `--json` streams durable envelopes live from the event bus (db
+            // persistence is unchanged and per-event): an abnormally terminated run
+            // still leaves a usable partial trajectory on stdout.
+            let mut json_printer = json.then(|| {
+                let rx = engine.bus().subscribe();
+                let engine_for_stream = engine.clone();
+                let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+                let task = tokio::spawn(exec_stream::stream_until_done(
+                    rx,
+                    session,
+                    done_rx,
+                    move || {
+                        let engine = engine_for_stream.clone();
+                        async move { engine.replay(session).await.map_err(anyhow::Error::from) }
+                    },
+                    std::io::stdout(),
+                ));
+                (task, done_tx)
+            });
+            let prompt = engine
+                .admit_user_prompt(session, prompt)
+                .await
+                .context("admit prompt")?;
+            let cancel = CancellationToken::new();
+            let (turn, stop) = run_until_stopped(
+                built,
+                &cancel,
+                engine.run_turn_with_external_dirs_and_guidance(
+                    session,
+                    agent,
+                    cancel.clone(),
+                    &[],
+                    None,
+                    None,
+                    Some(prompt),
+                ),
+            )
+            .await?;
+            // End of the run: nothing may keep streaming after `exec` returns. Every
+            // other in-flight turn (members, a deferred synthesis turn on the lead)
+            // is drained before the trajectory is flushed, so stdout and the log end
+            // on terminal events.
+            if stop.is_none() {
+                built
+                    .drain(if turn.is_err() {
+                        FinishCause::LeaderFailed
+                    } else {
+                        FinishCause::Shutdown
+                    })
+                    .await;
+            }
+            if let Some((task, done_tx)) = json_printer.take() {
+                let _ = done_tx.send(());
+                let printer = task
+                    .await
+                    .map_err(|e| anyhow::anyhow!("json stream task failed: {e}"))?
+                    .context("stream json envelopes")?;
+                // Authoritative tail flush: anything the bus dropped or that was
+                // appended between the last broadcast and turn completion comes from
+                // the durable log, keeping stdout exactly equal to `tail-session`.
+                let envelopes = engine.replay(session).await.context("replay session")?;
+                let mut printer = printer;
+                for env in &envelopes {
+                    printer.print(env, session).context("write json envelope")?;
+                }
+                printer.flush().context("flush json stream")?;
+            } else if turn.is_ok() {
+                let projection = engine
+                    .read_projection(session)
+                    .await
+                    .context("read projection")?;
+                print!("{}", render_transcript(&projection));
+            }
+            Ok((turn, stop))
+        })
+        .await?;
     exit_if_stopped(stop);
     // Surface the turn error only after the stdout trajectory is complete.
     turn.context("run turn")?;
-    shutdown?;
     Ok(())
 }
 
@@ -343,68 +340,74 @@ async fn cmd_goal(
     yolo: bool,
     pure: bool,
 ) -> anyhow::Result<()> {
-    let mut headless =
+    let headless =
         startup::HeadlessSession::start(open_store("").await?, model_override, yolo, pure, None)
             .await?;
-    let engine = headless.built.engine();
-    let session = headless.session;
-    let agent = headless.agent.clone();
-    let evaluator_router = headless.evaluator_router.clone();
-    let evaluator_model = config::resolve_evaluator_model(
-        evaluator_model_flag.as_deref(),
-        None,
-        &headless.evaluator_model,
-    )
-    .to_string();
-    let binding = engine
-        .bind_root_runtime(&agent.workdir)
-        .await
-        .context("bind goal evaluator resources")?;
-    let built = &mut headless.built;
-    // Selection point (design §4.5): a registered `goal.evaluate` hook
-    // provider outranks the built-in evaluator. The probe is the trait
-    // capability probe (default false), so any dispatcher without the hook —
-    // or a selection that cannot confirm registration — fails open to the D7
-    // model evaluator instead of erroring startup.
-    let fallback: Arc<dyn GoalEvaluator> = Arc::new(
-        ModelGoalEvaluator::new(Arc::new(evaluator_router), ModelRef::new(&evaluator_model))
-            .with_system_prompt(
-                binding
-                    .bundle_skill_content("hya/goal-loop", "evaluator-prompt")
-                    .map(skill_prompt_body)
-                    .unwrap_or("You are an independent goal verifier. No tools."),
-            ),
-    );
-    let dispatcher = goal_loop_hook_chain(&binding, agent.name.as_str());
-    let evaluator: Arc<dyn GoalEvaluator> = if dispatcher.has_goal_evaluate() {
-        Arc::new(PluginGoalEvaluator::new(dispatcher).with_fallback(Arc::clone(&fallback)))
-    } else {
-        fallback
-    };
-    let caps = SafetyCaps {
-        max_iterations,
-        ..SafetyCaps::default()
-    };
-    let cancel = CancellationToken::new();
-    let (outcome, stop) = run_until_stopped(
-        built,
-        &cancel,
-        run_goal(
-            engine.clone(),
-            session,
-            agent,
-            goal,
-            evaluator,
-            caps,
-            cancel.clone(),
-        ),
-    )
-    .await?;
-    let shutdown = built.shutdown().await.context("shutdown spawn supervisor");
+    let (outcome, stop) = headless
+        .run(async move |headless| {
+            let engine = headless.built.engine();
+            let session = headless.session;
+            let agent = headless.agent.clone();
+            let evaluator_router = headless.evaluator_router.clone();
+            let evaluator_model = config::resolve_evaluator_model(
+                evaluator_model_flag.as_deref(),
+                None,
+                &headless.evaluator_model,
+            )
+            .to_string();
+            let binding = engine
+                .bind_root_runtime(&agent.workdir)
+                .await
+                .context("bind goal evaluator resources")?;
+            let built = &mut headless.built;
+            // Selection point (design §4.5): a registered `goal.evaluate` hook
+            // provider outranks the built-in evaluator. The probe is the trait
+            // capability probe (default false), so any dispatcher without the hook —
+            // or a selection that cannot confirm registration — fails open to the D7
+            // model evaluator instead of erroring startup.
+            let fallback: Arc<dyn GoalEvaluator> = Arc::new(
+                ModelGoalEvaluator::new(
+                    Arc::new(evaluator_router),
+                    ModelRef::new(&evaluator_model),
+                )
+                .with_system_prompt(
+                    binding
+                        .bundle_skill_content("hya/goal-loop", "evaluator-prompt")
+                        .map(skill_prompt_body)
+                        .unwrap_or("You are an independent goal verifier. No tools."),
+                ),
+            );
+            let dispatcher = goal_loop_hook_chain(&binding, agent.name.as_str());
+            let evaluator: Arc<dyn GoalEvaluator> = if dispatcher.has_goal_evaluate() {
+                Arc::new(PluginGoalEvaluator::new(dispatcher).with_fallback(Arc::clone(&fallback)))
+            } else {
+                fallback
+            };
+            let caps = SafetyCaps {
+                max_iterations,
+                ..SafetyCaps::default()
+            };
+            let cancel = CancellationToken::new();
+            let (outcome, stop) = run_until_stopped(
+                built,
+                &cancel,
+                run_goal(
+                    engine.clone(),
+                    session,
+                    agent,
+                    goal,
+                    evaluator,
+                    caps,
+                    cancel.clone(),
+                ),
+            )
+            .await?;
+            Ok((outcome, stop))
+        })
+        .await?;
     exit_if_stopped(stop);
     let outcome = outcome.context("run goal")?;
     println!("goal outcome: {outcome:?}");
-    shutdown?;
     Ok(())
 }
 
@@ -424,93 +427,84 @@ async fn cmd_loop(
     yolo: bool,
     pure: bool,
 ) -> anyhow::Result<()> {
-    let mut headless =
+    let headless =
         startup::HeadlessSession::start(open_store("").await?, model_override, yolo, pure, None)
             .await?;
-    let engine = headless.built.engine();
-    let session = headless.session;
-    let agent = headless.agent.clone();
-    let evaluator_router = headless.evaluator_router.clone();
-    let evaluator_model = config::resolve_evaluator_model(
-        evaluator_model_flag.as_deref(),
-        None,
-        &headless.evaluator_model,
-    )
-    .to_string();
-    let binding = engine
-        .bind_root_runtime(&agent.workdir)
-        .await
-        .context("bind loop evaluator resources")?;
-    let built = &mut headless.built;
-    let predicate = cli_args::build_loop_predicate(while_command, until_command, &agent.workdir)
-        .map_err(anyhow::Error::msg)
-        .context("resolve loop condition")?;
-    let loop_config = LoopConfig {
-        budget: cli_args::loop_budget(budget, max_iterations),
-        predicate,
-        ..LoopConfig::default()
-    };
-    // The engine-supplied `loop.should_stop` consult: registered plugin
-    // providers may force a legitimate stop; without registrations the
-    // dispatcher answers `None` and the gate falls through untouched.
-    let evaluator_dispatcher = goal_loop_hook_chain(&binding, agent.name.as_str());
-    let verifier_fallback: Arc<dyn hya_core::LoopVerifier> = Arc::new(
-        ModelLoopVerifier::new(Arc::new(evaluator_router.clone()), ModelRef::new(&evaluator_model))
-            .with_system_prompt(binding.bundle_skill_content("hya/goal-loop", "loop-verifier-prompt").map(skill_prompt_body).unwrap_or("You are an independent loop verifier. You have no stake in the work and no tools.")),
-    );
-    let planner_fallback: Arc<dyn hya_core::LoopPlanner> = Arc::new(
-        ModelLoopPlanner::new(Arc::new(evaluator_router), ModelRef::new(&evaluator_model))
-            .with_system_prompt(
-                binding
-                    .bundle_skill_content("hya/goal-loop", "loop-planner-prompt")
-                    .map(skill_prompt_body)
-                    .unwrap_or("You are an independent loop planner. No tools."),
-            ),
-    );
-    let should_stop = Arc::clone(&evaluator_dispatcher);
-    let cancel = CancellationToken::new();
-    let (outcome, stop) = run_until_stopped(
-        built,
-        &cancel,
-        run_loop(
-            engine.clone(),
-            session,
-            agent,
-            target,
-            Arc::new(HookLoopVerifier::new(
-                Arc::clone(&evaluator_dispatcher),
-                verifier_fallback,
-            )),
-            Arc::new(HookLoopPlanner::new(evaluator_dispatcher, planner_fallback)),
-            loop_config,
-            cancel.clone(),
-            Some(should_stop),
-        ),
-    )
-    .await?;
-    if stop.is_some() {
-        let _ = built.shutdown().await;
-        exit_if_stopped(stop);
-    }
-    let outcome = match outcome {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            let _ = built.shutdown().await;
-            return Err(error).context("run loop");
-        }
-    };
+    let (outcome, stop) = headless
+        .run(async move |headless| {
+            let engine = headless.built.engine();
+            let session = headless.session;
+            let agent = headless.agent.clone();
+            let evaluator_router = headless.evaluator_router.clone();
+            let evaluator_model = config::resolve_evaluator_model(
+                evaluator_model_flag.as_deref(),
+                None,
+                &headless.evaluator_model,
+            )
+            .to_string();
+            let binding = engine
+                .bind_root_runtime(&agent.workdir)
+                .await
+                .context("bind loop evaluator resources")?;
+            let built = &mut headless.built;
+            let predicate = cli_args::build_loop_predicate(while_command, until_command, &agent.workdir)
+                .map_err(anyhow::Error::msg)
+                .context("resolve loop condition")?;
+            let loop_config = LoopConfig {
+                budget: cli_args::loop_budget(budget, max_iterations),
+                predicate,
+                ..LoopConfig::default()
+            };
+            // The engine-supplied `loop.should_stop` consult: registered plugin
+            // providers may force a legitimate stop; without registrations the
+            // dispatcher answers `None` and the gate falls through untouched.
+            let evaluator_dispatcher = goal_loop_hook_chain(&binding, agent.name.as_str());
+            let verifier_fallback: Arc<dyn hya_core::LoopVerifier> = Arc::new(
+                ModelLoopVerifier::new(Arc::new(evaluator_router.clone()), ModelRef::new(&evaluator_model))
+                    .with_system_prompt(binding.bundle_skill_content("hya/goal-loop", "loop-verifier-prompt").map(skill_prompt_body).unwrap_or("You are an independent loop verifier. You have no stake in the work and no tools.")),
+            );
+            let planner_fallback: Arc<dyn hya_core::LoopPlanner> = Arc::new(
+                ModelLoopPlanner::new(Arc::new(evaluator_router), ModelRef::new(&evaluator_model))
+                    .with_system_prompt(
+                        binding
+                            .bundle_skill_content("hya/goal-loop", "loop-planner-prompt")
+                            .map(skill_prompt_body)
+                            .unwrap_or("You are an independent loop planner. No tools."),
+                    ),
+            );
+            let should_stop = Arc::clone(&evaluator_dispatcher);
+            let cancel = CancellationToken::new();
+            let (outcome, stop) = run_until_stopped(
+                built,
+                &cancel,
+                run_loop(
+                    engine.clone(),
+                    session,
+                    agent,
+                    target,
+                    Arc::new(HookLoopVerifier::new(
+                        Arc::clone(&evaluator_dispatcher),
+                        verifier_fallback,
+                    )),
+                    Arc::new(HookLoopPlanner::new(evaluator_dispatcher, planner_fallback)),
+                    loop_config,
+                    cancel.clone(),
+                    Some(should_stop),
+                ),
+            )
+            .await?;
+            Ok((outcome, stop))
+        })
+        .await?;
+    exit_if_stopped(stop);
+    let outcome = outcome.context("run loop")?;
     println!("loop outcome: {outcome:?}");
     if let RunOutcome::InvalidCondition { reason, .. } = &outcome {
         eprintln!(
             "warning: the loop condition itself is broken, so this is NOT a success: {reason}"
         );
-        let _ = built.shutdown().await;
         anyhow::bail!("loop ended on a broken condition; not a success");
     }
-    built
-        .shutdown()
-        .await
-        .context("shutdown spawn supervisor")?;
     Ok(())
 }
 

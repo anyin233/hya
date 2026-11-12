@@ -112,7 +112,7 @@ URIs are never locked.
 | `exec` | `--db`, else in-memory | Through the server: a new root session in the current directory, one prompt turn, the same stdout. `--model` sets the session's model, `--yolo` its permission mode. `--pure` exits 75. | Lock held for the run |
 | `workflow use`, `workflow state` | `--db`, else in-memory | Through the server (`/v1/sessions/{id}/workflow`) | Lock held for the command |
 | `workflow run` | `--db`, else in-memory | Through the server; a run without `--session` creates the session there. `--revision`, `--pure`, and `--yolo` exit 75 (no `/v1` field for them). | Lock held for the run |
-| `workflow list`, `workflow info` | Catalog only; no session store | Not affected | Not affected |
+| `workflow list`, `workflow info` | Catalog only; existing `--db` read-only for Project lookup | Read directly, no lock | Read directly, no lock |
 | `sessions archive`/`unarchive` | Durable default or `--db` | Through the server (`PATCH /v1/sessions/{id}`) | Lock held for the write |
 | `sessions` (list), `tail-session` | Durable default or `--db` | Read directly, never write, no lock | Read directly, no lock |
 | `-p` goal mode, `loop` | A private in-memory database per run | Not affected (`--db` is ignored) | Not affected |
@@ -142,6 +142,13 @@ permission asks and questions of its session tree, as it would in process.
   command polls the session's workflow state until the run ends. Stopping the
   command (Ctrl-C) does not stop the run on the server. Errors read `<code>:
   <message>` from the `/v1` error model.
+
+Daemon clients bypass environment proxies and allow 5 seconds to connect.
+Ordinary requests (session creation/read/update, turn admission/cancellation,
+event replay, interactions, and Workflow selection/run admission/state) have
+a 30-second request timeout. Turn waits and SSE streams have no request
+timeout; turn waits use the server's explicit `timeoutMs` deadline.
+An error without the structured `/v1` error body includes its HTTP status.
 
 ## Backend Command Catalog
 
@@ -192,9 +199,16 @@ hya --db sessions.db workflow state --session hysec_...
 ```
 
 `list` and `info` read the merged project, user, installed, and immutable
-first-party Workflow catalog directly from prepared data. They do not open a
-session database, create a Session, resolve providers, or start MCP/plugin
-processes. Their `--json` results remain the shared `WorkflowCommandResult`
+first-party Workflow catalog directly from prepared data. When `--db` exists,
+they open it read-only to resolve the registered Project containing the current
+directory and include every Project root in order, including project bundles.
+A missing database uses directory scope without creating a database or Project.
+Unreadable bundle sources produce warnings on stderr; readable sources remain
+available and inspection exits successfully. Inspection never creates a Session,
+migrates or locks the database, resolves providers, or starts MCP/plugin processes.
+For example, `hya --db sessions.db workflow list --json` from `src/` includes
+Workflows in the containing registered Project's other roots.
+The `--json` results remain the shared `WorkflowCommandResult`
 variants `List { workflows: WorkflowSummary[] }` and `Info { workflow: WorkflowInfo }`.
 `use` persists an exact source/revision identity
 in an existing Session and therefore requires `--session`. `state` also requires
@@ -1283,7 +1297,7 @@ reachability.
 
 ```sh
 hya sessions --db hya.db
-hya sessions --all            # archived root sessions too
+hya sessions --all            # include child sessions and archived sessions
 hya sessions --archived       # only archived root sessions
 hya sessions archive <session-id>
 hya sessions unarchive <session-id>

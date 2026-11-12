@@ -137,7 +137,7 @@ async fn update_through_server(
     session: SessionId,
     archived: bool,
 ) -> anyhow::Result<()> {
-    hya_sdk_v1::V1Sdk::new(url.trim_end_matches('/'), "")
+    hya_sdk_v1::V1Sdk::for_local_daemon(url.trim_end_matches('/'), "")?
         .update_session(hya_api::v1::UpdateSessionRequest {
             session: session.to_string(),
             archived: Some(archived),

@@ -70,6 +70,7 @@ pub struct V1Sdk {
     base: String,
     directory: String,
     http: reqwest::Client,
+    request_timeout: Option<Duration>,
 }
 
 impl V1Sdk {
@@ -80,7 +81,29 @@ impl V1Sdk {
             base: base_url.into(),
             directory: directory.into(),
             http: reqwest::Client::new(),
+            request_timeout: None,
         }
+    }
+
+    /// Build the CLI's loopback daemon client: no environment proxy, a
+    /// 5-second connect timeout, and a 30-second timeout for ordinary calls.
+    /// Turn waits and SSE streams have no request timeout.
+    ///
+    /// # Errors
+    /// Returns a transport error if the HTTP client cannot be built.
+    pub fn for_local_daemon(
+        base_url: impl Into<String>,
+        directory: impl Into<String>,
+    ) -> Result<Self, SdkError> {
+        Ok(Self {
+            base: base_url.into(),
+            directory: directory.into(),
+            http: reqwest::Client::builder()
+                .no_proxy()
+                .connect_timeout(Duration::from_secs(5))
+                .build()?,
+            request_timeout: Some(Duration::from_secs(30)),
+        })
     }
 
     /// The directory scope this client names in scoped calls' `directory`
@@ -97,12 +120,27 @@ impl V1Sdk {
         query: Option<String>,
         body: Option<&Req>,
     ) -> Result<Resp, SdkError> {
+        self.call_with_timeout(method, path, query, body, self.request_timeout)
+            .await
+    }
+
+    async fn call_with_timeout<Req: Serialize, Resp: DeserializeOwned>(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        query: Option<String>,
+        body: Option<&Req>,
+        timeout: Option<Duration>,
+    ) -> Result<Resp, SdkError> {
         let mut url = format!("{}{path}", self.base);
         if let Some(query) = query {
             url.push('?');
             url.push_str(&query);
         }
         let mut request = self.http.request(method, url);
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
+        }
         if let Some(body) = body {
             request = request.json(body);
         }
@@ -124,7 +162,9 @@ impl V1Sdk {
             }
             return Err(SdkError::Api {
                 code: status.as_u16().to_string(),
-                message: String::from_utf8_lossy(&bytes).into_owned(),
+                message: format!("{status}: {}", String::from_utf8_lossy(&bytes))
+                    .trim_end()
+                    .to_owned(),
             });
         }
         Ok(serde_json::from_slice(&bytes)?)
@@ -172,7 +212,10 @@ impl V1Sdk {
     pub async fn get_session(&self, session: &str) -> Result<pb::SessionInfo, SdkError> {
         self.call(
             reqwest::Method::GET,
-            &format!("/v1/sessions/{session}"),
+            &format!(
+                "/v1/sessions/{session}",
+                session = encode_component(session)
+            ),
             None,
             None::<&Value>,
         )
@@ -187,8 +230,13 @@ impl V1Sdk {
         &self,
         page: Option<pb::PageRequest>,
     ) -> Result<pb::ListSessionsResponse, SdkError> {
-        let query =
-            page.map(|page| format!("page.cursor={}&page.limit={}", page.cursor, page.limit));
+        let query = page.map(|page| {
+            format!(
+                "page.cursor={}&page.limit={}",
+                encode_component(&page.cursor),
+                page.limit
+            )
+        });
         self.call(reqwest::Method::GET, "/v1/sessions", query, None::<&Value>)
             .await
     }
@@ -351,7 +399,10 @@ impl V1Sdk {
         let response: pb::CreateTurnResponse = self
             .call(
                 reqwest::Method::POST,
-                &format!("/v1/sessions/{session}/turns"),
+                &format!(
+                    "/v1/sessions/{session}/turns",
+                    session = encode_component(session)
+                ),
                 None,
                 Some(&request),
             )
@@ -392,11 +443,16 @@ impl V1Sdk {
         timeout: Duration,
     ) -> Result<pb::TurnInfo, SdkError> {
         let timeout_ms = timeout.as_millis().min(600_000) as u64;
-        self.call(
+        self.call_with_timeout(
             reqwest::Method::POST,
-            &format!("/v1/sessions/{session}/turns/{turn}/wait"),
+            &format!(
+                "/v1/sessions/{session}/turns/{turn}/wait",
+                session = encode_component(session),
+                turn = encode_component(turn)
+            ),
             Some(format!("timeoutMs={timeout_ms}")),
             None::<&Value>,
+            None,
         )
         .await
     }
@@ -408,7 +464,10 @@ impl V1Sdk {
     pub async fn list_messages(&self, session: &str) -> Result<pb::ListMessagesResponse, SdkError> {
         self.call(
             reqwest::Method::GET,
-            &format!("/v1/sessions/{session}/messages"),
+            &format!(
+                "/v1/sessions/{session}/messages",
+                session = encode_component(session)
+            ),
             None,
             None::<&Value>,
         )
@@ -422,7 +481,10 @@ impl V1Sdk {
     pub async fn todo(&self, session: &str) -> Result<pb::TodoList, SdkError> {
         self.call(
             reqwest::Method::GET,
-            &format!("/v1/sessions/{session}/todo"),
+            &format!(
+                "/v1/sessions/{session}/todo",
+                session = encode_component(session)
+            ),
             None,
             None::<&Value>,
         )
@@ -440,7 +502,10 @@ impl V1Sdk {
     ) -> Result<pb::ListEventsResponse, SdkError> {
         self.call(
             reqwest::Method::GET,
-            &format!("/v1/sessions/{session}/events"),
+            &format!(
+                "/v1/sessions/{session}/events",
+                session = encode_component(session)
+            ),
             Some(format!("sinceSeq={since_seq}")),
             None::<&Value>,
         )
@@ -460,7 +525,10 @@ impl V1Sdk {
     ) -> Result<pb::ListEventsResponse, SdkError> {
         self.call(
             reqwest::Method::GET,
-            &format!("/v1/sessions/{session}/events"),
+            &format!(
+                "/v1/sessions/{session}/events",
+                session = encode_component(session)
+            ),
             Some(format!("sinceSeq={since_seq}&includeRaw=true")),
             None::<&Value>,
         )
@@ -476,7 +544,7 @@ impl V1Sdk {
         &self,
         request: pb::UpdateSessionRequest,
     ) -> Result<pb::SessionInfo, SdkError> {
-        let path = format!("/v1/sessions/{}", request.session);
+        let path = format!("/v1/sessions/{}", encode_component(&request.session));
         self.call(reqwest::Method::PATCH, &path, None, Some(&request))
             .await
     }
@@ -488,7 +556,11 @@ impl V1Sdk {
     pub async fn cancel_turn(&self, session: &str, turn: &str) -> Result<pb::TurnInfo, SdkError> {
         self.call(
             reqwest::Method::POST,
-            &format!("/v1/sessions/{session}/turns/{turn}/cancel"),
+            &format!(
+                "/v1/sessions/{session}/turns/{turn}/cancel",
+                session = encode_component(session),
+                turn = encode_component(turn)
+            ),
             None,
             None::<&Value>,
         )
@@ -509,7 +581,10 @@ impl V1Sdk {
         };
         self.call(
             reqwest::Method::POST,
-            &format!("/v1/sessions/{session}/archive"),
+            &format!(
+                "/v1/sessions/{session}/archive",
+                session = encode_component(session)
+            ),
             None,
             Some(&request),
         )
@@ -532,7 +607,10 @@ impl V1Sdk {
         };
         self.call(
             reqwest::Method::POST,
-            &format!("/v1/sessions/{session}/steer"),
+            &format!(
+                "/v1/sessions/{session}/steer",
+                session = encode_component(session)
+            ),
             None,
             Some(&request),
         )
@@ -546,7 +624,10 @@ impl V1Sdk {
     pub async fn workflow_state(&self, session: &str) -> Result<pb::WorkflowState, SdkError> {
         self.call(
             reqwest::Method::GET,
-            &format!("/v1/sessions/{session}/workflow"),
+            &format!(
+                "/v1/sessions/{session}/workflow",
+                session = encode_component(session)
+            ),
             None,
             None::<&Value>,
         )
@@ -563,7 +644,10 @@ impl V1Sdk {
         &self,
         request: pb::SubmitWorkflowCommandRequest,
     ) -> Result<pb::SubmitWorkflowCommandResponse, SdkError> {
-        let path = format!("/v1/sessions/{}/workflow", request.session);
+        let path = format!(
+            "/v1/sessions/{}/workflow",
+            encode_component(&request.session)
+        );
         self.call(reqwest::Method::POST, &path, None, Some(&request))
             .await
     }
@@ -600,7 +684,10 @@ impl V1Sdk {
         let applied: pb::RespondInteractionResponse = self
             .call(
                 reqwest::Method::POST,
-                &format!("/v1/interactions/{request_id}/respond"),
+                &format!(
+                    "/v1/interactions/{request_id}/respond",
+                    request_id = encode_component(request_id)
+                ),
                 None,
                 Some(&request),
             )
@@ -631,10 +718,12 @@ impl V1Sdk {
             .http
             .get(format!(
                 "{}/v1/sessions/{session}/events/stream?sinceSeq={since_seq}",
-                self.base
+                self.base,
+                session = encode_component(session),
             ))
             .send()
-            .await?;
+            .await?
+            .error_for_status()?;
         let stream = response
             .bytes_stream()
             .eventsource()
@@ -934,6 +1023,67 @@ mod tests {
 
     use super::*;
     use hya_api::v1::stream_event::Payload as P;
+
+    #[tokio::test]
+    async fn daemon_timeouts_leave_turn_waits_and_streams_unbounded() {
+        let (requests, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let app = axum::Router::new().fallback(move || {
+            let (release, blocked) = tokio::sync::oneshot::channel();
+            requests.send(release).unwrap();
+            async move {
+                let _ = blocked.await;
+                axum::Json(serde_json::json!({}))
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let sdk = std::sync::Arc::new(V1Sdk::for_local_daemon(base, "").unwrap());
+
+        let ordinary = {
+            let sdk = sdk.clone();
+            tokio::spawn(async move { sdk.get_session("test").await })
+        };
+        let release = received.recv().await.unwrap();
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(31)).await;
+        assert!(
+            matches!(ordinary.await.unwrap(), Err(SdkError::Http(error)) if error.is_timeout())
+        );
+        tokio::time::resume();
+        let _ = release.send(());
+
+        let wait = {
+            let sdk = sdk.clone();
+            tokio::spawn(async move {
+                sdk.wait_turn("test", "turn", Duration::from_secs(120))
+                    .await
+            })
+        };
+        let release = received.recv().await.unwrap();
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(31)).await;
+        assert!(
+            !wait.is_finished(),
+            "turn waits must outlive the ordinary deadline"
+        );
+        tokio::time::resume();
+        release.send(()).unwrap();
+        wait.await.unwrap().unwrap();
+
+        let stream = tokio::spawn(async move { sdk.stream_session("test", 0).await });
+        let release = received.recv().await.unwrap();
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(31)).await;
+        assert!(
+            !stream.is_finished(),
+            "SSE must outlive the ordinary deadline"
+        );
+        tokio::time::resume();
+        release.send(()).unwrap();
+        let _ = stream.await.unwrap().unwrap();
+        server.abort();
+    }
 
     fn frame(seq: u64, payload: P) -> pb::StreamFrame {
         pb::StreamFrame {
