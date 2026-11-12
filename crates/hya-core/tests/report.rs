@@ -1794,6 +1794,8 @@ async fn steer_notice_truncation_survives_multibyte_bodies() {
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
+    // Steer snapshots are taken inside a root turn, which holds main back.
+    let _lead = engine.try_begin_turn(root).unwrap();
     let long_body = "配置很长的中文邮件内容".repeat(120);
     // From a peer: steer skips the agent's own posts.
     mail_main_from_peer(&engine, root, &long_body).await;
@@ -1816,6 +1818,8 @@ async fn steer_notice_carries_the_channel_id_for_handle_mail() {
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
+    // Steer snapshots are taken inside a root turn, which holds main back.
+    let _lead = engine.try_begin_turn(root).unwrap();
     let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "hya-scout").await;
 
     // The persistent DM pair minted at the child's registration.
@@ -1874,6 +1878,8 @@ async fn steer_resyncs_mail_from_the_log_after_the_bus_lagged() {
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
+    // Steer snapshots are taken inside a root turn, which holds main back.
+    let _lead = engine.try_begin_turn(root).unwrap();
     let (child, _) = spawn_idle_resident(&supervisor, &engine, root, "hya-scout").await;
 
     let mut steer = engine
@@ -1959,6 +1965,8 @@ async fn steer_policy_denial_keeps_real_mail_out_of_the_turn_notice() {
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
+    // Steer snapshots are taken inside a root turn, which holds main back.
+    let _lead = engine.try_begin_turn(root).unwrap();
     let (child, _) = spawn_idle_resident(&supervisor, &engine, root, "hya-scout").await;
     engine
         .mail_send(
