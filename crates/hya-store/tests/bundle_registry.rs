@@ -35,7 +35,7 @@ fn installed_candidate(
     installed_at: i64,
 ) -> BundleInstallCandidate {
     let source = format!(
-        "---\nkind: AgentBundle\nidentity:\n  id: hya/installed-package\n  version: {version}\n  publisher: hya\nagent:\n  id: installed-package-lead\n  description: {description}\n  role: main\n---\n{prompt}\n"
+        "---\nkind: Bundle\nidentity:\n  id: hya/installed-package\n  version: {version}\n  publisher: hya\nagents:\n  - id: installed-package-lead\n    description: {description}\n    role: main\n---\n{prompt}\n"
     );
     let prepared = prepare_package(BundleSource::new(
         "installed-package",
@@ -64,7 +64,7 @@ fn workflow_candidate(source_digest: [u8; 32]) -> BundleInstallCandidate {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: WorkflowBundle
+                br#"kind: Bundle
 identity:
   id: hya/workflow-installed
   version: 1.0.0
@@ -148,11 +148,8 @@ async fn workflow_bundle_installs_as_one_row_and_one_generation() {
     let Ok(document) = document else {
         panic!("stored prepared WorkflowBundle was not JSON: {document:?}");
     };
-    assert_eq!(document["bundles"][0]["workflow"]["id"], "release");
-    assert_eq!(
-        document["bundles"][0]["agents"].as_array().map(Vec::len),
-        Some(2)
-    );
+    assert_eq!(document["workflow"]["id"], "release");
+    assert_eq!(document["agents"].as_array().map(Vec::len), Some(2));
 }
 
 /// A reserved id anywhere in a Workflow Agent closure rejects the full transaction.
@@ -260,14 +257,14 @@ async fn same_source_digest_install_is_idempotent_without_generation_advance() {
         vec![SourceFile::new(
             "bundle.hya.md",
             br#"---
-kind: AgentBundle
+kind: Bundle
 identity:
   id: hya/installed-package
   version: 1.0.0
   publisher: hya
-agent:
-  id: installed-package-lead
-  role: main
+agents:
+  - id: installed-package-lead
+    role: main
 ---
 You are the installed package lead.
 "#,
@@ -482,15 +479,15 @@ async fn conflicting_agent_id_install_preserves_old_row_and_generation() {
         vec![SourceFile::new(
             "bundle.hya.md",
             br#"---
-kind: AgentBundle
+kind: Bundle
 identity:
   id: hya/replacement-conflict
   version: 1.0.0
   publisher: hya
-agent:
-  id: installed-package-lead
-  description: conflicting lead
-  role: main
+agents:
+  - id: installed-package-lead
+    description: conflicting lead
+    role: main
 ---
 You are the conflicting lead.
 "#,
@@ -740,7 +737,7 @@ fn namespaced_candidate(
         .map(|value| format!("namespace: {value}\n"))
         .unwrap_or_default();
     let manifest = format!(
-        "kind: AgentBundle\nidentity:\n  id: {bundle_id}\n  version: {version}\n  publisher: hya\n{namespace_line}agent:\n  id: {bundle_id}-lead\n  role: main\n  prompt: prompts/lead.md\n"
+        "kind: Bundle\nidentity:\n  id: {bundle_id}\n  version: {version}\n  publisher: hya\n{namespace_line}\nagents:\n  - id: {bundle_id}-lead\n    role: main\n    prompt: prompts/lead.md\n"
     );
     let prepared = prepare_package(BundleSource::new(
         bundle_id,

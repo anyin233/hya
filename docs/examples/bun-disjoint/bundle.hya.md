@@ -1,5 +1,5 @@
 ---
-kind: AgentBundle
+kind: Bundle
 identity:
   id: hya/docs-bun-disjoint
   version: 1.0.0
@@ -15,14 +15,14 @@ extensions:
   js:
     - id: alpha
       path: extensions/alpha.js
-agent:
-  id: docs-bun-alpha
-  role: main
-  resource_view:
-    allow:
-      - echo
-  hook_refs:
-    - event
+agents:
+  - id: docs-bun-alpha
+    role: main
+    resource_view:
+      allow:
+        - echo
+    hook_refs:
+      - event
 ---
 
 Disjoint activation closure: this agent selects exactly one Bundle-local tool

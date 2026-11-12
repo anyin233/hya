@@ -6,10 +6,7 @@
 
 use std::sync::OnceLock;
 
-use hya_bundle::{
-    BundleError, PreparedAgent, PreparedAgentSetBundle, PreparedCatalog, PreparedInstallableBundle,
-    first_party_bundle,
-};
+use hya_bundle::{Bundle, BundleError, PreparedAgent, PreparedCatalog, first_party_bundle};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -48,7 +45,7 @@ pub enum SpawnScope {
 /// Verified core-agents preset with its parsed reserved-id policy.
 struct LoadedCoreAgents {
     catalog: &'static PreparedCatalog,
-    bundle: &'static PreparedAgentSetBundle,
+    bundle: &'static Bundle,
     reserved_ids: Vec<&'static str>,
 }
 
@@ -61,8 +58,7 @@ fn load_core_agents() -> Result<LoadedCoreAgents, BundleError> {
     let bundle = catalog
         .bundles()
         .first()
-        .and_then(PreparedInstallableBundle::agent_set_bundle)
-        .ok_or_else(|| invalid("preset is not an AgentSetBundle".to_string()))?;
+        .ok_or_else(|| invalid("preset contains no Bundle".to_string()))?;
     let policy = bundle
         .extensions
         .iter()

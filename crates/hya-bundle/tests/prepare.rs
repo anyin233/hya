@@ -7,15 +7,15 @@ use sha2::{Digest, Sha256};
 
 fn source(root: &str, bundle_id: &str, stable_id: &str, reverse_files: bool) -> BundleSource {
     let manifest = format!(
-        r#"kind: AgentBundle
+        r#"kind: Bundle
 identity:
   id: {bundle_id}
   version: 1.0.0
   publisher: hya
-agent:
-  id: {stable_id}
-  role: main
-  prompt: prompts/lead.md
+agents:
+  - id: {stable_id}
+    role: main
+    prompt: prompts/lead.md
 "#,
     );
     let mut files = vec![
@@ -34,7 +34,7 @@ agent:
 #[test]
 #[allow(clippy::expect_used)]
 fn agent_set_bundle_prepares_multiple_agents_as_one_closed_payload() {
-    let manifest = br#"kind: AgentSetBundle
+    let manifest = br#"kind: Bundle
 identity:
   id: hya/agent-set
   version: 1.0.0
@@ -59,9 +59,11 @@ agents:
 
     let document: serde_json::Value =
         serde_json::from_slice(prepared.bytes()).expect("prepared catalog must be JSON");
-    assert_eq!(document["bundles"][0]["kind"], "AgentSetBundle");
+    assert!(document.get("kind").is_none());
+    assert!(document.get("index").is_none());
+    assert!(document.get("bundles").is_none());
     assert_eq!(
-        document["bundles"][0]["agents"]
+        document["agents"]
             .as_array()
             .expect("AgentSetBundle must carry an agents array")
             .len(),
@@ -91,20 +93,20 @@ fn plugin_bundle_prepares_without_agents() {
         "plugin",
         vec![SourceFile::new(
             "bundle.yaml",
-            br#"kind: Plugin
+            br#"kind: Bundle
 identity: { id: hya/plugins-demo, version: 1.0.0, publisher: hya }
 "#,
         )],
     );
     let prepared = prepare_package(source).expect("Plugin should prepare");
-    assert_eq!(prepared.bundles()[0].kind().as_str(), "Plugin");
+    assert_eq!(prepared.bundles()[0].kind().as_str(), "Bundle");
     assert!(prepared.bundles()[0].agents().is_empty());
 }
 
 #[test]
 #[allow(clippy::expect_used)]
 fn plugin_bundle_round_trips_static_skill_and_rejects_agent_fields() {
-    let manifest = br#"kind: Plugin
+    let manifest = br#"kind: Bundle
 identity: { id: hya/plugins-demo, version: 1.0.0, publisher: hya }
 resources:
   skills:
@@ -121,15 +123,13 @@ resources:
     .expect("Plugin skill should prepare");
     let decoded = PreparedCatalog::decode(prepared.bytes(), prepared.digest())
         .expect("Plugin prepared bytes should decode");
-    let plugin = decoded.bundles()[0]
-        .plugin_bundle()
-        .expect("decoded payload should be Plugin");
+    let plugin = &decoded.bundles()[0];
     assert_eq!(plugin.skills.len(), 1);
     assert_eq!(plugin.skills[0].local_id, "guide");
 
     for key in ["agent", "agents", "workflow", "channels"] {
         let text = format!(
-            "kind: Plugin\nidentity: {{ id: hya/plugins-demo, version: 1.0.0, publisher: hya }}\n{key}: {{}}\n"
+            "kind: Bundle\nidentity: {{ id: hya/plugins-demo, version: 1.0.0, publisher: hya }}\n{key}: {{}}\n"
         );
         let result = prepare_package(BundleSource::new(
             "plugin-invalid",
@@ -146,7 +146,7 @@ fn plugin_and_agent_bundles_coexist_in_one_catalog() {
         "plugin",
         vec![SourceFile::new(
             "bundle.yaml",
-            b"kind: Plugin\nidentity: { id: hya/plugin-pack, version: 1.0.0, publisher: hya }\n",
+            b"kind: Bundle\nidentity: { id: hya/plugin-pack, version: 1.0.0, publisher: hya }\n",
         )],
     ))
     .expect("Plugin should prepare");
@@ -154,7 +154,7 @@ fn plugin_and_agent_bundles_coexist_in_one_catalog() {
         "agent",
         vec![SourceFile::new(
             "bundle.yaml",
-            b"kind: AgentBundle\nidentity: { id: hya/agent-pack, version: 1.0.0, publisher: hya }\nagent: { id: lead, role: main }\n",
+            b"kind: Bundle\nidentity: { id: hya/agent-pack, version: 1.0.0, publisher: hya }\nagents: [{ id: lead, role: main }]\n",
         )],
     ))
     .expect("Agent should prepare");
@@ -170,7 +170,7 @@ fn plugin_rejects_static_rust_extensions() {
         "plugin-rust",
         vec![SourceFile::new(
             "bundle.yaml",
-            br#"kind: Plugin
+            br#"kind: Bundle
 identity: { id: hya/plugins-rust, version: 1.0.0, publisher: hya }
 extensions:
   rust:
@@ -185,34 +185,10 @@ extensions:
     ));
 }
 
-#[test]
-#[allow(clippy::expect_used)]
-fn agent_set_prepared_decode_rejects_an_empty_roster_with_valid_digests() {
-    let source = BundleSource::new(
-        "empty-roster",
-        vec![SourceFile::new(
-            "bundle.yaml",
-            br#"kind: AgentSetBundle
-identity: { id: hya/set, version: 1.0.0, publisher: hya }
-agents: [{ id: member, role: main }]
-"#,
-        )],
-    );
-    let prepared = prepare_package(source).expect("prepare agent set");
-    let mut document: serde_json::Value = serde_json::from_slice(prepared.bytes()).expect("JSON");
-    document["bundles"][0]["agents"] = serde_json::json!([]);
-    document["index"][0]["agent_ids"] = serde_json::json!([]);
-    let bytes = rehash_first_bundle(&mut document);
-    assert!(matches!(
-        PreparedCatalog::decode(&bytes, &digest(&bytes)),
-        Err(BundleError::NonCanonicalPreparedCatalog)
-    ));
-}
-
 /// Build one minimal WorkflowBundle source with an optional unreachable Agent.
 fn workflow_source(include_orphan: bool) -> BundleSource {
     let manifest = format!(
-        r#"kind: WorkflowBundle
+        r#"kind: Bundle
 identity:
   id: hya/workflow-demo
   version: 1.0.0
@@ -259,7 +235,7 @@ flowchart TD
 }
 /// Build a WorkflowBundle whose worker and verifier declare model routes.
 fn workflow_source_with_model_routes() -> BundleSource {
-    let manifest = br#"kind: WorkflowBundle
+    let manifest = br#"kind: Bundle
 identity:
   id: hya/workflow-model-routes
   version: 1.0.0
@@ -314,7 +290,7 @@ flowchart TD
 
 /// Build a WorkflowBundle whose compiled stage points at the requested Agent.
 fn workflow_source_with_stage_agent(stage_agent: &str) -> BundleSource {
-    let manifest = br#"kind: WorkflowBundle
+    let manifest = br#"kind: Bundle
 identity:
   id: hya/workflow-missing-agent
   version: 1.0.0
@@ -361,7 +337,7 @@ fn workflow_source_with_verifier_closure(
     let helper = include_helper
         .then_some("  - id: helper\n    role: subagent\n    prompt: prompts/helper.md\n");
     let manifest = format!(
-        r#"kind: WorkflowBundle
+        r#"kind: Bundle
 identity:
   id: hya/workflow-closure
   version: 1.0.0
@@ -426,10 +402,8 @@ fn digest(bytes: &[u8]) -> String {
     encoded
 }
 
-fn rehash_first_bundle(document: &mut serde_json::Value) -> Vec<u8> {
-    let Some(bundle) = document["bundles"].get_mut(0) else {
-        panic!("prepared bundle missing");
-    };
+fn rehash_bundle(document: &mut serde_json::Value) -> Vec<u8> {
+    let bundle = &mut *document;
     let mut digest_input = bundle.clone();
     let Some(fields) = digest_input.as_object_mut() else {
         panic!("prepared bundle is not an object");
@@ -441,7 +415,6 @@ fn rehash_first_bundle(document: &mut serde_json::Value) -> Vec<u8> {
     };
     let bundle_digest = digest(&digest_input);
     bundle["digest"] = serde_json::Value::String(bundle_digest.clone());
-    document["index"][0]["digest"] = serde_json::Value::String(bundle_digest);
     let bytes = serde_json::to_vec(document);
     let Ok(bytes) = bytes else {
         panic!("prepared document encode failed: {bytes:?}");
@@ -475,9 +448,24 @@ fn deterministic_prepare_is_independent_of_source_file_order() {
     );
 }
 
-/// WorkflowBundle preparation emits canonical v2 bytes with one closed payload kind.
 #[test]
-fn workflow_bundle_prepares_compiled_agent_closure_as_v3() {
+#[allow(clippy::expect_used)]
+fn process_command_changes_bundle_digest() {
+    let prepare = |command: &str| {
+        let manifest = format!(
+            "kind: Bundle\nidentity:\n  id: hya/workflow-demo\n  version: 1.0.0\n  publisher: hya\nworkflow:\n  id: demo\n  path: workflows/demo.hya.md\nagents:\n  - id: worker\n    role: subagent\n    prompt: prompts/worker.md\nextensions:\n  process:\n    kind: rust\n    command: [{command}]\n"
+        );
+        prepare_package(workflow_source(false).with_file("bundle.yaml", manifest.into_bytes()))
+            .expect("process-backed workflow should prepare")
+    };
+    let before = prepare("provider-before");
+    let after = prepare("provider-after");
+    assert_ne!(before.bundles()[0].digest(), after.bundles()[0].digest());
+}
+
+/// WorkflowBundle preparation emits canonical format 4 bytes with one complete payload.
+#[test]
+fn bundle_prepares_compiled_workflow_closure_as_v4() {
     let prepared = prepare_package(workflow_source(false));
     let Ok(prepared) = prepared else {
         panic!("WorkflowBundle preparation failed: {prepared:?}");
@@ -487,19 +475,19 @@ fn workflow_bundle_prepares_compiled_agent_closure_as_v3() {
         panic!("prepared WorkflowBundle was not JSON: {document:?}");
     };
 
-    assert_eq!(document["format_version"], 3);
-    assert_eq!(document["bundles"][0]["kind"], "WorkflowBundle");
-    assert_eq!(document["bundles"][0]["workflow"]["id"], "demo");
-    assert_eq!(document["bundles"][0]["agents"][0]["id"], "worker");
+    assert_eq!(document["format_version"], 4);
+    assert!(document.get("kind").is_none());
+    assert_eq!(document["workflow"]["id"], "demo");
+    assert_eq!(document["agents"][0]["id"], "worker");
     assert_eq!(
-        document["bundles"][0]["workflow"]["compiler_revision"],
+        document["workflow"]["compiler_revision"],
         "2ce247d3aaf2ecf6de48121779abf0056c467b0c1a01775cfdf1011108a76797"
     );
 }
 
-/// Model-routed WorkflowBundles retain their source contract in prepared v3.
+/// Model-routed WorkflowBundles retain their source contract in prepared format 4.
 #[test]
-fn workflow_bundle_prepares_model_routes_without_format_bump() {
+fn bundle_retains_workflow_model_routes() {
     let prepared = prepare_package(workflow_source_with_model_routes());
     let Ok(prepared) = prepared else {
         panic!("model-routed WorkflowBundle preparation failed: {prepared:?}");
@@ -509,16 +497,13 @@ fn workflow_bundle_prepares_model_routes_without_format_bump() {
         panic!("prepared model-routed WorkflowBundle was not JSON: {document:?}");
     };
 
-    assert_eq!(document["format_version"], 3);
-    assert_eq!(document["bundles"][0]["format_version"], 3);
-    let source = document["bundles"][0]["workflow"]["source"]
-        .as_str()
-        .unwrap_or_default();
+    assert_eq!(document["format_version"], 4);
+    let source = document["workflow"]["source"].as_str().unwrap_or_default();
     assert!(source.contains("id: fake/worker-primary"));
     assert!(source.contains("id: fake/worker-fallback"));
     assert!(source.contains("reasoning: low"));
     assert_ne!(
-        document["bundles"][0]["workflow"]["compiler_revision"], "",
+        document["workflow"]["compiler_revision"], "",
         "route-bearing source must retain the common compiler revision"
     );
 }
@@ -561,7 +546,7 @@ fn prepared_catalog_round_trips_and_rejects_tampered_bytes() {
 }
 
 #[test]
-fn prepared_decode_rejects_internally_consistent_noncanonical_vectors() {
+fn prepared_decode_rejects_removed_singular_agent_field() {
     let prepared = prepare_package(source("alpha", "hya/alpha", "alpha", false));
     let Ok(prepared) = prepared else {
         panic!("preparation failed: {prepared:?}");
@@ -570,16 +555,13 @@ fn prepared_decode_rejects_internally_consistent_noncanonical_vectors() {
     let Ok(mut document) = document else {
         panic!("prepared document was not JSON: {document:?}");
     };
-    let Some(bundle) = document["bundles"].get_mut(0) else {
-        panic!("prepared bundle missing");
-    };
-    // Reintroduce a plural `agents` array: a decoder that still honoured it
-    // would silently accept a multi-agent bundle.
-    let agent = bundle["agent"].clone();
+    let bundle = &mut document;
+    // Reintroduce the removed singular field with a valid complete digest.
+    let agent = bundle["agents"][0].clone();
     let Some(fields) = bundle.as_object_mut() else {
         panic!("prepared bundle is not an object");
     };
-    fields.insert("agents".to_string(), serde_json::json!([agent]));
+    fields.insert("agent".to_string(), agent);
 
     let mut digest_input = bundle.clone();
     let Some(fields) = digest_input.as_object_mut() else {
@@ -592,8 +574,6 @@ fn prepared_decode_rejects_internally_consistent_noncanonical_vectors() {
     };
     let bundle_digest = digest(&digest_input);
     bundle["digest"] = serde_json::Value::String(bundle_digest.clone());
-    document["index"][0]["digest"] = serde_json::Value::String(bundle_digest);
-    document["index"][0]["agent_ids"] = serde_json::json!(["alpha"]);
 
     let bytes = serde_json::to_vec(&document);
     let Ok(bytes) = bytes else {
@@ -601,10 +581,10 @@ fn prepared_decode_rejects_internally_consistent_noncanonical_vectors() {
     };
     let result = PreparedCatalog::decode(&bytes, &digest(&bytes));
     let Some(BundleError::PreparedDecode { detail }) = result.err() else {
-        panic!("a reintroduced `agents` array must be rejected at decode");
+        panic!("a reintroduced `agent` field must be rejected at decode");
     };
     assert!(
-        detail.contains("unknown field `agents`"),
+        detail.contains("unknown field `agent`"),
         "decode must name the plural field it refuses: {detail}"
     );
 }
@@ -619,12 +599,9 @@ fn prepared_decode_rejects_content_with_recomputed_outer_digests() {
     let Ok(mut document) = document else {
         panic!("prepared document was not JSON: {document:?}");
     };
-    document["bundles"][0]["agent"]["prompt"] =
-        serde_json::Value::String("tampered prompt".to_string());
+    document["agents"][0]["prompt"] = serde_json::Value::String("tampered prompt".to_string());
 
-    let Some(bundle) = document["bundles"].get_mut(0) else {
-        panic!("prepared bundle missing");
-    };
+    let bundle = &mut document;
     let mut digest_input = bundle.clone();
     let Some(fields) = digest_input.as_object_mut() else {
         panic!("prepared bundle is not an object");
@@ -636,7 +613,6 @@ fn prepared_decode_rejects_content_with_recomputed_outer_digests() {
     };
     let bundle_digest = digest(&digest_input);
     bundle["digest"] = serde_json::Value::String(bundle_digest.clone());
-    document["index"][0]["digest"] = serde_json::Value::String(bundle_digest);
 
     let bytes = serde_json::to_vec(&document);
     let Ok(bytes) = bytes else {
@@ -662,12 +638,10 @@ fn prepared_decode_rejects_noncanonical_provenance_paths() {
     let Ok(mut document) = document else {
         panic!("prepared document was not JSON: {document:?}");
     };
-    document["bundles"][0]["skills"][0]["source_path"] =
+    document["skills"][0]["source_path"] =
         serde_json::Value::String("resources/./skills/docs.md".to_string());
 
-    let Some(bundle) = document["bundles"].get_mut(0) else {
-        panic!("prepared bundle missing");
-    };
+    let bundle = &mut document;
     let mut digest_input = bundle.clone();
     let Some(fields) = digest_input.as_object_mut() else {
         panic!("prepared bundle is not an object");
@@ -679,7 +653,6 @@ fn prepared_decode_rejects_noncanonical_provenance_paths() {
     };
     let bundle_digest = digest(&digest_input);
     bundle["digest"] = serde_json::Value::String(bundle_digest.clone());
-    document["index"][0]["digest"] = serde_json::Value::String(bundle_digest);
 
     let bytes = serde_json::to_vec(&document);
     let Ok(bytes) = bytes else {
@@ -691,17 +664,17 @@ fn prepared_decode_rejects_noncanonical_provenance_paths() {
 
 #[test]
 fn prepared_decode_rejects_noncanonical_resolved_reference_vectors() {
-    let manifest = br#"kind: AgentBundle
+    let manifest = br#"kind: Bundle
 identity:
   id: hya/spawn-order
   version: 1.0.0
   publisher: hya
-agent:
-  id: lead
-  role: main
-  can_spawn:
-    - beta
-    - alpha
+agents:
+  - id: lead
+    role: main
+    can_spawn:
+      - beta
+      - alpha
 "#;
     let prepared = prepare_package(BundleSource::new(
         "spawn-order",
@@ -714,12 +687,12 @@ agent:
     let Ok(mut document) = document else {
         panic!("prepared document was not JSON: {document:?}");
     };
-    let Some(can_spawn) = document["bundles"][0]["agent"]["can_spawn"].as_array_mut() else {
+    let Some(can_spawn) = document["agents"][0]["can_spawn"].as_array_mut() else {
         panic!("prepared can_spawn missing");
     };
     can_spawn.reverse();
 
-    let bytes = rehash_first_bundle(&mut document);
+    let bytes = rehash_bundle(&mut document);
     let result = PreparedCatalog::decode(&bytes, &digest(&bytes));
     assert_eq!(result.err(), Some(BundleError::NonCanonicalPreparedCatalog));
 }
@@ -736,9 +709,9 @@ fn prepared_decode_revalidates_full_catalog_references() {
     };
     // Resource references are still revalidated on decode; `can_spawn` is not,
     // because a cross-bundle target may legitimately not be installed.
-    document["bundles"][0]["agent"]["resource_view"]["allow"] =
+    document["agents"][0]["resource_view"]["allow"] =
         serde_json::json!(["bundle:hya/alpha/skill/missing"]);
-    let bytes = rehash_first_bundle(&mut document);
+    let bytes = rehash_bundle(&mut document);
 
     let result = PreparedCatalog::decode(&bytes, &digest(&bytes));
     assert_eq!(
@@ -753,7 +726,7 @@ fn prepared_decode_revalidates_full_catalog_references() {
 
 #[test]
 fn prepared_decode_rejects_unreferenced_unsupported_hook_local_id() {
-    let manifest = br#"kind: AgentBundle
+    let manifest = br#"kind: Bundle
 identity:
   id: hya/prepared-hook
   version: 1.0.0
@@ -766,9 +739,9 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agent:
-  id: lead
-  role: main
+agents:
+  - id: lead
+    role: main
 "#;
     let prepared = prepare_package(BundleSource::new(
         "prepared-hook",
@@ -787,11 +760,11 @@ agent:
     let Ok(mut document) = document else {
         panic!("prepared document was not JSON: {document:?}");
     };
-    document["bundles"][0]["hooks"][0]["local_id"] = serde_json::Value::String("audit".to_string());
-    document["bundles"][0]["hooks"][0]["stable_id"] =
+    document["hooks"][0]["local_id"] = serde_json::Value::String("audit".to_string());
+    document["hooks"][0]["stable_id"] =
         serde_json::Value::String("bundle:hya/prepared-hook/hook/audit".to_string());
 
-    let bytes = rehash_first_bundle(&mut document);
+    let bytes = rehash_bundle(&mut document);
     let result = PreparedCatalog::decode(&bytes, &digest(&bytes));
     assert_eq!(
         result.err(),
@@ -822,8 +795,8 @@ fn prepared_decode_rejects_harness_prefixed_hook_refs_before_catalog_publication
         ("harness:hook", "resource"),
     ] {
         let mut document = document.clone();
-        document["bundles"][0]["agent"]["hook_refs"] = serde_json::json!([raw_ref]);
-        let bytes = rehash_first_bundle(&mut document);
+        document["agents"][0]["hook_refs"] = serde_json::json!([raw_ref]);
+        let bytes = rehash_bundle(&mut document);
         let result = PreparedCatalog::decode(&bytes, &digest(&bytes));
         assert_eq!(
             result.err(),
@@ -846,10 +819,9 @@ fn prepared_decode_rejects_harness_prefixed_hook_resource_view_reference() {
     let Ok(mut document) = document else {
         panic!("prepared document was not JSON: {document:?}");
     };
-    document["bundles"][0]["agent"]["resource_view"]["allow"] =
-        serde_json::json!(["harness:hook/event"]);
+    document["agents"][0]["resource_view"]["allow"] = serde_json::json!(["harness:hook/event"]);
 
-    let bytes = rehash_first_bundle(&mut document);
+    let bytes = rehash_bundle(&mut document);
     let result = PreparedCatalog::decode(&bytes, &digest(&bytes));
     assert_eq!(
         result.err(),
@@ -874,8 +846,8 @@ fn prepared_decode_rejects_unknown_bundle_collections() {
 
     for field in ["files", "helpers", "dependencies", "imports"] {
         let mut document = document.clone();
-        document["bundles"][0][field] = serde_json::json!([]);
-        let bytes = rehash_first_bundle(&mut document);
+        document[field] = serde_json::json!([]);
+        let bytes = rehash_bundle(&mut document);
         let result = PreparedCatalog::decode(&bytes, &digest(&bytes));
         assert!(matches!(result, Err(BundleError::PreparedDecode { .. })));
     }
@@ -883,7 +855,7 @@ fn prepared_decode_rejects_unknown_bundle_collections() {
 
 fn skill_source(resource_path: &str) -> BundleSource {
     let manifest = format!(
-        r#"kind: AgentBundle
+        r#"kind: Bundle
 identity:
   id: hya/skills
   version: 1.0.0
@@ -892,9 +864,9 @@ resources:
   skills:
     - id: docs
       path: {resource_path}
-agent:
-  id: lead
-  role: main
+agents:
+  - id: lead
+    role: main
 "#,
     );
     BundleSource::new(
@@ -1034,7 +1006,7 @@ fn workflow_bundle_packages_stage_verifier_and_transitive_helper_agents() {
 /// Build one AgentBundle source declaring one JS tool and optional schemas.
 fn schema_bundle_source(schemas_block: Option<&str>, tools: bool) -> BundleSource {
     let manifest = format!(
-        r#"kind: AgentBundle
+        r#"kind: Bundle
 identity:
   id: hya/schema-demo
   version: 1.0.0
@@ -1047,13 +1019,13 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agent:
-  id: lead
-  role: main
-  resource_view:
-    allow:
-      - query
-      - runtime
+agents:
+  - id: lead
+    role: main
+    resource_view:
+      allow:
+        - query
+        - runtime
 "#,
         schemas_block = schemas_block.unwrap_or_default(),
     );
@@ -1124,8 +1096,8 @@ fn manifest_schemas_prepare_emit_and_round_trip() {
         Err(error) => panic!("prepared bytes must be JSON: {error}"),
     };
     assert!(
-        document.get("schemas").is_none(),
-        "the schemas section must be skipped when empty (v2-compatible bytes)"
+        document["schemas"].as_array().is_some_and(Vec::is_empty),
+        "the schemas section must be skipped when empty (complete format 4 arrays)"
     );
     match PreparedCatalog::decode(plain.bytes(), plain.digest()) {
         Ok(_) => {}
@@ -1203,15 +1175,16 @@ fn manifest_schemas_duplicate_scheme_is_rejected() {
 fn process_bundle_source(process_block: Option<&str>) -> BundleSource {
     let process = process_block.map_or_else(String::new, |block| format!("  process:\n{block}"));
     let manifest = format!(
-        r#"kind: AgentBundle
+        r#"kind: Bundle
 identity:
   id: hya/process-demo
   version: 1.0.0
   publisher: hya
 extensions:
-{process}agent:
-  id: process-lead
-  role: main
+{process}
+agents:
+  - id: process-lead
+    role: main
 "#,
     );
     BundleSource::new(
@@ -1259,7 +1232,7 @@ fn manifest_extensions_process_declares_and_round_trips() {
     };
     assert!(
         document.get("extensions_process").is_none(),
-        "the extensions_process section must be skipped when empty (v2-compatible bytes)"
+        "the extensions_process section must be skipped when empty (complete format 4 arrays)"
     );
     match PreparedCatalog::decode(plain.bytes(), plain.digest()) {
         Ok(_) => {}
@@ -1302,16 +1275,17 @@ fn manifest_extensions_process_unknown_kind_is_rejected() {
 /// Build one AgentBundle source declaring `resources.mcp` plus MCP config files.
 fn mcp_bundle_source(mcp_list: &str, files: &[(&str, &str)]) -> BundleSource {
     let manifest = format!(
-        r#"kind: AgentBundle
+        r#"kind: Bundle
 identity:
   id: hya/mcp-demo
   version: 1.0.0
   publisher: hya
 resources:
   mcp:
-{mcp_list}agent:
-  id: mcp-lead
-  role: main
+{mcp_list}
+agents:
+  - id: mcp-lead
+    role: main
 "#,
     );
     let mut sources = vec![SourceFile::new("bundle.yaml", manifest.into_bytes())];
@@ -1421,7 +1395,7 @@ fn manifest_mcp_resource_files_are_shape_validated() {
 fn manifest_self_check_is_prepared_with_default_timeout() {
     let source = BundleSource::new("self-check", vec![SourceFile::new(
         "bundle.yaml",
-        b"kind: Plugin\nidentity: { id: acme/check, version: 1.0.0, publisher: acme }\ncheck: { command: [echo, ok] }\n",
+        b"kind: Bundle\nidentity: { id: acme/check, version: 1.0.0, publisher: acme }\ncheck: { command: [echo, ok] }\n",
     )]);
     let prepared = match prepare_package(source) {
         Ok(prepared) => prepared,
@@ -1442,7 +1416,7 @@ fn manifest_self_check_rejects_empty_command_and_out_of_bounds_timeout() {
             vec![SourceFile::new(
                 "bundle.yaml",
                 format!(
-                    "kind: Plugin\nidentity: {{ id: acme/check, version: 1.0.0, publisher: acme }}\ncheck: {check}\n"
+                    "kind: Bundle\nidentity: {{ id: acme/check, version: 1.0.0, publisher: acme }}\ncheck: {check}\n"
                 ),
             )],
         );

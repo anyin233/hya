@@ -17,8 +17,8 @@ use tokio::sync::{Mutex, OnceCell};
 use crate::bundle_config::BundleConfigResolver;
 use crate::runtime_reconcile::{bundle_schema_claims, prepared_static_bundle_source};
 
-/// First-party bundles published with the runtime catalog: WorkflowBundle and
-/// AgentSetBundle payloads, and the TUI extension of the built-in panes.
+/// First-party bundles published with the runtime catalog, including workflows
+/// and the TUI extension of the built-in panes.
 const FIRST_PARTY_CATALOG_BUNDLES: [&str; 3] = [
     "hya/goal-loop",
     "hya/plan-impl-review",
@@ -303,15 +303,7 @@ pub(crate) async fn compose(
         if config.watched() {
             watched.push((config.location().file().to_path_buf(), config.digest()));
         }
-        let fingerprint = crate::bundle_runtime::fingerprint(
-            bundle,
-            process,
-            schemas,
-            apis,
-            permission_modes,
-            &config,
-        )
-        .map_err(attribute)?;
+        let fingerprint = crate::bundle_runtime::fingerprint(bundle, &config).map_err(attribute)?;
         let key = (id.clone(), fingerprint);
         let source = match cache.get(&key) {
             Some(source) => source,

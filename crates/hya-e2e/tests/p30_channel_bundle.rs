@@ -17,7 +17,7 @@ async fn t2_25_installed_channel_policy_denies_child_send_and_uninstall_restores
         "channel-policy",
         vec![SourceFile::new(
             "bundle.yaml",
-            "kind: AgentSetBundle\nidentity: { id: acme/channel-policy, version: 1.0.0, publisher: acme }\nchannels:\n  - id: child-dm\n    kind: parent_dm\n    participants: [{ kind: role, role: child }]\n    capabilities: [report, steer, follow_up, resident_mail]\n    scope: vertical\n    retention: team_session\n",
+            "kind: Bundle\nidentity: { id: acme/channel-policy, version: 1.0.0, publisher: acme }\nchannels:\n  - id: child-dm\n    kind: parent_dm\n    participants: [{ kind: role, role: child }]\n    capabilities: [report, steer, follow_up, resident_mail]\n    scope: vertical\n    retention: team_session\n",
         )],
     );
     let package = std::env::temp_dir().join(format!(

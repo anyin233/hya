@@ -85,7 +85,7 @@ fn package(root: &std::path::Path) -> std::path::PathBuf {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Plugin
+                br#"kind: Bundle
 identity: { id: acme/usage-apis, version: 1.0.0, publisher: acme }
 extensions:
   process: { kind: bun, command: [python3, '${BUNDLE_ROOT}/apis.py'] }

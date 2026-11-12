@@ -46,7 +46,7 @@ fn workflow_bundle_source() -> hya_bundle::BundleSource {
         vec![
             hya_bundle::SourceFile::new(
                 "bundle.yaml",
-                br#"kind: WorkflowBundle
+                br#"kind: Bundle
 identity:
   id: hya/workflow-info
   version: 1.0.0
@@ -90,15 +90,15 @@ fn first_party_collision_source() -> hya_bundle::BundleSource {
         vec![
             hya_bundle::SourceFile::new(
                 "bundle.yaml",
-                br#"kind: AgentBundle
+                br#"kind: Bundle
 identity:
   id: hya/core-agents
   version: 9.9.9
   publisher: attacker
-agent:
-  id: collision-agent
-  role: main
-  prompt: prompts/collision.md
+agents:
+  - id: collision-agent
+    role: main
+    prompt: prompts/collision.md
 "#,
             ),
             hya_bundle::SourceFile::new(
@@ -115,7 +115,7 @@ fn goal_loop_override_source() -> hya_bundle::BundleSource {
         vec![
             hya_bundle::SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Plugin
+                br#"kind: Bundle
 identity: { id: hya/goal-loop, version: 9.0.0, publisher: local }
 namespace: goal-loop
 resources:
@@ -163,16 +163,16 @@ fn namespace_napper_package(data_root: &Path) -> Result<PathBuf, Box<dyn std::er
         vec![
             hya_bundle::SourceFile::new(
                 "bundle.yaml",
-                br#"kind: AgentBundle
+                br#"kind: Bundle
 identity:
   id: hya/demo-napper
   version: 1.0.0
   publisher: hya
 namespace: demo
-agent:
-  id: napper
-  role: main
-  prompt: prompts/nap.md
+agents:
+  - id: napper
+    role: main
+    prompt: prompts/nap.md
 "#,
             ),
             hya_bundle::SourceFile::new("prompts/nap.md", b"Take a nap.\n"),
@@ -230,7 +230,7 @@ fn bundle_install_list_info_uninstall_workflow() -> Result<(), Box<dyn std::erro
             "1.0.0",
             BUNDLE_AGENT_ID,
             "active",
-            "AgentBundle",
+            "Bundle",
             "-",
             "user",
         ]),
@@ -254,9 +254,9 @@ fn bundle_install_list_info_uninstall_workflow() -> Result<(), Box<dyn std::erro
         "format=public-v1",
         "state=active",
         "immutable=false",
-        "source_digest=43889c6597ed85a12b182d23634ebc5804392ee9b7d255e593cbf76c8e0d3f3e",
+        "source_digest=7eccef7d54c0cbd1df6dea2a54bfc0761b1800f144f11eb3fe4244299203aabe",
         expected_digest.as_str(),
-        "kind=AgentBundle",
+        "kind=Bundle",
         "agent=valid-public-lead",
     ] {
         assert!(
@@ -354,20 +354,20 @@ fn bundle_list_and_info_include_first_party_without_creating_registry()
     let list_stdout = String::from_utf8(list.stdout)?;
     for expected in [
         LIST_HEADER.to_string(),
-        first_party_row("hya/base-tools", "  active Plugin -"),
-        first_party_row("hya/channel-tools", "  active Plugin -"),
-        first_party_row("hya/core-commands", "  active Plugin -"),
-        first_party_row("hya/core-skills", "  active Plugin -"),
-        first_party_row("hya/extended-tools", "  active Plugin -"),
-        first_party_row("hya/network-tools", "  active Plugin -"),
-        first_party_row("hya/todo-tools", "  active Plugin -"),
+        first_party_row("hya/base-tools", "  active Bundle -"),
+        first_party_row("hya/channel-tools", "  active Bundle -"),
+        first_party_row("hya/core-commands", "  active Bundle -"),
+        first_party_row("hya/core-skills", "  active Bundle -"),
+        first_party_row("hya/extended-tools", "  active Bundle -"),
+        first_party_row("hya/network-tools", "  active Bundle -"),
+        first_party_row("hya/todo-tools", "  active Bundle -"),
         first_party_row(
             "hya/goal-loop",
-            " hya-goal-guide,hya-goal-verifier active AgentSetBundle -",
+            " hya-goal-guide,hya-goal-verifier active Bundle -",
         ),
         first_party_row(
             "hya/plan-impl-review",
-            " hya-pir-implementer,hya-pir-planner,hya-pir-reviewer active WorkflowBundle plan-impl-review",
+            " hya-pir-implementer,hya-pir-planner,hya-pir-reviewer active Bundle plan-impl-review",
         ),
     ] {
         assert!(
@@ -390,7 +390,7 @@ fn bundle_list_and_info_include_first_party_without_creating_registry()
         "origin=first-party",
         "format=prepared-v3",
         "immutable=true",
-        "kind=WorkflowBundle",
+        "kind=Bundle",
         "workflow=plan-impl-review",
     ] {
         assert!(
@@ -551,9 +551,9 @@ fn public_info_file_prepares_without_registry_mutation() -> Result<(), Box<dyn s
             "origin: package",
             "state: inspected",
             "immutable: false",
-            "source_digest: 43889c6597ed85a12b182d23634ebc5804392ee9b7d255e593cbf76c8e0d3f3e",
+            "source_digest: 7eccef7d54c0cbd1df6dea2a54bfc0761b1800f144f11eb3fe4244299203aabe",
             expected_digest.as_str(),
-            "kind: AgentBundle",
+            "kind: Bundle",
             "agent: valid-public-lead",
         ],
         "unexpected public package info:\n{stdout}"
@@ -631,7 +631,7 @@ async fn bundle_info_lists_prepared_static_resources() -> Result<(), Box<dyn std
             hya_bundle::SourceFile::new(
                 "bundle.hya.md",
                 br#"---
-kind: AgentBundle
+kind: Bundle
 identity:
   id: hya/resource-info
   version: 1.0.0
@@ -640,9 +640,9 @@ resources:
   skills:
     - id: handbook
       path: skills/handbook.md
-agent:
-  id: resource-info-lead
-  role: main
+agents:
+  - id: resource-info-lead
+    role: main
 ---
 You are the resource info lead.
 "#,
@@ -695,7 +695,7 @@ You are the resource info lead.
     Ok(())
 }
 
-/// Installed WorkflowBundle list/info output names its payload and complete Agent closure.
+/// Installed Bundle list/info output names its payload and complete Agent closure.
 #[tokio::test]
 async fn workflow_bundle_list_and_info_show_kind_workflow_and_agents()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -723,25 +723,24 @@ async fn workflow_bundle_list_and_info_show_kind_workflow_and_agents()
     let list = bundle_command(&data_root)
         .args(["bundle", "list"])
         .output()?;
-    assert_success("WorkflowBundle list", &list);
+    assert_success("Bundle list", &list);
     let list_stdout = String::from_utf8(list.stdout)?;
     assert!(
         list_stdout
             .lines()
-            .any(|line| line
-                == "hya/workflow-info 1.0.0 demo-worker active WorkflowBundle demo user"),
-        "unexpected WorkflowBundle list:\n{list_stdout}"
+            .any(|line| line == "hya/workflow-info 1.0.0 demo-worker active Bundle demo user"),
+        "unexpected Bundle list:\n{list_stdout}"
     );
 
     let info = bundle_command(&data_root)
         .args(["bundle", "info", "hya/workflow-info"])
         .output()?;
-    assert_success("WorkflowBundle info", &info);
+    assert_success("Bundle info", &info);
     let info_stdout = String::from_utf8(info.stdout)?;
-    for expected in ["kind=WorkflowBundle", "workflow=demo", "agent=demo-worker"] {
+    for expected in ["kind=Bundle", "workflow=demo", "agent=demo-worker"] {
         assert!(
             info_stdout.lines().any(|line| line == expected),
-            "WorkflowBundle info omitted {expected:?}:\n{info_stdout}"
+            "Bundle info omitted {expected:?}:\n{info_stdout}"
         );
     }
 
@@ -790,7 +789,7 @@ async fn public_bun_bundle_install_publishes_resources_atomically()
     };
     assert_eq!(bundle.identity().id, "hya/archive-js");
     let [agent] = bundle.agents() else {
-        return Err("prepared AgentBundle did not contain one Agent".into());
+        return Err("prepared Bundle did not contain one Agent".into());
     };
     assert_eq!(agent.id.as_str(), "archive-js-lead");
     assert_eq!(bundle.tools().len(), 1);
@@ -865,7 +864,7 @@ fn private_v1_envelope() -> Vec<u8> {
     bytes
 }
 
-/// Build one AgentBundle package declaring one JS tool and a `db` schema.
+/// Build one Bundle package declaring one JS tool and a `db` schema.
 fn schema_bundle_package(
     data_root: &std::path::Path,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -874,7 +873,7 @@ fn schema_bundle_package(
         vec![
             hya_bundle::SourceFile::new(
                 "bundle.yaml",
-                br#"kind: AgentBundle
+                br#"kind: Bundle
 identity:
   id: hya/schema-cli
   version: 1.0.0
@@ -891,13 +890,13 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agent:
-  id: lead
-  role: main
-  resource_view:
-    allow:
-      - query
-      - runtime
+agents:
+  - id: lead
+    role: main
+    resource_view:
+      allow:
+        - query
+        - runtime
 "#,
             ),
             hya_bundle::SourceFile::new("extensions/runtime.js", b"export default {}".to_vec()),
@@ -1037,8 +1036,8 @@ fn bundle_search_covers_user_and_project_bundles_with_scope_and_state()
         stdout_lines(&both),
         vec![
             LIST_HEADER.to_string(),
-            "hya/valid-public 1.0.0 valid-public-lead active AgentBundle - project".to_string(),
-            "hya/valid-public 1.0.0 valid-public-lead shadowed AgentBundle - user".to_string(),
+            "hya/valid-public 1.0.0 valid-public-lead active Bundle - project".to_string(),
+            "hya/valid-public 1.0.0 valid-public-lead shadowed Bundle - user".to_string(),
         ],
         "search must cover both scopes the way list does"
     );
@@ -1051,7 +1050,7 @@ fn bundle_search_covers_user_and_project_bundles_with_scope_and_state()
         stdout_lines(&narrowed),
         vec![
             LIST_HEADER.to_string(),
-            "hya/valid-public 1.0.0 valid-public-lead shadowed AgentBundle - user".to_string(),
+            "hya/valid-public 1.0.0 valid-public-lead shadowed Bundle - user".to_string(),
         ]
     );
 
@@ -1067,7 +1066,7 @@ fn bundle_search_covers_user_and_project_bundles_with_scope_and_state()
     Ok(())
 }
 
-/// Build one packaged AgentBundle declaring schemas, `extensions.process`, and
+/// Build one packaged Bundle declaring schemas, `extensions.process`, and
 /// `resources.mcp` for the `bundle info` declaration surface.
 fn declaration_bundle_package(
     data_root: &std::path::Path,
@@ -1077,7 +1076,7 @@ fn declaration_bundle_package(
         vec![
             hya_bundle::SourceFile::new(
                 "bundle.yaml",
-                br#"kind: AgentBundle
+                br#"kind: Bundle
 identity:
   id: hya/decl-demo
   version: 1.0.0
@@ -1124,13 +1123,13 @@ extensions:
   process:
     kind: bun
     command: [bun, run, extensions/runtime.ts]
-agent:
-  id: decl-lead
-  role: main
-  resource_view:
-    allow:
-      - query
-      - runtime
+agents:
+  - id: decl-lead
+    role: main
+    resource_view:
+      allow:
+        - query
+        - runtime
 "#,
             ),
             hya_bundle::SourceFile::new("extensions/runtime.js", b"export default {}".to_vec()),
@@ -1203,7 +1202,7 @@ fn bundle_info_reports_schema_process_and_mcp_declarations()
 
 /// `bundle install --claude <dir>` translates the fixture plugin offline and
 /// installs it as `claude/demo`; `bundle list` and `bundle info` show the
-/// translated AgentSetBundle with its skills and MCP declarations.
+/// translated Bundle with its skills and MCP declarations.
 #[test]
 fn bundle_install_claude_translates_and_installs_fixture() -> Result<(), Box<dyn std::error::Error>>
 {
@@ -1233,7 +1232,7 @@ fn bundle_install_claude_translates_and_installs_fixture() -> Result<(), Box<dyn
     let list_stdout = String::from_utf8(list.stdout)?;
     let installed_row = list_lines_starting_with(&list_stdout, "claude/demo");
     assert_eq!(
-        installed_row, "claude/demo 1.0.0 reviewer active AgentSetBundle - user",
+        installed_row, "claude/demo 1.0.0 reviewer active Bundle - user",
         "bundle list omitted the claude/demo row:\n{list_stdout}"
     );
 
@@ -1246,7 +1245,7 @@ fn bundle_install_claude_translates_and_installs_fixture() -> Result<(), Box<dyn
         "name=claude/demo",
         "version=1.0.0",
         "publisher=claude",
-        "kind=AgentSetBundle",
+        "kind=Bundle",
         "agent=reviewer",
         "skill=bundle:claude/demo/skill/audit",
         "skill=bundle:claude/demo/skill/review",
@@ -1291,7 +1290,7 @@ fn bundle_install_claude_resolves_local_marketplace_reference()
         .args(["bundle", "info", "claude/market-resource"])
         .output()?;
     assert_success("claude marketplace info", &info);
-    assert!(String::from_utf8(info.stdout)?.contains("kind=Plugin"));
+    assert!(String::from_utf8(info.stdout)?.contains("kind=Bundle"));
     fs::remove_dir_all(&data_root)?;
     Ok(())
 }
@@ -1397,7 +1396,7 @@ fn bundle_search_filters_first_party_and_installed_metadata()
             LIST_HEADER.to_string(),
             first_party_row(
                 "hya/goal-loop",
-                " hya-goal-guide,hya-goal-verifier active AgentSetBundle -"
+                " hya-goal-guide,hya-goal-verifier active Bundle -"
             ),
         ],
         "unexpected bundle id search rows:\n{by_bundle_id_stdout}"
@@ -1448,7 +1447,7 @@ fn bundle_search_filters_first_party_and_installed_metadata()
         installed_stdout.lines().collect::<Vec<_>>(),
         vec![
             LIST_HEADER,
-            "hya/valid-public 1.0.0 valid-public-lead active AgentBundle - user",
+            "hya/valid-public 1.0.0 valid-public-lead active Bundle - user",
         ],
         "installed search must match the installed bundle only:\n{installed_stdout}"
     );
@@ -1515,20 +1514,20 @@ fn bundle_search_without_a_metadata_match_lists_the_catalog()
     let stdout = String::from_utf8(search.stdout)?;
     for expected in [
         LIST_HEADER.to_string(),
-        first_party_row("hya/base-tools", "  active Plugin -"),
-        first_party_row("hya/channel-tools", "  active Plugin -"),
-        first_party_row("hya/core-commands", "  active Plugin -"),
-        first_party_row("hya/core-skills", "  active Plugin -"),
-        first_party_row("hya/extended-tools", "  active Plugin -"),
-        first_party_row("hya/network-tools", "  active Plugin -"),
-        first_party_row("hya/todo-tools", "  active Plugin -"),
+        first_party_row("hya/base-tools", "  active Bundle -"),
+        first_party_row("hya/channel-tools", "  active Bundle -"),
+        first_party_row("hya/core-commands", "  active Bundle -"),
+        first_party_row("hya/core-skills", "  active Bundle -"),
+        first_party_row("hya/extended-tools", "  active Bundle -"),
+        first_party_row("hya/network-tools", "  active Bundle -"),
+        first_party_row("hya/todo-tools", "  active Bundle -"),
         first_party_row(
             "hya/goal-loop",
-            " hya-goal-guide,hya-goal-verifier active AgentSetBundle -",
+            " hya-goal-guide,hya-goal-verifier active Bundle -",
         ),
         first_party_row(
             "hya/plan-impl-review",
-            " hya-pir-implementer,hya-pir-planner,hya-pir-reviewer active WorkflowBundle plan-impl-review",
+            " hya-pir-implementer,hya-pir-planner,hya-pir-reviewer active Bundle plan-impl-review",
         ),
     ] {
         assert!(
@@ -1557,7 +1556,7 @@ fn agent_set_installs_lists_searches_and_uninstalls_as_one_package()
         "agent-set-cli",
         vec![hya_bundle::SourceFile::new(
             "bundle.yaml",
-            br#"kind: AgentSetBundle
+            br#"kind: Bundle
 identity: { id: acme/set-cli, version: 1.0.0, publisher: acme }
 agents:
   - { id: set-cli-lead, role: main }
@@ -1584,7 +1583,7 @@ agents:
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("acme/set-cli"), "{args:?}: {stdout}");
         if args[1] != "install" {
-            assert!(stdout.contains("AgentSetBundle"), "{args:?}: {stdout}");
+            assert!(stdout.contains("Bundle"), "{args:?}: {stdout}");
             assert!(
                 stdout.contains("set-cli-lead") && stdout.contains("set-cli-reviewer"),
                 "{args:?}: {stdout}"
@@ -1611,7 +1610,7 @@ fn plugin_installs_lists_searches_and_uninstalls_without_an_agent()
         vec![
             hya_bundle::SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Plugin
+                br#"kind: Bundle
 identity: { id: acme/plugin-cli, version: 1.0.0, publisher: acme }
 resources:
   skills:
@@ -1645,7 +1644,7 @@ resources:
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("acme/plugin-cli"), "{args:?}: {stdout}");
         if args[1] != "install" {
-            assert!(stdout.contains("Plugin"), "{args:?}: {stdout}");
+            assert!(stdout.contains("Bundle"), "{args:?}: {stdout}");
             if args[1] == "info" {
                 assert!(stdout.contains("plugin-help"), "{args:?}: {stdout}");
             }
@@ -1789,7 +1788,7 @@ fn verify_checks_a_package_without_installing_it() -> Result<(), Box<dyn std::er
     for expected in [
         "verified hya/valid-public 1.0.0",
         "format=public-v1",
-        "kind=AgentBundle",
+        "kind=Bundle",
         "scope=user",
         "action=install",
     ] {
@@ -1925,9 +1924,19 @@ fn checked_package(
     check: &str,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let manifest = format!(
-        "kind: AgentBundle\nidentity:\n  id: hya/{name}\n  version: 1.0.0\n  publisher: hya\n\
-         check:\n  command: {check}\n  timeout_secs: 30\nagent:\n  id: {name}\n  role: subagent\n  \
-         prompt: prompts/p.md\n"
+        r#"kind: Bundle
+identity:
+  id: hya/{name}
+  version: 1.0.0
+  publisher: hya
+check:
+  command: {check}
+  timeout_secs: 30
+agents:
+  - id: {name}
+    role: subagent
+    prompt: prompts/p.md
+"#
     );
     let source = hya_bundle::BundleSource::new(
         name,
@@ -2048,7 +2057,7 @@ fn install_proves_activation_in_the_running_backend() -> Result<(), Box<dyn std:
             vec![
                 hya_bundle::SourceFile::new(
                     "bundle.yaml",
-                    br#"kind: Plugin
+                    br#"kind: Bundle
 identity: { id: acme/dead-process, version: 1.0.0, publisher: acme }
 extensions:
   process: { kind: rust, command: [sh, -c, 'exit 3'] }

@@ -17,7 +17,7 @@ Declare the extension in the bundle manifest and package its files as
 `extensions.files` (or `extensions.js`) resources:
 
 ```yaml
-kind: Plugin
+kind: Bundle
 identity: { id: acme/git-ui, version: 1.0.0, publisher: acme }
 extensions:
   files:

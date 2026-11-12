@@ -36,17 +36,7 @@ use hya_tool::{
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-const BUNDLE: &str = "kind: AgentSetBundle
-identity: { id: acme/report-turn, version: 1.0.0, publisher: acme }
-agents:
-  - id: lead
-    role: main
-    can_spawn: [scout]
-    resource_view: { allow: [harness:tool/grep] }
-  - id: scout
-    role: subagent
-    resource_view: { allow: [harness:tool/grep, harness:tool/glob] }
-";
+const BUNDLE: &str = "kind: Bundle\nidentity: { id: acme/report-turn, version: 1.0.0, publisher: acme }\nagents:\n  - id: lead\n    role: main\n    can_spawn: [scout]\n    resource_view: { allow: [harness:tool/grep] }\n  - id: scout\n    role: subagent\n    resource_view: { allow: [harness:tool/grep, harness:tool/glob] }\n";
 
 /// What a member does in every model round: the script receives the member's
 /// 0-based model-round number and returns that round's steps.

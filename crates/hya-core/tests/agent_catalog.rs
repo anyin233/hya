@@ -8,17 +8,17 @@
 use std::sync::Arc;
 
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleError, BundleIdentity, ModelPolicy, PreparedAgent,
-    PreparedAgentBundle, PreparedInstallableBundle, ResourceView,
+    AgentRole, Bundle, BundleCatalog, BundleError, BundleIdentity, ModelPolicy, PreparedAgent,
+    ResourceView,
 };
 use hya_core::{AgentCatalog, AgentOrigin, core_agents_preset};
 use hya_proto::AgentName;
 
 /// One installed bundle holding one agent with the given spawn graph.
-fn installed(bundle_id: &str, agent_id: &str, can_spawn: &[&str]) -> PreparedInstallableBundle {
-    PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
+fn installed(bundle_id: &str, agent_id: &str, can_spawn: &[&str]) -> Bundle {
+    Bundle {
         check: None,
-        format_version: 3,
+        format_version: 4,
         identity: BundleIdentity {
             id: bundle_id.to_string(),
             version: "1.0.0".to_string(),
@@ -26,7 +26,7 @@ fn installed(bundle_id: &str, agent_id: &str, can_spawn: &[&str]) -> PreparedIns
         },
         namespace: None,
         digest: format!("digest-{bundle_id}"),
-        agent: PreparedAgent {
+        agents: vec![PreparedAgent {
             id: AgentName::new(agent_id),
             description: Some(format!("{agent_id} description")),
             role: AgentRole::Subagent,
@@ -39,17 +39,24 @@ fn installed(bundle_id: &str, agent_id: &str, can_spawn: &[&str]) -> PreparedIns
             resource_view: ResourceView::default(),
             can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
             hook_refs: Vec::new(),
-        },
+        }],
         tools: Vec::new(),
         skills: Vec::new(),
         mcp: Vec::new(),
         hooks: Vec::new(),
         extensions: Vec::new(),
         tui: None,
-    }))
+
+        workflow: None,
+        channels: vec![],
+        schemas: vec![],
+        process: None,
+        apis: vec![],
+        permission_modes: vec![],
+    }
 }
 
-fn catalog(bundles: &[PreparedInstallableBundle]) -> AgentCatalog {
+fn catalog(bundles: &[Bundle]) -> AgentCatalog {
     let bundles = BundleCatalog::from_prepared(bundles).expect("bundle catalog");
     AgentCatalog::new(Arc::new(bundles)).expect("agent catalog")
 }
@@ -297,7 +304,7 @@ fn agent_set_members_use_bundle_origin_and_existing_spawn_authorization() {
         "set-runtime",
         vec![hya_bundle::SourceFile::new(
             "bundle.yaml",
-            br#"kind: AgentSetBundle
+            br#"kind: Bundle
 identity: { id: acme/team, version: 1.0.0, publisher: acme }
 agents:
   - { id: team-lead, role: main, can_spawn: [team-worker] }

@@ -2,9 +2,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use hya_bundle::{
-    BundleError, BundleSource, PreparedInstallableBundle, SourceFile, prepare_package,
-};
+use hya_bundle::{BundleError, BundleSource, SourceFile, prepare_package};
 
 fn agent_source(root: &str, manifest: &str) -> BundleSource {
     let mut files = vec![SourceFile::new("bundle.yaml", manifest.as_bytes().to_vec())];
@@ -22,26 +20,22 @@ fn manifest_with_namespace(namespace: Option<&str>, id: &str) -> String {
         .map(|value| format!("namespace: {value}\n"))
         .unwrap_or_default();
     format!(
-        r#"kind: AgentBundle
+        r#"kind: Bundle
 identity:
   id: {id}
   version: 1.0.0
   publisher: hya
-{namespace_line}agent:
-  id: lead
-  role: main
-  prompt: prompts/lead.md
+{namespace_line}
+agents:
+  - id: lead
+    role: main
+    prompt: prompts/lead.md
 "#
     )
 }
 
 fn first_namespace(catalog: &hya_bundle::PreparedCatalog) -> Option<&str> {
-    match &catalog.bundles()[0] {
-        PreparedInstallableBundle::Agent(bundle) => bundle.namespace.as_deref(),
-        PreparedInstallableBundle::AgentSet(bundle) => bundle.namespace.as_deref(),
-        PreparedInstallableBundle::Workflow(bundle) => bundle.namespace.as_deref(),
-        PreparedInstallableBundle::Plugin(bundle) => bundle.namespace.as_deref(),
-    }
+    catalog.bundles()[0].namespace.as_deref()
 }
 
 #[test]
@@ -121,7 +115,7 @@ fn invalid_default_name_segment_requires_explicit_namespace() {
 
 #[test]
 fn workflow_bundle_namespace_resolves_like_agent_bundle() {
-    let manifest = r#"kind: WorkflowBundle
+    let manifest = r#"kind: Bundle
 identity:
   id: hya/flow-pack
   version: 1.0.0

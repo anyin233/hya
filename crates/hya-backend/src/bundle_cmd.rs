@@ -6,7 +6,7 @@ use anyhow::Context as _;
 use clap::{Args, Subcommand};
 use hya_app::bundle_admin::{self, InstallTarget, Removed, SelfCheck};
 use hya_app::project_bundles::{ProjectBundle, find_project_bundle, plan_project_install};
-use hya_bundle::{PreparedCatalog, PreparedInstallableBundle, PublicPackageInspection};
+use hya_bundle::{Bundle, PreparedCatalog, PublicPackageInspection};
 use hya_server::BundleListing;
 use hya_store::{
     BundleInstallAction, BundleInstallPlan, BundleRegistry, BundleRegistryRecord,
@@ -291,7 +291,7 @@ async fn install_dispatch(
 /// `.hyabundle` package via the bundled Claude adapter.
 ///
 /// The adapter prints one JSON envelope (`hya-plugin-claude::emit`) with the
-/// standard `Plugin`/`AgentSetBundle` manifest and its translated files; they are prepared through
+/// standard `Plugin`/`Bundle` manifest and its translated files; they are prepared through
 /// the canonical `hya_bundle` pipeline, so namespace and digest validation is
 /// shared with every other install path.
 async fn stage_claude_source(source: &Path) -> anyhow::Result<PathBuf> {
@@ -1173,7 +1173,7 @@ async fn installed_records_if_exists() -> anyhow::Result<Vec<BundleRegistryRecor
 /// schemas, optional `extensions.process` declaration, API endpoints, and
 /// mcp entries. The declaration lines print only when non-empty.
 fn print_static_info(
-    bundle: &PreparedInstallableBundle,
+    bundle: &Bundle,
     separator: &str,
     schemas: &[hya_bundle::PreparedSchema],
     process: Option<&hya_bundle::PreparedProcessExtension>,

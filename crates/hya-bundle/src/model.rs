@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use hya_proto::AgentName;
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use serde::{Deserialize, Serialize};
 
 /// Source role. It controls selector visibility only.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -35,26 +35,14 @@ impl AgentRole {
 /// Bundle payload kind in a prepared document.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PreparedBundleKind {
-    /// A singular AgentBundle payload.
-    AgentBundle,
-    /// A closed set of Agents without a Workflow.
-    AgentSetBundle,
-    /// A WorkflowBundle payload containing one Workflow and its Agent closure.
-    WorkflowBundle,
-    /// Agentless Plugin resource payload.
-    Plugin,
+    /// One complete Bundle payload.
+    Bundle,
 }
 
 impl PreparedBundleKind {
-    /// Return the exact serialized payload kind tag.
-    #[must_use]
+    /// Serialized bundle kind.
     pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::AgentBundle => "AgentBundle",
-            Self::AgentSetBundle => "AgentSetBundle",
-            Self::WorkflowBundle => "WorkflowBundle",
-            Self::Plugin => "Plugin",
-        }
+        "Bundle"
     }
 }
 
@@ -160,7 +148,7 @@ pub enum ChannelParticipantRole {
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PreparedChannelParticipant {
-    /// One Agent declared in the same AgentSetBundle.
+    /// One Agent declared in the same Bundle.
     Agent {
         /// Manifest-local Agent id.
         agent: String,
@@ -271,48 +259,11 @@ pub struct PreparedCheck {
     pub timeout_secs: u64,
 }
 
-/// Fully prepared singular AgentBundle: exactly one Agent plus its resources.
-/// Fully prepared singular AgentBundle: exactly one Agent plus its resources.
+/// One complete prepared bundle, including every executable and policy declaration.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct PreparedAgentBundle {
-    /// Prepared-document format version (currently `3`).
-    pub format_version: u32,
-    /// Bundle identity block.
-    pub identity: BundleIdentity,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    /// Optional source self-check.
-    pub check: Option<PreparedCheck>,
-    /// Provider-facing namespace (declared or identity-derived). Skipped when
-    /// absent so prepared documents written before namespaces stay decodable.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
-    /// Digest of this bundle's canonical content for integrity checks.
-    pub digest: String,
-    /// The single Agent this bundle defines.
-    pub agent: PreparedAgent,
-    /// Prepared tool resources.
-    pub tools: Vec<PreparedResource>,
-    /// Prepared Skill resources.
-    pub skills: Vec<PreparedResource>,
-    /// Prepared MCP declarations (`resources.mcp`); each entry's content is a
-    /// validated `McpServerConfig`-shaped JSON file. Runtime spawning of these
-    /// servers lands in a later phase.
-    pub mcp: Vec<PreparedResource>,
-    /// Prepared hook resources.
-    pub hooks: Vec<PreparedResource>,
-    /// Prepared JS/Rust extension entrypoints.
-    pub extensions: Vec<PreparedResource>,
-    /// Optional bundle-owned frontend extension.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tui: Option<PreparedTuiExtension>,
-}
-
-/// Fully prepared AgentSetBundle: multiple Agents sharing one resource plane.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct PreparedAgentSetBundle {
-    /// Prepared-document format version (currently `3`).
+pub struct Bundle {
+    /// Prepared-document format version (currently `4`).
     pub format_version: u32,
     /// Bundle identity block.
     pub identity: BundleIdentity,
@@ -326,6 +277,8 @@ pub struct PreparedAgentSetBundle {
     pub digest: String,
     /// All Agents this bundle defines.
     pub agents: Vec<PreparedAgent>,
+    /// Optional compiled Workflow.
+    pub workflow: Option<PreparedWorkflow>,
     /// Declarative channel templates; concrete ids remain runtime-minted event facts.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub channels: Vec<PreparedChannelTemplate>,
@@ -342,40 +295,17 @@ pub struct PreparedAgentSetBundle {
     /// Optional bundle-owned frontend extension.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tui: Option<PreparedTuiExtension>,
+    /// External URI schemes owned by this bundle.
+    pub schemas: Vec<PreparedSchema>,
+    /// Explicit provider process.
+    pub process: Option<PreparedProcessExtension>,
+    /// HTTP API declarations.
+    pub apis: Vec<PreparedApi>,
+    /// Permission modes owned by this bundle.
+    pub permission_modes: Vec<PreparedPermissionMode>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-/// Fully prepared agentless Plugin payload.
-pub struct PreparedPluginBundle {
-    /// Prepared format version.
-    pub format_version: u32,
-    /// Bundle identity.
-    pub identity: BundleIdentity,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    /// Optional source self-check.
-    pub check: Option<PreparedCheck>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    /// Provider namespace.
-    pub namespace: Option<String>,
-    /// Content digest.
-    pub digest: String,
-    /// Tool resources.
-    pub tools: Vec<PreparedResource>,
-    /// Skill resources.
-    pub skills: Vec<PreparedResource>,
-    /// MCP resources.
-    pub mcp: Vec<PreparedResource>,
-    /// Hook resources.
-    pub hooks: Vec<PreparedResource>,
-    /// Extension resources.
-    pub extensions: Vec<PreparedResource>,
-    /// Optional bundle-owned frontend extension.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tui: Option<PreparedTuiExtension>,
-}
-
-/// One compiled Workflow source retained in a prepared WorkflowBundle.
+/// One compiled Workflow source retained in a prepared Bundle.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreparedWorkflow {
@@ -389,44 +319,6 @@ pub struct PreparedWorkflow {
     pub source_digest: String,
     /// Hex digest of the normalized `hya-workflow` compiler revision.
     pub compiler_revision: String,
-}
-
-/// Fully prepared WorkflowBundle: one Workflow and its exact Agent closure.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct PreparedWorkflowBundle {
-    /// Prepared-document format version (currently `3`).
-    pub format_version: u32,
-    /// Bundle identity block.
-    pub identity: BundleIdentity,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    /// Optional source self-check.
-    pub check: Option<PreparedCheck>,
-    /// Provider-facing namespace (declared or identity-derived). Skipped when
-    /// absent so prepared documents written before namespaces stay decodable.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
-    /// Digest of this bundle's canonical content for integrity checks.
-    pub digest: String,
-    /// The one compiled Workflow this bundle defines.
-    pub workflow: PreparedWorkflow,
-    /// All packaged Agents reachable from the Workflow's stages and spawn graph.
-    pub agents: Vec<PreparedAgent>,
-    /// Prepared tool resources.
-    pub tools: Vec<PreparedResource>,
-    /// Prepared Skill resources.
-    pub skills: Vec<PreparedResource>,
-    /// Prepared MCP declarations (`resources.mcp`); each entry's content is a
-    /// validated `McpServerConfig`-shaped JSON file. Runtime spawning of these
-    /// servers lands in a later phase.
-    pub mcp: Vec<PreparedResource>,
-    /// Prepared hook resources.
-    pub hooks: Vec<PreparedResource>,
-    /// Prepared JS/Rust extension entrypoints.
-    pub extensions: Vec<PreparedResource>,
-    /// Optional bundle-owned frontend extension.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tui: Option<PreparedTuiExtension>,
 }
 
 /// Validated bundle-owned TUI entrypoint and requested frontend capabilities.
@@ -443,274 +335,75 @@ pub struct PreparedTuiExtension {
     pub permissions: Vec<String>,
 }
 
-/// Closed prepared payload union for one installable bundle.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum PreparedInstallableBundle {
-    /// Singular AgentBundle payload.
-    Agent(Box<PreparedAgentBundle>),
-    /// AgentSetBundle payload with multiple Agents and no Workflow.
-    AgentSet(Box<PreparedAgentSetBundle>),
-    /// WorkflowBundle payload with one Workflow and Agent closure.
-    Workflow(Box<PreparedWorkflowBundle>),
-    /// Agentless Plugin payload.
-    Plugin(Box<PreparedPluginBundle>),
-}
-
-impl PreparedInstallableBundle {
-    /// Bundle-owned frontend extension declaration, if present.
-    #[must_use]
-    pub fn tui(&self) -> Option<&PreparedTuiExtension> {
-        match self {
-            Self::Agent(bundle) => bundle.tui.as_ref(),
-            Self::AgentSet(bundle) => bundle.tui.as_ref(),
-            Self::Workflow(bundle) => bundle.tui.as_ref(),
-            Self::Plugin(bundle) => bundle.tui.as_ref(),
-        }
-    }
-
-    /// Resolved provider-facing namespace: the declared value, or the
-    /// identity name segment when the prepared document predates namespaces.
-    #[must_use]
-    pub fn namespace(&self) -> &str {
-        let (declared, id) = match self {
-            Self::Agent(bundle) => (bundle.namespace.as_deref(), bundle.identity.id.as_str()),
-            Self::AgentSet(bundle) => (bundle.namespace.as_deref(), bundle.identity.id.as_str()),
-            Self::Workflow(bundle) => (bundle.namespace.as_deref(), bundle.identity.id.as_str()),
-            Self::Plugin(bundle) => (bundle.namespace.as_deref(), bundle.identity.id.as_str()),
-        };
-        declared.unwrap_or_else(|| id.rsplit('/').next().unwrap_or_default())
-    }
-    /// Self-check declaration, if present.
-    #[must_use]
-    pub fn check(&self) -> Option<&PreparedCheck> {
-        match self {
-            Self::Agent(bundle) => bundle.check.as_ref(),
-            Self::AgentSet(bundle) => bundle.check.as_ref(),
-            Self::Workflow(bundle) => bundle.check.as_ref(),
-            Self::Plugin(bundle) => bundle.check.as_ref(),
-        }
-    }
-}
-
-impl Serialize for PreparedInstallableBundle {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        #[derive(Serialize)]
-        struct Tagged<'a, T> {
-            kind: &'static str,
-            #[serde(flatten)]
-            bundle: &'a T,
-        }
-
-        match self {
-            Self::Agent(bundle) => Tagged {
-                kind: PreparedBundleKind::AgentBundle.as_str(),
-                bundle,
-            }
-            .serialize(serializer),
-            Self::AgentSet(bundle) => Tagged {
-                kind: PreparedBundleKind::AgentSetBundle.as_str(),
-                bundle,
-            }
-            .serialize(serializer),
-            Self::Workflow(bundle) => Tagged {
-                kind: PreparedBundleKind::WorkflowBundle.as_str(),
-                bundle,
-            }
-            .serialize(serializer),
-            Self::Plugin(bundle) => Tagged {
-                kind: PreparedBundleKind::Plugin.as_str(),
-                bundle,
-            }
-            .serialize(serializer),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for PreparedInstallableBundle {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let mut object = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
-        let kind = object
-            .remove("kind")
-            .and_then(|value| value.as_str().map(str::to_owned))
-            .ok_or_else(|| de::Error::custom("prepared bundle is missing string `kind`"))?;
-        let value = serde_json::Value::Object(object);
-        match kind.as_str() {
-            "AgentBundle" => serde_json::from_value::<PreparedAgentBundle>(value)
-                .map(Box::new)
-                .map(Self::Agent)
-                .map_err(de::Error::custom),
-            "AgentSetBundle" => serde_json::from_value::<PreparedAgentSetBundle>(value)
-                .map(Box::new)
-                .map(Self::AgentSet)
-                .map_err(de::Error::custom),
-            "WorkflowBundle" => serde_json::from_value::<PreparedWorkflowBundle>(value)
-                .map(Box::new)
-                .map(Self::Workflow)
-                .map_err(de::Error::custom),
-            "Plugin" => serde_json::from_value::<PreparedPluginBundle>(value)
-                .map(Box::new)
-                .map(Self::Plugin)
-                .map_err(de::Error::custom),
-            other => Err(de::Error::custom(format!(
-                "unsupported prepared bundle kind `{other}`"
-            ))),
-        }
-    }
-}
-
-impl PreparedInstallableBundle {
-    /// Return the closed payload kind.
-    #[must_use]
-    pub const fn kind(&self) -> PreparedBundleKind {
-        match self {
-            Self::Agent(_) => PreparedBundleKind::AgentBundle,
-            Self::AgentSet(_) => PreparedBundleKind::AgentSetBundle,
-            Self::Workflow(_) => PreparedBundleKind::WorkflowBundle,
-            Self::Plugin(_) => PreparedBundleKind::Plugin,
-        }
-    }
-
-    /// Return this payload's bundle identity.
-    #[must_use]
+/// Immutable accessors used by runtime catalogs.
+impl Bundle {
+    /// The bundle's identity.
     pub fn identity(&self) -> &BundleIdentity {
-        match self {
-            Self::Agent(bundle) => &bundle.identity,
-            Self::AgentSet(bundle) => &bundle.identity,
-            Self::Workflow(bundle) => &bundle.identity,
-            Self::Plugin(bundle) => &bundle.identity,
-        }
+        &self.identity
     }
-
-    /// Return this payload's canonical content digest.
-    #[must_use]
+    /// Digest of every declaration and embedded resource.
     pub fn digest(&self) -> &str {
-        match self {
-            Self::Agent(bundle) => &bundle.digest,
-            Self::AgentSet(bundle) => &bundle.digest,
-            Self::Workflow(bundle) => &bundle.digest,
-            Self::Plugin(bundle) => &bundle.digest,
-        }
+        &self.digest
     }
-
-    /// Return every Agent published by this payload.
-    #[must_use]
+    /// Provider-facing namespace.
+    pub fn namespace(&self) -> &str {
+        self.namespace
+            .as_deref()
+            .unwrap_or_else(|| self.identity.id.rsplit('/').next().unwrap_or_default())
+    }
+    /// Source self-check.
+    pub fn check(&self) -> Option<&PreparedCheck> {
+        self.check.as_ref()
+    }
+    /// Published Agents.
     pub fn agents(&self) -> &[PreparedAgent] {
-        match self {
-            Self::Agent(bundle) => std::slice::from_ref(&bundle.agent),
-            Self::AgentSet(bundle) => &bundle.agents,
-            Self::Workflow(bundle) => &bundle.agents,
-            Self::Plugin(_) => &[],
-        }
+        &self.agents
     }
-
-    /// Return declarative channel templates for an AgentSetBundle.
-    #[must_use]
+    /// Channel templates.
     pub fn channels(&self) -> &[PreparedChannelTemplate] {
-        match self {
-            Self::AgentSet(bundle) => &bundle.channels,
-            Self::Agent(_) | Self::Workflow(_) | Self::Plugin(_) => &[],
-        }
+        &self.channels
     }
-
-    /// Return this payload's resources of one exported kind.
-    #[must_use]
+    /// Compiled Workflow, if declared.
+    pub fn workflow(&self) -> Option<&PreparedWorkflow> {
+        self.workflow.as_ref()
+    }
+    /// Frontend extension, if declared.
+    pub fn tui(&self) -> Option<&PreparedTuiExtension> {
+        self.tui.as_ref()
+    }
+    /// Bundle kind exposed to catalogs.
+    pub const fn kind(&self) -> PreparedBundleKind {
+        PreparedBundleKind::Bundle
+    }
+    /// Resources of a selected family.
     pub fn resources(&self, kind: crate::ExportKind) -> &[PreparedResource] {
         match kind {
-            crate::ExportKind::Tool => self.tools(),
-            crate::ExportKind::Skill => self.skills(),
-            crate::ExportKind::Mcp => self.mcp(),
-            crate::ExportKind::Hook => self.hooks(),
-            crate::ExportKind::Extension => self.extensions(),
+            crate::ExportKind::Tool => &self.tools,
+            crate::ExportKind::Skill => &self.skills,
+            crate::ExportKind::Mcp => &self.mcp,
+            crate::ExportKind::Hook => &self.hooks,
+            crate::ExportKind::Extension => &self.extensions,
         }
     }
-
-    /// Return prepared tool resources.
-    #[must_use]
+    /// Prepared tools resources.
     pub fn tools(&self) -> &[PreparedResource] {
-        match self {
-            Self::Agent(bundle) => &bundle.tools,
-            Self::AgentSet(bundle) => &bundle.tools,
-            Self::Workflow(bundle) => &bundle.tools,
-            Self::Plugin(bundle) => &bundle.tools,
-        }
+        &self.tools
     }
-
-    /// Return prepared Skill resources.
-    #[must_use]
+    /// Prepared skills resources.
     pub fn skills(&self) -> &[PreparedResource] {
-        match self {
-            Self::Agent(bundle) => &bundle.skills,
-            Self::AgentSet(bundle) => &bundle.skills,
-            Self::Workflow(bundle) => &bundle.skills,
-            Self::Plugin(bundle) => &bundle.skills,
-        }
+        &self.skills
     }
-
-    /// Return prepared MCP resources.
-    #[must_use]
+    /// Prepared mcp resources.
     pub fn mcp(&self) -> &[PreparedResource] {
-        match self {
-            Self::Agent(bundle) => &bundle.mcp,
-            Self::AgentSet(bundle) => &bundle.mcp,
-            Self::Workflow(bundle) => &bundle.mcp,
-            Self::Plugin(bundle) => &bundle.mcp,
-        }
+        &self.mcp
     }
-
-    /// Return prepared hook resources.
-    #[must_use]
+    /// Prepared hooks resources.
     pub fn hooks(&self) -> &[PreparedResource] {
-        match self {
-            Self::Agent(bundle) => &bundle.hooks,
-            Self::AgentSet(bundle) => &bundle.hooks,
-            Self::Workflow(bundle) => &bundle.hooks,
-            Self::Plugin(bundle) => &bundle.hooks,
-        }
+        &self.hooks
     }
-
-    /// Return prepared JS/Rust extension resources.
-    #[must_use]
+    /// Prepared extensions resources.
     pub fn extensions(&self) -> &[PreparedResource] {
-        match self {
-            Self::Agent(bundle) => &bundle.extensions,
-            Self::AgentSet(bundle) => &bundle.extensions,
-            Self::Workflow(bundle) => &bundle.extensions,
-            Self::Plugin(bundle) => &bundle.extensions,
-        }
-    }
-
-    /// Return the Workflow metadata for a WorkflowBundle, if this is one.
-    #[must_use]
-    pub fn workflow(&self) -> Option<&PreparedWorkflow> {
-        match self {
-            Self::Agent(_) | Self::AgentSet(_) => None,
-            Self::Workflow(bundle) => Some(&bundle.workflow),
-            Self::Plugin(_) => None,
-        }
-    }
-
-    /// Return the AgentSetBundle payload, if this is one.
-    #[must_use]
-    pub fn agent_set_bundle(&self) -> Option<&PreparedAgentSetBundle> {
-        match self {
-            Self::AgentSet(bundle) => Some(bundle),
-            Self::Agent(_) | Self::Workflow(_) | Self::Plugin(_) => None,
-        }
-    }
-
-    /// Return the Plugin payload, if this is one.
-    #[must_use]
-    pub fn plugin_bundle(&self) -> Option<&PreparedPluginBundle> {
-        match self {
-            Self::Plugin(bundle) => Some(bundle),
-            _ => None,
-        }
+        &self.extensions
     }
 }
 
@@ -730,14 +423,8 @@ pub struct PreparedSchema {
     pub writable: bool,
 }
 
-/// Per-bundle schema list in a prepared catalog document.
-///
-/// Prepared bundles carry their `schemas:` declarations as a document-level
-/// section parallel to the index (skipped entirely when no bundle declares
-/// any), so documents written before the section stay byte-identical and
-/// decodable.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+/// Derived per-bundle URI-scheme lookup row; never persisted.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PreparedBundleSchemas {
     /// Bundle identity id the schemas belong to.
     pub bundle_id: String,
@@ -772,13 +459,8 @@ pub struct PreparedApi {
     pub response_schema: Option<String>,
 }
 
-/// Per-bundle endpoint list in a prepared catalog document.
-///
-/// Like `schemas:` this is a document-level section parallel to the index,
-/// skipped entirely when no bundle declares an endpoint, so documents written
-/// before the section stay byte-identical and decodable.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+/// Derived per-bundle API lookup row; never persisted.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PreparedBundleApis {
     /// Bundle identity id the endpoints belong to.
     pub bundle_id: String,
@@ -802,13 +484,8 @@ pub struct PreparedPermissionMode {
     pub description: String,
 }
 
-/// Per-bundle permission-mode list in a prepared catalog document.
-///
-/// A document-level section like `apis:`, skipped entirely when no bundle
-/// declares a mode, so documents written before the section stay
-/// byte-identical and decodable.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+/// Derived per-bundle permission-mode lookup row; never persisted.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PreparedBundlePermissionModes {
     /// Bundle identity id the modes belong to.
     pub bundle_id: String,
@@ -852,13 +529,8 @@ pub struct PreparedProcessExtension {
     pub command: Vec<String>,
 }
 
-/// Per-bundle process-extension row in a prepared catalog document.
-///
-/// Like the `schemas:` section this is a document-level list parallel to the
-/// index (skipped entirely when no bundle declares one) so documents written
-/// before the section stay byte-identical and decodable.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+/// Derived per-bundle process lookup row; never persisted.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PreparedBundleProcess {
     /// Bundle identity id the declaration belongs to.
     pub bundle_id: String,
@@ -866,9 +538,8 @@ pub struct PreparedBundleProcess {
     pub process: PreparedProcessExtension,
 }
 
-/// Compact index row for one bundle in a prepared catalog.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+/// Derived catalog index row; never persisted.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PreparedBundleIndex {
     /// Bundle identity id.
     pub bundle_id: String,
@@ -882,10 +553,10 @@ pub struct PreparedBundleIndex {
     pub workflow_ids: Vec<String>,
 }
 
-/// Canonical prepared multi-bundle document: decoded payloads, index, raw bytes, and digest.
+/// One decoded Bundle with derived runtime lookups and its canonical stored bytes.
 #[derive(Debug)]
 pub struct PreparedCatalog {
-    pub(crate) bundles: Vec<PreparedInstallableBundle>,
+    pub(crate) bundles: Vec<Bundle>,
     pub(crate) index: Vec<PreparedBundleIndex>,
     pub(crate) schemas: Vec<PreparedBundleSchemas>,
     pub(crate) process_extensions: Vec<PreparedBundleProcess>,
@@ -898,11 +569,11 @@ pub struct PreparedCatalog {
 impl PreparedCatalog {
     /// Prepared installable payloads in catalog order.
     #[must_use]
-    pub fn bundles(&self) -> &[PreparedInstallableBundle] {
+    pub fn bundles(&self) -> &[Bundle] {
         &self.bundles
     }
 
-    /// Compact index parallel to the prepared document.
+    /// Compact index reconstructed from the prepared Bundle on load.
     #[must_use]
     pub fn index(&self) -> &[PreparedBundleIndex] {
         &self.index
@@ -982,44 +653,4 @@ impl PreparedCatalog {
     pub fn digest(&self) -> &str {
         &self.digest
     }
-}
-
-#[derive(Serialize)]
-pub(crate) struct PreparedDocument<'a> {
-    pub format_version: u32,
-    pub bundles: &'a [PreparedInstallableBundle],
-    pub index: &'a [PreparedBundleIndex],
-    /// Per-bundle schema declarations; skipped when no bundle declares any so
-    /// documents written before the section keep their exact byte layout.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub schemas: Vec<PreparedBundleSchemas>,
-    /// Per-bundle `extensions.process` declarations; skipped when no bundle
-    /// declares any, for the same byte-layout reason.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub extensions_process: Vec<PreparedBundleProcess>,
-    /// Per-bundle `apis:` declarations; skipped when no bundle declares any,
-    /// for the same byte-layout reason.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub apis: Vec<PreparedBundleApis>,
-    /// Per-bundle `permission_modes:` declarations; skipped when no bundle
-    /// declares any, for the same byte-layout reason.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub permission_modes: Vec<PreparedBundlePermissionModes>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PreparedDocumentOwned {
-    #[serde(rename = "format_version")]
-    pub _format_version: u32,
-    pub bundles: Vec<PreparedInstallableBundle>,
-    pub index: Vec<PreparedBundleIndex>,
-    #[serde(default)]
-    pub schemas: Vec<PreparedBundleSchemas>,
-    #[serde(default)]
-    pub extensions_process: Vec<PreparedBundleProcess>,
-    #[serde(default)]
-    pub apis: Vec<PreparedBundleApis>,
-    #[serde(default)]
-    pub permission_modes: Vec<PreparedBundlePermissionModes>,
 }

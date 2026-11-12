@@ -11,7 +11,7 @@ fn source(agents: &str, extra: &str) -> BundleSource {
         vec![SourceFile::new(
             "bundle.yaml",
             format!(
-                "kind: AgentSetBundle\nidentity: {{ id: acme/team, version: 1.0.0, publisher: acme }}\nagents: {agents}\n{extra}\n"
+                "kind: Bundle\nidentity: {{ id: acme/team, version: 1.0.0, publisher: acme }}\nagents: {agents}\n{extra}\n"
             ),
         )],
     )
@@ -52,7 +52,6 @@ fn agent_set_package_is_deterministic_and_resolves_every_member()
 #[test]
 fn agent_set_rejects_empty_duplicate_and_unknown_source_contracts() {
     for (agents, extra) in [
-        ("[]", ""),
         ("[{id: same, role: main}, {id: same, role: subagent}]", ""),
         (
             "[{id: member, role: main}]",

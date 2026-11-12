@@ -378,7 +378,7 @@ fn approver_runtime(seen: Arc<Mutex<Vec<PermissionApproveInput>>>) -> Arc<Runtim
         "approver",
         vec![SourceFile::new(
             "bundle.yaml",
-            "kind: Plugin\nidentity: { id: acme/approver, version: 1.0.0, publisher: acme }\n",
+            "kind: Bundle\nidentity: { id: acme/approver, version: 1.0.0, publisher: acme }\n",
         )],
     ))
     .expect("prepare Plugin");

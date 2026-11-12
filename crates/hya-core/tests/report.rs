@@ -87,7 +87,7 @@ async fn engine_with_channel_restriction(channels: &str) -> Arc<SessionEngine> {
         vec![hya_bundle::SourceFile::new(
             "bundle.yaml",
             format!(
-                "kind: AgentSetBundle\nidentity: {{ id: acme/channel-restriction, version: 1.0.0, publisher: acme }}\nchannels:\n{channels}\n"
+                "kind: Bundle\nidentity: {{ id: acme/channel-restriction, version: 1.0.0, publisher: acme }}\nchannels:\n{channels}\n"
             ),
         )],
     );

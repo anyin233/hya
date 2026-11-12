@@ -9,8 +9,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use hya_bundle::{
-    BundleCatalog, PreparedCatalog, PreparedCheck, PreparedInstallableBundle,
-    PublicPackageInspection, cleanup_orphaned_staging, stage_package,
+    Bundle, BundleCatalog, PreparedCatalog, PreparedCheck, PublicPackageInspection,
+    cleanup_orphaned_staging, stage_package,
 };
 use hya_server::{
     BUNDLE_CONFLICT, BUNDLE_CONTROL_FAILURE, BUNDLE_IMMUTABLE, BUNDLE_INVALID_REQUEST,
@@ -282,7 +282,7 @@ pub async fn run_self_check(
 async fn run_self_check_in(
     root: &Path,
     public: &PublicPackageInspection,
-    bundle: &PreparedInstallableBundle,
+    bundle: &Bundle,
     check: &PreparedCheck,
 ) -> Result<String, BundleControlError> {
     let write = |path: &Path, bytes: &[u8]| -> Result<(), BundleControlError> {
@@ -551,10 +551,7 @@ pub fn decode_installed_catalog(
 }
 
 /// What one prepared bundle contributes.
-fn components(
-    prepared: &PreparedCatalog,
-    bundle: &PreparedInstallableBundle,
-) -> BundleListingComponents {
+fn components(prepared: &PreparedCatalog, bundle: &Bundle) -> BundleListingComponents {
     let id = &bundle.identity().id;
     let ids = |resources: &[hya_bundle::PreparedResource]| {
         resources
@@ -597,7 +594,7 @@ fn components(
 
 fn listing(
     prepared: &PreparedCatalog,
-    bundle: &PreparedInstallableBundle,
+    bundle: &Bundle,
     scope: &str,
     state: &str,
     enabled: bool,

@@ -1,4 +1,4 @@
-kind: Plugin
+kind: Bundle
 version_ref: backend
 identity:
   id: hya-extra/zvec-grep

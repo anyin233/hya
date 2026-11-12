@@ -16,7 +16,7 @@ async fn t2_21_plugin_installs_and_publishes_static_skill() {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Plugin
+                br#"kind: Bundle
 identity: { id: acme/plugin-e2e, version: 1.0.0, publisher: acme }
 resources:
   skills:

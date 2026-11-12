@@ -1,13 +1,13 @@
 //! Read-only inventory of the trusted first-party presets loaded at runtime.
 
-use hya_bundle::{BundleError, PreparedInstallableBundle, first_party_bundle};
+use hya_bundle::{Bundle, BundleError, first_party_bundle};
 
 /// Display metadata for one immutable trusted preset.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TrustedPresetDescriptor {
     /// Stable preset identity.
     pub id: String,
-    /// Prepared payload kind (`Plugin` or `AgentSetBundle`).
+    /// Prepared payload kind (`Plugin` or `Bundle`).
     pub kind: String,
     /// Preset payload version.
     pub version: String,
@@ -107,7 +107,7 @@ pub fn trusted_preset_inventory() -> Result<Vec<TrustedPresetDescriptor>, Bundle
         },
         TrustedPresetDescriptor {
             id: core.bundle_id().to_string(),
-            kind: "AgentSetBundle".to_string(),
+            kind: "Bundle".to_string(),
             version: core.version().to_string(),
             digest: core.digest().to_string(),
             immutable: true,
@@ -124,10 +124,7 @@ pub fn trusted_preset_inventory() -> Result<Vec<TrustedPresetDescriptor>, Bundle
     Ok(presets)
 }
 
-fn single_bundle<'a>(
-    bundles: &'a [PreparedInstallableBundle],
-    identity: &str,
-) -> Result<&'a PreparedInstallableBundle, BundleError> {
+fn single_bundle<'a>(bundles: &'a [Bundle], identity: &str) -> Result<&'a Bundle, BundleError> {
     bundles.first().ok_or_else(|| BundleError::InvalidManifest {
         source_name: identity.to_string(),
         detail: "trusted preset catalog is empty".to_string(),

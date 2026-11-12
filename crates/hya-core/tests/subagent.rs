@@ -7,8 +7,8 @@ mod support;
 use async_trait::async_trait;
 use futures::{FutureExt as _, stream};
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-    PreparedInstallableBundle, PreparedResource, ResourceView,
+    AgentRole, Bundle, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedResource,
+    ResourceView,
 };
 use hya_core::{
     AdmissionMemberIdentity, AgentCatalog, AgentSpec, BoundSidecarFactory, BoundSpawnSender,
@@ -463,10 +463,10 @@ struct ImmediateSidecarHandle {
 
 const SIDECAR_PERMISSION_TOOL: &str = "bundle:hya/sidecar-permission/tool/echo";
 
-fn sidecar_permission_bundle() -> PreparedAgentBundle {
-    PreparedAgentBundle {
+fn sidecar_permission_bundle() -> Bundle {
+    Bundle {
         check: None,
-        format_version: 3,
+        format_version: 4,
         identity: BundleIdentity {
             id: "hya/sidecar-permission".to_string(),
             version: "0.0.0".to_string(),
@@ -474,7 +474,7 @@ fn sidecar_permission_bundle() -> PreparedAgentBundle {
         },
         namespace: None,
         digest: "test-only".to_string(),
-        agent: PreparedAgent {
+        agents: vec![PreparedAgent {
             id: AgentName::new("sidecar-agent"),
             description: None,
             role: AgentRole::Subagent,
@@ -487,7 +487,7 @@ fn sidecar_permission_bundle() -> PreparedAgentBundle {
             resource_view: ResourceView::default(),
             can_spawn: Vec::new(),
             hook_refs: Vec::new(),
-        },
+        }],
         tools: vec![PreparedResource {
             local_id: "echo".to_string(),
             stable_id: SIDECAR_PERMISSION_TOOL.to_string(),
@@ -502,6 +502,13 @@ fn sidecar_permission_bundle() -> PreparedAgentBundle {
         hooks: Vec::new(),
         extensions: Vec::new(),
         tui: None,
+
+        workflow: None,
+        channels: vec![],
+        schemas: vec![],
+        process: None,
+        apis: vec![],
+        permission_modes: vec![],
     }
 }
 
@@ -2111,14 +2118,11 @@ async fn plugin_hooks_reach_bundle_subagent_alongside_its_sidecar_hooks() {
         "plugin",
         vec![hya_bundle::SourceFile::new(
             "bundle.yaml",
-            "kind: Plugin\nidentity: { id: acme/router, version: 1.0.0, publisher: acme }\n",
+            "kind: Bundle\nidentity: { id: acme/router, version: 1.0.0, publisher: acme }\n",
         )],
     ))
     .unwrap();
-    let bundles = [
-        PreparedInstallableBundle::Agent(Box::new(sidecar_permission_bundle())),
-        plugin.bundles()[0].clone(),
-    ];
+    let bundles = [sidecar_permission_bundle(), plugin.bundles()[0].clone()];
     let catalog = Arc::new(
         AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(&bundles).unwrap())).unwrap(),
     );
@@ -6368,7 +6372,7 @@ async fn run_team_preserves_input_member_order_with_mixed_outcomes() {
 }
 
 /// Wrap one prepared AgentBundle as an agent catalog over the compiled-in built-ins.
-fn agent_catalog(bundle: PreparedAgentBundle) -> Result<AgentCatalog, hya_bundle::BundleError> {
-    let bundles = [PreparedInstallableBundle::Agent(Box::new(bundle))];
+fn agent_catalog(bundle: Bundle) -> Result<AgentCatalog, hya_bundle::BundleError> {
+    let bundles = [bundle];
     AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(&bundles)?))
 }

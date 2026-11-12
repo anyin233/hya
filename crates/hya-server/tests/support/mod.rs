@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-    PreparedInstallableBundle, PreparedResource, PreparedTuiExtension, ResourceView,
+    AgentRole, Bundle, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedResource,
+    PreparedTuiExtension, ResourceView,
 };
 use hya_core::runtime_registry::RuntimeSourceSkill;
 use hya_core::{AgentCatalog, RuntimeRegistry, RuntimeSource, RuntimeSourceId, RuntimeSourceKind};
@@ -140,7 +140,7 @@ pub fn agent_catalog_with_tui(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
             aliases: Vec::new(),
         },
     ];
-    if let PreparedInstallableBundle::Agent(bundle) = bundle {
+    {
         bundle.digest = "a".repeat(64);
         bundle.extensions = resources;
         bundle.tui = Some(PreparedTuiExtension {
@@ -153,7 +153,7 @@ pub fn agent_catalog_with_tui(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
     agent_catalog_of(&bundles)
 }
 
-fn agent_catalog_of(bundles: &[PreparedInstallableBundle]) -> Arc<AgentCatalog> {
+fn agent_catalog_of(bundles: &[Bundle]) -> Arc<AgentCatalog> {
     let catalog = BundleCatalog::from_prepared(bundles).expect("server test catalog");
     Arc::new(AgentCatalog::new(Arc::new(catalog)).expect("server agent catalog"))
 }
@@ -171,13 +171,13 @@ pub fn test_agents() -> Vec<AgentFixture> {
 }
 
 /// One prepared bundle per agent, over the compiled-in built-ins.
-fn prepared_bundles(agents: &[AgentFixture]) -> Vec<PreparedInstallableBundle> {
+fn prepared_bundles(agents: &[AgentFixture]) -> Vec<Bundle> {
     agents
         .iter()
         .filter(|agent| hya_core::preset_agent(agent.stable_id).is_none())
-        .map(|agent| PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
+        .map(|agent| Bundle {
             check: None,
-            format_version: 3,
+            format_version: 4,
             identity: BundleIdentity {
                 id: format!("hya/server-tests-{}", agent.stable_id),
                 version: "0.0.0".to_string(),
@@ -204,7 +204,7 @@ fn prepared_bundles(agents: &[AgentFixture]) -> Vec<PreparedInstallableBundle> {
                     }]
                 })
                 .unwrap_or_default(),
-            agent: PreparedAgent {
+            agents: vec![PreparedAgent {
             id: AgentName::new(agent.stable_id),
             description: agent.description.map(str::to_string),
             role: agent.role,
@@ -221,18 +221,25 @@ fn prepared_bundles(agents: &[AgentFixture]) -> Vec<PreparedInstallableBundle> {
                 .map(|id| AgentName::new(*id))
                 .collect(),
                 hook_refs: Vec::new(),
-            },
+            }],
             tools: Vec::new(),
             mcp: Vec::new(),
             hooks: Vec::new(),
             extensions: Vec::new(),
             tui: None,
-        })))
+
+            workflow: None,
+            channels: vec![],
+            schemas: vec![],
+            process: None,
+            apis: vec![],
+            permission_modes: vec![],
+        })
         .collect()
 }
 
 /// Adapt one server fixture bundle's prepared Skill into its runtime source.
-fn bundle_skill_source(bundle: &PreparedInstallableBundle) -> Option<RuntimeSource> {
+fn bundle_skill_source(bundle: &Bundle) -> Option<RuntimeSource> {
     let skills = bundle
         .skills()
         .iter()

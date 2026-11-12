@@ -2211,7 +2211,7 @@ impl TurnBinding {
                             .iter()
                             .any(|bundle| {
                                 bundle.identity().id == source.id.configured_id()
-                                    && bundle.plugin_bundle().is_some()
+                                    && (bundle.agents().is_empty() && bundle.workflow().is_none())
                             }))
             })
             .filter_map(|source| source.hooks.clone())
@@ -3674,7 +3674,8 @@ fn collect_bundle_tool_candidates(
 fn is_harness_source(source: &RuntimeSource, bundles: &BundleCatalog) -> bool {
     source.id.kind() != RuntimeSourceKind::Bundle
         || bundles.bundles().iter().any(|bundle| {
-            bundle.identity().id == source.id.configured_id() && bundle.plugin_bundle().is_some()
+            bundle.identity().id == source.id.configured_id()
+                && (bundle.agents().is_empty() && bundle.workflow().is_none())
         })
 }
 
@@ -3857,7 +3858,7 @@ fn collect_harness_skill_candidates(
                 .bundles()
                 .iter()
                 .find(|bundle| bundle.identity().id == source.id.configured_id())
-                .is_some_and(|bundle| bundle.plugin_bundle().is_some());
+                .is_some_and(|bundle| bundle.agents().is_empty() && bundle.workflow().is_none());
         if source.id.kind() != RuntimeSourceKind::Plugin && !agentless_bundle_plugin {
             continue;
         }
@@ -4564,8 +4565,8 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use hya_bundle::{
-        AgentRole, BundleIdentity, BundleSource, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-        PreparedInstallableBundle, PreparedResource, SourceFile, prepare_package,
+        AgentRole, Bundle, BundleIdentity, BundleSource, ModelPolicy, PreparedAgent,
+        PreparedResource, SourceFile, prepare_package,
     };
     use hya_proto::{AgentName, ToolName};
     use hya_tool::{
@@ -4581,11 +4582,11 @@ mod tests {
     struct TestCatalog;
 
     impl TestCatalog {
-        fn from_prepared(bundles: &[PreparedAgentBundle]) -> Result<AgentCatalog, BundleError> {
+        fn from_prepared(bundles: &[Bundle]) -> Result<AgentCatalog, BundleError> {
             let bundles = bundles
                 .iter()
                 .cloned()
-                .map(|bundle| PreparedInstallableBundle::Agent(Box::new(bundle)))
+                .map(|bundle| bundle)
                 .collect::<Vec<_>>();
             AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(&bundles)?))
         }
@@ -4678,7 +4679,7 @@ mod tests {
             "AgentBundle",
             "private",
             "private-skill",
-            "agent: { id: private-agent, role: main }\n",
+            "agents: [{ id: private-agent, role: main }]\n",
         );
         let catalog = Arc::new(TestCatalog::from_verified_catalogs(&[&plugin, &agent]).unwrap());
         let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
@@ -4742,7 +4743,7 @@ mod tests {
     #[test]
     fn bundled_mcp_stays_in_mcp_partition() {
         let prepared = prepare_package(BundleSource::new("bundled-mcp", vec![
-            SourceFile::new("bundle.yaml", "kind: Plugin\nidentity: { id: acme/bundled-mcp, version: 1.0.0, publisher: acme }\n"),
+            SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: acme/bundled-mcp, version: 1.0.0, publisher: acme }\n"),
         ])).unwrap();
         let catalog = Arc::new(TestCatalog::from_verified_catalogs(&[&prepared]).unwrap());
         let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
@@ -4786,18 +4787,18 @@ mod tests {
             vec![
                 SourceFile::new(
                     "bundle.yaml",
-                    r#"kind: AgentBundle
+                    r#"kind: Bundle
 identity: { id: acme/private-process, version: 1.0.0, publisher: acme }
 extensions:
   process: { kind: rust, command: [fixture] }
 resources:
   tools: [{ id: echo, path: echo.json }]
   hooks: [{ id: tool.execute.before, path: echo.json }]
-agent:
-  hook_refs: [tool.execute.before]
-  id: private-process-agent
-  role: main
-  resource_view: { allow: [echo] }
+agents:
+  - hook_refs: [tool.execute.before]
+    id: private-process-agent
+    role: main
+    resource_view: { allow: [echo] }
 "#,
                 ),
                 SourceFile::new("echo.json", "{}"),
@@ -4864,7 +4865,7 @@ agent:
             "plugin-b",
             vec![SourceFile::new(
                 "bundle.yaml",
-                "kind: Plugin\nidentity: { id: acme/plugin-b, version: 1.0.0, publisher: acme }\n",
+                "kind: Bundle\nidentity: { id: acme/plugin-b, version: 1.0.0, publisher: acme }\n",
             )],
         ))
         .unwrap();
@@ -4872,7 +4873,7 @@ agent:
             "plugin-a",
             vec![SourceFile::new(
                 "bundle.yaml",
-                "kind: Plugin\nidentity: { id: acme/plugin-a, version: 1.0.0, publisher: acme }\n",
+                "kind: Bundle\nidentity: { id: acme/plugin-a, version: 1.0.0, publisher: acme }\n",
             )],
         ))
         .unwrap();
@@ -4881,7 +4882,7 @@ agent:
             vec![
                 SourceFile::new(
                     "bundle.yaml",
-                    r#"kind: AgentSetBundle
+                    r#"kind: Bundle
 identity: { id: acme/owner, version: 1.0.0, publisher: acme }
 extensions:
   process: { kind: rust, command: [fixture] }
@@ -4973,14 +4974,14 @@ agents:
             vec![
                 SourceFile::new(
                     "bundle.yaml",
-                    r#"kind: AgentBundle
+                    r#"kind: Bundle
 identity: { id: acme/private-mcp, version: 1.0.0, publisher: acme }
 resources:
   mcp: [{ id: echo, path: mcp.json }]
-agent:
-  id: private-mcp-agent
-  role: main
-  resource_view: { allow: [echo] }
+agents:
+  - id: private-mcp-agent
+    role: main
+    resource_view: { allow: [echo] }
 "#,
                 ),
                 SourceFile::new("mcp.json", r#"{"command":["fixture"]}"#),
@@ -5103,10 +5104,10 @@ agent:
         bundle_id: &str,
         agent: PreparedAgent,
         skills: Vec<PreparedResource>,
-    ) -> PreparedAgentBundle {
-        PreparedAgentBundle {
+    ) -> Bundle {
+        Bundle {
             check: None,
-            format_version: 3,
+            format_version: 4,
             identity: BundleIdentity {
                 id: bundle_id.to_string(),
                 version: "0.0.0".to_string(),
@@ -5114,13 +5115,20 @@ agent:
             },
             namespace: None,
             digest: "test-only".to_string(),
-            agent,
+            agents: vec![agent],
             tools: Vec::new(),
             skills,
             mcp: Vec::new(),
             hooks: Vec::new(),
             extensions: Vec::new(),
             tui: None,
+
+            workflow: None,
+            channels: vec![],
+            schemas: vec![],
+            process: None,
+            apis: vec![],
+            permission_modes: vec![],
         }
     }
 
@@ -5640,15 +5648,15 @@ agent:
                        permission_mode: Mode,
                        generation: ConfigGeneration| {
             let manifest = format!(
-                r#"kind: AgentBundle
+                r#"kind: Bundle
 identity:
   id: hya/runtime-fingerprint
   version: 1.0.0
   publisher: hya-tests
-agent:
-  id: fingerprint
-  description: "manifest {catalog_marker}"
-  role: main
+agents:
+  - id: fingerprint
+    description: "manifest {catalog_marker}"
+    role: main
 "#
             );
             let prepared = prepare_package(BundleSource::new(
@@ -5858,14 +5866,14 @@ agent:
             ]
         };
         let fixture = |selected: Vec<SkillCatalogEntry>, unrelated: Vec<SkillCatalogEntry>| {
-            let manifest = r#"kind: AgentBundle
+            let manifest = r#"kind: Bundle
 identity:
   id: hya/runtime-fingerprint-skills
   version: 1.0.0
   publisher: hya-tests
-agent:
-  id: fingerprint-skills
-  role: main
+agents:
+  - id: fingerprint-skills
+    role: main
 "#;
             let prepared = prepare_package(BundleSource::new(
                 "runtime-fingerprint-skills",
@@ -6048,14 +6056,14 @@ agent:
                        include_mcp: bool,
                        reverse_sources: bool,
                        reverse_resources: bool| {
-            let manifest = r#"kind: AgentBundle
+            let manifest = r#"kind: Bundle
 identity:
   id: hya/runtime-fingerprint-sources
   version: 1.0.0
   publisher: hya-tests
-agent:
-  id: fingerprint-sources
-  role: main
+agents:
+  - id: fingerprint-sources
+    role: main
 "#;
             let prepared = prepare_package(BundleSource::new(
                 "runtime-fingerprint-sources",

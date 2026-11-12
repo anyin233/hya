@@ -56,7 +56,7 @@ fn workflow_bundle_source_with_prompt(
     prompt: &str,
 ) -> hya_bundle::BundleSource {
     let manifest = format!(
-        r#"kind: WorkflowBundle
+        r#"kind: Bundle
 identity:
   id: {bundle_id}
   version: 1.0.0

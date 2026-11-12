@@ -134,7 +134,7 @@ async fn root_second_round_adopts_new_hook_when_first_round_had_none() {
         "hook",
         vec![SourceFile::new(
             "bundle.yaml",
-            "kind: Plugin\nidentity: { id: acme/hot-hook, version: 1.0.0, publisher: acme }\n",
+            "kind: Bundle\nidentity: { id: acme/hot-hook, version: 1.0.0, publisher: acme }\n",
         )],
     ))
     .unwrap();

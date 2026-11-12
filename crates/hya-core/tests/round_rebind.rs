@@ -18,8 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_trait::async_trait;
 use futures::stream;
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-    PreparedInstallableBundle, ResourceView,
+    AgentRole, Bundle, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, ResourceView,
 };
 use hya_core::{
     AgentCatalog, AgentSpec, CoreError, CreateSession, EventBus, MemberSpec, MemberStatus,
@@ -172,9 +171,9 @@ impl RuntimeCatalogRefresh for CountingRefresh {
 
 /// One installed bundle agent with an explicit prompt, over the built-ins.
 fn single_agent_catalog(stable_id: &str, prompt: &str) -> Arc<AgentCatalog> {
-    let bundle = PreparedAgentBundle {
+    let bundle = Bundle {
         check: None,
-        format_version: 3,
+        format_version: 4,
         identity: BundleIdentity {
             id: format!("hya/round-rebind-{stable_id}"),
             version: "0.0.0".to_string(),
@@ -182,7 +181,7 @@ fn single_agent_catalog(stable_id: &str, prompt: &str) -> Arc<AgentCatalog> {
         },
         namespace: None,
         digest: format!("test-only-{stable_id}"),
-        agent: PreparedAgent {
+        agents: vec![PreparedAgent {
             id: AgentName::new(stable_id),
             description: None,
             role: AgentRole::Main,
@@ -195,15 +194,22 @@ fn single_agent_catalog(stable_id: &str, prompt: &str) -> Arc<AgentCatalog> {
             resource_view: ResourceView::default(),
             can_spawn: Vec::new(),
             hook_refs: Vec::new(),
-        },
+        }],
         tools: Vec::new(),
         skills: Vec::new(),
         mcp: Vec::new(),
         hooks: Vec::new(),
         extensions: Vec::new(),
         tui: None,
+
+        workflow: None,
+        channels: vec![],
+        schemas: vec![],
+        process: None,
+        apis: vec![],
+        permission_modes: vec![],
     };
-    let prepared = PreparedInstallableBundle::Agent(Box::new(bundle));
+    let prepared = bundle;
     let Ok(bundles) = BundleCatalog::from_prepared(&[prepared]) else {
         panic!("test bundle catalog must be valid");
     };

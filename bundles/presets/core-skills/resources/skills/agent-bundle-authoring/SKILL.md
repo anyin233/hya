@@ -1,18 +1,17 @@
 ---
 name: agent-bundle-authoring
 description: >-
-  Use when authoring, packaging, importing, or installing public Plugin, AgentBundle, AgentSetBundle, or WorkflowBundle payloads: resources, process/MCP providers, scoped hooks, channel policies, trusted presets, immutable bindings, and permission boundaries. Harness remains the agent runtime.
+  Use when authoring, packaging, importing, or installing public Bundle payloads: resources, process/MCP providers, scoped hooks, channel policies, trusted presets, immutable bindings, and permission boundaries. Harness remains the agent runtime.
 ---
 <!-- Trusted core Skill; its metadata and body are prepared from this bundle. -->
 
 # Bundle authoring
 
-An AgentBundle defines exactly one agent. Choose the existing payload matching the authored surface:
-
-- `Plugin`: agentless tools, Skills, hooks, MCP, schemas, and optional process.
-- `AgentBundle`: exactly one Agent and its private resource plane.
-- `AgentSetBundle`: multiple Agents and optional restrictive `channels` templates; a channel-only package may omit Agents.
-- `WorkflowBundle`: one Workflow and its exact reachable Agent closure.
+Use an `agents` list. One `Bundle` can supply agentless resources, multiple
+Agents sharing a resource plane, optional restrictive `channels` templates,
+and an optional Workflow with its exact reachable Agent closure. All declarations
+contribute to its digest; prepared format 4 stores one complete Bundle and
+recomputes catalog indexes on load.
 
 Read `docs/agent-bundle-authoring.md`, `docs/bundle-runtime.md`, and the relevant
 `docs/workflows.md`, `docs/agent-channels.md`, or `docs/claude-plugin-import.md`
@@ -38,8 +37,8 @@ a permitted spawn of another Agent runs that Agent on its own plane.
 
 ## Source and package closure
 
-Use one root manifest. `bundle.hya.md` is the singular AgentBundle markdown
-form; the other payloads use `bundle.yaml`. Declare every prompt, resource,
+Use one root manifest. `bundle.hya.md` supports a body prompt for one Agent;
+`bundle.yaml` uses explicit prompt paths for every Agent. Declare every prompt, resource,
 JavaScript extension, and inert support file. Missing files, path traversal,
 absolute paths, duplicate normalized archive paths, unreferenced archive files,
 and non-regular files reject. Directory and archive forms prepare to the same
@@ -68,7 +67,7 @@ resource view and `hook_refs`.
 ## Activation-scoped JavaScript contract
 
 For agent-bearing JavaScript sidecars, `hook_refs` select Bundle-local Hook resources only;
-all `harness:hook/*` spellings reject. Harness host hooks stay outside AgentBundle metadata.
+all `harness:hook/*` spellings reject. Harness host hooks stay outside Bundle metadata.
 The supported hook IDs are exactly `event`, `tool.execute.before`, and `tool.execute.after`;
 aliases do not rename hooks. Process-backed bundles instead use the native hook vocabulary
 and restrict calls by each Agent's selected references.

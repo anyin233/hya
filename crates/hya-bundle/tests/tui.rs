@@ -5,7 +5,7 @@ use hya_bundle::{BundleError, BundleSource, SourceFile, prepare_package};
 
 fn tui_bundle(tui: &str, entry_path: &str, entry_bytes: &[u8]) -> BundleSource {
     let manifest = format!(
-        "kind: AgentBundle\nidentity:\n  id: hya/tui-test\n  version: 1.0.0\n  publisher: hya\nagent:\n  id: tui-test\n  role: main\n  prompt: prompts/lead.md\nextensions:\n  js:\n    - id: entry\n      path: {entry_path}\n  process:\n    kind: bun\n    command: [bun, run, '{entry_path}']\ntui:\n{tui}"
+        "kind: Bundle\nidentity:\n  id: hya/tui-test\n  version: 1.0.0\n  publisher: hya\nagents:\n  - id: tui-test\n    role: main\n    prompt: prompts/lead.md\nextensions:\n  js:\n    - id: entry\n      path: {entry_path}\n  process:\n    kind: bun\n    command: [bun, run, '{entry_path}']\ntui:\n{tui}"
     );
     BundleSource::new(
         "tui-test",

@@ -703,7 +703,7 @@ bundle install --project` puts a bundle. Leaving it unset writes nothing, so
 existing specs are unaffected.
 
 `approverBundle({ id, modes, approve })` (`e2e/hya.ts`) builds such a
-bundle for [permission modes](tui.md#permission-modes): a `kind: Plugin`
+bundle for [permission modes](tui.md#permission-modes): a `kind: Bundle`
 bundle with `permission_modes:` (`modes: { id, title, description? }[]`), a
 `permission.approve` hook resource, and an `extensions.process` of kind
 `bun` that runs the repository's Bun adapter

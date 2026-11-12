@@ -11,14 +11,14 @@ fn public_package_source() -> BundleSource {
         vec![SourceFile::new(
             "bundle.hya.md",
             br#"---
-kind: AgentBundle
+kind: Bundle
 identity:
   id: hya/public-package
   version: 1.0.0
   publisher: hya
-agent:
-  id: public-package-lead
-  role: main
+agents:
+  - id: public-package-lead
+    role: main
 ---
 You are the public package lead.
 "#,
@@ -32,7 +32,7 @@ fn workflow_package_source() -> BundleSource {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: WorkflowBundle
+                br#"kind: Bundle
 identity:
   id: hya/workflow-public
   version: 1.0.0
@@ -80,7 +80,7 @@ fn workflow_public_writer_round_trips_compiled_source_and_agents() {
     let [bundle] = inspected.bundles() else {
         panic!("Workflow package must contain one payload");
     };
-    assert_eq!(bundle.kind().as_str(), "WorkflowBundle");
+    assert_eq!(bundle.kind().as_str(), "Bundle");
     assert_eq!(
         bundle.workflow().map(|workflow| workflow.id.as_str()),
         Some("demo")
@@ -147,7 +147,7 @@ fn e2e_schema_demo_fixture_matches_the_production_package_bytes() {
             vec![
                 SourceFile::new(
                     "bundle.yaml",
-                    br#"kind: AgentBundle
+                    br#"kind: Bundle
 identity:
   id: hya/schema-demo
   version: 1.0.0
@@ -170,13 +170,13 @@ extensions:
   process:
     kind: bun
     command: [bun, schema-demo-worker]
-agent:
-  id: schema-lead
-  role: main
-  resource_view:
-    allow:
-      - query
-      - runtime
+agents:
+  - id: schema-lead
+    role: main
+    resource_view:
+      allow:
+        - query
+        - runtime
 "#,
                 ),
                 SourceFile::new("extensions/runtime.js", b"export default {}".to_vec()),

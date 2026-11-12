@@ -24,18 +24,16 @@ pub use first_party::{
     first_party_source_root, load_first_party,
 };
 pub use model::{
-    AgentRole, BundleIdentity, ChannelCapability, ChannelParticipantRole, ChannelRetention,
-    ChannelScope, ChannelTemplateKind, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-    PreparedAgentSetBundle, PreparedApi, PreparedBundleApis, PreparedBundleIndex,
-    PreparedBundleKind, PreparedBundlePermissionModes, PreparedBundleProcess,
+    AgentRole, Bundle, BundleIdentity, ChannelCapability, ChannelParticipantRole, ChannelRetention,
+    ChannelScope, ChannelTemplateKind, ModelPolicy, PreparedAgent, PreparedApi, PreparedBundleApis,
+    PreparedBundleIndex, PreparedBundleKind, PreparedBundlePermissionModes, PreparedBundleProcess,
     PreparedBundleSchemas, PreparedCatalog, PreparedChannelParticipant, PreparedChannelTemplate,
-    PreparedCheck, PreparedInstallableBundle, PreparedPermissionMode, PreparedPluginBundle,
-    PreparedProcessExtension, PreparedProcessKind, PreparedResource, PreparedSchema,
-    PreparedTuiExtension, PreparedWorkflow, PreparedWorkflowBundle, ResourceView,
+    PreparedCheck, PreparedPermissionMode, PreparedProcessExtension, PreparedProcessKind,
+    PreparedResource, PreparedSchema, PreparedTuiExtension, PreparedWorkflow, ResourceView,
 };
 pub use package::{
     PackageFormat, PublicPackageInspection, StagedPackage, cleanup_orphaned_staging,
     detect_package_format, inspect_public_package, stage_package, write_public_package,
 };
-pub use prepare::prepare_package;
+pub use prepare::{prepare_package, read_bundle_identity};
 pub use source::{BundleSource, SourceFile, SourceTuiExtension};

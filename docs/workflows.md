@@ -10,7 +10,7 @@ runtime creates a child Session or sends mail.
 | --- | --- |
 | Project | `<root>/.hya/workflows/*.hya.md` for every root of the bound catalog scope |
 | User | `$HOME/.config/hya/workflows/*.hya.md` |
-| Bundle catalog | Installed and read-only first-party `WorkflowBundle` payloads |
+| Bundle catalog | Installed and read-only first-party `Bundle` payloads |
 
 A Session's catalog scope decides which roots the Project tier reads: a
 Session inside a registered Project reads `<workdir>/.hya/workflows` first,
@@ -27,14 +27,14 @@ given source id or name wins.
 
 Project sources take precedence over user and bundle sources with the same declared name. User sources take precedence over bundle sources. Two bundle sources with the same bare name are ambiguous; use the exact `bundle:<bundle-id>/workflow/<workflow-id>` source id. YAML-only Workflow documents and the removed `stages:`/`needs:` format are not accepted.
 
-## Packaging a WorkflowBundle
+## Packaging a Bundle
 
-A `WorkflowBundle` packages one compiled Workflow and its exact Agent closure. It is a distinct closed payload kind beside singular `AgentBundle`.
+A `Bundle` packages one compiled Workflow and its exact Agent closure. It uses the same Bundle format as agentless and multi-Agent packages.
 
 The source must use `bundle.yaml`; `bundle.hya.md` is rejected because a multi-Agent payload has no unambiguous body prompt.
 
 ```yaml
-kind: WorkflowBundle
+kind: Bundle
 identity:
   id: acme/feature-delivery
   version: 1.0.0
@@ -58,7 +58,7 @@ Preparation fails unless all of these conditions are true:
 - `agents:` contains every Stage Agent, verifier Agent, and recursive `can_spawn` target.
 - `agents:` contains no Agent outside that reachable closure. Built-in Agent ids are reserved and cannot substitute for packaged closure members.
 - Agent ids are globally unique across the prepared catalog.
-- Shared `resources` and `extensions` satisfy the same digest, path, resource-view, and executable-sidecar rules as an AgentBundle.
+- Shared `resources` and `extensions` satisfy the same digest, path, resource-view, and executable-sidecar rules as a Bundle.
 
 Preparation stores the compiled Workflow source, source digest, compiler revision, sorted Agent closure, and shared resources in one canonical prepared payload. Install refresh publishes its Workflow, Agents, and prepared Skill contributions in one runtime generation. Existing turn bindings keep the old generation.
 
@@ -70,11 +70,11 @@ hya bundle list
 hya bundle info acme/feature-delivery
 ```
 
-`bundle list` and `bundle info` report `kind=WorkflowBundle`, the Workflow id, and the packaged Agent ids.
+`bundle list` and `bundle info` report `kind=Bundle`, the Workflow id, and the packaged Agent ids.
 
 ### Full Argus example
 
-The repository ships a complete ordinary WorkflowBundle source at
+The repository ships a complete ordinary Bundle source at
 [`bundles/examples/argus-example`](../bundles/examples/argus-example/). It uses
 the public graph, package, registry, catalog, and executor paths; no engine
 branch recognizes its topology. Package and install it from a source checkout:
@@ -233,7 +233,7 @@ provider response, credential, header, or raw error text. A Workflow without an
 explicit assignment keeps the existing Agent/category/global route path and
 does not add route fields or route-outcome Events.
 
-Prepared WorkflowBundles use prepared format v3 and retain
+Prepared Bundles use prepared format v4 and retain
 the complete source and compiler revision. A route-bearing v2 source still
 requires a runtime with the model-routing compiler; unchanged no-assignment v2
 sources retain their existing revision. Client session sidebars do not render

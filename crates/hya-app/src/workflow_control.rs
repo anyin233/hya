@@ -33,12 +33,12 @@ pub enum WorkflowCatalogOwner {
     Project,
     /// User-level Workflow file.
     User,
-    /// Installed WorkflowBundle payload.
+    /// Installed Bundle payload.
     Installed {
         /// Owning installed bundle id.
         bundle_id: String,
     },
-    /// Read-only first-party WorkflowBundle payload.
+    /// Read-only first-party Bundle payload.
     FirstParty {
         /// Owning first-party bundle id.
         bundle_id: String,
@@ -1486,6 +1486,36 @@ fn source_stem(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn process_command_changes_packaged_workflow_revision() {
+        use hya_bundle::{BundleSource, SourceFile, prepare_package};
+        let workflow_source = "---\nkind: Workflow\nname: demo\ndescription: Digest revision regression.\nnodes:\n  execute:\n    agent: worker\n    directive: Execute.\n---\nflowchart TD\n  execute\n";
+        let prepare = |command: &str| {
+            let manifest = format!(
+                "kind: Bundle\nidentity: {{id: hya/demo, version: 1.0.0, publisher: hya}}\nagents: [{{id: worker, role: subagent}}]\nworkflow: {{id: demo, path: workflows/demo.hya.md}}\nextensions:\n  process: {{kind: rust, command: [{command}]}}\n"
+            );
+            prepare_package(BundleSource::new(
+                "revision",
+                vec![
+                    SourceFile::new("bundle.yaml", manifest.into_bytes()),
+                    SourceFile::new("workflows/demo.hya.md", workflow_source.as_bytes()),
+                ],
+            ))
+            .unwrap_or_else(|error| panic!("prepare process-backed Workflow: {error}"))
+        };
+        let before = prepare("provider-before");
+        let after = prepare("provider-after");
+        let compiled = hya_workflow::compile(hya_workflow::WorkflowSource::new(
+            "workflows/demo.hya.md",
+            workflow_source,
+        ))
+        .unwrap_or_else(|error| panic!("compile Workflow: {error}"));
+        assert_ne!(before.bundles()[0].digest(), after.bundles()[0].digest());
+        assert_ne!(
+            super::bundle_workflow_revision(&compiled, before.bundles()[0].digest()),
+            super::bundle_workflow_revision(&compiled, after.bundles()[0].digest()),
+        );
+    }
     use super::{
         WorkflowControlError, map_workflow_preflight_error, workflow_event_run,
         workflow_request_hash,

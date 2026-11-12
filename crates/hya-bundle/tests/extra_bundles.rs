@@ -96,7 +96,7 @@ fn zvec_grep_is_a_plugin_with_one_mcp_server_and_one_skill() {
     let prepared = prepare_package(source).expect("prepare zvec-grep");
     let bundle = &prepared.bundles()[0];
 
-    assert_eq!(bundle.kind(), PreparedBundleKind::Plugin);
+    assert_eq!(bundle.kind(), PreparedBundleKind::Bundle);
     assert!(
         bundle.agents().is_empty(),
         "a Plugin bundle carries no synthetic agent"
@@ -114,7 +114,7 @@ fn scout_is_an_agent_set_bundle_with_a_subagent_scout_and_its_own_mcp_server() {
     let prepared = prepare_package(source).expect("prepare scout");
     let bundle = &prepared.bundles()[0];
 
-    assert_eq!(bundle.kind(), PreparedBundleKind::AgentSetBundle);
+    assert_eq!(bundle.kind(), PreparedBundleKind::Bundle);
     assert_eq!(bundle.agents().len(), 1, "expected exactly one agent");
     let agent = &bundle.agents()[0];
     assert_eq!(agent.id.as_str(), "scout");
@@ -160,7 +160,7 @@ fn jev_model_router_is_a_bun_process_plugin_with_one_chat_params_hook() {
     let prepared = prepare_package(source).expect("prepare jev-model-router");
     let bundle = &prepared.bundles()[0];
 
-    assert_eq!(bundle.kind(), PreparedBundleKind::Plugin);
+    assert_eq!(bundle.kind(), PreparedBundleKind::Bundle);
     assert_eq!(bundle.namespace(), "jev-model-router");
     assert!(bundle.agents().is_empty() && bundle.tools().is_empty());
     let hooks: Vec<_> = bundle
@@ -197,7 +197,7 @@ fn model_fallback_is_a_bun_process_plugin_with_one_model_fallback_hook() {
     let prepared = prepare_package(source).expect("prepare model-fallback");
     let bundle = &prepared.bundles()[0];
 
-    assert_eq!(bundle.kind(), PreparedBundleKind::Plugin);
+    assert_eq!(bundle.kind(), PreparedBundleKind::Bundle);
     assert_eq!(bundle.namespace(), "model-fallback");
     assert!(bundle.agents().is_empty() && bundle.tools().is_empty());
     let hooks: Vec<_> = bundle
@@ -230,7 +230,7 @@ fn token_summary_is_a_bun_process_plugin_with_one_tool_and_one_usage_api() {
     let prepared = prepare_package(source).expect("prepare token-summary");
     let bundle = &prepared.bundles()[0];
 
-    assert_eq!(bundle.kind(), PreparedBundleKind::Plugin);
+    assert_eq!(bundle.kind(), PreparedBundleKind::Bundle);
     assert_eq!(bundle.namespace(), "token-summary");
     assert!(bundle.agents().is_empty());
     assert!(bundle.hooks().is_empty(), "token-summary declares no hooks");

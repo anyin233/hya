@@ -3,7 +3,7 @@
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
-use hya_bundle::{BundleCatalog, PreparedCatalog, PreparedInstallableBundle};
+use hya_bundle::{Bundle, BundleCatalog, PreparedCatalog};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{Row, Sqlite, Transaction};
 
@@ -52,7 +52,7 @@ struct LoadedBundleRegistrySnapshot {
 #[derive(Debug)]
 struct LoadedBundleRegistryRecord {
     record: BundleRegistryRecord,
-    prepared: PreparedInstallableBundle,
+    prepared: Bundle,
 }
 
 impl LoadedBundleRegistrySnapshot {
@@ -515,7 +515,7 @@ impl BundleRegistry {
 fn decode_candidate(
     reserved_agent_ids: &[&str],
     candidate: &BundleInstallCandidate,
-) -> Result<PreparedInstallableBundle, StoreError> {
+) -> Result<Bundle, StoreError> {
     let prepared = PreparedCatalog::decode(&candidate.prepared_bytes, &candidate.prepared_digest)?;
     let [incoming] = prepared.bundles() else {
         return Err(StoreError::BundleRegistryData(
@@ -539,7 +539,7 @@ fn decode_candidate(
 fn plan_install(
     snapshot: &LoadedBundleRegistrySnapshot,
     policy: NamespaceInstallPolicy,
-    incoming: PreparedInstallableBundle,
+    incoming: Bundle,
     source_digest: [u8; 32],
 ) -> Result<BundleInstallPlan, StoreError> {
     let identity = incoming.identity();

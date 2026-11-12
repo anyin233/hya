@@ -5,8 +5,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use hya_bundle::{
-    PreparedApi, PreparedInstallableBundle, PreparedPermissionMode, PreparedProcessExtension,
-    PreparedProcessKind, PreparedSchema,
+    Bundle, PreparedApi, PreparedPermissionMode, PreparedProcessExtension, PreparedProcessKind,
+    PreparedSchema,
 };
 use hya_core::{CoreError, RuntimeSource, RuntimeSourceExport, RuntimeSourceId};
 use hya_mcp::{McpServerConfig, PreparedMcpServer};
@@ -39,7 +39,7 @@ impl BundleRuntimeConfig {
     /// Capture `location` for `bundle`, reading the file only when the bundle
     /// starts a process or MCP server that the file can influence.
     pub(crate) fn capture(
-        bundle: &PreparedInstallableBundle,
+        bundle: &Bundle,
         process: Option<&PreparedProcessExtension>,
         location: BundleConfigLocation,
     ) -> Self {
@@ -73,37 +73,21 @@ impl BundleRuntimeConfig {
 /// Whether preparing `bundle` starts an out-of-process provider: an explicit
 /// `extensions.process`, a declared MCP server, or the implicit Bun process of
 /// a JavaScript Plugin with tool or hook entrypoints.
-fn spawns_runtime(
-    bundle: &PreparedInstallableBundle,
-    process: Option<&PreparedProcessExtension>,
-) -> bool {
+fn spawns_runtime(bundle: &Bundle, process: Option<&PreparedProcessExtension>) -> bool {
     process.is_some()
         || !bundle.mcp().is_empty()
-        || (bundle.plugin_bundle().is_some()
+        || ((bundle.agents().is_empty() && bundle.workflow().is_none())
             && (!bundle.tools().is_empty() || !bundle.hooks().is_empty()))
 }
 
-/// Runtime source identity: the prepared bundle, its process, schemas, and
-/// API endpoints, and for spawning bundles the configuration location and content
-/// digest, so a `config.yml` edit restarts the bundle's providers like a
-/// changed bundle.
+/// Runtime source identity is the complete prepared digest plus watched configuration.
 pub(crate) fn fingerprint(
-    bundle: &PreparedInstallableBundle,
-    process: Option<&PreparedProcessExtension>,
-    schemas: &[PreparedSchema],
-    apis: &[PreparedApi],
-    permission_modes: &[PreparedPermissionMode],
+    bundle: &Bundle,
     config: &BundleRuntimeConfig,
 ) -> Result<[u8; 32], CoreError> {
     let config = config.watched.then_some(config);
-    // Without modes the encoding is unchanged, so bundles that declare none
-    // keep their runtime identity (and the Workflow request hashes built on it).
-    let bytes = if permission_modes.is_empty() {
-        serde_json::to_vec(&(bundle, process, schemas, apis, config))
-    } else {
-        serde_json::to_vec(&(bundle, process, schemas, apis, config, permission_modes))
-    }
-    .map_err(|error| CoreError::Invalid(format!("encode bundle runtime identity: {error}")))?;
+    let bytes = serde_json::to_vec(&(bundle.digest(), config))
+        .map_err(|error| CoreError::Invalid(format!("encode bundle runtime identity: {error}")))?;
     Ok(Sha256::digest(bytes).into())
 }
 
@@ -121,7 +105,7 @@ struct BundleOwner {
     _root: Option<MaterializedRoot>,
 }
 
-fn materialize(bundle: &PreparedInstallableBundle) -> Result<MaterializedRoot, CoreError> {
+fn materialize(bundle: &Bundle) -> Result<MaterializedRoot, CoreError> {
     let root = std::env::temp_dir().join(format!(
         "hya-bundle-runtime-{}",
         hya_proto::SessionId::new()
@@ -263,7 +247,7 @@ pub(crate) struct BundleRuntimeParts<'a> {
 /// Schema documents read from the bundle's own declared extension files
 /// (prepare already validated both; a failure here means a corrupt catalog).
 fn source_apis(
-    bundle: &PreparedInstallableBundle,
+    bundle: &Bundle,
     apis: &[PreparedApi],
 ) -> Result<Vec<hya_core::SourceApi>, CoreError> {
     let id = &bundle.identity().id;
@@ -305,7 +289,7 @@ fn source_apis(
 }
 
 pub(crate) async fn prepare_source(
-    bundle: &PreparedInstallableBundle,
+    bundle: &Bundle,
     parts: BundleRuntimeParts<'_>,
     config: &BundleRuntimeConfig,
 ) -> Result<CachedBundleSource, CoreError> {
@@ -318,37 +302,38 @@ pub(crate) async fn prepare_source(
     } = parts;
     let bundle_config = config.location();
     let id = &bundle.identity().id;
-    let fingerprint = fingerprint(bundle, process, schemas, apis, permission_modes, config)?;
+    let fingerprint = fingerprint(bundle, config)?;
     // A shared JavaScript Plugin has no agent activation to own a Bun sidecar.
     // Promote its explicit executable entrypoints to a generation-owned process.
-    let implicit_process = if process.is_none() && bundle.plugin_bundle().is_some() {
-        let entrypoints = bundle
-            .tools()
-            .iter()
-            .chain(bundle.hooks())
-            .map(|resource| resource.source_path.as_str())
-            .collect::<BTreeSet<_>>();
-        if entrypoints.is_empty() {
-            None
-        } else {
-            let mut command = crate::plugins::bundle_sidecar_command().ok_or_else(|| {
-                CoreError::Invalid("Bun is required for JavaScript Plugin resources".into())
-            })?;
-            command.extend(["--plugin-id".into(), bundle.namespace().into()]);
-            for path in entrypoints {
-                command.extend([
-                    "--bundle-extension".into(),
-                    format!("${{BUNDLE_ROOT}}/{path}"),
-                ]);
+    let implicit_process =
+        if process.is_none() && (bundle.agents().is_empty() && bundle.workflow().is_none()) {
+            let entrypoints = bundle
+                .tools()
+                .iter()
+                .chain(bundle.hooks())
+                .map(|resource| resource.source_path.as_str())
+                .collect::<BTreeSet<_>>();
+            if entrypoints.is_empty() {
+                None
+            } else {
+                let mut command = crate::plugins::bundle_sidecar_command().ok_or_else(|| {
+                    CoreError::Invalid("Bun is required for JavaScript Plugin resources".into())
+                })?;
+                command.extend(["--plugin-id".into(), bundle.namespace().into()]);
+                for path in entrypoints {
+                    command.extend([
+                        "--bundle-extension".into(),
+                        format!("${{BUNDLE_ROOT}}/{path}"),
+                    ]);
+                }
+                Some(PreparedProcessExtension {
+                    kind: PreparedProcessKind::Bun,
+                    command,
+                })
             }
-            Some(PreparedProcessExtension {
-                kind: PreparedProcessKind::Bun,
-                command,
-            })
-        }
-    } else {
-        None
-    };
+        } else {
+            None
+        };
     let process = process.or(implicit_process.as_ref());
 
     let contributions = PluginContributionSet {
@@ -501,7 +486,7 @@ pub(crate) async fn prepare_source(
                     ToolPermission::Tool,
                 ));
                 for claim in &mut claims {
-                    if bundle.plugin_bundle().is_some()
+                    if (bundle.agents().is_empty() && bundle.workflow().is_none())
                         && claim.canonical_tool == metadata.stable_id
                     {
                         claim.canonical_tool = canonical.clone();
@@ -662,7 +647,7 @@ for line in sys.stdin:
         let prepared = prepare_package(BundleSource::new(
             "mcp-env",
             vec![
-                SourceFile::new("bundle.yaml", "kind: Plugin\nidentity: { id: acme/mcp-env, version: 1.0.0, publisher: acme }\nresources:\n  mcp: [{ id: probe, path: mcp/probe.json }]\nextensions:\n  files: [{ id: server, path: server.py }]\n"),
+                SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: acme/mcp-env, version: 1.0.0, publisher: acme }\nresources:\n  mcp: [{ id: probe, path: mcp/probe.json }]\nextensions:\n  files: [{ id: server, path: server.py }]\n"),
                 SourceFile::new("mcp/probe.json", declaration),
                 SourceFile::new("server.py", script),
             ],
@@ -704,7 +689,7 @@ for line in sys.stdin:
         let spawning = prepare_package(BundleSource::new(
             "spawning",
             vec![
-                SourceFile::new("bundle.yaml", "kind: Plugin\nidentity: { id: acme/spawning, version: 1.0.0, publisher: acme }\nextensions:\n  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }\n  files: [{ id: runtime, path: runtime.py }]\n"),
+                SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: acme/spawning, version: 1.0.0, publisher: acme }\nextensions:\n  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }\n  files: [{ id: runtime, path: runtime.py }]\n"),
                 SourceFile::new("runtime.py", "pass\n"),
             ],
         ))
@@ -712,7 +697,7 @@ for line in sys.stdin:
         let skills_only = prepare_package(BundleSource::new(
             "skills-only",
             vec![
-                SourceFile::new("bundle.yaml", "kind: Plugin\nidentity: { id: acme/skills-only, version: 1.0.0, publisher: acme }\nresources:\n  skills: [{ id: guide, path: skills/guide/SKILL.md }]\n"),
+                SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: acme/skills-only, version: 1.0.0, publisher: acme }\nresources:\n  skills: [{ id: guide, path: skills/guide/SKILL.md }]\n"),
                 SourceFile::new("skills/guide/SKILL.md", "---\nname: guide\ndescription: guide\n---\nbody\n"),
             ],
         ))
@@ -726,15 +711,15 @@ for line in sys.stdin:
             let location = test_config(id);
             let absent = BundleRuntimeConfig::capture(bundle, process, location.clone());
             assert_eq!(absent.watched(), watched);
-            let before = fingerprint(bundle, process, &[], &[], &[], &absent).unwrap();
+            let before = fingerprint(bundle, &absent).unwrap();
             std::fs::create_dir_all(location.dir()).unwrap();
             std::fs::write(location.file(), "key: value\n").unwrap();
             let present = BundleRuntimeConfig::capture(bundle, process, location.clone());
-            let after = fingerprint(bundle, process, &[], &[], &[], &present).unwrap();
+            let after = fingerprint(bundle, &present).unwrap();
             assert_eq!(before != after, watched, "{id}");
             std::fs::write(location.file(), "key: other\n").unwrap();
             let edited = BundleRuntimeConfig::capture(bundle, process, location.clone());
-            let edited = fingerprint(bundle, process, &[], &[], &[], &edited).unwrap();
+            let edited = fingerprint(bundle, &edited).unwrap();
             assert_eq!(after != edited, watched, "{id}");
             let _ = std::fs::remove_dir_all(location.dir());
         }
@@ -777,7 +762,7 @@ for line in sys.stdin:
         let prepared = prepare_package(BundleSource::new(
             "native-executable",
             vec![
-                SourceFile::new("bundle.yaml", "kind: Plugin\nidentity: { id: acme/native-run, version: 1.0.0, publisher: acme }\nextensions:\n  rust: [{ id: provider, path: bin/provider }]\n  process: { kind: rust, command: ['${BUNDLE_ROOT}/bin/provider'] }\n"),
+                SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: acme/native-run, version: 1.0.0, publisher: acme }\nextensions:\n  rust: [{ id: provider, path: bin/provider }]\n  process: { kind: rust, command: ['${BUNDLE_ROOT}/bin/provider'] }\n"),
                 SourceFile::new("bin/provider", b"#!/bin/sh\nprintf native-ok\n"),
             ],
         ))
@@ -801,7 +786,7 @@ for line in sys.stdin:
         let prepared = prepare_package(BundleSource::new(
             "undeclared-contribution",
             vec![
-                SourceFile::new("bundle.yaml", "kind: Plugin\nidentity: { id: acme/undeclared, version: 1.0.0, publisher: acme }\nextensions:\n  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }\n  files: [{ id: runtime, path: runtime.py }]\n"),
+                SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: acme/undeclared, version: 1.0.0, publisher: acme }\nextensions:\n  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }\n  files: [{ id: runtime, path: runtime.py }]\n"),
                 SourceFile::new("runtime.py", script),
             ],
         )).unwrap();
@@ -846,7 +831,7 @@ for line in sys.stdin:
             vec![
                 SourceFile::new(
                     "bundle.yaml",
-                    format!("kind: Plugin\nidentity: {{ id: acme/apis, version: 1.0.0, publisher: acme }}\nextensions:\n  process: {{ kind: bun, command: [python3, '${{BUNDLE_ROOT}}/runtime.py'] }}\n  files: [{{ id: runtime, path: runtime.py }}, {{ id: usage-schema, path: usage.json }}]\n{manifest_apis}"),
+                    format!("kind: Bundle\nidentity: {{ id: acme/apis, version: 1.0.0, publisher: acme }}\nextensions:\n  process: {{ kind: bun, command: [python3, '${{BUNDLE_ROOT}}/runtime.py'] }}\n  files: [{{ id: runtime, path: runtime.py }}, {{ id: usage-schema, path: usage.json }}]\n{manifest_apis}"),
                 ),
                 SourceFile::new("runtime.py", script),
                 SourceFile::new("usage.json", r#"{"type":"object"}"#),
@@ -922,7 +907,7 @@ for line in sys.stdin:
             vec![
                 SourceFile::new(
                     "bundle.yaml",
-                    "kind: Plugin\nidentity: { id: acme/approver, version: 1.0.0, publisher: acme }\nextensions:\n  process: { kind: bun, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }\n  files: [{ id: runtime, path: runtime.py }]\nresources:\n  hooks: [{ id: permission.approve, path: hooks/approve.json }]\npermission_modes:\n  - { id: careful, title: Careful, description: Approves reads }\n",
+                    "kind: Bundle\nidentity: { id: acme/approver, version: 1.0.0, publisher: acme }\nextensions:\n  process: { kind: bun, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }\n  files: [{ id: runtime, path: runtime.py }]\nresources:\n  hooks: [{ id: permission.approve, path: hooks/approve.json }]\npermission_modes:\n  - { id: careful, title: Careful, description: Approves reads }\n",
                 ),
                 SourceFile::new("runtime.py", script),
                 SourceFile::new("hooks/approve.json", "{}"),
@@ -954,29 +939,6 @@ for line in sys.stdin:
                 title: "Careful".to_string(),
                 description: "Approves reads".to_string(),
             }]
-        );
-        assert_ne!(
-            fingerprint(bundle, process, &[], &[], modes, &config).unwrap(),
-            fingerprint(bundle, process, &[], &[], &[], &config).unwrap(),
-            "declared modes are part of the runtime fingerprint"
-        );
-        let legacy = {
-            let config = config.watched.then_some(&config);
-            Sha256::digest(
-                serde_json::to_vec(&(
-                    bundle,
-                    process,
-                    &[] as &[PreparedSchema],
-                    &[] as &[PreparedApi],
-                    config,
-                ))
-                .unwrap(),
-            )
-        };
-        assert_eq!(
-            fingerprint(bundle, process, &[], &[], &[], &config).unwrap(),
-            <[u8; 32]>::from(legacy),
-            "a bundle without modes keeps its previous fingerprint"
         );
     }
 }

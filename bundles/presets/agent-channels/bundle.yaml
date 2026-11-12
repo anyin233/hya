@@ -1,4 +1,4 @@
-kind: AgentSetBundle
+kind: Bundle
 version_ref: backend
 identity:
   id: hya/agent-channels

@@ -7,7 +7,7 @@
  * | ---------------------- | ----------------------------------------------- |
  * | `plugin.json`          | bundle identity (`claude/<name>`, publisher     |
  * |                        | `claude`), namespace = sanitized name           |
- * | `agents/*.md`          | AgentSetBundle agents (one per file)             |
+ * | `agents/*.md`          | Bundle agents (one per file)                     |
  * | per-skill `SKILL.md`   | skill resources                                 |
  * | `commands/*.md`        | skill resources (prompt-template bodies)        |
  * | `.mcp.json`            | `resources.mcp` JSON files                      |
@@ -331,7 +331,7 @@ function renderManifest(
   supportFiles: readonly { readonly path: string; readonly content: string }[],
 ): string {
   const lines: string[] = []
-  lines.push("kind: AgentBundle")
+  lines.push("kind: Bundle")
   lines.push("identity:")
   lines.push(`  id: ${yamlString(`claude/${namespace}`)}`)
   lines.push(`  version: ${yamlString(source.manifest.version)}`)
@@ -410,7 +410,6 @@ function renderManifest(
       }
     }
   }
-  lines[0] = agents.length > 0 ? "kind: AgentSetBundle" : "kind: Plugin"
   return `${lines.join("\n")}\n`
 }
 

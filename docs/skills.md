@@ -147,7 +147,7 @@ up the change on the next restart with no rebuild. No public installation or
 runtime file scan is involved. `hya/core-skills` is an immutable,
 noninstallable trusted inventory entry.
 
-The bundle's `bundle.yaml` declares `kind: Plugin`, identity
+The bundle's `bundle.yaml` declares `kind: Bundle`, identity
 `hya/core-skills` version `1.0.0`, and two `resources.skills` entries with
 `id` and `path`. Each `SKILL.md` begins with YAML frontmatter containing
 `name: string` and `description: string`, then the Markdown body. The `name`

@@ -2769,23 +2769,16 @@ mod tests {
         AgentCatalog::new(Arc::new(bundles)).expect("valid agent catalog")
     }
 
-    /// Wrap one prepared singular AgentBundle for a closed catalog payload.
-    fn agent_bundle(bundle: PreparedAgentBundle) -> PreparedInstallableBundle {
-        PreparedInstallableBundle::Agent(Box::new(bundle))
-    }
-
-    /// Wrap prepared singular AgentBundles for a closed catalog payload.
-    fn agent_bundles(
-        bundles: impl IntoIterator<Item = PreparedAgentBundle>,
-    ) -> Vec<PreparedInstallableBundle> {
-        bundles.into_iter().map(agent_bundle).collect()
+    /// Collect Agent fixture bundles for a catalog.
+    fn agent_bundles(bundles: impl IntoIterator<Item = Bundle>) -> Vec<Bundle> {
+        bundles.into_iter().collect()
     }
 
     use super::*;
     use async_trait::async_trait;
     use hya_bundle::{
-        AgentRole, BundleIdentity, BundleSource, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-        PreparedInstallableBundle, PreparedResource, ResourceView, SourceFile, prepare_package,
+        AgentRole, Bundle, BundleIdentity, BundleSource, ModelPolicy, PreparedAgent,
+        PreparedResource, ResourceView, SourceFile, prepare_package,
     };
     use hya_core::{CategoryEntry, run_team};
     use hya_plugin::messages::{METHOD_TOOL_CALL, ToolCallParams, ToolInfo};
@@ -2910,10 +2903,7 @@ mod tests {
             .iter()
             .find(|bundle| bundle.identity().id == "hya/goal-loop")
             .expect("goal-loop first-party bundle");
-        assert_eq!(
-            goal_loop.kind(),
-            hya_bundle::PreparedBundleKind::AgentSetBundle
-        );
+        assert_eq!(goal_loop.kind(), hya_bundle::PreparedBundleKind::Bundle);
         assert_eq!(goal_loop.agents().len(), 2);
         for skill in [
             "goal-contract",
@@ -3641,14 +3631,14 @@ for line in sys.stdin:
             vec![SourceFile::new(
                 "bundle.hya.md",
                 br#"---
-kind: AgentBundle
+kind: Bundle
 identity:
   id: hya/runtime-installed-test
   version: 1.0.0
   publisher: hya
-agent:
-  id: runtime-installed-agent
-  role: main
+agents:
+  - id: runtime-installed-agent
+    role: main
 ---
 You are the runtime-installed agent.
 "#,
@@ -3976,7 +3966,7 @@ You are the runtime-installed agent.
                 SourceFile::new(
                     "bundle.hya.md",
                     br#"---
-kind: AgentBundle
+kind: Bundle
 identity:
   id: hya/runtime-installed-resident
   version: 1.0.0
@@ -3989,12 +3979,12 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agent:
-  id: runtime-installed-resident-agent
-  role: subagent
-  resource_view:
-    allow:
-      - bundle:hya/runtime-installed-resident/tool/echo
+agents:
+  - id: runtime-installed-resident-agent
+    role: subagent
+    resource_view:
+      allow:
+        - bundle:hya/runtime-installed-resident/tool/echo
 ---
 You are the installed resident agent.
 "#,
@@ -4639,10 +4629,10 @@ You are the installed resident agent.
         let bundles = stable_ids
             .iter()
             .map(|stable_id| {
-                PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
+                Bundle {
                     check: None,
                     tui: None,
-                    format_version: 3,
+                    format_version: 4,
                     identity: BundleIdentity {
                         id: format!("hya/recovery-resolution-{stable_id}"),
                         version: "0.0.0".to_string(),
@@ -4650,7 +4640,7 @@ You are the installed resident agent.
                     },
                     namespace: None,
                     digest: format!("test-only-{stable_id}"),
-                    agent: PreparedAgent {
+                    agents: vec![PreparedAgent {
                         id: AgentName::new(*stable_id),
                         description: None,
                         role: AgentRole::Main,
@@ -4664,13 +4654,20 @@ You are the installed resident agent.
                         // Deliberately empty: recovery must not depend on can_spawn.
                         can_spawn: Vec::new(),
                         hook_refs: Vec::new(),
-                    },
+                    }],
                     tools: Vec::new(),
                     skills: Vec::new(),
                     mcp: Vec::new(),
                     hooks: Vec::new(),
                     extensions: Vec::new(),
-                }))
+
+                    workflow: None,
+                    channels: vec![],
+                    schemas: vec![],
+                    process: None,
+                    apis: vec![],
+                    permission_modes: vec![],
+                }
             })
             .collect::<Vec<_>>();
         Arc::new(to_agent_catalog(
@@ -4810,10 +4807,10 @@ You are the installed resident agent.
                 can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
                 hook_refs: Vec::new(),
             };
-            PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
+            Bundle {
                 check: None,
                 tui: None,
-                format_version: 3,
+                format_version: 4,
                 identity: BundleIdentity {
                     id: format!("hya/spawn-model-precedence-{stable_id}"),
                     version: "0.0.0".to_string(),
@@ -4821,13 +4818,20 @@ You are the installed resident agent.
                 },
                 namespace: None,
                 digest: format!("test-only-{stable_id}"),
-                agent,
+                agents: vec![agent],
                 tools: Vec::new(),
                 skills: Vec::new(),
                 mcp: Vec::new(),
                 hooks: Vec::new(),
                 extensions: Vec::new(),
-            }))
+
+                workflow: None,
+                channels: vec![],
+                schemas: vec![],
+                process: None,
+                apis: vec![],
+                permission_modes: vec![],
+            }
         };
         let bundles = vec![bundle("worker", AgentRole::Subagent, &[], model_policy)];
         Arc::new(to_agent_catalog(
@@ -5273,7 +5277,7 @@ for line in sys.stdin:
             "tool.execute.after",
             "extensions/runtime.js",
         );
-        bundle.agent.hook_refs = vec![
+        bundle.agents[0].hook_refs = vec![
             event_hook_id,
             before_hook.stable_id.clone(),
             after_hook.stable_id.clone(),
@@ -5428,8 +5432,7 @@ for line in sys.stdin:
         let selected = make_skill("selected");
         let unselected = make_skill("unselected");
         let mut bundle = disjoint_materialized_bundle("selected-skills");
-        bundle
-            .agent
+        bundle.agents[0]
             .resource_view
             .allow
             .push(selected.stable_id.clone());
@@ -5781,7 +5784,7 @@ for line in sys.stdin:
         std::fs::write(
             authoring_root.join("bundle.hya.md"),
             br#"---
-kind: AgentBundle
+kind: Bundle
 identity:
   id: hya/directory-helper-import
   version: 0.0.1
@@ -5794,12 +5797,12 @@ extensions:
   js:
     - id: main
       path: extensions/main.js
-agent:
-  id: directory-helper-main
-  role: main
-  resource_view:
-    allow:
-      - echo
+agents:
+  - id: directory-helper-main
+    role: main
+    resource_view:
+      allow:
+        - echo
 ---
 You are a directory-authored executable Bundle agent.
 "#,
@@ -6388,14 +6391,14 @@ export default {
             "tool.execute.after",
             "extensions/runtime.js",
         );
-        bundle.agent.hook_refs = vec![
+        bundle.agents[0].hook_refs = vec![
             event_hook.stable_id.clone(),
             before_hook.stable_id.clone(),
             after_hook.stable_id.clone(),
         ];
         bundle.hooks.extend([event_hook, before_hook, after_hook]);
-        bundle.agent.id = AgentName::new("root-hook-agent");
-        bundle.agent.role = AgentRole::Main;
+        bundle.agents[0].id = AgentName::new("root-hook-agent");
+        bundle.agents[0].role = AgentRole::Main;
         set_materialized_extension_content(
             &mut bundle,
             r#"
@@ -7728,13 +7731,13 @@ for line in sys.stdin:
         }
     }
 
-    fn materialized_bundle(marker: &str) -> PreparedAgentBundle {
+    fn materialized_bundle(marker: &str) -> Bundle {
         let mut resource_view = ResourceView::default();
         resource_view.allow.push("echo".to_string());
-        PreparedAgentBundle {
+        Bundle {
             check: None,
             tui: None,
-            format_version: 3,
+            format_version: 4,
             identity: BundleIdentity {
                 id: "hya/materialized".to_string(),
                 version: "0.0.0".to_string(),
@@ -7742,7 +7745,7 @@ for line in sys.stdin:
             },
             namespace: None,
             digest: format!("{marker}-bundle-digest"),
-            agent: PreparedAgent {
+            agents: vec![PreparedAgent {
                 id: AgentName::new("worker"),
                 description: None,
                 role: AgentRole::Subagent,
@@ -7755,7 +7758,7 @@ for line in sys.stdin:
                 resource_view,
                 can_spawn: Vec::new(),
                 hook_refs: vec!["bundle:hya/materialized/hook/event".to_string()],
-            },
+            }],
             tools: vec![materialized_resource(
                 marker,
                 "tool",
@@ -7776,19 +7779,26 @@ for line in sys.stdin:
                 "runtime",
                 "extensions/runtime.js",
             )],
+
+            workflow: None,
+            channels: vec![],
+            schemas: vec![],
+            process: None,
+            apis: vec![],
+            permission_modes: vec![],
         }
     }
 
-    fn materialized_tool_bundle(marker: &str) -> PreparedAgentBundle {
+    fn materialized_tool_bundle(marker: &str) -> Bundle {
         let mut bundle = materialized_bundle(marker);
         bundle.hooks.clear();
-        bundle.agent.hook_refs.clear();
+        bundle.agents[0].hook_refs.clear();
         bundle
     }
 
     /// Two bundles with disjoint closures: `alpha` and `beta`, each owning its
     /// own tool, hook, and extension.
-    fn disjoint_materialized_bundles(marker: &str) -> Vec<PreparedAgentBundle> {
+    fn disjoint_materialized_bundles(marker: &str) -> Vec<Bundle> {
         let alpha = disjoint_materialized_bundle(marker);
         let mut beta = alpha.clone();
         beta.identity.id = "hya/materialized-beta".to_string();
@@ -7807,7 +7817,7 @@ for line in sys.stdin:
             stable_id: format!("bundle:{}/extension/beta", beta.identity.id),
             ..alpha.extensions[1].clone()
         }];
-        beta.agent = PreparedAgent {
+        beta.agents[0] = PreparedAgent {
             id: AgentName::new("beta"),
             prompt: Some(format!("{marker} beta prompt")),
             resource_view: ResourceView {
@@ -7815,7 +7825,7 @@ for line in sys.stdin:
                 ..ResourceView::default()
             },
             hook_refs: vec![beta_hook],
-            ..alpha.agent.clone()
+            ..alpha.agents[0].clone()
         };
 
         let mut alpha_only = alpha;
@@ -7825,7 +7835,7 @@ for line in sys.stdin:
         vec![alpha_only, beta]
     }
 
-    fn disjoint_materialized_bundle(marker: &str) -> PreparedAgentBundle {
+    fn disjoint_materialized_bundle(marker: &str) -> Bundle {
         let alpha_path = "extensions/alpha.js";
         let beta_path = "extensions/beta.js";
         let alpha_tool = materialized_resource(marker, "tool", "echo", alpha_path);
@@ -7834,10 +7844,10 @@ for line in sys.stdin:
         let beta_tool = materialized_resource(marker, "tool", "beta", beta_path);
         let beta_hook = materialized_resource(marker, "hook", "tool.execute.before", beta_path);
         let beta_extension = materialized_resource(marker, "extension", "beta", beta_path);
-        PreparedAgentBundle {
+        Bundle {
             check: None,
             tui: None,
-            format_version: 3,
+            format_version: 4,
             identity: BundleIdentity {
                 id: "hya/materialized".to_string(),
                 version: "0.0.0".to_string(),
@@ -7848,7 +7858,7 @@ for line in sys.stdin:
             // One agent per bundle: `alpha` selects only its own closure, while
             // the bundle still ships both extensions so selection can be
             // exercised over a superset.
-            agent: PreparedAgent {
+            agents: vec![PreparedAgent {
                 id: AgentName::new("alpha"),
                 description: None,
                 role: AgentRole::Subagent,
@@ -7864,12 +7874,19 @@ for line in sys.stdin:
                 },
                 can_spawn: Vec::new(),
                 hook_refs: vec![alpha_hook.stable_id.clone()],
-            },
+            }],
             tools: vec![alpha_tool, beta_tool],
             skills: Vec::new(),
             mcp: Vec::new(),
             hooks: vec![alpha_hook, beta_hook],
             extensions: vec![alpha_extension, beta_extension],
+
+            workflow: None,
+            channels: vec![],
+            schemas: vec![],
+            process: None,
+            apis: vec![],
+            permission_modes: vec![],
         }
     }
 
@@ -7879,14 +7896,14 @@ for line in sys.stdin:
         let mut selector = owner.clone();
         selector.identity.id = "hya/selector".to_string();
         selector.digest = "selector-bundle-digest".to_string();
-        let mut selector_agent = selector.agent.clone();
+        let mut selector_agent = selector.agents[0].clone();
         selector_agent.id = AgentName::new("selector");
         selector_agent.resource_view = ResourceView {
             allow: vec!["bundle:hya/materialized/tool/echo".to_string()],
             ..ResourceView::default()
         };
         selector_agent.hook_refs = vec!["bundle:hya/materialized/hook/event".to_string()];
-        selector.agent = selector_agent;
+        selector.agents[0] = selector_agent;
         selector.tools.clear();
         selector.skills.clear();
         selector.mcp.clear();
@@ -7920,7 +7937,7 @@ for line in sys.stdin:
         assert_eq!(reference, "bundle:hya/materialized/tool/echo");
     }
 
-    fn set_materialized_extension_content(bundle: &mut PreparedAgentBundle, content: String) {
+    fn set_materialized_extension_content(bundle: &mut Bundle, content: String) {
         let digest = format!(
             "materialized-content-{:x}",
             Sha256::digest(content.as_bytes())
@@ -7937,7 +7954,7 @@ for line in sys.stdin:
     }
 
     fn set_materialized_extension_content_for_path(
-        bundle: &mut PreparedAgentBundle,
+        bundle: &mut Bundle,
         source_path: &str,
         content: String,
     ) {
@@ -7958,7 +7975,7 @@ for line in sys.stdin:
         }
     }
 
-    fn materialized_bun_bundle(marker: &str) -> PreparedAgentBundle {
+    fn materialized_bun_bundle(marker: &str) -> Bundle {
         let mut bundle = materialized_tool_bundle(marker);
         set_materialized_extension_content(
             &mut bundle,
@@ -8117,8 +8134,7 @@ export default {
     #[test]
     fn sidecar_materialization_orders_deduplicated_extensions_by_canonical_identity() {
         let mut bundle = disjoint_materialized_bundle("ordered");
-        bundle
-            .agent
+        bundle.agents[0]
             .resource_view
             .allow
             .push(bundle.tools[1].stable_id.clone());
@@ -8261,8 +8277,8 @@ export default {
             .iter()
             .map(|resource| resource.stable_id.clone())
             .collect::<Vec<_>>();
-        bundle.agent.resource_view.allow = selected_tool_ids;
-        bundle.agent.hook_refs = selected_hook_ids;
+        bundle.agents[0].resource_view.allow = selected_tool_ids;
+        bundle.agents[0].hook_refs = selected_hook_ids;
 
         let catalog = Arc::new(to_agent_catalog(
             BundleCatalog::from_prepared(&agent_bundles([bundle]))
@@ -8319,7 +8335,7 @@ export default {
     async fn bundle_sidecar_hook_only_declaration_accepts_zero_tools() {
         let mut bundle = materialized_bundle("hook-only");
         bundle.tools.clear();
-        bundle.agent.resource_view = ResourceView::default();
+        bundle.agents[0].resource_view = ResourceView::default();
         let catalog = Arc::new(to_agent_catalog(
             BundleCatalog::from_prepared(&agent_bundles([bundle]))
                 .expect("hook-only fixture catalog"),
@@ -8452,7 +8468,7 @@ export default {
         lead_bundle.tools.clear();
         lead_bundle.hooks.clear();
         lead_bundle.extensions.clear();
-        lead_bundle.agent = PreparedAgent {
+        lead_bundle.agents[0] = PreparedAgent {
             id: AgentName::new("lead"),
             description: None,
             role: AgentRole::Main,
@@ -8532,8 +8548,8 @@ export default {
         static_bundle.extensions.clear();
         static_bundle.tools.clear();
         static_bundle.hooks.clear();
-        static_bundle.agent.hook_refs.clear();
-        static_bundle.agent.resource_view = ResourceView::default();
+        static_bundle.agents[0].hook_refs.clear();
+        static_bundle.agents[0].resource_view = ResourceView::default();
         let static_catalog = Arc::new(to_agent_catalog(
             BundleCatalog::from_prepared(&agent_bundles([static_bundle]))
                 .expect("static fixture catalog"),

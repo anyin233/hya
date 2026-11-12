@@ -123,7 +123,7 @@ fn dechunk(body: &str) -> String {
 
 /// A Plugin bundle with a TUI extension, packaged at `dir/tui-panel.hyabundle`.
 fn package(dir: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let manifest = "kind: Plugin\nidentity: { id: e2e/tui-panel, version: 1.0.0, publisher: e2e }\nextensions:\n  files:\n    - { id: panel, path: tui/main.ts }\ntui:\n  api_version: 1\n  entry: tui/main.ts\n  sdk: 1.0.0\n  permissions: [tui.panel]\n";
+    let manifest = "kind: Bundle\nidentity: { id: e2e/tui-panel, version: 1.0.0, publisher: e2e }\nextensions:\n  files:\n    - { id: panel, path: tui/main.ts }\ntui:\n  api_version: 1\n  entry: tui/main.ts\n  sdk: 1.0.0\n  permissions: [tui.panel]\n";
     let source = hya_bundle::BundleSource::new(
         "tui-panel",
         vec![

@@ -158,7 +158,7 @@ fn trusted_defaults() -> Result<&'static TrustedDefaults, BundleError> {
             let channels = preset
                 .bundles()
                 .first()
-                .map_or(&[][..], hya_bundle::PreparedInstallableBundle::channels);
+                .map_or(&[][..], hya_bundle::Bundle::channels);
             Ok((
                 default_capabilities(channels, ChannelTemplateKind::Unit)
                     .map_err(|error| error.to_string())?,

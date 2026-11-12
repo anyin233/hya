@@ -20,7 +20,7 @@ optional channel capability.
 Declare templates in an `AgentSetBundle`:
 
 ```yaml
-kind: AgentSetBundle
+kind: Bundle
 identity: { id: acme/review-channels, version: 1.0.0, publisher: acme }
 agents:
   - { id: reviewer, role: subagent }

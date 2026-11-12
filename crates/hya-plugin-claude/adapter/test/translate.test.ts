@@ -62,7 +62,7 @@ describe("translatePlugin", () => {
     }
 
     const manifest = translation.manifestYaml
-    expect(manifest).toContain("kind: AgentSetBundle")
+    expect(manifest).toContain("kind: Bundle")
     expect(manifest).toContain(`id: "claude/code-review"`)
     expect(manifest).toContain('publisher: "claude"')
     expect(manifest).toContain('namespace: "code-review"')
@@ -82,7 +82,7 @@ describe("translatePlugin", () => {
     expect(translation.skills).toHaveLength(0)
     expect(translation.manifestYaml).toContain("skills:")
     expect(translation.manifestYaml).toContain("[]")
-    expect(translation.manifestYaml).toContain("kind: Plugin")
+    expect(translation.manifestYaml).toContain("kind: Bundle")
     expect(translation.manifestYaml).not.toContain("\nagent:")
     expect(translation.manifestYaml).not.toContain("\nagents:")
   })

@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
-use hya_bundle::{PreparedBundleKind, first_party_bundle};
+use hya_bundle::first_party_bundle;
 use serde::Deserialize;
 
 use crate::tool::ToolPermission;
@@ -100,8 +100,8 @@ fn load_preset(identity: &str) -> Result<BaseToolsPreset, String> {
     let [bundle] = catalog.bundles() else {
         return Err("tool family must prepare one bundle".to_string());
     };
-    if bundle.kind() != PreparedBundleKind::Plugin {
-        return Err("tool family must be a Plugin".to_string());
+    if !bundle.agents().is_empty() || bundle.workflow().is_some() {
+        return Err("tool family must be an agentless Bundle".to_string());
     }
     let asset = bundle
         .extensions()
