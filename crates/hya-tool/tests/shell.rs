@@ -103,6 +103,7 @@ fn assert_result_shape(result: &Value, command: &str) {
         "pty",
         "timedOut",
         "timeoutClamped",
+        "deadlineCapped",
         "timeoutSeconds",
         "truncated",
     ]);

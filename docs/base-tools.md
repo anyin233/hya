@@ -269,8 +269,9 @@ extensions:
 package must have one library named `runtime`; its exported C symbols are
 `hya_tool_bundle_abi_v1(*mut u8)` and
 `hya_tool_bundle_register_v1(*mut Vec<Arc<dyn Tool>>)` and
-`hya_tool_bundle_with_runtime_v1(*const c_void, unsafe extern "C" fn(*mut c_void), *mut c_void)`.
-The host checks the 32-byte ABI digest before calling `register`, and the
+`hya_tool_bundle_with_runtime_v1(*const c_void, unsafe extern "C" fn(*mut c_void), *mut c_void)` and
+`hya_tool_bundle_share_deadline_v1(*const c_void)`, which hands the library
+the host's run-deadline cell once at load. The host checks the 32-byte ABI digest before calling `register`, and the
 library remains mapped for the process lifetime. The runtime callback polls
 one tool future synchronously while the bundle's Tokio runtime is entered.
 Calls with an existing host runtime stay on their original task, preserving
