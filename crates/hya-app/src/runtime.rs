@@ -1457,10 +1457,14 @@ impl RuntimeTaskOwner {
     }
 
     /// Cancel intake and wait for every tracked service and handler to exit.
-    pub async fn shutdown(&mut self) {
-        self.stop.cancel();
-        self.tasks.close();
-        self.tasks.wait().await;
+    pub fn shutdown(&self) -> impl std::future::Future<Output = ()> + Send + 'static + use<> {
+        let stop = self.stop.clone();
+        let tasks = self.tasks.clone();
+        async move {
+            stop.cancel();
+            tasks.close();
+            tasks.wait().await;
+        }
     }
 }
 
@@ -1557,15 +1561,26 @@ impl BuiltSessionEngine {
     /// [`ResidentSupervisor::drain`]): new turns are refused, active turns are
     /// cancelled with `cause` and given [`DRAIN_DEADLINE`] to close their
     /// messages, then team members are made terminal and each lead is parked.
+    /// Stops and joins composition intake and registrations before draining
+    /// residents. The owned future can be passed to a server shutdown callback.
     /// Idempotent; the first cause wins.
-    pub async fn drain(&self, cause: FinishCause) -> TurnDrainReport {
-        self.resident_supervisor.drain(cause, DRAIN_DEADLINE).await
+    pub fn drain(
+        &self,
+        cause: FinishCause,
+    ) -> impl std::future::Future<Output = TurnDrainReport> + Send + 'static + use<> {
+        let engine = self.engine.clone();
+        let residents = self.resident_supervisor.clone();
+        let shutdown = self.lifecycle.shutdown();
+        async move {
+            engine.begin_drain(cause);
+            shutdown.await;
+            residents.drain(cause, DRAIN_DEADLINE).await
+        }
     }
 
     /// Stop intake, cancel and join admitted handlers, then drain turns and
     /// residents so no late registration can escape the drain. Safe to call repeatedly.
     pub async fn shutdown(&mut self) -> Result<(), CoreError> {
-        self.lifecycle.shutdown().await;
         self.drain(FinishCause::Shutdown).await;
         Ok(())
     }
@@ -1683,6 +1698,7 @@ fn spawn_workflow_supervisor(
     stop: tokio_util::sync::CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     let tasks = control.tasks.clone();
+    let slots = Arc::new(tokio::sync::Semaphore::new(rx.max_capacity()));
     tasks.spawn(async move {
         loop {
             let bound_request = tokio::select! {
@@ -1694,9 +1710,16 @@ fn spawn_workflow_supervisor(
                 },
             };
             let (binding, request) = bound_request.into_parts();
+            let Ok(slot) = slots.clone().try_acquire_owned() else {
+                let _ = request.reply.send(Err(hya_tool::WorkflowHostError::new(
+                    "WORKFLOW_OVERLOADED",
+                    "workflow host queue is full; retry shortly",
+                )));
+                continue;
+            };
             let control = control.clone();
             control.tasks.clone().spawn(async move {
-                handle_workflow_request(&control, binding, request).await;
+                handle_workflow_request(&control, binding, request, slot).await;
             });
         }
     })
@@ -1707,6 +1730,7 @@ async fn handle_workflow_request(
     control: &crate::WorkflowControl,
     binding: TurnBinding,
     request: hya_tool::WorkflowRequest,
+    slot: tokio::sync::OwnedSemaphorePermit,
 ) {
     let hya_tool::WorkflowRequest {
         parent,
@@ -1716,7 +1740,7 @@ async fn handle_workflow_request(
         reply,
     } = request;
     let result = control
-        .execute(
+        .execute_with_admission(
             parent,
             crate::WorkflowInvocation {
                 caller: None,
@@ -1726,6 +1750,7 @@ async fn handle_workflow_request(
             },
             command,
             cancel,
+            Some(slot),
         )
         .await
         .map_err(|error| hya_tool::WorkflowHostError::new(error.code(), error.to_string()));
@@ -2830,6 +2855,179 @@ mod tests {
         );
     }
 
+    async fn review_runtime() -> (BuiltSessionEngine, AgentSpec, SessionId) {
+        let (router, model) = offline_router(None);
+        let mut agent = agent_with_model(&model, None);
+        agent.workdir = tempdir();
+        let built = build_session_engine_pure(
+            SessionStore::connect_memory().await.unwrap(),
+            router,
+            &agent,
+            BTreeMap::new(),
+            Vec::new(),
+            (
+                WebSearchConfig::default(),
+                InvocationPolicy::default(),
+                config::EngineSettings::default(),
+            ),
+        )
+        .await
+        .unwrap();
+        let root = built
+            .engine()
+            .create(CreateSession {
+                parent: None,
+                agent: agent.name.clone(),
+                model: agent.model.clone(),
+                workdir: agent.workdir.to_string_lossy().into_owned(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
+            })
+            .await
+            .unwrap();
+        (built, agent, root)
+    }
+
+    #[tokio::test]
+    async fn review_drain_joins_late_registration_before_killing_team() {
+        let (mut built, agent, root) = review_runtime().await;
+        let engine = built.engine();
+        let binding = engine.bind_runtime(&agent.workdir).unwrap();
+        let agents = engine
+            .agent_roster_for_binding(&binding, agent.name.as_str())
+            .unwrap();
+        let resources = engine
+            .agent_resource_policy_for_binding(&binding, agent.name.as_str())
+            .unwrap();
+        let supervisor = built.resident_supervisor();
+        supervisor
+            .ensure_main(
+                root,
+                agent.clone(),
+                (binding.clone(), agents.clone(), resources.clone()),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let stop = built.lifecycle.stop.clone();
+        built.lifecycle.tasks.spawn(async move {
+            // A dequeued registration must finish even when stop is signalled.
+            stop.cancelled().await;
+            supervisor
+                .spawn_resident_parked(
+                    root,
+                    agent,
+                    (binding, agents, resources, None),
+                    "late registration".into(),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+        });
+        built.drain(FinishCause::Shutdown).await;
+        let registrations_joined = built.lifecycle.tasks.is_empty();
+        built.shutdown().await.unwrap();
+        assert!(
+            registrations_joined,
+            "stop drained residents before joining registration handlers"
+        );
+        assert!(
+            engine.store().active_actor_ids().await.unwrap().is_empty(),
+            "a registration escaped the first drain"
+        );
+    }
+
+    #[test]
+    fn review_workflow_catalog_does_not_block_runtime_worker() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let (mut built, agent, root) = review_runtime().await;
+            let control = built.workflow_control();
+            let (release, held) = std::sync::mpsc::channel();
+            let (entered, ready) = tokio::sync::oneshot::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                entered.send(()).unwrap();
+                held.recv().unwrap();
+            });
+            ready.await.unwrap();
+            let (sender, receiver) = BoundWorkflowSender::with_capacity(1);
+            let binding = built.engine().bind_runtime(&agent.workdir).unwrap();
+            let plane = sender.for_binding(&binding).for_session(root);
+            spawn_workflow_supervisor(receiver, control.clone(), built.lifecycle.stop.clone());
+            let request = plane.execute(
+                ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
+                hya_proto::WorkflowCommand::List,
+                CancellationToken::new(),
+            );
+            tokio::pin!(request);
+            let early = tokio::time::timeout(Duration::from_millis(100), &mut request).await;
+            let overflow = tokio::time::timeout(
+                Duration::from_millis(250),
+                plane.execute(
+                    ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
+                    hya_proto::WorkflowCommand::State,
+                    CancellationToken::new(),
+                ),
+            ).await;
+            release.send(()).unwrap();
+            blocker.await.unwrap();
+            let was_off_thread = early.is_err();
+            if was_off_thread {
+                request.await.unwrap();
+            }
+            built.shutdown().await.unwrap();
+            assert!(
+                matches!(overflow, Ok(Err(ToolError::Overloaded(_)))),
+                "a request beyond the configured capacity was accepted: {overflow:?}"
+            );
+            assert!(
+                was_off_thread,
+                "catalog construction ran on the runtime worker instead of the occupied blocking pool"
+            );
+        });
+    }
+
+    #[tokio::test]
+    async fn review_workflow_token_taken_after_shutdown_rejects_request() {
+        let (mut built, _, root) = review_runtime().await;
+        let control = built.workflow_control();
+        built.shutdown().await.unwrap();
+        // TaskTracker permits a token after close/wait: execute must check stop
+        // AFTER acquiring that token before doing any catalog or durable work.
+        let late_token = control.tasks.token();
+        let error = control
+            .execute(
+                root,
+                Default::default(),
+                hya_proto::WorkflowCommand::List,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "WORKFLOW_RUNTIME_UNAVAILABLE");
+        let list = control.list(None).await;
+        let decorated = control.decorate(root, Default::default()).await;
+        assert!(
+            matches!(list, Err(crate::WorkflowControlError::RuntimeUnavailable)),
+            "scope listing started after shutdown"
+        );
+        assert!(
+            matches!(
+                decorated,
+                Err(crate::WorkflowControlError::RuntimeUnavailable)
+            ),
+            "decoration started after shutdown"
+        );
+        drop(late_token);
+        assert!(built.lifecycle.tasks.is_empty());
+    }
+
     #[tokio::test]
     async fn built_session_engine_shutdown_drains_supervisor() {
         let (router, model) = offline_router(None);
@@ -3251,7 +3449,7 @@ flowchart TD
         let workflows = workflow_sender
             .for_binding(&binding)
             .for_session_with_agents(lead, agents);
-        let mut tasks = RuntimeTaskOwner::new();
+        let tasks = RuntimeTaskOwner::new();
         let stop = tasks.stop.clone();
         let owner = process_owner_run_id();
         let resident_supervisor = ResidentSupervisor::start_with_owner(Arc::clone(&engine), owner);
