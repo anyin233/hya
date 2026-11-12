@@ -1,5 +1,6 @@
 //! Typed tooling and process-harness HTTP calls.
 
+use crate::encode_component;
 use hya_api::v1 as pb;
 use hya_proto::{Envelope, SessionId};
 use serde_json::Value;
@@ -22,19 +23,6 @@ pub enum ClientError {
     /// Response body failed to decode into the expected v1 type.
     #[error("decode: {0}")]
     Decode(#[from] serde_json::Error),
-}
-
-/// Percent-encode one path segment or query value (RFC 3986 unreserved
-/// characters pass through).
-fn encode_component(text: &str) -> String {
-    text.bytes()
-        .map(|byte| match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (byte as char).to_string()
-            }
-            _ => format!("%{byte:02X}"),
-        })
-        .collect()
 }
 
 /// Thin HTTP client bound to a server base URL (no directory header).
@@ -98,7 +86,9 @@ impl Client {
             }
             return Err(ClientError::Api {
                 code: status.as_u16().to_string(),
-                message: String::from_utf8_lossy(&bytes).into_owned(),
+                message: format!("{status}: {}", String::from_utf8_lossy(&bytes))
+                    .trim_end()
+                    .to_owned(),
             });
         }
         Ok(serde_json::from_slice(&bytes)?)
@@ -261,7 +251,10 @@ impl Client {
         };
         self.call(
             reqwest::Method::POST,
-            &format!("/v1/sessions/{session}/turns"),
+            &format!(
+                "/v1/sessions/{}/turns",
+                encode_component(&session.to_string())
+            ),
             None,
             Some(&request),
         )
@@ -282,7 +275,11 @@ impl Client {
         let timeout_ms = timeout.as_millis().min(600_000) as u64;
         self.call(
             reqwest::Method::POST,
-            &format!("/v1/sessions/{session}/turns/{turn}/wait"),
+            &format!(
+                "/v1/sessions/{}/turns/{}/wait",
+                encode_component(&session.to_string()),
+                encode_component(turn)
+            ),
             Some(&format!("timeoutMs={timeout_ms}")),
             None::<&Value>,
         )
@@ -332,7 +329,10 @@ impl Client {
         };
         self.call(
             reqwest::Method::GET,
-            &format!("/v1/sessions/{session}/events"),
+            &format!(
+                "/v1/sessions/{}/events",
+                encode_component(&session.to_string())
+            ),
             query,
             None::<&Value>,
         )
@@ -391,7 +391,7 @@ impl Client {
     ) -> Result<pb::RespondInteractionResponse, ClientError> {
         self.call(
             reqwest::Method::POST,
-            &format!("/v1/interactions/{id}/respond"),
+            &format!("/v1/interactions/{}/respond", encode_component(id)),
             None,
             Some(response),
         )

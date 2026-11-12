@@ -75,53 +75,67 @@ pub(crate) enum WorkflowCliCommand {
 }
 
 /// Inspect prepared data only: no providers, native tools, MCP or plugin processes.
-async fn catalog() -> anyhow::Result<hya_app::WorkflowCatalog> {
+async fn catalog(db: &str) -> anyhow::Result<hya_app::WorkflowCatalog> {
     use hya_app::{WorkflowCatalog, WorkflowCatalogRoots, bundle_admin};
-    use hya_bundle::BundleCatalog;
     use hya_core::{AgentCatalog, CatalogScope, RuntimeRegistry};
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
     let workdir = std::env::current_dir().context("resolve current directory")?;
+    let project = if !db.is_empty() && std::path::Path::new(db).try_exists()? {
+        hya_store::SessionStore::connect_read_only(db)
+            .await
+            .with_context(|| format!("open existing database read-only at {db}"))?
+            .resolve_project_by_path(&workdir.to_string_lossy())
+            .await?
+    } else {
+        None
+    };
+    let scope = project.map_or_else(
+        || CatalogScope::Directory(workdir.clone()),
+        |project| CatalogScope::Project {
+            id: project.id,
+            roots: project
+                .roots
+                .into_iter()
+                .map(std::path::PathBuf::from)
+                .collect(),
+        },
+    );
     let registry = bundle_admin::existing_registry().await?;
     let disabled = match &registry {
         Some(registry) => registry.disabled_bundle_ids().await?,
         None => BTreeSet::new(),
     };
-    let (mut catalogs, _) = hya_app::project_bundles::load_project_bundles(
-        &hya_app::project_bundles::root_bundles_dir(&workdir),
-    )?;
+    let mut installed = Vec::new();
     if let Some(registry) = registry {
-        for record in registry.snapshot().await?.bundles {
-            catalogs.push(bundle_admin::decode_installed_catalog(&record)?);
+        let snapshot = registry.snapshot().await?;
+        for row in snapshot.unreadable {
+            eprintln!("warning: installed bundle {}: {}", row.bundle_id, row.error);
+        }
+        for record in snapshot.bundles {
+            installed.push(bundle_admin::decode_installed_catalog(&record)?);
         }
     }
-    catalogs.extend(hya_app::first_party_catalogs()?);
-    let mut ids = BTreeSet::new();
-    let mut namespaces = BTreeSet::new();
-    // Project > installed > first-party, just as a fresh headless Project bind.
-    let catalogs = catalogs
-        .iter()
-        .filter(|catalog| {
-            let bundle = &catalog.bundles()[0];
-            let id = &bundle.identity().id;
-            if disabled.contains(id) || ids.contains(id) || namespaces.contains(bundle.namespace())
-            {
-                return false;
-            }
-            ids.insert(id.clone());
-            namespaces.insert(bundle.namespace().to_string());
-            true
-        })
-        .collect::<Vec<_>>();
-    let bundles = BundleCatalog::from_verified_catalogs(&catalogs)?;
+    let roots = match &scope {
+        CatalogScope::Project { roots, .. } => roots.as_slice(),
+        CatalogScope::Global | CatalogScope::Directory(_) => &[],
+    };
+    let (bundles, warnings) = hya_app::ProjectScopeRefresh::catalog_for_roots(
+        roots,
+        &installed,
+        &hya_app::first_party_catalogs()?,
+        &disabled,
+    )?;
+    for warning in warnings {
+        eprintln!("warning: {warning}");
+    }
     let agents = AgentCatalog::new(Arc::new(bundles))?;
     let registry = RuntimeRegistry::new(
         hya_tool::ToolRegistry::from_tool_families(&[]),
         Arc::new(agents),
     )
     .with_pure_skills(true);
-    let scope = CatalogScope::Directory(workdir.clone());
     let binding = registry.bind_scoped(&scope, &workdir)?;
     WorkflowCatalog::build(WorkflowCatalogRoots::for_scope(&scope, &workdir), &binding)
         .map_err(control_error)
@@ -138,13 +152,13 @@ pub(crate) async fn run(
     let (command, json_output, is_run, session) = match command {
         WorkflowCliCommand::List { json } => {
             let result = WorkflowCommandResult::List {
-                workflows: catalog().await?.list(),
+                workflows: catalog(db).await?.list(),
             };
             return finish(&result, json, false);
         }
         WorkflowCliCommand::Info { name, json } => {
             let result = WorkflowCommandResult::Info {
-                workflow: catalog().await?.info(&name).map_err(control_error)?,
+                workflow: catalog(db).await?.info(&name).map_err(control_error)?,
             };
             return finish(&result, json, false);
         }
@@ -190,7 +204,7 @@ pub(crate) async fn run(
     let session = session
         .map(|value| value.parse().context("parse workflow Session id"))
         .transpose()?;
-    // `list`/`info` never open the database. Every other command writes it
+    // `list`/`info` only read an existing database. Every other command writes it
     // (a Session, a selection, a run, crash recovery on open), so it holds
     // the database lock, or goes through the server that owns the database.
     let store = match crate::db_writer::claim(db, "workflow").await? {
@@ -232,27 +246,23 @@ pub(crate) async fn run(
             return finish(&result, json_output, is_run);
         }
     };
-    let mut runtime =
+    let runtime =
         crate::startup::HeadlessSession::start(store, model_override, yolo, pure, session).await?;
     let result = runtime
-        .built
-        .workflow_control()
-        .execute(
-            runtime.session,
-            WorkflowInvocation::default(),
-            command,
-            CancellationToken::new(),
-        )
-        .await;
-    let shutdown = runtime.built.shutdown().await;
-    let engine = runtime.built.engine();
-    if shutdown.is_ok() {
-        engine
-            .store()
-            .release_runtime_owner(engine.runtime_owner())?;
-    }
-    let result = result.map_err(control_error)?;
-    shutdown?;
+        .run(async move |runtime| {
+            runtime
+                .built
+                .workflow_control()
+                .execute(
+                    runtime.session,
+                    WorkflowInvocation::default(),
+                    command,
+                    CancellationToken::new(),
+                )
+                .await
+                .map_err(control_error)
+        })
+        .await?;
     finish(&result, json_output, is_run)
 }
 

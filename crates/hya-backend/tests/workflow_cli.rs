@@ -149,6 +149,163 @@ fn combined_text(output: &Output) -> String {
     )
 }
 
+fn write_catalog_bundle(root: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = root.join(".hya/bundles/catalog");
+    fs::create_dir_all(dir.join("workflows"))?;
+    fs::write(
+        dir.join("bundle.yaml"),
+        "kind: Bundle\nidentity: {id: test/catalog, version: 1.0.0, publisher: test}\nagents: [{id: catalog-worker, role: subagent}]\nworkflow: {id: echo-input, path: workflows/echo-input.hya.md}\n",
+    )?;
+    fs::write(
+        dir.join("workflows/echo-input.hya.md"),
+        SINGLE_INPUT_WORKFLOW.replace("hya-task", "catalog-worker"),
+    )?;
+    Ok(())
+}
+
+/// Inspection must resolve the exact identity accepted by a real run, without
+/// writing or locking the existing database.
+fn assert_catalog_matches_run(
+    env: &IsolatedEnv,
+    cwd: &std::path::Path,
+    warning: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let db = env.root.join("sessions.db");
+    let before = fs::read(&db)?;
+    let mut identity = None;
+    for args in [
+        vec!["workflow", "list", "--json"],
+        vec!["workflow", "info", "echo-input", "--json"],
+    ] {
+        let output = workflow_command(env)
+            .current_dir(cwd)
+            .arg("--db")
+            .arg(&db)
+            .args(args)
+            .output()?;
+        assert!(output.status.success(), "{}", combined_text(&output));
+        if let Some(warning) = warning {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("warning") && stderr.contains(warning),
+                "{stderr}"
+            );
+        }
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        let found = if value["kind"] == "list" {
+            value["workflows"]
+                .as_array()
+                .and_then(|rows| rows.iter().find(|row| row["name"] == "echo-input"))
+                .map(|row| serde_json::json!({"name": row["name"], "source": row["source"], "revision": row["revision"]}))
+        } else {
+            Some(value["workflow"]["identity"].clone())
+        };
+        assert!(found.is_some(), "missing echo-input: {value}");
+        if let Some(identity) = &identity {
+            assert_eq!(found.as_ref(), Some(identity));
+        }
+        identity = found;
+    }
+    assert_eq!(fs::read(&db)?, before, "inspection modified the database");
+    assert!(!env.hya_config.join("config.yaml").exists());
+    assert!(!PathBuf::from(format!("{}.lock", db.display())).exists());
+    assert!(!PathBuf::from(format!("{}.runtime-owner.lock", db.display())).exists());
+    let run = workflow_command(env)
+        .current_dir(cwd)
+        .arg("--db")
+        .arg(&db)
+        .args([
+            "workflow",
+            "run",
+            "echo-input",
+            "--input",
+            "v=scope",
+            "--json",
+        ])
+        .output()?;
+    assert!(run.status.success(), "{}", combined_text(&run));
+    let result: serde_json::Value = serde_json::from_slice(&run.stdout)?;
+    assert_eq!(
+        Some(&result["result"]["run"]["workflow"]),
+        identity.as_ref()
+    );
+    assert_eq!(result["result"]["run"]["status"], "completed");
+    Ok(())
+}
+
+async fn register_project(
+    env: &IsolatedEnv,
+    roots: &[PathBuf],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let db = env.root.join("sessions.db");
+    let store = hya_store::SessionStore::connect(&db.to_string_lossy()).await?;
+    store
+        .create_project(
+            "catalog",
+            &roots
+                .iter()
+                .map(|root| root.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+        )
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_catalog_matches_run_from_project_subdirectory()
+-> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("catalog-subdirectory")?;
+    env.write_workflow("echo-input.hya.md", SINGLE_INPUT_WORKFLOW)?;
+    let cwd = env.workdir.join("src/nested");
+    fs::create_dir_all(&cwd)?;
+    register_project(&env, std::slice::from_ref(&env.workdir)).await?;
+    assert_catalog_matches_run(&env, &cwd, None)
+}
+
+#[tokio::test]
+async fn cli_catalog_matches_run_from_second_project_root() -> Result<(), Box<dyn std::error::Error>>
+{
+    let env = IsolatedEnv::new("catalog-second-root")?;
+    let other = env.root.join("other");
+    write_catalog_bundle(&other)?;
+    register_project(&env, &[env.workdir.clone(), other]).await?;
+    assert_catalog_matches_run(&env, &env.workdir, None)
+}
+
+#[tokio::test]
+async fn cli_catalog_matches_run_beside_malformed_project_bundle()
+-> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("catalog-malformed")?;
+    write_catalog_bundle(&env.workdir)?;
+    let broken = env.workdir.join(".hya/bundles/broken");
+    fs::create_dir_all(&broken)?;
+    fs::write(broken.join("bundle.yaml"), "kind: [\n")?;
+    register_project(&env, std::slice::from_ref(&env.workdir)).await?;
+    assert_catalog_matches_run(&env, &env.workdir, Some("broken"))
+}
+
+#[tokio::test]
+async fn cli_catalog_matches_run_with_unreadable_registry_row()
+-> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("catalog-unreadable")?;
+    write_catalog_bundle(&env.workdir)?;
+    let source = BundleSource::read_directory(env.workdir.join(".hya/bundles/catalog"))?;
+    let package = env.root.join("catalog.hyabundle");
+    fs::write(&package, write_public_package(&source)?)?;
+    let installed = workflow_command(&env)
+        .args(["bundle", "install", "-y"])
+        .arg(package)
+        .output()?;
+    assert!(installed.status.success(), "{}", combined_text(&installed));
+    fs::remove_dir_all(env.workdir.join(".hya/bundles"))?;
+    env.write_workflow("echo-input.hya.md", SINGLE_INPUT_WORKFLOW)?;
+    let registry = env.home.join(".local/share/hya/bundles/registry.sqlite3");
+    let corrupted = Command::new("python3").args(["-c", "import sqlite3,sys\nwith sqlite3.connect(sys.argv[1]) as db:\n db.execute(\"UPDATE installed_bundle SET prepared_bytes=x'00' WHERE bundle_id='test/catalog'\")"]).arg(registry).output()?;
+    assert!(corrupted.status.success(), "{}", combined_text(&corrupted));
+    register_project(&env, std::slice::from_ref(&env.workdir)).await?;
+    assert_catalog_matches_run(&env, &env.workdir, Some("test/catalog"))
+}
+
 #[test]
 fn cli_run_reports_durable_fan_out_and_join_projection() -> Result<(), Box<dyn std::error::Error>> {
     let env = IsolatedEnv::new("fan-join")?;

@@ -50,7 +50,7 @@ fn client(url: &str) -> anyhow::Result<(V1Sdk, String)> {
         .to_string_lossy()
         .into_owned();
     Ok((
-        V1Sdk::new(url.trim_end_matches('/'), workdir.clone()),
+        V1Sdk::for_local_daemon(url.trim_end_matches('/'), workdir.clone())?,
         workdir,
     ))
 }
@@ -400,4 +400,51 @@ async fn submit(
 
 fn projection(state: &pb::WorkflowState) -> anyhow::Result<WorkflowProjection> {
     serde_json::from_str(&state.raw_json).context("decode the server's Workflow state")
+}
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn daemon_client_bypasses_environment_proxies() -> anyhow::Result<()> {
+        // A subprocess isolates proxy variables from the other HTTP tests.
+        if std::env::var_os("HYA_TEST_PROXY_CHILD").is_none() {
+            let mut command = std::process::Command::new(std::env::current_exe()?);
+            command.args([
+                "--exact",
+                "routed::tests::daemon_client_bypasses_environment_proxies",
+                "--nocapture",
+            ]);
+            command.env("HYA_TEST_PROXY_CHILD", "1");
+            for key in [
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "all_proxy",
+            ] {
+                command.env(key, "http://192.0.2.1:1");
+            }
+            command.env_remove("NO_PROXY").env_remove("no_proxy");
+            let output = command.output()?;
+            anyhow::ensure!(
+                output.status.success(),
+                "proxy child failed: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Ok(());
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}", listener.local_addr()?);
+        let app = axum::Router::new()
+            .fallback(|| async { axum::Json(serde_json::json!({"id": "local"})) });
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let (sdk, _) = super::client(&url)?;
+        let response =
+            tokio::time::timeout(std::time::Duration::from_secs(2), sdk.get_session("local")).await;
+        server.abort();
+        assert_eq!(response??.id, "local");
+        Ok(())
+    }
 }
