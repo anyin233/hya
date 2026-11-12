@@ -2053,6 +2053,57 @@ async fn resident_mail_policy_denial_does_not_wake_an_idle_resident() {
     );
 }
 
+/// Both commits are visible before the listener handles either envelope. This
+/// reproduces the batched-mail boundary without relying on task scheduling.
+#[tokio::test]
+async fn two_policy_denied_mails_committed_together_are_consumed() {
+    let engine = engine_with_channel_restriction(
+        "  - { id: dm, kind: parent_dm, participants: [{kind: role, role: child}], capabilities: [send, report, steer, follow_up], scope: vertical, retention: team_session }",
+    ).await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "hya-scout").await;
+    let before = engine.replay(child).await.unwrap();
+    let mut events = engine.bus().subscribe();
+    let batch = engine
+        .store()
+        .append_events(
+            root,
+            ["first denied", "second denied"]
+                .into_iter()
+                .map(|body| Event::MailSent {
+                    session: root,
+                    from: "main".into(),
+                    to: MailEndpoint::Handle(handle.clone()),
+                    kind: MailKind::Message,
+                    body: body.into(),
+                })
+                .collect(),
+        )
+        .await
+        .unwrap();
+    for envelope in batch {
+        engine.bus().publish(envelope);
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let projection = engine.read_projection(root).await.unwrap();
+            if projection.team.roster[&handle].resident_cursor == 2 {
+                break;
+            }
+            events.recv().await.unwrap();
+        }
+    })
+    .await
+    .expect("the complete denied batch must be consumed");
+    assert_eq!(
+        engine.replay(child).await.unwrap(),
+        before,
+        "denied mail must start no turn"
+    );
+}
+
 #[tokio::test]
 async fn public_mail_send_uses_the_session_captured_channel_policy() {
     let engine = engine_with_channel_restriction(

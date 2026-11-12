@@ -400,6 +400,9 @@ report/archive, and mail-driven revival, with 1, 16 and 64 workers under one roo
 It uses an offline fake provider and a temporary file-backed WAL SQLite database.
 Workers pause at provider entry so spawning and revival can be measured separately
 from their work. Completion is observed on the event bus, without polling SQL.
+Prompt admission completes before that gate and belongs to `spawn`/`revive`;
+`work` begins after admission. These cases cover first and revived activations.
+Live mail wake coalescing is covered by the resident lifecycle regressions.
 
 Output rows contain `scenario` (`A` initial episode, `B` revived episode), `n`,
 `phase`, `wall_ms`, and `counts` (`statements`, `transactions`, `events`, `bytes`).

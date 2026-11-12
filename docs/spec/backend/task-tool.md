@@ -546,6 +546,40 @@ episode is idle or generating a report handoff. Terminal envelopes are published
 after removing the episode from memory, before resolving its completion; the
 next episode cannot publish a new registration ahead of those envelopes.
 
+### Atomic mail wakes
+
+A harness wake delivers all eligible unread mail in one user message, with
+`[mail from <sender>] <body>` sections separated by blank lines. For example,
+sending two messages while a worker is busy produces one follow-up turn and one
+prompt containing both messages. Main mail wakes use the same path; a quiescence
+wake includes `TEAM QUIESCED` in its owned user prompt. No new tool, flag or
+configuration is required.
+
+`SessionStore::begin_work(claim: Option<&ActorClaim>, root: SessionId,
+handle: &str, inbox_through: u64, prompt: ResidentWorkPrompt,
+current_task: String) -> Result<(MessageId, Vec<Envelope>), StoreError>` holds
+one `BEGIN IMMEDIATE` transaction. `Some(claim)` fences the exact episode and
+writes `ResidentWorkStarted { session: root, actor_session, handle, epoch,
+inbox_through }`; its cursor advances when activity returns to Idle. `None`
+is the root lead and writes `MailConsumed { session: root, handle, through:
+inbox_through }`. Both write `AgentActivityChanged { status: Busy,
+current_task }` and the prompt together. Publication occurs only after commit.
+A stale claim or any failed write rolls back delivery and consumption together.
+
+`ResidentWorkPrompt::Text(String)` admits a new User message with its text part
+and finish. `Admitted { message: MessageId, append: String }` reuses the initial
+directive committed at registration; nonempty coalesced mail is appended with
+`TextReplace` in the work transaction. Every harness turn passes the returned
+message id as `TurnRequestContext.admitted_prompt`, including lead and synthesis
+turns, so cancellation during binding closes the owned answer and shutdown can
+record the root's resume obligation.
+
+Global and bundle user-text hooks run once on coalesced mail/synthesis text
+before the transaction, outside locks. Initial directives retain their
+registration-time hook/`TextReplace` path. Cancellation or failure before the
+work commit leaves the mail unread. Policy-ineligible mail is consumed without
+starting a turn or charging the turn budget, including multiple queued messages.
+
 ### Mail during a running turn
 
 Unread team mail can steer an active turn without starting another turn. For

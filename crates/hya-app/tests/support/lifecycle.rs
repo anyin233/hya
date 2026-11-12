@@ -823,7 +823,7 @@ impl BlockingPlugin {
     pub async fn for_hook(hook: &str) -> Self {
         assert!(matches!(
             hook,
-            "session.start" | "chat.params" | "tool.execute.after"
+            "session.start" | "chat.params" | "tool.execute.after" | "message.user.before"
         ));
         use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -893,7 +893,10 @@ def handle(r):
   with socket.create_connection(('127.0.0.1',{port})) as s:
    s.sendall((json.dumps(p)+'\n').encode())
    s.recv(1024)
-  result={{'outcome':'continue','request':p['request']}} if m=='hook/chat.params' else ({{'outcome':'continue','result':p['result']}} if m=='hook/tool.execute.after' else {{}})
+  if m=='hook/chat.params': result={{'outcome':'continue','request':p['request']}}
+  elif m=='hook/tool.execute.after': result={{'outcome':'continue','result':p['result']}}
+  elif m=='hook/message.user.before': result={{'outcome':'continue','text':p['text']}}
+  else: result={{}}
  else: result={{}}
  if 'id' in r:
   with output: print(json.dumps({{'jsonrpc':'2.0','id':r['id'],'result':result}}),flush=True)

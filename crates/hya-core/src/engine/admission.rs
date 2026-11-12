@@ -783,18 +783,8 @@ impl SessionEngine {
         stable_id: &str,
     ) -> Result<MessageId, CoreError> {
         let channel_policy = crate::ChannelPolicy::from_binding(binding)?.snapshot_for(stable_id);
-        let text = if let Some(hooks) = &self.hooks {
-            match hooks
-                .message_user_before(MessageUserBeforeInput { session, text })
-                .await
-            {
-                MessageUserBeforeOutcome::Continue { text } => text,
-            }
-        } else {
-            text
-        };
         let text = self
-            .apply_bundle_message_hook(binding, stable_id, session, text)
+            .user_text_after_hooks(binding, stable_id, session, text)
             .await;
         let message = MessageId::new();
         let part = PartId::new();

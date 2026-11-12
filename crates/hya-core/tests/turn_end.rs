@@ -2040,7 +2040,7 @@ async fn root_mail_wake_stopped_during_binding_owns_its_prompt() {
 }
 
 #[tokio::test]
-async fn root_synthesis_wake_stopped_during_binding_claims_no_prompt() {
+async fn root_synthesis_wake_stopped_during_binding_owns_its_prompt() {
     root_wake_stopped_during_binding(false).await;
 }
 
@@ -2145,22 +2145,16 @@ async fn root_wake_stopped_during_binding(mail: bool) {
     )
     .await
     .expect("resident shutdown must finish before inspecting the stopped root");
-    let expected = if mail {
-        vec![vec![(FinishReason::Cancelled, Some(FinishCause::Shutdown))]]
-    } else {
-        vec![]
-    };
     assert_eq!(
         assistant_finishes(&engine.replay(root).await.unwrap(), root)
             .iter()
             .map(|(_, f)| f.clone())
             .collect::<Vec<_>>(),
-        expected
+        vec![vec![(FinishReason::Cancelled, Some(FinishCause::Shutdown))]]
     );
-    assert_eq!(
-        engine.store().list_pending_resumes().await.unwrap().len(),
-        usize::from(mail)
-    );
+    let pending = engine.store().list_pending_resumes().await.unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].session, root);
     assert_eq!(provider.streams_for(root), 0);
 }
 

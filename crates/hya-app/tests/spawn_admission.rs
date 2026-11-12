@@ -1993,7 +1993,7 @@ async fn quiescence_main_synthesis_uses_triggering_guidance_once() {
                 .await
                 .unwrap();
             let has_synth = proj.session.messages.iter().any(|m| {
-                matches!(m.role, hya_proto::Role::System)
+                matches!(m.role, hya_proto::Role::User)
                     && m.parts.iter().any(|p| {
                         matches!(
                             p,
@@ -2246,7 +2246,7 @@ async fn nested_first_resident_main_synthesis_uses_root_definition_not_caller() 
         loop {
             let proj = engine.read_projection(root).await.unwrap();
             let has_synth = proj.session.messages.iter().any(|m| {
-                matches!(m.role, hya_proto::Role::System)
+                matches!(m.role, hya_proto::Role::User)
                     && m.parts.iter().any(|p| {
                         matches!(
                             p,

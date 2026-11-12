@@ -1619,3 +1619,315 @@ async fn registration_writer_reserves_sqlite_before_any_read() {
         .await
         .unwrap();
 }
+
+async fn work_fixture(store: &SessionStore) -> (SessionId, ActorClaim) {
+    let root = SessionId::new();
+    let actor = SessionId::new();
+    for (session, parent) in [(root, None), (actor, Some(root))] {
+        store
+            .append_event(
+                session,
+                &Event::SessionCreated {
+                    session,
+                    parent,
+                    agent: AgentName::new("resident"),
+                    model: hya_proto::ModelRef::new("fake"),
+                    workdir: "/tmp".into(),
+                    project: None,
+                    kind: hya_proto::SessionKind::Project,
+                },
+            )
+            .await
+            .unwrap();
+    }
+    store
+        .append_event(
+            root,
+            &Event::AgentRegistered {
+                session: root,
+                agent_session: actor,
+                handle: "worker".into(),
+                parent: Some("main".into()),
+                agent_type: AgentName::new("resident"),
+                mode: SubagentMode::Resident,
+            },
+        )
+        .await
+        .unwrap();
+    for body in ["first", "second"] {
+        store
+            .append_event(
+                root,
+                &Event::MailSent {
+                    session: root,
+                    from: "main".into(),
+                    to: MailEndpoint::Handle("main/worker".into()),
+                    kind: MailKind::Message,
+                    body: body.into(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let claim = store.try_claim_new(actor, OwnerRunId::new()).await.unwrap();
+    (root, claim)
+}
+
+#[tokio::test]
+async fn begin_work_commits_one_prompt_and_its_work_boundary() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let (root, claim) = work_fixture(&store).await;
+    let (message, envelopes) = store
+        .begin_work(
+            Some(&claim),
+            root,
+            "main/worker",
+            2,
+            hya_store::ResidentWorkPrompt::Text(
+                "[mail from main] first\n\n[mail from main] second".into(),
+            ),
+            "mail from main".into(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(envelopes.len(), 7);
+    let child = store.read_projection(claim.actor_id).await.unwrap();
+    assert_eq!(child.session.messages.len(), 1);
+    assert_eq!(child.session.messages[0].id, message);
+    assert_eq!(child.session.messages[0].role, Role::User);
+    let root_projection = store.read_projection(root).await.unwrap();
+    let entry = &root_projection.team.roster["main/worker"];
+    assert_eq!(entry.resident_work.as_ref().unwrap().inbox_through, 2);
+    assert_eq!(entry.status, RosterStatus::Busy);
+    store
+        .append_event(
+            root,
+            &Event::AgentActivityChanged {
+                session: root,
+                handle: "main/worker".into(),
+                status: RosterStatus::Idle,
+                current_task: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.read_projection(root).await.unwrap().team.roster["main/worker"].resident_cursor,
+        2
+    );
+}
+
+#[tokio::test]
+async fn begin_work_rejects_a_stale_claim_without_writes() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let (root, claim) = work_fixture(&store).await;
+    store
+        .recover_claim(claim.actor_id, OwnerRunId::new())
+        .await
+        .unwrap();
+    let before_root = store.replay(root).await.unwrap();
+    let before_child = store.replay(claim.actor_id).await.unwrap();
+    let result = store
+        .begin_work(
+            Some(&claim),
+            root,
+            "main/worker",
+            2,
+            hya_store::ResidentWorkPrompt::Text("stale work".into()),
+            "mail".into(),
+        )
+        .await;
+    assert!(
+        matches!(result, Err(StoreError::StaleActorClaim { actor_id }) if actor_id == claim.actor_id)
+    );
+    assert_eq!(store.replay(root).await.unwrap(), before_root);
+    assert_eq!(store.replay(claim.actor_id).await.unwrap(), before_child);
+}
+
+#[tokio::test]
+async fn begin_work_rolls_back_prompt_consumption_and_activity_at_every_write() {
+    for boundary in [
+        "message_started",
+        "text_start",
+        "text_delta",
+        "text_end",
+        "message_finished",
+        "resident_work_started",
+        "agent_activity_changed",
+    ] {
+        let db = TempDb::new(boundary);
+        let store = SessionStore::connect(db.path()).await.unwrap();
+        let (root, claim) = work_fixture(&store).await;
+        let before_root = store.replay(root).await.unwrap();
+        let before_child = store.replay(claim.actor_id).await.unwrap();
+        let mut conn = SqliteConnection::connect(&format!("sqlite://{}", db.path()))
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE TRIGGER reject_work BEFORE INSERT ON event_log WHEN json_extract(NEW.payload, '$.type') = '{boundary}' BEGIN SELECT RAISE(ABORT, 'work failure'); END")).execute(&mut conn).await.unwrap();
+        let result = store
+            .begin_work(
+                Some(&claim),
+                root,
+                "main/worker",
+                2,
+                hya_store::ResidentWorkPrompt::Text("coalesced work".into()),
+                "mail".into(),
+            )
+            .await;
+        assert!(result.is_err(), "{boundary}");
+        assert_eq!(store.replay(root).await.unwrap(), before_root, "{boundary}");
+        assert_eq!(
+            store.replay(claim.actor_id).await.unwrap(),
+            before_child,
+            "{boundary}"
+        );
+        store.validate_actor_claim(&claim).await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn lead_begin_work_consumption_rolls_back_with_the_prompt() {
+    let db = TempDb::new("lead-work");
+    let store = SessionStore::connect(db.path()).await.unwrap();
+    let (root, _) = work_fixture(&store).await;
+    let before = store.replay(root).await.unwrap();
+    let mut conn = SqliteConnection::connect(&format!("sqlite://{}", db.path()))
+        .await
+        .unwrap();
+    sqlx::query("CREATE TRIGGER reject_work BEFORE INSERT ON event_log WHEN json_extract(NEW.payload, '$.type') = 'mail_consumed' BEGIN SELECT RAISE(ABORT, 'lead work failure'); END").execute(&mut conn).await.unwrap();
+    assert!(
+        store
+            .begin_work(
+                None,
+                root,
+                "main",
+                2,
+                hya_store::ResidentWorkPrompt::Text("lead work".into()),
+                "mail".into()
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(store.replay(root).await.unwrap(), before);
+    sqlx::query("DROP TRIGGER reject_work")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    let (message, envelopes) = store
+        .begin_work(
+            None,
+            root,
+            "main",
+            2,
+            hya_store::ResidentWorkPrompt::Text("lead work".into()),
+            "mail".into(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        envelopes
+            .iter()
+            .any(|e| matches!(&e.event, Event::MailConsumed { through: 2, .. }))
+    );
+    assert_eq!(
+        store.read_projection(root).await.unwrap().session.messages[0].id,
+        message
+    );
+}
+
+#[tokio::test]
+async fn begin_work_reuses_registered_prompt_and_rolls_back_its_mail_append() {
+    let db = TempDb::new("registered-work");
+    let store = SessionStore::connect(db.path()).await.unwrap();
+    let (root, claim) = work_fixture(&store).await;
+    let session = claim.actor_id;
+    let message = MessageId::new();
+    let part = PartId::new();
+    store
+        .append_events(
+            session,
+            vec![
+                Event::MessageStarted {
+                    session,
+                    message,
+                    role: Role::User,
+                    agent: None,
+                    model: None,
+                },
+                Event::TextStart {
+                    session,
+                    message,
+                    part,
+                },
+                Event::TextDelta {
+                    session,
+                    message,
+                    part,
+                    delta: "registered directive".into(),
+                },
+                Event::TextEnd {
+                    session,
+                    message,
+                    part,
+                },
+                Event::MessageFinished {
+                    session,
+                    message,
+                    role: Role::User,
+                    finish: FinishReason::Stop,
+                    tokens: None,
+                    cause: None,
+                },
+            ],
+        )
+        .await
+        .unwrap();
+    let before_root = store.replay(root).await.unwrap();
+    let before_child = store.replay(session).await.unwrap();
+    let mut conn = SqliteConnection::connect(&format!("sqlite://{}", db.path()))
+        .await
+        .unwrap();
+    sqlx::query("CREATE TRIGGER reject_work BEFORE INSERT ON event_log WHEN json_extract(NEW.payload, '$.type') = 'resident_work_started' BEGIN SELECT RAISE(ABORT, 'work failure'); END").execute(&mut conn).await.unwrap();
+    assert!(
+        store
+            .begin_work(
+                Some(&claim),
+                root,
+                "main/worker",
+                2,
+                hya_store::ResidentWorkPrompt::Admitted {
+                    message,
+                    append: "first\n\nsecond".into()
+                },
+                "mail".into()
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(store.replay(root).await.unwrap(), before_root);
+    assert_eq!(store.replay(session).await.unwrap(), before_child);
+    sqlx::query("DROP TRIGGER reject_work")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    let (owned, _) = store
+        .begin_work(
+            Some(&claim),
+            root,
+            "main/worker",
+            2,
+            hya_store::ResidentWorkPrompt::Admitted {
+                message,
+                append: "first\n\nsecond".into(),
+            },
+            "mail".into(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(owned, message);
+    let projection = store.read_projection(session).await.unwrap();
+    assert_eq!(projection.session.messages.len(), 1);
+    assert!(
+        matches!(&projection.session.messages[0].parts[0], PartProjection::Text { text, .. } if text == "registered directive\n\nfirst\n\nsecond")
+    );
+}

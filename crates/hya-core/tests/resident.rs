@@ -223,13 +223,13 @@ async fn quiescence_wakes_main_to_synthesize() {
         .unwrap();
 
     // Quiescence fires: main is woken and its transcript carries the synthesis
-    // directive (a System message) plus an assistant turn — with no user prompt.
+    // directive in one owned User message plus an assistant turn.
     let woke = {
         let mut ok = false;
         for _ in 0..300 {
             let proj = engine.read_projection(root).await.unwrap();
             let has_directive = proj.session.messages.iter().any(|m| {
-                matches!(m.role, Role::System)
+                matches!(m.role, Role::User)
                     && m.parts.iter().any(|p| matches!(
                         p,
                         hya_proto::PartProjection::Text { text, .. } if text.contains("TEAM QUIESCED")
@@ -251,7 +251,7 @@ async fn quiescence_wakes_main_to_synthesize() {
     };
     assert!(
         woke,
-        "quiescence must wake main with a synthesis directive and no user input"
+        "quiescence must wake main with an owned synthesis prompt"
     );
 
     // Both residents finished idle and are quiescent. Root teardown

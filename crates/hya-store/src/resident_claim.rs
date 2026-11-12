@@ -1,4 +1,7 @@
-use hya_proto::{ActorClaim, ActorEpoch, Envelope, Event, OwnerRunId, SessionId, now_millis};
+use hya_proto::{
+    ActorClaim, ActorEpoch, Envelope, Event, FinishReason, MessageId, OwnerRunId, PartId,
+    PartProjection, Role, RosterStatus, SessionId, now_millis,
+};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -14,7 +17,140 @@ pub struct RecoveredActorClaim {
     pub previous_epoch: ActorEpoch,
 }
 
+/// A wake either admits new text or owns the directive already committed at registration.
+#[derive(Debug)]
+pub enum ResidentWorkPrompt {
+    /// Admit one new coalesced user message.
+    Text(String),
+    /// Reuse the initial directive committed at registration.
+    Admitted {
+        /// The registered user message owned by this turn.
+        message: MessageId,
+        /// Coalesced new mail, appended to that directive when nonempty.
+        append: String,
+    },
+}
+
 impl SessionStore {
+    /// Deliver one coalesced wake and record its work boundary under one writer
+    /// reservation. Hooks must finish before calling; publish only after commit.
+    /// A claim-less wake belongs to the root lead.
+    pub async fn begin_work(
+        &self,
+        claim: Option<&ActorClaim>,
+        root: SessionId,
+        handle: &str,
+        inbox_through: u64,
+        prompt: ResidentWorkPrompt,
+        current_task: String,
+    ) -> Result<(MessageId, Vec<Envelope>), StoreError> {
+        let mut tx = self.begin_transaction().await?;
+        if let Some(claim) = claim {
+            fence_actor_claim(&mut tx, claim).await?;
+        }
+        let session = claim.map_or(root, |claim| claim.actor_id);
+        let mut events = Vec::new();
+        let message = match prompt {
+            ResidentWorkPrompt::Text(text) => {
+                let message = MessageId::new();
+                let part = PartId::new();
+                events.extend([
+                    Event::MessageStarted {
+                        session,
+                        message,
+                        role: Role::User,
+                        agent: None,
+                        model: None,
+                    },
+                    Event::TextStart {
+                        session,
+                        message,
+                        part,
+                    },
+                    Event::TextDelta {
+                        session,
+                        message,
+                        part,
+                        delta: text,
+                    },
+                    Event::TextEnd {
+                        session,
+                        message,
+                        part,
+                    },
+                    Event::MessageFinished {
+                        session,
+                        message,
+                        role: Role::User,
+                        finish: FinishReason::Stop,
+                        tokens: None,
+                        cause: None,
+                    },
+                ]);
+                message
+            }
+            ResidentWorkPrompt::Admitted { message, append } => {
+                if !append.is_empty() {
+                    let projection =
+                        crate::replay_projection(&self.projections, &mut tx, session).await?;
+                    let (part, text) = projection
+                        .session
+                        .messages
+                        .iter()
+                        .find(|entry| entry.id == message)
+                        .and_then(|entry| {
+                            entry.parts.iter().find_map(|part| match part {
+                                PartProjection::Text { id, text, .. } => Some((*id, text)),
+                                _ => None,
+                            })
+                        })
+                        .ok_or_else(|| {
+                            StoreError::ActorClaimData(
+                                "admitted resident prompt has no text".into(),
+                            )
+                        })?;
+                    events.push(Event::TextReplace {
+                        session,
+                        message,
+                        part,
+                        text: format!("{text}\n\n{append}"),
+                    });
+                }
+                message
+            }
+        };
+        if let Some(claim) = claim {
+            events.push(Event::ResidentWorkStarted {
+                session: root,
+                actor_session: session,
+                handle: handle.into(),
+                epoch: claim.epoch,
+                inbox_through,
+            });
+        } else {
+            events.push(Event::MailConsumed {
+                session: root,
+                handle: handle.into(),
+                through: inbox_through,
+            });
+        }
+        events.push(Event::AgentActivityChanged {
+            session: root,
+            handle: handle.into(),
+            status: RosterStatus::Busy,
+            current_task: Some(current_task),
+        });
+        let mut envelopes = Vec::with_capacity(events.len());
+        for event in events {
+            let target = event
+                .session()
+                .ok_or_else(|| StoreError::ActorClaimData("wake event has no session".into()))?;
+            envelopes.push(crate::append_event_in_transaction(&mut tx, target, event).await?);
+        }
+        tx.commit().await?;
+        Ok((message, envelopes))
+    }
+
     /// Commit a tool outcome and its optional team-mail acknowledgement together.
     /// The actor capability fences both logs; publish envelopes only after success.
     pub async fn commit_tool_result_with_mail(

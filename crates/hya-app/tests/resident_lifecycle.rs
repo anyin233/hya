@@ -390,11 +390,21 @@ async fn i5_post_kill_task_uses_fresh_team_without_waiting_for_other_endings() {
         tokio::time::timeout(support::lifecycle::BOUND, async {
             loop {
                 let request = requests.recv().await.unwrap();
-                if request.session == h.root && request.completion.messages.last().is_some_and(|m| matches!(m, hya_proto::Message::System { content, .. } if content.contains("TEAM QUIESCED"))) {
-                    break request.completion.system.is_some_and(|system| system.contains("NEW_TEAM_GUIDANCE_M4"));
+                if request.session == h.root
+                    && request.completion.messages.last().is_some_and(|m| {
+                        matches!(m, hya_proto::Message::User { .. })
+                            && serde_json::to_string(m).unwrap().contains("TEAM QUIESCED")
+                    })
+                {
+                    break request
+                        .completion
+                        .system
+                        .is_some_and(|system| system.contains("NEW_TEAM_GUIDANCE_M4"));
                 }
             }
-        }).await.unwrap_or(false)
+        })
+        .await
+        .unwrap_or(false)
     } else {
         false
     };
@@ -565,7 +575,6 @@ async fn i16_cancelling_archive_caller_does_not_cancel_the_ending() {
 }
 
 #[tokio::test]
-#[ignore = "M4-5: I15"]
 async fn i15_one_owed_wake_admits_one_coalesced_owned_prompt() {
     let mut h = Harness::new().await;
     let first = Arc::new(Gate::default());
@@ -594,7 +603,28 @@ async fn i15_one_owed_wake_admits_one_coalesced_owned_prompt() {
         })
         .collect::<Vec<_>>();
     next.release();
+    h.until(h.root, |p| {
+        p.team
+            .roster
+            .get(&handle)
+            .is_some_and(|entry| entry.resident_cursor == 2)
+    })
+    .await;
+    let requests = h
+        .provider
+        .captured
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|request| {
+            request.session == child
+                && serde_json::to_string(&request.completion.messages)
+                    .unwrap()
+                    .contains("COALESCE_")
+        })
+        .count();
     h.shutdown().await;
+    assert_eq!(requests, 1, "two queued mails must produce one turn");
     assert_eq!(
         mail_prompts.len(),
         1,
@@ -605,7 +635,6 @@ async fn i15_one_owed_wake_admits_one_coalesced_owned_prompt() {
 }
 
 #[tokio::test]
-#[ignore = "M4-5: I15"]
 async fn i15_failed_prompt_admission_rolls_back_work_started() {
     let mut h = Harness::new().await;
     let (child, handle) = h.spawn(vec![Round::text("initial activation")]).await;
@@ -614,16 +643,92 @@ async fn i15_failed_prompt_admission_rolls_back_work_started() {
         events.iter().filter(|e| matches!(&e.event, Event::ResidentWorkStarted { actor_session, .. } if *actor_session == child)).count()
     };
     let before = count(&h.engine.replay(h.root).await.unwrap());
+    let before_child = h.engine.replay(child).await.unwrap();
     h.reject_wake_prompt(child).await;
     h.mail(&handle, "rejected wake".into()).await.unwrap();
     h.archived(&handle).await;
-    let after = count(&h.engine.replay(h.root).await.unwrap());
+    let root_events = h.engine.replay(h.root).await.unwrap();
+    let after = count(&root_events);
+    let mut before_archive = hya_proto::Projection::default();
+    for event in &root_events {
+        if matches!(&event.event, Event::AgentArchived { handle: target, .. } if target == &handle)
+        {
+            break;
+        }
+        before_archive.apply(event);
+    }
+    assert_eq!(
+        before_archive.team.roster[&handle].resident_cursor, 0,
+        "failed admission must leave mail unread"
+    );
+    let after_child = h.engine.replay(child).await.unwrap();
+    assert_eq!(
+        after_child
+            .iter()
+            .filter(|e| matches!(
+                e.event,
+                Event::MessageStarted {
+                    role: hya_proto::Role::User,
+                    ..
+                }
+            ))
+            .count(),
+        before_child
+            .iter()
+            .filter(|e| matches!(
+                e.event,
+                Event::MessageStarted {
+                    role: hya_proto::Role::User,
+                    ..
+                }
+            ))
+            .count(),
+        "failed admission must leave no orphan prompt"
+    );
     h.heal().await;
     h.shutdown().await;
     assert_eq!(
         after, before,
         "work-start committed without its admitted prompt"
     );
+}
+
+#[tokio::test]
+async fn i15_cancelled_coalesced_hook_leaves_mail_unread() {
+    let plugin = support::lifecycle::BlockingPlugin::for_hook("message.user.before").await;
+    let mut h = Harness::with_plugins(vec![plugin.spec.clone()]).await;
+    let initial = Arc::new(Gate::default());
+    let (child, handle) = h
+        .spawn(vec![
+            Round::text("initial activation").gated(initial.clone()),
+        ])
+        .await;
+    initial.arrived().await;
+    h.mail(&handle, "HOOK_FIRST".into()).await.unwrap();
+    h.mail(&handle, "HOOK_SECOND".into()).await.unwrap();
+    plugin.arm_session(child);
+    initial.release();
+    plugin.gate.arrived().await;
+    let root = h.engine.read_projection(h.root).await.unwrap();
+    assert_eq!(root.team.roster[&handle].resident_cursor, 0);
+    assert!(
+        root.team.roster[&handle].resident_work.is_none(),
+        "hooks must precede the work boundary"
+    );
+    assert!(
+        !h.engine
+            .replay(child)
+            .await
+            .unwrap()
+            .iter()
+            .any(|e| matches!(&e.event, Event::TextDelta { delta, .. } if delta.contains("HOOK_"))),
+        "blocked hooks must hold no admitted prompt"
+    );
+    output(&h.tool("archive", json!({"target": handle})).await);
+    plugin.gate.release();
+    h.shutdown().await;
+    drop(h);
+    plugin.shutdown().await;
 }
 
 #[tokio::test]
