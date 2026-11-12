@@ -15,7 +15,6 @@ use hya_core::{
 use hya_proto::ModelRef;
 use sha2::Digest as _;
 
-use crate::agent_model_config::AgentModelConfigFiles;
 use crate::bundle_config::BundleConfigResolver;
 use crate::installed_bundle_refresh::{BaseCatalogs, InstalledBundleRefresh, SourceKey, compose};
 use crate::project_bundles::{
@@ -51,6 +50,7 @@ struct PublishedBundle {
     catalog: PreparedCatalog,
     sources: BTreeMap<SourceKey, hya_core::RuntimeSource>,
     models: BTreeMap<String, ModelRef>,
+    efforts: BTreeMap<String, hya_provider::ReasoningEffort>,
 }
 
 impl ProjectScopeRefresh {
@@ -235,6 +235,7 @@ impl ProjectScopeRefresh {
         let mut namespaces = BTreeSet::new();
         let mut catalogs = Vec::new();
         let mut bundle_models = BTreeMap::new();
+        let mut bundle_efforts = BTreeMap::new();
         let mut project_bundle_dirs = BTreeMap::new();
         let mut sources = BTreeMap::new();
         for dir in &dirs {
@@ -257,6 +258,7 @@ impl ProjectScopeRefresh {
             if !published.models.is_empty() {
                 bundle_models.insert(id.clone(), published.models.clone());
             }
+            bundle_efforts.insert(id.clone(), published.efforts.clone());
             sources.extend(published.sources.clone());
         }
         for catalog in base.installed.iter().chain(&base.first_party) {
@@ -292,6 +294,7 @@ impl ProjectScopeRefresh {
                 bundle_sources,
                 plugin_sources,
                 bundle_models,
+                bundle_efforts,
                 project_bundle_dirs,
                 fingerprint: inputs.fingerprint,
             },
@@ -335,11 +338,20 @@ impl ProjectScopeRefresh {
                 catalog,
                 sources: BTreeMap::new(),
                 models: BTreeMap::new(),
+                efforts: BTreeMap::new(),
             });
         }
-        let models = AgentModelConfigFiles::project_models(dir).map_err(|error| {
+        let agents = crate::agent_model_config::read_agent_settings(&dir.join("config.yml"))
+            .map_err(|error| {
+                CoreError::Invalid(format!("project bundle {id} configuration: {error:#}"))
+            })?;
+        let efforts = crate::agent_model_config::typed_efforts(&agents).map_err(|error| {
             CoreError::Invalid(format!("project bundle {id} configuration: {error:#}"))
         })?;
+        let models = agents
+            .into_iter()
+            .filter_map(|(id, entry)| entry.model.map(|model| (id, ModelRef::new(model))))
+            .collect();
         let resolver = BundleConfigResolver::new(
             self.installed.config_file().to_path_buf(),
             BTreeMap::from([(id, dir.to_path_buf())]),
@@ -359,6 +371,7 @@ impl ProjectScopeRefresh {
             catalog,
             sources: composition.sources,
             models,
+            efforts,
         })
     }
 }

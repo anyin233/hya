@@ -108,6 +108,8 @@ pub struct ScopeOverlay {
     /// Model leaves of the scope's bundles (`bundle id -> agent id ->
     /// model`), read from each scope bundle's own `config.yml`.
     pub bundle_models: BTreeMap<String, BTreeMap<String, ModelRef>>,
+    /// Effort leaves read in the same transaction as the scope models.
+    pub bundle_efforts: BTreeMap<String, BTreeMap<String, hya_provider::ReasoningEffort>>,
     /// Scope bundle id to the bundle's source directory. These ids shadow
     /// the user-scope model configuration of the same bundle id.
     pub project_bundle_dirs: BTreeMap<String, PathBuf>,
@@ -126,6 +128,7 @@ impl ScopeOverlay {
             bundle_sources: Vec::new(),
             plugin_sources: Vec::new(),
             bundle_models: BTreeMap::new(),
+            bundle_efforts: BTreeMap::new(),
             project_bundle_dirs: BTreeMap::new(),
             fingerprint: [0; 32],
         }

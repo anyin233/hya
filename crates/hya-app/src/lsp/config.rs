@@ -2,13 +2,13 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, bail};
+use anyhow::bail;
 use serde::Deserialize;
 use serde_json::Value;
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ServerConfig {
+pub(crate) struct ServerConfig {
     #[serde(default)]
     pub command: Vec<String>,
     #[serde(default)]
@@ -25,32 +25,16 @@ pub(super) struct ServerConfig {
     pub disabled: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(untagged)]
-enum Selection {
+pub(crate) enum Selection {
     Enabled(bool),
     Servers(BTreeMap<String, ServerConfig>),
 }
 
-#[derive(Default, Deserialize)]
-struct FileConfig {
-    lsp: Option<Selection>,
-}
-
-pub(super) fn load() -> anyhow::Result<BTreeMap<String, ServerConfig>> {
-    let path = crate::config::active_config_path();
-    let selection = match std::fs::read_to_string(&path) {
-        Ok(text) if !text.trim().is_empty() => {
-            serde_norway::from_str::<FileConfig>(&text)
-                .context("parse lsp config")?
-                .lsp
-        }
-        Ok(_) => None,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => {
-            return Err(error).with_context(|| format!("read LSP config {}", path.display()));
-        }
-    };
+pub(crate) fn resolve(
+    selection: Option<Selection>,
+) -> anyhow::Result<BTreeMap<String, ServerConfig>> {
     if matches!(selection, Some(Selection::Enabled(false))) {
         return Ok(BTreeMap::new());
     }

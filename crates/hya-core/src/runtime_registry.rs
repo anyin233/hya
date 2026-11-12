@@ -269,6 +269,7 @@ struct BindingPlace {
     workdir: PathBuf,
     scope: CatalogScope,
     project_bundle_dirs: Arc<BTreeMap<String, PathBuf>>,
+    bundle_efforts: Arc<BTreeMap<String, BTreeMap<String, ReasoningEffort>>>,
 }
 
 #[cfg(test)]
@@ -278,6 +279,7 @@ impl BindingPlace {
             workdir,
             scope,
             project_bundle_dirs: Arc::new(BTreeMap::new()),
+            bundle_efforts: Arc::new(BTreeMap::new()),
         })
     }
 }
@@ -547,8 +549,8 @@ impl RuntimeRegistry {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut replaced = None;
-        let (snapshot, project_bundle_dirs) = match scopes.get_mut(&key) {
-            None => (base, Arc::new(BTreeMap::new())),
+        let (snapshot, project_bundle_dirs, bundle_efforts) = match scopes.get_mut(&key) {
+            None => (base, Arc::new(BTreeMap::new()), Arc::new(BTreeMap::new())),
             Some(entry) => {
                 let snapshot = match &entry.snapshot {
                     Some(snapshot) if entry.base_generation == base.generation => {
@@ -565,7 +567,11 @@ impl RuntimeRegistry {
                 };
                 agent_model_configuration =
                     overlay_agent_model_configuration(agent_model_configuration, &entry.overlay);
-                (snapshot, Arc::clone(&entry.project_bundle_dirs))
+                (
+                    snapshot,
+                    Arc::clone(&entry.project_bundle_dirs),
+                    Arc::new(entry.overlay.bundle_efforts.clone()),
+                )
             }
         };
         drop(scopes);
@@ -580,6 +586,7 @@ impl RuntimeRegistry {
                 workdir: workdir.to_path_buf(),
                 scope: scope.clone(),
                 project_bundle_dirs,
+                bundle_efforts,
             }),
         })
     }
@@ -2369,6 +2376,19 @@ impl TurnBinding {
     #[must_use]
     pub fn project_bundle_dirs(&self) -> &BTreeMap<String, PathBuf> {
         &self.place.project_bundle_dirs
+    }
+
+    /// A project-owned Agent's configured effort, including explicit absence.
+    pub fn project_agent_effort(&self, agent_id: &str) -> Option<Option<ReasoningEffort>> {
+        let definition = self.agent_catalog().resolve(agent_id)?;
+        let bundle = definition.origin.bundle_id()?;
+        self.project_bundle_dirs().contains_key(bundle).then(|| {
+            self.place
+                .bundle_efforts
+                .get(bundle)
+                .and_then(|entries| entries.get(agent_id))
+                .copied()
+        })
     }
 
     #[must_use]
