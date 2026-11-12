@@ -1280,6 +1280,53 @@ async fn deleting_root_cancels_a_busy_member_before_archiving() {
 
 #[tokio::test]
 async fn steer_surfaces_mail_inside_a_root_turn_tool_result() {
+    steer_turn_result(serde_json::json!({"output": "ok"}), None).await;
+}
+
+#[tokio::test]
+async fn steer_preserves_non_object_tool_results() {
+    for output in [
+        serde_json::json!("ok"),
+        serde_json::json!([1, 2]),
+        serde_json::Value::Null,
+    ] {
+        steer_turn_result(output, None).await;
+    }
+}
+
+#[tokio::test]
+async fn steer_acknowledgement_rolls_back_when_result_append_fails() {
+    steer_turn_result(serde_json::json!({"output": "ok"}), Some("tool_result")).await;
+}
+
+#[tokio::test]
+async fn steer_result_rolls_back_when_acknowledgement_append_fails() {
+    steer_turn_result(serde_json::json!({"output": "ok"}), Some("mail_consumed")).await;
+}
+
+async fn steer_turn_result(output: serde_json::Value, reject_event: Option<&str>) {
+    struct OutputTool(serde_json::Value);
+    #[async_trait]
+    impl hya_tool::Tool for OutputTool {
+        fn name(&self) -> &str {
+            "ls"
+        }
+        fn schema(&self) -> hya_proto::ToolSchema {
+            hya_proto::ToolSchema {
+                name: hya_proto::ToolName::new("ls"),
+                description: "scripted result".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+                output_schema: None,
+            }
+        }
+        async fn execute(
+            &self,
+            _: &hya_tool::ToolCtx,
+            _: serde_json::Value,
+        ) -> Result<serde_json::Value, hya_tool::ToolError> {
+            Ok(self.0.clone())
+        }
+    }
     // A provider that first issues one harmless tool call (ls) then finishes:
     // the steer notice must ride that tool result.
     struct OneToolProvider {
@@ -1332,12 +1379,17 @@ async fn steer_surfaces_mail_inside_a_root_turn_tool_result() {
             resource_pattern: "*".to_string(),
             mode: hya_tool::Mode::Allow,
         }]));
+    let tools = ToolRegistry::builtins();
+    tools.remove("ls");
+    tools
+        .register(Arc::new(OutputTool(output.clone())))
+        .unwrap();
     let engine = Arc::new(SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         Arc::new(ProviderRouter::new().with(Arc::new(OneToolProvider {
             called: std::sync::atomic::AtomicBool::new(false),
         }))),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(tools)),
         permission,
         EventBus::default(),
     ));
@@ -1349,6 +1401,12 @@ async fn steer_surfaces_mail_inside_a_root_turn_tool_result() {
     // out to its sender too), so the backlog must come from someone else.
     mail_main_from_peer(&engine, root, "steer payload for main").await;
 
+    if let Some(tag) = reject_event {
+        let mut tx = engine.store().begin_transaction().await.unwrap();
+        sqlx::query(&format!("CREATE TRIGGER reject_steer_result BEFORE INSERT ON event_log WHEN instr(NEW.payload, '{tag}') > 0 BEGIN SELECT RAISE(ABORT, 'reject steer result'); END"))
+            .execute(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+    }
     let agent = AgentSpec {
         name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
@@ -1371,7 +1429,30 @@ async fn steer_surfaces_mail_inside_a_root_turn_tool_result() {
             None,
         )
         .await;
-    let _ = finish;
+    if reject_event.is_some() {
+        assert!(
+            finish.is_err(),
+            "result trigger must reject the turn: {finish:?}"
+        );
+        let replay = engine.replay(root).await.unwrap();
+        assert!(
+            !replay
+                .iter()
+                .any(|e| matches!(e.event, Event::ToolResult { .. }))
+        );
+        assert!(
+            !replay
+                .iter()
+                .any(|e| matches!(e.event, Event::MailConsumed { .. })),
+            "failed delivery must leave mail unread"
+        );
+        assert_eq!(
+            engine.read_projection(root).await.unwrap().team.roster["main"].resident_cursor,
+            0
+        );
+        return;
+    }
+    finish.unwrap();
 
     // The durable cursor for main advanced past the steered mail.
     let projection = engine.read_projection(root).await.unwrap();
@@ -1388,6 +1469,19 @@ async fn steer_surfaces_mail_inside_a_root_turn_tool_result() {
             .any(|envelope| matches!(&envelope.event, Event::MailConsumed { .. })),
         "MailConsumed must be committed"
     );
+    if !output.is_object() {
+        let delivered = replay
+            .iter()
+            .find_map(|e| match &e.event {
+                Event::ToolResult { output, .. } => Some(output),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            delivered["result"], output,
+            "preserve the original tool value"
+        );
+    }
     // And the tool result carried the notice text.
     let tool_results: Vec<String> = replay
         .iter()
@@ -1776,9 +1870,8 @@ async fn steer_resyncs_mail_from_the_log_after_the_bus_lagged() {
     assert!(notice.contains("LAGGED_MAIL_BODY"), "{notice}");
     let projection = engine.read_projection(root).await.unwrap();
     assert_eq!(
-        projection.team.roster["main"].resident_cursor,
-        projection.team.inboxes["main"].len() as u64,
-        "the resynced mail is consumed durably"
+        projection.team.roster["main"].resident_cursor, 0,
+        "preparing a notice alone must not consume mail"
     );
 }
 
@@ -1846,9 +1939,8 @@ async fn steer_policy_denial_keeps_real_mail_out_of_the_turn_notice() {
     assert!(steer.drain(&engine).await.unwrap().is_none());
     let projection = engine.read_projection(root).await.unwrap();
     assert_eq!(
-        projection.team.roster["main"].resident_cursor,
-        projection.team.inboxes["main"].len() as u64,
-        "denied delivery must be consumed so it cannot block report or replay"
+        projection.team.roster["main"].resident_cursor, 0,
+        "preparing a filtered result alone must not consume mail"
     );
 }
 

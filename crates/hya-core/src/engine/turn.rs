@@ -2217,6 +2217,7 @@ impl SessionEngine {
                 } else {
                     result
                 };
+                let mail_mark = self.mail_mark(session);
                 let (event, retains_artifact) = match result {
                     Ok(mut output) => {
                         artifact_guard.remove_unowned_path(&mut output);
@@ -2277,7 +2278,18 @@ impl SessionEngine {
                     Event::ToolResult { output, .. } if todo_tool => Some(output.clone()),
                     _ => None,
                 };
-                self.emit_for_actor(actor_claim, session, event).await?;
+                let acknowledgement = steer.take_acknowledgement();
+                let consumed_mail = acknowledgement.is_some();
+                let envelopes = self
+                    .store
+                    .commit_tool_result_with_mail(actor_claim, session, event, acknowledgement)
+                    .await?;
+                for envelope in envelopes {
+                    self.publish_envelope(envelope);
+                }
+                if consumed_mail {
+                    self.notify_mail_consumed(session, mail_mark);
+                }
                 // A todo tool's result carries the whole list; record the
                 // change so the projection (and `todoUpdated`) follow it.
                 if let Some(output) = todo_output
@@ -2369,7 +2381,11 @@ fn permission_for_session(
 
 /// Splice a steer notice into a tool result's model-facing text.
 fn append_steer_notice(output: &mut serde_json::Value, notice: &str) {
-    let Some(object) = output.as_object_mut() else {
+    let serde_json::Value::Object(object) = output else {
+        *output = serde_json::json!({
+            "result": std::mem::take(output),
+            "steer": notice.trim_start(),
+        });
         return;
     };
     if let Some(serde_json::Value::String(text)) = object.get("output") {

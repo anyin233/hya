@@ -10,8 +10,8 @@
 //! inbox past the durable cursor — so mail another delivery path already
 //! consumed (a `wait` that returned it) is never shown twice, and mail on a
 //! channel minted after the turn began (a new member's DM) is not missed —
-//! drains it into a notice appended to the tool result, and commits a
-//! `MailConsumed` event advancing the durable cursor.
+//! prepares a notice appended to the tool result. The turn commits the result
+//! and `MailConsumed` together before notifying the mail observer.
 
 use std::collections::HashMap;
 
@@ -36,8 +36,8 @@ pub struct SteeredMail {
 
 /// Per-turn steer state: the backlog plus the live bus tail.
 pub struct SteerMailbox {
+    pending_ack: Option<Event>,
     root: SessionId,
-    session: SessionId,
     handle: String,
     queue: Vec<SteeredMail>,
     /// Durable cursor covered so far; `MailConsumed.through` values.
@@ -76,7 +76,7 @@ impl SessionEngine {
         let Ok(root) = self.team_root(session).await else {
             return SteerMailbox {
                 root: session,
-                session,
+                pending_ack: None,
                 handle: String::new(),
                 queue: Vec::new(),
                 through: 0,
@@ -93,7 +93,7 @@ impl SessionEngine {
         let Ok(handle) = self.resolve_handle(root, session).await else {
             return SteerMailbox {
                 root,
-                session,
+                pending_ack: None,
                 handle: String::new(),
                 queue: Vec::new(),
                 through: 0,
@@ -110,7 +110,7 @@ impl SessionEngine {
         let Ok(projection) = self.read_projection_shared(root).await else {
             return SteerMailbox {
                 root,
-                session,
+                pending_ack: None,
                 handle: handle.clone(),
                 queue: Vec::new(),
                 through: 0,
@@ -137,7 +137,7 @@ impl SessionEngine {
         let (channels, dm_by_peer, channel_roles) = topology(&projection, &handle);
         let mut mailbox = SteerMailbox {
             root,
-            session,
+            pending_ack: None,
             handle,
             queue: Vec::new(),
             through: cursor,
@@ -260,6 +260,10 @@ impl SteerMailbox {
         self.policy = Some(policy);
     }
 
+    pub(crate) fn take_acknowledgement(&mut self) -> Option<Event> {
+        self.pending_ack.take()
+    }
+
     /// Notice live `MailSent` deliveries on the team log (the next drain
     /// re-reads the durable inbox), or a bus lag.
     pub(crate) fn poll_live(&mut self) {
@@ -358,11 +362,9 @@ impl SteerMailbox {
         }
     }
 
-    /// Drain pending mail into a notice appended to a tool result, advancing
-    /// the durable cursor via `MailConsumed`. `None` when nothing is pending.
+    /// Prepare a notice without acknowledging delivery. The turn must commit
+    /// `take_acknowledgement()` atomically with the result carrying this notice.
     pub async fn drain(&mut self, engine: &SessionEngine) -> Result<Option<String>, CoreError> {
-        // Taken before anything below sees the inbox: work counted later stays owed.
-        let mark = engine.mail_mark(self.session);
         self.poll_live();
         if self.handle.is_empty() {
             return Ok(None);
@@ -383,19 +385,12 @@ impl SteerMailbox {
         let root = self.root;
         let handle = self.handle.clone();
         let through = self.through;
-        engine
-            .emit_for_actor(
-                None,
-                root,
-                Event::MailConsumed {
-                    session: root,
-                    handle,
-                    through,
-                },
-            )
-            .await?;
+        self.pending_ack = Some(Event::MailConsumed {
+            session: root,
+            handle,
+            through,
+        });
         self.committed_through = through;
-        engine.notify_mail_consumed(self.session, mark);
         if shown.is_empty() {
             return Ok(None);
         }
