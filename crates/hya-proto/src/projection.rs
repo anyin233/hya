@@ -543,7 +543,7 @@ pub struct RosterEntry {
     /// A short human-facing description of what the member is currently doing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_task: Option<String>,
-    /// Number of inbox entries acknowledged within this episode.
+    /// Inbox offset acknowledged within this episode; revival skips prior history.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub resident_cursor: u64,
     /// Latest harness-observed activity time (Unix-epoch ms), folded from
@@ -662,7 +662,7 @@ pub fn session_archive_event(
 /// different projection, or when `Projection` (or anything it contains)
 /// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
 /// the bump is recorded.
-pub const PROJECTION_REDUCER_VERSION: u32 = 3;
+pub const PROJECTION_REDUCER_VERSION: u32 = 4;
 
 /// Durable snapshot encoding: the wire projection plus replay-only reducer
 /// state the wire form deliberately omits.
@@ -1405,6 +1405,15 @@ impl Projection {
                 // Re-registering an existing path preserves its live status /
                 // current_task (the reducer keys the roster by canonical path)
                 // while refreshing the binding + mode.
+                // Archive removes unit broadcast membership; registering its
+                // next episode restores the same unit without minting channels.
+                if self.team.archived.contains_key(&path) && !self.team.roster.contains_key(&path)
+                    && let Some(parent) = parent
+                    && let Some(channel) = self.team.channels.values_mut().find(|channel| channel.kind == ChannelKind::Group && channel.unit.as_ref() == Some(parent))
+                {
+                    channel.members.insert(path.clone());
+                }
+                let cursor = self.team.inboxes.get(&path).map_or(0, |inbox| inbox.len() as u64);
                 let entry = self
                     .team
                     .roster
@@ -1416,7 +1425,7 @@ impl Projection {
                         mode: *mode,
                         status: RosterStatus::default(),
                         current_task: None,
-                        resident_cursor: 0,
+                        resident_cursor: cursor,
                         heartbeat_ms: 0,
                         resident_work: None,
                     });

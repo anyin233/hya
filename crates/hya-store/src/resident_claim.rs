@@ -32,6 +32,190 @@ pub enum ResidentWorkPrompt {
 }
 
 impl SessionStore {
+    /// Reactivate an archived member, cut its context and append its first mail
+    /// in one writer transaction. Authorization is rechecked here, including
+    /// when another sender already revived the member. In that case only mail
+    /// is appended and the returned claim is None.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn revive_episode(
+        &self,
+        root: SessionId,
+        owner: OwnerRunId,
+        parent_claim: Option<&ActorClaim>,
+        actor: SessionId,
+        from: String,
+        to: hya_proto::MailEndpoint,
+        kind: hya_proto::MailKind,
+        body: String,
+        context_marker: &str,
+        policy: Option<hya_proto::mail::ChannelPolicySnapshot>,
+    ) -> Result<(Option<(ActorClaim, u64)>, Vec<Envelope>), StoreError> {
+        use hya_proto::{MailEndpoint, SubagentMode, scope};
+        let mut tx = self.begin_transaction().await?;
+        if let Some(claim) = parent_claim {
+            fence_actor_claim(&mut tx, claim).await?;
+        }
+        let mut projection = crate::replay_projection(&self.projections, &mut tx, root).await?;
+        // Use the ordinary append's exact authorization and liveness rules.
+        // MailRevivalRequired is returned before any append.
+        let append = match &to {
+            MailEndpoint::Handle(address) => {
+                crate::mailbox::append_direct_mail_in_transaction(
+                    &projection,
+                    &mut tx,
+                    root,
+                    from.clone(),
+                    address.clone(),
+                    kind,
+                    body.clone(),
+                    policy,
+                )
+                .await
+            }
+            MailEndpoint::Channel(channel) => {
+                let key = projection
+                    .team
+                    .resolve_channel(&from, channel)
+                    .map_err(|error| StoreError::MailAuthorizationRejected {
+                        sender: from.clone(),
+                        channel: channel.clone(),
+                        reason: error.to_string(),
+                    })?;
+                crate::mailbox::append_resolved_channel_mail(
+                    &mut tx,
+                    root,
+                    from.clone(),
+                    key,
+                    kind,
+                    body.clone(),
+                    &projection,
+                    policy,
+                )
+                .await
+                .map(|(envelope, _)| envelope)
+            }
+        };
+        let target = match append {
+            Ok(envelope) => {
+                tx.commit().await?;
+                return Ok((None, vec![envelope]));
+            }
+            Err(StoreError::MailRevivalRequired { target, .. }) => target,
+            Err(error) => return Err(error),
+        };
+        let archived = &projection.team.archived[&target];
+        if archived.session != actor {
+            return Err(StoreError::ActorClaimData(
+                "revive actor changed during preparation".into(),
+            ));
+        }
+        let agent_type = archived.agent_type.clone();
+        let channel = projection
+            .team
+            .channels
+            .iter()
+            .find(|(_, state)| {
+                state.kind == hya_proto::ChannelKind::Dm
+                    && state.members.contains(&from)
+                    && state.members.contains(&target)
+            })
+            .map(|(key, _)| key.clone())
+            .ok_or_else(|| StoreError::MailAuthorizationRejected {
+                sender: from.clone(),
+                channel: target.clone(),
+                reason: "archived member has no parent DM channel".into(),
+            })?;
+        let actor_projection = crate::replay_projection(&self.projections, &mut tx, actor).await?;
+        let handoff =
+            actor_projection.session.handoff.as_ref().ok_or_else(|| {
+                StoreError::ActorClaimData("archived resident has no handoff".into())
+            })?;
+        let boundary = format!(
+            "{context_marker}\nPRIOR HANDOFF (generation {})\n{}",
+            handoff.generation, handoff.doc
+        );
+        let cursor = projection
+            .team
+            .inboxes
+            .get(&target)
+            .map_or(0, |inbox| inbox.len() as u64);
+        let claim = Self::try_claim_new_in_transaction(&mut tx, actor, owner).await?;
+        let message = MessageId::new();
+        let part = PartId::new();
+        let events = [
+            Event::AgentRegistered {
+                session: root,
+                agent_session: actor,
+                handle: scope::leaf(&target).into(),
+                parent: Some(from.clone()),
+                agent_type,
+                mode: SubagentMode::Resident,
+            },
+            Event::AgentRestarted {
+                session: root,
+                handle: target,
+                child: actor,
+                epoch: claim.epoch,
+            },
+            Event::MessageStarted {
+                session: actor,
+                message,
+                role: Role::System,
+                agent: None,
+                model: None,
+            },
+            Event::TextStart {
+                session: actor,
+                message,
+                part,
+            },
+            Event::TextDelta {
+                session: actor,
+                message,
+                part,
+                delta: boundary,
+            },
+            Event::TextEnd {
+                session: actor,
+                message,
+                part,
+            },
+            Event::MessageFinished {
+                session: actor,
+                message,
+                role: Role::System,
+                finish: FinishReason::Stop,
+                tokens: None,
+                cause: None,
+            },
+        ];
+        let mut envelopes = Vec::new();
+        for event in events {
+            let session = event
+                .session()
+                .ok_or_else(|| StoreError::ActorClaimData("revive event has no session".into()))?;
+            let envelope = crate::append_event_in_transaction(&mut tx, session, event).await?;
+            if session == root {
+                projection.apply(&envelope);
+            }
+            envelopes.push(envelope);
+        }
+        let (mail, _) = crate::mailbox::append_resolved_channel_mail(
+            &mut tx,
+            root,
+            from,
+            channel,
+            kind,
+            body,
+            &projection,
+            policy,
+        )
+        .await?;
+        envelopes.push(mail);
+        tx.commit().await?;
+        Ok((Some((claim, cursor)), envelopes))
+    }
+
     /// Deliver one coalesced wake and record its work boundary under one writer
     /// reservation. Hooks must finish before calling; publish only after commit.
     /// A claim-less wake belongs to the root lead.

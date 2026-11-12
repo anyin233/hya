@@ -43,9 +43,9 @@ use std::time::{Duration, Instant};
 
 use hya_bundle::{ChannelCapability, ChannelParticipantRole, ChannelTemplateKind};
 use hya_proto::{
-    ActorClaim, ActorEpoch, ArchiveReason, ChannelKind, Event, FinishCause, FinishReason,
-    MailEndpoint, MemberId, MemberRunStatus, ModelRef, OwnerRunId, ReportOutcome, RosterStatus,
-    SessionId, SubagentMode, ToolCallId, scope,
+    ActorClaim, ArchiveReason, ChannelKind, Event, FinishCause, FinishReason, MailEndpoint,
+    MemberId, MemberRunStatus, OwnerRunId, ReportOutcome, RosterStatus, SessionId, SubagentMode,
+    ToolCallId, scope,
 };
 use hya_tool::{AgentDef, ArchiveReceipt, ResolvedTool};
 use tokio::sync::{Notify, oneshot, watch};
@@ -2415,6 +2415,8 @@ pub struct ResidentSupervisor {
     claim_writes: tokio::sync::Mutex<()>,
     #[cfg(test)]
     registration_pause: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
+    #[cfg(test)]
+    revive_ready_pause: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
     self_ref: Weak<ResidentSupervisor>,
     listener_stop: CancellationToken,
     listener: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -2913,16 +2915,6 @@ impl ArchiveReviver for ResidentSupervisor {
         Ok(outcome)
     }
 
-    async fn revive(
-        &self,
-        root: SessionId,
-        parent: &str,
-        child_handle: &str,
-        body: String,
-    ) -> Result<(), CoreError> {
-        self.revive_child(root, parent, child_handle, body).await
-    }
-
     async fn archive_member(
         &self,
         caller: SessionId,
@@ -3019,6 +3011,8 @@ impl ResidentSupervisor {
             claim_writes: tokio::sync::Mutex::new(()),
             #[cfg(test)]
             registration_pause: Mutex::new(None),
+            #[cfg(test)]
+            revive_ready_pause: Mutex::new(None),
             self_ref: self_ref.clone(),
             listener_stop: CancellationToken::new(),
             listener: Mutex::new(None),
@@ -3026,9 +3020,7 @@ impl ResidentSupervisor {
         });
         // The supervisor is the engine's revive seam (ADR-0015): wire it before
         // the listener task starts so no mail send can race the installation.
-        supervisor
-            .engine
-            .set_reviver(supervisor.clone() as Arc<dyn ArchiveReviver>);
+        supervisor.engine.set_reviver(supervisor.clone());
         // Turn boundaries deliver wakes deferred by the single-active-turn
         // invariant (mail/quiescence owed to a session whose turn was running).
         let observer: Arc<dyn TurnBoundaryObserver> = supervisor.clone();
@@ -3781,157 +3773,182 @@ impl ResidentSupervisor {
         Ok(false)
     }
 
-    /// Revive one archived direct child of `parent` with `body` as the wake
-    /// prompt (ADR-0015 §4). Re-resolves the episode runtime from the CURRENT
-    /// binding, seeds the fresh episode with the latest handoff, re-registers
-    /// the agent under a new claim epoch, and marks the restart durably.
-    pub async fn revive_child(
+    /// Prepare outside the claim-write lock, then commit and install a revived
+    /// episode under the same serialization as every archive/Takeover decision.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn revive_episode(
         &self,
         root: SessionId,
         parent: &str,
-        child_handle: &str,
+        target: &str,
+        to: MailEndpoint,
+        kind: hya_proto::MailKind,
         body: String,
+        parent_claim: Option<&ActorClaim>,
+        policy: Option<hya_proto::mail::ChannelPolicySnapshot>,
     ) -> Result<(), CoreError> {
         let projection = self.engine.read_projection(root).await?;
-        let canonical = child_handle.to_string();
-        let entry = projection.team.archived.get(&canonical).ok_or_else(|| {
-            CoreError::Invalid(format!("`{child_handle}` is not an archived agent"))
-        })?;
-        if scope::parent_path(&canonical) != Some(parent) {
-            return Err(CoreError::Invalid(format!(
-                "`{child_handle}` is not a direct child of `{parent}`"
-            )));
-        }
-        let child = entry.session;
-        let stable = entry.agent_type.clone();
-
-        // Re-resolve from the current runtime; a vanished stable id fails the
-        // revive closed instead of silently downgrading the agent.
+        // A concurrent sender may already have installed the new episode.
+        let child = projection
+            .team
+            .roster
+            .get(target)
+            .map(|entry| entry.session)
+            .or_else(|| {
+                projection
+                    .team
+                    .archived
+                    .get(target)
+                    .map(|entry| entry.session)
+            })
+            .ok_or_else(|| CoreError::Invalid(format!("resident not found: {target}")))?;
         let child_projection = self.engine.read_projection(child).await?;
+        let stable = child_projection
+            .session
+            .agent
+            .as_ref()
+            .ok_or_else(|| CoreError::Invalid("resident has no recorded agent".into()))?;
         let workdir = child_projection
             .session
             .workdir
-            .clone()
+            .as_ref()
             .map(std::path::PathBuf::from)
             .ok_or_else(|| CoreError::Invalid(format!("session not found: {child}")))?;
         let binding = self.engine.bind_session_runtime(child, &workdir).await?;
-        let agents = self
-            .engine
-            .agent_roster_for_binding(&binding, stable.as_str())?;
-        let resources = self
-            .engine
-            .agent_resource_policy_for_binding(&binding, stable.as_str())?;
         let base = AgentSpec {
             name: stable.clone(),
             model: child_projection
                 .session
                 .model
                 .clone()
-                .unwrap_or_else(|| ModelRef::new("fake")),
+                .ok_or_else(|| CoreError::Invalid("resident has no model".into()))?,
             system_prompt: String::new(),
-            workdir: workdir.clone(),
+            workdir,
             reasoning: None,
         };
-        let agent = self
+        let (agent, (binding, agents, resources, sidecar_factory)) = self
             .engine
-            .agent_spec_for_binding(&binding, &base, stable.as_str())?;
-
-        // Seed under the new claim, in the registration transaction, before
-        // arming. A failed competing revival must leave no transcript writes.
-        let mut events = Vec::new();
-        if let Some(handoff) = child_projection.session.handoff.clone() {
-            let message = hya_proto::MessageId::new();
-            let part = hya_proto::PartId::new();
-            events.extend([
-                Event::MessageStarted {
-                    session: child,
-                    message,
-                    role: hya_proto::Role::System,
-                    agent: None,
-                    model: None,
-                },
-                Event::TextStart {
-                    session: child,
-                    message,
-                    part,
-                },
-                Event::TextDelta {
-                    session: child,
-                    message,
-                    part,
-                    delta: format!(
-                        "PRIOR HANDOFF (generation {})\n{}",
-                        handoff.generation, handoff.doc
-                    ),
-                },
-                Event::TextEnd {
-                    session: child,
-                    message,
-                    part,
-                },
-                Event::MessageFinished {
-                    session: child,
-                    message,
-                    role: hya_proto::Role::System,
-                    finish: hya_proto::FinishReason::Stop,
-                    tokens: None,
-                    cause: None,
-                },
-            ]);
+            .resolve_resident_runtime(binding, &base, stable)?;
+        let channel_policy =
+            ChannelPolicy::from_binding(&binding)?.snapshot_for(agent.name.as_str());
+        let mut team = self.team_for(root).await?;
+        #[cfg(test)]
+        {
+            let pause = self
+                .registration_pause
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some((entered, release)) = pause {
+                entered.notify_one();
+                release.notified().await;
+            }
         }
-
-        let parent_path = scope::parent_path(&canonical).unwrap_or(scope::ROOT_HANDLE);
-        let leaf = scope::leaf(&canonical).to_string();
-        let arming = format!("[mail from {parent}] {body}");
-        self.register_episode(
-            root,
-            child,
-            parent_path.to_string(),
-            leaf,
-            agent,
-            ResidentRuntimeContext::Resolved {
-                binding,
-                agents,
-                resources,
-            },
-            ResidentActivation {
-                events,
-                parent_claim: None,
-                initial: Some(arming),
-                guidance: None,
-                route: None,
-                sidecar_factory: None,
-            },
-        )
-        .await?;
-
-        // Durable restart marker under the new incarnation's epoch.
-        let epoch = self
-            .slot_claim_epoch(root, child)
-            .unwrap_or(ActorEpoch::INITIAL);
-        self.engine
-            .emit_for_actor(
-                None,
+        let mut write = self.claim_writes.lock().await;
+        loop {
+            let current = self.engine.read_projection(root).await?;
+            // A live roster wins: never wait for a concurrent revival's episode.
+            if current.team.roster.contains_key(target) {
+                break;
+            }
+            let previous = self.team_with_resident(child).and_then(|previous| {
+                previous
+                    .lock()
+                    .residents
+                    .get(&child)
+                    .map(|slot| slot.done.subscribe())
+            });
+            let Some(done) = previous else {
+                break;
+            };
+            drop(write);
+            let _ = await_episode(done).await;
+            team = self.team_for(root).await?;
+            write = self.claim_writes.lock().await;
+        }
+        let (claim, envelopes) = self
+            .engine
+            .store()
+            .revive_episode(
                 root,
-                Event::AgentRestarted {
-                    session: root,
-                    handle: canonical,
-                    child,
-                    epoch,
-                },
+                self.owner_run_id,
+                parent_claim,
+                child,
+                parent.into(),
+                to,
+                kind,
+                body,
+                hya_provider::COMPACT_CONTEXT_MARKER,
+                policy,
             )
             .await?;
+        let Some((claim, cursor)) = claim else {
+            for envelope in envelopes {
+                self.engine.publish_envelope(envelope);
+            }
+            return Ok(());
+        };
+        self.engine
+            .update_session_channel_policy(child, channel_policy);
+        let parent_session = projection
+            .team
+            .roster
+            .get(parent)
+            .map_or(root, |entry| entry.session);
+        let (ready, initialized) = oneshot::channel();
+        let init = EpisodeInit {
+            binding: binding.clone(),
+            agent: agent.name.clone(),
+            parent: parent_session,
+            envelopes,
+            ready,
+        };
+        team.install_episode(
+            child,
+            Episode {
+                handle: target.into(),
+                agent,
+                binding,
+                agents: Some(agents),
+                resources: Some(resources),
+                guidance: None,
+                route: None,
+                sidecar_factory,
+                is_main: false,
+                status: SlotStatus::Idle,
+                pending: true,
+                report: None,
+                user_stopped: false,
+                synth_pending: false,
+                claim: Some(claim),
+                cancel: team.cancel.child_token(),
+                ending: None,
+                done: watch::channel(None).0,
+                initial_prompt: None,
+                cursor: usize::try_from(cursor).unwrap_or(usize::MAX),
+                last_activity: None,
+                last_heartbeat_emit: None,
+                notify: Arc::new(Notify::new()),
+            },
+            Some(init),
+        );
+        drop(write);
+        initialized
+            .await
+            .map_err(|_| CoreError::Invalid("resident initialization task exited".into()))??;
+        #[cfg(test)]
+        {
+            let pause = self
+                .revive_ready_pause
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some((entered, release)) = pause {
+                entered.notify_one();
+                release.notified().await;
+            }
+        }
         Ok(())
-    }
-
-    fn slot_claim_epoch(&self, root: SessionId, session: SessionId) -> Option<ActorEpoch> {
-        self.teams().get(&root).and_then(|team| {
-            let state = team.lock();
-            state
-                .residents
-                .get(&session)
-                .and_then(|slot| slot.claim.as_ref().map(|claim| claim.epoch))
-        })
     }
 
     /// Register the team root as the main actor so child mail (and quiescence) wake

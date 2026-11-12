@@ -263,8 +263,9 @@ the live, user-held episode.
 ### 3.2 Handoff pipeline
 
 The handoff call is the existing compaction handoff machinery with a
-state-only template: `SummarizeOptions { handoff: true }`, verbatim transcript
-plus one trailing prompt, executed by the **subagent's configured model**
+state-only template: `SummarizeOptions { handoff: true }`, the current episode
+transcript (after its episode boundary, including local compactions) plus one
+trailing prompt, executed by the **subagent's configured model**
 (model policy chain unchanged; a dedicated `handoff.model`/`handoff.category`
 override may point it at a cheaper tier).
 
@@ -287,9 +288,13 @@ compaction (the five-rung ladder) is unchanged and orthogonal; the terminal
 handoff supersedes whatever the episode compacted internally.
 
 Degraded handoffs (model call failed, or engine-synthesized terminality) are
-derived deterministically from the projection: last assistant message +
-roster facts, written under the same six headings where known, and flagged
-`degraded: true`. Terminality never blocks on the summarizer.
+derived deterministically from the ended episode: its first user message is
+Goal, its last assistant text is Current state (or `no work done in this episode`),
+and unread inbox bodies are Pending (otherwise the last user message). Only
+Files and code and Decisions carry forward from the previous handoff, labelled
+`(from generation N)`. Next step is `none`; `degraded` is always `true`.
+Forced endings leave unread mail unread in history and carry it in Pending;
+revival never delivers it again. Terminality never blocks on the summarizer.
 
 ### 3.3 The lead is never archived
 
@@ -342,21 +347,58 @@ of the sender. The write gate's resolution order is:
 3. anything else ⇒ unknown (indistinguishable rejection)
 ```
 
-Revive sequence (store-transactional where marked):
+Revive re-resolves the recorded agent's binding, spawn roster, resources and
+activation-sidecar factory using the same `SessionEngine::resolve_resident_runtime`
+method as startup recovery. The catalog must still contain that exact identity.
+It waits only for this member's previous episode completion, outside the
+claim-write lock. Team reservation and claim-write serialization cover commit
+through installation, including archive and orphan-takeover decisions.
 
-1. resolve archived handle → session, stable agent id, latest handoff;
-2. re-resolve runtime binding for the stable id (catalog must still contain
-   it; fingerprint drift ⇒ typed reject, no silent fallback);
-3. actor claim: epoch bump on the same actor id (existing fence);
-4. **txn**: `AgentRestarted` + `AgentRegistered` upsert (same canonical
-   handle, mode Resident) + DM-channel membership re-check;
-5. governor re-debit (revive counts as a new lease);
-6. arm episode n+1: context = system prompt + handoff(n) + `[mail from
-   parent] <DM body>`; the DM body is the new task.
+`SessionStore::revive_episode` owns one `BEGIN IMMEDIATE` transaction:
 
-Concurrent revives of one archived agent: the claim CAS admits exactly one;
-the loser receives a typed conflict. Reviving a **live** agent is impossible —
-branch 1 delivers the mail normally.
+1. fence the sending parent's optional `ActorClaim` and recheck mail membership,
+   direction and policy against the current projection;
+2. reactivate the child's released claim with epoch + 1;
+3. append `AgentRegistered { session: root, agent_session: child, handle: leaf,
+   parent: Some(parent_handle), agent_type, mode: Resident }`, followed by
+   `AgentRestarted { session: root, handle: canonical_path, child, epoch }`;
+4. append a completed system message to the child with this exact prefix:
+
+   ```text
+   HYA_COMPACTED_CONTEXT
+   PRIOR HANDOFF (generation N)
+   <handoff document>
+   ```
+
+5. append the reviving `MailSent { session: root, from: parent_handle,
+   to: Channel(existing_dm_id), kind, body }`.
+
+Inputs are root/actor `SessionId`, owner `OwnerRunId`, optional parent `ActorClaim`,
+sender `String`, original `MailEndpoint`, `MailKind`, body `String`, context-marker
+`&str`, and optional `ChannelPolicySnapshot`. It returns
+`(Option<(ActorClaim, u64)>, Vec<Envelope>)` (claim and inbox cursor);
+callers publish after commit and install only when a new claim is returned.
+Authorization failures retain `MailAuthorizationRejected`; SQLite errors roll
+back the claim, roster, boundary and mail together. No channels are recreated;
+revived registration restores membership in the existing parent-unit broadcast
+channel.
+
+A newly inserted `AgentRegistered` roster row starts `resident_cursor` at the
+current inbox length. The later reviving mail is therefore the first owed work;
+`begin_work` records that work boundary and admits its user prompt together.
+Successful completion advances the durable cursor; user cancellation retains
+that prompt for resume. The model request starts at the latest context marker,
+retaining one handoff and the new episode's
+messages. Re-registering an already live roster row preserves its cursor.
+
+Concurrent senders revive at most once. If another sender has already installed
+the episode, the same transaction authorizes and appends ordinary mail, returning
+`None` for the claim. It neither waits for nor replaces that live episode.
+
+For example, after `archive {"target":"main/worker"}`, a parent can invoke
+`send {"to":"#DM-…","body":"Review the updated patch"}` (or use the child's
+handle). The new episode sees its handoff and that mail; old handled mail stays
+in history, and old unread mail is represented by Pending in the handoff.
 
 ## 5. Channel plane
 
