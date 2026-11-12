@@ -92,7 +92,7 @@ fn plugin_apis_prepare_sorted_and_round_trip() {
 }
 
 #[test]
-fn apis_change_the_catalog_digest_and_are_skipped_when_empty() {
+fn apis_change_the_catalog_digest_and_serialize_as_an_empty_list_when_absent() {
     let plain = prepared(api_bundle(false, true, None));
     let with_apis = prepared(api_bundle(
         false,
@@ -106,7 +106,7 @@ fn apis_change_the_catalog_digest_and_are_skipped_when_empty() {
     };
     assert!(
         document["apis"].as_array().is_some_and(Vec::is_empty),
-        "the apis section is skipped when no bundle declares any"
+        "the apis section is an empty list when no endpoints are declared"
     );
     let a = api("a", "GET", "session", "/a");
     let b = api("b", "GET", "session", "/b");

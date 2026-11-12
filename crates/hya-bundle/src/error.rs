@@ -68,7 +68,9 @@ pub enum BundleError {
         guidance: String,
     },
     /// `kind` is not `Bundle`.
-    #[error("unsupported bundle kind `{found}` in `{source_name}`")]
+    #[error(
+        "unsupported bundle kind `{found}` in `{source_name}`; the bundle format changed: use `kind: Bundle` with `agents: []` instead of `agent:`"
+    )]
     WrongKind {
         /// Source root or package name for diagnostics.
         source_name: String,

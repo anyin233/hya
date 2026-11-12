@@ -169,6 +169,8 @@ pub(crate) struct BaseCatalogs {
     pub(crate) disabled: BTreeSet<String>,
     /// Every first-party catalog, before any shadowing.
     pub(crate) first_party: Vec<Arc<PreparedCatalog>>,
+    /// Rows skipped at the last publication, also reported by explicit refresh.
+    unreadable_errors: Vec<String>,
 }
 
 /// One composed catalog tier: the Bundle catalog, every Bundle-kind runtime
@@ -371,6 +373,7 @@ impl InstalledBundleRefresh {
                 installed: Vec::new(),
                 disabled: BTreeSet::new(),
                 first_party: Vec::new(),
+                unreadable_errors: Vec::new(),
             })),
             host_reads: None,
         }
@@ -454,12 +457,7 @@ impl InstalledBundleRefresh {
         }
 
         let snapshot = match &self.registry.get() {
-            Some(registry) => Some(
-                registry
-                    .snapshot()
-                    .await
-                    .map_err(crate::bundle_admin::registry_read_error)?,
-            ),
+            Some(registry) => Some(registry.snapshot().await?),
             None => None,
         };
         let mut installed = Vec::with_capacity(
@@ -467,6 +465,13 @@ impl InstalledBundleRefresh {
                 .as_ref()
                 .map_or(0, |snapshot| snapshot.bundles.len()),
         );
+        let unreadable_errors = snapshot.as_ref().map_or_else(Vec::new, |snapshot| {
+            snapshot
+                .unreadable
+                .iter()
+                .map(|row| format!("installed bundle {}: {}", row.bundle_id, row.error))
+                .collect::<Vec<_>>()
+        });
         if let Some(snapshot) = &snapshot {
             for record in &snapshot.bundles {
                 let prepared = Self::decode_installed(record).map_err(CoreError::Invalid)?;
@@ -512,6 +517,7 @@ impl InstalledBundleRefresh {
                 installed,
                 disabled,
                 first_party,
+                unreadable_errors: unreadable_errors.clone(),
             });
         }
         self.initialized.store(true, Ordering::Release);
@@ -520,7 +526,11 @@ impl InstalledBundleRefresh {
         if let Some(generation) = registry_generation {
             *applied_generation = generation;
         }
-        Ok(true)
+        if unreadable_errors.is_empty() {
+            Ok(true)
+        } else {
+            Err(CoreError::Invalid(unreadable_errors.join("; ")))
+        }
     }
 
     /// Decode one registry row, or explain why it is unreadable.
@@ -592,5 +602,15 @@ pub(crate) fn static_bundle_skill_sources(
 impl RuntimeCatalogRefresh for InstalledBundleRefresh {
     async fn refresh_if_changed(&self, runtime: &RuntimeRegistry) -> Result<bool, CoreError> {
         InstalledBundleRefresh::refresh_if_changed(self, runtime).await
+    }
+
+    async fn refresh_explicit(&self, runtime: &RuntimeRegistry) -> Result<bool, CoreError> {
+        let changed = self.refresh_if_changed(runtime).await?;
+        let base = self.base_catalogs();
+        if base.unreadable_errors.is_empty() {
+            Ok(changed)
+        } else {
+            Err(CoreError::Invalid(base.unreadable_errors.join("; ")))
+        }
     }
 }

@@ -44,14 +44,14 @@ fn single_markdown_requires_the_exact_filename_and_the_kind_marker() {
     ));
 
     // `api_version` was removed with the single-agent format; a manifest that
-    // still carries it is rejected by name, not by a generic parse error.
+    // still carries it reports the removed field in its parse error.
     let stale_api_version = markdown(
         &format!("api_version: hya.agent-bundle/v1\n{}", manifest_markers()),
         "bundle.hya.md",
     );
     assert!(matches!(
         stale_api_version,
-        Err(BundleError::InvalidManifest { .. })
+        Err(BundleError::InvalidManifest { detail, .. }) if detail.contains("api_version")
     ));
 
     let missing_kind = markdown(

@@ -188,6 +188,95 @@ fn project(roots: &[&Path]) -> CatalogScope {
     }
 }
 
+#[tokio::test]
+async fn unreadable_registry_row_does_not_block_installed_or_project_sources_on_session_bind() {
+    use sha2::{Digest, Sha256};
+    use sqlx::Connection;
+
+    let state = temp_path("unreadable-registry");
+    let root = temp_path("unreadable-project");
+    let registry_path = state.join("registry.db");
+    for (id, agent, digest) in [
+        ("hya/readable", "readable-agent", 1),
+        ("hya/old", "old-agent", 2),
+    ] {
+        install(
+            &registry_path,
+            installed_agent_source(id, agent, agent, agent),
+            digest,
+        )
+        .await;
+    }
+    let mut connection = sqlx::SqliteConnection::connect(registry_path.to_str().unwrap())
+        .await
+        .unwrap();
+    let (bytes,): (Vec<u8>,) =
+        sqlx::query_as("SELECT prepared_bytes FROM installed_bundle WHERE bundle_id = 'hya/old'")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+    let mut document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    document["format_version"] = 3.into();
+    let bytes = serde_json::to_vec(&document).unwrap();
+    sqlx::query("UPDATE installed_bundle SET prepared_bytes = ?, prepared_digest = ? WHERE bundle_id = 'hya/old'")
+        .bind(&bytes).bind(format!("{:x}", Sha256::digest(&bytes)))
+        .execute(&mut connection).await.unwrap();
+    connection.close().await.unwrap();
+
+    write_project_bundle(&root, "local", "hya/local", "LOCAL");
+    let plugin = root.join(".hya/plugins/helper");
+    std::fs::create_dir_all(&plugin).unwrap();
+    std::fs::write(plugin.join("helper.py"), pid_script("helper")).unwrap();
+    std::fs::write(
+        plugin.join("plugin.toml"),
+        "id = 'helper'\nkind = 'rust'\ncommand = ['python3', '.hya/plugins/helper/helper.py']\n",
+    )
+    .unwrap();
+
+    let h = harness(&state).await;
+    let registered = h
+        .engine
+        .store()
+        .create_project("unreadable", &[root.display().to_string()])
+        .await
+        .unwrap();
+    let session = h
+        .engine
+        .create(hya_core::CreateSession {
+            parent: None,
+            agent: hya_proto::AgentName::new("hya-main"),
+            model: ModelRef::new("dev/echo"),
+            workdir: root.display().to_string(),
+            project: Some(registered.id),
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    let bound = h.engine.bind_session_runtime(session, &root).await.unwrap();
+    assert_eq!(prompt_of(&bound, "readable-agent"), "readable-agent");
+    assert_eq!(prompt_of(&bound, "local-agent"), "LOCAL");
+    assert!(bound.resolve_agent("old-agent").is_none());
+    assert!(tool_pid(&bound, "helper__echo") > 0);
+    let refreshed = h
+        .engine
+        .refresh_bundles(&project(&[&root]), &root)
+        .await
+        .unwrap();
+    assert!(
+        refreshed
+            .errors
+            .iter()
+            .any(|error| error.to_string().contains("hya/old")),
+        "{:?}",
+        refreshed.errors
+    );
+    drop(refreshed);
+    drop(bound);
+    drop(h);
+    std::fs::remove_dir_all(state).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 impl Harness {
     async fn bind(&self, scope: &CatalogScope) -> TurnBinding {
         let workdir = scope
