@@ -49,7 +49,6 @@ fn reply_for(messages: &[Message]) -> String {
 fn dev_capabilities() -> Capabilities {
     Capabilities {
         streaming_tool_calls: true,
-        parallel_tool_calls: true,
         ..Capabilities::default()
     }
 }

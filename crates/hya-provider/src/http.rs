@@ -340,7 +340,6 @@ impl HttpProvider {
             prompt_caching: kind == ProviderKind::Anthropic,
             caps: Capabilities {
                 streaming_tool_calls: true,
-                parallel_tool_calls: true,
                 usage_reporting: true,
                 reasoning_request: true,
                 prompt_caching: kind == ProviderKind::Anthropic,
@@ -904,9 +903,6 @@ impl HttpProvider {
         append_identity_bytes(&mut identity, provider_kind_identity(self.kind))?;
         append_identity_bytes(&mut identity, self.endpoint.as_bytes())?;
         append_identity_optional_bytes(&mut identity, self.google_base.as_deref())?;
-        append_identity_bytes(&mut identity, b"alias/bare-model-id")?;
-        append_identity_bytes(&mut identity, b"alias/provider-prefixed-model-id")?;
-        append_identity_bytes(&mut identity, b"alias/nonempty-variant-suffix")?;
 
         let mut models = self.models.iter().collect::<Vec<_>>();
         models.sort_unstable();
@@ -946,16 +942,12 @@ impl HttpProvider {
             identity.extend_from_slice(&limit.output.to_be_bytes());
         }
 
-        // Image-input support decides whether prompts may carry images; only
-        // routes that declare it extend the identity, so existing identities
-        // stay stable.
-        if !self.model_image_input.is_empty() {
-            append_identity_bytes(&mut identity, b"model-image-input")?;
-            append_identity_count(&mut identity, self.model_image_input.len())?;
-            for (model, image_input) in &self.model_image_input {
-                append_identity_bytes(&mut identity, model.as_bytes())?;
-                identity.push(u8::from(*image_input));
-            }
+        // Image-input support decides whether prompts may carry images.
+        append_identity_bytes(&mut identity, b"model-image-input")?;
+        append_identity_count(&mut identity, self.model_image_input.len())?;
+        for (model, image_input) in &self.model_image_input {
+            append_identity_bytes(&mut identity, model.as_bytes())?;
+            identity.push(u8::from(*image_input));
         }
 
         append_capabilities_identity(&mut identity, &self.caps)?;
@@ -1609,7 +1601,7 @@ mod tests {
             "secret-a",
             &["model-a", "model-b"],
         );
-        caps_changed_route.caps.json_output = true;
+        caps_changed_route.caps.usage_reporting = false;
         let caps_changed = router(caps_changed_route);
         assert_ne!(
             configured_identities(&equivalent_a),
