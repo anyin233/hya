@@ -273,9 +273,8 @@ async fn no_progress_detection_stops_early() {
     .await
     .unwrap();
     match outcome {
-        RunOutcome::Achieved { iterations, reason } => {
+        RunOutcome::Stalled { iterations } => {
             assert_eq!(iterations, 3);
-            assert!(reason.contains("no progress"), "reason was {reason}");
         }
         other => panic!("expected no-progress stop, got {other:?}"),
     }
@@ -309,9 +308,8 @@ async fn repeated_directive_without_strategy_change_stops() {
     .await
     .unwrap();
     match outcome {
-        RunOutcome::Achieved { iterations, reason } => {
+        RunOutcome::Stalled { iterations } => {
             assert_eq!(iterations, 2);
-            assert!(reason.contains("repeated directive"), "reason was {reason}");
         }
         other => panic!("expected repeated-directive stop, got {other:?}"),
     }
@@ -340,4 +338,39 @@ fn validate_budget_enforces_ceiling() {
         })
         .is_ok()
     );
+}
+
+#[tokio::test]
+async fn cancellation_interrupts_predicate_wait() {
+    let (vc, pc, ec) = counters();
+    let cancel = CancellationToken::new();
+    let executor = CountingExecutor { calls: ec };
+    let run = drive_loop(
+        &executor,
+        Arc::new(ScriptedVerifier {
+            verdicts: vec![verdict(0, false, &[])],
+            calls: vc,
+        }),
+        Arc::new(ScriptedPlanner {
+            dirs: vec![("next".into(), false)],
+            calls: pc,
+        }),
+        "target".into(),
+        LoopConfig {
+            predicate: Some(hya_core::LoopPredicate::new(
+                "exec sleep 2",
+                hya_core::PredicateMode::Until,
+                std::env::temp_dir(),
+            )),
+            ..LoopConfig::default()
+        },
+        cancel.clone(),
+        None,
+    );
+    let trigger = async {
+        tokio::task::yield_now().await;
+        cancel.cancel();
+    };
+    let (outcome, ()) = tokio::join!(run, trigger);
+    assert_eq!(outcome.unwrap(), RunOutcome::Cancelled);
 }

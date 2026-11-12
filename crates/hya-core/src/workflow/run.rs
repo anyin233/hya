@@ -1278,6 +1278,9 @@ async fn drive_loop_stage(
                 clamp(executor.latest().await)
             )
         }
+        crate::completion::RunOutcome::InvalidCondition { reason, .. } => {
+            return Err(CoreError::Invalid(reason).into());
+        }
         crate::completion::RunOutcome::Cancelled => {
             report.status = StageStatus::Cancelled;
             format!("{}\n\n[loop cancelled]", clamp(executor.latest().await))
