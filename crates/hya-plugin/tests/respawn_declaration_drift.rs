@@ -132,6 +132,7 @@ async fn plugin_respawn_declaration_drift_closes_new_process_and_calls_fail_clos
             timeout_ms: Some(2_000),
             env,
             plugin_dir: None,
+            launch: Default::default(),
         }],
         HostInfo {
             name: "test".to_string(),

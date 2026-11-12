@@ -2142,6 +2142,7 @@ for line in sys.stdin:
                 timeout_ms: None,
                 env: BTreeMap::new(),
                 plugin_dir: None,
+                launch: Default::default(),
             },
         )
     }

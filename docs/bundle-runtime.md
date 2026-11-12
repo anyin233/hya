@@ -296,6 +296,25 @@ its explicitly declared tool/hook entrypoints and bundle namespace as plugin
 id. It needs no synthetic Agent or explicit `extensions.process` command.
 Agent-bearing JavaScript bundles retain their activation-scoped sidecars.
 
+A single JavaScript module can serve different agent views without splitting
+its exports. For example, declare both tools against `main.js`, list the module
+once, and select one tool per agent:
+
+```yaml
+agents:
+  - { id: reader, role: subagent, resource_view: { allow: [read] } }
+  - { id: writer, role: subagent, resource_view: { allow: [write] } }
+resources:
+  tools: [{ id: read, path: main.js }, { id: write, path: main.js }]
+extensions:
+  js: [{ id: main, path: main.js }]
+```
+
+`main.js` exports both `tool.read` and `tool.write`. Each agent sees and can call
+only its selected tool. Initialization checks the complete exports declared for
+each loaded module; `hook_refs` filters its hooks independently. Selected
+entrypoints still come from the captured binding and run in private activations.
+
 ## Project bundles
 
 Project bundles (`.hya/bundles/<dir>/`, written by `hya bundle install
