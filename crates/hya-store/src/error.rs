@@ -16,7 +16,12 @@ pub enum StoreError {
     /// Migration runner failure while applying `migrations/`.
     #[error("migrate: {0}")]
     Migrate(#[source] Arc<sqlx::migrate::MigrateError>),
-    /// JSON (de)serialization of event payloads or sync envelopes.
+    /// The session database predates the current schema baseline.
+    #[error(
+        "this database was created by an older version and is no longer supported; move it away"
+    )]
+    UnsupportedDatabase,
+    /// JSON (de)serialization of event payloads.
     #[error("json: {0}")]
     Json(#[source] Arc<serde_json::Error>),
     /// Prepared-bundle / catalog validation failure from `hya-bundle`.
@@ -113,18 +118,6 @@ pub enum StoreError {
     /// Generic admission journal invariant or input validation failure.
     #[error("admission journal: {0}")]
     AdmissionData(String),
-    /// Active or non-active admission caps would be exceeded by the request.
-    #[error(
-        "admission capacity exceeded: active={active}, non_active={non_active}, requested={requested}"
-    )]
-    AdmissionCapacityExceeded {
-        /// Rows currently in `accepted` + `started`.
-        active: u32,
-        /// Rows currently in `queued` + `waiting`.
-        non_active: u32,
-        /// Units this claim asked to reserve.
-        requested: u32,
-    },
     /// Ordinary claim lost because another process already holds the actor.
     #[error("resident actor is already claimed: {actor_id}")]
     ActorAlreadyClaimed {

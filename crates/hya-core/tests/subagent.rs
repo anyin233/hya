@@ -1635,10 +1635,6 @@ async fn provider_streams_partition_100_general_28_reserved_and_root_progresses(
     }
     assert_eq!(governor.available_general_stream_permits(), 0);
     assert_eq!(governor.available_reserved_stream_permits(), 28);
-    let counts = engine.store().admission_counts().await.unwrap();
-    assert_eq!(counts.active, 0);
-    assert_eq!(counts.non_active, 0);
-    assert_eq!(counts.total, 0);
 
     let root = engine
         .create(CreateSession {
@@ -1669,10 +1665,14 @@ async fn provider_streams_partition_100_general_28_reserved_and_root_progresses(
         .expect("root provider stream must progress under general saturation");
     assert_eq!(governor.available_general_stream_permits(), 0);
     assert_eq!(governor.available_reserved_stream_permits(), 27);
-    let counts = engine.store().admission_counts().await.unwrap();
-    assert_eq!(counts.active, 0);
-    assert_eq!(counts.non_active, 0);
-    assert_eq!(counts.total, 0);
+    assert!(
+        engine
+            .store()
+            .nonterminal_admissions_for_root(root)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     release.notify_one();
     assert_eq!(run.await.unwrap().unwrap(), FinishReason::Stop);
@@ -1713,10 +1713,14 @@ async fn provider_streams_partition_100_general_28_reserved_and_root_progresses(
     assert_eq!(governor.available_general_stream_permits(), 100);
     assert_eq!(governor.available_reserved_stream_permits(), 28);
 
-    let counts = engine.store().admission_counts().await.unwrap();
-    assert_eq!(counts.active, 0);
-    assert_eq!(counts.non_active, 0);
-    assert_eq!(counts.total, 0);
+    assert!(
+        engine
+            .store()
+            .nonterminal_admissions_for_root(root)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 fn member(engine: &SessionEngine, agent: &AgentSpec, directive: &str) -> MemberSpec {
