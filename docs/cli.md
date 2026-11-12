@@ -241,7 +241,7 @@ or removed.
 
 | Command | What it does |
 | --- | --- |
-| `hya bundle install [--user\|--project] [-y] [--overwrite] <PACKAGE>` | Verify a `.hyabundle`, run its declared self-check, and install it into the scope. Asks for confirmation unless `-y`. Then, if a backend runs for `--db`, prove the bundle is active there ([Self-proof and activation](bundle-runtime.md#self-proof-and-activation)); exit 1 when it is not. |
+| `hya bundle install [--user\|--project] [-y] [--overwrite] <PACKAGE>` | Verify a `.hyabundle`, run its declared self-check, and install it into the scope. Asks for confirmation unless `-y`. Replacement preserves enabled/disabled state. With a backend running for `--db`, prove activation for enabled bundles; disabled bundles report `installed, disabled` and succeed ([Self-proof and activation](bundle-runtime.md#self-proof-and-activation)). |
 | `hya bundle install [--user\|--project] [-y] [--overwrite] --claude <SOURCE>` | Translate a Claude Code plugin and install it the same way. |
 | `hya bundle remove [--user\|--project] [-y] <BUNDLE_ID>` | Remove a bundle from the scope. Asks for confirmation unless `-y`. Alias: `uninstall`. A running backend for `--db` refreshes at once. |
 | `hya bundle disable <BUNDLE_ID>` | Disable a bundle by id in every scope: it stays installed but publishes nothing (agents, skills, tools, MCP servers, workflows, APIs, permission modes, TUI extension). First-party bundles can be disabled; the trusted presets (`hya/core-agents`, the tool libraries, …) cannot. A running backend refreshes at once. `list` shows it `disabled`. |
@@ -267,6 +267,18 @@ hya bundle search --project docs               # search one scope
 hya bundle schema hya/schema-demo              # one bundle's schemes
 hya bundle schema schema-demo.hyabundle        # from a package file
 ```
+
+Unreadable installed rows remain addressable by id: `info` and `schema` report
+the decode error and a reinstall hint; `remove`, `enable`, and `disable` can
+change them. `list` shows both `unreadable` and `disabled` when applicable.
+Reinstalling an unreadable row needs no `--overwrite` for version comparison:
+there is no readable version to compare. Uninstall clears its disabled flag.
+
+When refreshing a running daemon, errors for the command's target bundle fail
+the command. Errors for other sources print `warning: <source-id>: <message>`
+on stderr and keep a successful exit code. For example, `hya bundle disable
+acme/healthy --db ./hya.db` succeeds while warning about an unreadable
+`acme/broken` row. A disabled row is not loaded and produces no load error.
 
 ### Confirmation
 

@@ -136,17 +136,29 @@ async fn refresh_scope(
         errors: refreshed
             .errors
             .iter()
-            .map(|error| match error {
+            .flat_map(|error| match error {
+                hya_core::CoreError::BundleRefresh(errors) => errors
+                    .iter()
+                    .map(|(id, message)| pb::BundleRefreshError {
+                        bundle_id: id.clone(),
+                        message: message.clone(),
+                    })
+                    .collect(),
                 hya_core::CoreError::BundleRuntime { bundle_id, source } => {
-                    pb::BundleRefreshError {
+                    vec![pb::BundleRefreshError {
                         bundle_id: bundle_id.clone(),
                         message: source.to_string(),
-                    }
+                    }]
                 }
-                other => pb::BundleRefreshError {
-                    bundle_id: String::new(),
+                other => vec![pb::BundleRefreshError {
+                    bundle_id: if directory.is_empty() {
+                        "global"
+                    } else {
+                        directory
+                    }
+                    .to_string(),
                     message: other.to_string(),
-                },
+                }],
             })
             .collect(),
     })

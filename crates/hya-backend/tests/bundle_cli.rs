@@ -218,16 +218,255 @@ async fn registry_with_old_and_current_bundles(
         )
         .await?;
     drop(registry);
+    corrupt_registry_row(data_root, BUNDLE_ID)?;
+    Ok(package)
+}
+
+fn corrupt_registry_row(data_root: &Path, id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let corrupt = Command::new("python3")
         .args([
             "-c",
             "import sqlite3,json,hashlib,sys\nwith sqlite3.connect(sys.argv[1]) as db:\n row=db.execute('SELECT prepared_bytes FROM installed_bundle WHERE bundle_id=?',(sys.argv[2],)).fetchone()\n doc=json.loads(row[0]);doc['format_version']=3\n data=json.dumps(doc).encode()\n db.execute('UPDATE installed_bundle SET prepared_bytes=?,prepared_digest=? WHERE bundle_id=?',(data,hashlib.sha256(data).hexdigest(),sys.argv[2]))",
         ])
-        .arg(&registry_path)
-        .arg(BUNDLE_ID)
+        .arg(data_root.join("hya/bundles/registry.sqlite3"))
+        .arg(id)
         .output()?;
     assert_success("write old registry row", &corrupt);
-    Ok(package)
+    Ok(())
+}
+
+struct BundleDaemon {
+    root: PathBuf,
+    db: String,
+    url: String,
+}
+
+impl BundleDaemon {
+    fn start(root: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let db = root.join("s.db").to_string_lossy().into_owned();
+        let started = bundle_command(root)
+            .args(["serve", "start", "--json", "--db", &db])
+            .output()?;
+        assert_success("serve start", &started);
+        let discovery: serde_json::Value = serde_json::from_slice(&started.stdout)?;
+        Ok(Self {
+            root: root.to_path_buf(),
+            db,
+            url: discovery["url"].as_str().ok_or("daemon URL")?.to_string(),
+        })
+    }
+
+    fn command(&self, args: &[&str]) -> Result<Output, std::io::Error> {
+        bundle_command(&self.root)
+            .arg("bundle")
+            .args(args)
+            .args(["--db", &self.db])
+            .output()
+    }
+}
+
+impl Drop for BundleDaemon {
+    fn drop(&mut self) {
+        let stopped = bundle_command(&self.root)
+            .args(["serve", "stop", "--db", &self.db])
+            .output();
+        assert!(stopped.is_ok_and(|output| output.status.success()));
+    }
+}
+
+#[tokio::test]
+async fn live_bundle_operations_isolate_unreadable_rows() -> Result<(), Box<dyn std::error::Error>>
+{
+    let root = unique_data_root()?;
+    let package = registry_with_old_and_current_bundles(&root).await?;
+    let override_package = root.join("override.hyabundle");
+    fs::write(
+        &override_package,
+        hya_bundle::write_public_package(&goal_loop_override_source())?,
+    )?;
+    assert_success(
+        "install override",
+        &bundle_command(&root)
+            .args(["bundle", "install", "-y"])
+            .arg(&override_package)
+            .output()?,
+    );
+    corrupt_registry_row(&root, "hya/goal-loop")?;
+    let daemon = BundleDaemon::start(&root)?;
+    for args in [
+        vec!["remove", "-y", BUNDLE_ID],
+        vec!["disable", "hya/workflow-info"],
+        vec!["enable", "hya/workflow-info"],
+        vec!["install", "-y", package.to_str().ok_or("package path")?],
+    ] {
+        let output = daemon.command(&args)?;
+        assert_success(&format!("{args:?}"), &output);
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(
+            stderr.contains("warning:") && stderr.contains("hya/goal-loop"),
+            "{stderr}"
+        );
+    }
+    let disabled = daemon.command(&["disable", "hya/goal-loop"])?;
+    assert_success("disable unreadable", &disabled);
+    let enabled = daemon.command(&["enable", "hya/goal-loop"])?;
+    assert!(
+        !enabled.status.success(),
+        "enabling the unreadable target must fail its own refresh"
+    );
+    assert!(String::from_utf8(enabled.stderr)?.contains("hya/goal-loop"));
+    assert_success(
+        "remove last unreadable",
+        &daemon.command(&["remove", "-y", "hya/goal-loop"])?,
+    );
+    drop(daemon);
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_refresh_attributes_each_unreadable_row() -> Result<(), Box<dyn std::error::Error>> {
+    let root = unique_data_root()?;
+    registry_with_old_and_current_bundles(&root).await?;
+    corrupt_registry_row(&root, "hya/workflow-info")?;
+    let daemon = BundleDaemon::start(&root)?;
+    for _ in 0..2 {
+        let response = reqwest::Client::new()
+            .post(format!("{}/v1/bundles:refresh", daemon.url))
+            .json(&serde_json::json!({}))
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<hya_api::v1::RefreshBundlesResponse>()
+            .await?;
+        let errors = response.errors;
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert_eq!(
+            errors
+                .iter()
+                .map(|error| error.bundle_id.as_str())
+                .collect::<Vec<_>>(),
+            [BUNDLE_ID, "hya/workflow-info"]
+        );
+        assert!(
+            errors
+                .iter()
+                .all(|error| error.message.contains("reinstall"))
+        );
+    }
+    drop(daemon);
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_info_and_schema_report_unreadable_ids_without_builtin_fallthrough()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = unique_data_root()?;
+    registry_with_old_and_current_bundles(&root).await?;
+    let package = root.join("override.hyabundle");
+    fs::write(
+        &package,
+        hya_bundle::write_public_package(&goal_loop_override_source())?,
+    )?;
+    assert_success(
+        "install override",
+        &bundle_command(&root)
+            .args(["bundle", "install", "-y"])
+            .arg(&package)
+            .output()?,
+    );
+    corrupt_registry_row(&root, "hya/goal-loop")?;
+    let daemon = BundleDaemon::start(&root)?;
+    for id in [BUNDLE_ID, "hya/goal-loop"] {
+        for action in ["info", "schema"] {
+            for scope in [None, Some("--user")] {
+                let mut args = vec!["bundle", action, id];
+                args.extend(scope);
+                let output = bundle_command(&root).args(args).output()?;
+                let text = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                for expected in [id, "unreadable", "format", "reinstall"] {
+                    assert!(text.contains(expected), "{action} {id}: {text}");
+                }
+                assert!(!text.contains("state=active"), "{text}");
+            }
+        }
+    }
+    drop(daemon);
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_reinstall_preserves_disabled_and_uninstall_clears_it()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = unique_data_root()?;
+    let package = write_fixture(&root)?;
+    assert_success(
+        "install",
+        &bundle_command(&root)
+            .args(["bundle", "install", "-y"])
+            .arg(&package)
+            .output()?,
+    );
+    let daemon = BundleDaemon::start(&root)?;
+    assert_success("disable", &daemon.command(&["disable", BUNDLE_ID])?);
+    corrupt_registry_row(&root, BUNDLE_ID)?;
+    let registry = hya_store::BundleRegistry::connect(
+        &root.join("hya/bundles/registry.sqlite3").to_string_lossy(),
+    )
+    .await?;
+    let install = daemon.command(&["install", "-y", package.to_str().ok_or("package path")?])?;
+    assert_success("reinstall disabled unreadable", &install);
+    assert!(String::from_utf8(install.stdout)?.contains("installed, disabled"));
+    assert!(registry.disabled_bundle_ids().await?.contains(BUNDLE_ID));
+    assert_success(
+        "uninstall disabled",
+        &daemon.command(&["uninstall", "-y", BUNDLE_ID])?,
+    );
+    assert!(!registry.disabled_bundle_ids().await?.contains(BUNDLE_ID));
+    drop(daemon);
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_refresh_skips_disabled_unreadable_rows() -> Result<(), Box<dyn std::error::Error>> {
+    let root = unique_data_root()?;
+    registry_with_old_and_current_bundles(&root).await?;
+    let registry = hya_store::BundleRegistry::connect(
+        &root.join("hya/bundles/registry.sqlite3").to_string_lossy(),
+    )
+    .await?;
+    registry.set_bundle_enabled(BUNDLE_ID, false).await?;
+    let daemon = BundleDaemon::start(&root)?;
+    let response = reqwest::Client::new()
+        .post(format!("{}/v1/bundles:refresh", daemon.url))
+        .json(&serde_json::json!({}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<hya_api::v1::RefreshBundlesResponse>()
+        .await?;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let list = bundle_command(&root).args(["bundle", "list"]).output()?;
+    assert_success("list disabled unreadable", &list);
+    let text = String::from_utf8(list.stdout)?;
+    let row = text
+        .lines()
+        .find(|line| line.starts_with(BUNDLE_ID))
+        .ok_or("missing row")?;
+    assert!(
+        row.contains("disabled") && row.contains("unreadable"),
+        "{row}"
+    );
+    drop(daemon);
+    fs::remove_dir_all(root)?;
+    Ok(())
 }
 
 #[tokio::test]
@@ -2218,6 +2457,7 @@ resources:
         assert!(stderr.contains("installed but not activated"), "{stderr}");
         // The failure is attributed to the bundle that could not start.
         assert!(stderr.contains("\n  acme/dead-process: "), "{stderr}");
+
         Ok(())
     })();
     let _ = bundle_command(&data_root)

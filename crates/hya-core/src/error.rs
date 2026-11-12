@@ -44,6 +44,10 @@ pub enum CoreError {
         /// Why it failed.
         source: Box<CoreError>,
     },
+    /// Independent refresh failures, kept as source id / diagnostic pairs
+    /// across the single-error catalog-refresh trait boundary.
+    #[error("bundle refresh failed: {}", .0.iter().map(|(id, error)| format!("{id}: {error}")).collect::<Vec<_>>().join("; "))]
+    BundleRefresh(Vec<(String, String)>),
     /// The session already has an active turn; a session runs at most one
     /// turn at a time (single-active-turn invariant).
     #[error("TURN_ALREADY_ACTIVE: session `{session}` already has an active turn")]

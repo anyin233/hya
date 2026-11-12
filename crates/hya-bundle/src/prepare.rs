@@ -968,9 +968,15 @@ fn validate_process_command(command: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn resource_order(left: &PreparedResource, right: &PreparedResource) -> std::cmp::Ordering {
+    left.local_id.cmp(&right.local_id)
+}
+
 fn resources_are_canonical(bundle: &Bundle, kind: &str, resources: &[PreparedResource]) -> bool {
     let mut names = BTreeSet::new();
-    is_strictly_sorted(resources.iter().map(|resource| resource.local_id.as_str()))
+    resources
+        .windows(2)
+        .all(|pair| resource_order(&pair[0], &pair[1]).is_lt())
         && resources.iter().all(|resource| {
             (resource.stable_id
                 == format!(
@@ -1701,7 +1707,7 @@ fn prepare_resource_sets(
             prepare_resources(bundle_id, "extension", files, executable_extensions)?;
         extensions.extend(native_binaries);
         extensions.extend(native_libraries);
-        extensions.sort_by(|left, right| left.stable_id.cmp(&right.stable_id));
+        extensions.sort_by(resource_order);
         let mut names = BTreeSet::new();
         for extension in &extensions {
             for name in std::iter::once(&extension.local_id).chain(&extension.aliases) {
@@ -1778,7 +1784,7 @@ fn prepare_resource_sets(
         extensions.push(resource);
     }
     extensions.extend(native_libraries);
-    extensions.sort_by(|left, right| left.local_id.cmp(&right.local_id));
+    extensions.sort_by(resource_order);
     let mut names = BTreeSet::new();
     for extension in &extensions {
         for name in std::iter::once(&extension.local_id).chain(&extension.aliases) {
