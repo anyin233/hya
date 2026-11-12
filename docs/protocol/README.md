@@ -1341,7 +1341,8 @@ Streams never end on their own otherwise, so a stream that ends **without**
 `serverStopping` while the client did not cancel it means the server went
 away unexpectedly (a crash, `kill -9`) or the connection dropped. Probe
 `GET /v1/health`: `{"ok": true}` means reconnect to the same server;
-`unavailable` or no answer means find its successor (or start one). Local
+`unavailable` or no answer means find the running daemon again (or start
+one). Local
 clients of a database do that through `<db>.server.json`
 ([ADR-0022](../adr/0022-one-writer-per-database.md),
 [ADR-0023](../adr/0023-persistent-backend-daemon.md)); the TUI's rules are in

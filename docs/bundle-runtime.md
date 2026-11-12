@@ -99,8 +99,9 @@ A bundle update goes live in four steps, each of which can refuse it:
 4. **Next turn.** Root turns bind the refreshed generation at admission and
    at every round boundary. Subagent and Workflow member activations keep the
    snapshot they were bound with until they end. First-party native tool
-   libraries are loaded once per process: changing them needs
-   `hya serve restart` ([cli.md](cli.md#self-proof-and-rollback)).
+   libraries are loaded once per process: changing them needs a stop and
+   start, which `hya serve restart` performs
+   ([cli.md](cli.md#backend-daemon)).
 
 `hya bundle remove`, `enable`, and `disable` also request a refresh of the
 running database backend and the current directory's Project, without changing
@@ -182,22 +183,24 @@ and tests enforce that prepared identities match the backend release version.
 A release builds each supported target natively: `x86_64-unknown-linux-gnu`,
 `aarch64-unknown-linux-gnu`, and `aarch64-apple-darwin`. It publishes:
 
-- `hya-<version>-<target>.tar.gz` per target, containing `bin/hya`,
--  `bundles/hya-<name>.hyabundle` for all eleven bundles, and three Bun
-  programs with their production `node_modules`: `lib/hya/bun-adapter`,
-  `lib/hya/tui` (the OpenTUI terminal UI bare `hya` starts, including the
-  target's `@opentui/core-<platform>` native package), and `lib/hya/tui-web`
-  (the WebUI host with its `web/` page and `@xterm/*`). Extracting it gives a
-  working installed layout; running the TUI and WebUI needs Bun on `PATH`.
+- Two side-specific archives per target, `hya-backend-<version>-<target>.tar.gz`
+  and `hya-frontend-<version>-<target>.tar.gz`. The backend archive holds
+  `bin/hya`, `bundles/hya-<name>.hyabundle` for all twelve bundles, the Argus
+  example bundle, and Bun with the Bun adapter under `lib/hya/`; it holds no
+  TUI. The frontend archive holds Bun, `lib/hya/tui` (the OpenTUI terminal UI
+  bare `hya` starts, including the target's `@opentui/core-<platform>` native
+  package), `lib/hya/tui-sdk`, and `lib/hya/tui-web` with its `web/` page; it
+  holds no `bin/hya` and no bundles. Installing both sides gives a working
+  setup, and running the TUI and WebUI needs Bun on `PATH`.
 - One standalone asset per bundle, byte-identical to the archived copy:
   `hya-<name>-<version>-<target>.hyabundle` for the five native tool families
   on each target, and `hya-<name>-<version>.hyabundle` once for the seven
   platform-independent bundles. The release fails if two targets built a
   platform-independent bundle with different bytes. To replace a bundle in an
   installed layout, save the asset as `<prefix>/bundles/hya-<name>.hyabundle`.
-- `SHA256SUMS-<target>` from each target job and a combined `SHA256SUMS`
-  covering every archive and bundle asset, plus build provenance attestations
-  for each file.
+- A `SHA256SUMS` per side and target covering that side's archive, plus every
+  bundle asset on the backend side, and build provenance attestations for each
+  file.
 
 `cargo run -p xtask -- stage-first-party-bundles` produces both the archived
 packages and the assets and refuses a release version that any bundle does not

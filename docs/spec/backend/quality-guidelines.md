@@ -456,7 +456,7 @@ cargo run -p xtask -- release-rehearsal \
 - Third-party release actions are pinned to immutable commit SHAs.
 - The publishing job uses the `release` environment so repository settings can
   require manual approval.
-- Backend release payload includes `bin/hya`, the eleven first-party backend
+- Backend release payload includes `bin/hya`, the twelve first-party backend
   bundles under `bundles/`, Bun, and production `lib/hya/bun-adapter`; it
   excludes the TUI and WebUI. The frontend release separately carries
   `lib/hya/bin/bun`, `lib/hya/tui`, and `lib/hya/tui-web`, and excludes
