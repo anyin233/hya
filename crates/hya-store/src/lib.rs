@@ -29,6 +29,7 @@ mod workflow;
 
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions, TryLockError};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -69,11 +70,20 @@ pub use workflow::{WorkflowAdmissionOutcome, WorkflowSelectionOutcome};
 struct RuntimeOwnerState {
     lock_path: Option<PathBuf>,
     claim: Mutex<Option<RuntimeOwnerClaim>>,
+    pending_lock: Mutex<Option<RuntimeOwnerLock>>,
 }
 
 struct RuntimeOwnerClaim {
     owner: OwnerRunId,
-    _lock_file: Option<File>,
+    _lock_file: Option<RuntimeOwnerLock>,
+}
+
+struct RuntimeOwnerLock(File);
+
+impl Drop for RuntimeOwnerLock {
+    fn drop(&mut self) {
+        let _ = self.0.set_len(0);
+    }
 }
 
 impl RuntimeOwnerState {
@@ -81,6 +91,7 @@ impl RuntimeOwnerState {
         Self {
             lock_path: None,
             claim: Mutex::new(None),
+            pending_lock: Mutex::new(None),
         }
     }
 
@@ -88,6 +99,7 @@ impl RuntimeOwnerState {
         Self {
             lock_path: Some(lock_path),
             claim: Mutex::new(None),
+            pending_lock: Mutex::new(None),
         }
     }
 
@@ -104,11 +116,19 @@ impl RuntimeOwnerState {
             };
         }
 
-        let lock_file = self
-            .lock_path
-            .as_deref()
-            .map(acquire_runtime_owner_lock)
-            .transpose()?;
+        let lock_file = match self
+            .pending_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            Some(file) => Some(file),
+            None => self
+                .lock_path
+                .as_deref()
+                .map(acquire_runtime_owner_lock)
+                .transpose()?,
+        };
         *claim = Some(RuntimeOwnerClaim {
             owner,
             _lock_file: lock_file,
@@ -155,7 +175,7 @@ fn runtime_owner_lock_error(path: Option<&Path>, source: std::io::Error) -> Stor
     }
 }
 
-fn acquire_runtime_owner_lock(path: &Path) -> Result<File, StoreError> {
+fn acquire_runtime_owner_lock(path: &Path) -> Result<RuntimeOwnerLock, StoreError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err(runtime_owner_lock_error(
@@ -176,14 +196,20 @@ fn acquire_runtime_owner_lock(path: &Path) -> Result<File, StoreError> {
     options.mode(0o600);
     #[cfg(unix)]
     options.custom_flags(libc::O_NOFOLLOW);
-    let file = options
+    let mut file = options
         .open(path)
         .map_err(|source| runtime_owner_lock_error(Some(path), source))?;
     #[cfg(unix)]
     file.set_permissions(fs::Permissions::from_mode(0o600))
         .map_err(|source| runtime_owner_lock_error(Some(path), source))?;
     match file.try_lock() {
-        Ok(()) => Ok(file),
+        Ok(()) => {
+            file.set_len(0)
+                .map_err(|source| runtime_owner_lock_error(Some(path), source))?;
+            writeln!(file, "{}", std::process::id())
+                .map_err(|source| runtime_owner_lock_error(Some(path), source))?;
+            Ok(RuntimeOwnerLock(file))
+        }
         Err(TryLockError::WouldBlock) => Err(StoreError::RuntimeOwnerBusy),
         Err(TryLockError::Error(source)) => Err(runtime_owner_lock_error(Some(path), source)),
     }
@@ -261,6 +287,32 @@ impl SessionStore {
             projections: Arc::new(ProjectionCache::new()),
             _memory_keeper: None,
         })
+    }
+
+    /// Reserve runtime ownership before SQLite initialization, then transfer the
+    /// lock to the first `claim_runtime_owner` call on the returned store.
+    pub async fn connect_runtime(path: &str) -> Result<Self, StoreError> {
+        let sqlite = Path::new(path);
+        let parent = sqlite
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let canonical = if sqlite.exists() {
+            sqlite.canonicalize()
+        } else {
+            parent
+                .canonicalize()
+                .map(|parent| parent.join(sqlite.file_name().unwrap_or_default()))
+        }
+        .map_err(|source| runtime_owner_lock_error(Some(sqlite), source))?;
+        let lock = acquire_runtime_owner_lock(&runtime_owner_lock_path(&canonical))?;
+        let store = Self::connect(path).await?;
+        *store
+            .runtime_owner
+            .pending_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lock);
+        Ok(store)
     }
 
     /// Open an in-memory store (single connection) and run migrations.

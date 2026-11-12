@@ -1,5 +1,5 @@
 //! One writer per database (docs/cli.md "`hya serve`", ADR-0022): `hya serve
-//! --db <db>` holds an exclusive lock on `<db>.lock` for its lifetime and
+//! --db <db>` holds an exclusive lock on `<db>.runtime-owner.lock` for its lifetime and
 //! publishes `<db>.server.json` once listening. A second `hya serve` on the
 //! same database fails fast with exit status 75 and names the running
 //! server; a stale discovery file (its process gone, the lock free) is
@@ -117,7 +117,7 @@ fn serve_locks_the_database_publishes_discovery_and_a_second_serve_fails_fast() 
 
     // The lock file exists and the discovery file names this server.
     assert!(
-        PathBuf::from(format!("{}.lock", db.display())).is_file(),
+        PathBuf::from(format!("{}.runtime-owner.lock", db.display())).is_file(),
         "no lock file next to the database"
     );
     let discovery = read_discovery(&db)?;
@@ -177,7 +177,7 @@ fn a_stale_discovery_file_is_ignored_and_overwritten() -> TestResult {
         discovery_path(&db),
         r#"{"url":"http://127.0.0.1:1","pid":999999,"version":"0.0.0","startedAt":1}"#,
     )?;
-    std::fs::write(format!("{}.lock", db.display()), "999999\n")?;
+    std::fs::write(format!("{}.runtime-owner.lock", db.display()), "999999\n")?;
     let server = start(&root, &db)?;
     let discovery = read_discovery(&db)?;
     assert_eq!(discovery["url"], serde_json::json!(server.url));

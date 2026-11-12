@@ -24,25 +24,30 @@ pub(crate) async fn cmd_serve(
     let hosts = crate::cli_args::serve_host_policy(&bind, &allow_hosts)?;
     // Restored turns can run tools during bootstrap, so catch stop signals already.
     let terminate = install_termination_signals().context("install termination handlers")?;
-    let lock = match db_lock::try_claim(&db)? {
-        db_lock::Claim::Owned(lock) => Some(lock),
-        db_lock::Claim::Unlocked => None,
-        db_lock::Claim::Busy(busy) => {
-            eprintln!("{}", busy.serve_message());
-            std::process::exit(db_lock::EXIT_DB_IN_USE);
+    let prepared = match prepare_server(
+        &bind,
+        db.clone(),
+        model_override,
+        yolo,
+        pure,
+        &relay,
+        &hosts,
+    )
+    .await
+    {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            if runtime_owner_busy(&error) {
+                if let Some(busy) = db_lock::holder(&db).ok().flatten() {
+                    eprintln!("{}", busy.serve_message());
+                } else {
+                    eprintln!("hya: {error:#}");
+                }
+                std::process::exit(db_lock::EXIT_DB_IN_USE);
+            }
+            return Err(error);
         }
     };
-    let prepared =
-        match prepare_server(&bind, db, lock, model_override, yolo, pure, &relay, &hosts).await {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                if runtime_owner_busy(&error) {
-                    eprintln!("hya: {error:#}");
-                    std::process::exit(db_lock::EXIT_DB_IN_USE);
-                }
-                return Err(error);
-            }
-        };
     let link = match relay_settings {
         Some(settings) => Some(prepared.relay.connect(settings).await?),
         None => None,
@@ -343,11 +348,11 @@ pub(crate) async fn serve_until(
     }
     relay.shutdown().await;
     let shutdown_result = built.shutdown().await.context("shutdown spawn supervisor");
+    drop(lock);
     engine
         .store()
         .release_runtime_owner(engine.runtime_owner())?;
     drop(built);
-    drop(lock);
     drain_result.await.context("receive drain result")??;
     shutdown_result
 }
@@ -369,7 +374,6 @@ fn runtime_owner_busy(error: &anyhow::Error) -> bool {
 pub(crate) async fn prepare_server(
     bind: &str,
     db: String,
-    mut lock: Option<db_lock::DbLock>,
     model_override: Option<String>,
     yolo: bool,
     pure: bool,
@@ -378,7 +382,11 @@ pub(crate) async fn prepare_server(
 ) -> anyhow::Result<PreparedServer> {
     emit_startup_mark("backend_start", None);
     super::first_run_config_bootstrap(false)?;
-    let store = open_store(&db).await?;
+    let store = if db_lock::paths(&db).is_some() {
+        hya_store::SessionStore::connect_runtime(&db).await?
+    } else {
+        open_store(&db).await?
+    };
     emit_startup_mark("store_open", None);
     let mut runtime = resolve_runtime(model_override)
         .await
@@ -411,6 +419,7 @@ pub(crate) async fn prepare_server(
         )
         .await?
     };
+    let mut lock = db_lock::owned_metadata(&db)?;
     emit_startup_mark("engine_built", None);
     let engine = built.engine();
     let asks = built

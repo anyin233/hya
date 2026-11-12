@@ -139,7 +139,7 @@ pub(crate) async fn start_with_relay(
                 None => child = Some(ours),
                 Some(status) if status.code() == Some(db_lock::EXIT_DB_IN_USE) => {
                     // Lost the race, or the holder was still shutting down:
-                    // wait for its server, or for the lock to come free.
+                    // Read owner metadata while waiting for its server or exit.
                 }
                 Some(status) => anyhow::bail!(
                     "hya serve (daemon) exited with {status} before it was ready; see {}{}",

@@ -490,13 +490,31 @@ async fn recovery_requires_runtime_owner_claim() {
 
 /// File-backed claims are clone-shared, process-exclusive, and released on drop.
 #[tokio::test]
+async fn dropping_a_reserved_runtime_store_clears_its_metadata() {
+    let path = database_path();
+    let store = SessionStore::connect_runtime(path.to_str().expect("UTF-8 path"))
+        .await
+        .expect("reserve store");
+    let metadata = std::path::PathBuf::from(format!("{}.runtime-owner.lock", path.display()));
+    assert_eq!(
+        std::fs::read_to_string(&metadata).expect("metadata").trim(),
+        std::process::id().to_string()
+    );
+    drop(store);
+    assert_eq!(
+        std::fs::read_to_string(&metadata).expect("released metadata"),
+        ""
+    );
+}
+
+#[tokio::test]
 async fn runtime_owner_claim_is_exclusive_and_releases_after_holder_drop() {
     let path = database_path();
     let session = SessionId::new();
     let run = WorkflowRunId::new();
     let previous_owner = OwnerRunId::new();
     let owner = OwnerRunId::new();
-    let first = SessionStore::connect(path.to_str().expect("UTF-8 path"))
+    let first = SessionStore::connect_runtime(path.to_str().expect("UTF-8 path"))
         .await
         .expect("first store");
     first
@@ -518,9 +536,22 @@ async fn runtime_owner_claim_is_exclusive_and_releases_after_holder_drop() {
         .await
         .expect("second store");
 
+    assert!(
+        matches!(
+            second.claim_runtime_owner(OwnerRunId::new()),
+            Err(StoreError::RuntimeOwnerBusy)
+        ),
+        "reserved lock excludes writers before runtime construction"
+    );
     first
         .claim_runtime_owner(owner)
         .expect("first store claims runtime owner");
+    let metadata = std::path::PathBuf::from(format!("{}.runtime-owner.lock", path.display()));
+    let pid = format!("{}\n", std::process::id());
+    assert_eq!(
+        std::fs::read_to_string(&metadata).expect("owner metadata"),
+        pid
+    );
     first_clone
         .claim_runtime_owner(owner)
         .expect("matching clone claim is idempotent");
@@ -529,8 +560,16 @@ async fn runtime_owner_claim_is_exclusive_and_releases_after_holder_drop() {
         Err(StoreError::RuntimeOwnerBusy)
     ));
 
+    assert_eq!(
+        std::fs::read_to_string(&metadata).expect("loser preserves metadata"),
+        pid
+    );
     drop(first_clone);
     drop(first);
+    assert_eq!(
+        std::fs::read_to_string(&metadata).expect("released metadata"),
+        ""
+    );
     second
         .claim_runtime_owner(owner)
         .expect("second store claims after holder drop");

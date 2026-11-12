@@ -1,27 +1,6 @@
-//! One writer per database (ADR-0022; docs/cli.md "`hya serve`").
-//!
-//! A server (`hya serve`, or bare `hya`'s in-process server) on a file
-//! database holds an exclusive advisory lock (`flock`) on `<db>.lock` for its
-//! whole lifetime; the OS releases it when the process exits, crash
-//! included. The lock file holds the owner's pid (informational). Once the
-//! listener is bound the owner publishes `<db>.server.json`
-//! (`{"url","pid","version","startedAt"}`, written to a temporary file and
-//! renamed) so other processes can attach to it instead of opening the
-//! database themselves; a clean shutdown removes it before the lock is
-//! released.
-//!
-//! The discovery file is trusted only while its lock is held: whoever takes
-//! the lock deletes any discovery file it finds (a crashed owner's), and
-//! readers that cannot test the lock (the Bun TUI) also check that the pid is
-//! alive and that `GET <url>/v1/health` answers.
-//!
-//! `<db>` is the database path with its directory canonicalized, so different
-//! spellings of one file share one lock. In-memory stores (`""`, `:memory:`)
-//! and SQLite URIs (`file:…`) are not locked.
+//! Daemon discovery metadata. The store owns the sole database lock.
+//! Readers inspect its PID metadata and probe HTTP without taking a lock.
 
-use std::fs::{File, OpenOptions};
-use std::io::{Read as _, Seek as _, Write as _};
-use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -79,7 +58,7 @@ fn auto_transport() -> String {
     "auto".to_owned()
 }
 
-/// `<db>.lock`, `<db>.server.json`, the daemon log `<db>.server.log`, the
+/// `<db>.runtime-owner.lock`, `<db>.server.json`, the daemon log `<db>.server.log`, the
 /// stop request `<db>.server.stop` of one database.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DbPaths {
@@ -115,7 +94,7 @@ pub(crate) fn paths(db: &str) -> Option<DbPaths> {
         dir.join(file)
     };
     Some(DbPaths {
-        lock: with(".lock"),
+        lock: with(".runtime-owner.lock"),
         discovery: with(".server.json"),
         log: with(".server.log"),
         stop: with(".server.stop"),
@@ -123,14 +102,11 @@ pub(crate) fn paths(db: &str) -> Option<DbPaths> {
     })
 }
 
-/// The held lock of a database; publishes and (on drop) removes its
-/// discovery file. Dropping it releases the lock.
+/// Discovery lifecycle held inside the store runtime-owner claim.
 #[derive(Debug)]
 pub(crate) struct DbLock {
     paths: DbPaths,
     published: bool,
-    // Held for the flock; closed (unlocked) last, after `Drop` ran.
-    _file: File,
 }
 
 /// Another process holds the database.
@@ -163,55 +139,11 @@ impl Busy {
     }
 }
 
-/// The result of trying to take a database's lock.
-#[derive(Debug)]
-// A one-shot return value of `try_claim`; boxing `Owned` buys nothing.
-#[allow(clippy::large_enum_variant)]
-pub(crate) enum Claim {
-    /// The store is not locked (in-memory, SQLite URI).
-    Unlocked,
-    /// This process now owns the database.
-    Owned(DbLock),
-    /// Another process owns it.
-    Busy(Busy),
-}
-
-/// Try (without waiting) to take `db`'s lock. On success any discovery file
-/// left by a crashed owner is removed and the lock file records this pid.
-pub(crate) fn try_claim(db: &str) -> std::io::Result<Claim> {
+/// Create discovery state only after the store's runtime-owner claim succeeds.
+pub(crate) fn owned_metadata(db: &str) -> std::io::Result<Option<DbLock>> {
     let Some(paths) = paths(db) else {
-        return Ok(Claim::Unlocked);
+        return Ok(None);
     };
-    // A missing database directory is an error here (naming the lock path),
-    // as it would be for the store itself.
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&paths.lock)
-        .map_err(|error| with_path(error, &paths.lock))?;
-    match file.try_lock() {
-        Ok(()) => {}
-        Err(std::fs::TryLockError::WouldBlock) => {
-            let mut text = String::new();
-            let holder_pid = file
-                .read_to_string(&mut text)
-                .ok()
-                .and_then(|_| text.trim().parse().ok());
-            let discovery = read_discovery(&paths.discovery);
-            return Ok(Claim::Busy(Busy {
-                db: db.to_string(),
-                paths,
-                holder_pid,
-                discovery,
-            }));
-        }
-        Err(std::fs::TryLockError::Error(error)) => return Err(with_path(error, &paths.lock)),
-    }
-    // We hold the lock: any discovery or stop request is stale from an earlier owner.
     for stale in [&paths.discovery, &paths.stop] {
         match std::fs::remove_file(stale) {
             Ok(()) => {}
@@ -219,56 +151,36 @@ pub(crate) fn try_claim(db: &str) -> std::io::Result<Claim> {
             Err(error) => return Err(with_path(error, stale)),
         }
     }
-    file.set_len(0)?;
-    file.rewind()?;
-    writeln!(file, "{}", std::process::id())?;
-    Ok(Claim::Owned(DbLock {
+    Ok(Some(DbLock {
         paths,
         published: false,
-        _file: file,
     }))
 }
 
-/// Who holds `db`'s lock, found without keeping it: `None` when the lock is
-/// free or the store is not locked. (Testing a `flock` means taking it for an
-/// instant; a `hya serve` that tries to claim it in that instant exits 75,
-/// which every caller of this already retries.)
+/// Read the runtime owner's PID metadata without ever acquiring its lock.
 pub(crate) fn holder(db: &str) -> std::io::Result<Option<Busy>> {
     let Some(paths) = paths(db) else {
         return Ok(None);
     };
-    let mut file = match OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&paths.lock)
-    {
-        Ok(file) => file,
-        // No database directory: nothing can hold it.
+    let text = match std::fs::read_to_string(&paths.lock) {
+        Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(with_path(error, &paths.lock)),
     };
-    match file.try_lock() {
-        // Free: closing the file releases the instant claim.
-        Ok(()) => Ok(None),
-        Err(std::fs::TryLockError::WouldBlock) => {
-            let mut text = String::new();
-            let holder_pid = file
-                .read_to_string(&mut text)
-                .ok()
-                .and_then(|_| text.trim().parse().ok());
-            Ok(Some(Busy {
-                db: db.to_string(),
-                discovery: read_discovery(&paths.discovery),
-                paths,
-                holder_pid,
-            }))
-        }
-        Err(std::fs::TryLockError::Error(error)) => Err(with_path(error, &paths.lock)),
-    }
+    let Some(pid) = text
+        .trim()
+        .parse()
+        .ok()
+        .filter(|pid| crate::daemon::process_alive(*pid))
+    else {
+        return Ok(None);
+    };
+    Ok(Some(Busy {
+        db: db.to_owned(),
+        holder_pid: Some(pid),
+        discovery: read_discovery(&paths.discovery).filter(|found| found.pid == pid),
+        paths,
+    }))
 }
 
 fn with_path(error: std::io::Error, path: &Path) -> std::io::Error {
@@ -426,8 +338,7 @@ pub(crate) fn take_stop_request(path: &Path, pid: u32) -> Option<StopNotice> {
 
 impl Drop for DbLock {
     fn drop(&mut self) {
-        // Still under the lock, so the file can only be ours. A predecessor
-        // suppresses this unlink after transferring the capability.
+        // Removed before the store releases runtime ownership.
         if self.published {
             let _ = std::fs::remove_file(&self.paths.discovery);
         }
@@ -504,25 +415,11 @@ mod tests {
         }
     }
 
-    fn owned(claim: Claim) -> DbLock {
-        match claim {
-            Claim::Owned(lock) => lock,
-            other => panic!("expected the lock, got {other:?}"),
-        }
-    }
-
-    fn busy(claim: Claim) -> Busy {
-        match claim {
-            Claim::Busy(busy) => busy,
-            other => panic!("expected busy, got {other:?}"),
-        }
-    }
-
     #[test]
     fn in_memory_and_uri_stores_are_not_locked() {
         for db in ["", ":memory:", "file:x.db?mode=memory", "sqlite::memory:"] {
             assert!(paths(db).is_none(), "{db}");
-            assert!(matches!(try_claim(db).unwrap(), Claim::Unlocked), "{db}");
+            assert!(owned_metadata(db).unwrap().is_none(), "{db}");
         }
     }
 
@@ -533,7 +430,7 @@ mod tests {
         std::fs::create_dir_all(&nested).unwrap();
         let spelled = format!("{}/../sessions.db", nested.display());
         let found = paths(&spelled).unwrap();
-        assert_eq!(found.lock, scratch.0.join("sessions.db.lock"));
+        assert_eq!(found.lock, scratch.0.join("sessions.db.runtime-owner.lock"));
         assert_eq!(found.discovery, scratch.0.join("sessions.db.server.json"));
         assert_eq!(found.log, scratch.0.join("sessions.db.server.log"));
         assert_eq!(found.stop, scratch.0.join("sessions.db.server.stop"));
@@ -544,59 +441,17 @@ mod tests {
     }
 
     #[test]
-    fn holder_reports_the_lock_owner_without_keeping_the_lock() {
-        let scratch = Scratch::new("holder");
+    fn discovery_never_creates_or_claims_a_lock() {
+        let scratch = Scratch::new("read-only");
         let db = scratch.db();
-        assert!(holder(&db).unwrap().is_none(), "a free lock has no holder");
-        // Asking did not keep the lock: it can be claimed right after.
-        let mut lock = owned(try_claim(&db).unwrap());
-        let held = holder(&db).unwrap().expect("held");
-        assert_eq!(held.holder_pid, Some(std::process::id()));
-        assert_eq!(held.discovery, None);
-        let published = lock.publish("http://127.0.0.1:4").unwrap();
-        assert_eq!(holder(&db).unwrap().unwrap().discovery, Some(published));
-        drop(lock);
         assert!(holder(&db).unwrap().is_none());
-        assert!(holder(":memory:").unwrap().is_none());
-        let missing = scratch.0.join("no-such-dir/s.db");
-        assert!(holder(&missing.to_string_lossy()).unwrap().is_none());
-    }
-
-    #[test]
-    fn a_second_claim_is_busy_and_names_the_holder_until_the_first_is_dropped() {
-        let scratch = Scratch::new("busy");
-        let db = scratch.db();
-        let mut first = owned(try_claim(&db).unwrap());
-        let pending = busy(try_claim(&db).unwrap());
-        assert_eq!(pending.holder_pid, Some(std::process::id()));
-        assert_eq!(pending.discovery, None);
-        assert!(
-            pending.serve_message().contains("still starting"),
-            "{}",
-            pending.serve_message()
-        );
-
-        let published = first.publish("http://127.0.0.1:4321").unwrap();
-        let listening = busy(try_claim(&db).unwrap());
-        assert_eq!(listening.discovery.as_ref(), Some(&published));
-        let message = listening.serve_message();
-        assert!(message.contains("already in use"), "{message}");
-        assert!(message.contains("http://127.0.0.1:4321"), "{message}");
-        assert!(
-            message.contains(&format!("pid {}", std::process::id())),
-            "{message}"
-        );
-
-        let discovery = first.paths().discovery.clone();
-        drop(first);
-        assert!(!discovery.exists(), "drop removes the discovery file");
-        let _again = owned(try_claim(&db).unwrap());
+        assert!(!paths(&db).unwrap().lock.exists());
     }
 
     #[test]
     fn the_discovery_file_has_the_documented_shape() {
         let scratch = Scratch::new("shape");
-        let mut lock = owned(try_claim(&scratch.db()).unwrap());
+        let mut lock = owned_metadata(&scratch.db()).unwrap().unwrap();
         lock.publish("http://127.0.0.1:9").unwrap();
         let text = std::fs::read_to_string(&lock.paths().discovery).unwrap();
         let value: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -618,7 +473,7 @@ mod tests {
     #[test]
     fn the_relay_is_recorded_in_the_discovery_file_and_cleared_again() {
         let scratch = Scratch::new("relay");
-        let mut lock = owned(try_claim(&scratch.db()).unwrap());
+        let mut lock = owned_metadata(&scratch.db()).unwrap().unwrap();
         let path = lock.discovery_path();
         // Before publishing there is nothing to update.
         set_discovery_relay(&path, Some(DiscoveredRelay::default())).unwrap();
@@ -656,7 +511,7 @@ mod tests {
             r#"{"url":"http://127.0.0.1:1","pid":1,"version":"0","startedAt":1}"#,
         )
         .unwrap();
-        let _lock = owned(try_claim(&db).unwrap());
+        let _lock = owned_metadata(&db).unwrap().unwrap();
         assert!(!stale.exists());
     }
 

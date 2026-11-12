@@ -10,7 +10,7 @@ use anyhow::Context as _;
 use clap::Subcommand;
 use hya_proto::{SessionId, session_archive_event};
 
-use crate::db_lock::{self, Claim};
+use crate::db_writer::{self, Writer};
 
 /// `hya sessions archive|unarchive <id>`.
 #[derive(Subcommand, Clone, Debug, PartialEq, Eq)]
@@ -96,20 +96,13 @@ async fn set_archived(db: &str, id: &str, archived: bool) -> anyhow::Result<()> 
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid session id: {id}"))?;
     let verb = if archived { "archived" } else { "unarchived" };
-    match db_lock::try_claim(db)? {
-        Claim::Busy(busy) => {
-            let Some(server) = busy.discovery else {
-                eprintln!(
-                    "{}",
-                    crate::db_writer::starting_message("sessions", db, busy.holder_pid)
-                );
-                std::process::exit(db_lock::EXIT_DB_IN_USE);
-            };
+    match db_writer::claim(db, "sessions")? {
+        Writer::Server(server) => {
             update_through_server(&server.url, session, archived).await?;
         }
-        // Held (or not lockable) for the whole write; dropped on return.
-        claim @ (Claim::Owned(_) | Claim::Unlocked) => {
+        Writer::Direct => {
             let store = hya_app::open_store(db).await?;
+            store.claim_runtime_owner(hya_store::OwnerRunId::new())?;
             let projection = store.read_projection(session).await?;
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -126,7 +119,6 @@ async fn set_archived(db: &str, id: &str, archived: bool) -> anyhow::Result<()> 
                 Ok(None) => {}
                 Err(error) => anyhow::bail!("{error}: {session}"),
             }
-            drop(claim);
         }
     }
     println!("{verb} {session}");

@@ -1,27 +1,12 @@
-//! Every writer respects the database lock (ADR-0022, ADR-0023; docs/cli.md
-//! "Database lock and the backend daemon").
-//!
-//! A command that writes a file database first asks who owns it:
-//!
-//! - nobody: the command takes `<db>.lock` itself and holds it until it
-//!   exits, so a `hya serve` (a daemon) started meanwhile exits 75 instead of
-//!   becoming a second writer;
-//! - a server that has published `<db>.server.json`: the command goes through
-//!   that server over `/v1` ([`crate::routed`]), or exits 75 when it cannot
-//!   be expressed there;
-//! - a holder that has not published yet (a server still starting, or
-//!   another command-line writer): exit 75.
-//!
-//! In-memory stores and SQLite URIs are not locked.
+//! Route writers using owner metadata; direct runtimes claim ownership in the store.
 
-use crate::db_lock::{self, Claim, DbLock, Discovery};
+use crate::db_lock::{self, Discovery};
 
 /// How a writing command reaches its database.
 #[derive(Debug)]
 pub(crate) enum Writer {
-    /// Open the store in this process. `Some` holds the database lock for as
-    /// long as it lives; `None` is an in-memory store (nothing to lock).
-    Direct(Option<DbLock>),
+    /// Open the store here; runtime construction claims its ownership.
+    Direct,
     /// A live server owns the database: go through it.
     Server(Discovery),
 }
@@ -29,10 +14,9 @@ pub(crate) enum Writer {
 /// Find out how `hya <command>` writes `db`. Exits 75 when the database is
 /// held by a process that serves no HTTP yet.
 pub(crate) fn claim(db: &str, command: &str) -> anyhow::Result<Writer> {
-    match db_lock::try_claim(db)? {
-        Claim::Unlocked => Ok(Writer::Direct(None)),
-        Claim::Owned(lock) => Ok(Writer::Direct(Some(lock))),
-        Claim::Busy(busy) => match busy.discovery {
+    match db_lock::holder(db)? {
+        None => Ok(Writer::Direct),
+        Some(busy) => match busy.discovery {
             Some(server) => Ok(Writer::Server(server)),
             None => {
                 eprintln!("{}", starting_message(command, db, busy.holder_pid));
@@ -79,40 +63,8 @@ mod tests {
     #[test]
     fn in_memory_stores_are_direct_and_unlocked() {
         for db in ["", ":memory:", "file:x.db?mode=memory"] {
-            assert!(matches!(claim(db, "exec").unwrap(), Writer::Direct(None)));
+            assert!(matches!(claim(db, "exec").unwrap(), Writer::Direct));
         }
-    }
-
-    #[test]
-    fn a_free_file_database_is_locked_for_the_writer() {
-        let dir = std::env::temp_dir().join(format!(
-            "hya-writer-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos())
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let db = dir.join("s.db").to_string_lossy().into_owned();
-        let Writer::Direct(Some(mut lock)) = claim(&db, "exec").unwrap() else {
-            panic!("expected the lock");
-        };
-        assert!(db_lock::holder(&db).unwrap().is_some(), "held while alive");
-        // A holder that publishes a server is routed to.
-        let published = lock.publish("http://127.0.0.1:9").unwrap();
-        let other = std::thread::spawn({
-            let db = db.clone();
-            move || match claim(&db, "exec").unwrap() {
-                Writer::Server(found) => found,
-                other => panic!("expected the server, got {other:?}"),
-            }
-        })
-        .join()
-        .unwrap();
-        assert_eq!(other, published);
-        drop(lock);
-        assert!(db_lock::holder(&db).unwrap().is_none(), "released on drop");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

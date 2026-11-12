@@ -141,13 +141,8 @@ async fn exec_entry(
             )
             .await
         }
-        // The lock (if any) is held until the run returns; an early exit
-        // (a stop signal) releases it with the process.
-        db_writer::Writer::Direct(lock) => {
-            let result = cmd_exec(prompt, model_override, db, yolo, json, pure).await;
-            drop(lock);
-            result
-        }
+        // The direct runtime claims the store owner lock.
+        db_writer::Writer::Direct => cmd_exec(prompt, model_override, db, yolo, json, pure).await,
     }
 }
 

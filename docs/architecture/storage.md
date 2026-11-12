@@ -624,3 +624,21 @@ The same store replay powers:
 
 This makes the database a useful debugging artifact: if the event log is intact,
 the session can be reconstructed.
+
+### Runtime owner discovery
+
+The store holds the only database advisory lock, `<canonical-db>.runtime-owner.lock`.
+After acquiring it, the owner writes its decimal PID followed by a newline; releasing
+the claim clears the PID before unlocking. Process exit releases the OS lock even if live tasks kept the claim from being dropped; readers
+ignore metadata whose PID is no longer alive. Discovery never acquires a lock.
+The daemon publishes `<db>.server.json` after binding its listener and removes it
+before releasing ownership. `hya serve start --db sessions.db --json` reads this
+metadata and checks `/v1/health`; concurrent starters attach to the same writer.
+The discovery JSON contract remains `url`, `pid`, `version`, `startedAt`, with
+optional `relay` and `allowHosts` fields (see the CLI Backend daemon section).
+
+`SessionStore::connect_runtime(path: &str) -> Result<SessionStore, StoreError>`
+reserves that same lock before SQLite initialization and transfers it to the
+first `claim_runtime_owner(owner: OwnerRunId) -> Result<(), StoreError>` call.
+Daemon startup uses this entry point so concurrent initializers cannot race on
+SQLite's first WAL setup. A conflicting reservation returns `RuntimeOwnerBusy`.
