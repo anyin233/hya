@@ -662,7 +662,7 @@ pub fn session_archive_event(
 /// different projection, or when `Projection` (or anything it contains)
 /// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
 /// the bump is recorded.
-pub const PROJECTION_REDUCER_VERSION: u32 = 1;
+pub const PROJECTION_REDUCER_VERSION: u32 = 2;
 
 /// Durable snapshot encoding: the wire projection plus replay-only reducer
 /// state the wire form deliberately omits.
@@ -1430,17 +1430,6 @@ impl Projection {
                 current_task,
                 ..
             } => {
-                let terminal = matches!(*status, RosterStatus::Done | RosterStatus::Failed);
-                let explicit_stop = *status == RosterStatus::Failed
-                    && current_task.as_deref() == Some("resident stopped");
-                let terminal_inbox_len = if explicit_stop {
-                    self.team
-                        .inboxes
-                        .get(handle)
-                        .map_or(0, |inbox| inbox.len() as u64)
-                } else {
-                    0
-                };
                 if let Some(entry) = self.team.roster.get_mut(handle) {
                     entry.status = *status;
                     if current_task.is_some() {
@@ -1450,9 +1439,6 @@ impl Projection {
                         && let Some(work) = entry.resident_work.take()
                     {
                         entry.resident_cursor = entry.resident_cursor.max(work.inbox_through);
-                    }
-                    if terminal && explicit_stop && entry.mode.is_resident() {
-                        entry.resident_cursor = entry.resident_cursor.max(terminal_inbox_len);
                     }
                 }
             }
@@ -2868,6 +2854,51 @@ mod orchestration_tests {
     /// Steer consumption advances the durable cursor without touching
     /// liveness — the report gate must not re-block on mail the agent saw
     /// inside a tool result (fix for the unread-mail report loop).
+    #[test]
+    fn terminal_activity_does_not_consume_unread_mail() {
+        let root = SessionId::new();
+        let actor = SessionId::new();
+        for note in ["resident stopped", "archived by parent"] {
+            let projection = Projection::from_events(&[
+                env(
+                    1,
+                    Event::AgentRegistered {
+                        session: root,
+                        agent_session: actor,
+                        handle: "worker".into(),
+                        parent: Some("main".into()),
+                        agent_type: AgentName::new("worker"),
+                        mode: SubagentMode::Resident,
+                    },
+                ),
+                env(
+                    2,
+                    Event::MailSent {
+                        session: root,
+                        from: "main".into(),
+                        to: MailEndpoint::Handle("main/worker".into()),
+                        kind: MailKind::Message,
+                        body: "unread".into(),
+                    },
+                ),
+                env(
+                    3,
+                    Event::AgentActivityChanged {
+                        session: root,
+                        handle: "main/worker".into(),
+                        status: RosterStatus::Failed,
+                        current_task: Some(note.into()),
+                    },
+                ),
+            ]);
+            assert_eq!(
+                projection.team.roster["main/worker"].resident_cursor, 0,
+                "{note}"
+            );
+            assert_eq!(projection.team.inboxes["main/worker"].len(), 1);
+        }
+    }
+
     #[test]
     fn mail_consumed_advances_the_durable_inbox_cursor() {
         let root = SessionId::new();

@@ -453,24 +453,35 @@ Resident report, stop, turn error, budget kill and sidecar startup failure use
 one store terminal transition. It fences the claim, checks the handoff generation
 and expected resident cursor/work, and for voluntary reports rechecks unread mail
 and live children under the SQLite writer reservation. Mail arriving during
-handoff generation refuses the report archive; the member remains live and can
-read that mail before reporting again. The refused report is discarded: handling
-the mail never re-submits its old outcome or text.
+handoff generation refuses the report archive. The refusing transaction commits
+only a direct `MailSent` from `harness` to the member, explaining the unread
+mail, live subagent, or changed episode. Publication wakes the member; it remains
+live and must read the notice and handle the blocking work before reporting
+again. The refused report is discarded: handling the mail never re-submits its
+old outcome or text.
 
-`finalize_resident_archive(claim: Option<&ActorClaim>, root: SessionId, handle: &str,
-archive: ResidentArchive, cause: FinishCause)` returns committed envelopes and
-released admission records. `ResidentArchive` carries `actor: SessionId`, `generation: u32`,
+`finalize_resident_archive(owner: ResidentArchiveOwner<'_>, root: SessionId,
+handle: &str, archive: ResidentArchive, cause: FinishCause)` returns
+`Result<(ResidentArchiveOutcome, Vec<Envelope>, Vec<AdmissionRecord>), StoreError>`.
+`ResidentArchiveOwner::Claim(&ActorClaim)` fences the episode's capability;
+`Takeover` ends an orphan whose caller guarantees has no in-memory episode.
+Takeover increments the active claim's epoch, replaces its owner, aborts its
+previous epoch's admissions and releases the claim in this same transaction.
+A failed transaction rolls back the takeover too.
+`ResidentArchiveOutcome::Committed` carries terminal effects (or empty effects
+for a matching repeated finalization). `Refused` carries only the harness notice
+and no admission refunds. A store error is a failed write, not a refusal.
+`ResidentArchive` carries `actor: SessionId`, `generation: u32`,
 `doc: String`, `degraded: bool`, `reason: ArchiveReason`, `note: String`,
 `member_status: MemberRunStatus`,
 `report: Option<(ReportOutcome, String)>`, `check_gate: bool`, and
 `expected_work: Option<(u64, Option<ResidentWorkProjection>)>`. Handoff, optional
 parent report/mail, cancellation cleanup, terminal activity, archive marker and
-claim release commit together. When no process owns the actor, temporary claim
-acquisition also happens inside this transaction. `publish_resident_finalization` publishes and
+claim release commit together. `publish_resident_finalization` publishes and
 refunds only after commit. Stop/failure entry points choose terminal reasons and
 use this same transaction, including cancellation of unstarted directives. The
 caller supplies the archive reason, member status and handoff document; the
-store never synthesizes prose or derives a reason from the member status.
+store never synthesizes a handoff or derives a reason from the member status.
 Forced endings use the shared projection-derived handoff template, retaining a
 previous handoff's document when one exists. Its numbered goal and pending-task
 sections remain searchable through `search_agent`.
@@ -483,6 +494,17 @@ failure before a revived member's first turn; it never returns an older report
 for a forced ending. A failed terminal transaction rolls back every effect and
 is returned or logged with the member session id. Shutdown has no fallback
 terminal write path.
+
+The `report` tool accepts `{result: string, outcome?: "done" | "failed"}`;
+`result` must be nonempty and `outcome` defaults to `"done"`. For example,
+`report({"result":"Updated the parser and verified its tests","outcome":"done"})`
+returns `title: "Report submitted"` and an `output` beginning
+`Report submitted; it takes effect when this turn ends.` Submission closes the
+turn after its current tool round. If the terminal recheck refuses it, the next
+wake includes `[mail from harness] Your report was not accepted: <reason>. Read
+and answer it, then call report again.` The report takes effect only when its
+archive commits. Terminal activity never consumes unread mail based on the
+terminal note; only explicit delivery/consumption advances the cursor.
 
 For example, after a budget kill, send a new directive to the archived child to
 revive it through the existing mail revival path. Spawn and revival wait for a

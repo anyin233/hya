@@ -3099,7 +3099,7 @@ async fn explicit_stop_fails_closed_instead_of_taking_over_a_newer_resident_clai
 }
 
 #[tokio::test]
-async fn resident_direct_send_committed_before_stop_is_durably_cancelled() {
+async fn resident_direct_send_committed_before_stop_remains_unread() {
     let db_dir = support::TestDir::new("resident-direct-stop");
     let db_path = db_dir.path().join("sessions.db");
     let db_path = db_path.to_string_lossy().into_owned();
@@ -3249,8 +3249,8 @@ async fn resident_direct_send_committed_before_stop_is_durably_cancelled() {
         before_archive.apply(&envelope);
     }
     assert_eq!(
-        before_archive.team.roster[&handle].resident_cursor,
-        inbox_len as u64
+        before_archive.team.roster[&handle].resident_cursor, 0,
+        "stopping must not mark unread mail consumed"
     );
 }
 

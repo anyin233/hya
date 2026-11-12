@@ -280,9 +280,14 @@ revival from presenting an unrun, cancelled task as an open directive. The text
 is required because model requests omit empty assistant messages. Existing open
 turn cleanup remains unchanged.
 
-`finalize_resident_archive(claim: Option<&ActorClaim>, root: SessionId,
+`finalize_resident_archive(owner: ResidentArchiveOwner<'_>, root: SessionId,
 handle: &str, archive: ResidentArchive, cause: FinishCause)` returns
-`Result<(Vec<Envelope>, Vec<AdmissionRecord>), StoreError>`. The engine supplies
+`Result<(ResidentArchiveOutcome, Vec<Envelope>, Vec<AdmissionRecord>), StoreError>`.
+`Claim(&ActorClaim)` fences the episode; `Takeover` bumps an orphan's active
+claim epoch and replaces its owner inside the terminal transaction. Voluntary
+gate refusals commit only a harness notice and return `Refused`; terminal effects
+return `Committed`. A store error rolls back everything, including takeover.
+The engine supplies
 the prepared handoff, archive reason, terminal note and `member_status` explicitly
 (see [Task Tool](task-tool.md#atomic-resident-termination)); the store never
 synthesizes a handoff. Causes are `UserCancel` for ordinary stop, `Archived` for

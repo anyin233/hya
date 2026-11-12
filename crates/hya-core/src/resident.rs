@@ -1613,7 +1613,7 @@ impl TeamActor {
         session: SessionId,
         claim: Option<&ActorClaim>,
         pending: PendingReport,
-    ) -> Result<(), CoreError> {
+    ) -> Result<hya_store::ResidentArchiveOutcome, CoreError> {
         let canonical = {
             let state = self.lock();
             let Some(slot) = state
@@ -1621,16 +1621,15 @@ impl TeamActor {
                 .get(&session)
                 .filter(|slot| slot.claim.as_ref() == claim)
             else {
-                return Ok(());
+                return Ok(hya_store::ResidentArchiveOutcome::Committed);
             };
             slot.handle.clone()
         };
-        report_gate_projection(&self.engine, self.root, &canonical).await?;
         if !self.owns_slot(session, claim) {
-            return Ok(());
+            return Ok(hya_store::ResidentArchiveOutcome::Committed);
         }
         let PendingReport { outcome, report } = pending;
-        match archive_reported_agent(
+        let outcome = archive_reported_agent(
             &self.engine,
             self.root,
             &canonical,
@@ -1641,14 +1640,16 @@ impl TeamActor {
             ArchiveReason::Reported,
             false,
         )
-        .await
-        {
-            Ok(()) => {
+        .await?;
+        match outcome {
+            hya_store::ResidentArchiveOutcome::Committed => {
                 self.remove_slot(session, claim);
-                Ok(())
             }
-            Err(error) => Err(error),
+            hya_store::ResidentArchiveOutcome::Refused => {
+                self.drop_pending_archive(session, claim);
+            }
         }
+        Ok(outcome)
     }
 
     /// Handle one `MailSent` for this team: charge the message budget, count the
@@ -1882,9 +1883,10 @@ async fn resident_task(
                 continue;
             }
             match result {
-                Ok(()) => return,
+                Ok(hya_store::ResidentArchiveOutcome::Committed) => return,
+                Ok(hya_store::ResidentArchiveOutcome::Refused) => {}
                 Err(error) => {
-                    tracing::warn!(%session, %error, "resident report refused");
+                    tracing::warn!(%session, %error, "resident report archive failed");
                     team.drop_pending_archive(session, task_claim.as_ref());
                 }
             }
@@ -2354,8 +2356,8 @@ pub(crate) async fn archive_reported_agent(
     report: String,
     reason: ArchiveReason,
     force_degraded: bool,
-) -> Result<(), CoreError> {
-    let result: Result<(), CoreError> = async {
+) -> Result<hya_store::ResidentArchiveOutcome, CoreError> {
+    let result = async {
         // The lead (the user-started root agent) is never archived: its session
         // stays live and resumable whatever happens to one of its turns.
         if child == root || canonical == scope::ROOT_HANDLE {
@@ -2379,10 +2381,13 @@ pub(crate) async fn archive_reported_agent(
             engine.terminal_handoff_claimed(child).await
         };
 
-        let finalized = engine
+        let (outcome, envelopes, admissions) = engine
             .store()
             .finalize_resident_archive(
-                claim,
+                claim.map_or(
+                    hya_store::ResidentArchiveOwner::Takeover,
+                    hya_store::ResidentArchiveOwner::Claim,
+                ),
                 root,
                 canonical,
                 hya_store::ResidentArchive {
@@ -2400,8 +2405,8 @@ pub(crate) async fn archive_reported_agent(
                 FinishCause::UserCancel,
             )
             .await?;
-        engine.publish_resident_finalization(finalized);
-        Ok(())
+        engine.publish_resident_finalization((envelopes, admissions));
+        Ok(outcome)
     }
     .await;
     result.inspect_err(|error| {
@@ -2429,10 +2434,13 @@ pub(crate) async fn archive_stopped_agent(
     }
     let handoff = engine.degraded_terminal_handoff(child).await;
 
-    let finalized = engine
+    let (_, envelopes, admissions) = engine
         .store()
         .finalize_resident_archive(
-            claim,
+            claim.map_or(
+                hya_store::ResidentArchiveOwner::Takeover,
+                hya_store::ResidentArchiveOwner::Claim,
+            ),
             root,
             canonical,
             hya_store::ResidentArchive {
@@ -2453,7 +2461,7 @@ pub(crate) async fn archive_stopped_agent(
         .inspect_err(|error| {
             tracing::error!(session = %child, %error, "resident terminal transition failed");
         })?;
-    engine.publish_resident_finalization(finalized);
+    engine.publish_resident_finalization((envelopes, admissions));
     Ok(())
 }
 
@@ -3337,7 +3345,7 @@ impl ResidentSupervisor {
         // Projection-level gate (unread mail / live children); re-checked here
         // even for pre-checked tool callers.
         self.report_gate_state(root, &canonical).await?;
-        archive_reported_agent(
+        let outcome = archive_reported_agent(
             &self.engine,
             root,
             &canonical,
@@ -3349,6 +3357,9 @@ impl ResidentSupervisor {
             false,
         )
         .await?;
+        if outcome == hya_store::ResidentArchiveOutcome::Refused {
+            return Ok(());
+        }
 
         // 6. Slot teardown: idle by the gate, so a plain stop handshake ends
         //    the resident task and releases the team budget counters.

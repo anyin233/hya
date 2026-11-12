@@ -179,8 +179,8 @@ with a typed error unless, atomically under the team lock:
 2. the handle has zero live direct children (all archived).
 
 The **archive transaction** re-checks both conditions at commit time; a
-message that committed in between aborts the archive and wakes a follow-up
-turn instead of being lost. There is no timing window by construction.
+message that committed in between refuses the archive. The refusing transaction
+commits only a harness notice, so the member learns why on its next wake.
 
 Mail the caller's current resident wake already injected into its turn
 (`ResidentWorkStarted.inbox_through`) counts as read for the in-turn check.
@@ -190,18 +190,20 @@ call, and the `send` / `wait` paths. Every agent can satisfy the gate because
 the harness allocates the mail tools to every agent regardless of its bundle
 `resource_view` (see the [coordination tools](agent-tool-surface.md#coordination-tools-allocated-at-startup)).
 
-#### An accepted report ends the turn
+#### A submitted report ends the turn
 
-Once a `report` is accepted, the engine ends the member's turn right after
+Once a `report` is submitted, the engine ends the member's turn right after
 the tool round that contained it: the other tool calls of that round
 (before or after the `report`) still run and their results are recorded,
 then the assistant message closes with exactly one `MessageFinished`
 (`finish: stop`, no `cause`) and **no further model call** is made. The tool
-result reads `Report accepted; your turn ends now. …` — it no longer invites
-the model to continue. (Before 0.41.0 the turn kept going and one model
-re-reported 43 times in one turn.)
+result reads `Report submitted; it takes effect when this turn ends. …`.
+Archive is decided after the turn ends. A refusal arrives as
+`[mail from harness] Your report was not accepted: <reason>. Read and answer it,
+then call report again.` It names unread mail, a live subagent, or an episode
+change observed by the terminal transaction.
 
-- **One report per episode.** A second `report` in the same turn is rejected
+- **One submission per turn.** A second `report` in the same turn is rejected
   at the tool plane with an actionable `ToolError` ("already accepted … do not
   call `report` again") and never reaches the supervisor, so an episode
   produces exactly one `SubagentReported`. Mechanism: the turn loop hands a
@@ -209,9 +211,10 @@ re-reported 43 times in one turn.)
   report sets it.
 - **Mail during the report round** is not steered into that round's tool
   results (the member gets no round to act on it). It stays unread, so the
-  archive re-check at rest fails, the report stays parked, and the mail wakes
-  a new episode in which the member may `report` again (the new report
-  replaces the parked one; still one `SubagentReported`).
+  archive re-check at rest refuses the report and commits a harness notice.
+  The pending report is discarded; the notice and mail wake another turn in
+  the same episode. The member must handle them and submit a fresh report.
+  Only a committed archive produces `SubagentReported`.
 - **At rest first.** After a turn that accepted a report, the resident loop
   executes the parked report before any follow-up turn, so mail the turn
   already surfaced does not buy a fresh model round.
@@ -606,7 +609,11 @@ workspace suite.
 The store finalizer fences the actor claim and replays the root and child inside
 `BEGIN IMMEDIATE`. A prepared handoff carries its generation and observed
 cursor/work boundary; a mismatch refuses termination. Voluntary reports also
-recheck inbox drainage and live children here, after handoff preparation.
+recheck inbox drainage and live children here, after handoff preparation. A
+voluntary refusal commits only `MailSent { from: "harness", to: Handle(member),
+kind: Message, body: <reason and instruction to report again> }` and returns
+`ResidentArchiveOutcome::Refused`. It leaves the claim, handoff, member row and
+archive unchanged. The published mail wakes the still-live episode.
 Cancellation cleanup, parent member effects, handoff, optional report/mail,
 terminal activity, archive and claim release commit together. The engine calls
 `publish_resident_finalization` once with the returned envelopes and admissions.
@@ -614,8 +621,18 @@ Budget kills and sidecar startup failures enter this same transition, so their
 members enter the archive and can be revived. The caller supplies the handoff,
 archive reason and terminal member status. Forced endings use the same numbered,
 projection-derived handoff template as degraded reports, retaining an existing
-handoff document. The store builds no prose. Terminal failure is returned or
+handoff document. The store builds no handoff prose. Terminal failure is returned or
 logged with the member session id; shutdown performs no fallback writes.
+
+The finalizer takes `ResidentArchiveOwner::Claim(&ActorClaim)` for an owned
+episode, or `Takeover` for an orphan with no in-memory episode. Takeover bumps
+the active claim's epoch and replaces its owner, fences old writes, aborts the
+old epoch's admissions, and archives/releases in one transaction. Failure rolls
+back the takeover and terminal effects together. `Committed` returns envelopes
+and admission refunds; `Refused` returns only the notice. See the exact
+[store and tool contracts](../spec/backend/task-tool.md#atomic-resident-termination).
+Terminal activity preserves unread mail regardless of its textual note;
+delivery and explicit consumption alone advance the inbox cursor.
 
 Killed teams accept no registrations. Spawn and revival share a registration
 gate with the kill decision, wait for the old slots and budget counters to be

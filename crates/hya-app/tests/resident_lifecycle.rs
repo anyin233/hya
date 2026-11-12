@@ -999,7 +999,6 @@ async fn i4_failed_terminal_write_can_be_reconciled() {
 }
 
 #[tokio::test]
-#[ignore = "M4-1: I7"]
 async fn i7_refused_report_delivers_a_harness_notice() {
     let mut h = Harness::new().await;
     let summary = Arc::new(Gate::default());

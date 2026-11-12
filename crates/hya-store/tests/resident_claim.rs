@@ -19,13 +19,15 @@ async fn finalize_resident(
     note: &str,
 ) -> Result<(Vec<Envelope>, Vec<hya_store::AdmissionRecord>), StoreError> {
     let projection = store.read_projection(claim.actor_id).await?;
-    store.finalize_resident_archive(Some(claim), root, handle, hya_store::ResidentArchive {
+    let (outcome, envelopes, admissions) = store.finalize_resident_archive(hya_store::ResidentArchiveOwner::Claim(claim), root, handle, hya_store::ResidentArchive {
         actor: claim.actor_id,
         generation: projection.session.handoff.as_ref().map_or(1, |handoff| handoff.generation + 1),
         doc: "1. Goal - test task\n2. Current state - stopped\n3. Files and code - none\n4. Decisions - none\n5. Pending tasks - none\n6. Next step - none".into(),
         degraded: true, reason: hya_proto::ArchiveReason::Killed, note: note.into(), member_status: status,
         report: None, check_gate: false, expected_work: None,
-    }, if status == MemberRunStatus::Failed { hya_proto::FinishCause::Other } else { hya_proto::FinishCause::UserCancel }).await
+    }, if status == MemberRunStatus::Failed { hya_proto::FinishCause::Other } else { hya_proto::FinishCause::UserCancel }).await?;
+    assert_eq!(outcome, hya_store::ResidentArchiveOutcome::Committed);
+    Ok((envelopes, admissions))
 }
 
 struct StopFixture {
@@ -168,6 +170,266 @@ async fn stop_fixture(path: &str) -> StopFixture {
         handle: path,
         claim,
         operation,
+    }
+}
+
+#[tokio::test]
+async fn terminal_takeover_archives_an_active_claim() {
+    let temp_db = TempDb::new("takeover");
+    let fixture = stop_fixture(temp_db.path()).await;
+    let archive = || hya_store::ResidentArchive {
+        actor: fixture.actor,
+        generation: 1,
+        doc: "orphan handoff".into(),
+        degraded: true,
+        reason: hya_proto::ArchiveReason::ArchivedByParent,
+        note: "archive orphan".into(),
+        member_status: MemberRunStatus::Cancelled,
+        report: None,
+        check_gate: false,
+        expected_work: None,
+    };
+    let mut connection = SqliteConnection::connect(&format!("sqlite://{}", temp_db.path()))
+        .await
+        .unwrap();
+    sqlx::query(
+        r#"CREATE TRIGGER fail_takeover_archive BEFORE INSERT ON event_log
+           WHEN instr(NEW.payload, '"type":"agent_archived"') > 0
+           BEGIN SELECT RAISE(ABORT, 'takeover archive failed'); END"#,
+    )
+    .execute(&mut connection)
+    .await
+    .unwrap();
+    let failed = fixture
+        .store
+        .finalize_resident_archive(
+            hya_store::ResidentArchiveOwner::Takeover,
+            fixture.root,
+            &fixture.handle,
+            archive(),
+            hya_proto::FinishCause::Archived,
+        )
+        .await;
+    assert!(matches!(failed, Err(StoreError::Sqlite(_))));
+    fixture
+        .store
+        .validate_actor_claim(&fixture.claim)
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.store.replay(fixture.root).await.unwrap(),
+        fixture.before_root
+    );
+    assert_eq!(
+        fixture.store.replay(fixture.actor).await.unwrap(),
+        fixture.before_actor
+    );
+    assert_eq!(
+        fixture
+            .store
+            .admission(fixture.operation)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        AdmissionState::Started
+    );
+    sqlx::query("DROP TRIGGER fail_takeover_archive")
+        .execute(&mut connection)
+        .await
+        .unwrap();
+    let (outcome, events, admissions) = fixture
+        .store
+        .finalize_resident_archive(
+            hya_store::ResidentArchiveOwner::Takeover,
+            fixture.root,
+            &fixture.handle,
+            archive(),
+            hya_proto::FinishCause::Archived,
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome, hya_store::ResidentArchiveOutcome::Committed);
+    assert!(events.iter().any(|envelope| matches!(
+        &envelope.event,
+        Event::AgentArchived { child, reason: hya_proto::ArchiveReason::ArchivedByParent, .. }
+            if *child == fixture.actor
+    )));
+    assert_eq!(admissions.len(), 1);
+    assert_eq!(admissions[0].operation_id, fixture.operation);
+    assert_eq!(admissions[0].state, AdmissionState::Aborted);
+    assert!(admissions[0].logical_released);
+    assert!(fixture.store.active_actor_ids().await.unwrap().is_empty());
+    let projection = fixture.store.read_projection(fixture.root).await.unwrap();
+    assert!(!projection.team.roster.contains_key(&fixture.handle));
+    assert_eq!(
+        projection.team.archived[&fixture.handle].session,
+        fixture.actor
+    );
+    assert!(matches!(
+        fixture.store.validate_actor_claim(&fixture.claim).await,
+        Err(StoreError::StaleActorClaim { actor_id }) if actor_id == fixture.actor
+    ));
+    let epoch: i64 =
+        sqlx::query_scalar("SELECT epoch FROM resident_actor_claim WHERE actor_id = ?")
+            .bind(fixture.actor.storage_key())
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+    assert_eq!(epoch as u64, fixture.claim.epoch.get() + 1);
+}
+
+#[tokio::test]
+async fn refused_report_commits_only_a_harness_notice() {
+    for refusal in [
+        "unread mail",
+        "live subagent",
+        "work changed",
+        "generation changed",
+    ] {
+        let temp_db = TempDb::new("refusal");
+        let fixture = stop_fixture(temp_db.path()).await;
+        if refusal != "unread mail" {
+            fixture
+                .store
+                .append_event(
+                    fixture.root,
+                    &Event::MailConsumed {
+                        session: fixture.root,
+                        handle: fixture.handle.clone(),
+                        through: 1,
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        if refusal == "live subagent" {
+            fixture
+                .store
+                .append_event(
+                    fixture.root,
+                    &Event::AgentRegistered {
+                        session: fixture.root,
+                        agent_session: SessionId::new(),
+                        handle: "nested".into(),
+                        parent: Some(fixture.handle.clone()),
+                        agent_type: AgentName::new("resident"),
+                        mode: SubagentMode::Resident,
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        let before_root = fixture.store.replay(fixture.root).await.unwrap();
+        let archive = || hya_store::ResidentArchive {
+            actor: fixture.actor,
+            generation: if refusal == "generation changed" {
+                2
+            } else {
+                1
+            },
+            doc: "prepared report handoff".into(),
+            degraded: false,
+            reason: hya_proto::ArchiveReason::Reported,
+            note: "premature report".into(),
+            member_status: MemberRunStatus::Done,
+            report: Some((hya_proto::ReportOutcome::Done, "premature report".into())),
+            check_gate: true,
+            expected_work: (refusal == "work changed").then_some((5, None)),
+        };
+        let mut connection = SqliteConnection::connect(&format!("sqlite://{}", temp_db.path()))
+            .await
+            .unwrap();
+        sqlx::query(
+            r#"CREATE TRIGGER fail_refusal_notice BEFORE INSERT ON event_log
+               WHEN instr(NEW.payload, '"type":"mail_sent"') > 0
+               BEGIN SELECT RAISE(ABORT, 'notice insert failed'); END"#,
+        )
+        .execute(&mut connection)
+        .await
+        .unwrap();
+        let failed = fixture
+            .store
+            .finalize_resident_archive(
+                hya_store::ResidentArchiveOwner::Claim(&fixture.claim),
+                fixture.root,
+                &fixture.handle,
+                archive(),
+                hya_proto::FinishCause::UserCancel,
+            )
+            .await;
+        assert!(matches!(failed, Err(StoreError::Sqlite(_))));
+        assert_eq!(
+            fixture.store.replay(fixture.root).await.unwrap(),
+            before_root
+        );
+        assert_eq!(
+            fixture.store.replay(fixture.actor).await.unwrap(),
+            fixture.before_actor
+        );
+        fixture
+            .store
+            .validate_actor_claim(&fixture.claim)
+            .await
+            .unwrap();
+        sqlx::query("DROP TRIGGER fail_refusal_notice")
+            .execute(&mut connection)
+            .await
+            .unwrap();
+        let (outcome, events, admissions) = fixture
+            .store
+            .finalize_resident_archive(
+                hya_store::ResidentArchiveOwner::Claim(&fixture.claim),
+                fixture.root,
+                &fixture.handle,
+                archive(),
+                hya_proto::FinishCause::UserCancel,
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome, hya_store::ResidentArchiveOutcome::Refused);
+        assert!(admissions.is_empty());
+        assert_eq!(events.len(), 1);
+        assert!(
+            matches!(&events[0].event,
+                Event::MailSent { session, from, to: MailEndpoint::Handle(handle), body, .. }
+                    if *session == fixture.root && from == hya_proto::scope::HARNESS_HANDLE
+                        && handle == &fixture.handle && body.contains("Your report was not accepted")
+                        && body.contains(if refusal.ends_with("changed") { "episode changed" } else { refusal })
+            ),
+            "{refusal}: {:?}",
+            events[0]
+        );
+        let mut expected = before_root;
+        expected.extend(events);
+        assert_eq!(fixture.store.replay(fixture.root).await.unwrap(), expected);
+        assert_eq!(
+            fixture.store.replay(fixture.actor).await.unwrap(),
+            fixture.before_actor
+        );
+        fixture
+            .store
+            .validate_actor_claim(&fixture.claim)
+            .await
+            .unwrap();
+        assert_eq!(
+            fixture
+                .store
+                .admission(fixture.operation)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            AdmissionState::Started
+        );
+        let projection = fixture.store.read_projection(fixture.root).await.unwrap();
+        assert!(projection.team.roster.contains_key(&fixture.handle));
+        assert!(!projection.team.archived.contains_key(&fixture.handle));
+        let entry = &projection.team.roster[&fixture.handle];
+        assert!(
+            entry.resident_cursor < projection.team.inboxes[&fixture.handle].len() as u64,
+            "the notice must remain unread and owe a durable wake"
+        );
     }
 }
 
@@ -437,8 +699,8 @@ async fn resident_stop_finalization_commits_mail_admission_and_claim_release_tog
         RosterStatus::Failed
     );
     assert_eq!(
-        before_archive.team.roster[path].resident_cursor,
-        inbox_len as u64
+        before_archive.team.roster[path].resident_cursor, 0,
+        "terminal activity must leave unread mail unread"
     );
     assert!(!store.active_actor_ids().await.unwrap().contains(&actor));
     assert!(matches!(
