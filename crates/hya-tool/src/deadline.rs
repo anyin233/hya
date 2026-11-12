@@ -4,6 +4,8 @@
 //! is a fact of the process, not of a session: [`install`] once at start,
 //! [`current`] anywhere. The remaining time is split into stages that decide
 //! which harness notices the agents get and how long a tool call may block.
+//! A native tool bundle links its own copy of this crate; the loader hands it
+//! the host's cell ([`crate::native_bundle::share_deadline_v1`]).
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock, PoisonError};
@@ -36,6 +38,8 @@ pub struct RunDeadline {
 }
 
 static DEADLINE: OnceLock<RunDeadline> = OnceLock::new();
+/// In a native bundle's copy of this crate: the host's [`DEADLINE`].
+static HOST: OnceLock<&'static OnceLock<RunDeadline>> = OnceLock::new();
 
 /// Start the run's clock with `budget`.
 ///
@@ -51,7 +55,17 @@ pub fn install(budget: Duration) {
 /// The run's deadline, when it has a budget.
 #[must_use]
 pub fn current() -> Option<&'static RunDeadline> {
-    DEADLINE.get()
+    HOST.get().copied().unwrap_or(&DEADLINE).get()
+}
+
+/// This copy's cell, for the loader to hand to a bundle.
+pub(crate) fn cell() -> &'static OnceLock<RunDeadline> {
+    &DEADLINE
+}
+
+/// Read the host's cell from now on (in a bundle's copy, once at load).
+pub(crate) fn adopt(host: &'static OnceLock<RunDeadline>) {
+    assert!(HOST.set(host).is_ok(), "host deadline adopted twice");
 }
 
 fn clamp_secs(value: f64, low: f64, high: f64) -> Duration {
