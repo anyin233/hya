@@ -984,7 +984,7 @@ mod tests {
         ) -> Arc<crate::RuntimeRegistry> {
             let bundle = hya_bundle::PreparedAgentBundle {
                 check: None,
-                format_version: 2,
+                format_version: 3,
                 identity: hya_bundle::BundleIdentity {
                     id: "hya/mailbox-unit-tests-resident".to_string(),
                     version: "0.0.0".to_string(),
@@ -1002,7 +1002,6 @@ mod tests {
                     prompt_digest: None,
                     model_policy: hya_bundle::ModelPolicy::default(),
                     workdir: None,
-                    legacy_spawn_lifecycle: None,
                     resource_view: hya_bundle::ResourceView::default(),
                     can_spawn: Vec::new(),
                     hook_refs: Vec::new(),

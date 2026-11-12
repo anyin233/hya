@@ -177,7 +177,7 @@ fn prepared_bundles(agents: &[AgentFixture]) -> Vec<PreparedInstallableBundle> {
         .filter(|agent| hya_core::builtin_agent(agent.stable_id).is_none())
         .map(|agent| PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
             check: None,
-            format_version: 2,
+            format_version: 3,
             identity: BundleIdentity {
                 id: format!("hya/server-tests-{}", agent.stable_id),
                 version: "0.0.0".to_string(),
@@ -214,7 +214,6 @@ fn prepared_bundles(agents: &[AgentFixture]) -> Vec<PreparedInstallableBundle> {
             prompt_digest: None,
             model_policy: ModelPolicy::default(),
             workdir: None,
-            legacy_spawn_lifecycle: None,
             resource_view: ResourceView::default(),
             can_spawn: agent
                 .can_spawn

@@ -640,7 +640,7 @@ fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
         .map(|agent| {
             PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
                 check: None,
-                format_version: 2,
+                format_version: 3,
                 identity: BundleIdentity {
                     id: format!("hya/root-turn-precedence-{}", agent.stable_id),
                     version: "0.0.0".to_string(),
@@ -662,7 +662,6 @@ fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
                         reasoning: agent.reasoning.clone(),
                     },
                     workdir: agent.workdir.clone(),
-                    legacy_spawn_lifecycle: None,
                     resource_view: ResourceView::default(),
                     can_spawn: Vec::new(),
                     hook_refs: Vec::new(),

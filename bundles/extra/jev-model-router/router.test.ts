@@ -346,7 +346,7 @@ describe("handleMessage", () => {
         protocol_version: 1,
         plugin: { id: "jev-model-router", version: expect.any(String), kind: "bun" },
         tools: [],
-        hooks: [{ name: "chat.params", posture: "open" }],
+        hooks: [{ name: "chat.params" }],
         skills: [],
       },
     });

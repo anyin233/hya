@@ -1,5 +1,5 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-//! Phase 5: a `safe`-posture `tool.execute.before` guard that misses its
+//! Phase 5: a `tool.execute.before` guard that misses its
 //! deadline must fail safe — the chain vetoes so the engine emits a `ToolError`
 //! rather than running the tool with an unchecked guard.
 
@@ -25,7 +25,7 @@ for line in sys.stdin:
         result = {
             "protocol_version": 1,
             "plugin": {"id": "slow-guard", "version": "0.1.0", "kind": "rust"},
-            "hooks": [{"name": "tool.execute.before", "posture": "safe"}],
+            "hooks": [{"name": "tool.execute.before"}],
             "tools": [],
         }
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
@@ -46,7 +46,6 @@ async fn tool_before_safe_timeout_vetoes() {
         command: slow_guard_fixture(),
         timeout_ms: Some(200),
         env: BTreeMap::new(),
-        posture_overrides: BTreeMap::new(),
         plugin_dir: None,
     };
     let host = PluginHost::connect_all(

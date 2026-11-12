@@ -1051,76 +1051,26 @@ agents:
     }
 }
 
-/// Catalogs prepared before 0.41.0 serialized `spawn_lifecycle` on every
-/// agent. They must keep decoding (and digest-verifying) so installed bundles
-/// survive the upgrade; new preparation never writes the key.
+/// Old install records are rejected before their obsolete agent fields are decoded.
 #[test]
-fn legacy_prepared_catalog_with_spawn_lifecycle_still_decodes() {
-    use sha2::{Digest as _, Sha256};
+fn old_prepared_catalog_requires_reinstall() {
+    use sha2::{Digest, Sha256};
 
-    let prepared = prepare_package(agent_source("legacy", "acme/legacy", "legacy-lead", &[]))
+    let prepared = prepare_package(agent_source("old", "acme/old", "old-lead", &[]))
         .unwrap_or_else(|error| panic!("fixture must prepare: {error:?}"));
-    let fresh = String::from_utf8(prepared.bytes().to_vec()).unwrap_or_default();
-    assert!(
-        !fresh.contains("spawn_lifecycle"),
-        "prepare must not write the removed key: {fresh}"
-    );
-
-    let hex = |bytes: &[u8]| {
-        Sha256::digest(bytes)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    };
-    let mut document: serde_json::Value =
-        serde_json::from_slice(prepared.bytes()).unwrap_or_default();
-    let bundle = &mut document["bundles"][0];
-    let old_digest = bundle["digest"].as_str().unwrap_or_default().to_string();
-    fn legacy_agent(value: &mut serde_json::Value) -> bool {
-        match value {
-            serde_json::Value::Object(fields) => {
-                if fields.get("id").and_then(serde_json::Value::as_str) == Some("legacy-lead")
-                    && fields.contains_key("role")
-                {
-                    // Old catalogs serialized the key in struct order, right
-                    // after `workdir` (serde_json preserves key order here).
-                    let mut rebuilt = serde_json::Map::new();
-                    for (key, value) in std::mem::take(fields) {
-                        let after_workdir = key == "workdir";
-                        rebuilt.insert(key, value);
-                        if after_workdir {
-                            rebuilt.insert(
-                                "spawn_lifecycle".to_string(),
-                                serde_json::Value::String("transient".to_string()),
-                            );
-                        }
-                    }
-                    *fields = rebuilt;
-                    return fields.contains_key("spawn_lifecycle");
-                }
-                fields.values_mut().any(legacy_agent)
-            }
-            serde_json::Value::Array(items) => items.iter_mut().any(legacy_agent),
-            _ => false,
-        }
-    }
-    assert!(legacy_agent(bundle), "agent payload missing: {fresh}");
-    let mut unsigned = bundle.clone();
-    if let Some(fields) = unsigned.as_object_mut() {
-        fields.remove("digest");
-    }
-    let new_digest = hex(&serde_json::to_vec(&unsigned).unwrap_or_default());
-    let legacy = serde_json::to_string(&document)
-        .unwrap_or_default()
-        .replace(&old_digest, &new_digest);
-    let outer = hex(legacy.as_bytes());
-
-    let decoded = PreparedCatalog::decode(legacy.as_bytes(), &outer)
-        .unwrap_or_else(|error| panic!("legacy catalog must decode: {error:?}"));
-    assert_eq!(
-        decoded.bundles()[0].agents()[0]
-            .legacy_spawn_lifecycle
-            .as_deref(),
-        Some("transient")
-    );
+    let mut document: serde_json::Value = serde_json::from_slice(prepared.bytes())
+        .unwrap_or_else(|error| panic!("fixture JSON: {error}"));
+    document["format_version"] = serde_json::json!(2);
+    document["bundles"][0]["format_version"] = serde_json::json!(2);
+    document["bundles"][0]["agent"]["spawn_lifecycle"] = serde_json::json!("transient");
+    let bytes = serde_json::to_vec(&document).unwrap_or_default();
+    let digest = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let error = PreparedCatalog::decode(&bytes, &digest)
+        .err()
+        .unwrap_or_else(|| panic!("old install record decoded"));
+    assert_eq!(error, BundleError::UnsupportedPreparedFormat { found: 2 });
+    assert!(error.to_string().contains("please reinstall"));
 }

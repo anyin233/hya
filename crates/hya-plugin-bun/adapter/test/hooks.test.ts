@@ -324,3 +324,30 @@ test("chat.params handlers receive the request lineage (root_session, agent)", a
   })
   expect(responses[3]?.error?.message).toBe("params.root_session is invalid")
 })
+
+
+test("tool hooks receive one wire argument regardless of declared arity and fold each result", async () => {
+  const before: ExtensionHooks[] = [
+    {
+      "tool.execute.before": function (params: { input: number }, _unused: unknown) {
+        expect(arguments.length).toBe(1)
+        return { input: params.input + 1 }
+      },
+    },
+    { "tool.execute.before": (params: { input: number }) => ({ input: params.input * 2 }) },
+  ]
+  expect(await runToolExecuteBeforeHooks(before, { ...beforeParams, input: 3 }))
+    .toEqual({ outcome: "continue", input: 8 })
+
+  const after: ExtensionHooks[] = [
+    {
+      "tool.execute.after": function (params: { result: { output: number } }, _unused: unknown) {
+        expect(arguments.length).toBe(1)
+        return { status: "ok", output: params.result.output + 1 }
+      },
+    },
+    { "tool.execute.after": (params: { result: { output: number } }) => ({ status: "ok", output: params.result.output * 2 }) },
+  ]
+  expect(await runToolExecuteAfterHooks(after, { ...afterBase, result: { status: "ok", output: 3 } }))
+    .toEqual({ outcome: "continue", result: { status: "ok", output: 8 } })
+})

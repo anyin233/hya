@@ -4,7 +4,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use hya_bundle::{PackageInspection, cleanup_orphaned_staging, stage_package};
+use hya_bundle::{cleanup_orphaned_staging, stage_package};
 
 static NEXT_TEMP_ROOT: AtomicU64 = AtomicU64::new(0);
 
@@ -54,7 +54,7 @@ fn staged_public_package_is_private_source_independent_and_cleans_only_its_owner
     assert_eq!(staged_metadata.permissions().mode() & 0o777, 0o600);
     assert_eq!(fs::read(staged_file)?, fixture.as_slice());
 
-    assert!(matches!(staged.inspect()?, PackageInspection::Public(_)));
+    staged.inspect()?;
     assert!(!owned_dir.exists());
     assert!(foreign.is_dir());
 
@@ -165,10 +165,7 @@ fn public_inspection_returns_the_declared_source_files() -> Result<(), Box<dyn s
     let staging_root = temp_root.join("staging");
     fs::create_dir(&staging_root)?;
 
-    let PackageInspection::Public(public) = stage_package(&package, &staging_root)?.inspect()?
-    else {
-        panic!("a written public package must inspect as public");
-    };
+    let public = stage_package(&package, &staging_root)?.inspect()?;
     let files = public
         .files
         .iter()

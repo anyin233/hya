@@ -35,7 +35,6 @@ export type ExtensionModuleShape =
       readonly id: string | undefined
       readonly server: ExtensionFactory
     }
-  | { readonly kind: "legacy_server"; readonly servers: readonly ExtensionFactory[] }
   | { readonly kind: "tui_only" }
   | { readonly kind: "error"; readonly message: string }
 
@@ -81,7 +80,7 @@ export function detectServerModuleShape(
   if (v1 !== undefined) {
     return v1
   }
-  return detectLegacyServerShape(mod)
+  return { kind: "error", message: "extension must export a default object with a server factory" }
 }
 
 async function resolveDirectoryIndex(dir: string): Promise<string | undefined> {
@@ -133,39 +132,6 @@ function detectV1ServerShape(
     id: typeof value.id === "string" ? value.id : undefined,
     server,
   }
-}
-
-function detectLegacyServerShape(
-  mod: Readonly<Record<string, unknown>>,
-): ExtensionModuleShape {
-  const seen = new Set<unknown>()
-  const servers: ExtensionFactory[] = []
-  for (const entry of Object.values(mod)) {
-    if (seen.has(entry)) {
-      continue
-    }
-    seen.add(entry)
-    const server = legacyServer(entry)
-    if (server === undefined) {
-      return { kind: "error", message: "extension export is not a function" }
-    }
-    servers.push(server)
-  }
-  if (servers.length === 0) {
-    return { kind: "error", message: "extension module has no exports" }
-  }
-  return { kind: "legacy_server", servers }
-}
-
-function legacyServer(value: unknown): ExtensionFactory | undefined {
-  if (isExtensionFactory(value)) {
-    return value
-  }
-  if (!isRecord(value)) {
-    return undefined
-  }
-  const server = value.server
-  return isExtensionFactory(server) ? server : undefined
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {

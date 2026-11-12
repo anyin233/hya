@@ -477,7 +477,7 @@ fn deterministic_prepare_is_independent_of_source_file_order() {
 
 /// WorkflowBundle preparation emits canonical v2 bytes with one closed payload kind.
 #[test]
-fn workflow_bundle_prepares_compiled_agent_closure_as_v2() {
+fn workflow_bundle_prepares_compiled_agent_closure_as_v3() {
     let prepared = prepare_package(workflow_source(false));
     let Ok(prepared) = prepared else {
         panic!("WorkflowBundle preparation failed: {prepared:?}");
@@ -487,7 +487,7 @@ fn workflow_bundle_prepares_compiled_agent_closure_as_v2() {
         panic!("prepared WorkflowBundle was not JSON: {document:?}");
     };
 
-    assert_eq!(document["format_version"], 2);
+    assert_eq!(document["format_version"], 3);
     assert_eq!(document["bundles"][0]["kind"], "WorkflowBundle");
     assert_eq!(document["bundles"][0]["workflow"]["id"], "demo");
     assert_eq!(document["bundles"][0]["agents"][0]["id"], "worker");
@@ -497,7 +497,7 @@ fn workflow_bundle_prepares_compiled_agent_closure_as_v2() {
     );
 }
 
-/// Model-routed WorkflowBundles retain their source contract in prepared v2.
+/// Model-routed WorkflowBundles retain their source contract in prepared v3.
 #[test]
 fn workflow_bundle_prepares_model_routes_without_format_bump() {
     let prepared = prepare_package(workflow_source_with_model_routes());
@@ -509,8 +509,8 @@ fn workflow_bundle_prepares_model_routes_without_format_bump() {
         panic!("prepared model-routed WorkflowBundle was not JSON: {document:?}");
     };
 
-    assert_eq!(document["format_version"], 2);
-    assert_eq!(document["bundles"][0]["format_version"], 2);
+    assert_eq!(document["format_version"], 3);
+    assert_eq!(document["bundles"][0]["format_version"], 3);
     let source = document["bundles"][0]["workflow"]["source"]
         .as_str()
         .unwrap_or_default();
@@ -1002,7 +1002,10 @@ fn workflow_bundle_rejects_missing_transitive_spawn_agent_with_typed_error() {
 fn prepared_catalog_rejects_v1_bytes_without_upgrading_them() {
     let bytes = br#"{"format_version":1,"bundles":[],"index":[]}"#;
     let result = PreparedCatalog::decode(bytes, &digest(bytes));
-    assert_eq!(result.err(), Some(BundleError::NonCanonicalPreparedCatalog));
+    assert_eq!(
+        result.err(),
+        Some(BundleError::UnsupportedPreparedFormat { found: 1 })
+    );
 }
 
 #[test]

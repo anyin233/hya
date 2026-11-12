@@ -436,7 +436,7 @@ export async function handleMessage(message: RpcMessage, router: Router): Promis
         protocol_version: 1,
         plugin: { id: PLUGIN_ID, version: PLUGIN_VERSION, kind: "bun" },
         tools: [],
-        hooks: [{ name: "chat.params", posture: "open" }],
+        hooks: [{ name: "chat.params" }],
         skills: [],
       });
     case "hook/chat.params": {

@@ -223,8 +223,8 @@ not serve them.
 
 Guard refusal on the wire is normally a **successful** result with
 `"outcome": "veto"` (see `tool.execute.before`). A JSON-RPC error from a
-**Safe**-posture `tool.execute.before` plugin is also treated as a veto by the
-host (see [Hook posture](#hook-posture)). That conversion does **not** apply to
+`tool.execute.before` plugin is also treated as a veto by the
+host (see [Hook failure behavior](#hook-failure-behavior)). That conversion does **not** apply to
 `permission.ask`. Code `1` is the reserved app error constant for an explicit
 veto-style RPC error.
 
@@ -243,7 +243,7 @@ After `initialize`, the plugin must reply with an `InitializeResult`:
     "kind": "rust"
   },
   "hooks": [
-    { "name": "tool.execute.before", "posture": "safe" },
+    { "name": "tool.execute.before" },
     { "name": "event" }
   ],
   "tools": [
@@ -276,7 +276,7 @@ After `initialize`, the plugin must reply with an `InitializeResult`:
 | `plugin.id` | **Must** equal the configured / manifest id or the host aborts with `IdentityMismatch`. |
 | `plugin.version` | Free-form version string. |
 | `plugin.kind` | **Required** on the initialize reply (no `#[serde(default)]` on `PluginInfo.kind`). Wire snake_case: `rust`, `bun`, `claude`, `other`. Omitting `kind` fails deserialization and aborts the handshake. (`#[default] Rust` on `PluginKindWire` applies to YAML config / `plugin.toml` entries that do have `#[serde(default)]`, not to this wire field.) |
-| `hooks` | Only hooks listed here are ever dispatched to this plugin. Optional per-hook `posture`. |
+| `hooks` | Only hooks listed here are ever dispatched to this plugin. Each registration is exactly `{ "name": "<hook>" }`. |
 | `tools` | Each entry becomes a first-class hya `Tool`. Field name is camelCase **`inputSchema`**. |
 | `workspaceAdapters` | Aggregated across all loaded plugins and served verbatim at `GET /experimental/workspace/adapter`. Shape: `{ type, name, description }`. |
 | `apis` | Optional. API endpoints answered over `api/request`: `{ name, description? }`, names unique and non-empty. A bundle process must list exactly its manifest `apis:` ids (otherwise the bundle fails to start); configured plugins' endpoints are ignored. |
@@ -297,49 +297,33 @@ After `initialize`, the plugin must reply with an `InitializeResult`:
 
 ---
 
-## Hook posture
+## Hook failure behavior
 
-Posture is the **per-hook failure policy**. Wire values (serde snake_case):
-`safe` and `open`.
+Failure handling is fixed by hook class; registrations contain only `name`.
+The initialize decoder rejects a registration carrying `posture`. A
+`plugin.toml` configures process startup, while the initialize reply is the
+sole hook declaration; manifest `[[hooks]]` overrides are rejected.
 
-| Posture | On hook call failure or timeout |
+| Hook class | On call failure, malformed reply, or timeout |
 | --- | --- |
-| **Safe** | For **`tool.execute.before` only**, the host converts transport/parse failure into a **veto** (`guard failed safe: …`). Other hooks that declare Safe (including `permission.ask` and `permission.approve`) do **not** get that conversion — see each hook. |
-| **Open** | Failure is logged / skipped; the pipeline continues with the prior input. |
-
-**Defaults** (`HookName::default_posture`):
-
-| Hooks | Default |
-| --- | --- |
-| `permission.ask`, `permission.approve`, `tool.execute.before` | **Safe** |
-| Every other hook | **Open** |
-
-**Tightening only:** `force_safer(declared, default)` ORs postures so that if
-either the declared posture or the hook default is Safe, the effective posture
-is Safe. A plugin that declares `open` on a Safe-by-default hook still runs
-**Safe**.
-
-**Resolution order** for each registered hook
-([`host/connection.rs`](../crates/hya-plugin/src/host/connection.rs)):
-
-1. `posture` in the initialize reply (if present)
-2. Else the manifest `posture_overrides` entry for that hook name
-3. Else `HookName::default_posture()`
-4. Then `force_safer` against the hook default
+| Guard (`tool.execute.before`) | Veto with `guard failed safe: …`. |
+| Permissions (`permission.ask`, `permission.approve`) | Defer to the next interceptor or the user. |
+| Enrichment, evaluation, and observation | Skip the failed handler and continue with the prior input or built-in behavior. |
+| Model fallback (`model.fallback`) | Treat the handler as `give_up`. |
 
 ---
 
 ## Hooks
 
 Only hooks listed in the initialize reply are dispatched. Each subsection gives
-the wire method, params, outcomes, and default posture.
+the wire method, params, outcomes, and failure behavior.
 
 ### `event` (notification)
 
 - **Method:** `event` (not under `hook/`)
 - **Kind:** host → plugin **notification** (no `id`, no reply)
 - **Params:** `{ "envelope": <Envelope> }`
-- **Default posture:** Open
+- **Failure behavior:** fail-open.
 - **Delivery:** best-effort only — see [Event fan-out](#event-fan-out).
 
 ### `command.execute.before`
@@ -348,7 +332,7 @@ the wire method, params, outcomes, and default posture.
 - **Params:** `{ "session", "command", "arguments", "text" }`
 - **Outcome:** `{ "outcome": "continue", "text": "<rewritten>" }`
 - **Role:** enrichment (folds across plugins)
-- **Default posture:** Open
+- **Failure behavior:** fail-open.
 
 ### `experimental.text.complete`
 
@@ -356,7 +340,7 @@ the wire method, params, outcomes, and default posture.
 - **Params:** `{ "session", "message", "part", "text" }`
 - **Outcome:** `{ "outcome": "continue", "text": "<rewritten>" }`
 - **Role:** enrichment
-- **Default posture:** Open
+- **Failure behavior:** fail-open.
 
 ### `message.user.before`
 
@@ -364,7 +348,7 @@ the wire method, params, outcomes, and default posture.
 - **Params:** `{ "session", "text" }`
 - **Outcome:** `{ "outcome": "continue", "text": "<rewritten>" }`
 - **Role:** enrichment
-- **Default posture:** Open
+- **Failure behavior:** fail-open.
 
 ### `chat.params`
 
@@ -389,7 +373,7 @@ the wire method, params, outcomes, and default posture.
   leaves the **original** effort in place. A rewritten `request.model` is the
   model the turn streams from, and the engine's configured cross-model fallback
   chain for that model still applies.
-- **Default posture:** Open
+- **Failure behavior:** fail-open.
 
 Example params for a subagent turn:
 
@@ -411,8 +395,7 @@ Example params for a subagent turn:
   - `{ "outcome": "continue", "input": <rewritten> }`
   - `{ "outcome": "veto", "reason": "<string>" }`
 - **Role:** **guard** — first veto short-circuits; later plugins are not called
-- **Default posture:** Safe
-- On Safe-posture transport/parse failure, host vetoes with reason  
+- On transport/parse failure, host vetoes with reason
   `guard failed safe: <plugin> (<error>)`
 
 ### `tool.execute.after`
@@ -423,7 +406,7 @@ Example params for a subagent turn:
   or `{ "status": "err", "message" }`
 - **Outcome:** `{ "outcome": "continue", "result": <WireToolResult> }`
 - **Role:** enrichment
-- **Default posture:** Open
+- **Failure behavior:** fail-open.
 
 ### `permission.ask` (permission chain — not a Safe-veto guard)
 
@@ -437,15 +420,9 @@ Example params for a subagent turn:
   - `defer` (try next plugin / fall through to user ask)
 - **Role:** first non-`defer` answer decides
   ([`permission_bridge.rs`](../crates/hya-plugin/src/permission_bridge.rs))
-- **Default posture:** Safe (registration default only)
-- **Failure policy:** posture is **not** a veto switch here. The host only
-  skips plugins with no registered posture; serialize failure, RPC error, or
-  undecodable reply all `continue` to the next plugin. If every plugin defers
-  or errors, the interceptor returns `None` and the session falls through to
-  the interactive user ask. Contrast `tool.execute.before`, the sole hook
-  where Safe posture turns a call failure into a veto
-  (`GUARD_FAILED_SAFE` in
-  [`dispatcher.rs`](../crates/hya-plugin/src/dispatcher.rs)).
+- **Failure policy:** serialize failure, RPC error, or an undecodable reply
+  defers to the next registered plugin. If every plugin defers or errors, the
+  interceptor returns `None` and the session falls through to the user ask.
 
 ### `permission.approve` (session permission mode approver)
 
@@ -469,7 +446,6 @@ declared permission modes (manifest `permission_modes:`, see
   mode, and only after every `permission.ask` interceptor deferred (the
   approver is appended at the end of the chain). It is never called under
   `manual` or `yolo`, and never for checks that rules already allow or deny.
-- **Default posture:** Safe (registration default only).
 - **Failure policy:** like `permission.ask` — a timeout, RPC error, or
   undecodable reply counts as `defer`, and a final `defer` sends the ask to
   the user. A failing approver therefore never allows anything.
@@ -512,7 +488,7 @@ the agent or request chain.
   `{ "outcome": "give_up" }`
 - **Role:** decision chain. The first `retry` wins. `give_up` passes the
   consult on to the next plugin.
-- **Default posture:** Open. The hook always fails open, whatever the posture:
+- **Failure policy:** fail-open:
   an RPC error, a timeout, an undecodable reply, or a `retry` with an empty
   model counts as `give_up` for that plugin.
 
@@ -550,8 +526,8 @@ Example exchange:
 
 ### Injection-point hooks (dispatched, fail-open)
 
-Five observation/enrichment hooks round out the injection surface. All default
-to posture **Open** and are **fail-open**: a hook error, timeout, or a plugin
+Five observation/enrichment hooks round out the injection surface. All are
+**fail-open**: a hook error, timeout, or a plugin
 that fails to answer never blocks the engine — the built-in behavior proceeds
 and the failure is logged.
 
@@ -566,7 +542,7 @@ and the failure is logged.
 ### Evaluator hooks (dispatched)
 
 Three hooks turn a plugin into the independent judge for goal/loop mode. All
-default to posture **Open**; the engine's iteration caps and no-progress
+fail open; the engine's iteration caps and no-progress
 detection stay engine-authority and cannot be overridden by a plugin.
 
 | Wire name | Params | Outcome |
@@ -591,8 +567,8 @@ handshake timing.
 
 | Hook class | Chain rule |
 | --- | --- |
-| **Enrichment** (`command.execute.before`, `message.user.before`, `experimental.text.complete`, `chat.params`, `tool.execute.after`) | **Fold:** plugin *N*’s output becomes plugin *N+1*’s input. A failing Open-posture plugin is skipped; its input is passed through. |
-| **Guard** (`tool.execute.before`) | **Short-circuit:** first `veto` returns immediately. Safe-posture failures become `guard failed safe: <plugin> (<error>)`. |
+| **Enrichment** (`command.execute.before`, `message.user.before`, `experimental.text.complete`, `chat.params`, `tool.execute.after`) | **Fold:** plugin *N*’s output becomes plugin *N+1*’s input. A failing plugin is skipped; its input is passed through. |
+| **Guard** (`tool.execute.before`) | **Short-circuit:** first `veto` returns immediately. Call failures become `guard failed safe: <plugin> (<error>)`. |
 | **`permission.ask`** | First non-`defer` outcome wins. Serialize/RPC/decode failures **skip** that plugin (no Safe veto). All-defer **or** all-error falls through to the normal user-ask path. |
 | **`permission.approve`** | Only the declaring bundle's process is asked; within it, first non-`defer` outcome wins. Failures count as `defer`; all-defer falls through to the user ask. |
 | **`model.fallback`** | First `retry` wins. `give_up`, RPC/decode failures, and empty models **skip** that plugin (always fail-open). Configured plugins are asked first, then installed Plugin bundles, then the session agent's own bundle hooks: the same order as `chat.params`. All give-up surfaces the provider error. |

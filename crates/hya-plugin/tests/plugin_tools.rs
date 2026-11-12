@@ -66,7 +66,6 @@ fn spec() -> PluginSpec {
         command: tool_fixture(),
         timeout_ms: Some(3000),
         env: BTreeMap::new(),
-        posture_overrides: BTreeMap::new(),
         plugin_dir: None,
     }
 }

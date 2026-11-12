@@ -2053,7 +2053,7 @@ fn nested_root_divergence_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegist
         PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
             check: None,
             tui: None,
-            format_version: 2,
+            format_version: 3,
             identity: BundleIdentity {
                 id: format!("hya/nested-root-divergence-{stable_id}"),
                 version: "0.0.0".to_string(),
@@ -2071,7 +2071,6 @@ fn nested_root_divergence_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegist
                 prompt_digest: None,
                 model_policy: ModelPolicy::default(),
                 workdir: None,
-                legacy_spawn_lifecycle: None,
                 resource_view: ResourceView::default(),
                 can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
                 hook_refs: Vec::new(),
@@ -2342,7 +2341,6 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
                 prompt_digest: None,
                 model_policy: ModelPolicy::default(),
                 workdir: None,
-                legacy_spawn_lifecycle: None,
                 resource_view: ResourceView::default(),
                 can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
                 hook_refs: Vec::new(),
@@ -2359,7 +2357,7 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
             PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
                 check: None,
                 tui: None,
-                format_version: 2,
+                format_version: 3,
                 identity: BundleIdentity {
                     id: format!("hya/missing-root-def-{stable_id}"),
                     version: "0.0.0".to_string(),

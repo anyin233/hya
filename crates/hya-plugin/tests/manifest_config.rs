@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use hya_plugin::config::{PluginEntry, merge};
 use hya_plugin::manifest::Manifest;
-use hya_plugin::messages::{HookName, PluginKindWire};
+use hya_plugin::messages::PluginKindWire;
 
 fn entry(command: &str, enabled: bool) -> PluginEntry {
     PluginEntry {
@@ -26,35 +26,23 @@ fn manifest(id: &str, command: &str, enabled: bool) -> Manifest {
         command: vec![command.to_string()],
         enabled,
         timeout_ms: None,
-        hooks: Vec::new(),
     }
 }
 
 #[test]
-fn manifest_parses_and_drops_unknown_hooks() {
+fn manifest_parses_process_configuration() {
     let toml = r#"
 id = "remember"
 kind = "rust"
 command = ["./remember"]
 timeout_ms = 1000
 
-[[hooks]]
-name = "tool.execute.before"
-posture = "safe"
-
-[[hooks]]
-name = "totally.unknown"
-posture = "open"
 "#;
     let m = Manifest::parse(toml).unwrap();
     assert_eq!(m.id, "remember");
     assert_eq!(m.command, vec!["./remember".to_string()]);
     assert_eq!(m.timeout_ms, Some(1000));
     assert!(m.enabled, "enabled defaults to true");
-
-    let hooks = m.resolved_hooks();
-    assert_eq!(hooks.len(), 1, "the unknown hook is dropped");
-    assert_eq!(hooks[0].0, HookName::ToolExecuteBefore);
 }
 
 #[test]
@@ -125,4 +113,18 @@ fn merge_config_wins_disabled_dropped_manifest_only_kept() {
         vec!["config-a".to_string()],
         "config wins on id collision"
     );
+}
+
+#[test]
+fn manifest_rejects_removed_hook_overrides() {
+    let error = Manifest::parse(
+        r#"id = "x"
+command = ["x"]
+[[hooks]]
+name = "tool.execute.before"
+posture = "safe"
+"#,
+    )
+    .unwrap_err();
+    assert!(error.contains("unknown field `hooks`"), "{error}");
 }
