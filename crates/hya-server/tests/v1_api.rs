@@ -215,7 +215,7 @@ async fn v1_session_lifecycle_create_get_patch_delete() {
     let (status, _) = send(
         app.clone(),
         Method::GET,
-        "/v1/sessions/00000000-0000-0000-0000-000000000000",
+        "/v1/sessions/hysec_00000000000000000000",
         Value::Null,
     )
     .await;

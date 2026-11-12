@@ -16,7 +16,7 @@ use crate::ids::{
     ActorEpoch, ConfigGeneration, MemberId, MessageId, PartId, ProjectId, SessionId, ToolCallId,
     WorkflowRunId,
 };
-use crate::mail::{ChannelKind, MailEndpoint, MailKind, is_minted_channel_id};
+use crate::mail::{ChannelKind, MailEndpoint, MailKind};
 use crate::message::{
     FinishCause, FinishReason, MemberRunStatus, Role, RosterStatus, SubagentMode, TokenUsage,
     ToolPartState,
@@ -69,15 +69,13 @@ pub struct SessionProjection {
     pub title: Option<String>,
     /// Opaque session metadata object.
     pub metadata: Option<serde_json::Value>,
-    /// Full permission rule list (last `SessionPermissionSet` wins).
-    pub permission: Option<Vec<serde_json::Value>>,
     /// Latest terminal handoff document (ADR-0015): the only state an agent
     /// carries between episodes; revival seeds model context from it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff: Option<HandoffProjection>,
     /// Archive stamp (unix epoch milliseconds) while this root session is
-    /// archived; `None` when it is not (never archived, unarchived, or a
-    /// legacy zero stamp). See [`SessionProjection::is_archived`].
+    /// archived; `None` when it is not (never archived or
+    /// unarchived). See [`SessionProjection::is_archived`].
     pub archived: Option<serde_json::Number>,
     /// Created ephemeral (`SessionEphemeralSet { ephemeral: true }`) and
     /// still unused: the server deletes such a session once no client
@@ -86,8 +84,6 @@ pub struct SessionProjection {
     /// good. Omitted from serialized projections when `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
-    /// Share URL when shared; `None` after clear.
-    pub share: Option<String>,
     /// Ordered transcript messages.
     pub messages: Vec<MessageProjection>,
     /// Subagents spawned by this session, folded from member lifecycle events.
@@ -301,7 +297,7 @@ impl PartProjection {
 ///
 /// A replay of the root session's event log reconstructs this exactly: handles
 /// are baked into `AgentRegistered`, channel membership into `ChannelJoined`/
-/// `ChannelLeft`, and every `MailSent` is appended (in seq order) to the
+/// and every `MailSent` is appended (in seq order) to the
 /// recipient inboxes / channel log the reducer resolves at fold time. Kept on the
 /// top-level [`Projection`] rather than [`SessionProjection`] because it belongs
 /// to the whole team tree, not one session's transcript.
@@ -385,61 +381,6 @@ impl std::fmt::Display for ChannelResolveError {
 }
 
 impl TeamProjection {
-    /// Resolve a handle as written on the wire to its canonical path.
-    ///
-    /// New emitters always write canonical paths, so this is the identity for
-    /// any log written after scoping landed. The remaining branches exist purely
-    /// to replay **pre-scoping** logs, which carry bare leaf names:
-    ///
-    /// 1. anything containing a `/` is already canonical;
-    /// 2. anything that is already a roster key is canonical (this is what
-    ///    matches the root, whose path `main` has no separator);
-    /// 3. otherwise resolve the leaf against the roster, which is unambiguous in
-    ///    a flat legacy team;
-    /// 4. failing that, attach it to the root, matching how a legacy
-    ///    `AgentRegistered` with no `parent` folds.
-    ///
-    /// Step 4 also covers ordering: a `MailSent` folded before the recipient's
-    /// `AgentRegistered` still lands under the same key that registration will
-    /// later produce, so replay does not depend on event order.
-    ///
-    /// Public because the reducer is not the only reader of a raw address: the
-    /// resident supervisor resolves a live `MailSent`'s recipients against this
-    /// same roster, and the two must agree or a delivered message would fail to
-    /// wake its recipient.
-    #[must_use]
-    pub fn canonical_member(&self, raw: &str) -> String {
-        if raw.contains(scope::PATH_SEPARATOR)
-            || raw == scope::ROOT_HANDLE
-            || raw == scope::HARNESS_HANDLE
-            || self.roster.contains_key(raw)
-        {
-            return raw.to_string();
-        }
-        let mut matches = self.roster.keys().filter(|key| scope::leaf(key) == raw);
-        match (matches.next(), matches.next()) {
-            // Exactly one roster entry carries this leaf.
-            (Some(only), None) => only.clone(),
-            // Unknown, or ambiguous across units: fall back to the legacy
-            // interpretation rather than guessing which unit was meant.
-            _ => scope::join_path(scope::ROOT_HANDLE, raw),
-        }
-    }
-
-    /// Resolve a channel name as written on the wire to its canonical key.
-    ///
-    /// New emitters write qualified keys (`main/lead-1#build`) or minted ids
-    /// (`announce-{8}` / `DM-{8}`, which are their own keys, ADR-0016). A
-    /// pre-scoping log carries a bare name, which belongs to the root's unit
-    /// because a legacy team is one flat unit under `main`.
-    #[must_use]
-    pub fn canonical_channel(&self, raw: &str) -> String {
-        if is_minted_channel_id(raw) || raw.contains(scope::CHANNEL_SEPARATOR) {
-            return raw.to_string();
-        }
-        scope::qualify_channel(scope::ROOT_HANDLE, raw)
-    }
-
     /// Whether `path` leads a unit — that is, whether any roster entry is its
     /// direct child.
     #[must_use]
@@ -527,11 +468,11 @@ impl TeamProjection {
 /// to it (independent of who was subscribed when).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChannelProjection {
-    /// Group broadcast vs DM pair (ADR-0016). Defaults to group: legacy logs
-    /// predate minted channels and every legacy channel was a unit channel.
+    /// Group broadcast vs DM pair (ADR-0016). Named channels joined without a
+    /// minting event are group channels.
     #[serde(default)]
     pub kind: ChannelKind,
-    /// Owning unit path for group channels; `None` for DM pairs and legacy
+    /// Owning unit path for group channels; `None` for DM pairs and named
     /// channels (derive those from the unit-qualified key).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unit: Option<String>,
@@ -609,34 +550,6 @@ pub struct ResidentWorkProjection {
     pub inbox_through: u64,
 }
 
-/// The canonical path an `AgentRegistered` binds, derived from the event's own
-/// fields so the reducer stays a pure fold (no store, no lineage query).
-///
-/// | Case | Path |
-/// | --- | --- |
-/// | `agent_session == session` (the team root registering itself) | `main` |
-/// | `parent = Some(p)` | `{p}/{handle}` |
-/// | `parent = None`, non-root — **pre-scoping logs only** | `main/{handle}` |
-///
-/// The root's canonical path is the fixed [`scope::ROOT_HANDLE`] rather than the
-/// event's `handle`. Every root registration already emits `main`, and pinning it
-/// keeps the third row meaningful: a legacy child can only be attached to a root
-/// whose path is known without reading any other event.
-fn canonical_registered_path(
-    session: SessionId,
-    agent_session: SessionId,
-    handle: &str,
-    parent: &Option<String>,
-) -> String {
-    if agent_session == session {
-        return scope::ROOT_HANDLE.to_string();
-    }
-    match parent {
-        Some(parent) => scope::join_path(parent, handle),
-        None => scope::join_path(scope::ROOT_HANDLE, handle),
-    }
-}
-
 fn is_zero(value: &u64) -> bool {
     *value == 0
 }
@@ -651,11 +564,6 @@ pub struct HandoffProjection {
     /// A deterministic degraded fallback produced this document.
     #[serde(default)]
     pub degraded: bool,
-}
-
-/// Whether an archive stamp is zero (the legacy "not archived" value).
-fn is_zero_stamp(stamp: &serde_json::Number) -> bool {
-    stamp.as_u64() == Some(0) || stamp.as_i64() == Some(0) || stamp.as_f64() == Some(0.0)
 }
 
 impl SessionProjection {
@@ -739,7 +647,7 @@ pub fn session_archive_event(
 /// different projection, or when `Projection` (or anything it contains)
 /// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
 /// the bump is recorded.
-pub const PROJECTION_REDUCER_VERSION: u32 = 9;
+pub const PROJECTION_REDUCER_VERSION: u32 = 1;
 
 /// Durable snapshot encoding: the wire projection plus replay-only reducer
 /// state the wire form deliberately omits.
@@ -968,9 +876,6 @@ impl Projection {
             Event::SessionPermissionModeSet { mode, .. } => {
                 self.session.permission_mode = Some(mode.clone());
             }
-            Event::SessionMoved { workdir, .. } => {
-                self.session.workdir = Some(workdir.clone());
-            }
             Event::SessionTitled { title, .. } => {
                 self.session.title = Some(title.clone());
                 self.session.ephemeral = false;
@@ -978,27 +883,15 @@ impl Projection {
             Event::SessionMetadataSet { metadata, .. } => {
                 self.session.metadata = Some(metadata.clone());
             }
-            Event::SessionPermissionSet { permission, .. } => {
-                self.session.permission = Some(permission.clone());
-            }
             Event::SessionArchived { archived, .. } => {
-                // A zero stamp is the legacy Compat "clear archive" write.
-                self.session.archived = (!is_zero_stamp(archived)).then(|| archived.clone());
-                if self.session.archived.is_some() {
-                    self.session.ephemeral = false;
-                }
+                self.session.archived = Some(archived.clone());
+                self.session.ephemeral = false;
             }
             Event::SessionUnarchived { .. } => {
                 self.session.archived = None;
             }
             Event::SessionEphemeralSet { ephemeral, .. } => {
                 self.session.ephemeral = *ephemeral;
-            }
-            Event::SessionShareSet { url, .. } => {
-                self.session.share = Some(url.clone());
-            }
-            Event::SessionShareCleared { .. } => {
-                self.session.share = None;
             }
             Event::AgentSwitched { agent, .. } => {
                 self.session.agent = Some(agent.clone());
@@ -1252,12 +1145,6 @@ impl Projection {
                     self.session.usage.record_legacy(&sum);
                 }
             }
-            Event::MessageDeleted { message, .. } => {
-                self.session.messages.retain(|item| item.id != *message);
-                if let Some(revert) = self.session.revert.as_mut() {
-                    revert.hidden.retain(|item| item.id != *message);
-                }
-            }
             Event::FilesChanged {
                 message,
                 call,
@@ -1489,14 +1376,17 @@ impl Projection {
                 }
             }
             Event::AgentRegistered {
-                session,
+                session: _,
                 agent_session,
                 handle,
                 parent,
                 agent_type,
                 mode,
             } => {
-                let path = canonical_registered_path(*session, *agent_session, handle, parent);
+                let path = match parent {
+                    Some(parent) => scope::join_path(parent, handle),
+                    None => handle.clone(),
+                };
                 // Re-registering an existing path preserves its live status /
                 // current_task (the reducer keys the roster by canonical path)
                 // while refreshing the binding + mode.
@@ -1525,7 +1415,6 @@ impl Projection {
                 current_task,
                 ..
             } => {
-                let handle = &self.canonical_member(handle);
                 let terminal = matches!(*status, RosterStatus::Done | RosterStatus::Failed);
                 let explicit_stop = *status == RosterStatus::Failed
                     && current_task.as_deref() == Some("resident stopped");
@@ -1559,7 +1448,6 @@ impl Projection {
                 inbox_through,
                 ..
             } => {
-                let handle = &self.canonical_member(handle);
                 if let Some(entry) = self.team.roster.get_mut(handle)
                     && entry.session == *actor_session
                     && entry.mode.is_resident()
@@ -1578,7 +1466,6 @@ impl Projection {
                 // Max-fold: liveness only ever advances. A heartbeat observes an
                 // existing row (the slot must be registered to be tracked) and
                 // never materializes one, matching every other roster update.
-                let handle = &self.canonical_member(handle);
                 if let Some(entry) = self.team.roster.get_mut(handle) {
                     entry.heartbeat_ms = entry.heartbeat_ms.max(*heartbeat_ms);
                 }
@@ -1586,23 +1473,12 @@ impl Projection {
             Event::ChannelJoined {
                 channel, member, ..
             } => {
-                let key = self.canonical_channel(channel);
-                let member = self.canonical_member(member);
                 self.team
                     .channels
-                    .entry(key)
+                    .entry(channel.clone())
                     .or_default()
                     .members
-                    .insert(member);
-            }
-            Event::ChannelLeft {
-                channel, member, ..
-            } => {
-                let key = self.canonical_channel(channel);
-                let member = self.canonical_member(member);
-                if let Some(ch) = self.team.channels.get_mut(&key) {
-                    ch.members.remove(&member);
-                }
+                    .insert(member.clone());
             }
             Event::ChannelCreated {
                 channel,
@@ -1611,17 +1487,12 @@ impl Projection {
                 members,
                 ..
             } => {
-                let key = self.canonical_channel(channel);
-                let members = members
-                    .iter()
-                    .map(|member| self.canonical_member(member))
-                    .collect::<Vec<_>>();
-                let channel_state = self.team.channels.entry(key).or_default();
+                let channel_state = self.team.channels.entry(channel.clone()).or_default();
                 channel_state.kind = *kind;
                 if unit.is_some() {
                     channel_state.unit = unit.clone();
                 }
-                channel_state.members.extend(members);
+                channel_state.members.extend(members.iter().cloned());
             }
             Event::SubagentReported {
                 member,
@@ -1654,7 +1525,7 @@ impl Projection {
                 reason,
                 ..
             } => {
-                let handle = self.canonical_member(handle);
+                let handle = handle.clone();
                 if let Some(entry) = self.team.roster.remove(&handle) {
                     self.team.archived.insert(
                         handle.clone(),
@@ -1675,13 +1546,13 @@ impl Projection {
                 }
             }
             Event::MailConsumed { handle, through, .. } => {
-                let handle = self.canonical_member(handle);
+                let handle = handle.clone();
                 if let Some(entry) = self.team.roster.get_mut(&handle) {
                     entry.resident_cursor = entry.resident_cursor.max(*through);
                 }
             }
             Event::AgentRestarted { handle, .. } => {
-                let handle = self.canonical_member(handle);
+                let handle = handle.clone();
                 self.team.archived.remove(&handle);
             }
             Event::MailSent {
@@ -1691,25 +1562,13 @@ impl Projection {
                 body,
                 ..
             } => {
-                // Canonicalize both endpoints so EVERY handle in the projection
-                // is a canonical path. A pre-scoping log carries bare leaves and
-                // bare channel names; leaving them raw here would strand the
-                // message under a key no roster entry matches.
-                let to = match to {
-                    MailEndpoint::Handle(handle) => {
-                        MailEndpoint::Handle(self.canonical_member(handle))
-                    }
-                    MailEndpoint::Channel(channel) => {
-                        MailEndpoint::Channel(self.canonical_channel(channel))
-                    }
-                };
                 let message = MailMessage {
-                    from: self.canonical_member(from),
+                    from: from.clone(),
                     to: to.clone(),
                     kind: *kind,
                     body: body.clone(),
                 };
-                match &to {
+                match to {
                     MailEndpoint::Handle(handle) => {
                         self.team
                             .inboxes
@@ -1785,8 +1644,7 @@ impl Projection {
             // The marker placement is the one stateful part: the folded
             // messages stay in the log, and request reconstruction slices at
             // this boundary. Other context events remain observability-only.
-            | Event::ContextEvicted { .. }
-            | Event::Unknown => {}
+            | Event::ContextEvicted { .. } => {}
             Event::SessionForked {
                 source,
                 before_message,
@@ -1844,14 +1702,6 @@ impl Projection {
                 });
             }
         }
-    }
-
-    fn canonical_member(&self, raw: &str) -> String {
-        self.team.canonical_member(raw)
-    }
-
-    fn canonical_channel(&self, raw: &str) -> String {
-        self.team.canonical_channel(raw)
     }
 
     /// Get or insert the member projection for `member`.
@@ -1980,8 +1830,6 @@ mod team_tests {
     ///
     /// Written in the **post-scoping** emitter shape: registrations carry a real
     /// `parent`, and every handle / channel on the wire is already canonical.
-    /// Pre-scoping logs are covered separately by
-    /// `tests/legacy_flat_mailbox.rs`.
     fn build_log(root: SessionId) -> Vec<Envelope> {
         let alice = SessionId::new();
         let bob = SessionId::new();
@@ -2374,14 +2222,6 @@ mod team_tests {
 
         let keys: Vec<&str> = projection.team.roster.keys().map(String::as_str).collect();
         assert_eq!(keys, vec!["main", "main/lead-1", "main/lead-1/worker-1"]);
-
-        // The tree the fold produced is the tree the scope rule reads.
-        assert!(crate::in_scope("main/lead-1/worker-1", "main/lead-1"));
-        assert!(crate::in_scope("main/lead-1", "main"));
-        assert!(
-            !crate::in_scope("main/lead-1/worker-1", "main"),
-            "skip-level must stay closed"
-        );
     }
 }
 
@@ -2757,31 +2597,6 @@ mod usage_fold_tests {
     }
 
     #[test]
-    fn deleting_a_message_keeps_its_billed_usage() {
-        let session = SessionId::new();
-        let message = MessageId::new();
-        let log = envs(vec![
-            created(session),
-            started(session, message),
-            round(session, message, 0, "model-a", usage(10, 4, 1, false)),
-            finished(session, message, Some(usage(10, 4, 1, false))),
-        ]);
-        let before = Projection::from_events(&log).session.usage;
-        let mut deleted = log.clone();
-        deleted.extend(
-            envs(vec![Event::MessageDeleted { session, message }])
-                .into_iter()
-                .map(|mut env| {
-                    env.seq = EventSeq(log.len() as u64 + 1);
-                    env
-                }),
-        );
-        let after = Projection::from_events(&deleted);
-        assert!(after.session.messages.is_empty());
-        assert_eq!(after.session.usage, before);
-    }
-
-    #[test]
     fn legacy_message_sums_fold_as_unattributed_with_unknown_thinking() {
         let session = SessionId::new();
         let message = MessageId::new();
@@ -2890,7 +2705,7 @@ mod orchestration_tests {
                 2,
                 Event::ChannelJoined {
                     session: root,
-                    channel: "build".to_string(),
+                    channel: "main#build".to_string(),
                     member: "main/lead-1".to_string(),
                 },
             ),
@@ -2973,7 +2788,7 @@ mod orchestration_tests {
     }
 
     /// `ChannelCreated` is the minting fact: kind and initial members fold.
-    /// A legacy channel (no creation event) still defaults to group kind.
+    /// Named channels joined without a minting event default to group kind.
     #[test]
     fn channel_created_folds_kind_and_members() {
         let root = SessionId::new();
@@ -2992,7 +2807,7 @@ mod orchestration_tests {
                 2,
                 Event::ChannelJoined {
                     session: root,
-                    channel: "build".to_string(),
+                    channel: "main#build".to_string(),
                     member: "main".to_string(),
                 },
             ),
@@ -3000,8 +2815,8 @@ mod orchestration_tests {
         let announce = projection.team.channels.get("announce-aB12Cd34").unwrap();
         assert_eq!(announce.kind, ChannelKind::Group);
         assert!(announce.members.contains("main"));
-        let legacy = projection.team.channels.get("main#build").unwrap();
-        assert_eq!(legacy.kind, ChannelKind::Group, "old logs default to group");
+        let named = projection.team.channels.get("main#build").unwrap();
+        assert_eq!(named.kind, ChannelKind::Group);
     }
 
     /// A report is a terminal member status on the parent log (ADR-0015).

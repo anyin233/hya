@@ -280,13 +280,11 @@ impl SessionEngine {
         // by mail from above it: the user decides when it continues.
         if !user_steer && let Some(reviver) = self.archive_reviver() {
             let peer = match &to {
-                MailEndpoint::Handle(handle) => {
-                    Some(policy_projection.team.canonical_member(handle))
-                }
+                MailEndpoint::Handle(handle) => Some(handle.to_string()),
                 MailEndpoint::Channel(channel) => policy_projection
                     .team
                     .channels
-                    .get(&policy_projection.team.canonical_channel(channel))
+                    .get(channel)
                     .filter(|state| {
                         state.kind == hya_proto::ChannelKind::Dm && state.members.contains(&from)
                     })
@@ -332,11 +330,10 @@ impl SessionEngine {
                     if let Some(reviver) = self.archive_reviver()
                         && let Ok(projection) = self.read_projection(root).await
                     {
-                        let canonical = projection.team.canonical_member(handle);
-                        let own_archived_child = projection.team.archived.contains_key(&canonical)
-                            && scope::parent_path(&canonical) == Some(from.as_str());
+                        let own_archived_child = projection.team.archived.contains_key(handle)
+                            && scope::parent_path(handle) == Some(from.as_str());
                         if own_archived_child {
-                            reviver.revive(root, &from, &canonical, body).await?;
+                            reviver.revive(root, &from, handle, body).await?;
                             return Ok(MailReceipt {
                                 from,
                                 to,
@@ -371,7 +368,7 @@ impl SessionEngine {
             let archived_peer = projection
                 .team
                 .channels
-                .get(&projection.team.canonical_channel(&channel))
+                .get(&channel)
                 .filter(|state| {
                     state.kind == hya_proto::ChannelKind::Dm && state.members.contains(&from)
                 })
@@ -865,7 +862,10 @@ fn dm_with_handle<'a>(
     caller: &str,
     raw: &str,
 ) -> Option<(String, &'a hya_proto::ChannelProjection)> {
-    let mut candidates = vec![projection.team.canonical_member(raw)];
+    let mut candidates = vec![raw.to_string()];
+    if let Some(member) = projection.team.resolve_in_scope(caller, raw) {
+        candidates.push(member);
+    }
     if !raw.contains(scope::PATH_SEPARATOR) {
         candidates.push(scope::join_path(caller, raw));
     }

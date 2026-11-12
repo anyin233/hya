@@ -25,17 +25,13 @@ impl TextPartAccumulator {
             }
             Event::TextEnd { part, .. } => self.parts.get(part).map(|text| (*part, text.clone())),
             Event::SessionCreated { .. }
-            | Event::SessionMoved { .. }
             | Event::SessionTitled { .. }
             | Event::SessionMetadataSet { .. }
             | Event::SessionAgentModelOverrideSet { .. }
             | Event::SessionPermissionModeSet { .. }
-            | Event::SessionPermissionSet { .. }
             | Event::SessionArchived { .. }
             | Event::SessionUnarchived { .. }
             | Event::SessionEphemeralSet { .. }
-            | Event::SessionShareSet { .. }
-            | Event::SessionShareCleared { .. }
             | Event::AgentSwitched { .. }
             | Event::ModelSwitched { .. }
             | Event::SessionStatus { .. }
@@ -51,7 +47,6 @@ impl TextPartAccumulator {
             | Event::TurnBindingRecorded { .. }
             | Event::UserPromptContextRecorded { .. }
             | Event::MessageFinished { .. }
-            | Event::MessageDeleted { .. }
             | Event::PartDeleted { .. }
             | Event::StepStarted { .. }
             | Event::StepFinished { .. }
@@ -75,7 +70,6 @@ impl TextPartAccumulator {
             | Event::AgentHeartbeat { .. }
             | Event::MailSent { .. }
             | Event::ChannelJoined { .. }
-            | Event::ChannelLeft { .. }
             | Event::ChannelCreated { .. }
             | Event::SubagentReported { .. }
             | Event::HandoffCommitted { .. }
@@ -91,8 +85,7 @@ impl TextPartAccumulator {
             | Event::FilesChanged { .. }
             | Event::SessionReverted { .. }
             | Event::SessionUnreverted { .. }
-            | Event::Error { .. }
-            | Event::Unknown => None,
+            | Event::Error { .. } => None,
         }
     }
 

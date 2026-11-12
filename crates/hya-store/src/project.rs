@@ -293,9 +293,7 @@ impl SessionStore {
                 .await?;
         let mut live = 0_u64;
         for key in keys {
-            let Some(session) = decode_session_key(&key) else {
-                continue;
-            };
+            let session = decode_session_key(&key)?;
             if !self
                 .with_projection(session, |projection| projection.session.is_archived())
                 .await?

@@ -252,8 +252,7 @@ Consequences:
 
 `append_event` inserts:
 
-- session storage key bytes (`hysec_...` ASCII for new sessions; 16-byte UUID
-  keys for legacy sessions)
+- session storage key bytes (`hysec_[A-Za-z0-9]{20}` ASCII)
 - serialized `Event` JSON
 - timestamp in Unix epoch milliseconds
 
@@ -263,13 +262,16 @@ SQLite assigns the global autoincrement `seq`, which becomes `Envelope.seq`.
 
 | Direction | Rule |
 | --- | --- |
-| **Write** (`SessionId::storage_key`) | `hysec_...` ASCII bytes for new sessions; 16-byte UUID for legacy |
-| **Read** (`decode_session_key`) | If the blob is **valid UTF-8**, parse as `SessionId` text (`hysec_`, `ses_<uuid>`, or raw uuid text) and **return that result** (`Some` or `None`) — **no** binary UUID fallback after a failed parse. Only when the blob is **not** valid UTF-8, interpret exactly 16 bytes as a legacy raw UUID. |
+| **Write** (`SessionId::storage_key`) | ASCII bytes of `hysec_[A-Za-z0-9]{20}` |
+| **Read** (`decode_session_key`) | Validate UTF-8 and parse the same `hysec_` grammar; return `Result<SessionId, StoreError>`. Invalid keys fail with `SessionKeyData`, including the key and parse error. |
 
-Compatible readers must mirror that control flow: a 16-byte legacy UUID whose
-bytes happen to be valid UTF-8 (all `< 0x80`) will **not** be recovered by the
-binary branch; production legacy keys are raw UUID bytes (not text), so they
-take the non-UTF-8 path.
+UUID text and binary UUID keys are unsupported. Listing, recovery, and pending
+interaction reads propagate malformed keys instead of dropping rows or turning
+them into sessions with no owner. Event JSON failures return `EventDecode {
+session: SessionId, seq: i64, source: Arc<serde_json::Error> }`; for example, a
+row tagged `future_event` fails replay with its session, sequence and unknown
+tag. No migration or dual-format decoder is provided. Snapshot reducer version
+**1** defines the new baseline.
 
 This is a full replay log, not a rendered transcript cache. Persisted events can
 include prompts, tool-call inputs, tool outputs, reasoning deltas, command
@@ -396,7 +398,7 @@ reads next. The schema boundary above still rejects pre-reset databases.
 
 **Equivalence tests.** `crates/hya-proto/tests/projection_snapshot.rs`
 checks `decode(encode(fold(prefix))) + tail == fold(all)` at every split of
-generated logs (streaming, usage records and legacy totals, message/part
+generated logs (streaming, usage records and legacy totals, part
 deletion, compaction markers, forks, re-emitted Workflow run starts, team
 traffic). `crates/hya-store/tests/projection_cache.rs` checks warm and
 restarted reads against a full replay across interleaved appends, reducer
@@ -568,6 +570,8 @@ SQLite or migration error.
 | `Sqlite` | Underlying sqlx/SQLite error |
 | `Migrate` | Migration runner failure, including unknown applied versions |
 | `UnsupportedDatabase` | Existing session schema lacks the current baseline; move the database away |
+| `EventDecode` | Stored event decode failed; includes session, sequence and JSON source |
+| `SessionKeyData` | Stored key is not a valid `hysec_` text key |
 | `Json` | Event/payload JSON (de)serialization |
 | `Bundle` | `hya-bundle` prepare/catalog error |
 | `BundleRegistryData` | Invalid registry generation or install candidate shape |
@@ -575,7 +579,6 @@ SQLite or migration error.
 | `BundleRegistryBusy` | Writer contention with zero busy timeout |
 | `BundleNotFound` | Uninstall/lookup of missing bundle |
 | `BundleContentConflict` | Same version, different content on install |
-| `PrivateActivationUnsupported` | Private package inspection cannot be installed |
 | `BundleAgentIdReserved` | Bundle declares a reserved built-in agent id |
 | `OperationIdConflict` | Immutable admission claim fields differ for the same operation id |
 | `AdmissionNotFound` | No journal row for the operation |

@@ -89,7 +89,7 @@ impl SessionStore {
         let event = Event::MailSent {
             session: root,
             from,
-            to: MailEndpoint::Handle(handle),
+            to: MailEndpoint::Handle(handle.to_string()),
             kind,
             body,
         };
@@ -116,8 +116,7 @@ impl SessionStore {
     ) -> Result<Envelope, StoreError> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let projection = replay_projection(&self.projections, &mut tx, root).await?;
-        let handle = projection.team.canonical_member(handle);
-        let Some(entry) = projection.team.roster.get(&handle) else {
+        let Some(entry) = projection.team.roster.get(handle) else {
             return Err(StoreError::MailboxRejected(format!(
                 "unknown mail target `{handle}`"
             )));
@@ -133,7 +132,7 @@ impl SessionStore {
         let event = Event::MailSent {
             session: root,
             from: scope::HARNESS_HANDLE.to_string(),
-            to: MailEndpoint::Handle(handle),
+            to: MailEndpoint::Handle(handle.to_string()),
             kind: MailKind::Message,
             body,
         };
@@ -195,9 +194,6 @@ impl SessionStore {
         fence_actor_claim(&mut tx, &recovered.claim).await?;
 
         let projection = replay_projection(&self.projections, &mut tx, root).await?;
-        // Accept a canonical path or a bare leaf: callers hold handles minted at
-        // different times, and the roster is keyed by canonical path.
-        let handle = &projection.team.canonical_member(handle);
         let Some(entry) = projection.team.roster.get(handle) else {
             return Err(StoreError::ActorClaimData(
                 "resident recovery roster mismatch".to_string(),
@@ -338,8 +334,6 @@ impl SessionStore {
         }
 
         let projection = replay_projection(&self.projections, &mut tx, root).await?;
-        // Canonical path or bare leaf, as elsewhere on the resident paths.
-        let handle = &projection.team.canonical_member(handle);
         let Some(entry) = projection.team.roster.get(handle) else {
             return Err(StoreError::ActorClaimData(
                 "resident stop handle is not registered".to_string(),
@@ -517,8 +511,7 @@ async fn released_resident_matches(
     }
 
     let projection = replay_projection(cache, tx, root).await?;
-    let handle = projection.team.canonical_member(handle);
-    Ok(projection.team.roster.get(&handle).is_some_and(|entry| {
+    Ok(projection.team.roster.get(handle).is_some_and(|entry| {
         entry.session == claim.actor_id
             && entry.mode == SubagentMode::Resident
             && entry.status == RosterStatus::Failed

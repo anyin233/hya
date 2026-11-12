@@ -71,7 +71,8 @@ impl super::SessionStore {
             .map(|row| {
                 let session = row
                     .try_get::<Option<Vec<u8>>, _>("session_id")?
-                    .and_then(|v| String::from_utf8(v).ok()?.parse::<SessionId>().ok());
+                    .map(|key| crate::decode_session_key(&key))
+                    .transpose()?;
                 Ok(PendingInteraction {
                     id: row.try_get("id")?,
                     session,

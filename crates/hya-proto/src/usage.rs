@@ -222,9 +222,8 @@ impl SessionUsage {
 /// Attributed usage of one assistant message: the sum of its `UsageRecorded`
 /// rounds and the model that served the latest one.
 ///
-/// Kept on the message so consumers (the usage ledger, legacy fallback) can
-/// tell an attributed message from a legacy one. Removed with the message on
-/// `MessageDeleted`; the session totals are not.
+/// Kept on the message for per-message display and to distinguish attributed
+/// rounds from unrecorded message sums. Session totals survive transcript changes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessageUsage {
     /// Model that served the latest recorded round.

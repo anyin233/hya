@@ -202,30 +202,6 @@ async fn hysec_session_round_trips_through_replay_list_and_delete() {
 }
 
 #[tokio::test]
-async fn legacy_uuid_session_round_trips_through_replay_list_and_delete() {
-    let store = SessionStore::connect_memory().await.unwrap();
-    let session: SessionId = "ses_018f032a3d2f7a21a05c2e61fc57dced".parse().unwrap();
-    let event = Event::SessionTitled {
-        session,
-        title: "legacy".into(),
-    };
-
-    store.append_event(session, &event).await.unwrap();
-    let envelopes = store.replay(session).await.unwrap();
-    let sessions = store.list_sessions().await.unwrap();
-    let listed = sessions
-        .iter()
-        .find(|info| info.session == session)
-        .unwrap();
-
-    assert_eq!(envelopes.len(), 1);
-    assert_eq!(envelopes[0].event, event);
-    assert_eq!(listed.events, 1);
-    assert!(store.delete_session(session).await.unwrap());
-    assert!(store.replay(session).await.unwrap().is_empty());
-}
-
-#[tokio::test]
 async fn session_info_matches_the_listed_row() {
     let store = SessionStore::connect_memory().await.unwrap();
     let listed = SessionId::new();

@@ -92,20 +92,6 @@ fn first_use_clears_the_mark_for_good() {
 }
 
 #[test]
-fn a_legacy_zero_archive_stamp_does_not_clear_the_mark() {
-    let session = SessionId::new();
-    let mut events = marked(session);
-    events.push(env(
-        3,
-        Event::SessionArchived {
-            session,
-            archived: serde_json::Number::from(0),
-        },
-    ));
-    assert!(Projection::from_events(&events).session.ephemeral);
-}
-
-#[test]
 fn the_mark_survives_a_snapshot_round_trip_and_is_omitted_when_unset() {
     let session = SessionId::new();
     let projection = Projection::from_events(&marked(session));

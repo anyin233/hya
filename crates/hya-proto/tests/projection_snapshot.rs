@@ -66,7 +66,7 @@ fn run_started(session: SessionId, run: WorkflowRunId, revision: u8) -> Event {
 /// snapshot must carry that replay-only dedupe state or the tail re-applies it.
 #[test]
 fn snapshot_keeps_replay_only_workflow_dedupe_state() {
-    let session = SessionId::from_uuid(Uuid::from_u128(1));
+    let session = format!("hysec_{:020}", 1).parse::<SessionId>().unwrap();
     let first = WorkflowRunId::from_uuid(Uuid::from_u128(2));
     let second = WorkflowRunId::from_uuid(Uuid::from_u128(3));
     let log = envelopes(vec![
@@ -99,8 +99,11 @@ fn snapshot_keeps_replay_only_workflow_dedupe_state() {
 #[test]
 fn snapshot_plus_tail_equals_full_replay_at_every_split() {
     for seed in 0..48_u64 {
-        let session = SessionId::from_uuid(Uuid::from_u128(u128::from(seed) + 100));
-        let fork_of = (seed % 4 == 0).then(|| SessionId::from_uuid(Uuid::from_u128(99)));
+        let session = format!("hysec_{:020}", u128::from(seed) + 100)
+            .parse::<SessionId>()
+            .unwrap();
+        let fork_of =
+            (seed % 4 == 0).then(|| format!("hysec_{:020}", 99).parse::<SessionId>().unwrap());
         let log = envelopes(event_script::script(seed, session, fork_of, 90));
         let full = Projection::from_events(&log);
         for split in 0..=log.len() {
@@ -141,8 +144,11 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 fn reducer_fingerprint_pins_the_version() {
     let mut encoded = Vec::new();
     for seed in 0..8_u64 {
-        let session = SessionId::from_uuid(Uuid::from_u128(u128::from(seed) + 500));
-        let fork_of = (seed % 2 == 0).then(|| SessionId::from_uuid(Uuid::from_u128(499)));
+        let session = format!("hysec_{:020}", u128::from(seed) + 500)
+            .parse::<SessionId>()
+            .unwrap();
+        let fork_of =
+            (seed % 2 == 0).then(|| format!("hysec_{:020}", 499).parse::<SessionId>().unwrap());
         let log = envelopes(event_script::script(seed, session, fork_of, 120));
         encoded.extend(
             Projection::from_events(&log)
@@ -153,7 +159,7 @@ fn reducer_fingerprint_pins_the_version() {
     let fingerprint = fnv1a(&encoded);
     assert_eq!(
         (PROJECTION_REDUCER_VERSION, fingerprint),
-        (9, 0x2988_cc9c_b8c5_411c),
+        (1, 0xb0d6_622b_86a1_c6f1),
         "reducer output changed: bump PROJECTION_REDUCER_VERSION and record \
          the new fingerprint {fingerprint:#018x}"
     );
