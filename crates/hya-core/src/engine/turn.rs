@@ -562,18 +562,6 @@ impl SessionEngine {
             .await
     }
 
-    pub(crate) async fn run_restored_turn(
-        &self,
-        session: SessionId,
-        agent: &AgentSpec,
-        lease: TurnLease,
-    ) -> Result<FinishReason, CoreError> {
-        let request = TurnRequestContext::new(CancellationToken::new(), &[], None, None, None)
-            .with_lease(lease);
-        self.run_turn_with_external_dirs_and_claim(session, agent, TurnActivation::Root, request)
-            .await
-    }
-
     pub(crate) async fn run_bound_turn(
         &self,
         session: SessionId,
@@ -1263,19 +1251,6 @@ impl SessionEngine {
                 return Err(CoreError::Cancelled);
             }
             if cancel.is_cancelled() {
-                self.emit_for_actor(
-                    actor_claim,
-                    session,
-                    Event::MessageFinished {
-                        session,
-                        message,
-                        role: Role::Assistant,
-                        finish: FinishReason::Cancelled,
-                        tokens: None,
-                        cause: self.turn_gate.cancel_cause(session),
-                    },
-                )
-                .await?;
                 return Ok(FinishReason::Cancelled);
             }
             let mut projection = self.store.read_projection(session).await?;

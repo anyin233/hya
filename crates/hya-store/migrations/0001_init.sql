@@ -144,22 +144,13 @@ CREATE TABLE model_effort_preference (
     PRIMARY KEY (provider_id, model_id)
 );
 
--- One restore prompt for each session interrupted by a graceful process stop.
+-- One restore prompt for each eligible root interrupted by a graceful stop.
 CREATE TABLE pending_resume (
     session_id BLOB PRIMARY KEY,
     prompt TEXT NOT NULL,
+    prompt_message_id BLOB,
     created_at INTEGER NOT NULL
 );
-
-CREATE TABLE pending_interaction (
-    id TEXT PRIMARY KEY,
-    session_id BLOB,
-    kind TEXT NOT NULL,
-    payload TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    resolved_at INTEGER
-);
-CREATE INDEX pending_interaction_live ON pending_interaction(created_at, id) WHERE resolved_at IS NULL;
 
 -- Durable per-Agent default thinking effort chosen by the user at runtime.
 -- Independent of the Agent's model tiers; the runtime owner fences writes.

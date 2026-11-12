@@ -36,15 +36,23 @@ Three rules replace the handoff.
    next turn sees the new catalog. A source that fails to load keeps its last
    published state.
 2. **A binary change is `stop` then `start`.** `hya serve stop` drains: it
-   cancels every active turn and records one `pending_resume` row per
-   interrupted session. `hya serve start` starts a fresh process that binds its
+   cancels every active turn and atomically records its cancellation together
+   with one `pending_resume` row for an interrupted, non-archived root session.
+   Child sessions remain under the resident supervisor's recovery.
+   `hya serve start` starts a fresh process that binds its
    own listener. There is no listener inheritance, self-check, generation pin,
    rollback launch, or parked owner. Clients reconnect, as they already do when
    a daemon goes away (ADR-0023).
 3. **An interrupted session receives a restore prompt.** On start, each session
    with a `pending_resume` row gets one injected prompt stating that the
    previous turn was interrupted by a restart and which tool calls did not
-   finish, and a new turn is started. The model decides what to redo.
+   finish, and a new turn is started through normal server admission, including
+   guidance, external directories, busy tracking, and cancellation. The row
+   remains until the assistant turn starts, so a crash after prompt injection
+   starts the turn on the next launch without injecting a second prompt.
+   Missing or archived sessions lose their rows; a session's restore failure
+   is logged with its id and does not block other sessions or server startup.
+   The model decides what to redo.
 
 Permission and question requests that were unanswered at `stop` are cancelled
 with their turn. They are not carried across processes, and a tool call that
