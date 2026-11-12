@@ -509,21 +509,25 @@ impl SessionEngine {
         let mut artifact_guard =
             BashArtifactGuard::capture(&tool, result.as_ref().ok(), binding.workdir());
         let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let result = apply_tool_after_hooks(
-            self,
-            result,
-            AfterHookCall {
-                session,
-                message: shell_part.message,
-                call: shell_part.call,
-                tool: &tool,
-                input: input_for_after,
-                time_ms,
-            },
-        )
-        .await;
+        let result = if cancel.is_cancelled() {
+            result
+        } else {
+            apply_tool_after_hooks(
+                self,
+                result,
+                AfterHookCall {
+                    session,
+                    message: shell_part.message,
+                    call: shell_part.call,
+                    tool: &tool,
+                    input: input_for_after,
+                    time_ms,
+                },
+            )
+            .await
+        };
 
-        match result {
+        let finish = match result {
             Ok(mut output) => {
                 artifact_guard.remove_unowned_path(&mut output);
                 if !artifact_guard.retained_by(&output) {
@@ -562,7 +566,7 @@ impl SessionEngine {
                 } else {
                     artifact_guard.discard()?;
                 }
-                Ok(FinishReason::Stop)
+                FinishReason::Stop
             }
             Err(error) => {
                 artifact_guard.discard()?;
@@ -587,9 +591,14 @@ impl SessionEngine {
                     file_capture,
                 ))
                 .await?;
-                Ok(finish)
+                finish
             }
-        }
+        };
+        Ok(if cancel.is_cancelled() {
+            FinishReason::Cancelled
+        } else {
+            finish
+        })
     }
 }
 

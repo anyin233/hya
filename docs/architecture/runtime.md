@@ -937,6 +937,21 @@ Each step is checked against the projection, so a part or message that already
 reached a terminal state is never closed twice. Shell turns (`run_shell`) bind
 the same cancel token and close their message the same way on error.
 
+Sidecar loss cancels the resident or transient subagent's turn token and awaits
+the turn, so buffered text/reasoning and tool file changes are flushed before
+the message closes. A completed tool result stays a `ToolResult` if cancellation
+arrives just after it; cancellation stops the turn after recording it. Cancelled
+results skip after-hooks on both model and direct shell turns. For example,
+`hya serve stop` during a direct shell call keeps its shutdown finish and
+restore record even if a configured after-hook rewrites errors to success.
+
+Replay equals the content observed live except for content produced after an
+actor lost its claim: the stale actor cannot flush text, reasoning, or file
+changes through the claim fence, and recovery closes its message. Cancellation
+may repeat durable `TextStart`/`TextEnd` boundaries already seen live; the
+projection handles them idempotently. A straggler can append `ToolResult` after
+the drain deadline's `MessageFinished`, without a second finish.
+
 ### Graceful drain
 
 A graceful stop — SIGINT/SIGTERM on `exec`/`run`/`-p`/`loop`, the normal end
@@ -1316,14 +1331,19 @@ with hya's event log in place of opencode's git snapshot directory.
 
 ### Snapshots (`files_changed`)
 
-Before a tool call runs, the engine captures the prior state of the files it
-may change ([`file_snapshot.rs`](../../crates/hya-core/src/engine/file_snapshot.rs));
+After authorizing a tool call and before running it, the engine captures the
+prior state of the files it may change
+([`file_snapshot.rs`](../../crates/hya-core/src/engine/file_snapshot.rs));
 after the call it keeps the prior content of each file that actually changed
 as a per-session blob (`file_blob` table, keyed by sha256) and appends one
- `files_changed { message, call, files: [{path, before, observed}] }` after the call's
- `tool_result` / `tool_error`. `before` is `absent`, `stored {hash, size}`, or
- `omitted {size, reason}`; `observed` is true only for bash changes inferred from
+ `files_changed { message, call, files: [{path, before, observed}] }` for that call.
+ `before` is `absent`, `stored {hash, size}`, or `omitted {size, reason}`;
+ `observed` is true only for bash changes inferred from
  git status (and defaults to false when replaying older events).
+
+An edit made by the user while a permission prompt is pending is part of the
+authorized tool's starting state. If permission is denied or cancelled, the
+tool takes no snapshot and records no `FilesChanged` event.
 
 | Tool | What is captured |
 | --- | --- |

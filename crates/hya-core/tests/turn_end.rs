@@ -10,21 +10,21 @@ mod support;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::{StreamExt as _, stream};
 use hya_core::{
-    AgentSpec, BoundSidecarFactory, CoreError, CreateSession, EventBus, ResidentSupervisor,
-    RuntimeCatalogRefresh, RuntimeRegistry, SessionEngine, SidecarEnvironment, SidecarHandle,
-    SidecarStart, SubagentGovernor, SubagentLimits, TurnBinding,
+    AgentSpec, BoundSidecarFactory, CoreError, CreateSession, EventBus, MemberSpec,
+    ResidentSupervisor, RuntimeCatalogRefresh, RuntimeRegistry, SessionEngine, SidecarEnvironment,
+    SidecarHandle, SidecarStart, SubagentGovernor, SubagentLimits, TurnBinding, run_team,
 };
 use hya_proto::{
     AgentName, ArchiveReason, Envelope, Event, FinishCause, FinishReason, MailEndpoint, MailKind,
-    MessageId, ModelRef, PartId, PartProjection, Role, RosterStatus, SessionId, ToolCallId,
-    ToolName, ToolPartState, ToolSchema,
+    MemberId, MessageId, ModelRef, PartId, PartProjection, Role, RosterStatus, SessionId,
+    ToolCallId, ToolName, ToolPartState, ToolSchema,
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
@@ -279,8 +279,16 @@ async fn scripted_engine(
     provider: Arc<ScriptProvider>,
     tools: Arc<ToolRegistry>,
 ) -> (Arc<SessionEngine>, AgentSpec) {
-    let router = Arc::new(ProviderRouter::new().with(provider));
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
+    scripted_engine_with_permission(provider, tools, perm).await
+}
+
+async fn scripted_engine_with_permission(
+    provider: Arc<ScriptProvider>,
+    tools: Arc<ToolRegistry>,
+    perm: PermissionPlane,
+) -> (Arc<SessionEngine>, AgentSpec) {
+    let router = Arc::new(ProviderRouter::new().with(provider));
     let store = SessionStore::connect_memory().await.unwrap();
     let owner = hya_proto::OwnerRunId::new();
     store.claim_runtime_owner(owner).unwrap();
@@ -1940,6 +1948,607 @@ async fn cancel_partial_text_preserves_live_bytes_in_replay() {
 
 struct WriteThenWait {
     written: Notify,
+}
+
+struct WriteAndCancel(&'static str);
+
+#[derive(Default)]
+struct BoundaryHooks {
+    bind_pause: Option<(Arc<Notify>, Arc<Notify>)>,
+    after_calls: AtomicUsize,
+}
+
+#[async_trait]
+impl hya_core::HookDispatcher for BoundaryHooks {
+    fn dispatch_event(&self, _: &Envelope) {}
+    async fn session_start(&self, _: hya_core::SessionLifecycleInput) {
+        if let Some((entered, release)) = &self.bind_pause {
+            entered.notify_one();
+            release.notified().await;
+        }
+    }
+    async fn command_execute_before(
+        &self,
+        input: hya_core::CommandExecuteBeforeInput,
+    ) -> hya_core::CommandExecuteBeforeOutcome {
+        hya_core::CommandExecuteBeforeOutcome::Continue { text: input.text }
+    }
+    async fn text_complete(
+        &self,
+        input: hya_core::TextCompleteInput,
+    ) -> hya_core::TextCompleteOutcome {
+        hya_core::TextCompleteOutcome::Continue { text: input.text }
+    }
+    async fn message_user_before(
+        &self,
+        input: hya_core::MessageUserBeforeInput,
+    ) -> hya_core::MessageUserBeforeOutcome {
+        hya_core::MessageUserBeforeOutcome::Continue { text: input.text }
+    }
+    async fn chat_params(&self, input: hya_core::ChatParamsInput) -> hya_core::ChatParamsOutcome {
+        hya_core::ChatParamsOutcome::Continue {
+            request: input.request,
+        }
+    }
+    async fn tool_execute_before(
+        &self,
+        input: hya_core::ToolExecuteBeforeInput,
+    ) -> hya_core::ToolExecuteBeforeOutcome {
+        hya_core::ToolExecuteBeforeOutcome::Continue { input: input.input }
+    }
+    async fn tool_execute_after(
+        &self,
+        _: hya_core::ToolExecuteAfterInput,
+    ) -> hya_core::ToolExecuteAfterOutcome {
+        self.after_calls.fetch_add(1, Ordering::SeqCst);
+        hya_core::ToolExecuteAfterOutcome::Continue {
+            result: hya_core::ToolOutcomeNative::Ok {
+                output: json!({"rewritten":true}),
+                time_ms: 0,
+            },
+        }
+    }
+}
+
+#[tokio::test]
+async fn cancelled_shell_skips_after_hooks_and_keeps_shutdown_restore() {
+    let shell = Arc::new(ShutdownErrorShell {
+        entered: Notify::new(),
+    });
+    let tools = Arc::new(ToolRegistry::builtins());
+    tools.remove("bash");
+    tools.register(shell.clone()).unwrap();
+    let provider = Arc::new(ScriptProvider::default());
+    let (engine, agent) = scripted_engine(provider, tools).await;
+    let hooks = Arc::new(BoundaryHooks::default());
+    let engine = Arc::new((*engine).clone().with_hooks(hooks.clone()));
+    let session = make_session(&engine, None, "hya-main").await;
+    let runner = engine.clone();
+    let turn = tokio::spawn(async move {
+        runner
+            .run_shell(session, &agent, "wait".into(), CancellationToken::new())
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), shell.entered.notified())
+        .await
+        .unwrap();
+    engine
+        .stop_for_restart(Duration::from_secs(5))
+        .await
+        .unwrap();
+    let finish = turn.await.unwrap().unwrap().1;
+    assert_eq!(
+        hooks.after_calls.load(Ordering::SeqCst),
+        0,
+        "cancelled tools must bypass after-hooks"
+    );
+    assert_eq!(finish, FinishReason::Cancelled);
+    assert_eq!(
+        engine.store().list_pending_resumes().await.unwrap().len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn root_mail_wake_stopped_during_binding_owns_its_prompt() {
+    root_wake_stopped_during_binding(true).await;
+}
+
+#[tokio::test]
+async fn root_synthesis_wake_stopped_during_binding_claims_no_prompt() {
+    root_wake_stopped_during_binding(false).await;
+}
+
+async fn root_wake_stopped_during_binding(mail: bool) {
+    let (engine, agent, provider) = engine_with_script().await;
+    let root = make_session(&engine, None, "hya-main").await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let worker = make_session(&engine, Some(root), "hya-task").await;
+    supervisor
+        .register_existing_resident(root, worker, "worker".into(), agent.clone(), None)
+        .await
+        .unwrap();
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let hooks = Arc::new(BoundaryHooks {
+        bind_pause: Some((entered.clone(), release.clone())),
+        ..BoundaryHooks::default()
+    });
+    let plugin = hya_bundle::prepare_package(hya_bundle::BundleSource::new(
+        "wake-bind",
+        vec![hya_bundle::SourceFile::new(
+            "bundle.yaml",
+            "kind: Plugin\nidentity: { id: test/wake-bind, version: 1.0.0, publisher: test }\n",
+        )],
+    ))
+    .unwrap();
+    let catalog = hya_core::AgentCatalog::new(Arc::new(
+        hya_bundle::BundleCatalog::from_verified_catalogs(&[&plugin]).unwrap(),
+    ))
+    .unwrap();
+    engine
+        .runtime_registry()
+        .refresh(|candidate| {
+            candidate.replace_catalog(Arc::new(catalog));
+            candidate.upsert_sources(vec![
+                hya_core::RuntimeSource::new(
+                    hya_core::RuntimeSourceId::bundle("test/wake-bind"),
+                    [1; 32],
+                    Arc::new(()),
+                    Vec::new(),
+                )
+                .with_hooks(hooks),
+            ])
+        })
+        .unwrap();
+    register_main(&supervisor, &engine, &agent, root).await;
+    let (sender, to) = if mail {
+        (worker, "main")
+    } else {
+        (root, "main/worker")
+    };
+    engine
+        .mail_send(
+            sender,
+            MailEndpoint::Handle(to.into()),
+            MailKind::Message,
+            "wake work".into(),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), entered.notified())
+        .await
+        .unwrap();
+    let before = engine.replay(root).await.unwrap();
+    assert_eq!(
+        before.iter().any(
+            |e| matches!(&e.event, Event::TextDelta { delta, .. } if delta.contains("wake work"))
+        ),
+        mail
+    );
+    assert!(
+        assistant_finishes(&before, root).is_empty(),
+        "wake is still binding, before assistant start"
+    );
+    let runner = engine.clone();
+    let stop = tokio::spawn(async move { runner.stop_for_restart(Duration::from_secs(5)).await });
+    assert!(eventually(|| async { engine.draining().is_some() }).await);
+    release.notify_one();
+    let report = stop.await.unwrap().unwrap();
+    assert!(report.stragglers.is_empty(), "{report:?}");
+    supervisor.team_cancel(root).unwrap().cancel();
+    let expected = if mail {
+        vec![vec![(FinishReason::Cancelled, Some(FinishCause::Shutdown))]]
+    } else {
+        vec![]
+    };
+    assert_eq!(
+        assistant_finishes(&engine.replay(root).await.unwrap(), root)
+            .iter()
+            .map(|(_, f)| f.clone())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    assert_eq!(
+        engine.store().list_pending_resumes().await.unwrap().len(),
+        usize::from(mail)
+    );
+    assert_eq!(provider.streams_for(root), 0);
+}
+
+#[async_trait]
+impl Tool for WriteAndCancel {
+    fn name(&self) -> &str {
+        self.0
+    }
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: ToolName::new(self.0),
+            description: "complete at cancellation".into(),
+            input_schema: json!({"type":"object"}),
+            output_schema: None,
+        }
+    }
+    async fn execute(
+        &self,
+        ctx: &ToolCtx,
+        _: serde_json::Value,
+    ) -> Result<serde_json::Value, ToolError> {
+        tokio::fs::write(ctx.workdir.join("partial.txt"), "saved").await?;
+        ctx.cancel.cancel();
+        Ok(json!({"output":"completed"}))
+    }
+}
+
+#[tokio::test]
+async fn completed_tool_result_survives_cancellation() {
+    completed_result_survives_cancellation(false).await;
+}
+
+#[tokio::test]
+async fn completed_shell_result_survives_cancellation() {
+    completed_result_survives_cancellation(true).await;
+}
+
+async fn completed_result_survives_cancellation(shell: bool) {
+    let provider = Arc::new(ScriptProvider::default());
+    let tools = Arc::new(ToolRegistry::builtins());
+    let name = if shell { "bash" } else { "write" };
+    tools.remove(name);
+    tools.register(Arc::new(WriteAndCancel(name))).unwrap();
+    let (engine, mut agent) = scripted_engine(provider.clone(), tools).await;
+    let dir = support::TestDir::new("completed-tool-cancel");
+    if shell {
+        assert!(
+            std::process::Command::new("git")
+                .arg("init")
+                .arg(dir.path())
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+    }
+    agent.workdir = dir.path().into();
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: agent.name.clone(),
+            model: agent.model.clone(),
+            workdir: dir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    provider.script(session, Script::Write);
+    engine
+        .admit_user_prompt(session, "write".into())
+        .await
+        .unwrap();
+    let finish = if shell {
+        engine
+            .run_shell(session, &agent, "write".into(), CancellationToken::new())
+            .await
+            .unwrap()
+            .1
+    } else {
+        engine
+            .run_turn(session, &agent, CancellationToken::new())
+            .await
+            .unwrap()
+    };
+    assert_eq!(finish, FinishReason::Cancelled);
+    let events = engine.replay(session).await.unwrap();
+    assert!(events.iter().any(|e| matches!(&e.event, Event::ToolResult { output, .. } if output["output"] == "completed")),
+        "a completed result must not be replaced by a cancellation error");
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e.event, Event::ToolError { .. }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e.event, Event::FilesChanged { .. }))
+    );
+}
+
+#[tokio::test]
+async fn permission_pending_user_edit_is_not_attributed_to_cancelled_tool() {
+    permission_pending_user_edit(false).await;
+}
+
+#[tokio::test]
+async fn authorized_tool_snapshot_starts_after_permission_pending_user_edit() {
+    permission_pending_user_edit(true).await;
+}
+
+async fn permission_pending_user_edit(approve: bool) {
+    let provider = Arc::new(ScriptProvider::default());
+    let tools = Arc::new(ToolRegistry::builtins());
+    let policy = hya_tool::InvocationPolicy::compile(
+        hya_tool::PermissionModel::Default,
+        vec![hya_tool::InvocationRule::new(
+            hya_tool::PermissionTarget::Tool,
+            "^write$",
+            hya_tool::Mode::Ask,
+        )],
+    )
+    .unwrap();
+    let (permission, mut asks) =
+        PermissionPlane::new_with_policy(PermissionRules::default(), policy);
+    let (engine, mut agent) =
+        scripted_engine_with_permission(provider.clone(), tools, permission).await;
+    let dir = support::TestDir::new("permission-user-edit");
+    agent.workdir = dir.path().into();
+    tokio::fs::write(dir.path().join("partial.txt"), "before")
+        .await
+        .unwrap();
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: agent.name.clone(),
+            model: agent.model.clone(),
+            workdir: dir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    provider.script(session, Script::Write);
+    engine
+        .admit_user_prompt(session, "write".into())
+        .await
+        .unwrap();
+    let runner = engine.clone();
+    let turn = tokio::spawn(async move {
+        runner
+            .run_turn(session, &agent, CancellationToken::new())
+            .await
+    });
+    let ask = tokio::time::timeout(Duration::from_secs(5), asks.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(ask.action, hya_tool::Action::Tool, "{:?}", ask.resource);
+    tokio::fs::write(dir.path().join("partial.txt"), "user edit")
+        .await
+        .unwrap();
+    if approve {
+        ask.reply.send(hya_tool::Decision::AllowOnce).unwrap();
+    } else {
+        assert!(engine.cancel_turn(session, FinishCause::UserCancel));
+        drop(ask);
+    }
+    assert_eq!(
+        turn.await.unwrap().unwrap(),
+        if approve {
+            FinishReason::Stop
+        } else {
+            FinishReason::Cancelled
+        }
+    );
+    let events = engine.replay(session).await.unwrap();
+    if approve {
+        let before = events
+            .iter()
+            .find_map(|e| match &e.event {
+                Event::FilesChanged { files, .. } => Some(&files[0].before),
+                _ => None,
+            })
+            .unwrap();
+        let hya_proto::FileState::Stored { hash, .. } = before else {
+            panic!("{before:?}")
+        };
+        assert_eq!(
+            engine
+                .store()
+                .file_blob(session, hash)
+                .await
+                .unwrap()
+                .unwrap(),
+            b"user edit"
+        );
+    } else {
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.event, Event::FilesChanged { .. })),
+            "a tool waiting for authorization must not own a user's edit"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(dir.path().join("partial.txt"))
+                .await
+                .unwrap(),
+            "user edit"
+        );
+    }
+}
+
+#[derive(Clone)]
+struct LossSidecar {
+    loss: CancellationToken,
+    terminated: Arc<Notify>,
+    hooks: bool,
+}
+
+#[async_trait]
+impl BoundSidecarFactory for LossSidecar {
+    async fn start(&self, _: SidecarStart) -> Result<Box<dyn SidecarHandle>, CoreError> {
+        Ok(Box::new(self.clone()))
+    }
+}
+
+#[async_trait]
+impl SidecarHandle for LossSidecar {
+    async fn ready(&mut self) -> Result<(), CoreError> {
+        Ok(())
+    }
+    async fn shutdown(&mut self) -> Result<(), CoreError> {
+        Ok(())
+    }
+    fn is_healthy(&self) -> bool {
+        !self.loss.is_cancelled()
+    }
+    fn loss_token(&self) -> Option<CancellationToken> {
+        Some(self.loss.clone())
+    }
+    fn hook_dispatcher(&self) -> Option<Arc<dyn hya_core::HookDispatcher>> {
+        self.hooks
+            .then(|| Arc::new(hya_core::NoopHookHost) as Arc<dyn hya_core::HookDispatcher>)
+    }
+    async fn terminate(&mut self) -> Result<(), CoreError> {
+        self.terminated.notify_one();
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn sidecar_loss_flushes_transient_text() {
+    for hooks in [false, true] {
+        sidecar_loss_flushes_turn(false, hooks, false).await;
+    }
+}
+
+#[tokio::test]
+async fn sidecar_loss_flushes_transient_tool_changes() {
+    for hooks in [false, true] {
+        sidecar_loss_flushes_turn(false, hooks, true).await;
+    }
+}
+
+#[tokio::test]
+async fn sidecar_loss_flushes_resident_text() {
+    for hooks in [false, true] {
+        sidecar_loss_flushes_turn(true, hooks, false).await;
+    }
+}
+
+#[tokio::test]
+async fn sidecar_loss_flushes_resident_tool_changes() {
+    for hooks in [false, true] {
+        sidecar_loss_flushes_turn(true, hooks, true).await;
+    }
+}
+
+async fn sidecar_loss_flushes_turn(resident: bool, hooks: bool, writing: bool) {
+    let provider = Arc::new(ScriptProvider::default());
+    let tools = Arc::new(ToolRegistry::builtins());
+    tools.remove("write");
+    let tool = Arc::new(WriteThenWait {
+        written: Notify::new(),
+    });
+    tools.register(tool.clone()).unwrap();
+    let (engine, mut agent) = scripted_engine(provider.clone(), tools).await;
+    let dir = support::TestDir::new("sidecar-loss-flush");
+    agent.workdir = dir.path().into();
+    let root = make_session(&engine, None, "hya-main").await;
+    let child = engine
+        .create(CreateSession {
+            parent: Some(root),
+            agent: agent.name.clone(),
+            model: agent.model.clone(),
+            workdir: dir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    provider.script(
+        child,
+        if writing {
+            Script::Write
+        } else {
+            Script::PartialText
+        },
+    );
+    let sidecar = Arc::new(LossSidecar {
+        loss: CancellationToken::new(),
+        terminated: Arc::new(Notify::new()),
+        hooks,
+    });
+    let mut live = engine.bus().subscribe();
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let run = if resident {
+        supervisor
+            .register_existing_resident_with_sidecar(
+                root,
+                child,
+                "worker".into(),
+                agent,
+                Some("work".into()),
+                sidecar.clone(),
+            )
+            .await
+            .unwrap();
+        None
+    } else {
+        let spec = MemberSpec {
+            id: MemberId::new(),
+            binding: engine.bind_runtime(&agent.workdir).unwrap(),
+            agent,
+            agents: Arc::from([]),
+            resources: None,
+            guidance: None,
+            directive: "work".into(),
+            description: String::new(),
+            session: Some(child),
+            sidecar_factory: Some(sidecar.clone()),
+            tool_call: None,
+        };
+        Some(tokio::spawn(run_team(
+            engine.clone(),
+            root,
+            vec![spec],
+            CancellationToken::new(),
+        )))
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        if writing {
+            tool.written.notified().await;
+        } else {
+            loop {
+                if matches!(live.recv().await.unwrap().event, Event::TextDelta { session, ref delta, .. }
+                    if session == child && delta == "partial answer") { break; }
+            }
+        }
+    }).await.unwrap();
+    sidecar.loss.cancel();
+    tokio::time::timeout(Duration::from_secs(5), sidecar.terminated.notified())
+        .await
+        .unwrap();
+    if let Some(run) = run {
+        tokio::time::timeout(Duration::from_secs(5), run)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    let events = engine.replay(child).await.unwrap();
+    // Stop the slot before assertions, including on the unfixed implementation.
+    supervisor.stop_resident(root, "main/worker").await.ok();
+    assert_eq!(
+        assistant_finishes(&events, child)
+            .iter()
+            .map(|(_, f)| f.iter().map(|(finish, _)| *finish).collect::<Vec<_>>())
+            .collect::<Vec<_>>(),
+        vec![vec![FinishReason::Cancelled]],
+        "resident={resident}, hooks={hooks}, writing={writing}"
+    );
+    if writing {
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e.event, Event::FilesChanged { .. })),
+            "sidecar loss must retain the tool's file changes"
+        );
+    } else {
+        for text in ["partial answer", "thinking"] {
+            assert!(events.iter().any(|e| matches!(&e.event,
+                Event::TextReplace { text: saved, .. } | Event::ReasoningReplace { text: saved, .. } if saved == text)),
+                "sidecar loss must flush {text}");
+        }
+    }
 }
 #[async_trait]
 impl Tool for WriteThenWait {
