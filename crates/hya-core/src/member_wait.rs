@@ -369,6 +369,11 @@ async fn evaluate(
                 Some("failed".to_string()),
                 Some(summary),
             ),
+            (Some(_), Some((MemberRunStatus::Failed, reason))) => (
+                WaitMemberState::Archived,
+                Some("failed".to_string()),
+                Some(reason),
+            ),
             (_, Some((MemberRunStatus::Cancelled, note))) => (
                 WaitMemberState::Archived,
                 Some("cancelled".to_string()),

@@ -217,6 +217,151 @@ struct ParkedMembers {
     release: tokio::sync::Notify,
 }
 
+#[derive(Default)]
+struct ParkedHandoff {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl hya_core::Summarizer for ParkedHandoff {
+    async fn summarize(
+        &self,
+        _messages: &[hya_proto::Message],
+        _options: hya_core::SummarizeOptions,
+    ) -> Result<String, CoreError> {
+        self.entered.notify_one();
+        self.release.notified().await;
+        Ok("1. Goal - real goal\n2. Current state - ready\n3. Files and code - none\n4. Decisions - none\n5. Pending tasks - real pending\n6. Next step - wait".into())
+    }
+}
+
+#[tokio::test]
+async fn refused_report_is_dropped_until_the_member_reports_again() {
+    let summary = Arc::new(ParkedHandoff::default());
+    let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
+    let engine = Arc::new(
+        SessionEngine::new(
+            SessionStore::connect_memory().await.unwrap(),
+            Arc::new(ProviderRouter::new().with(Arc::new(StubProvider))),
+            support::test_runtime(Arc::new(ToolRegistry::builtins())),
+            permission,
+            EventBus::default(),
+        )
+        .with_compaction(summary.clone(), hya_core::CompactionConfig::default()),
+    );
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let _lead = engine.try_begin_turn(root).unwrap();
+    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "work").await;
+    let mut bus = engine.bus().subscribe();
+    supervisor
+        .submit_report(root, &handle, ReportOutcome::Done, "STALE REPORT".into())
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        summary.entered.notified(),
+    )
+    .await
+    .unwrap();
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::parse(&handle),
+            MailKind::Message,
+            "late directive".into(),
+        )
+        .await
+        .unwrap();
+    summary.release.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let projection = engine.read_projection(child).await.unwrap();
+            if projection
+                .session
+                .messages
+                .iter()
+                .filter(|message| {
+                    message.role == hya_proto::Role::Assistant && message.finish.is_some()
+                })
+                .count()
+                >= 2
+            {
+                break;
+            }
+            bus.recv().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    let (lifecycle, rx) = hya_tool::LifecyclePlane::new();
+    tokio::spawn(run_lifecycle_service(
+        engine.clone(),
+        supervisor.clone(),
+        rx,
+    ));
+    let result = lifecycle
+        .for_session(root)
+        .wait(
+            hya_tool::WaitSpec::parse(
+                &serde_json::json!({"targets": [handle], "timeout_secs": 1}),
+                false,
+            )
+            .unwrap(),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        result.finished.is_empty() && result.already_finished.is_empty(),
+        "{result:?}"
+    );
+    assert!(
+        engine
+            .read_projection(root)
+            .await
+            .unwrap()
+            .team
+            .roster
+            .contains_key(&handle)
+    );
+    assert!(
+        engine
+            .read_projection(child)
+            .await
+            .unwrap()
+            .session
+            .handoff
+            .is_none()
+    );
+    supervisor
+        .submit_report(root, &handle, ReportOutcome::Done, "FRESH REPORT".into())
+        .await
+        .unwrap();
+    summary.entered.notified().await;
+    summary.release.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !engine
+            .read_projection(root)
+            .await
+            .unwrap()
+            .team
+            .archived
+            .contains_key(&handle)
+        {
+            bus.recv().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        member_row(&engine, root, child).await.summary,
+        "FRESH REPORT"
+    );
+}
+
 #[async_trait]
 impl Provider for ParkedMembers {
     fn id(&self) -> &str {
@@ -539,11 +684,140 @@ async fn stop_still_terminates_a_resident_without_report() {
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
-    let (_child, handle) = spawn_idle_resident(&supervisor, &engine, root, "work").await;
+    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "work").await;
     supervisor.stop_resident(root, &handle).await.unwrap();
     let projection = engine.read_projection(root).await.unwrap();
     assert!(!projection.team.roster.contains_key(&handle));
     assert!(projection.team.archived.contains_key(&handle));
+    assert_eq!(
+        projection.team.archived[&handle].reason,
+        ArchiveReason::Killed
+    );
+    let handoff = engine
+        .read_projection(child)
+        .await
+        .unwrap()
+        .session
+        .handoff
+        .unwrap();
+    assert!(handoff.doc.starts_with("1. Goal - "), "{}", handoff.doc);
+    assert!(handoff.doc.contains("5. Pending tasks - "));
+}
+
+#[tokio::test]
+async fn stopped_handoffs_are_searchable_by_the_members_directive() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (child, handle) =
+        spawn_idle_resident(&supervisor, &engine, root, "quartz investigation").await;
+    supervisor.stop_resident(root, &handle).await.unwrap();
+    let (mailbox, rx) = hya_tool::MailboxPlane::new();
+    tokio::spawn(hya_core::run_mailbox_service(engine.clone(), rx));
+    let rows = mailbox
+        .for_session(root)
+        .search_agents("quartz".into())
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "stopped members must have parseable goal/pending fields"
+    );
+    assert_eq!(rows[0].session, child.to_string());
+    assert!(!rows[0].goal.is_empty());
+    assert!(rows[0].pending.contains("quartz investigation"));
+}
+
+#[tokio::test]
+async fn a_forced_stop_preserves_the_previous_real_handoff() {
+    let summary = Arc::new(ParkedHandoff::default());
+    let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
+    let engine = Arc::new(
+        SessionEngine::new(
+            SessionStore::connect_memory().await.unwrap(),
+            Arc::new(ProviderRouter::new().with(Arc::new(StubProvider))),
+            support::test_runtime(Arc::new(ToolRegistry::builtins())),
+            permission,
+            EventBus::default(),
+        )
+        .with_compaction(summary.clone(), hya_core::CompactionConfig::default()),
+    );
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let _lead = engine.try_begin_turn(root).unwrap();
+    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "work").await;
+    summary.release.notify_one();
+    supervisor
+        .report_and_archive(root, &handle, ReportOutcome::Done, "FIRST REPORT".into())
+        .await
+        .unwrap();
+    let original = engine
+        .read_projection(child)
+        .await
+        .unwrap()
+        .session
+        .handoff
+        .unwrap();
+    assert!(!original.degraded);
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::parse(&handle),
+            MailKind::Message,
+            "next task".into(),
+        )
+        .await
+        .unwrap();
+    supervisor.stop_resident(root, &handle).await.unwrap();
+    let stopped = engine
+        .read_projection(child)
+        .await
+        .unwrap()
+        .session
+        .handoff
+        .unwrap();
+    assert_eq!(stopped.doc, original.doc);
+    assert_eq!(stopped.generation, original.generation + 1);
+}
+
+#[tokio::test]
+async fn a_refused_revival_leaves_the_child_transcript_unchanged() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let _lead = engine.try_begin_turn(root).unwrap();
+    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "work").await;
+    supervisor
+        .report_and_archive(root, &handle, ReportOutcome::Done, "done".into())
+        .await
+        .unwrap();
+    let other = engine
+        .store()
+        .try_claim_new(child, hya_proto::OwnerRunId::new())
+        .await
+        .unwrap();
+    let before = engine.replay(child).await.unwrap();
+    let result = engine
+        .mail_send(
+            root,
+            MailEndpoint::parse(&handle),
+            MailKind::Message,
+            "competing revival".into(),
+        )
+        .await;
+    assert!(
+        matches!(result, Err(CoreError::Store(hya_store::StoreError::ActorAlreadyClaimed { actor_id })) if actor_id == child)
+    );
+    assert_eq!(
+        engine.replay(child).await.unwrap(),
+        before,
+        "claim failure must not append PRIOR HANDOFF"
+    );
+    engine.store().release_claim(&other).await.unwrap();
 }
 
 #[tokio::test]
@@ -945,6 +1219,62 @@ async fn deleting_the_root_session_force_archives_descendants() {
     assert!(
         !active_after.contains(&lead),
         "delete-driven teardown must release descendant claims: {active_after:?}"
+    );
+}
+
+#[tokio::test]
+async fn deleting_root_cancels_a_busy_member_before_archiving() {
+    let provider = Arc::new(ParkedMembers::default());
+    let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
+    let engine = Arc::new(SessionEngine::new(
+        SessionStore::connect_memory().await.unwrap(),
+        Arc::new(ProviderRouter::new().with(provider.clone())),
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        permission,
+        EventBus::default(),
+    ));
+    let root = root_team(&engine).await;
+    *provider.root.lock().unwrap() = Some(root);
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let _lead = engine.try_begin_turn(root).unwrap();
+    let agent = agent_spec();
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
+    let (child, _) = supervisor
+        .spawn_resident(
+            root,
+            agent,
+            (binding, Arc::from([]), resources, None),
+            "work".into(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let mut bus = engine.bus().subscribe();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !engine.turn_active(child) {
+            bus.recv().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        engine.delete_session(root),
+    )
+    .await
+    .expect("delete must cancel the parked provider")
+    .unwrap();
+    assert!(!engine.turn_active(child));
+    assert!(
+        !engine
+            .store()
+            .active_actor_ids()
+            .await
+            .unwrap()
+            .contains(&child)
     );
 }
 
@@ -1902,6 +2232,59 @@ async fn stopped_resident_member_row_is_cancelled_once() {
         finishes, 1,
         "a repeated stop must not re-terminalize the row"
     );
+}
+
+#[tokio::test]
+async fn failed_shutdown_archive_has_no_second_terminal_write_path() {
+    let dir = support::TestDir::new("failed-terminal-transition");
+    let database = format!(
+        "sqlite://{}?mode=rwc",
+        dir.path().join("session.db").display()
+    );
+    let store = SessionStore::connect(&database).await.unwrap();
+    let faults = sqlx::SqlitePool::connect(&database).await.unwrap();
+    let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
+    let engine = Arc::new(SessionEngine::new(
+        store,
+        Arc::new(ProviderRouter::new().with(Arc::new(StubProvider))),
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        permission,
+        EventBus::default(),
+    ));
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "work").await;
+    sqlx::query("CREATE TRIGGER reject_handoff BEFORE INSERT ON event_log WHEN json_extract(NEW.payload, '$.type') = 'handoff_committed' BEGIN SELECT RAISE(ABORT, 'injected terminal failure'); END")
+        .execute(&faults).await.unwrap();
+    supervisor
+        .drain(
+            hya_proto::FinishCause::Shutdown,
+            std::time::Duration::from_secs(1),
+        )
+        .await;
+    assert_eq!(
+        member_row(&engine, root, child).await.status,
+        MemberRunStatus::Running,
+        "a failed archive must roll back all terminal effects"
+    );
+    let projection = engine.read_projection(root).await.unwrap();
+    assert!(projection.team.roster.contains_key(&handle));
+    assert!(!projection.team.archived.contains_key(&handle));
+    assert!(
+        engine
+            .store()
+            .active_actor_ids()
+            .await
+            .unwrap()
+            .contains(&child)
+    );
+    sqlx::query("DROP TRIGGER reject_handoff")
+        .execute(&faults)
+        .await
+        .unwrap();
+    supervisor.stop_resident(root, &handle).await.unwrap();
+    faults.close().await;
 }
 
 /// Root turns succeed; every other session's provider call fails.

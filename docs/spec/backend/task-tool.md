@@ -454,26 +454,51 @@ one store terminal transition. It fences the claim, checks the handoff generatio
 and expected resident cursor/work, and for voluntary reports rechecks unread mail
 and live children under the SQLite writer reservation. Mail arriving during
 handoff generation refuses the report archive; the member remains live and can
-read that mail before reporting again.
+read that mail before reporting again. The refused report is discarded: handling
+the mail never re-submits its old outcome or text.
 
 `finalize_resident_archive(claim: Option<&ActorClaim>, root: SessionId, handle: &str,
 archive: ResidentArchive, cause: FinishCause)` returns committed envelopes and
 released admission records. `ResidentArchive` carries `actor: SessionId`, `generation: u32`,
 `doc: String`, `degraded: bool`, `reason: ArchiveReason`, `note: String`,
+`member_status: MemberRunStatus`,
 `report: Option<(ReportOutcome, String)>`, `check_gate: bool`, and
 `expected_work: Option<(u64, Option<ResidentWorkProjection>)>`. Handoff, optional
 parent report/mail, cancellation cleanup, terminal activity, archive marker and
 claim release commit together. When no process owns the actor, temporary claim
 acquisition also happens inside this transaction. `publish_resident_finalization` publishes and
 refunds only after commit. Stop/failure entry points choose terminal reasons and
-use this same transaction, including cancellation of unstarted directives.
+use this same transaction, including cancellation of unstarted directives. The
+caller supplies the archive reason, member status and handoff document; the
+store never synthesizes prose or derives a reason from the member status.
+Forced endings use the shared projection-derived handoff template, retaining a
+previous handoff's document when one exists. Its numbered goal and pending-task
+sections remain searchable through `search_agent`.
+
+An explicit resident stop records `reason: killed` and member status `cancelled`;
+a budget or activation failure records `killed` / `failed`. Parent archive,
+root teardown and graceful shutdown retain their explicit reasons. `wait`
+returns the current episode's terminal member status and reason, including a
+failure before a revived member's first turn; it never returns an older report
+for a forced ending. A failed terminal transaction rolls back every effect and
+is returned or logged with the member session id. Shutdown has no fallback
+terminal write path.
 
 For example, after a budget kill, send a new directive to the archived child to
-revive it through the existing mail revival path. An empty killed team gets a
-fresh cancellation token on its next activation. Revival still retains the
+revive it through the existing mail revival path. Spawn and revival wait for a
+killed team's slots to finish cleanup before registration; then a fresh team
+restores `main`, resets activity budgets and uses a fresh cancellation token.
+Registration and the decision to kill share an async gate, held only through
+durable registration and slot installation, never across lifecycle hooks.
+Revival's prior-handoff message commits with its new claim and arming directive;
+a competing claim refuses the whole registration without transcript writes.
+Revival still retains the
 existing transcript; bounded episode context is separate work.
 
 Root teardown obtains its owned capability through
 `ArchiveReviver::resident_claim(root: SessionId, child: SessionId) -> Option<ActorClaim>`.
 The supervisor returns the slot's claim; an unsupervised, already-claimed actor
 is refused rather than taken over by an ordinary archive.
+Forced teardown holds further resident wakes and cancels each member's turn
+before acquiring its handoff lease. A claim-less archive checks ownership only
+inside the terminal transaction.

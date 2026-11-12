@@ -89,6 +89,10 @@ impl SessionEngine {
 /// Deterministic degraded handoff from the projection alone. Placeholders stay
 /// explicit — a degraded document is honest about what it does not know.
 fn degraded_handoff_doc(projection: Option<&Projection>) -> String {
+    // Retained handoff state is more useful than cancellation boilerplate.
+    if let Some(handoff) = projection.and_then(|projection| projection.session.handoff.as_ref()) {
+        return handoff.doc.clone();
+    }
     let mut doc = String::from("1. Goal - ");
     let mut current = String::from("(degraded handoff: unknown)");
     let mut pending = String::from("(degraded handoff: unknown)");

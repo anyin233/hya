@@ -10,6 +10,24 @@ use hya_proto::{
 use hya_store::{ActorClaim, AdmissionClaim, AdmissionState, OwnerRunId, SessionStore, StoreError};
 use sqlx::{Connection, SqliteConnection};
 
+async fn finalize_resident(
+    store: &SessionStore,
+    claim: &ActorClaim,
+    root: SessionId,
+    handle: &str,
+    status: MemberRunStatus,
+    note: &str,
+) -> Result<(Vec<Envelope>, Vec<hya_store::AdmissionRecord>), StoreError> {
+    let projection = store.read_projection(claim.actor_id).await?;
+    store.finalize_resident_archive(Some(claim), root, handle, hya_store::ResidentArchive {
+        actor: claim.actor_id,
+        generation: projection.session.handoff.as_ref().map_or(1, |handoff| handoff.generation + 1),
+        doc: "1. Goal - test task\n2. Current state - stopped\n3. Files and code - none\n4. Decisions - none\n5. Pending tasks - none\n6. Next step - none".into(),
+        degraded: true, reason: hya_proto::ArchiveReason::Killed, note: note.into(), member_status: status,
+        report: None, check_gate: false, expected_work: None,
+    }, if status == MemberRunStatus::Failed { hya_proto::FinishCause::Other } else { hya_proto::FinishCause::UserCancel }).await
+}
+
 struct StopFixture {
     store: SessionStore,
     root: SessionId,
@@ -320,10 +338,16 @@ async fn resident_stop_finalization_commits_mail_admission_and_claim_release_tog
         store.append_event(actor, &event).await.unwrap();
     }
 
-    let (events, admissions) = store
-        .finalize_resident_stop(&actor_claim, root, path)
-        .await
-        .unwrap();
+    let (events, admissions) = finalize_resident(
+        &store,
+        &actor_claim,
+        root,
+        path,
+        MemberRunStatus::Cancelled,
+        "resident stopped",
+    )
+    .await
+    .unwrap();
 
     assert_eq!(events.len(), 6);
     assert!(matches!(
@@ -517,10 +541,16 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
     assert_eq!(projection.team.inboxes.get(path).unwrap().len(), 1);
     assert_eq!(projection.team.roster.get(path).unwrap().resident_cursor, 0);
 
-    let (events, admissions) = store
-        .finalize_resident_stop(&recovered.claim, root, path)
-        .await
-        .unwrap();
+    let (events, admissions) = finalize_resident(
+        &store,
+        &recovered.claim,
+        root,
+        path,
+        MemberRunStatus::Cancelled,
+        "resident stopped",
+    )
+    .await
+    .unwrap();
     assert!(admissions.is_empty());
     assert_eq!(
         events
@@ -550,10 +580,16 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
     assert!(!projection.team.roster.contains_key(path));
     assert_eq!(projection.team.archived[path].session, actor);
 
-    let (events, admissions) = store
-        .finalize_resident_stop(&recovered.claim, root, path)
-        .await
-        .unwrap();
+    let (events, admissions) = finalize_resident(
+        &store,
+        &recovered.claim,
+        root,
+        path,
+        MemberRunStatus::Cancelled,
+        "resident stopped",
+    )
+    .await
+    .unwrap();
     assert!(events.is_empty());
     assert!(admissions.is_empty());
 
@@ -634,10 +670,15 @@ async fn resident_stop_finalizer_rolls_back_at_each_write_boundary_and_is_exactl
             .await
             .unwrap();
 
-        let failed = fixture
-            .store
-            .finalize_resident_stop(&fixture.claim, fixture.root, &fixture.handle)
-            .await;
+        let failed = finalize_resident(
+            &fixture.store,
+            &fixture.claim,
+            fixture.root,
+            &fixture.handle,
+            MemberRunStatus::Cancelled,
+            "resident stopped",
+        )
+        .await;
         assert!(failed.is_err(), "{boundary} boundary must fail");
         assert_eq!(
             fixture.store.replay(fixture.root).await.unwrap(),
@@ -677,11 +718,16 @@ async fn resident_stop_finalizer_rolls_back_at_each_write_boundary_and_is_exactl
             .execute(&mut connection)
             .await
             .unwrap();
-        let (events, admissions) = fixture
-            .store
-            .finalize_resident_stop(&fixture.claim, fixture.root, &fixture.handle)
-            .await
-            .unwrap();
+        let (events, admissions) = finalize_resident(
+            &fixture.store,
+            &fixture.claim,
+            fixture.root,
+            &fixture.handle,
+            MemberRunStatus::Cancelled,
+            "resident stopped",
+        )
+        .await
+        .unwrap();
         assert_eq!(events.len(), 6, "{boundary} retry terminalizes once");
         assert_eq!(admissions.len(), 1);
         assert_eq!(
@@ -735,11 +781,16 @@ async fn resident_stop_finalizer_rolls_back_at_each_write_boundary_and_is_exactl
             1
         );
 
-        let (events, admissions) = fixture
-            .store
-            .finalize_resident_stop(&fixture.claim, fixture.root, &fixture.handle)
-            .await
-            .unwrap();
+        let (events, admissions) = finalize_resident(
+            &fixture.store,
+            &fixture.claim,
+            fixture.root,
+            &fixture.handle,
+            MemberRunStatus::Cancelled,
+            "resident stopped",
+        )
+        .await
+        .unwrap();
         assert!(events.is_empty());
         assert!(admissions.is_empty());
         assert_eq!(
@@ -827,15 +878,27 @@ async fn resident_finalization_closes_its_member_row_on_the_parent_log() {
         let claim = store.try_claim_new(actor, OwnerRunId::new()).await.unwrap();
 
         let (events, _) = if stop {
-            store
-                .finalize_resident_stop(&claim, root, "main/resident-1")
-                .await
-                .unwrap()
+            finalize_resident(
+                &store,
+                &claim,
+                root,
+                "main/resident-1",
+                MemberRunStatus::Cancelled,
+                "resident stopped",
+            )
+            .await
+            .unwrap()
         } else {
-            store
-                .finalize_resident_failure(&claim, root, "main/resident-1", "team budget exceeded")
-                .await
-                .unwrap()
+            finalize_resident(
+                &store,
+                &claim,
+                root,
+                "main/resident-1",
+                MemberRunStatus::Failed,
+                "team budget exceeded",
+            )
+            .await
+            .unwrap()
         };
         let finishes: Vec<_> = events
             .iter()

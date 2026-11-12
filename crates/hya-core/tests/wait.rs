@@ -121,17 +121,24 @@ struct Team {
 }
 
 async fn team() -> Team {
+    team_with_limits(hya_core::SubagentLimits::default()).await
+}
+
+async fn team_with_limits(limits: hya_core::SubagentLimits) -> Team {
     let provider = Arc::new(GateProvider::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let router = Arc::new(ProviderRouter::new().with(provider.clone()));
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(Vec::new()));
-    let engine = Arc::new(SessionEngine::new(
-        store,
-        router,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
-        permission,
-        EventBus::default(),
-    ));
+    let engine = Arc::new(
+        SessionEngine::new(
+            store,
+            router,
+            support::test_runtime(Arc::new(ToolRegistry::builtins())),
+            permission,
+            EventBus::default(),
+        )
+        .with_governor(hya_core::SubagentGovernor::new(limits)),
+    );
     let root = engine
         .create(CreateSession {
             parent: None,
@@ -213,6 +220,69 @@ async fn wait(team: &Team, caller: SessionId, input: serde_json::Value, mail: bo
 /// `wait` tool call runs inside that turn.
 fn hold_lead_turn(team: &Team) -> hya_core::TurnLease {
     team.engine.try_begin_turn(team.root).unwrap()
+}
+
+#[tokio::test]
+async fn wait_preserves_a_budget_kills_failure_and_reason() {
+    let team = team_with_limits(hya_core::SubagentLimits {
+        per_team_message_budget: 1,
+        ..hya_core::SubagentLimits::default()
+    })
+    .await;
+    let _lead = hold_lead_turn(&team);
+    let (child, handle) = spawn(&team, team.root, true).await;
+    let mut bus = team.engine.bus().subscribe();
+    team.engine
+        .mail_send(
+            team.root,
+            MailEndpoint::parse(&handle),
+            MailKind::Message,
+            "one".into(),
+        )
+        .await
+        .unwrap();
+    team.engine
+        .mail_send(
+            team.root,
+            MailEndpoint::parse(&handle),
+            MailKind::Message,
+            "two".into(),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !team
+            .engine
+            .read_projection(team.root)
+            .await
+            .unwrap()
+            .team
+            .archived
+            .contains_key(&handle)
+        {
+            bus.recv().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    let outcome = wait(
+        &team,
+        team.root,
+        json!({"targets": [handle], "timeout_secs": 1}),
+        false,
+    )
+    .await;
+    let member = outcome
+        .finished
+        .iter()
+        .chain(&outcome.already_finished)
+        .find(|member| member.session == child)
+        .unwrap();
+    assert_eq!(member.outcome.as_deref(), Some("failed"), "{outcome:?}");
+    assert_eq!(
+        member.report.as_deref(),
+        Some("per-team message budget exceeded")
+    );
 }
 
 #[tokio::test]
@@ -385,6 +455,7 @@ async fn a_wait_on_only_user_stopped_members_has_nothing_to_wait_for() {
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+    let mut bus = team.engine.bus().subscribe();
     assert!(team.engine.cancel_user_turn(child), "it is mid-turn");
     let started = std::time::Instant::now();
     let outcome = wait(&team, team.root, json!({"timeout_secs": 30}), true).await;
@@ -398,6 +469,23 @@ async fn a_wait_on_only_user_stopped_members_has_nothing_to_wait_for() {
     assert_eq!(outcome.running[0].state, WaitMemberState::StoppedByUser);
     let rendered = outcome.to_tool_result().to_string();
     assert!(rendered.contains("[stopped by the user:"), "{rendered}");
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let projection = team.engine.read_projection(team.root).await.unwrap();
+            if projection
+                .team
+                .roster
+                .get(&handle)
+                .is_some_and(|entry| entry.status == hya_proto::RosterStatus::Idle)
+            {
+                assert!(!projection.team.archived.contains_key(&handle));
+                break;
+            }
+            bus.recv().await.unwrap();
+        }
+    })
+    .await
+    .expect("a cancelled, live resident must become durably idle");
 }
 
 /// Run-4 evidence (scout): after its report the lead mails the member a

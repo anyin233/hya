@@ -785,8 +785,22 @@ release. For example, archive `inspect the parser` before it runs, then revive
 with `inspect the tests instead`: the model sees the old task followed by its
 cancellation answer before the new directive. No extra tool arguments are
 needed. See the [task registration contract](../spec/backend/task-tool.md#scenario-atomic-resident-registration-and-arming)
-for the store interface and ordering. The remaining archive/revive transactions
-are unchanged.
+for the store interface and ordering.
+
+Resident exits use one [atomic terminal transition](../spec/backend/task-tool.md#atomic-resident-termination):
+the caller supplies a prepared handoff, explicit archive reason and member
+status; cleanup, report/mail when present, archive and claim release commit
+together. Forced handoffs retain prior state and remain searchable. `wait`
+returns the current episode's failure reason, including a kill before its first
+turn. A refused voluntary report is discarded; handling late mail requires a
+new `report` call. Terminal errors are returned or logged with the session id,
+without fallback writes. Root teardown cancels member turns before archiving.
+
+Spawn and revival wait for a killed team's slots to finish cleanup, then
+restore `main` and fresh activity budgets on an uncancelled team. For example,
+mail a new directive to a budget-killed child: it revives under the same session
+and can wake its parent again. A refused competing revival writes neither its
+prior-handoff message nor its directive.
 
 ## AgentBundle activation sidecars (0.34.11)
 

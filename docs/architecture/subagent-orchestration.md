@@ -504,9 +504,10 @@ not already running (fenced by the resident's claim; once per episode, so an
 idle resident stays `running`) → `SubagentReported` (report, or the turn-error
 failure report), `MemberFinished { cancelled }` (archive, drain, stop), or
 `MemberFinished { failed }` (budget kill and other failure finalization,
-written in the claim-release transaction). Every terminal write checks the
-folded row, so retries and restarts append nothing twice; a revival's first
-turn reopens the row as `running`. Closing the parent's turn — cancel or crash
+written in the claim-release transaction). The terminal transaction's claim and
+archive fence makes retries idempotent. Forced termination replaces an earlier
+episode's result even before the first revived turn; otherwise that first turn
+reopens the row as `running`. Closing the parent's turn — cancel or crash
 recovery — leaves rows whose `task` call already returned open.
 
 ## 10. Workflow integration
@@ -610,11 +611,23 @@ Cancellation cleanup, parent member effects, handoff, optional report/mail,
 terminal activity, archive and claim release commit together. The engine calls
 `publish_resident_finalization` once with the returned envelopes and admissions.
 Budget kills and sidecar startup failures enter this same transition, so their
-members enter the archive and can be revived. Empty killed teams are replaced
-on activation to avoid reusing a cancelled token.
+members enter the archive and can be revived. The caller supplies the handoff,
+archive reason and terminal member status. Forced endings use the same numbered,
+projection-derived handoff template as degraded reports, retaining an existing
+handoff document. The store builds no prose. Terminal failure is returned or
+logged with the member session id; shutdown performs no fallback writes.
+
+Killed teams accept no registrations. Spawn and revival share a registration
+gate with the kill decision, wait for the old slots and budget counters to be
+released, then restore the root activation context as `main` on a fresh team.
+Hooks run outside that gate. A refused voluntary report is discarded; the member
+must call `report` again after handling the work that blocked it. Root teardown
+holds resident wakes and cancels turns before acquiring handoff leases.
 
 Workflow Stage waits also recognize archived actors. They use the linked parent
 member row for the terminal status and summary, so failure and cancellation can
 settle a Stage after the live roster entry has been removed. Live-only listings
-and delivery cursors still read the live roster; `wait` already reads both the
-roster and archive.
+and delivery cursors still read the live roster. `wait` reads both roster and
+archive and returns failed members' current-episode reasons. Forced finalization
+replaces even a previous episode's terminal member row when revival has not yet
+started a turn. Claim-release idempotency prevents duplicate terminal writes.

@@ -280,11 +280,16 @@ revival from presenting an unrun, cancelled task as an open directive. The text
 is required because model requests omit empty assistant messages. Existing open
 turn cleanup remains unchanged.
 
-`finalize_resident_stop_with_cause(claim: &ActorClaim, root: SessionId,
-handle: &str, cause: FinishCause)` returns
-`Result<(Vec<Envelope>, Vec<AdmissionRecord>), StoreError>`. It is the stop
-contract with an explicit cause for an unstarted task: `UserCancel` for ordinary
-stop, `Archived` for parent archive, and `Shutdown` for graceful drain. Failure
-uses `Other`; takeover recovery uses `Interrupted`. Returned envelopes are
-published after commit. Handoff, optional report/mail, archive and claim release
-now share that terminal transaction; revival remains a separate transaction.
+`finalize_resident_archive(claim: Option<&ActorClaim>, root: SessionId,
+handle: &str, archive: ResidentArchive, cause: FinishCause)` returns
+`Result<(Vec<Envelope>, Vec<AdmissionRecord>), StoreError>`. The engine supplies
+the prepared handoff, archive reason, terminal note and `member_status` explicitly
+(see [Task Tool](task-tool.md#atomic-resident-termination)); the store never
+synthesizes a handoff. Causes are `UserCancel` for ordinary stop, `Archived` for
+parent archive, `Shutdown` for drain, and `Other` for failure. Returned envelopes
+are published after commit. Handoff, optional report/mail, archive and claim
+release share that transaction; a failed transition has no fallback writes.
+Terminal member closure also replaces the previous episode's result when a
+revived actor stops before its first turn. The claim/archive fence makes repeat
+finalization idempotent. Revival commits its prior-handoff message and initial
+directive together with the new claim, so rejected registration writes nothing.
