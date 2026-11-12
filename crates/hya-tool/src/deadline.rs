@@ -47,7 +47,9 @@ static HOST: OnceLock<&'static OnceLock<RunDeadline>> = OnceLock::new();
 /// When called a second time: one process runs one budgeted run.
 pub fn install(budget: Duration) {
     assert!(
-        DEADLINE.set(RunDeadline::new(Instant::now(), budget)).is_ok(),
+        DEADLINE
+            .set(RunDeadline::new(Instant::now(), budget))
+            .is_ok(),
         "run deadline installed twice"
     );
 }
@@ -220,14 +222,15 @@ impl RunDeadline {
                  run; at the limit every agent is stopped. Finish the piece in hand and call \
                  `report` with what you have."
             ),
-            (Stage::Final | Stage::Over, true) => format!(
-                "HEADLESS RUN — FINAL {left}s: call `report` now with what you have."
-            ),
+            (Stage::Final | Stage::Over, true) => {
+                format!("HEADLESS RUN — FINAL {left}s: call `report` now with what you have.")
+            }
         }
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -254,7 +257,11 @@ mod tests {
             (40, 20, 90, 30),
         ] {
             let deadline = started(budget, 0);
-            assert_eq!(deadline.wrap_up_window().as_secs(), wrap_up, "W1 for {budget}");
+            assert_eq!(
+                deadline.wrap_up_window().as_secs(),
+                wrap_up,
+                "W1 for {budget}"
+            );
             assert_eq!(deadline.final_window().as_secs(), last, "W2 for {budget}");
             assert_eq!(deadline.grace().as_secs(), grace, "G for {budget}");
         }
