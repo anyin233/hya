@@ -4,9 +4,8 @@ This document is the paired contract for **durable spawn admission**
 (SQLite `admission_journal` in `hya-store`) and the **in-memory
 `SubagentGovernor`** budget used by `SessionEngine` when spawning subagents.
 
-Schema and API must agree: capacity caps, state names, and intent size limits
-are enforced in both SQL CHECK constraints and Rust. Prefer omitting a claim
-over guessing one.
+The journal persists operation deduplication, lifecycle, actor fencing, and
+refund evidence. The process-local governor enforces the spawn budget.
 
 Related storage overview: [storage.md](storage.md).
 
@@ -16,63 +15,31 @@ Nested fan-out must not:
 
 - double-debit the per-root spawn budget under concurrent finalizers
 - lose track of in-flight admissions across process restart / actor takeover
-- promote queued work unfairly under load
 
 The journal is the durable truth for operation lifecycle. The governor is a
 process-local reservation of units against that truth.
 
 ## Schema: `admission_journal`
 
-### Lifecycle of the table
-
-| Migration | Change |
-| --- | --- |
-| `0004_admission_journal.sql` | Create journal: PK `operation_id`, states `accepted`/`started`/`completed`/`cancelled`/`aborted` |
-| `0005_resident_actor_claim.sql` | Nullable `actor_id`, `actor_epoch` (epoch `NULL` or `> 0`) + index |
-| `0006_admission_queue_states.sql` | **Rebuild**: composite PK `(operation_id, member_ordinal)`, add `queued`/`waiting`, `member_ordinal` / `batch_size` |
-| `0007_admission_bindings.sql` | Binding + spawn-intent columns (all-or-nothing CHECK) |
-| `0008_admission_fairness.sql` | `admission_sequence` / `promotion_sequence` + FIFO indexes |
-
-### Effective columns (after 0008)
+The table is created by the session store's single `0001_init.sql` baseline.
+Each operation owns exactly one row. The journal is not a runnable queue.
 
 | Column | Constraint / notes |
 | --- | --- |
-| `operation_id` | BLOB, length 16; part of composite PK |
-| `member_ordinal` | INTEGER `>= 0`, part of PK; **CHECK** `member_ordinal < batch_size` |
-| `source_tool_call_id` | BLOB length 16; **UNIQUE** with `member_ordinal` |
+| `operation_id` | BLOB PK, length 16 |
+| `source_tool_call_id` | BLOB NOT NULL UNIQUE, length 16 |
 | `root_session_id` | BLOB NOT NULL (team-root storage key for the spawn budget) |
-| `request_fingerprint` | BLOB length **32** |
-| `state` | CHECK IN (`queued`, `accepted`, `started`, `waiting`, `completed`, `cancelled`, `aborted`) |
-| `admission_units` | INTEGER `> 0` |
-| `logical_released` | INTEGER 0/1 — set when a **started** row is first terminalized (exactly-once refund flag) |
+| `request_fingerprint` | BLOB NOT NULL, length **32** |
+| `state` | TEXT NOT NULL CHECK IN (`accepted`, `started`, `completed`, `cancelled`, `aborted`) |
+| `admission_units` | INTEGER NOT NULL `> 0` |
+| `logical_released` | INTEGER NOT NULL DEFAULT 0, CHECK 0/1; marks a started debit's release |
 | `terminal_reason` | TEXT, nullable |
-| `created_at` / `updated_at` | INTEGER millis |
+| `created_at` / `updated_at` | INTEGER NOT NULL, unix millis |
 | `actor_id` | BLOB, nullable |
 | `actor_epoch` | INTEGER, nullable, `> 0` if present |
-| `batch_size` | INTEGER `> 0` |
-| `runtime_fingerprint_version` | INTEGER 0..=u32::MAX, nullable |
-| `runtime_fingerprint` | BLOB length 32, nullable |
-| `admission_binding_fingerprint_version` | INTEGER 0..=u32::MAX, nullable |
-| `admission_binding_fingerprint` | BLOB length 32, nullable |
-| `spawn_intent` | BLOB length **1..=1_048_576**, nullable |
-| `admission_sequence` | INTEGER `> 0` or NULL; backfilled from `rowid` in 0008 |
-| `promotion_sequence` | INTEGER `> 0` or NULL |
 
-**All-or-nothing binding CHECK (0007):** the five binding columns
-(`runtime_fingerprint_version`, `runtime_fingerprint`,
-`admission_binding_fingerprint_version`, `admission_binding_fingerprint`,
-`spawn_intent`) are either **all NULL** or **all present**.
-
-### Indexes (fairness / promotion)
-
-| Index | Purpose |
-| --- | --- |
-| `admission_journal_admission_sequence` | Partial **UNIQUE** on `admission_sequence` WHERE NOT NULL |
-| `admission_journal_promotion_sequence` | Partial **UNIQUE** on `promotion_sequence` WHERE NOT NULL |
-| `admission_journal_queued_admission_sequence` | Partial on `(state, admission_sequence)` WHERE `state = 'queued'` — FIFO scan for promotion |
-| `admission_journal_root_promotion_sequence` | Partial on `(root_session_id, promotion_sequence)` WHERE NOT NULL |
-| `admission_journal_root_state` | `(root_session_id, state)` |
-| `admission_journal_actor_state` | `(actor_id, actor_epoch, state)` |
+Indexes: `admission_journal_root_state(root_session_id, state)` and
+`admission_journal_actor_state(actor_id, actor_epoch, state)`.
 
 ## Store types
 
@@ -80,73 +47,51 @@ process-local reservation of units against that truth.
 
 | Variant | Wire string | Terminal? |
 | --- | --- | --- |
-| `Queued` | `queued` | no |
 | `Accepted` | `accepted` | no |
 | `Started` | `started` | no |
-| `Waiting` | `waiting` | no |
 | `Completed` | `completed` | **yes** |
 | `Cancelled` | `cancelled` | **yes** |
 | `Aborted` | `aborted` | **yes** |
 
 `is_terminal()` is true for `Completed` \| `Cancelled` \| `Aborted`.
 
-### Capacity caps
-
-Rust constants (enforced before insert/promote; mirrored by count queries):
-
-| Cap | Value | Counts states |
-| --- | --- | --- |
-| `MAX_ACTIVE_ADMISSIONS` | **100** | `accepted` + `started` |
-| `MAX_NON_ACTIVE_ADMISSIONS` | **156** | `queued` + `waiting` |
-
-Exceeding either returns `StoreError::AdmissionCapacityExceeded { active, non_active, requested }`.
-
-### Intent size
-
-`MAX_ADMISSION_INTENT_BYTES = 1_048_576` (1 MiB). Empty or oversized
-`spawn_intent` is rejected in Rust and by the SQL CHECK on the column.
-
 ### Input / record types
 
 | Type | Fields |
 | --- | --- |
 | `AdmissionClaim` | `operation_id`, `source_tool_call_id`, `root_session`, `request_fingerprint: [u8; 32]`, `admission_units`, `actor_claim: Option<ActorClaim>` |
-| `AdmissionIntent` | `runtime_fingerprint_version: u32`, `runtime_fingerprint: [u8; 32]`, `admission_binding_fingerprint_version: u32`, `admission_binding_fingerprint: [u8; 32]`, `spawn_intent: Vec<u8>` |
-| `AdmissionLaunch` | `record: AdmissionRecord`, `intent: AdmissionIntent` |
 | `AdmissionActorBinding` | `actor_id: SessionId`, `actor_epoch: ActorEpoch` |
-| `AdmissionRecord` | `operation_id`, `source_tool_call_id`, `root_session`, `request_fingerprint`, `member_ordinal`, `batch_size`, `state`, `admission_units`, `actor: Option<AdmissionActorBinding>`, `logical_released`, `terminal_reason`, `created_at`, `updated_at` |
-| `AdmissionCounts` | `active`, `non_active`, `total` |
+| `AdmissionRecord` | `operation_id`, `source_tool_call_id`, `root_session`, `request_fingerprint`, `state`, `admission_units`, `actor: Option<AdmissionActorBinding>`, `logical_released`, `terminal_reason`, `created_at`, `updated_at` |
 
 ### Outcome enums
 
 | Enum | Variants |
 | --- | --- |
 | `AdmissionClaimOutcome` | `Claimed(AdmissionRecord)`, `Existing(AdmissionRecord)` |
-| `AdmissionBatchClaimOutcome` | `Claimed(Vec<AdmissionLaunch>)`, `Existing` |
 | `AdmissionStartOutcome` | `Started(AdmissionRecord)`, `Existing(AdmissionRecord)` |
 | `AdmissionTerminal` | `Completed`, `Cancelled`, `Aborted` → map to matching `AdmissionState` |
 | `AdmissionFinalizeOutcome` | `record`, `release_required: bool` — **true only for the process that terminalized a started/debited operation** (see `logical_released`) |
-| `AdmissionReleaseOutcome` | `finalized: Vec<AdmissionFinalizeOutcome>`, `promoted: Vec<AdmissionLaunch>` |
 
-## Store API (15 methods)
+## Store API
 
 | Method | Role |
 | --- | --- |
-| `claim_admission` | Insert single-member row as `accepted` (`member_ordinal=0`, `batch_size=1`); idempotent conflict → `Existing` or `OperationIdConflict` if fingerprints disagree |
-| `claim_admission_batch` | Claim a batch of members with binding intents (capacity-checked) |
-| `suspend_parent_and_claim_admission_batch` | Parent member → `waiting`, then claim child batch in one transaction |
-| `queue_waiting_admission_member` | Move/create a member into `queued`/`waiting` path for later promotion |
-| `admission` | Load one operation's primary record (`member_ordinal=0`, `batch_size=1`) |
-| `admissions` | Load all member rows for an operation id |
-| `admission_counts` | Active / non-active / total counts |
-| `promote_queued_admissions` | FIFO promote from `queued` into active slots (uses fairness indexes) |
-| `start_admission` | `accepted` → `started` for single-member claim |
-| `start_admission_member` | Start a specific member ordinal |
-| `finalize_admission` | Terminalize single-member row; sets `logical_released` when previous state was `started` |
-| `finalize_admission_members` | Terminalize multiple members; may return promotions |
-| `recover_nonterminal_admissions` | Startup recovery of nonterminal rows |
+| `claim_admission` | Insert operation as `accepted`; idempotent conflict → `Existing` or `OperationIdConflict` if fingerprints disagree |
+| `admission` | Load one operation's record |
+| `start_admission` | `accepted` → `started` for a claim |
+| `finalize_admission` | Terminalize operation; sets `logical_released` when previous state was `started` |
+| `recover_nonterminal_admissions` | Abort non-actor accepted/started rows at startup; only started rows mark a released debit |
 | `abort_recovered_actor_admissions` | Abort nonterminal rows for a recovered actor claim; rows that were started get `logical_released` for governor refund |
+| `terminal_released_operations_for_root` | List terminal operation IDs with `logical_released = 1` for a root budget |
 | `nonterminal_admissions_for_root` | List nonterminal rows for a root session (root-turn cleanup) |
+
+For example, claim an `AdmissionClaim` with `admission_units: 2` and a stable
+operation/tool-call identity, reserve two governor units, then call
+`start_admission(operation_id, actor_claim)`. On completion call
+`finalize_admission(operation_id, AdmissionTerminal::Completed, "completed", actor_claim)`;
+refund only when the returned `release_required` is true. Repeating the same
+claim returns `Existing`; changing its immutable request returns
+`StoreError::OperationIdConflict`.
 
 `claim_admission` inserts state `'accepted'` immediately — durable claim happens
 before any governor debit.
@@ -234,7 +179,5 @@ governor (session-store resident recovery already encodes that rule).
 1. Durable claim before governor debit.
 2. Distinct terminal reason strings for each early-exit path listed above.
 3. Exactly-once governor refund via `logical_released` / `release_required`.
-4. Active cap 100 (`accepted`+`started`); non-active cap 156 (`queued`+`waiting`).
-5. Spawn intent size 1..=1 MiB, all-or-nothing with binding fingerprints.
-6. Member PK `(operation_id, member_ordinal)` with `member_ordinal < batch_size`.
-7. FIFO promotion driven by `admission_sequence` under partial indexes.
+4. One row per operation; tool-call identity is unique.
+5. Startup aborts non-actor accepted/started operations; actor recovery remains fenced.

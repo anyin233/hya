@@ -27,9 +27,6 @@ mod recovery;
 mod resident_claim;
 mod workflow;
 
-/// Upper bound on durable `spawn_intent` bytes (1 MiB); mirrored by SQL CHECK.
-pub const MAX_ADMISSION_INTENT_BYTES: usize = 1_048_576;
-
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
@@ -46,9 +43,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, S
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 pub use admission::{
-    AdmissionActorBinding, AdmissionClaim, AdmissionClaimOutcome, AdmissionCounts,
-    AdmissionFinalizeOutcome, AdmissionRecord, AdmissionStartOutcome, AdmissionState,
-    AdmissionTerminal,
+    AdmissionActorBinding, AdmissionClaim, AdmissionClaimOutcome, AdmissionFinalizeOutcome,
+    AdmissionRecord, AdmissionStartOutcome, AdmissionState, AdmissionTerminal,
 };
 pub use agent_effort_preference::AgentEffortPreference;
 pub use agent_model_preference::AgentModelPreference;
@@ -267,7 +263,8 @@ pub struct LedgerEntry {
 }
 
 impl SessionStore {
-    /// Open or create a file-backed store at `sqlite://{path}`, run migrations, enable WAL.
+    /// Open or create a file-backed store at `sqlite://{path}`, initialize the schema, enable WAL.
+    /// Existing databases without the current baseline return [`StoreError::UnsupportedDatabase`].
     pub async fn connect(path: &str) -> Result<Self, StoreError> {
         let opts = SqliteConnectOptions::from_str(&format!("sqlite://{path}"))?
             .create_if_missing(true)
@@ -368,11 +365,29 @@ impl SessionStore {
     }
 
     async fn migrate(pool: &sqlx::SqlitePool) -> Result<(), StoreError> {
-        // Unknown migrations belong to newer generations; rollback remains safe while
-        // migrations are additive and known checksums still match.
-        let mut migrator = sqlx::migrate!("./migrations");
-        migrator.ignore_missing = true;
-        migrator.run(pool).await?;
+        // Serialize baseline inspection with initialization; SQLite sqlx migration locks are a no-op.
+        let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+        let migrator = sqlx::migrate!("./migrations");
+        let tables: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+        )
+        .fetch_all(&mut *transaction)
+        .await?;
+        if !tables.is_empty() {
+            if !tables.iter().any(|name| name == "_sqlx_migrations") {
+                return Err(StoreError::UnsupportedDatabase);
+            }
+            let checksum: Option<Vec<u8>> = sqlx::query_scalar(
+                "SELECT checksum FROM _sqlx_migrations WHERE version = 1 AND success = 1",
+            )
+            .fetch_optional(&mut *transaction)
+            .await?;
+            if checksum.as_deref() != Some(migrator.migrations[0].checksum.as_ref()) {
+                return Err(StoreError::UnsupportedDatabase);
+            }
+        }
+        migrator.run_direct(&mut *transaction).await?;
+        transaction.commit().await?;
         Ok(())
     }
 

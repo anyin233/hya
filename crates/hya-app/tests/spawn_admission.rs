@@ -224,7 +224,12 @@ async fn inline_description_is_unsupported_before_admission_without_side_effects
             .read_projection(fixture.parent)
             .await
             .unwrap();
-        let admission_counts_before = fixture.engine.store().admission_counts().await.unwrap();
+        let admissions_before = fixture
+            .engine
+            .store()
+            .nonterminal_admissions_for_root(fixture.parent)
+            .await
+            .unwrap();
         let remaining_budget_before = fixture
             .engine
             .governor()
@@ -286,7 +291,12 @@ async fn inline_description_is_unsupported_before_admission_without_side_effects
             .read_projection(fixture.parent)
             .await
             .unwrap();
-        let admission_counts_after = fixture.engine.store().admission_counts().await.unwrap();
+        let admissions_after = fixture
+            .engine
+            .store()
+            .nonterminal_admissions_for_root(fixture.parent)
+            .await
+            .unwrap();
         let remaining_budget_after = fixture
             .engine
             .governor()
@@ -311,8 +321,8 @@ async fn inline_description_is_unsupported_before_admission_without_side_effects
             "unsupported inline description must not change the parent projection"
         );
         assert_eq!(
-            admission_counts_after, admission_counts_before,
-            "unsupported inline description must not change durable admission counts"
+            admissions_after, admissions_before,
+            "unsupported inline description must not change durable admissions"
         );
         assert_eq!(
             remaining_budget_after, remaining_budget_before,
@@ -331,16 +341,6 @@ async fn inline_description_is_unsupported_before_admission_without_side_effects
                 .unwrap()
                 .is_none(),
             "unsupported inline description must precede durable admission"
-        );
-        assert!(
-            fixture
-                .engine
-                .store()
-                .admissions(operation.operation_id())
-                .await
-                .unwrap()
-                .is_empty(),
-            "unsupported inline description must leave no admission rows"
         );
         assert_eq!(
             fixture.provider_calls.load(Ordering::SeqCst),

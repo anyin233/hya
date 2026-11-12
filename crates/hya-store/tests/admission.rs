@@ -7,33 +7,6 @@ use hya_store::{
     AdmissionClaim, AdmissionClaimOutcome, AdmissionStartOutcome, AdmissionState,
     AdmissionTerminal, SessionStore, StoreError,
 };
-use sqlx::{Connection, SqliteConnection};
-
-struct AdmissionTempDb {
-    path: String,
-}
-
-impl AdmissionTempDb {
-    fn new() -> Self {
-        let path = std::env::temp_dir()
-            .join(format!("hya-admission-{}.db", SessionId::new()))
-            .to_string_lossy()
-            .into_owned();
-        Self { path }
-    }
-
-    fn path(&self) -> &str {
-        &self.path
-    }
-}
-
-impl Drop for AdmissionTempDb {
-    fn drop(&mut self) {
-        for suffix in ["", "-wal", "-shm"] {
-            let _ = std::fs::remove_file(format!("{}{suffix}", self.path));
-        }
-    }
-}
 
 fn claim(source_tool_call_id: ToolCallId, fingerprint: u8) -> AdmissionClaim {
     AdmissionClaim {
@@ -182,14 +155,6 @@ async fn startup_recovery_aborts_unbound_accepted_without_rebinding() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(
-        store.admission_counts().await.unwrap(),
-        hya_store::AdmissionCounts {
-            active: 0,
-            non_active: 0,
-            total: 0,
-        }
-    );
 
     let repeated = store
         .recover_nonterminal_admissions("startup recovery")
@@ -312,99 +277,38 @@ async fn claim_is_idempotent_and_conflicting_fingerprint_fails_closed() {
 }
 
 #[tokio::test]
-async fn queued_and_waiting_states_round_trip_through_admission_journal() {
-    let temp_db = AdmissionTempDb::new();
-    let store = SessionStore::connect(temp_db.path()).await.unwrap();
-    let queued = claim(ToolCallId::new(), 16);
-    let waiting = claim(ToolCallId::new(), 17);
-    store.claim_admission(&queued).await.unwrap();
-    store.claim_admission(&waiting).await.unwrap();
-
-    let mut connection = SqliteConnection::connect(&format!("sqlite://{}", temp_db.path()))
-        .await
-        .unwrap();
-    let mut transaction = connection.begin().await.unwrap();
-    for (admission, state) in [(&queued, "queued"), (&waiting, "waiting")] {
-        sqlx::query("UPDATE admission_journal SET state = ? WHERE operation_id = ?")
-            .bind(state)
-            .bind(admission.operation_id.as_uuid().as_bytes().as_slice())
-            .execute(&mut *transaction)
-            .await
-            .unwrap();
-    }
-    transaction.commit().await.unwrap();
-
-    let queued_record = store.admission(queued.operation_id).await.unwrap().unwrap();
-    let waiting_record = store
-        .admission(waiting.operation_id)
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(queued_record.state, AdmissionState::Queued);
-    assert_eq!(waiting_record.state, AdmissionState::Waiting);
-    assert!(!queued_record.state.is_terminal());
-    assert!(!waiting_record.state.is_terminal());
-}
-
-#[tokio::test]
-async fn startup_recovery_preserves_legacy_bound_rows_and_releases_started_once() {
-    let temp_db = AdmissionTempDb::new();
-    let store = SessionStore::connect(temp_db.path()).await.unwrap();
-    let accepted = claim(ToolCallId::new(), 12);
+async fn startup_recovery_aborts_started_and_releases_once() {
+    let store = SessionStore::connect_memory().await.unwrap();
     let started = claim(ToolCallId::new(), 13);
-    let waiting = claim(ToolCallId::new(), 14);
-    for admission in [&accepted, &started, &waiting] {
-        store.claim_admission(admission).await.unwrap();
-    }
+    store.claim_admission(&started).await.unwrap();
     store
         .start_admission(started.operation_id, None)
         .await
         .unwrap();
-    let mut connection = SqliteConnection::connect(&format!("sqlite://{}", temp_db.path()))
-        .await
-        .unwrap();
-    sqlx::query("UPDATE admission_journal SET runtime_fingerprint_version = 1, runtime_fingerprint = ?, admission_binding_fingerprint_version = 1, admission_binding_fingerprint = ?, spawn_intent = ? WHERE operation_id = ?")
-        .bind(vec![12_u8; 32]).bind(vec![12_u8; 32]).bind(vec![12_u8])
-        .bind(accepted.operation_id.as_uuid().as_bytes().as_slice())
-        .execute(&mut connection).await.unwrap();
-    sqlx::query("UPDATE admission_journal SET state = 'waiting' WHERE operation_id = ?")
-        .bind(waiting.operation_id.as_uuid().as_bytes().as_slice())
-        .execute(&mut connection)
-        .await
-        .unwrap();
-    store
+
+    let recovered = store
         .recover_nonterminal_admissions("restart")
         .await
         .unwrap();
-    let requeued = store
-        .admission(accepted.operation_id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(requeued.state, AdmissionState::Queued);
-    assert_eq!(requeued.terminal_reason, None);
-    assert!(!requeued.logical_released);
-    let aborted = store
-        .admission(started.operation_id)
-        .await
-        .unwrap()
-        .unwrap();
+    assert_eq!(recovered.len(), 1);
+    let aborted = &recovered[0];
+    assert_eq!(aborted.operation_id, started.operation_id);
     assert_eq!(aborted.state, AdmissionState::Aborted);
+    assert_eq!(aborted.terminal_reason.as_deref(), Some("restart"));
     assert!(aborted.logical_released);
-    let parent = store
-        .admission(waiting.operation_id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(parent.state, AdmissionState::Aborted);
-    assert!(!parent.logical_released);
     assert_eq!(
         store
             .terminal_released_operations_for_root(started.root_session)
             .await
             .unwrap(),
         vec![started.operation_id]
+    );
+    assert!(
+        store
+            .nonterminal_admissions_for_root(started.root_session)
+            .await
+            .unwrap()
+            .is_empty()
     );
     assert!(
         store
@@ -418,7 +322,7 @@ async fn startup_recovery_preserves_legacy_bound_rows_and_releases_started_once(
             .admission(started.operation_id)
             .await
             .unwrap()
-            .unwrap(),
-        aborted
+            .as_ref(),
+        Some(aborted)
     );
 }

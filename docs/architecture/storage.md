@@ -38,86 +38,72 @@ sensitive.
 PRAGMAs (WAL and friends) are set via connect options, not migrations — WAL
 cannot run inside the transaction sqlx wraps migrations in.
 
-## Migrations
+## Session schema and compatibility
 
-Session-store migrations live under
-[`crates/hya-store/migrations/`](../../crates/hya-store/migrations/). A
-**separate** database and migration set for the bundle registry is documented
-under [Bundle registry database](#bundle-registry-database).
+Session stores use one baseline,
+[`0001_init.sql`](../../crates/hya-store/migrations/0001_init.sql), containing
+only the current event log, indexes, and control tables. There is no upgrade
+path from the previous schema. Removing the retired relational transcript,
+team, mailbox, goal, sync, and durable admission queue tables keeps the schema
+aligned with the event-log read path.
 
-### `0001_init.sql`
+`SessionStore::connect(path) -> Result<SessionStore, StoreError>` initializes
+an empty database or opens a database with the current baseline checksum in
+`_sqlx_migrations`. An existing schema without that baseline fails before
+schema initialization with `StoreError::UnsupportedDatabase` and the exact
+message:
 
-Creates the base relational tables plus the event log and token ledger.
-The current runtime read path is **event-log based**. Tables such as
-`message` and `part` exist in the schema, but `read_projection` folds from
-`event_log` rather than querying materialized message rows.
-
-| Table | Columns | Keys / indexes |
-| --- | --- | --- |
-| `session` | `id BLOB PK`, `parent_id BLOB` FK → `session(id)`, `agent TEXT NOT NULL`, `model TEXT NOT NULL`, `workdir TEXT NOT NULL`, `title TEXT`, `permission TEXT NOT NULL DEFAULT '{}'`, `created_at`, `updated_at` (+ `project_id`, `kind` from [`0014`](#0014_projectsql)) | Index `session_parent` on `parent_id` |
-| `message` | `id BLOB PK`, `session_id` FK → `session(id)` **ON DELETE CASCADE**, `role`, `agent`, `model`, `finish`, `cost_json`, `tokens_json`, `created_at` | Index `message_session` |
-| `part` | `id BLOB PK`, `message_id` FK → `message(id)` **ON DELETE CASCADE**, `seq`, `kind`, `body_json` | **UNIQUE** `(message_id, seq)` |
-| `event_log` | see [Event Log](#event-log) | |
-| `team_run` | `id BLOB PK`, `lead_session` FK → `session(id)`, `spec_json`, `state`, `created_at` | |
-| `team_member` | `id BLOB PK`, `team_id` FK → `team_run(id)` **ON DELETE CASCADE**, `session_id` FK → `session(id)`, `background_task_id`, `role`, `state`, `created_at` | |
-| `mail` | `id BLOB PK`, `team_id` FK CASCADE, `from_ep`, `to_ep`, `kind`, `body_json`, `delivered_at`, `acked_at`, `created_at` | **Pre-ADR-0001 relational mailbox.** Superseded by event-sourced `MailSent`; not on any live read path. |
-| `task_board` | `id BLOB PK`, `team_id` FK CASCADE, `title`, `body`, `status`, `assignee`, `created_at`, `updated_at` | **Pre-ADR-0001.** Not on any live read path. |
-| `goal` | `id BLOB PK`, `session_id` FK → `session(id)`, `condition`, `bound_json`, `state`, `turns_evaluated`, `last_reason`, `started_at`, `cleared_at` | |
-| `token_ledger` | `id BLOB PK`, `session_id BLOB` (no FK), `turn`, `provider`, `model`, `team_id`, `completion_run_id`, `iteration`, `role`, `category`, `prompt_tokens`, `completion_tokens`, `confidence`, `ts` | |
-
-### `0002_sync_event.sql`
-
-```sql
-CREATE TABLE sync_event (
-    aggregate_id TEXT NOT NULL,
-    seq INTEGER NOT NULL,
-    payload TEXT NOT NULL,
-    PRIMARY KEY (aggregate_id, seq)
-);
-CREATE INDEX sync_event_seq ON sync_event(seq);
+```text
+this database was created by an older version and is no longer supported; move it away
 ```
 
-Backs the Compat `/sync/history` and `/sync/replay` routes. See
-[Sync store API](#sync-store-api).
+Old schema/data are never migrated or decoded. Unknown migration versions are
+also rejected by the migration runner; missing versions are not ignored.
+`connect_memory()` creates the same baseline for a fresh in-memory store.
+The [bundle registry](#bundle-registry-database) has its own database and
+migration history, which this session-schema reset does not change.
 
-### `0003_saved_permission.sql`
+To start fresh after this error, stop processes using the old database, move
+it to a different path, then restart with the original path. For example:
 
-```sql
-CREATE TABLE saved_permission (
-    id         TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
-    action     TEXT NOT NULL,
-    resource   TEXT NOT NULL,
-    UNIQUE(project_id, action, resource)
-);
-CREATE INDEX saved_permission_project ON saved_permission(project_id);
+```sh
+hya serve stop --db ./sessions.db
+mv ./sessions.db ./sessions.db.old
+hya serve start --db ./sessions.db
 ```
 
-Durable store for **allow-always** permission decisions. See
-[Saved permissions](#saved-permissions). `0013_saved_permission_time.sql`
-adds `time_created INTEGER` (ms since the Unix epoch; `NULL` for rows saved
-before it).
+If `sessions.db-wal` or `sessions.db-shm` remain after shutdown, move them
+alongside the old database before restarting. The old data stay at the moved
+path; this version cannot reopen them. A different fresh `--db` path works too.
 
-### `0004` → `0008` admission journal
+### Tables
 
-Spawn-budget durability lives in `admission_journal`. Full schema evolution
-and state machine are documented in
-[admission-and-governor.md](admission-and-governor.md) so the SQL and the
-engine/store API cannot drift across docs.
+The baseline SQL defines every column, constraint, and index. The current
+session database contains these application tables (plus sqlx's migration
+history and SQLite's sequence table):
 
-Summary of migration roles:
-
-| Migration | Role |
+| Table | Contract |
 | --- | --- |
-| `0004_admission_journal.sql` | Initial single-row-per-operation journal (`accepted`…`aborted`) |
-| `0005_resident_actor_claim.sql` | Adds `resident_actor_claim` + nullable `actor_id` / `actor_epoch` on the journal |
-| `0006_admission_queue_states.sql` | Rebuilds to composite PK `(operation_id, member_ordinal)`, adds `queued` / `waiting`, `batch_size` |
-| `0007_admission_bindings.sql` | All-or-nothing binding columns + `spawn_intent` (1..=1 MiB) |
-| `0008_admission_fairness.sql` | `admission_sequence` / `promotion_sequence` + FIFO partial indexes |
+| `session` | Placement/parent index: `id BLOB PK`, `parent_id BLOB` FK → `session(id)`, `agent`, `model`, `workdir` TEXT NOT NULL, nullable `title TEXT`, `permission TEXT NOT NULL DEFAULT '{}'`, `created_at`/`updated_at INTEGER NOT NULL`, nullable `project_id TEXT`, `kind TEXT NOT NULL DEFAULT 'project'` (`project` or `temporary`). Indexed by parent and Project. Only `session_created` inserts rows. |
+| `event_log` | Canonical Events; see [Event log](#event-log). |
+| `token_ledger` | Auxiliary usage records; see [Token ledger](#token-ledger). |
+| `saved_permission` | `id TEXT PK`, `project_id`, `action`, `resource` TEXT NOT NULL, nullable `time_created INTEGER` (unix ms); unique `(project_id, action, resource)`, indexed by Project. |
+| `admission_journal` | One operation per row; see [Admission and governor](admission-and-governor.md). |
+| `resident_actor_claim` | Actor/epoch/owner fence; see [Resident actor claims](#resident-actor-claims). |
+| `agent_model_preference` | Per-Agent model identities; see below. |
+| `model_effort_preference` | `(provider_id TEXT, model_id TEXT)` PK, `effort TEXT NOT NULL`, `updated_at INTEGER NOT NULL`. |
+| `agent_effort_preference` | `agent_id TEXT NOT NULL PK`, `effort TEXT NOT NULL`, `updated_at INTEGER NOT NULL`. |
+| `open_assistant_message` | `(session_id BLOB, message_id TEXT)` PK, both NOT NULL, WITHOUT ROWID. The event-append transaction inserts assistant starts and deletes finishes/deletions; startup recovery reads this index. |
+| `projection_snapshot` | Derived reducer cache; see below. |
+| `file_blob` | Per-session content-addressed bytes; see below. |
+| `project`, `project_root` | Mutable Project configuration; see below. |
+| `pending_resume` | Handoff continuation: `id TEXT PK`, `session_id BLOB`, `owner_run BLOB` (16 bytes), `generation INTEGER >= 0`, `prompt TEXT`, `created_at INTEGER` are required; nullable `taken_by BLOB` (16 bytes) and `taken_at INTEGER` are both present or absent. One live row per session; live rows indexed by `(generation, created_at, id)`. |
+| `pending_interaction` | `id TEXT PK`, nullable `session_id BLOB`, required `kind`/`payload TEXT`, `created_at INTEGER`, nullable `resolved_at INTEGER`; unresolved rows indexed by creation time/id. |
+| `pending_interaction_reply` | `id TEXT PK`, required `kind`/`payload TEXT`, `created_at INTEGER`, nullable `consumed_at INTEGER`; unconsumed rows indexed by creation time/id. |
 
-### `0009_agent_model_preference.sql`
+### Agent model preferences
 
-Adds the backend-owned per-Agent model preference table:
+The backend-owned per-Agent model preference table:
 
 | Column | Constraint |
 | --- | --- |
@@ -137,9 +123,9 @@ variants, prompts, Session content, and provider responses never enter this
 table. File-backed databases retain the rows across restart; memory databases
 do not, and separate database paths remain isolated.
 
-### `0011_projection_snapshot.sql`
+### Projection snapshots
 
-Adds `projection_snapshot`, the durable level of the
+`projection_snapshot` is the durable level of the
 [projection cache](#projection-reads):
 
 | Column | Constraint |
@@ -151,12 +137,11 @@ Adds `projection_snapshot`, the durable level of the
 
 The table starts empty and holds only derived data: dropping every row is
 always safe (the next read of each session folds its full log once and writes
-a fresh row). Upgrading a database therefore costs one full fold per session,
-paid lazily by the first read of that session.
+a fresh row). The first read of an existing log without a snapshot pays one full fold.
 
-### `0012_file_blob.sql`
+### File blobs
 
-Adds `file_blob`, the content store behind session revert
+`file_blob` is the content store behind session revert
 ([Runtime — File snapshots and revert](runtime.md#file-snapshots-and-revert))
 and, since R4 of 0.41.0, prompt image attachments (no schema change):
 
@@ -183,9 +168,9 @@ message). Prompt images are referenced from `user_prompt_context_recorded`
 by hash, so the event log and projection snapshots stay small and replay is
 unchanged: the fold never reads blobs; only a model request does.
 
-### `0014_project.sql`
+### Projects
 
-Adds Projects (ADR-0024): a named, ordered, non-empty list of absolute
+Projects (ADR-0024) are a named, ordered, non-empty list of absolute
 workspace roots on the backend machine. They are mutable configuration
 managed with CRUD like `saved_permission`, never events; a session names its
 Project in `session_created` (see [Event model](event-model.md)), and the
@@ -197,9 +182,6 @@ materializer mirrors that on the `session` row.
 | `project_root` | `project_id TEXT NOT NULL` FK → `project(id)` **ON DELETE CASCADE**, `path TEXT NOT NULL`, `ord INTEGER NOT NULL` (`0` = primary root); PK `(project_id, ord)`, **UNIQUE** `(project_id, path)` |
 | `session.project_id` | `TEXT NULL`, no FK (the event log keeps the id after its Project is deleted); index `session_project` |
 | `session.kind` | `TEXT NOT NULL DEFAULT 'project'`, `project` \| `temporary` |
-
-Sessions from before the migration read as `kind = project` with no Project;
-no backfill is needed.
 
 Store API ([`project.rs`](../../crates/hya-store/src/project.rs)):
 
@@ -226,9 +208,9 @@ Duplicates are removed keeping the first occurrence. An empty list is
 `ProjectRootsEmpty`, a relative path `ProjectRootNotAbsolute`, a blank name
 `ProjectNameEmpty`.
 
-### `0005_resident_actor_claim.sql` (claim table)
+### Resident actor claims
 
-Adds coordination table `resident_actor_claim`:
+Coordination table `resident_actor_claim`:
 
 | Column | Constraint |
 | --- | --- |
@@ -361,7 +343,7 @@ treats them as a source of truth.
 | Level | Where | Written | Scope |
 | --- | --- | --- | --- |
 | In-process | `Arc<Projection>` per session, shared by every clone of one `SessionStore` (least recently read of 256 sessions evicted) | every read that folded new events | one process |
-| Durable | `projection_snapshot` row per session ([`0011`](#0011_projection_snapshotsql)) | a read that folded ≥ 1024 events since the last snapshot (every read for the first fold of an existing log above that size) | every process on the database |
+| Durable | `projection_snapshot` row per session ([schema](#projection-snapshots)) | a read that folded ≥ 1024 events since the last snapshot (every read for the first fold of an existing log above that size) | every process on the database |
 
 A read (`read_projection`, `read_projection_shared`, `with_projection`):
 
@@ -409,8 +391,9 @@ shape changes. The `reducer_fingerprint_pins_the_version` test in
 `crates/hya-proto/tests/projection_snapshot.rs` hashes the reducer's output
 over generated logs and fails until the bump (and the new fingerprint) is
 recorded. Older snapshots are then ignored and rebuilt lazily. A process
-running an older binary against the same database ignores newer snapshots the
-same way; the rows are simply rewritten by whichever version reads next.
+running a binary with the same schema baseline but an older reducer ignores
+newer snapshots the same way; the rows are rewritten by whichever reducer
+reads next. The schema boundary above still rejects pre-reset databases.
 
 **Equivalence tests.** `crates/hya-proto/tests/projection_snapshot.rs`
 checks `decode(encode(fold(prefix))) + tail == fold(all)` at every split of
@@ -449,27 +432,13 @@ the durable-snapshot interval (tests use `1`). There is no configuration key:
 the interval only moves cost between snapshot writes and tail folds, never the
 result.
 
-## Materialized team tables
+## Write-through indexes
 
-The event log remains the single source of truth; `session`, `team_run`,
-`team_member`, `mail`, and `task_board` are queryable write-through
-projections maintained inside the same transaction as the event append
-(`SessionStore::append_event`, `append_event_in_transaction`, and the
-resident-mutation batch):
-
-| Event | Materialized rows |
-| --- | --- |
-| `session_created` | `session` (authoritative row; `INSERT OR IGNORE`, then `project_id` / `kind` set from the event, also on a placeholder row) |
-| `agent_registered` | `team_run` ensure (the orchestration root's log session is the run) + `team_member` |
-| `mail_sent` | `mail` (`from_ep`/`to_ep`/`kind`/`body_json`, `delivered_at` = append time; `acked_at` stays NULL) |
-| `member_spawned` | `task_board` row (`status: pending`) |
-| `subagent_reported` | `task_board` status → `done`/`failed` |
-
-FK anchors are self-healing: when a registration arrives on a log whose
-`session` row does not exist (synthetic or migrated sequences), a placeholder
-`session` row is anchored first and a later authoritative `session_created`
-keeps its own values. Reads never consult these tables — replaying
-`event_log` through the shared projection stays the only derivation path.
+The event-append transaction maintains `session` placement rows from
+`session_created` and the `open_assistant_message` crash-recovery index from
+assistant message lifecycle events. Registration, mail, member spawn, and
+reports write only to `event_log`; reads fold the shared projection. They
+create no placeholder session rows or relational team/mail/task rows.
 
 ## Token Ledger
 
@@ -549,28 +518,6 @@ row into the process `PermissionPlane` (`persistent` rules for `*` rows,
 the row. See [Tools and permissions — Saved
 grants](tools-and-permissions.md#saved-grants).
 
-## Sync store API
-
-Alongside the `sync_event` table:
-
-### `replay_sync_events(events: &[Value]) → Vec<Value>`
-
-For each event with camelCase `aggregateID` and `seq`, runs
-`INSERT OR IGNORE INTO sync_event (aggregate_id, seq, payload)`. The stored
-payload is reshaped by `history_event` to snake_case keys
-`{ id, aggregate_id, seq, type, data }`. The return value is **not** that
-stored shape: it is a clone of each **caller-supplied** event that was newly
-inserted (still camelCase `aggregateID`, etc.). A re-replay of an overlapping
-history returns an empty set for those rows.
-
-### `sync_history(known: &BTreeMap<String, u64>) → Vec<Value>`
-
-Returns every stored event (ordered by `seq`) whose sequence is **strictly
-greater** than the caller's per-aggregate `known` watermark (or any event for
-aggregates absent from `known`). Each element is the **stored** JSON payload
-(`{ id, aggregate_id, seq, type, data }` — snake_case). Clients must not expect
-`aggregateID` on this path.
-
 ## Bundle registry database
 
 A **second** SQLite file, separate from the session/event database. Schema and
@@ -630,7 +577,8 @@ SQLite or migration error.
 | Variant | When |
 | --- | --- |
 | `Sqlite` | Underlying sqlx/SQLite error |
-| `Migrate` | Migration runner failure |
+| `Migrate` | Migration runner failure, including unknown applied versions |
+| `UnsupportedDatabase` | Existing session schema lacks the current baseline; move the database away |
 | `Json` | Event/payload JSON (de)serialization |
 | `Bundle` | `hya-bundle` prepare/catalog error |
 | `BundleRegistryData` | Invalid registry generation or install candidate shape |
@@ -643,8 +591,7 @@ SQLite or migration error.
 | `OperationIdConflict` | Immutable admission claim fields differ for the same operation id |
 | `AdmissionNotFound` | No journal row for the operation |
 | `AdmissionTransitionConflict` | Illegal state transition |
-| `AdmissionData` | Journal invariant / units / intent size / unknown state |
-| `AdmissionCapacityExceeded` | Active or non-active caps exceeded |
+| `AdmissionData` | Journal invariant / units / unknown state |
 | `ActorAlreadyClaimed` | Resident actor claim held by another owner |
 | `StaleActorClaim` | Epoch/owner no longer current |
 | `ActorClaimUnavailable` | No recoverable active claim |

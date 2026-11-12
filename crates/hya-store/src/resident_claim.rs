@@ -166,7 +166,7 @@ impl SessionStore {
                  terminal_reason = 'resident actor released', updated_at = ? \
              WHERE actor_id = ? AND actor_epoch = ? AND state IN ('accepted', 'started') \
              RETURNING operation_id, source_tool_call_id, root_session_id, request_fingerprint, \
-                       member_ordinal, batch_size, state, admission_units, logical_released, \
+                       state, admission_units, logical_released, \
                        terminal_reason, created_at, updated_at, actor_id, actor_epoch",
         )
         .bind(now_millis())

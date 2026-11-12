@@ -1,6 +1,5 @@
 //! Integration tests for `hya-store`: Projects (ADR-0024) — CRUD, root
-//! validation, cwd resolution, session membership, and the migration that
-//! adds `session.project_id` / `session.kind` to an existing database.
+//! validation, cwd resolution, and session membership.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -12,7 +11,6 @@ use hya_proto::{
     AgentName, Event, FileChange, FileState, MessageId, ModelRef, ProjectId, SessionId, SessionKind,
 };
 use hya_store::{SessionStore, StoreError};
-use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 fn temp_db() -> String {
@@ -418,103 +416,6 @@ async fn raw_pool(path: &str) -> sqlx::SqlitePool {
         .connect_with(options)
         .await
         .unwrap()
-}
-
-/// A database written before the Project migration: its sessions keep
-/// working, read as `kind = project` with no Project, and new sessions record
-/// theirs.
-#[tokio::test]
-async fn project_migration_upgrades_a_database_with_sessions() {
-    let path = temp_db();
-    let options = SqliteConnectOptions::from_str(&format!("sqlite://{path}"))
-        .unwrap()
-        .create_if_missing(true)
-        .foreign_keys(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(options)
-        .await
-        .unwrap();
-    let mut migrator = sqlx::migrate!("./migrations");
-    let before: Vec<_> = migrator
-        .migrations
-        .iter()
-        .filter(|migration| migration.version < 14)
-        .cloned()
-        .collect();
-    migrator.migrations = before.into();
-    migrator.run(&pool).await.unwrap();
-
-    let old = SessionId::new();
-    let payload = serde_json::json!({
-        "type": "session_created",
-        "session": old.to_string(),
-        "parent": null,
-        "agent": "build",
-        "model": "fake",
-        "workdir": "/old",
-    })
-    .to_string();
-    sqlx::query("INSERT INTO event_log (session_id, payload, ts) VALUES (?, ?, 1)")
-        .bind(old.storage_key())
-        .bind(payload)
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query(
-        "INSERT INTO session (id, parent_id, agent, model, workdir, title, permission, \
-         created_at, updated_at) VALUES (?, NULL, 'build', 'fake', '/old', NULL, '{}', 1, 1)",
-    )
-    .bind(old.storage_key())
-    .execute(&pool)
-    .await
-    .unwrap();
-    pool.close().await;
-
-    let store = SessionStore::connect(&path).await.unwrap();
-    let projection = store.read_projection(old).await.unwrap();
-    assert_eq!(projection.session.project, None);
-    assert_eq!(projection.session.kind, SessionKind::Project);
-    assert_eq!(store.list_sessions().await.unwrap().len(), 1);
-
-    let project = store.create_project("p", &roots(&["/new"])).await.unwrap();
-    let new = create_session(&store, None, Some(project.id), SessionKind::Project).await;
-    let temp = create_session(&store, None, None, SessionKind::Temporary).await;
-    assert_eq!(
-        store
-            .list_sessions_in(Some(project.id))
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|info| info.session)
-            .collect::<Vec<_>>(),
-        vec![new]
-    );
-    drop(store);
-
-    let pool = raw_pool(&path).await;
-    let row = |session: SessionId| {
-        let pool = pool.clone();
-        async move {
-            let row = sqlx::query("SELECT project_id, kind FROM session WHERE id = ?")
-                .bind(session.storage_key())
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-            (
-                row.try_get::<Option<String>, _>("project_id").unwrap(),
-                row.try_get::<String, _>("kind").unwrap(),
-            )
-        }
-    };
-    assert_eq!(row(old).await, (None, "project".to_string()));
-    assert_eq!(
-        row(new).await,
-        (Some(project.id.to_string()), "project".to_string())
-    );
-    assert_eq!(row(temp).await, (None, "temporary".to_string()));
-    pool.close().await;
-    remove_db(&path);
 }
 
 #[tokio::test]
