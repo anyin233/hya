@@ -853,8 +853,14 @@ impl SessionEngine {
             fallback = crate::TASK_AGENT_ID,
             "stored session agent is not in the catalog; continuing as the task agent"
         );
-        self.switch_agent(session, AgentName::new(crate::TASK_AGENT_ID))
-            .await?;
+        self.emit(
+            session,
+            Event::AgentSwitched {
+                session,
+                agent: AgentName::new(crate::TASK_AGENT_ID),
+            },
+        )
+        .await?;
         Ok(true)
     }
 

@@ -229,6 +229,7 @@ impl From<hya_core::CoreError> for V1Error {
         }
         let code = match &error {
             hya_core::CoreError::TurnAlreadyActive { .. } => Code::SessionBusy,
+            hya_core::CoreError::Invalid(_) => Code::InvalidArgument,
             _ => Code::Internal,
         };
         Self::new(code, error.to_string())

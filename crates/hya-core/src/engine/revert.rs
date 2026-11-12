@@ -84,6 +84,7 @@ impl SessionEngine {
         session: SessionId,
         target: RevertTarget,
     ) -> Result<RevertOutcome, RevertError> {
+        self.ensure_external_turn_allowed(session).await?;
         let _lease = self.revert_lease(session)?;
         let projection = self.store.read_projection(session).await?;
         if projection.session.id.is_none() {
@@ -158,6 +159,7 @@ impl SessionEngine {
         &self,
         session: SessionId,
     ) -> Result<Vec<FileRestore>, RevertError> {
+        self.ensure_external_turn_allowed(session).await?;
         let _lease = self.revert_lease(session)?;
         let projection = self.store.read_projection(session).await?;
         if projection.session.id.is_none() {

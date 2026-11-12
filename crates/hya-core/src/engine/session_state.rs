@@ -10,12 +10,14 @@ impl SessionEngine {
         session: SessionId,
         agent: AgentName,
     ) -> Result<(), CoreError> {
+        self.ensure_external_turn_allowed(session).await?;
         self.emit(session, Event::AgentSwitched { session, agent })
             .await
     }
 
     /// Record a model switch event for the session.
     pub async fn switch_model(&self, session: SessionId, model: ModelRef) -> Result<(), CoreError> {
+        self.ensure_external_turn_allowed(session).await?;
         self.emit(session, Event::ModelSwitched { session, model })
             .await
     }

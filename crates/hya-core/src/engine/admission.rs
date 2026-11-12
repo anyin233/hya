@@ -385,31 +385,22 @@ impl SessionEngine {
         Ok(())
     }
 
-    pub(crate) async fn ensure_external_turn_allowed(
-        &self,
-        session: SessionId,
-    ) -> Result<(), CoreError> {
-        let in_memory = self
-            .archive_reviver()
-            .is_some_and(|supervisor| supervisor.has_episode(session));
-        let live = if in_memory {
-            true
-        } else {
-            let (root, depth) = self.session_lineage(session).await?;
-            depth > 0
-                && self
-                    .read_projection(root)
-                    .await?
-                    .team
-                    .roster
-                    .values()
-                    .any(|entry| {
-                        entry.session == session && entry.mode == hya_proto::SubagentMode::Resident
-                    })
-        };
-        if live {
+    /// Refuse client turns and execution-state edits on registered team members.
+    /// Member episodes are controlled through mail, including after archival.
+    ///
+    /// # Errors
+    /// [`CoreError::Invalid`] with mail guidance for a team member; store failures.
+    pub async fn ensure_external_turn_allowed(&self, session: SessionId) -> Result<(), CoreError> {
+        let (root, depth) = self.session_lineage(session).await?;
+        // Registration is a permanent identity fact. Unlike the current roster
+        // or claim, its event survives archive/revive and needs no episode lock.
+        if depth > 0
+            && self.replay(root).await?.iter().any(|envelope| {
+                matches!(envelope.event, Event::AgentRegistered { agent_session, .. } if agent_session == session)
+            })
+        {
             return Err(CoreError::Invalid(
-                "this subagent's live episode owns its turns; steer this subagent with mail".into(),
+                "this subagent's episodes own its turns; steer this subagent with mail".into(),
             ));
         }
         Ok(())

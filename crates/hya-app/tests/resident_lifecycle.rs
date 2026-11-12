@@ -1580,6 +1580,171 @@ async fn e7_live_member_turns_are_refused_before_prompt_admission() {
 }
 
 #[tokio::test]
+async fn e7_archived_member_turns_are_refused_before_prompt_admission() {
+    let mut h = Harness::new().await;
+    let (child, handle) = h.spawn(vec![report("finished")]).await;
+    h.archived(&handle).await;
+    let before = h.engine.replay(child).await.unwrap();
+    let error = h
+        .engine
+        .admit_user_prompt(child, "direct client prompt".into())
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("steer this subagent with mail"),
+        "{error}"
+    );
+    let error = h
+        .engine
+        .admit_command_prompt(child, "test".into(), String::new(), "must not run".into())
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("steer this subagent with mail"),
+        "{error}"
+    );
+    let error = h
+        .engine
+        .run_turn(child, &h.agent, tokio_util::sync::CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("steer this subagent with mail"),
+        "{error}"
+    );
+    let error = h
+        .engine
+        .run_shell(
+            child,
+            &h.agent,
+            "echo must-not-run".into(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("steer this subagent with mail"),
+        "{error}"
+    );
+    assert_eq!(h.engine.replay(child).await.unwrap().len(), before.len());
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn e7_member_model_switch_is_refused() {
+    let mut h = Harness::new().await;
+    let (child, handle) = h.spawn(vec![Round::text("idle")]).await;
+    h.idle(child, &handle).await;
+    for archived in [false, true] {
+        if archived {
+            output(&h.tool("archive", json!({"target": handle})).await);
+        }
+        let before = h.engine.replay(child).await.unwrap().len();
+        let error = h
+            .engine
+            .switch_model(child, hya_proto::ModelRef::new("other"))
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("steer this subagent with mail"),
+            "{error}"
+        );
+        assert_eq!(h.engine.replay(child).await.unwrap().len(), before);
+    }
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn e7_member_agent_switch_is_refused() {
+    let mut h = Harness::new().await;
+    let (child, handle) = h.spawn(vec![Round::text("idle")]).await;
+    h.idle(child, &handle).await;
+    for archived in [false, true] {
+        if archived {
+            output(&h.tool("archive", json!({"target": handle})).await);
+        }
+        let before = h.engine.replay(child).await.unwrap().len();
+        let error = h
+            .engine
+            .switch_agent(child, hya_proto::AgentName::new("other"))
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("steer this subagent with mail"),
+            "{error}"
+        );
+        assert_eq!(h.engine.replay(child).await.unwrap().len(), before);
+    }
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn e7_member_revert_and_unrevert_are_refused() {
+    let mut h = Harness::new().await;
+    let (child, handle) = h.spawn(vec![Round::text("idle")]).await;
+    h.idle(child, &handle).await;
+    for archived in [false, true] {
+        if archived {
+            output(&h.tool("archive", json!({"target": handle})).await);
+        }
+        let before = h.engine.replay(child).await.unwrap().len();
+        let error = h
+            .engine
+            .revert_session(child, hya_core::RevertTarget::LastUserMessage)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("steer this subagent with mail"),
+            "{error}"
+        );
+        let error = h.engine.unrevert_session(child).await.unwrap_err();
+        assert!(
+            error.to_string().contains("steer this subagent with mail"),
+            "{error}"
+        );
+        assert_eq!(h.engine.replay(child).await.unwrap().len(), before);
+    }
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn e7_roots_and_never_registered_children_keep_client_mutations() {
+    let mut h = Harness::new().await;
+    let child = h
+        .engine
+        .create(hya_core::CreateSession {
+            parent: Some(h.root),
+            agent: h.agent.name.clone(),
+            model: h.agent.model.clone(),
+            workdir: h.dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    for session in [h.root, child] {
+        h.engine
+            .admit_user_prompt(session, "ordinary prompt".into())
+            .await
+            .unwrap();
+        h.engine
+            .switch_model(session, h.agent.model.clone())
+            .await
+            .unwrap();
+        h.engine
+            .switch_agent(session, h.agent.name.clone())
+            .await
+            .unwrap();
+        h.engine
+            .revert_session(session, hya_core::RevertTarget::LastUserMessage)
+            .await
+            .unwrap();
+        h.engine.unrevert_session(session).await.unwrap();
+    }
+    h.shutdown().await;
+}
+
+#[tokio::test]
 async fn e1_archive_racing_registration_never_takes_over_a_live_episode() {
     let plugin = support::lifecycle::BlockingPlugin::new().await;
     let mut h = Harness::with_plugins(vec![plugin.spec.clone()]).await;

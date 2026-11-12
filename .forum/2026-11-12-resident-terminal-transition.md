@@ -43,3 +43,12 @@ before durable Idle. The existing report test retains its bounded retry for the
 reservation window, and engine-level stop/recovery tests again send mail through
 `engine.mail_send` and assert same-session revival. They no longer substitute a
 store-only mail rejection for the engine contract.
+
+## Can a client resume an archived member with a direct turn?
+
+No. Team membership is permanent once `AgentRegistered.agent_session` names the
+session in its root log. Check that historical event before turn preparation or
+execution-state edits, rather than the live claim or roster: archival and revival
+must not open a client-admission window. Use mail/steer for member work. Model/agent
+switches and revert/unrevert are refused; a fork copies into an independent root
+and does not mutate its member source.
