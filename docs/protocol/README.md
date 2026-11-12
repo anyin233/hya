@@ -102,6 +102,24 @@ Bodies follow canonical protojson:
 - `bytes` fields are standard base64 strings.
 - Timestamps are RFC 3339 strings.
 
+## Regenerating the gRPC adapter
+
+Run `cargo run -p xtask -- gen-api` after editing the proto contract. It
+regenerates the committed Rust/protojson types, protocol references, TUI
+catalog and proto copy, and `crates/hya-server/src/v1/grpc_generated.rs`.
+Normal server builds use committed output and need no code generation.
+Regular unary methods encode path fields and dispatch through the HTTP router.
+
+Eleven RPCs delegate to explicit implementations in `grpc.rs`:
+`StreamSessionEvents` and `StreamGlobalEvents` share event-stream producers;
+`StreamPty` is bidirectional; `InvokeSessionBundleApi` and
+`InvokeGlobalBundleApi` carry dynamic methods, paths and response bodies;
+`WaitTurn` sends its timeout in the HTTP query; `ConnectRelay`,
+`DisconnectRelay`, `GetRelayStatus`, `GetRelayLink`, and `RotateRelayKey`
+require a known loopback peer. New streaming or dynamic-method RPCs require
+an explicit implementation. All other RPC adapters are generated from their
+`hya.http` mapping without per-method server edits.
+
 ## Pagination across transports
 
 List requests with `PageRequest page` accept `page.limit` (uint32) and
