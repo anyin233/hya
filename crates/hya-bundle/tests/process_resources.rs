@@ -131,6 +131,38 @@ extensions:
 }
 
 #[test]
+fn process_and_library_extensions_round_trip_in_local_id_order() {
+    for kind in ["files", "js", "rust"] {
+        let source = BundleSource::new(
+            "process-with-library",
+            vec![
+                SourceFile::new(
+                    "bundle.yaml",
+                    format!(
+                        "kind: Bundle\nidentity: {{ id: hya/todo-tools, version: 1.0.0, publisher: hya }}\nextensions:\n  process: {{ kind: rust, command: ['${{BUNDLE_ROOT}}/types.bin'] }}\n  {kind}: [{{ id: types, path: types.bin }}]\n  libraries: [{{ id: runtime, path: native/libhya_todo_tools.so }}]\n"
+                    ),
+                ),
+                SourceFile::new("types.bin", b"{}".as_slice()),
+                SourceFile::new("native/libhya_todo_tools.so", vec![0, 0xff, 0x80]),
+            ],
+        );
+        let prepared = prepare_package(source.clone()).expect("prepare process with library");
+        assert_eq!(
+            prepared.bundles()[0]
+                .extensions()
+                .iter()
+                .map(|resource| resource.local_id.as_str())
+                .collect::<Vec<_>>(),
+            ["runtime", "types"],
+            "{kind}"
+        );
+        let package = write_public_package(&source).expect("package process with library");
+        let inspected = inspect_public_package(&package).expect("inspect process with library");
+        assert_eq!(inspected.bytes(), prepared.bytes());
+    }
+}
+
+#[test]
 fn native_library_bundle_packages_raw_bytes_without_a_process() {
     let library = vec![0xcf, 0xfa, 0xed, 0xfe, 0, 0xff, 0x80];
     let source = BundleSource::new(

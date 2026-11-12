@@ -74,7 +74,7 @@ pub(crate) fn error_code(error: &CoreError) -> &'static str {
         CoreError::RuntimeRefresh(_) => "runtime_refresh_error",
         CoreError::Cancelled => "cancelled",
         CoreError::AgentDefinitionMissing { .. } => "agent_definition_missing",
-        CoreError::Invalid(_) => "invalid",
+        CoreError::Invalid(_) | CoreError::BundleRefresh(_) => "invalid",
         CoreError::TurnAlreadyActive { .. } => "turn_already_active",
         // The failure keeps its own code; the bundle id is in the text.
         CoreError::BundleRuntime { source, .. } => error_code(source),

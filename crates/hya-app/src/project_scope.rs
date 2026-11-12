@@ -79,7 +79,10 @@ impl ProjectScopeRefresh {
             }
             match prepare_bundle_catalog(&dir, disabled) {
                 Ok(bundle) => project.push(bundle.catalog),
-                Err(error) => errors.push(format!("project bundle {}: {error}", dir.display())),
+                Err(error) => errors.push((
+                    dir.display().to_string(),
+                    format!("project bundle {}: {error}", dir.display()),
+                )),
             }
         }
         let (catalog, _) = compose_scope_catalog(
@@ -87,7 +90,8 @@ impl ProjectScopeRefresh {
             installed.iter().chain(first_party),
             disabled,
         )?;
-        Ok((catalog, errors))
+        let warnings = errors.into_iter().map(|(_, message)| message).collect();
+        Ok((catalog, warnings))
     }
 
     /// Compose Project sources on top of the installed base catalog.
@@ -171,11 +175,23 @@ impl ProjectScopeRefresh {
         let retained_plugins = runtime
             .scope_overlay(&key)
             .map_or_else(Vec::new, |overlay| overlay.plugin_sources.clone());
-        let (plugin_sources, mut errors, plugins_changed) = state
+        let (plugin_sources, plugin_errors, plugins_changed) = state
             .plugins
             .refresh(roots, &self.plugins, &retained_plugins, explicit)
             .await;
-        errors.extend(base_error.map(|error| error.to_string()));
+        let mut errors = plugin_errors
+            .into_iter()
+            .map(|error| (key.to_string(), error))
+            .collect::<Vec<_>>();
+        if let Some(error) = base_error {
+            match error {
+                CoreError::BundleRefresh(failures) => errors.extend(failures),
+                CoreError::BundleRuntime { bundle_id, source } => {
+                    errors.push((bundle_id, source.to_string()))
+                }
+                other => errors.push((key.to_string(), other.to_string())),
+            }
+        }
         changed |= plugins_changed;
         let dirs = project_bundle_dirs(roots, &state.bundles, &mut errors);
         let present = dirs.iter().cloned().collect::<BTreeSet<_>>();
@@ -203,6 +219,9 @@ impl ProjectScopeRefresh {
                 let bundle = &published.catalog.bundles()[0];
                 (bundle.identity().id.as_str(), bundle.namespace())
             });
+            let source_id = declared
+                .or(retained)
+                .map_or_else(|| dir.display().to_string(), |(id, _)| id.to_string());
             if let Some((id, namespace)) = declared.or(retained)
                 && !claim_bundle(id, namespace, &base.disabled, &mut ids, &mut namespaces)
             {
@@ -251,8 +270,13 @@ impl ProjectScopeRefresh {
                     }
                 }
             }
-            if let Some(error) = &record.error {
-                errors.push(format!("project bundle {}: {error}", dir.display()));
+            if let Some(error) = &record.error
+                && !base.disabled.contains(&source_id)
+            {
+                errors.push((
+                    source_id,
+                    format!("project bundle {}: {error}", dir.display()),
+                ));
             }
             if let Some(published) = &record.published
                 && published.enabled
@@ -266,7 +290,7 @@ impl ProjectScopeRefresh {
             return if errors.is_empty() {
                 Ok(false)
             } else {
-                Err(CoreError::Invalid(errors.join("; ")))
+                Err(CoreError::BundleRefresh(errors))
             };
         }
         // Select catalogs using the same first-root/id/namespace precedence as
@@ -346,7 +370,7 @@ impl ProjectScopeRefresh {
         if errors.is_empty() {
             Ok(true)
         } else {
-            Err(CoreError::Invalid(errors.join("; ")))
+            Err(CoreError::BundleRefresh(errors))
         }
     }
 
@@ -465,7 +489,7 @@ fn compose_scope_catalog<'a>(
 fn project_bundle_dirs(
     roots: &[PathBuf],
     retained: &BTreeMap<PathBuf, BundleRecord>,
-    errors: &mut Vec<String>,
+    errors: &mut Vec<(String, String)>,
 ) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     for root in roots {
@@ -484,7 +508,10 @@ fn project_bundle_dirs(
                 dirs.extend(paths);
             }
             Err(error) => {
-                errors.push(format!("read {}: {error}", directory.display()));
+                errors.push((
+                    directory.display().to_string(),
+                    format!("read {}: {error}", directory.display()),
+                ));
                 dirs.extend(
                     retained
                         .keys()

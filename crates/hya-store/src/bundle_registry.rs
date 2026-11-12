@@ -326,6 +326,10 @@ impl BundleRegistry {
                 .bind(loser)
                 .execute(&mut *transaction)
                 .await?;
+            sqlx::query("DELETE FROM bundle_disabled WHERE bundle_id = ?")
+                .bind(loser)
+                .execute(&mut *transaction)
+                .await?;
         }
 
         match plan.action {
@@ -449,6 +453,10 @@ impl BundleRegistry {
                 "bundle registry uninstall row is missing".to_string(),
             ));
         }
+        sqlx::query("DELETE FROM bundle_disabled WHERE bundle_id = ?")
+            .bind(bundle_id)
+            .execute(&mut *transaction)
+            .await?;
         let generation = advance_generation(&mut transaction, snapshot.generation).await?;
         transaction.commit().await?;
         Ok(BundleUninstallOutcome::Removed { generation })
@@ -580,7 +588,8 @@ fn plan_install(
         .iter()
         .find(|loaded| loaded.record.bundle_id == bundle_id);
 
-    // Same bundle id: refuse downgrades unless the policy allows them.
+    // Compare versions only for readable installations. An unreadable row has
+    // no validated version to compare; replacing it always repairs that id.
     if let Some(loaded) = existing
         && loaded.record.source_digest != source_digest
         && loaded.record.version != version
@@ -720,4 +729,79 @@ fn is_sqlite_busy_or_locked(error: &sqlx::Error) -> bool {
         .code()
         .and_then(|code| code.parse::<u32>().ok())
         .is_some_and(|code| matches!(code & 0xff, 5 | 6))
+}
+
+#[cfg(test)]
+mod disabled_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn replacement_preserves_disabled_and_removal_clears_it()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let path = std::env::temp_dir().join(format!(
+            "hya-registry-disabled-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        let registry = BundleRegistry::connect(&path.to_string_lossy()).await?;
+        for (id, version, digest) in [
+            ("test/original", "1.0.0", 1),
+            ("test/original", "2.0.0", 2),
+            ("test/original", "1.0.0", 4),
+            ("test/replacement", "1.0.0", 3),
+        ] {
+            let prepared = hya_bundle::prepare_package(hya_bundle::BundleSource::new(
+                id,
+                vec![hya_bundle::SourceFile::new(
+                    "bundle.yaml",
+                    format!(
+                        "kind: Bundle\nidentity: {{ id: {id}, version: {version}, publisher: test }}\nnamespace: shared\n"
+                    ),
+                )],
+            ))?;
+            registry
+                .install(
+                    &[],
+                    if id == "test/replacement" {
+                        NamespaceInstallPolicy::OverwriteConflicts
+                    } else {
+                        NamespaceInstallPolicy::DenyConflicts
+                    },
+                    BundleInstallCandidate {
+                        source_digest: [digest; 32],
+                        prepared_digest: prepared.digest().to_string(),
+                        prepared_bytes: prepared.bytes().to_vec(),
+                        installed_at: 1,
+                    },
+                )
+                .await?;
+            if version == "2.0.0" || digest == 4 {
+                assert!(registry.disabled_bundle_ids().await?.contains(id));
+            }
+            if version == "2.0.0" {
+                sqlx::query("UPDATE installed_bundle SET prepared_bytes = ? WHERE bundle_id = ?")
+                    .bind(vec![0_u8])
+                    .bind(id)
+                    .execute(&registry.pool)
+                    .await?;
+                assert_eq!(registry.snapshot().await?.unreadable.len(), 1);
+            }
+            if id == "test/replacement" {
+                assert!(
+                    !registry
+                        .disabled_bundle_ids()
+                        .await?
+                        .contains("test/original")
+                );
+            }
+            registry.set_bundle_enabled(id, false).await?;
+        }
+        registry.uninstall("test/replacement").await?;
+        assert!(registry.disabled_bundle_ids().await?.is_empty());
+        registry.pool.close().await;
+        std::fs::remove_file(path)?;
+        Ok(())
+    }
 }

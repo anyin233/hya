@@ -212,11 +212,11 @@ async fn set_enabled(bundle_id: &str, enabled: bool, db: &str) -> anyhow::Result
         "{} {bundle_id}",
         if enabled { "enabled" } else { "disabled" }
     );
-    refresh_daemon(db).await
+    refresh_daemon(db, bundle_id).await
 }
 
 /// Ask the running backend to refresh the base and the current Project now.
-async fn refresh_daemon(db: &str) -> anyhow::Result<()> {
+async fn refresh_daemon(db: &str, bundle_id: &str) -> anyhow::Result<()> {
     if let Some(found) = crate::daemon::running(db).await {
         let refreshed = reqwest::Client::new()
             .post(format!("{}/v1/bundles:refresh", found.url))
@@ -230,21 +230,29 @@ async fn refresh_daemon(db: &str) -> anyhow::Result<()> {
             .json::<hya_api::v1::RefreshBundlesResponse>()
             .await
             .context("read the backend bundle refresh response")?;
-        anyhow::ensure!(
-            refreshed.errors.is_empty(),
-            "backend bundle refresh failed: {}",
-            refreshed
-                .errors
-                .iter()
-                .map(|error| if error.bundle_id.is_empty() {
-                    error.message.clone()
-                } else {
-                    format!("{}: {}", error.bundle_id, error.message)
-                })
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
+        report_refresh_errors(bundle_id, &refreshed.errors)?;
     }
+    Ok(())
+}
+
+fn report_refresh_errors(
+    id: &str,
+    errors: &[hya_api::v1::BundleRefreshError],
+) -> anyhow::Result<()> {
+    let mut failures = Vec::new();
+    for error in errors {
+        let message = format!("{}: {}", error.bundle_id, error.message);
+        if error.bundle_id == id {
+            failures.push(message);
+        } else {
+            eprintln!("warning: {message}");
+        }
+    }
+    anyhow::ensure!(
+        failures.is_empty(),
+        "backend bundle refresh failed:\n  {}",
+        failures.join("\n  ")
+    );
     Ok(())
 }
 
@@ -399,8 +407,16 @@ async fn self_check(public: &PublicPackageInspection) -> anyhow::Result<()> {
 /// catalog now and require the installed bundle (`id` at `digest`) to be
 /// published. Without a running backend it loads at the next start.
 async fn prove_activation(db: &str, scope: Scope, id: &str, digest: &str) -> anyhow::Result<()> {
+    let disabled = match bundle_admin::existing_registry().await? {
+        Some(registry) => registry.disabled_bundle_ids().await?.contains(id),
+        None => false,
+    };
     let Some(found) = crate::daemon::running(db).await else {
-        println!("activation: no backend runs for {db}; it loads when one starts");
+        if disabled {
+            println!("activation: installed, disabled");
+        } else {
+            println!("activation: no backend runs for {db}; it loads when one starts");
+        }
         return Ok(());
     };
     let directory = match scope {
@@ -418,35 +434,27 @@ async fn prove_activation(db: &str, scope: Scope, id: &str, digest: &str) -> any
         .await
         .with_context(|| format!("ask the backend at {} to refresh its bundles", found.url))?;
     let status = response.status();
-    let body: serde_json::Value = response
-        .json()
-        .await
-        .context("read the bundle refresh response")?;
     if !status.is_success() {
+        let body = response
+            .text()
+            .await
+            .context("read the bundle refresh error")?;
         anyhow::bail!("installed but not activated: the backend answered {status}: {body}");
     }
-    let published = body["bundles"].as_array().is_some_and(|bundles| {
-        bundles.iter().any(|bundle| {
-            bundle["id"].as_str() == Some(id) && bundle["preparedDigest"].as_str() == Some(digest)
-        })
-    });
-    let errors: Vec<String> = body["errors"]
-        .as_array()
-        .map(|errors| {
-            errors
-                .iter()
-                .filter_map(|error| {
-                    let message = error["message"].as_str()?;
-                    Some(
-                        match error["bundleId"].as_str().filter(|id| !id.is_empty()) {
-                            Some(bundle) => format!("{bundle}: {message}"),
-                            None => message.to_owned(),
-                        },
-                    )
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let body = response
+        .json::<hya_api::v1::RefreshBundlesResponse>()
+        .await
+        .context("read the bundle refresh response")?;
+    report_refresh_errors(id, &body.errors)
+        .map_err(|error| anyhow::anyhow!("installed but not activated: {error}"))?;
+    if disabled {
+        println!("activation: installed, disabled");
+        return Ok(());
+    }
+    let published = body
+        .bundles
+        .iter()
+        .any(|bundle| bundle.id == id && bundle.prepared_digest == digest);
     if published {
         println!(
             "activation: active in the backend (pid {}); the next turn uses it",
@@ -454,22 +462,16 @@ async fn prove_activation(db: &str, scope: Scope, id: &str, digest: &str) -> any
         );
         return Ok(());
     }
-    if scope == Scope::Project && body["scope"].as_str() == Some("directory") {
+    if scope == Scope::Project && body.scope == "directory" {
         println!(
             "activation: {directory} is not inside a registered Project, so no session loads its \
              `.hya/bundles`; add it to a Project (TUI `/project`) to activate the bundle"
         );
         return Ok(());
     }
-    if errors.is_empty() {
-        anyhow::bail!(
-            "installed but not activated: the backend (pid {}) does not publish {id} at the installed digest",
-            found.pid
-        );
-    }
     anyhow::bail!(
-        "installed but not activated; the backend keeps the previous bundles:\n  {}",
-        errors.join("\n  ")
+        "installed but not activated: the backend (pid {}) does not publish {id} at the installed digest",
+        found.pid
     )
 }
 
@@ -800,7 +802,12 @@ fn search_entry(listing: BundleListing) -> SearchEntry {
             workflow: components.workflows.first().cloned().unwrap_or_else(dash),
             kind: if unreadable { dash() } else { listing.kind },
             state: if unreadable {
-                "unreadable (reinstall)".to_string()
+                if listing.enabled {
+                    "unreadable (reinstall)"
+                } else {
+                    "disabled, unreadable (reinstall)"
+                }
+                .to_string()
             } else {
                 listing.state
             },
@@ -935,11 +942,7 @@ async fn info(bundle_id: &str, filter: Option<Scope>) -> anyhow::Result<()> {
 
 /// Print a user-installed bundle; `false` when the registry has no such id.
 async fn info_installed(bundle_id: &str) -> anyhow::Result<bool> {
-    let Some(record) = installed_records_if_exists()
-        .await?
-        .into_iter()
-        .find(|record| record.bundle_id == bundle_id)
-    else {
+    let Some((record, enabled)) = installed_record_if_exists(bundle_id).await? else {
         return Ok(false);
     };
     let prepared = bundle_admin::decode_installed_catalog(&record)?;
@@ -954,7 +957,7 @@ async fn info_installed(bundle_id: &str) -> anyhow::Result<bool> {
     println!("origin=installed");
     println!("scope=user");
     println!("format=public-v1");
-    println!("state=active");
+    println!("state={}", if enabled { "active" } else { "disabled" });
     println!("immutable=false");
     println!("source_digest={}", hex_digest(&record.source_digest));
     println!("prepared_digest={}", record.prepared_digest);
@@ -1070,7 +1073,7 @@ async fn remove(bundle_id: &str, scope: Scope, yes: bool, db: &str) -> anyhow::R
             println!("removed {bundle_id} scope=project path={}", path.display());
         }
     }
-    refresh_daemon(db).await
+    refresh_daemon(db, bundle_id).await
 }
 
 /// Print the URI-scheme extensions one bundle declares, one
@@ -1101,11 +1104,7 @@ async fn schema(name: &str, filter: Option<Scope>) -> anyhow::Result<()> {
     };
     let installed =
         || async {
-            let Some(record) = installed_records_if_exists()
-                .await?
-                .into_iter()
-                .find(|record| record.bundle_id == name)
-            else {
+            let Some((record, _)) = installed_record_if_exists(name).await? else {
                 return anyhow::Ok(None);
             };
             bundle_admin::decode_installed_catalog(&record).map(Some).with_context(|| {
@@ -1158,15 +1157,29 @@ fn print_schema_rows(schemas: &[hya_bundle::PreparedSchema]) {
     }
 }
 
-async fn installed_records_if_exists() -> anyhow::Result<Vec<BundleRegistryRecord>> {
-    match bundle_admin::existing_registry().await? {
-        Some(registry) => Ok(registry
-            .snapshot()
-            .await
-            .map_err(bundle_admin::store_error)?
-            .bundles),
-        None => Ok(Vec::new()),
+async fn installed_record_if_exists(
+    id: &str,
+) -> anyhow::Result<Option<(BundleRegistryRecord, bool)>> {
+    let Some(registry) = bundle_admin::existing_registry().await? else {
+        return Ok(None);
+    };
+    let snapshot = registry
+        .snapshot()
+        .await
+        .map_err(bundle_admin::store_error)?;
+    let enabled = !registry.disabled_bundle_ids().await?.contains(id);
+    if let Some(row) = snapshot.unreadable.iter().find(|row| row.bundle_id == id) {
+        anyhow::bail!(
+            "installed bundle {id} is unreadable{}: {}",
+            if enabled { "" } else { " (disabled)" },
+            row.error
+        );
     }
+    Ok(snapshot
+        .bundles
+        .into_iter()
+        .find(|record| record.bundle_id == id)
+        .map(|record| (record, enabled)))
 }
 
 /// Print the static metadata of one prepared bundle, including its declared
@@ -1304,7 +1317,7 @@ mod refresh_tests {
             axum::serve(listener, app).await.unwrap();
         });
         std::fs::write(&paths.discovery, serde_json::to_vec(&serde_json::json!({"url":url,"pid":std::process::id(),"version":"test","startedAt":0})).unwrap()).unwrap();
-        let result = super::refresh_daemon(db.to_str().unwrap()).await;
+        let result = super::refresh_daemon(db.to_str().unwrap(), "alpha").await;
         server.abort();
         let _ = server.await;
         drop(owner);
