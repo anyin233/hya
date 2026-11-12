@@ -639,7 +639,7 @@ pub enum Event {
         handle: String,
         /// New live activity.
         status: RosterStatus,
-        /// Optional short task label; `Some("resident stopped")` is an explicit-stop sentinel.
+        /// Optional short task label for display; it does not acknowledge work.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         current_task: Option<String>,
     },
@@ -655,6 +655,18 @@ pub enum Event {
         /// Actor epoch for this incarnation.
         epoch: ActorEpoch,
         /// Inbox length covered by this coalesced resident turn.
+        inbox_through: u64,
+    },
+    /// The admitted resident wake settled. A user cancellation leaves its work
+    /// pending instead; in-turn MailConsumed acknowledgements do not settle it.
+    ResidentWorkFinished {
+        /// Team-root log session.
+        session: SessionId,
+        /// Roster handle whose work settled.
+        handle: String,
+        /// Epoch of the work being settled.
+        epoch: ActorEpoch,
+        /// Inbox boundary acknowledged by the completed wake.
         inbox_through: u64,
     },
     /// Harness-observed liveness for one resident (ADR-0002). Emitted ONLY by
@@ -1169,6 +1181,7 @@ impl Event {
             Event::AgentRegistered { session, .. }
             | Event::AgentActivityChanged { session, .. }
             | Event::ResidentWorkStarted { session, .. }
+            | Event::ResidentWorkFinished { session, .. }
             | Event::AgentHeartbeat { session, .. }
             | Event::MailSent { session, .. }
             | Event::ChannelJoined { session, .. }
@@ -1276,6 +1289,12 @@ mod tests {
                 handle: "reviewer-3".to_string(),
                 epoch: ActorEpoch::INITIAL,
                 inbox_through: 2,
+            },
+            Event::ResidentWorkFinished {
+                session: root,
+                handle: "main/member".into(),
+                epoch: ActorEpoch::INITIAL,
+                inbox_through: 1,
             },
             Event::MailSent {
                 session: root,

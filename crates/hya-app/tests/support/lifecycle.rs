@@ -199,7 +199,8 @@ impl Provider for ScriptedProvider {
                     let encoded = serde_json::to_string(message).unwrap();
                     scripts
                         .iter_mut()
-                        .find(|(marker, _)| encoded.contains(marker.as_str()))
+                        .filter(|(marker, _)| encoded.contains(marker.as_str()))
+                        .max_by_key(|(marker, _)| encoded.rfind(marker.as_str()))
                         .map(|(_, rounds)| {
                             rounds.pop_front().unwrap_or_else(|| Round::text("settled"))
                         })

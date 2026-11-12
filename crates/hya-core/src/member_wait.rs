@@ -535,6 +535,7 @@ fn relevant(event: &Event, root: SessionId, caller: SessionId) -> bool {
             | Event::AgentRestarted { .. }
             | Event::AgentRegistered { .. }
             | Event::ResidentWorkStarted { .. }
+            | Event::ResidentWorkFinished { .. }
             | Event::SubagentReported { .. }
             | Event::MemberFinished { .. }
     );
