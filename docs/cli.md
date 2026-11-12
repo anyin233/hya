@@ -675,6 +675,7 @@ runs whose prompt context is exactly what you passed.
 ```sh
 hya exec "summarize this repo"
 hya exec --json "summarize this repo"
+hya exec --json --time-budget 900 "fix the failing test"
 ```
 
 Runs one headless turn and prints the rendered transcript. The session works
@@ -719,15 +720,36 @@ back to `hya-main`. `hya run`, `hya -p` goal mode, `hya loop`, `hya rpc`, and
 `hya workflow run` (when it creates a new Session) all resolve the root Agent
 the same way.
 
-**Live subagents at the end of a lead turn.** When the lead's turn ends on its
-own (not cancelled, not failed) while subagents it started are still on the
-roster, the run does not end. The harness appends a system message to the lead
-that starts with `HEADLESS RUN`, lists those subagents (handle, status, current
-task), and says that they are stopped when the run ends, then runs the lead
-again so it can `wait` for them or `archive` them. The run ends when a lead turn
-ends with no live subagent, or after two such notice turns in a row in which the
-lead called neither `wait` nor `archive`. `run` behaves the same; an `exec`
-routed through a server does not (see above).
+**Unfinished work at the end of a lead turn.** When the lead's turn ends on its
+own (not cancelled, not failed) with work left, the run does not end. Work left
+is any of: subagents it started still on the roster (stopped and lost when the
+run ends); items of its own todo list still `pending` or `in_progress`
+(`blocked` counts as finished: nothing outside a headless run unblocks it); or
+a last step whose text announces a step it did not take — its raw text ends
+with `:`/`：`, or its last paragraph is short and its last sentence has a clause
+opening like "Now let me", "Let me", "I'll now", "现在我来", "接下来" ("Let me
+know" and "如需" do not count) — or that hit the output limit. The harness
+appends one system message to the lead that starts with `HEADLESS RUN` and
+lists every reason (subagents with handle, status, and task; the unfinished
+todos; the quoted announcement), then runs the lead again. The run ends when a
+lead turn ends with none of them, after two such notice turns in a row in which
+the lead called no tool, or after twelve notices in a run without
+`--time-budget`. `run` behaves the same; an `exec` routed through a server does
+not (see above).
+
+**`--time-budget <SECS>`.** Tells the run how long an outside harness lets it
+live (B seconds of wall clock from the start of `exec`). The run opens with a
+`HEADLESS RUN — time budget` system message. With R seconds left, the stages
+are: *wrap-up* once R ≤ min(clamp(0.35·B, 300, 3600), 0.5·B), *final* once
+R ≤ clamp(0.12·B, 90, 600), and *over* once R ≤ the grace G = clamp(0.05·B,
+30, 120). The first tool result of each session after it enters wrap-up and
+after it enters final carries a `HEADLESS RUN — TIME` / `HEADLESS RUN — FINAL`
+notice at its end (a subagent is told to `report`). A lead continuation in a
+late stage starts with the same notice, ends after one ignored notice in the
+final stage, and is not started at all once the run is over. Every `bash`
+timeout (an unset or `0` one included) and every `wait` is shortened to
+max(R − G, 5 s); `bash` says so in a `<shell_metadata>` line and sets
+`deadlineCapped: true` in its metadata. A routed `exec` refuses the flag.
 
 **Stopping and end of run.** Nothing keeps streaming after `exec` returns.
 When the run ends, `exec` drains every other in-flight turn — team
