@@ -2,6 +2,11 @@
 //! "Diagnostics", ADR-0025 D9). The relay runs in this test process; `hya
 //! relay doctor` itself is spawned as a subprocess, like every other CLI
 //! test in this crate (`sessions_cli.rs`, `proxy_cli.rs`).
+//!
+//! Intermediary-hop behaviour (an HTTP/1.1-only hop carrying WebSocket but not
+//! gRPC) is covered by `hya-relay`'s own conformance suite
+//! (`tests/conformance.rs`, `c_http1_only_hop_makes_auto_use_websocket`); this
+//! file covers the doctor's target parsing, report shape, and advice.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -9,7 +14,6 @@ use std::net::SocketAddr;
 use std::process::{Command, Output};
 
 use hya_relay::server::{RelayServer, RelayServerConfig};
-use hya_relay::testing::Http1OnlyHop;
 use serde_json::Value;
 use tokio::net::TcpListener;
 
@@ -48,22 +52,6 @@ async fn all_ok_recommends_auto_and_reports_both_bindings() -> TestResult {
     assert_eq!(report["ws"]["ok"], true, "{report}");
     assert_eq!(report["recommended_transport"], "auto");
     assert_eq!(report["prefix_ok"], true);
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn grpc_blocked_by_an_http1_only_hop_recommends_ws() -> TestResult {
-    let (addr, relay) = start_relay().await;
-    let hop = Http1OnlyHop::start(addr).await?;
-    let output = doctor(&format!("http://{}", hop.addr), &["--json"])?;
-    relay.abort();
-    assert!(output.status.success(), "{output:?}");
-    let report: Value = serde_json::from_slice(&output.stdout)?;
-    assert_eq!(report["reachable"], true);
-    assert_eq!(report["grpc"]["ok"], false, "{report}");
-    assert_eq!(report["grpc"]["kind"], "NoHttp2", "{report}");
-    assert_eq!(report["ws"]["ok"], true, "{report}");
-    assert_eq!(report["recommended_transport"], "ws");
     Ok(())
 }
 

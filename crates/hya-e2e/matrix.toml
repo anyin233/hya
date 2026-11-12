@@ -5,470 +5,353 @@ id = "T0.1"
 title = "backend boots"
 track = "P"
 path = "crates/hya-e2e/tests/p01_session_prompt.rs"
-tags = ["pr", "bootstrap"]
-timeout_secs = 60
 
 [[scenario]]
 id = "T1.2"
 title = "prompt + assistant text via FakeLlm"
 track = "P"
 path = "crates/hya-e2e/tests/p01_session_prompt.rs"
-tags = ["pr", "session"]
-timeout_secs = 60
 
 [[scenario]]
 id = "T1.3"
 title = "multi-round tool loop"
 track = "P"
 path = "crates/hya-e2e/tests/p02_tool_loop_fs.rs"
-tags = ["pr", "tools"]
-timeout_secs = 90
 
 [[scenario]]
 id = "T1.4"
 title = "read/write files"
 track = "P"
 path = "crates/hya-e2e/tests/p02_tool_loop_fs.rs"
-tags = ["pr", "tools"]
-timeout_secs = 90
 
 [[scenario]]
 id = "T1.5"
 title = "bash tool"
 track = "P"
 path = "crates/hya-e2e/tests/p02_tool_loop_fs.rs"
-tags = ["pr", "tools"]
-timeout_secs = 90
 
 [[scenario]]
 id = "T1.7"
 title = "permissions ask/once/reject + yolo mode switch"
 track = "P"
 path = "crates/hya-e2e/tests/p03_permissions.rs"
-tags = ["pr", "permissions"]
-timeout_secs = 90
 
 [[scenario]]
 id = "T1.8"
 title = "question tool + reply"
 track = "P"
 path = "crates/hya-e2e/tests/p04_questions.rs"
-tags = ["pr", "questions"]
-timeout_secs = 90
 
 [[scenario]]
 id = "T1.9"
 title = "skills load"
 track = "P"
 path = "crates/hya-e2e/tests/p05_skills.rs"
-tags = ["pr", "skills"]
-timeout_secs = 90
 
 [[scenario]]
 id = "T1.10"
 title = "MCP tool call"
 track = "P"
 path = "crates/hya-e2e/tests/p06_mcp.rs"
-tags = ["pr", "mcp"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T1.11"
 title = "session list + resume"
 track = "P"
 path = "crates/hya-e2e/tests/p07_session_lifecycle.rs"
-tags = ["pr", "session"]
-timeout_secs = 90
 
 [[scenario]]
 id = "T1.12"
 title = "session context API multi-turn"
 track = "P"
 path = "crates/hya-e2e/tests/p12_context_api.rs"
-tags = ["pr", "context"]
-timeout_secs = 90
 
 [[scenario]]
 id = "T1.13"
 title = "project AGENTS.md guidance on Compat prompt"
 track = "P"
 path = "crates/hya-e2e/tests/p13_project_agents_context.rs"
-tags = ["pr", "context", "agents"]
-timeout_secs = 90
 
 [[scenario]]
 id = "T1.14"
 title = "compact and summarize context management"
 track = "P"
 path = "crates/hya-e2e/tests/p14_compact_summarize.rs"
-tags = ["pr", "context", "compact"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T1.15"
 title = "todowrite and edit tools"
 track = "P"
 path = "crates/hya-e2e/tests/p15_todo_and_edit.rs"
-tags = ["pr", "tools"]
-timeout_secs = 90
 
 [[scenario]]
 id = "T1.16"
 title = "custom slash catalog and route expansion"
 track = "P"
 path = "crates/hya-e2e/tests/p18_custom_slash_resources.rs"
-tags = ["pr", "resources", "commands"]
-timeout_secs = 240
 
 [[scenario]]
 id = "T1.17"
 title = "Skill-backed slash expansion and discovery order"
 track = "P"
 path = "crates/hya-e2e/tests/p18_custom_slash_resources.rs"
-tags = ["pr", "resources", "skills", "commands"]
-timeout_secs = 240
 
 [[scenario]]
 id = "T1.18"
 title = "custom command invokes builtin Skill Tool"
 track = "P"
 path = "crates/hya-e2e/tests/p18_custom_slash_resources.rs"
-tags = ["pr", "resources", "skills", "recovery"]
-timeout_secs = 240
 
 [[scenario]]
 id = "T1.19"
 title = "custom command invokes plugin Tool"
 track = "P"
 path = "crates/hya-e2e/tests/p18_custom_slash_resources.rs"
-tags = ["pr", "resources", "plugins", "recovery"]
-timeout_secs = 300
 
 [[scenario]]
 id = "T1.20"
 title = "custom command invokes MCP Tool"
 track = "P"
 path = "crates/hya-e2e/tests/p18_custom_slash_resources.rs"
-tags = ["pr", "resources", "mcp", "recovery"]
-timeout_secs = 360
 
 [[scenario]]
 id = "T1.21"
 title = "custom resource name conflicts fail closed"
 track = "P"
 path = "crates/hya-e2e/tests/p18_custom_slash_resources.rs"
-tags = ["pr", "resources", "conflicts"]
-timeout_secs = 300
 
 [[scenario]]
 id = "T1.22"
 title = "dynamic resource snapshots and reload"
 track = "P"
 path = "crates/hya-e2e/tests/p18_custom_slash_resources.rs"
-tags = ["pr", "resources", "reload", "recovery"]
-timeout_secs = 300
 
 [[scenario]]
 id = "T1.23"
 title = "structured custom Tool errors and session recovery"
 track = "P"
 path = "crates/hya-e2e/tests/p18_custom_slash_resources.rs"
-tags = ["pr", "resources", "errors", "recovery"]
-timeout_secs = 240
 
 [[scenario]]
 id = "T2.1"
 title = "subagent task spawn"
 track = "P"
 path = "crates/hya-e2e/tests/p08_subagent_task.rs"
-tags = ["pr", "subagent"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.2"
 title = "nested subagent tree depth>=2"
 track = "P"
 path = "crates/hya-e2e/tests/p09_nested_subagent.rs"
-tags = ["pr", "subagent", "nested"]
-timeout_secs = 180
 
 [[scenario]]
 id = "T2.3"
 title = "agent roster / roles API"
 track = "P"
 path = "crates/hya-e2e/tests/p10_agent_roster.rs"
-tags = ["pr", "roster"]
-timeout_secs = 60
 
 [[scenario]]
 id = "T2.4"
 title = "swarm roster + list_agents from a resident"
 track = "P"
 path = "crates/hya-e2e/tests/p16_swarm_mailbox.rs"
-tags = ["pr", "swarm", "roster"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.5"
 title = "swarm send delivers direct mail to a resident"
 track = "P"
 path = "crates/hya-e2e/tests/p16_swarm_mailbox.rs"
-tags = ["pr", "swarm", "mailbox"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.6"
 title = "swarm send delivers channel mail to subscribers"
 track = "P"
 path = "crates/hya-e2e/tests/p16_swarm_mailbox.rs"
-tags = ["pr", "swarm", "mailbox"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.7"
 title = "hyabundle install/list/info/uninstall"
 track = "P"
 path = "crates/hya-e2e/tests/p11_hyabundle.rs"
-tags = ["pr", "hyabundle"]
-timeout_secs = 90
 
 [[scenario]]
 id = "T2.8"
 title = "hyabundle spawn package agent"
 track = "P"
 path = "crates/hya-e2e/tests/p11_hyabundle.rs"
-tags = ["pr", "hyabundle"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.9"
 title = "swarm channels lists membership and message counts"
 track = "P"
 path = "crates/hya-e2e/tests/p16_swarm_mailbox.rs"
-tags = ["pr", "swarm", "mailbox"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.10"
 title = "swarm join changes channel recipients"
 track = "P"
 path = "crates/hya-e2e/tests/p16_swarm_mailbox.rs"
-tags = ["pr", "swarm", "mailbox"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.11"
 title = "swarm leave stops channel mail (negative + controls)"
 track = "P"
 path = "crates/hya-e2e/tests/p16_swarm_mailbox.rs"
-tags = ["pr", "swarm", "mailbox"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.12"
 title = "cross-unit send is refused and never crosses"
 track = "P"
 path = "crates/hya-e2e/tests/p16_swarm_mailbox.rs"
-tags = ["pr", "swarm", "mailbox", "isolation"]
-timeout_secs = 180
 
 [[scenario]]
 id = "T2.13"
 title = "user-authored Workflow runs fan-out and fan-in"
 track = "P"
 path = "crates/hya-e2e/tests/p17_workflow_composition.rs"
-tags = ["pr", "workflow", "subagent"]
-timeout_secs = 180
 
 [[scenario]]
 id = "T2.14"
 title = "Workflow stage model routing and replay"
 track = "P"
 path = "crates/hya-e2e/tests/p19_workflow_model_routing.rs"
-tags = ["pr", "workflow", "routing", "replay"]
-timeout_secs = 180
 
 [[scenario]]
 id = "T2.15"
 title = "model catalog discovery and offline fallback"
 track = "P"
 path = "crates/hya-e2e/tests/p20_model_catalog_discovery.rs"
-tags = ["pr", "providers", "catalog", "offline"]
-timeout_secs = 180
 
 [[scenario]]
 id = "T2.16"
 title = "agent model preference steers spawned subagent model"
 track = "P"
 path = "crates/hya-e2e/tests/p21_agent_model_preference.rs"
-tags = ["pr", "agents", "models", "preferences"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.17"
 title = "dispatch-time model resolution branches"
 track = "P"
 path = "crates/hya-e2e/tests/p22_dispatch_model_resolution.rs"
-tags = ["pr", "agents", "models", "dispatch"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.18"
 title = "long MCP call auto-backgrounds and steers reclaim"
 track = "P"
 path = "crates/hya-e2e/tests/p23_mcp_background.rs"
-tags = ["pr", "mcp", "background"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.19"
 title = "installed bundle schemas surface through CLI and runtime API"
 track = "P"
 path = "crates/hya-e2e/tests/p24_bundle_schemas.rs"
-tags = ["pr", "hyabundle", "schemas"]
 [[scenario]]
 id = "T2.20"
 title = "goal-loop preset bundle serves skills and patched evaluator pollutes goal session"
 track = "P"
 path = "crates/hya-e2e/tests/p25_goal_loop_bundle.rs"
-tags = ["pr", "hyabundle", "goal", "plugins"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.21"
 title = "agentless Plugin bundle installs and publishes static skill"
 track = "P"
 path = "crates/hya-e2e/tests/p26_plugin_bundle.rs"
-tags = ["pr", "hyabundle", "plugin", "skills"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.22"
 title = "packaged native processes, MCP and selected hooks execute with owner scope"
 track = "P"
 path = "crates/hya-e2e/tests/p27_bundle_process.rs"
-tags = ["pr", "hyabundle", "plugin", "mcp"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.23"
 title = "default subagent bundle worker mails its parent, reports, and archives"
 track = "P"
 path = "crates/hya-e2e/tests/p28_subagent_bundle.rs"
-tags = ["pr", "hyabundle", "subagent", "mailbox"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.24"
 title = "Claude import executes packaged hooks and skills after source removal"
 track = "P"
 path = "crates/hya-e2e/tests/p29_claude_bundle.rs"
-tags = ["pr", "hyabundle", "plugin", "skills"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.25"
 title = "installed channel policy denies child sends and uninstall restores defaults"
 track = "P"
 path = "crates/hya-e2e/tests/p30_channel_bundle.rs"
-tags = ["pr", "hyabundle", "subagent", "mailbox"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.26"
 title = "hya-extra/zvec-grep Plugin bundle MCP tool executes through fake zg on PATH"
 track = "P"
 path = "crates/hya-e2e/tests/p31_extra_bundles.rs"
-tags = ["pr", "hyabundle", "plugin", "mcp", "extras"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.27"
 title = "hya-extra/jev-model-router routes chat.params to the Jev-chosen tier, sticky per chain, default_tier on Jev failure"
 track = "P"
 path = "crates/hya-e2e/tests/p32_jev_model_router.rs"
-tags = ["pr", "hyabundle", "plugin", "extras"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.28"
 title = "hya-extra/model-fallback consults model.fallback on a pre-stream failure, recovers on the configured chain, and gives up when no chain matches"
 track = "P"
 path = "crates/hya-e2e/tests/p33_model_fallback.rs"
-tags = ["pr", "hyabundle", "plugin", "extras"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.29"
 title = "an installed bundle process registers its own API endpoints (manifest apis:): a session-scoped GET /v1/sessions/{session}/bundles/{bundle}/usage reads the session tree's usage via the request-scoped session.usage capability, a global POST under /v1/bundles/{bundle}/api/ echoes body + path params with status 201 and a session-less capability, a global PUT/GET/DELETE trio keeps process-owned state, host-side failures use bundle_api_* codes, and a kind: bun process tool call receives a capability"
 track = "P"
 path = "crates/hya-e2e/tests/p34_bundle_apis.rs"
-tags = ["pr", "hyabundle", "plugin"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.30"
 title = "hya-extra/token-summary Plugin bundle serves the usage session API endpoint (per-model input/cache/output tokens, thinking/visible split) for a root+subagent session tree, and its token_summary agent tool renders the same data as a Markdown table that reaches the model's follow-up request"
 track = "P"
 path = "crates/hya-e2e/tests/p35_token_summary.rs"
-tags = ["pr", "hyabundle", "plugin", "extras"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.31"
 title = "wait is woken inside the lead turn by a worker report and never repeats it; a worker that stops without a report wakes it as stalled; archive stops a worker and mail to its handle wakes it"
 track = "P"
 path = "crates/hya-e2e/tests/p36_wait_archive.rs"
-tags = ["pr", "subagent", "mailbox"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.32"
 title = "manual mode: a session reads any root of its multi-root Project without asking; a read outside every root asks ExternalDirectory for the concrete <dir>/*; allow-always then covers a sibling session of the same Project for a sibling file in that directory, but a session of a different Project asks again"
 track = "P"
 path = "crates/hya-e2e/tests/p37_project_permission_scope.rs"
-tags = ["pr", "permissions", "project"]
-timeout_secs = 90
 
 [[scenario]]
 id = "T2.33"
 title = "yolo mode auto-approves a read outside every Project root without ever raising an ExternalDirectory ask"
 track = "P"
 path = "crates/hya-e2e/tests/p37_project_permission_scope.rs"
-tags = ["pr", "permissions", "project"]
-timeout_secs = 60
 
 [[scenario]]
 id = "T2.34"
 title = "bash's cwd outside every Project root never raises ExternalDirectory, even in manual mode where the command itself still asks Action::Bash"
 track = "P"
 path = "crates/hya-e2e/tests/p37_project_permission_scope.rs"
-tags = ["pr", "permissions", "project"]
-timeout_secs = 60
 
 [[scenario]]
 id = "T2.35"
 title = "secure relay golden path over the pinned gRPC binding: hya proxy + hya serve --relay + hya bridge; remote Project, in-root and outside-root reads (ExternalDirectory ask answered over the bridge), session SSE, PTY WebSocket, temporary session, RelayControl refused from relay origin, rotate rejects the running bridge, shutdown sends serverStopping then 503 offline; a capture hop in front of the proxy never sees prompt, file, PTY, or PSK bytes"
 track = "P"
 path = "crates/hya-e2e/tests/p38_relay.rs"
-tags = ["pr", "relay", "security"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.36"
 title = "the T2.35 relay golden path and capture assertions over the pinned WebSocket binding"
 track = "P"
 path = "crates/hya-e2e/tests/p38_relay.rs"
-tags = ["pr", "relay", "security"]
-timeout_secs = 120
 
 [[scenario]]
 id = "T2.37"
 title = "relay over TLS to the proxy (rcgen certificate, --relay-ca on serve and bridge, hya:// link): health, session, and prompt through the bridge; the capture hop sees no prompt, answer, or PSK bytes"
 track = "P"
 path = "crates/hya-e2e/tests/p38_relay.rs"
-tags = ["pr", "relay", "security", "tls"]
-timeout_secs = 90
 
 # Index-only deep engine coverage (not duplicated in Track P).
 [[scenario]]
@@ -476,40 +359,30 @@ id = "I.nested"
 title = "nested spawn tree (in-process)"
 track = "I"
 path = "crates/hya-app/tests/nested_spawn_tree.rs"
-tags = ["index-only", "nested"]
-timeout_secs = 0
 
 [[scenario]]
 id = "I.subagent"
 title = "subagent/resident core"
 track = "I"
 path = "crates/hya-core/tests/subagent.rs"
-tags = ["index-only", "subagent"]
-timeout_secs = 0
 
 [[scenario]]
 id = "I.v1_api"
 title = "v1 HTTP contract integration"
 track = "I"
 path = "crates/hya-server/tests/v1_api.rs"
-tags = ["index-only", "v1"]
-timeout_secs = 0
 
 [[scenario]]
 id = "I.v1_grpc_parity"
 title = "v1 HTTP/gRPC dual-transport conformance"
 track = "I"
 path = "crates/hya-server/tests/v1_grpc_parity.rs"
-tags = ["index-only", "v1", "grpc"]
-timeout_secs = 0
 
 [[scenario]]
 id = "I.bundle_cli"
 title = "backend bundle CLI unit"
 track = "I"
 path = "crates/hya-backend/tests/bundle_cli.rs"
-tags = ["index-only", "hyabundle"]
-timeout_secs = 0
 
 # Retired ids. Every number in a T-series range must be either used above or
 # retired here, so a numbering hole can never again go untracked.

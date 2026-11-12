@@ -7,13 +7,12 @@
 > only HTTP surface — see the [protocol guide](protocol/README.md) and
 > [Server and Client](architecture/server-client.md). Every route-level claim
 > below describes that deleted surface and is retained as evidence of the
-> pre-consolidation parity work. Compat touchpoints that are still living
-> product surface: the Compat-compatible CLI aliases and no-op flags
-> (`run`, `--print-logs`, `--log-level`, `--pure`, `serve --hostname/--port`,
-> `--cors`, `--mdns`), the Compat plugin adapter
-)
-> The OpenCode plugin adapter and the `xtask sync-compat` migration task have
-> also been deleted; no living compat surface remains beyond CLI aliases.
+> pre-consolidation parity work. Of the Compat CLI aliases tracked here, only
+> `--pure` is still living product surface (kept so Compat command lines that
+> pass it work); `run`, `--print-logs`, `--log-level`, `serve
+> --hostname/--port`, `--cors`, and `--mdns` were deleted. The plugin adapters
+> and the `xtask sync-compat` migration task are deleted too; no living compat
+> surface remains beyond `--pure`.
 
 Last refreshed: 2026-09-02.
 
