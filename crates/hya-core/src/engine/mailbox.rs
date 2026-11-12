@@ -297,10 +297,21 @@ impl SessionEngine {
             let envelope = match append {
                 Ok(envelope) => envelope,
                 Err(ref error @ hya_store::StoreError::MailRevivalRequired { ref target, .. }) => {
-                    let Some(reviver) = self.archive_reviver() else {
+                    let Some(supervisor) = self.resident_supervisor() else {
                         return Err(error.clone().into());
                     };
-                    reviver.revive(root, &from, target, body).await?;
+                    supervisor
+                        .revive_episode(
+                            root,
+                            &from,
+                            target,
+                            to.clone(),
+                            kind,
+                            body,
+                            actor_claim,
+                            channel_policy,
+                        )
+                        .await?;
                     return Ok(MailReceipt {
                         from,
                         to,
@@ -339,10 +350,21 @@ impl SessionEngine {
         let (envelope, recipients) = match append {
             Ok(result) => result,
             Err(ref error @ hya_store::StoreError::MailRevivalRequired { ref target, .. }) => {
-                let Some(reviver) = self.archive_reviver() else {
+                let Some(supervisor) = self.resident_supervisor() else {
                     return Err(error.clone().into());
                 };
-                reviver.revive(root, &from, target, body).await?;
+                supervisor
+                    .revive_episode(
+                        root,
+                        &from,
+                        target,
+                        to.clone(),
+                        kind,
+                        body,
+                        actor_claim,
+                        channel_policy,
+                    )
+                    .await?;
                 return Ok(MailReceipt {
                     from,
                     to,
@@ -1443,18 +1465,6 @@ mod tests {
         assert_mail_rejected(
             engine
                 .mail_send(
-                    root,
-                    MailEndpoint::Handle("resident-1".into()),
-                    MailKind::Message,
-                    "relative revival stays unsupported".into(),
-                )
-                .await,
-            "main",
-            "direct:resident-1",
-        );
-        assert_mail_rejected(
-            engine
-                .mail_send(
                     outsider.session,
                     MailEndpoint::Handle(handle.clone()),
                     MailKind::Message,
@@ -1497,7 +1507,7 @@ mod tests {
         let receipt = engine
             .mail_send(
                 root,
-                MailEndpoint::Handle(handle.clone()),
+                MailEndpoint::Handle("resident-1".into()),
                 MailKind::Message,
                 "authorized revival".into(),
             )
@@ -1517,7 +1527,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mail_auth_dm_during_revival_delivers_without_a_second_revive() {
+    async fn mail_auth_concurrent_handle_and_channel_sends_revive_exactly_once() {
         use std::time::Duration;
 
         tokio::time::timeout(Duration::from_secs(10), async {
@@ -1526,18 +1536,23 @@ mod tests {
             let (root, supervisor, handle, channel, lead_turn) = archived_child(&engine).await;
             hooks.block.store(true, std::sync::atomic::Ordering::SeqCst);
             let reviving = tokio::spawn({
-                let supervisor = supervisor.clone();
+                let engine = engine.clone();
                 let handle = handle.clone();
                 async move {
-                    supervisor
-                        .revive_child(root, "main", &handle, "episode two".into())
+                    engine
+                        .mail_send(
+                            root,
+                            MailEndpoint::Handle(handle),
+                            MailKind::Message,
+                            "episode two".into(),
+                        )
                         .await
                 }
             });
             hooks.entered.notified().await;
             let projection = engine.read_projection(root).await.unwrap();
             assert!(projection.team.roster.contains_key(&handle));
-            assert!(projection.team.archived.contains_key(&handle));
+            assert!(!projection.team.archived.contains_key(&handle));
             let result = engine
                 .mail_send(
                     root,
@@ -1569,12 +1584,15 @@ mod tests {
             supervisor
                 .drain(hya_proto::FinishCause::Shutdown, Duration::from_secs(2))
                 .await;
-            let receipt = result.expect("the roster wins while AgentRestarted is pending");
+            let receipt = result.expect("the live episode accepts concurrent mail");
             assert_eq!(handle_result.unwrap().recipients, 1);
             assert_eq!(receipt.to, MailEndpoint::Channel(channel));
             assert_eq!(receipt.recipients, 2);
-            assert_eq!(delivered, ["during revival", "handle during revival"]);
-            assert_eq!(restarts_before_release, 0);
+            assert_eq!(
+                delivered,
+                ["episode two", "during revival", "handle during revival"]
+            );
+            assert_eq!(restarts_before_release, 1);
         })
         .await
         .expect("revival synchronization must complete");

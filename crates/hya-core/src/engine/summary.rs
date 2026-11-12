@@ -38,7 +38,13 @@ impl SessionEngine {
         let messages = summary_messages(&projection)?;
         let usage = crate::compaction::UsageCollector::default();
         let options = crate::compaction::SummarizeOptions {
-            previous_summary: crate::compaction::previous_summary(&messages),
+            previous_summary: crate::compaction::previous_summary(&messages).or_else(|| {
+                projection
+                    .session
+                    .handoff
+                    .as_ref()
+                    .map(|handoff| handoff.doc.clone())
+            }),
             max_output_tokens: Some(self.compaction.summary_max_tokens),
             usage: Some(usage.clone()),
             ..options
@@ -76,6 +82,21 @@ impl SessionEngine {
     }
 }
 
+/// Handoffs describe the whole current episode, including its local
+/// compactions. The earlier handoff is supplied separately as the anchor.
+pub(crate) fn episode_messages(projection: &Projection) -> &[hya_proto::MessageProjection] {
+    let prefix = format!("{COMPACT_CONTEXT_MARKER}\nPRIOR HANDOFF (generation ");
+    let start = projection
+        .session
+        .messages
+        .iter()
+        .rposition(|message| {
+            message.role == Role::System && collect_text(&message.parts).starts_with(&prefix)
+        })
+        .map_or(0, |index| index + 1);
+    &projection.session.messages[start..]
+}
+
 pub(crate) fn summary_messages(projection: &Projection) -> Result<Vec<Message>, CoreError> {
     if projection.session.id.is_none() {
         return Err(CoreError::Invalid("session not found".to_string()));
@@ -90,9 +111,7 @@ pub(crate) fn summary_messages(projection: &Projection) -> Result<Vec<Message>, 
         .model
         .clone()
         .unwrap_or_else(|| ModelRef::new("unknown"));
-    Ok(projection
-        .session
-        .messages
+    Ok(episode_messages(projection)
         .iter()
         .map(|message| match message.role {
             Role::User => Message::User {

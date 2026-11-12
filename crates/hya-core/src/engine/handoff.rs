@@ -2,7 +2,7 @@
 //!
 //! The terminal handoff is the only state an archived agent carries into its
 //! next episode. It is written once, at report time, by the subagent's
-//! configured summarizer over the verbatim transcript with the state-only
+//! configured summarizer over the ended episode transcript with the state-only
 //! template ([`STATE_HANDOFF_TEMPLATE`](crate::compaction)); each generation
 //! anchors on its predecessor. Generation never fails: a missing summarizer, a
 //! failed call, or engine-synthesized terminality falls back to a deterministic
@@ -13,7 +13,7 @@ use hya_proto::{Projection, SessionId, UsagePurpose};
 use crate::compaction::{SummarizeOptions, UsageCollector};
 
 use super::SessionEngine;
-use super::summary::summary_messages;
+use super::summary::{episode_messages, summary_messages};
 
 /// A generated terminal handoff.
 #[derive(Clone, Debug)]
@@ -45,7 +45,7 @@ impl SessionEngine {
         let Ok(projection) = self.read_projection(session).await else {
             return TerminalHandoff {
                 generation: 1,
-                doc: degraded_handoff_doc(None),
+                doc: degraded_handoff_doc(None, &[]),
                 degraded: true,
             };
         };
@@ -80,64 +80,107 @@ impl SessionEngine {
         }
         TerminalHandoff {
             generation,
-            doc: degraded_handoff_doc(Some(&projection)),
+            doc: degraded_handoff_doc(Some(&projection), &self.unread_handoff_mail(session).await),
             degraded: true,
         }
     }
 }
 
-/// Deterministic degraded handoff from the projection alone. Placeholders stay
-/// explicit — a degraded document is honest about what it does not know.
-fn degraded_handoff_doc(projection: Option<&Projection>) -> String {
-    // Retained handoff state is more useful than cancellation boilerplate.
-    if let Some(handoff) = projection.and_then(|projection| projection.session.handoff.as_ref()) {
-        return handoff.doc.clone();
-    }
-    let mut doc = String::from("1. Goal - ");
-    let mut current = String::from("(degraded handoff: unknown)");
-    let mut pending = String::from("(degraded handoff: unknown)");
-    if let Some(projection) = projection {
-        for message in projection.session.messages.iter().rev() {
+/// The ended episode contributes goal/state/pending; only durable files and
+/// decisions carry forward from the previous generation.
+fn degraded_handoff_doc(projection: Option<&Projection>, unread: &[String]) -> String {
+    use hya_proto::{PartProjection, Role};
+    let messages = projection.map(episode_messages).unwrap_or_default();
+    let texts: Vec<_> = messages
+        .iter()
+        .map(|message| {
             let text = message
                 .parts
                 .iter()
                 .filter_map(|part| match part {
-                    hya_proto::PartProjection::Text { text, .. } => Some(text.as_str()),
+                    PartProjection::Text { text, .. } => Some(text.as_str()),
                     _ => None,
                 })
-                .collect::<Vec<_>>()
-                .join("");
-            if text.trim().is_empty() {
-                continue;
-            }
-            if message.role == hya_proto::Role::Assistant && current.starts_with("(degraded") {
-                current = text.chars().take(400).collect();
-            } else if message.role == hya_proto::Role::User && pending.starts_with("(degraded") {
-                pending = text.chars().take(200).collect();
-            }
-            if !current.starts_with("(degraded") && !pending.starts_with("(degraded") {
-                break;
-            }
-        }
-    }
-    let _ = std::fmt::Write::write_fmt(
-        &mut doc,
-        format_args!("the task of this agent's current episode.\n2. Current state - {current}\n"),
-    );
-    let _ = std::fmt::Write::write_fmt(
-        &mut doc,
-        format_args!(
-            "3. Files and code - (degraded handoff: unknown)\n4. Decisions - (degraded handoff: unknown)\n"
-        ),
-    );
-    let _ = std::fmt::Write::write_fmt(
-        &mut doc,
-        format_args!("5. Pending tasks - {pending}\n6. Next step - none\n"),
-    );
-    doc
+                .collect::<String>();
+            (message.role, text)
+        })
+        .filter(|(_, text)| !text.trim().is_empty())
+        .collect();
+    let goal = texts
+        .iter()
+        .find(|(role, _)| *role == Role::User)
+        .map(|(_, text)| text.as_str())
+        .or_else(|| unread.first().map(String::as_str))
+        .unwrap_or("no work requested in this episode");
+    let current = texts
+        .iter()
+        .rev()
+        .find(|(role, _)| *role == Role::Assistant)
+        .map(|(_, text)| text.as_str())
+        .unwrap_or("no work done in this episode");
+    let pending = if unread.is_empty() {
+        texts
+            .iter()
+            .rev()
+            .find(|(role, _)| *role == Role::User)
+            .map_or_else(|| "none".into(), |(_, text)| text.clone())
+    } else {
+        unread.join("\n")
+    };
+    let carry = |number: u8| {
+        let Some(previous) = projection.and_then(|projection| projection.session.handoff.as_ref())
+        else {
+            return "unknown".into();
+        };
+        let prefix = format!("{number}. ");
+        let next = format!("\n{}. ", number + 1);
+        let Some(start) = previous.doc.find(&prefix) else {
+            return "unknown".into();
+        };
+        let section = previous.doc[start..]
+            .split(&next)
+            .next()
+            .unwrap_or_default();
+        let content = section
+            .split_once(" - ")
+            .map_or(section, |(_, text)| text)
+            .trim();
+        format!("(from generation {}) {content}", previous.generation)
+    };
+    format!(
+        "1. Goal - {goal}\n2. Current state - {current}\n3. Files and code - {}\n4. Decisions - {}\n5. Pending tasks - {pending}\n6. Next step - none\n",
+        carry(3),
+        carry(4)
+    )
 }
 
 impl SessionEngine {
+    async fn unread_handoff_mail(&self, session: SessionId) -> Vec<String> {
+        let Ok(root) = self.team_root(session).await else {
+            return Vec::new();
+        };
+        let Ok(projection) = self.read_projection(root).await else {
+            return Vec::new();
+        };
+        let Some(entry) = projection
+            .team
+            .roster
+            .values()
+            .find(|entry| entry.session == session)
+        else {
+            return Vec::new();
+        };
+        projection
+            .team
+            .inboxes
+            .get(&entry.handle)
+            .into_iter()
+            .flatten()
+            .skip(usize::try_from(entry.resident_cursor).unwrap_or(usize::MAX))
+            .map(|mail| format!("[mail from {}] {}", mail.from, mail.body))
+            .collect()
+    }
+
     /// Deterministic degraded handoff, bypassing the summarizer entirely
     /// (`archive`, drain, and budget-kill paths must never wait on a model call).
     pub async fn degraded_terminal_handoff(&self, session: SessionId) -> TerminalHandoff {
@@ -150,13 +193,16 @@ impl SessionEngine {
                     .map_or(1, |handoff| handoff.generation.saturating_add(1));
                 TerminalHandoff {
                     generation,
-                    doc: degraded_handoff_doc(Some(&projection)),
+                    doc: degraded_handoff_doc(
+                        Some(&projection),
+                        &self.unread_handoff_mail(session).await,
+                    ),
                     degraded: true,
                 }
             }
             Err(_) => TerminalHandoff {
                 generation: 1,
-                doc: degraded_handoff_doc(None),
+                doc: degraded_handoff_doc(None, &[]),
                 degraded: true,
             },
         }

@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::{CreateSession, EventBus};
-use hya_proto::{AgentName, MailKind, SessionKind};
+use hya_proto::{AgentName, MailKind, ModelRef, SessionKind};
 use hya_provider::{DevProvider, ProviderRouter};
 use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
@@ -245,4 +245,137 @@ async fn drain_cause_reaches_the_member_straggler_close() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn concurrent_mail_revives_install_one_episode_without_waiting_for_the_winner() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let lead_turn = engine.try_begin_turn(root).unwrap();
+    let (child, handle) = parked(&supervisor, root).await;
+    supervisor
+        .archive_member(root, &handle, "pause")
+        .await
+        .unwrap();
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    *supervisor.registration_pause.lock().unwrap() = Some((entered.clone(), release.clone()));
+    let first = tokio::spawn({
+        let engine = engine.clone();
+        let handle = handle.clone();
+        async move {
+            engine
+                .mail_send(
+                    root,
+                    MailEndpoint::Handle(handle),
+                    MailKind::Message,
+                    "first caller".into(),
+                )
+                .await
+        }
+    });
+    entered.notified().await;
+    let second = engine
+        .mail_send(
+            root,
+            MailEndpoint::Handle(handle.clone()),
+            MailKind::Message,
+            "second caller".into(),
+        )
+        .await;
+    release.notify_one();
+    let first = tokio::time::timeout(Duration::from_secs(2), first).await;
+    assert!(second.is_ok(), "{second:?}");
+    first
+        .expect("concurrent sender must not await the winning episode")
+        .unwrap()
+        .unwrap();
+    let projection = engine.read_projection(root).await.unwrap();
+    assert_eq!(
+        engine.store().active_actor_ids().await.unwrap(),
+        vec![child]
+    );
+    assert_eq!(
+        engine
+            .replay(root)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|envelope| matches!(envelope.event, Event::AgentRestarted { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(projection.team.inboxes[&handle].len(), 2);
+    drop(lead_turn);
+    supervisor
+        .drain(FinishCause::Shutdown, Duration::from_secs(2))
+        .await;
+}
+
+#[tokio::test]
+async fn mail_revival_fast_archive_cannot_be_erased_by_a_late_restart() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let engine = engine().await;
+        let root = root(&engine).await;
+        let supervisor = ResidentSupervisor::start(engine.clone());
+        let lead = engine.try_begin_turn(root).unwrap();
+        let (child, handle) = parked(&supervisor, root).await;
+        supervisor
+            .archive_member(root, &handle, "first ending")
+            .await
+            .unwrap();
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        *supervisor.revive_ready_pause.lock().unwrap() = Some((entered.clone(), release.clone()));
+        let reviving = tokio::spawn({
+            let engine = engine.clone();
+            let handle = handle.clone();
+            async move {
+                engine
+                    .mail_send(
+                        root,
+                        MailEndpoint::Handle(handle),
+                        MailKind::Message,
+                        "new episode".into(),
+                    )
+                    .await
+            }
+        });
+        // Initialization is complete, but the sender has not returned yet.
+        entered.notified().await;
+        supervisor
+            .archive_member(root, &handle, "fast archive")
+            .await
+            .unwrap();
+        release.notify_one();
+        reviving.await.unwrap().unwrap();
+        let projection = engine.read_projection(root).await.unwrap();
+        assert!(projection.team.archived.contains_key(&handle));
+        assert!(!projection.team.roster.contains_key(&handle));
+        let events = engine.replay(root).await.unwrap();
+        let restarted = events
+            .iter()
+            .rposition(|envelope| matches!(envelope.event, Event::AgentRestarted { .. }))
+            .unwrap();
+        let archived = events
+            .iter()
+            .rposition(|envelope| matches!(envelope.event, Event::AgentArchived { .. }))
+            .unwrap();
+        assert!(restarted < archived);
+        assert!(
+            !engine
+                .store()
+                .active_actor_ids()
+                .await
+                .unwrap()
+                .contains(&child)
+        );
+        drop(lead);
+        supervisor
+            .drain(FinishCause::Shutdown, Duration::from_secs(2))
+            .await;
+    })
+    .await
+    .expect("fast archive must finish before the sender returns");
 }

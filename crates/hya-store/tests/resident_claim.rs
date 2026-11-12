@@ -1985,3 +1985,259 @@ async fn user_cancelled_work_recovers_its_prompt_even_after_mail_was_acknowledge
     assert_eq!(actor.session.messages.len(), 1);
     assert_eq!(actor.session.messages[0].id, prompt);
 }
+
+async fn revival_fixture(store: &SessionStore) -> (SessionId, ActorClaim) {
+    let (root, claim) = work_fixture(store).await;
+    for event in [
+        Event::AgentRegistered {
+            session: root,
+            agent_session: root,
+            handle: "main".into(),
+            parent: None,
+            agent_type: AgentName::new("resident"),
+            mode: SubagentMode::Transient,
+        },
+        Event::ChannelCreated {
+            session: root,
+            channel: "DM-12345678".into(),
+            kind: hya_proto::ChannelKind::Dm,
+            unit: None,
+            members: vec!["main".into(), "main/worker".into()],
+        },
+        Event::ChannelCreated {
+            session: root,
+            channel: "announce-12345678".into(),
+            kind: hya_proto::ChannelKind::Group,
+            unit: Some("main".into()),
+            members: vec!["main".into(), "main/worker".into()],
+        },
+        Event::MailConsumed {
+            session: root,
+            handle: "main/worker".into(),
+            through: 1,
+        },
+    ] {
+        store.append_event(root, &event).await.unwrap();
+    }
+    finalize_resident(
+        store,
+        &claim,
+        root,
+        "main/worker",
+        MemberRunStatus::Cancelled,
+        "archived",
+    )
+    .await
+    .unwrap();
+    (root, claim)
+}
+
+async fn revive_mail(
+    store: &SessionStore,
+    root: SessionId,
+    actor: SessionId,
+    to: MailEndpoint,
+    body: &str,
+) -> Result<(Option<(ActorClaim, u64)>, Vec<Envelope>), StoreError> {
+    store
+        .revive_episode(
+            root,
+            OwnerRunId::new(),
+            None,
+            actor,
+            "main".into(),
+            to,
+            MailKind::Message,
+            body.into(),
+            "HYA_COMPACTED_CONTEXT",
+            None,
+        )
+        .await
+}
+
+#[tokio::test]
+async fn revive_episode_preserves_channels_and_skips_all_prior_mail_for_both_addresses() {
+    for endpoint in [
+        MailEndpoint::Handle("worker".into()),
+        MailEndpoint::Channel("DM-12345678".into()),
+    ] {
+        let store = SessionStore::connect_memory().await.unwrap();
+        let (root, old) = revival_fixture(&store).await;
+        let channels = store.read_projection(root).await.unwrap().team.channels;
+        let (claim, envelopes) = revive_mail(&store, root, old.actor_id, endpoint, "new work")
+            .await
+            .unwrap();
+        assert_eq!(claim.unwrap().0.epoch.get(), old.epoch.get() + 1);
+        assert_eq!(envelopes.len(), 8);
+        let projection = store.read_projection(root).await.unwrap();
+        assert_eq!(
+            projection.team.channels.keys().collect::<Vec<_>>(),
+            channels.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            projection.team.channels["DM-12345678"].members,
+            channels["DM-12345678"].members
+        );
+        assert!(
+            !channels["announce-12345678"]
+                .members
+                .contains("main/worker")
+        );
+        assert!(
+            projection.team.channels["announce-12345678"]
+                .members
+                .contains("main/worker")
+        );
+        assert!(!projection.team.archived.contains_key("main/worker"));
+        assert_eq!(projection.team.roster["main/worker"].resident_cursor, 2);
+        let inbox = &projection.team.inboxes["main/worker"];
+        assert_eq!(inbox.len(), 3);
+        assert_eq!(inbox[2].body, "new work");
+        assert_eq!(inbox[2].to, MailEndpoint::Channel("DM-12345678".into()));
+        let actor = store.read_projection(old.actor_id).await.unwrap();
+        assert_eq!(actor.session.messages.last().unwrap().role, Role::System);
+        let (second_claim, _) = revive_mail(
+            &store,
+            root,
+            old.actor_id,
+            MailEndpoint::Handle("worker".into()),
+            "concurrent work",
+        )
+        .await
+        .unwrap();
+        assert!(second_claim.is_none());
+        assert_eq!(
+            store.read_projection(root).await.unwrap().team.inboxes["main/worker"].len(),
+            4
+        );
+        assert_eq!(
+            store
+                .replay(root)
+                .await
+                .unwrap()
+                .iter()
+                .filter(|envelope| matches!(envelope.event, Event::AgentRestarted { .. }))
+                .count(),
+            1
+        );
+    }
+}
+
+#[tokio::test]
+async fn revive_episode_rolls_back_claim_boundary_registration_and_mail_at_every_write() {
+    for tag in [
+        "claim",
+        "agent_registered",
+        "agent_restarted",
+        "message_started",
+        "text_start",
+        "text_delta",
+        "text_end",
+        "message_finished",
+        "mail_sent",
+    ] {
+        let db = TempDb::new(tag);
+        let store = SessionStore::connect(db.path()).await.unwrap();
+        let (root, old) = revival_fixture(&store).await;
+        let before_root = store.replay(root).await.unwrap();
+        let before_actor = store.replay(old.actor_id).await.unwrap();
+        let mut connection = SqliteConnection::connect(&format!("sqlite://{}", db.path()))
+            .await
+            .unwrap();
+        let sql = if tag == "claim" {
+            "CREATE TRIGGER reject_revive BEFORE UPDATE ON resident_actor_claim BEGIN SELECT RAISE(ABORT, 'injected revive'); END".into()
+        } else {
+            format!(
+                "CREATE TRIGGER reject_revive BEFORE INSERT ON event_log WHEN NEW.payload LIKE '%\"{tag}\"%' BEGIN SELECT RAISE(ABORT, 'injected revive'); END"
+            )
+        };
+        sqlx::query(&sql).execute(&mut connection).await.unwrap();
+        assert!(
+            revive_mail(
+                &store,
+                root,
+                old.actor_id,
+                MailEndpoint::Handle("worker".into()),
+                "must not send"
+            )
+            .await
+            .is_err(),
+            "{tag}"
+        );
+        assert_eq!(store.replay(root).await.unwrap(), before_root, "{tag}");
+        assert_eq!(
+            store.replay(old.actor_id).await.unwrap(),
+            before_actor,
+            "{tag}"
+        );
+        assert!(store.active_actor_ids().await.unwrap().is_empty(), "{tag}");
+        assert!(
+            store
+                .read_projection(root)
+                .await
+                .unwrap()
+                .team
+                .archived
+                .contains_key("main/worker")
+        );
+        sqlx::query("DROP TRIGGER reject_revive")
+            .execute(&mut connection)
+            .await
+            .unwrap();
+        let (claim, _) = revive_mail(
+            &store,
+            root,
+            old.actor_id,
+            MailEndpoint::Handle("worker".into()),
+            "retry",
+        )
+        .await
+        .unwrap();
+        assert_eq!(claim.unwrap().0.epoch.get(), old.epoch.get() + 1);
+    }
+}
+
+#[tokio::test]
+async fn revive_episode_rechecks_policy_and_parent_claim_without_any_writes() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let (root, old) = revival_fixture(&store).await;
+    let before = store.replay(root).await.unwrap();
+    let denied = store
+        .revive_episode(
+            root,
+            OwnerRunId::new(),
+            None,
+            old.actor_id,
+            "main".into(),
+            MailEndpoint::Handle("worker".into()),
+            MailKind::Message,
+            "denied".into(),
+            "HYA_COMPACTED_CONTEXT",
+            Some(hya_proto::mail::ChannelPolicySnapshot {
+                dm_parent: 0,
+                ..Default::default()
+            }),
+        )
+        .await;
+    assert!(matches!(
+        denied,
+        Err(StoreError::MailAuthorizationRejected { .. })
+    ));
+    let stale = store
+        .revive_episode(
+            root,
+            OwnerRunId::new(),
+            Some(&old),
+            old.actor_id,
+            "main".into(),
+            MailEndpoint::Channel("DM-12345678".into()),
+            MailKind::Message,
+            "stale sender".into(),
+            "HYA_COMPACTED_CONTEXT",
+            None,
+        )
+        .await;
+    assert!(matches!(stale, Err(StoreError::StaleActorClaim { .. })));
+    assert_eq!(store.replay(root).await.unwrap(), before);
+    assert!(store.active_actor_ids().await.unwrap().is_empty());
+}

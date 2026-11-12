@@ -312,7 +312,7 @@ the root.
 
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
-| `agent_registered` | `session` (team root), `agent_session: SessionId`, `handle: String` (the agent's **leaf** name), `parent: Option<String>` (default absent = team root), `agent_type: AgentName` (default empty), `mode: SubagentMode` (default `transient`) | Fold: roster entry keyed by **canonical path** `{parent}/{handle}`; a root registration (`agent_session == session`) keys as `main`. See [ADR-0011](../adr/0011-hierarchy-scoped-mailbox.md) |
+| `agent_registered` | `session` (team root), `agent_session: SessionId`, `handle: String` (the agent's **leaf** name), `parent: Option<String>` (default absent = team root), `agent_type: AgentName` (default empty), `mode: SubagentMode` (default `transient`) | Fold: roster entry keyed by **canonical path** `{parent}/{handle}`; a new row starts its cursor at the current inbox length, and a revived row rejoins its parent unit broadcast channel; a root registration (`agent_session == session`) keys as `main`. See [ADR-0011](../adr/0011-hierarchy-scoped-mailbox.md) |
 | `agent_activity_changed` | `session`, `handle`, `status: RosterStatus`, `current_task: Option<String>` | Fold: roster activity; activity is display-only; cancellation may show Idle while work remains pending |
 | `resident_work_started` | `session`, `actor_session`, `handle`, `epoch: ActorEpoch`, `inbox_through: u64` | Fold: marks fenced resident work on roster before tool/child/provider dispatch |
 | `resident_work_finished` | `session`, `handle`, `epoch: ActorEpoch`, `inbox_through: u64` | Internal completion marker; matching work epoch clears pending work and acknowledges its inbox boundary. Unlike `mail_consumed`, it settles the admitted prompt. |
@@ -321,6 +321,13 @@ the root.
 
 `SubagentMode`: `transient` \| `resident`.  
 `RosterStatus`: `idle` \| `busy` \| `done` \| `failed`.
+
+Revival commits `agent_registered`, `agent_restarted` (`session`, canonical
+`handle`, `child`, `epoch`), a child system context boundary and the first DM
+`mail_sent` together. Live re-registration preserves the cursor. Earlier unread
+mail stays in history and appears in the prior episode handoff's Pending section,
+while only the reviving mail is owed to the new episode. See the
+[revival contract and example](subagent-orchestration.md#4-revival).
 
 #### Context, fork, and reduction observability
 

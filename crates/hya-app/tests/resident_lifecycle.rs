@@ -213,10 +213,18 @@ async fn blocked_sidecar() -> (
     let mut control = support::lifecycle::SidecarControl::new(true).await;
     let plugin = support::lifecycle::BlockingPlugin::for_hook("chat.params").await;
     let h = Harness::with_plugins(vec![plugin.spec.clone()]).await;
+    let initial = Arc::new(Gate::default());
     let (child, handle) = h
-        .spawn_agent("m4-sidecar-worker", vec![Round::text("initial activation")])
+        .spawn_agent(
+            "m4-sidecar-worker",
+            vec![Round::text("initial activation").gated(initial.clone())],
+        )
         .await;
     control.started().await;
+    initial.arrived().await;
+    // Keep setup quiescence from spending a team turn before the blocked wake.
+    let lead = h.engine.try_begin_turn(h.root).unwrap();
+    initial.release();
     h.idle(child, &handle).await;
     plugin.arm_session(child);
     let marker = h
@@ -224,6 +232,7 @@ async fn blocked_sidecar() -> (
         .script(vec![Round::text("cancel-ignoring activation hook")]);
     h.mail(&handle, marker).await.unwrap();
     plugin.gate.arrived().await;
+    drop(lead);
     (h, plugin, control, child, handle)
 }
 
@@ -780,7 +789,6 @@ async fn harness_blocking_tool_writes_only_when_released() {
 }
 
 #[tokio::test]
-#[ignore = "M4-6: I11"]
 async fn i11_revive_skips_prior_mail_and_handoff_retains_unread_mail() {
     let mut h = Harness::new().await;
     let (child, handle) = h.spawn(vec![Round::text("initial work")]).await;
@@ -836,7 +844,6 @@ async fn i11_revive_skips_prior_mail_and_handoff_retains_unread_mail() {
 }
 
 #[tokio::test]
-#[ignore = "M4-6: I12"]
 async fn i12_revive_preserves_executable_bundle_sidecar_tools() {
     let test = "i12_revive_preserves_executable_bundle_sidecar_tools";
     if support::lifecycle::isolated_sidecar_config(test) {
@@ -1244,7 +1251,6 @@ async fn i7_refused_report_delivers_a_harness_notice() {
 }
 
 #[tokio::test]
-#[ignore = "M4-6: I9"]
 async fn i9_third_episode_context_contains_only_latest_handoff() {
     let mut h = Harness::new().await;
     let (child, handle) = h
@@ -1276,7 +1282,6 @@ async fn i9_third_episode_context_contains_only_latest_handoff() {
 }
 
 #[tokio::test]
-#[ignore = "M4-6: I10"]
 async fn i10_rejected_restart_rolls_back_the_whole_revive() {
     let mut h = Harness::new().await;
     let (child, handle) = h.spawn(vec![report("ready")]).await;
@@ -2782,4 +2787,196 @@ async fn m45_r3_forced_ending_keeps_a_late_dead_sidecars_stop_diagnostic() {
     let events = h.engine.replay(h.root).await.unwrap();
     h.shutdown().await;
     assert!(events.iter().any(|envelope| matches!(&envelope.event, Event::MemberFinished { child: Some(member), summary, .. } if *member == child && summary.contains("sidecar did not stop") && summary.contains("late loss stop failed"))), "forced ending discarded its sidecar stop diagnostic: {events:?}");
+}
+
+#[tokio::test]
+async fn m46_sidecar_failed_episode_revives_with_only_new_mail_and_working_tools() {
+    let test = "m46_sidecar_failed_episode_revives_with_only_new_mail_and_working_tools";
+    if support::lifecycle::isolated_sidecar_config(test) {
+        return;
+    }
+    support::lifecycle::install_sidecar_bundle().await;
+    let mut control = support::lifecycle::SidecarControl::new(false).await;
+    let mut h = Harness::new().await;
+    let (child, handle) = h
+        .spawn_agent("m4-sidecar-worker", vec![Round::text("initial")])
+        .await;
+    control.started().await;
+    h.idle(child, &handle).await;
+    let completed = h.provider.script(vec![Round::text("completed mail work")]);
+    h.mail(&handle, format!("COMPLETED_BEFORE_LOSS {completed}"))
+        .await
+        .unwrap();
+    h.until(child, |projection| projection.session.messages.iter().any(|message| message.parts.iter().any(|part| matches!(part, hya_proto::PartProjection::Text { text, .. } if text == "completed mail work")))).await;
+    h.idle(child, &handle).await;
+    assert_eq!(
+        h.engine.read_projection(h.root).await.unwrap().team.roster[&handle].resident_cursor,
+        1
+    );
+    let gate = Arc::new(Gate::default());
+    let handled = h.provider.script(vec![
+        Round::text("interrupted state").stream_gated(gate.clone()),
+    ]);
+    h.mail(&handle, format!("INTERRUPTED_BEFORE_LOSS {handled}"))
+        .await
+        .unwrap();
+    gate.arrived().await;
+    h.mail(&handle, "UNREAD_BEFORE_LOSS".into()).await.unwrap();
+    control.die().await;
+    h.archived(&handle).await;
+    let doc = h
+        .engine
+        .read_projection(child)
+        .await
+        .unwrap()
+        .session
+        .handoff
+        .unwrap()
+        .doc;
+    assert!(doc.contains("UNREAD_BEFORE_LOSS"));
+    assert!(doc.contains("INTERRUPTED_BEFORE_LOSS"));
+    assert!(!doc.contains("COMPLETED_BEFORE_LOSS"));
+    let next = h.provider.script(vec![
+        Round::tool("echo", json!({})),
+        Round::text("new episode finished"),
+    ]);
+    let mut requests = h.provider.requests.subscribe();
+    h.mail(&handle, next.clone()).await.unwrap();
+    control.started().await;
+    let request = request_for(&mut requests, child).await;
+    h.idle(child, &handle).await;
+    let users = request
+        .messages
+        .iter()
+        .filter(|message| matches!(message, hya_proto::Message::User { .. }))
+        .map(|message| serde_json::to_string(message).unwrap())
+        .collect::<String>();
+    let systems = request
+        .messages
+        .iter()
+        .filter(|message| matches!(message, hya_proto::Message::System { .. }))
+        .map(|message| serde_json::to_string(message).unwrap())
+        .collect::<String>();
+    assert!(
+        !users.contains("COMPLETED_BEFORE_LOSS")
+            && !users.contains("INTERRUPTED_BEFORE_LOSS")
+            && !users.contains("UNREAD_BEFORE_LOSS"),
+        "{users}"
+    );
+    assert_eq!(users.matches(&next).count(), 1);
+    assert_eq!(systems.matches("UNREAD_BEFORE_LOSS").count(), 1);
+    let events = h.engine.replay(child).await.unwrap();
+    assert!(events.iter().any(|envelope| matches!(&envelope.event, Event::ToolResult { output, .. } if output.to_string().contains("sidecar echo"))), "revived sidecar did not execute its tool");
+    h.shutdown().await;
+    control.shutdown().await;
+}
+
+#[tokio::test]
+async fn m46_forced_handoff_describes_the_ended_episode_instead_of_copying_its_predecessor() {
+    let mut h = Harness::new().await;
+    let (child, handle) = h.spawn(vec![report("old episode")]).await;
+    h.archived(&handle).await;
+    let next = h
+        .provider
+        .script(vec![Round::text("CURRENT_EPISODE_STATE")]);
+    h.mail(&handle, format!("CURRENT_EPISODE_GOAL {next}"))
+        .await
+        .unwrap();
+    h.idle(child, &handle).await;
+    output(&h.tool("archive", json!({"target": handle})).await);
+    let handoff = h
+        .engine
+        .read_projection(child)
+        .await
+        .unwrap()
+        .session
+        .handoff
+        .unwrap();
+    h.shutdown().await;
+    assert_eq!(handoff.generation, 2);
+    assert!(handoff.degraded);
+    assert!(
+        handoff
+            .doc
+            .contains("1. Goal - [mail from main] CURRENT_EPISODE_GOAL"),
+        "{}",
+        handoff.doc
+    );
+    assert!(
+        handoff
+            .doc
+            .contains("2. Current state - CURRENT_EPISODE_STATE"),
+        "{}",
+        handoff.doc
+    );
+    assert!(handoff.doc.contains("(from generation 1)"));
+}
+
+#[tokio::test]
+async fn m46_handoff_summarizer_receives_only_the_latest_episode() {
+    let mut h = Harness::new().await;
+    let (_child, handle) = h.spawn(vec![report("OLD_EPISODE_EVIDENCE")]).await;
+    h.archived(&handle).await;
+    let next = h.provider.script(vec![report("CURRENT_EPISODE_EVIDENCE")]);
+    h.mail(&handle, next).await.unwrap();
+    h.archived(&handle).await;
+    let requests = h
+        .provider
+        .captured
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|request| request.completion.tools.is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
+    h.shutdown().await;
+    assert_eq!(requests.len(), 2);
+    let latest = serde_json::to_string(&requests.last().unwrap().completion.messages).unwrap();
+    assert!(latest.contains("CURRENT_EPISODE_EVIDENCE"), "{latest}");
+    assert!(!latest.contains("OLD_EPISODE_EVIDENCE"), "{latest}");
+}
+
+#[tokio::test]
+async fn m46_in_episode_compaction_does_not_replace_the_handoff_goal() {
+    let mut h = Harness::new().await;
+    let (child, handle) = h.spawn(vec![Round::text("initial state")]).await;
+    h.idle(child, &handle).await;
+    let actor = h.engine.read_projection(child).await.unwrap();
+    let goal = actor
+        .session
+        .messages
+        .iter()
+        .find(|message| message.role == hya_proto::Role::User)
+        .unwrap()
+        .parts
+        .iter()
+        .filter_map(|part| match part {
+            hya_proto::PartProjection::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<String>();
+    h.engine.summarize_session(child).await.unwrap();
+    let later = h.provider.script(vec![Round::text("latest episode state")]);
+    h.mail(&handle, later).await.unwrap();
+    h.idle(child, &handle).await;
+    output(&h.tool("archive", json!({"target": handle})).await);
+    let handoff = h
+        .engine
+        .read_projection(child)
+        .await
+        .unwrap()
+        .session
+        .handoff
+        .unwrap();
+    h.shutdown().await;
+    assert!(
+        handoff.doc.starts_with(&format!("1. Goal - {goal}\n")),
+        "{}",
+        handoff.doc
+    );
+    assert!(
+        handoff
+            .doc
+            .contains("2. Current state - latest episode state")
+    );
 }

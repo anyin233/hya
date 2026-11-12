@@ -31,14 +31,19 @@ communication half (ADR-0011).
   tasks / Next step): what *is*, never how we got here. The agent carries only
   this document: a revived episode's context is system prompt + latest handoff
   + the reviving DM body — never a replayed transcript. Each handoff
-  anchor-updates its predecessor, as compaction summaries already do.
+  anchor-updates its predecessor, as compaction summaries already do. Summary
+  input is limited to the ended episode. Forced handoffs describe that episode
+  and retain unread mail under Pending; revival skips all prior inbox entries.
 - **Archive is immediate on report.** One transaction: roster removal, actor
   claim release, spawn-budget refund, group-channel membership removal.
   Archived agents are invisible to their parent and unreachable by broadcast;
   the durable event log keeps everything for audit and replay.
 - **Revival is a downward DM only** (ADR-0016): re-resolve the runtime binding,
   bump the claim epoch, re-debit the budget, arm a new episode. There is no
-  other wake path for an archived agent.
+  other wake path for an archived agent. One writer transaction rechecks mail
+  authorization, activates the claim, registers the member, records the restart,
+  appends the context boundary and sends the reviving mail on the existing DM.
+  Recovery and revival share exact capability resolution, including sidecars.
   Registration reserves its selected team through claim commit and episode
   initialization; idle-team retirement cannot cancel a new revival. Cold main
   activation applies root turns' missing-agent policy: a removed recorded root

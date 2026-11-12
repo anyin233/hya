@@ -127,6 +127,7 @@ pub struct Request {
 
 pub struct ScriptedProvider {
     scripts: Mutex<BTreeMap<String, VecDeque<Round>>>,
+    script_sessions: Mutex<BTreeMap<String, SessionId>>,
     pub requests: broadcast::Sender<Request>,
     pub handoffs: Mutex<VecDeque<Round>>,
     pub captured: Mutex<Vec<Request>>,
@@ -136,6 +137,7 @@ impl Default for ScriptedProvider {
     fn default() -> Self {
         Self {
             scripts: Mutex::default(),
+            script_sessions: Mutex::default(),
             requests: broadcast::channel(256).0,
             handoffs: Mutex::default(),
             captured: Mutex::default(),
@@ -190,6 +192,7 @@ impl Provider for ScriptedProvider {
                 .unwrap_or_else(|| Round::text(HANDOFF))
         } else {
             let mut scripts = self.scripts.lock().unwrap();
+            let sessions = self.script_sessions.lock().unwrap();
             request
                 .messages
                 .iter()
@@ -199,7 +202,12 @@ impl Provider for ScriptedProvider {
                     let encoded = serde_json::to_string(message).unwrap();
                     scripts
                         .iter_mut()
-                        .filter(|(marker, _)| encoded.contains(marker.as_str()))
+                        .filter(|(marker, _)| {
+                            encoded.contains(marker.as_str())
+                                && sessions
+                                    .get(marker.as_str())
+                                    .is_none_or(|owner| *owner == session)
+                        })
                         .max_by_key(|(marker, _)| encoded.rfind(marker.as_str()))
                         .map(|(_, rounds)| {
                             rounds.pop_front().unwrap_or_else(|| Round::text("settled"))
@@ -464,6 +472,47 @@ impl Harness {
     }
 
     pub async fn mail(&self, handle: &str, body: String) -> Result<(), hya_core::CoreError> {
+        // Real DM mail appears in both peers' histories. Bind its script to
+        // the recipient so a concurrent main synthesis cannot steal the round.
+        let projection = self.engine.read_projection(self.root).await.unwrap();
+        let target = match MailEndpoint::parse(handle) {
+            MailEndpoint::Handle(path) => Some(path),
+            MailEndpoint::Channel(channel) => projection
+                .team
+                .channels
+                .get(&channel)
+                .and_then(|channel| {
+                    channel
+                        .members
+                        .iter()
+                        .find(|member| member.as_str() != "main")
+                })
+                .cloned(),
+        };
+        if let Some(target) = target {
+            let session = projection
+                .team
+                .roster
+                .get(&target)
+                .map(|entry| entry.session)
+                .or_else(|| {
+                    projection
+                        .team
+                        .archived
+                        .get(&target)
+                        .map(|entry| entry.session)
+                });
+            if let Some(session) = session {
+                let scripts = self.provider.scripts.lock().unwrap();
+                let mut sessions = self.provider.script_sessions.lock().unwrap();
+                for marker in scripts
+                    .keys()
+                    .filter(|marker| body.contains(marker.as_str()))
+                {
+                    sessions.insert(marker.clone(), session);
+                }
+            }
+        }
         self.engine
             .mail_send(
                 self.root,

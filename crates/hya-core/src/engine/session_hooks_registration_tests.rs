@@ -508,8 +508,13 @@ async fn revived_resident_ignores_stale_initialization(at_start: bool) {
     let running = Arc::new(Notify::new());
     let finish = Arc::new(Notify::new());
     *hooks.pause_request.lock().unwrap() = Some((running.clone(), finish.clone()));
-    supervisor
-        .revive_child(root, "main", handle, "episode two".into())
+    engine
+        .mail_send(
+            root,
+            hya_proto::MailEndpoint::Handle(handle.into()),
+            hya_proto::MailKind::Message,
+            "episode two".into(),
+        )
         .await
         .unwrap();
     tokio::time::timeout(Duration::from_secs(5), running.notified())
@@ -699,8 +704,22 @@ async fn archive_before_first_turn_closes_initial_task_before_revive() {
     );
     result.unwrap();
     assert_cancelled_task(&engine, child, FinishCause::Archived).await;
-    supervisor
-        .revive_child(root, "main", "main/worker", "do Y instead".into())
+    let ended_messages = engine
+        .read_projection(child)
+        .await
+        .unwrap()
+        .session
+        .messages
+        .into_iter()
+        .map(|message| message.id)
+        .collect::<Vec<_>>();
+    engine
+        .mail_send(
+            root,
+            hya_proto::MailEndpoint::Handle("main/worker".into()),
+            hya_proto::MailKind::Message,
+            "do Y instead".into(),
+        )
         .await
         .unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -729,17 +748,20 @@ async fn archive_before_first_turn_closes_initial_task_before_revive() {
         hya_proto::Message::User { parts, .. } => Some(parts.iter().any(|part| matches!(part, hya_proto::Part::Text { text, .. } if text.contains("do Y instead")))),
         _ => None,
     }).unwrap());
-    let x = messages
-        .iter()
-        .position(|message| matches!(message, hya_proto::Message::User { .. }))
-        .unwrap();
-    assert!(matches!(
-        &messages[x + 1],
-        hya_proto::Message::Assistant {
-            finish: Some(FinishReason::Cancelled),
-            ..
-        }
-    ));
+    assert!(
+        messages
+            .iter()
+            .all(|message| !ended_messages.contains(&message.id()))
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| matches!(message,
+                hya_proto::Message::System { content, .. } if content.contains("PRIOR HANDOFF")
+            ))
+            .count(),
+        1
+    );
     supervisor.team_cancel(root).unwrap().cancel();
 }
 
@@ -921,7 +943,8 @@ async fn mail_to_a_killed_team_waits_for_cleanup_and_restores_main() {
     let hooks = Arc::new(Hooks::default());
     let (engine, supervisor, agent, root) = fixture(
         SubagentLimits {
-            per_team_message_budget: 1,
+            // Revival now contributes a real MailSent before the child replies.
+            per_team_message_budget: 2,
             ..SubagentLimits::default()
         },
         Some(hooks.clone()),
@@ -956,7 +979,7 @@ async fn mail_to_a_killed_team_waits_for_cleanup_and_restores_main() {
     let handle = handle.clone();
     let child = entry.session;
     let mut bus = engine.bus().subscribe();
-    for i in 0..2 {
+    for i in 0..3 {
         engine
             .mail_announce(root, format!("budget {i}"))
             .await
@@ -1062,7 +1085,7 @@ async fn wait_after_a_revived_member_is_killed_before_its_first_turn_uses_this_e
     let hooks = Arc::new(Hooks::default());
     let (engine, supervisor, agent, root) = fixture(
         SubagentLimits {
-            per_team_message_budget: 1,
+            per_team_message_budget: 2,
             ..SubagentLimits::default()
         },
         Some(hooks.clone()),

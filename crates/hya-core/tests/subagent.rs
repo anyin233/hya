@@ -1060,6 +1060,7 @@ async fn assert_stopped_member_revives(
     handle: &str,
     body: &str,
 ) {
+    let mut events = engine.bus().subscribe();
     engine
         .mail_send(
             root,
@@ -1069,6 +1070,17 @@ async fn assert_stopped_member_revives(
         )
         .await
         .expect("engine mail must revive the stopped member");
+    // Mail commits before the revived episode admits its prompt in begin_work.
+    tokio::time::timeout(COOPERATIVE_END_BOUND, async {
+        loop {
+            if engine.read_projection(child).await.unwrap().session.messages.iter().any(|message| {
+                message.role == Role::User && message.parts.iter().any(|part| matches!(part, PartProjection::Text { text, .. } if text.contains(body)))
+            }) {
+                break;
+            }
+            events.recv().await.unwrap();
+        }
+    }).await.expect("revived episode must admit the committed mail");
     assert!(engine.replay(root).await.unwrap().iter().any(|e| matches!(&e.event, Event::AgentRestarted { child: restarted, epoch, .. } if *restarted == child && *epoch > hya_proto::ActorEpoch::INITIAL)));
     let projection = engine.read_projection(root).await.unwrap();
     assert_eq!(projection.team.roster[handle].session, child);
@@ -2945,6 +2957,8 @@ async fn resident_replacement_declaration_drift_disables_once_and_releases_claim
         })
         .await
         .unwrap();
+    // This counter measures the child; main synthesis uses the same provider.
+    let _lead = engine.try_begin_turn(root).unwrap();
     let binding = engine.bind_runtime(&agent.workdir).unwrap();
     let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
     let starts = Arc::new(AtomicUsize::new(0));
