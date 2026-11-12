@@ -124,13 +124,29 @@ impl SessionEngine {
     /// Replace `session`'s captured chain with `binding`'s chain for
     /// `stable_agent_id` (see the module contract), starting dispatchers new
     /// to the session.
-    #[expect(clippy::nonminimal_bool, reason = "preserve the upstream predicate")]
     pub(crate) async fn swap_session_hooks(
         &self,
         session: SessionId,
         binding: &TurnBinding,
         stable_agent_id: &str,
     ) {
+        let fresh = self.replace_session_hooks(session, binding, stable_agent_id);
+        if !fresh.is_empty() {
+            HookChain::new(fresh)
+                .session_start(SessionLifecycleInput { session })
+                .await;
+        }
+    }
+
+    /// Swap the maps synchronously so a resident can hold its slot's claim
+    /// check through the write, then notify the returned hooks outside the lock.
+    #[expect(clippy::nonminimal_bool, reason = "preserve the upstream predicate")]
+    pub(crate) fn replace_session_hooks(
+        &self,
+        session: SessionId,
+        binding: &TurnBinding,
+        stable_agent_id: &str,
+    ) -> Vec<Arc<dyn HookDispatcher>> {
         let hooks = binding.scope_hooks_for_agent(stable_agent_id);
         let scope = binding.scope().key();
         let generation = binding.generation();
@@ -143,7 +159,7 @@ impl SessionEngine {
             {
                 previous.scope = scope;
                 previous.generation = generation;
-                return;
+                return Vec::new();
             }
             let previous = map.get(&session);
             let fresh = hooks
@@ -176,11 +192,7 @@ impl SessionEngine {
         // Release the old chain (possibly the last handle on a process)
         // outside the lock.
         drop(retired);
-        if !fresh.is_empty() {
-            HookChain::new(fresh)
-                .session_start(SessionLifecycleInput { session })
-                .await;
-        }
+        fresh
     }
 
     /// After a bind of `binding`'s scope: swap `own`'s captured chain (when

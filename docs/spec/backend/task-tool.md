@@ -397,6 +397,18 @@ parent's `agent.spawn` hook and starts the resident loop. Dropping the spawning
 future during a hook does not drop this task. A failed registration transaction
 creates no session hook/policy map entry and makes no child plugin call.
 
+Each slot belongs to its exact `ActorClaim`, including epoch and owner. After
+an awaited hook or other asynchronous operation, initialization and the resident
+driver recheck ownership before publishing, replacing session hook/policy maps,
+updating slot state, or entering another turn. If a parent archives and revives
+the child while an old `session.start` or `agent.spawn` is blocked, releasing
+that hook silently retires the old task; only the revived episode drives the
+session. Map replacement and its ownership check share the team lock.
+`remove_slot(session: SessionId, claim: Option<&ActorClaim>)` removes only a
+matching slot; stale or already-removed cleanup is a no-op. `None` belongs only
+to the main actor. Sidecar recovery updates the driver's claim only after the
+matching slot accepts the recovered claim.
+
 Concurrent sibling registrations resolve their unit's group channel under the
 same SQLite writer reservation. A single `announce` therefore reaches every
 registered sibling. For example, a batch of eight first children joins one
@@ -422,7 +434,10 @@ registration and before the first worker turn. This does not promise replay of
 work that already crossed `ResidentWorkStarted`. The
 `engine::session_hooks::registration_tests` regressions cover stale-parent and
 database rollback, hook ordering, dropped spawns, concurrent announcements, and
-all pre-first-turn stop paths including archive followed by revival.
+all pre-first-turn stop paths including archive followed by revival. The two
+`revived_resident_ignores_stale_*` tests hold the old initialization in each
+lifecycle hook while the revived episode is Busy, checking publication, hook
+map ownership, Busy/Idle activity and subsequent stop cleanup.
 
 ### Live provider routing
 

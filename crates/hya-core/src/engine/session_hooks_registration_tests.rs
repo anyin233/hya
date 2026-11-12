@@ -17,15 +17,21 @@ use crate::{
     RuntimeSource, RuntimeSourceId, SessionEngine, SubagentGovernor, SubagentLimits,
 };
 
+type Pause = Option<(Arc<Notify>, Arc<Notify>)>;
+
 #[derive(Default)]
 struct Hooks {
     seen: Mutex<Vec<(SessionId, &'static str)>>,
-    pause_start: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
-    pause_spawn: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
+    pause_start: Mutex<Pause>,
+    pause_spawn: Mutex<Pause>,
+    pause_request: Arc<Mutex<Pause>>,
     requests: Arc<Mutex<Vec<hya_provider::CompletionRequest>>>,
 }
 
-struct RecordingProvider(Arc<Mutex<Vec<hya_provider::CompletionRequest>>>);
+struct RecordingProvider {
+    requests: Arc<Mutex<Vec<hya_provider::CompletionRequest>>>,
+    pause: Arc<Mutex<Pause>>,
+}
 
 #[async_trait]
 impl Provider for RecordingProvider {
@@ -43,7 +49,12 @@ impl Provider for RecordingProvider {
         session: SessionId,
         message: hya_proto::MessageId,
     ) -> Result<hya_provider::EventStream, hya_provider::ProviderError> {
-        self.0.lock().unwrap().push(request.clone());
+        self.requests.lock().unwrap().push(request.clone());
+        let pause = self.pause.lock().unwrap().take();
+        if let Some((entered, release)) = pause {
+            entered.notify_one();
+            release.notified().await;
+        }
         DevProvider::new().stream(request, session, message).await
     }
 }
@@ -124,6 +135,10 @@ async fn fixture(
         .as_ref()
         .map(|hooks| hooks.requests.clone())
         .unwrap_or_default();
+    let pause = hooks
+        .as_ref()
+        .map(|hooks| hooks.pause_request.clone())
+        .unwrap_or_default();
     if let Some(hooks) = hooks {
         runtime
             .refresh(|candidate| {
@@ -150,7 +165,7 @@ async fn fixture(
     let engine = Arc::new(
         SessionEngine::new(
             SessionStore::connect_memory().await.unwrap(),
-            Arc::new(ProviderRouter::new().with(Arc::new(RecordingProvider(requests)))),
+            Arc::new(ProviderRouter::new().with(Arc::new(RecordingProvider { requests, pause }))),
             runtime,
             permission,
             EventBus::default(),
@@ -422,6 +437,166 @@ async fn dropping_spawn_during_hook(at_start: bool) {
 }
 
 #[tokio::test]
+async fn revived_resident_ignores_stale_session_start() {
+    revived_resident_ignores_stale_initialization(true).await;
+}
+
+#[tokio::test]
+async fn revived_resident_ignores_stale_agent_spawn() {
+    revived_resident_ignores_stale_initialization(false).await;
+}
+
+async fn revived_resident_ignores_stale_initialization(at_start: bool) {
+    let hooks = Arc::new(Hooks::default());
+    let (engine, supervisor, agent, root) =
+        fixture(SubagentLimits::default(), Some(hooks.clone())).await;
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let pause = if at_start {
+        &hooks.pause_start
+    } else {
+        &hooks.pause_spawn
+    };
+    *pause.lock().unwrap() = Some((entered.clone(), release.clone()));
+    let task = tokio::spawn({
+        let engine = engine.clone();
+        let supervisor = supervisor.clone();
+        async move { spawn(&supervisor, &engine, &agent, root, None).await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), entered.notified())
+        .await
+        .unwrap();
+    *pause.lock().unwrap() = None;
+    let projection = engine.read_projection(root).await.unwrap();
+    let (handle, entry) = projection
+        .team
+        .roster
+        .iter()
+        .find(|(_, e)| e.session != root)
+        .unwrap();
+    let child = entry.session;
+    supervisor
+        .archive_member(root, handle, "superseded")
+        .await
+        .unwrap();
+
+    // The revived episode must retain its current hook chain even if an old
+    // session.start finishes against the previous runtime snapshot.
+    let fresh_hooks = Arc::new(Hooks::default());
+    engine
+        .runtime
+        .refresh(|candidate| {
+            candidate.upsert_sources(vec![
+                RuntimeSource::new(
+                    RuntimeSourceId::plugin("registration-test"),
+                    [3; 32],
+                    Arc::new(()),
+                    Vec::new(),
+                )
+                .with_hooks(fresh_hooks.clone()),
+                RuntimeSource::new(
+                    RuntimeSourceId::bundle("test/registration-hooks"),
+                    [4; 32],
+                    Arc::new(()),
+                    Vec::new(),
+                )
+                .with_hooks(fresh_hooks),
+            ])
+        })
+        .unwrap();
+    let running = Arc::new(Notify::new());
+    let finish = Arc::new(Notify::new());
+    *hooks.pause_request.lock().unwrap() = Some((running.clone(), finish.clone()));
+    supervisor
+        .revive_child(root, "main", handle, "episode two".into())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), running.notified())
+        .await
+        .unwrap();
+    let captured = engine.captured_session_hooks(child).unwrap();
+    assert_eq!(supervisor.member_busy(root, child), Some(true));
+    let mut events = engine.bus().subscribe();
+    release.notify_one();
+    let _ = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // Episode two stays in the provider until released. A second driver would
+    // take the shared slot through Busy -> Idle while that turn is still live.
+    let stale_effect = tokio::time::timeout(Duration::from_millis(150), async {
+        loop {
+            let envelope = events.recv().await.unwrap();
+            match envelope.event {
+                hya_proto::Event::SessionCreated { session, .. } if session == child => {
+                    break "late registration publication";
+                }
+                hya_proto::Event::AgentActivityChanged {
+                    handle: ref actor,
+                    status: hya_proto::RosterStatus::Idle,
+                    ..
+                } if actor == handle => break "premature idle",
+                _ => {}
+            }
+        }
+    })
+    .await;
+    assert!(
+        stale_effect.is_err(),
+        "stale episode affected its replacement: {stale_effect:?}"
+    );
+    assert_eq!(supervisor.member_busy(root, child), Some(true));
+    assert!(
+        Arc::ptr_eq(&captured, &engine.captured_session_hooks(child).unwrap()),
+        "stale initialization replaced the revived hook chain"
+    );
+    finish.notify_one();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let projection = engine.read_projection(child).await.unwrap();
+            if supervisor.member_busy(root, child) == Some(false)
+                && projection
+                    .session
+                    .messages
+                    .last()
+                    .is_some_and(|message| message.finish == Some(FinishReason::Stop))
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(hooks.requests.lock().unwrap().len(), 1);
+    let activity = engine
+        .replay(root)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|envelope| match envelope.event {
+            hya_proto::Event::AgentActivityChanged {
+                handle: actor,
+                status,
+                ..
+            } if actor == *handle => Some(status),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        &activity[activity.len() - 2..],
+        &[hya_proto::RosterStatus::Busy, hya_proto::RosterStatus::Idle]
+    );
+    supervisor.stop_resident(root, handle).await.unwrap();
+    assert_eq!(
+        supervisor.member_busy(root, child),
+        None,
+        "revived slot must remain stoppable"
+    );
+}
+
+#[tokio::test]
 async fn concurrent_siblings_share_one_group_and_all_receive_announce() {
     let (engine, supervisor, agent, root) = fixture(SubagentLimits::default(), None).await;
     // Root lazy registration is intentionally outside this change's scope.
@@ -609,6 +784,125 @@ async fn initial_cancellation_rolls_back_with_the_terminal_event() {
     assert_cancelled_task(&engine, child, FinishCause::UserCancel).await;
 }
 
+struct BlockingShutdown {
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+#[async_trait]
+impl crate::BoundSidecarFactory for BlockingShutdown {
+    async fn start(
+        &self,
+        _: crate::SidecarStart,
+    ) -> Result<Box<dyn crate::SidecarHandle>, crate::CoreError> {
+        Ok(Box::new(Self {
+            entered: self.entered.clone(),
+            release: self.release.clone(),
+        }))
+    }
+}
+
+#[async_trait]
+impl crate::SidecarHandle for BlockingShutdown {
+    async fn ready(&mut self) -> Result<(), crate::CoreError> {
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), crate::CoreError> {
+        self.entered.notify_one();
+        self.release.notified().await;
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn stale_sidecar_cleanup_keeps_the_revived_slot() {
+    let hooks = Arc::new(Hooks::default());
+    let (engine, supervisor, agent, root) =
+        fixture(SubagentLimits::default(), Some(hooks.clone())).await;
+    let child = create(&engine, Some(root)).await;
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    supervisor
+        .register_existing_resident_with_sidecar(
+            root,
+            child,
+            "worker".into(),
+            agent,
+            Some("episode one".into()),
+            Arc::new(BlockingShutdown {
+                entered: entered.clone(),
+                release: release.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let projection = engine.read_projection(child).await.unwrap();
+            if supervisor.member_busy(root, child) == Some(false)
+                && projection
+                    .session
+                    .messages
+                    .last()
+                    .is_some_and(|message| message.finish == Some(FinishReason::Stop))
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let stopping = tokio::spawn({
+        let supervisor = supervisor.clone();
+        async move { supervisor.stop_resident(root, "main/worker").await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), entered.notified())
+        .await
+        .unwrap();
+    let running = Arc::new(Notify::new());
+    let finish = Arc::new(Notify::new());
+    *hooks.pause_request.lock().unwrap() = Some((running.clone(), finish.clone()));
+    supervisor
+        .revive_child(root, "main", "main/worker", "episode two".into())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), running.notified())
+        .await
+        .unwrap();
+    release.notify_one();
+    tokio::time::timeout(Duration::from_secs(5), stopping)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        supervisor.member_busy(root, child),
+        Some(true),
+        "old cleanup removed the revived slot"
+    );
+    finish.notify_one();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let projection = engine.read_projection(child).await.unwrap();
+            if supervisor.member_busy(root, child) == Some(false)
+                && projection
+                    .session
+                    .messages
+                    .last()
+                    .is_some_and(|message| message.finish == Some(FinishReason::Stop))
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    supervisor.stop_resident(root, "main/worker").await.unwrap();
+}
+
 struct FailingSidecar;
 
 #[async_trait]
@@ -769,6 +1063,8 @@ async fn terminal_archive_rechecks_mail_after_report_gate() {
         .await
         .unwrap()
         .claim;
+    // archive_reported_agent owns its turn lease; the fixture must release it.
+    drop(lease);
     let result = crate::resident::archive_reported_agent(
         &engine,
         root,
@@ -800,7 +1096,6 @@ async fn terminal_archive_rechecks_mail_after_report_gate() {
             .iter()
             .any(|mail| mail.body == "late directive")
     );
-    drop(lease);
     engine
         .store()
         .finalize_resident_stop(&claim, root, "main/worker")
