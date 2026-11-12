@@ -268,6 +268,28 @@ impl TokenAccounting {
         self.estimate_range(messages, 0..messages.len(), None)
     }
 
+    /// Estimate the composed request, including top-level instructions and tool schemas.
+    pub(crate) fn estimate_request(
+        &self,
+        request: &hya_provider::CompletionRequest,
+        policy: hya_provider::ReasoningReplayPolicy,
+    ) -> usize {
+        self.estimate_with_reasoning_policy(&request.messages, policy)
+            + request
+                .system
+                .as_ref()
+                .map_or(0, |system| self.tokenizer.count_text(system))
+            + request
+                .tools
+                .iter()
+                .map(|tool| {
+                    self.tokenizer.count_text(tool.name.as_str())
+                        + self.tokenizer.count_text(&tool.description)
+                        + self.estimate_json(&tool.input_schema)
+                })
+                .sum::<usize>()
+    }
+
     /// Estimate `messages[range]`. Replay decisions need the whole transcript
     /// (the current turn starts after its last user text), so the window is
     /// computed once over `messages` and indices stay absolute.

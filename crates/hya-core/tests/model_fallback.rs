@@ -51,6 +51,7 @@ enum Outcome {
 /// Provider that claims exactly one model id and plays queued outcomes.
 struct ScriptedModelProvider {
     claimed_model: &'static str,
+    max_context: u32,
     outcomes: Mutex<VecDeque<Outcome>>,
     attempts: Arc<Mutex<Vec<String>>>,
     request_reasoning: Arc<Mutex<Vec<Option<ReasoningEffort>>>>,
@@ -64,6 +65,7 @@ impl ScriptedModelProvider {
     ) -> Self {
         Self {
             claimed_model,
+            max_context: 200_000,
             outcomes: Mutex::new(outcomes.into()),
             attempts,
             request_reasoning: Arc::new(Mutex::new(Vec::new())),
@@ -81,7 +83,7 @@ impl Provider for ScriptedModelProvider {
         (model.as_str() == self.claimed_model).then(|| Capabilities {
             streaming_tool_calls: true,
             usage_reporting: true,
-            max_context: 200_000,
+            max_context: self.max_context,
             reasoning_request: true,
             ..Capabilities::default()
         })
@@ -555,6 +557,7 @@ struct FallbackHook {
     answers: Mutex<VecDeque<ModelFallbackOutcome>>,
     /// When set, every consult past the script retries `<prefix>-<attempt>`.
     endless_prefix: Option<&'static str>,
+    expand_request: bool,
     consults: Arc<Mutex<Vec<ModelFallbackInput>>>,
 }
 
@@ -567,6 +570,7 @@ impl FallbackHook {
             Arc::new(Self {
                 answers: Mutex::new(answers.into()),
                 endless_prefix: None,
+                expand_request: false,
                 consults: Arc::clone(&consults),
             }),
             consults,
@@ -600,9 +604,11 @@ impl HookDispatcher for FallbackHook {
     }
 
     async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome {
-        ChatParamsOutcome::Continue {
-            request: input.request,
+        let mut request = input.request;
+        if self.expand_request {
+            request.system = Some("expanded instructions ".repeat(200_000));
         }
+        ChatParamsOutcome::Continue { request }
     }
 
     async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
@@ -829,6 +835,7 @@ async fn model_fallback_is_capped_at_eight_attempts_per_round() {
     let hook = Arc::new(FallbackHook {
         answers: Mutex::new(VecDeque::new()),
         endless_prefix: Some("ghost"),
+        expand_request: false,
         consults: Arc::clone(&consults),
     });
     let fixt = fixture_with_hooks(vec![alpha], None, "alpha", Some(hook)).await;
@@ -932,4 +939,83 @@ fn model_failure_classes_map_provider_errors() {
         ModelFailureClass::InvalidRequest.as_str(),
         "invalid_request"
     );
+}
+
+#[tokio::test]
+async fn over_window_final_request_is_never_sent() {
+    let attempts = attempts_counter();
+    let mut provider = ScriptedModelProvider::new(
+        "tiny",
+        vec![Outcome::Complete("TOO LARGE")],
+        attempts.clone(),
+    );
+    provider.max_context = 1;
+    let fixt = fixture(vec![provider], None, "tiny").await;
+    let result = fixt
+        .engine
+        .run_turn(fixt.session, &fixt.agent, CancellationToken::new())
+        .await;
+    assert!(
+        attempts.lock().unwrap().is_empty(),
+        "oversized request reached provider"
+    );
+    assert!(result.unwrap_err().to_string().contains("context window"));
+}
+
+#[tokio::test]
+async fn smaller_fallback_window_is_checked_before_send() {
+    let preferred_attempts = attempts_counter();
+    let fallback_attempts = attempts_counter();
+    let preferred = ScriptedModelProvider::new(
+        "large",
+        vec![Outcome::PreStreamFailure(ProviderError::Transport(
+            "offline".into(),
+        ))],
+        preferred_attempts.clone(),
+    );
+    let mut fallback = ScriptedModelProvider::new(
+        "small",
+        vec![Outcome::Complete("TOO LARGE")],
+        fallback_attempts.clone(),
+    );
+    fallback.max_context = 1;
+    let fixt = fixture(
+        vec![preferred, fallback],
+        Some(chain("large", &["small"])),
+        "large",
+    )
+    .await;
+    let result = fixt
+        .engine
+        .run_turn(fixt.session, &fixt.agent, CancellationToken::new())
+        .await;
+    assert_eq!(preferred_attempts.lock().unwrap().len(), 1);
+    assert!(
+        fallback_attempts.lock().unwrap().is_empty(),
+        "oversized fallback reached provider"
+    );
+    assert!(result.unwrap_err().to_string().contains("context window"));
+}
+
+#[tokio::test]
+async fn hook_expanded_request_is_never_sent() {
+    let attempts = attempts_counter();
+    let provider = ScriptedModelProvider::new(
+        "hooked",
+        vec![Outcome::Complete("TOO LARGE")],
+        attempts.clone(),
+    );
+    let hook = Arc::new(FallbackHook {
+        answers: Mutex::new(VecDeque::new()),
+        endless_prefix: None,
+        expand_request: true,
+        consults: Arc::new(Mutex::new(Vec::new())),
+    });
+    let fixt = fixture_with_hooks(vec![provider], None, "hooked", Some(hook)).await;
+    let result = fixt
+        .engine
+        .run_turn(fixt.session, &fixt.agent, CancellationToken::new())
+        .await;
+    assert!(attempts.lock().unwrap().is_empty());
+    assert!(result.unwrap_err().to_string().contains("context window"));
 }

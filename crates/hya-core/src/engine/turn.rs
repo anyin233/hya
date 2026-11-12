@@ -441,6 +441,27 @@ impl SessionEngine {
         Err(error)
     }
 
+    fn check_request_context(&self, request: &CompletionRequest) -> Result<(), ProviderError> {
+        let router = self.provider_router();
+        let Some(capabilities) = router.capabilities(&request.model) else {
+            return Ok(()); // The router reports unknown models through its normal path.
+        };
+        let tokens = self
+            .token_accounting
+            .estimate_request(request, router.reasoning_replay_policy(&request.model));
+        let required = tokens.saturating_add(request.max_output_tokens.unwrap_or(0) as usize);
+        if capabilities.max_context > 0 && required > capabilities.max_context as usize {
+            return Err(ProviderError::Incompatible(format!(
+                "final request for {} exceeds context window: estimated {} input tokens + {} output tokens > {} tokens after context reduction",
+                request.model,
+                tokens,
+                request.max_output_tokens.unwrap_or(0),
+                capabilities.max_context
+            )));
+        }
+        Ok(())
+    }
+
     /// One router attempt of `request` on `model`, with that model's own
     /// reasoning variant.
     async fn stream_model_candidate(
@@ -453,6 +474,7 @@ impl SessionEngine {
         let mut attempt = request.clone();
         attempt.model = model.clone();
         attempt.reasoning = messages::reasoning_for_model(&attempt.model, request.reasoning);
+        self.check_request_context(&attempt)?;
         self.provider_router()
             .stream(attempt, session, message)
             .await
@@ -477,6 +499,7 @@ impl SessionEngine {
             let mut attempt = request.clone();
             attempt.model = candidate.model.clone();
             attempt.reasoning = Some(candidate.reasoning);
+            self.check_request_context(&attempt)?;
             match self
                 .provider_router()
                 .stream(attempt, session, message)
@@ -1417,7 +1440,12 @@ impl SessionEngine {
                 usage_reporting,
                 reasoning_policy,
             );
-            let mut tokens = initial_count.tokens;
+            let template =
+                request_from_messages(&live_agent, Vec::new(), resources, &model, depth, None);
+            let request_overhead = self
+                .token_accounting
+                .estimate_request(&template, reasoning_policy);
+            let mut tokens = initial_count.tokens.saturating_add(request_overhead);
             let token_source = initial_count.source;
             let over_threshold = |tokens: usize| tokens > resolved_threshold;
 
@@ -1577,6 +1605,7 @@ impl SessionEngine {
                         (projection, messages, tokens) = self
                             .reload_after_compaction(session, &live_agent, &model)
                             .await?;
+                        tokens = tokens.saturating_add(request_overhead);
                     }
                     crate::compaction::CompactionRung::SnapCompact => {
                         // Local and deterministic: no model call, no capability
@@ -1623,6 +1652,7 @@ impl SessionEngine {
                         (projection, messages, tokens) = self
                             .reload_after_compaction(session, &live_agent, &model)
                             .await?;
+                        tokens = tokens.saturating_add(request_overhead);
                     }
                     crate::compaction::CompactionRung::Handoff => {
                         let Some(summarizer) = &self.summarizer else {
@@ -1694,6 +1724,7 @@ impl SessionEngine {
                         (projection, messages, tokens) = self
                             .reload_after_compaction(session, &live_agent, &model)
                             .await?;
+                        tokens = tokens.saturating_add(request_overhead);
                     }
                     crate::compaction::CompactionRung::Summarize => {
                         let Some(summarizer) = &self.summarizer else {
@@ -1769,6 +1800,7 @@ impl SessionEngine {
                         (projection, messages, tokens) = self
                             .reload_after_compaction(session, &live_agent, &model)
                             .await?;
+                        tokens = tokens.saturating_add(request_overhead);
                     }
                 }
             }
