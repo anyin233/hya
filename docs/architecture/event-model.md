@@ -553,10 +553,6 @@ UsageTotals {
   each session and calling `SessionUsage::merge`. `SessionUsage::total()` sums
   every model.
 
-This is **not** the `token_ledger` row shape (session/role/iteration/run-id
-columns in storage). Ledger accounting and envelope `TokenUsage` are different
-models.
-
 The store schema keeps a `message.cost_json` column, but no workspace writer
 populates it and `hya-proto` no longer defines a cost type for it; integrators
 should not assume live cost population from projection alone.

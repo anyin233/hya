@@ -44,7 +44,7 @@ hya / hya-server
 | `hya-mcp` | [`../crates/hya-mcp/src/lib.rs`](../crates/hya-mcp/src/lib.rs) | MCP stdio client/manager, resource discovery, and tool bridge. |
 | `hya-plugin` | [`../crates/hya-plugin/src/lib.rs`](../crates/hya-plugin/src/lib.rs) | Stdio JSON-RPC plugin host, manifest/config merge, hook dispatch, tool and permission bridge. |
 | `hya-plugin-bun` | [`../crates/hya-plugin-bun`](../crates/hya-plugin-bun) | Bundled Bun extension adapter (`kind: bun`) for JS bundle sidecars and process extensions. |
-| `hya-store` | [`../crates/hya-store/src/lib.rs`](../crates/hya-store/src/lib.rs) | SQLite event log, replay, projection reads, token ledger, admission journal, mailbox, resident claims, saved permissions, and installed-bundle registry. |
+| `hya-store` | [`../crates/hya-store/src/lib.rs`](../crates/hya-store/src/lib.rs) | SQLite event log, replay, projection reads, admission journal, mailbox, resident claims, saved permissions, and installed-bundle registry. |
 | `hya-core` | [`../crates/hya-core/src/lib.rs`](../crates/hya-core/src/lib.rs) | Session engine, event bus, turn loop, compaction, durable Workflow execution/replay, hooks, goal/loop drivers, resident teams, orchestrator budgets, worktrees. |
 | `hya-workflow` | [`../crates/hya-workflow/src/lib.rs`](../crates/hya-workflow/src/lib.rs) | Workflow source compilation, validation, immutable normalized plans, revisions, model assignments, and rendering inputs. |
 | `hya-server` | [`../crates/hya-server/src/lib.rs`](../crates/hya-server/src/lib.rs) | The `hya.v1` contract over `SessionEngine`: `/v1` HTTP/JSON+SSE+WebSocket routes plus the tonic `V1Grpc` dispatch through the same router. |
@@ -163,7 +163,7 @@ Important modules:
 
 | File | Purpose |
 | --- | --- |
-| [`src/lib.rs`](../crates/hya-store/src/lib.rs) | Connections, append/replay/`read_projection`, list/delete sessions, token ledger, `decode_session_key`. |
+| [`src/lib.rs`](../crates/hya-store/src/lib.rs) | Connections, append/replay/`read_projection`, list/delete sessions, `decode_session_key`. |
 | [`src/admission.rs`](../crates/hya-store/src/admission.rs) | Durable spawn-admission operation deduplication, lifecycle, and refunds. |
 | [`src/mailbox.rs`](../crates/hya-store/src/mailbox.rs) | Event-sourced mail writes, resident recovery, stop/failure finalization. |
 | [`src/resident_claim.rs`](../crates/hya-store/src/resident_claim.rs) | Actor claim fencing primitives. |
@@ -177,7 +177,7 @@ Session-store migrations (`migrations/`):
 
 | Migration | Role |
 | --- | --- |
-| `0001_init.sql` | Current event log, placement/recovery indexes, token ledger, permissions, Projects, preferences, admission/actor fencing, and handoff/interaction state. Older session schemas are rejected at open; see [Storage](architecture/storage.md#session-schema-and-compatibility). |
+| `0001_init.sql` | Current event log, placement/recovery indexes, permissions, Projects, preferences, admission/actor fencing, and handoff/interaction state. Older session schemas are rejected at open; see [Storage](architecture/storage.md#session-schema-and-compatibility). |
 
 Bundle registry uses a **separate** migration set under
 `bundle_migrations/0001_init.sql` for the installed-bundle database file.
@@ -296,7 +296,7 @@ process E2E is layered on top (Track P); see [Testing](testing/README.md).
 | [`../crates/hya-core/tests`](../crates/hya-core/tests) | Turn loop, goal/loop gates, teams, subagents, categories, worktrees. |
 | [`../crates/hya-app/tests`](../crates/hya-app/tests) | Nested spawn tree, admission, installed-bundle refresh, runtime composition. |
 | [`../crates/hya-provider/tests`](../crates/hya-provider/tests) | OpenAI/Anthropic conformance, provider preflight, canonical event shape. |
-| [`../crates/hya-store/tests`](../crates/hya-store/tests) | Migration, projection, session scoping, persistence, token ledger. |
+| [`../crates/hya-store/tests`](../crates/hya-store/tests) | Migration, projection, session scoping, persistence, usage projection. |
 | [`../crates/hya-tool/tests`](../crates/hya-tool/tests) | Permission evaluation and builtin tools. |
 | [`../crates/hya-server/tests`](../crates/hya-server/tests) | v1 HTTP contract behavior and HTTP/gRPC parity. |
 | [`../crates/hya-plugin/tests`](../crates/hya-plugin/tests) | Plugin host protocol, hooks, and tool bridge behavior. |
