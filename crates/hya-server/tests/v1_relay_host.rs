@@ -449,8 +449,6 @@ async fn relay_control_and_process_stop_are_loopback_only() {
             "/v1/relay/connect",
             Some(json!({"proxyUrl": relay.url()})),
         ),
-        ("POST", "/v1/process/dispose", Some(json!({}))),
-        ("POST", "/v1/process/upgrade", Some(json!({}))),
     ] {
         let (status, error) = call(&mut api, method, path, body).await;
         assert_eq!(status, 403, "{method} {path}: {error}");
@@ -486,7 +484,7 @@ async fn relay_control_and_process_stop_are_loopback_only() {
 }
 
 /// gRPC reaches the same server through the tunnel, and every call keeps
-/// the relay origin: `RelayControl` and process stop/upgrade are refused
+/// the relay origin: `RelayControl` calls are refused
 /// with `PERMISSION_DENIED` (also in the in-process dispatch), browser
 /// markers are refused, and the same rpcs over loopback work.
 #[tokio::test]
@@ -566,23 +564,7 @@ async fn grpc_over_the_relay_keeps_the_relay_origin() {
             .map(drop),
         "connect",
     );
-    // Process stop/upgrade reach the router's relay check through the
-    // in-process dispatch.
     let mut process = ProcessClient::new(channel.clone());
-    denied(
-        process
-            .dispose_process(pb::DisposeProcessRequest::default())
-            .await
-            .map(drop),
-        "dispose",
-    );
-    denied(
-        process
-            .upgrade_process(pb::UpgradeProcessRequest::default())
-            .await
-            .map(drop),
-        "upgrade",
-    );
     // A browser marker over the relay is refused for gRPC too.
     let mut browser = tonic::Request::new(pb::GetHealthRequest::default());
     browser

@@ -374,20 +374,6 @@ impl pb::process_server::Process for V1Grpc {
         unary!(self, "PATCH", "/v1/config", request)
     }
 
-    async fn dispose_process(
-        &self,
-        request: GrpcRequest<pb::DisposeProcessRequest>,
-    ) -> Result<GrpcResponse<pb::DisposeProcessResponse>, Status> {
-        unary!(self, "POST", "/v1/process/dispose", request)
-    }
-
-    async fn upgrade_process(
-        &self,
-        request: GrpcRequest<pb::UpgradeProcessRequest>,
-    ) -> Result<GrpcResponse<pb::UpgradeProcessResponse>, Status> {
-        unary!(self, "POST", "/v1/process/upgrade", request)
-    }
-
     async fn get_bootstrap(
         &self,
         request: GrpcRequest<pb::GetBootstrapRequest>,
@@ -639,38 +625,6 @@ impl pb::auth_server::Auth for V1Grpc {
                 &format!("/v1/auth/{provider_id}"),
                 BTreeMap::new(),
                 &empty,
-            )
-            .await?,
-        )
-    }
-
-    async fn start_oauth(
-        &self,
-        request: GrpcRequest<pb::StartOauthRequest>,
-    ) -> Result<GrpcResponse<pb::StartOauthResponse>, Status> {
-        let (ctx, inner) = split(request);
-        let provider_id = field(&inner, "providerId");
-        into_response(
-            self.post(
-                &ctx,
-                &format!("/v1/auth/{provider_id}/oauth/start"),
-                &pb::StartOauthRequest::default(),
-            )
-            .await?,
-        )
-    }
-
-    async fn complete_oauth(
-        &self,
-        request: GrpcRequest<pb::CompleteOauthRequest>,
-    ) -> Result<GrpcResponse<pb::CompleteOauthResponse>, Status> {
-        let (ctx, inner) = split(request);
-        let provider_id = field(&inner, "providerId");
-        into_response(
-            self.post(
-                &ctx,
-                &format!("/v1/auth/{provider_id}/oauth/callback"),
-                &inner,
             )
             .await?,
         )

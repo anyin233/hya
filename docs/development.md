@@ -47,7 +47,7 @@ suite only when asked, or for a cross-cutting change that touches most crates
 | --- | --- |
 | Private to one crate or package (internal functions, tests, non-`pub` items) | That crate or package only |
 | Public API, wire types, or behavior other crates rely on | The crate and its direct workspace dependents that use the changed items |
-| `proto/hya/v1` | Regenerate with `cargo run -p xtask -- gen-api`, then `hya-api`, `hya-server`, `hya-sdk-v1`, `hya-client`, and `packages/hya-tui` when its generated catalog or protobuf definitions change |
+| `proto/hya/v1` | Regenerate with `cargo run -p xtask -- gen-api`, then `hya-api`, `hya-server`, `hya-sdk-v1`, and `packages/hya-tui` when its generated catalog or protobuf definitions change |
 | Version bump ([Version bumps](#version-bumps)) | `cargo test -p xtask` and `cargo test -p hya-bundle` |
 | `crates/hya-e2e/matrix.toml` or a new Track P test | `cargo run -p xtask -- matrix-check` |
 | Documentation only | No build or tests; check links and that no repository-private process notes leaked into project docs |
@@ -297,7 +297,7 @@ Use this guide when deciding where a change belongs:
 | Turn-loop behavior, goal/loop/team/worktree runtime logic | `hya-core` |
 | HTTP route or SSE behavior | `hya-server` |
 | `hya.v1` contract change (proto message/rpc, error code, HTTP binding) | `hya-api` — edit `proto/hya/v1/*.proto`, then regenerate with `cargo run -p xtask -- gen-api` |
-| Typed Rust HTTP integration | `hya-client`; Rust frontends use `hya-sdk-v1` |
+| Typed Rust HTTP integration | `hya-sdk-v1` (`Client` for tooling; `V1Sdk` for frontends) |
 | Bun/OpenTUI frontend behavior | `packages/hya-tui` (v1 HTTP/JSON+SSE and direct gRPC client) |
 | User-facing backend CLI command, config loading, server launch | `hya` |
 | Process-level agent scenario (real backend + FakeLlm) | `hya-e2e` (+ matrix docs under `docs/testing/`) |

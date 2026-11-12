@@ -223,7 +223,7 @@ async fn check_stop_start_restore(unanswered_permission: bool) {
     );
     let ready: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
     let url = ready["url"].as_str().unwrap();
-    let client = hya_client::Client::new(url);
+    let client = hya_sdk_v1::Client::new(url);
     let restored = wait_until(
         "restored turn completes",
         Duration::from_secs(30),

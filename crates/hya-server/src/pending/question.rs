@@ -91,45 +91,12 @@ impl QuestionRequests {
     /// Pending-plane bridge retained for the interaction event stream.
     #[allow(dead_code)]
     #[allow(dead_code)]
-    pub(crate) async fn snapshot_asked(&self) -> Vec<Value> {
-        let pending = {
-            let entries = self.inner.lock().await;
-            entries
-                .iter()
-                .filter_map(|(id, entry)| {
-                    question_view(id, entry).map(|properties| (id.clone(), properties))
-                })
-                .collect::<Vec<_>>()
-        };
-        pending
-            .into_iter()
-            .map(|(id, properties)| question_asked_event_from_view(&id, properties))
-            .collect()
-    }
-
-    /// Pending-plane bridge retained for the interaction event stream.
-    #[allow(dead_code)]
-    #[allow(dead_code)]
     pub(crate) async fn list(&self) -> Vec<QuestionRequestView> {
         self.inner
             .lock()
             .await
             .iter()
             .filter_map(|(id, entry)| question_view(id, entry))
-            .collect()
-    }
-
-    #[allow(dead_code)]
-    pub(crate) async fn list_session(&self, session: SessionId) -> Vec<QuestionRequestView> {
-        self.inner
-            .lock()
-            .await
-            .iter()
-            .filter_map(|(id, entry)| {
-                (entry.session == Some(session))
-                    .then(|| question_view(id, entry))
-                    .flatten()
-            })
             .collect()
     }
 

@@ -139,10 +139,6 @@ async fn v1_process_config_and_catalog_surfaces_answer() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-
-    let (status, dispose) = send(app, Method::POST, "/v1/process/dispose", Value::Null).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(dispose["error"]["code"], json!("unavailable"));
 }
 
 /// Key writes belong to the app-owned provider control (`hya_app::auth`,

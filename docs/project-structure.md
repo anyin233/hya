@@ -49,7 +49,6 @@ hya / hya-server
 | `hya-workflow` | [`../crates/hya-workflow/src/lib.rs`](../crates/hya-workflow/src/lib.rs) | Workflow source compilation, validation, immutable normalized plans, revisions, model assignments, and rendering inputs. |
 | `hya-server` | [`../crates/hya-server/src/lib.rs`](../crates/hya-server/src/lib.rs) | The `hya.v1` contract over `SessionEngine`: `/v1` HTTP/JSON+SSE+WebSocket routes plus the tonic `V1Grpc` dispatch through the same router. |
 | `hya-api` | [`../crates/hya-api/src/lib.rs`](../crates/hya-api/src/lib.rs) | The v1 dual-protocol contract crate: generated proto types, stable error-code table (HTTP status + gRPC code), cursor helpers. |
-| `hya-client` | [`../crates/hya-client/src/lib.rs`](../crates/hya-client/src/lib.rs) | Typed reqwest client for the v1 API. |
 | `hya-sdk-v1` | [`../crates/hya-sdk-v1/src/lib.rs`](../crates/hya-sdk-v1/src/lib.rs) | Typed SDK for new frontends on the v1 API: bootstrap, event-driven turns, transcript reads, interactions, SSE subscription, `V1SessionMirror`. |
 | `hya-updater` | [`../crates/hya-updater`](../crates/hya-updater) | `hya update` installer shell-out: pipes the embedded `scripts/hya-install.sh` to `sh`; see [install.md](install.md). |
 | `hya` | [`../crates/hya-backend/src/main.rs`](../crates/hya-backend/src/main.rs) | Unified `hya` executable (package `hya-backend`) and the only shipped binary; subcommands select the area: `exec`, goal mode, `loop`, server, tail-session, config/auth/agents, bundles, Workflows, session listing, and `update` (release installer); bare startup prints a guidance banner. |
@@ -237,7 +236,7 @@ The projection reducer applies `seq == 0` as live-only (does not advance
 `last_seq`); durable envelopes with `seq <= last_seq` are ignored; otherwise the
 event folds and `last_seq` advances.
 
-## `hya-server`, `hya-api`, and `hya-client`
+## `hya-server`, `hya-api`, and `hya-sdk-v1`
 
 `hya-server` exposes the engine over exactly one contract — `hya.v1` — served
 over HTTP/JSON+SSE+WebSocket under `/v1` and, on the same port, over gRPC
@@ -259,7 +258,7 @@ generated [API reference](protocol/api-reference.md); this page only records
 the ownership boundary. The legacy Compat and native `/sessions/*` route
 groups are deleted.
 
-`hya-client` is the small typed wrapper over the v1 API (create session,
+`hya-sdk-v1` is the small typed wrapper over the v1 API (create session,
 event-driven prompt admit+wait, curated and raw-envelope event replay,
 pending-interaction list/respond). New frontends use `hya-sdk-v1` (typed SDK
 with SSE `StreamFrame` subscription and `V1SessionMirror`). See
@@ -284,7 +283,7 @@ The interactive frontend lives outside the Cargo workspace:
   TUI as the WebUI, plus the Playwright TUI test harness. See
   [tui-web.md](tui-web.md).
 
-Rust clients integrate through `hya-sdk-v1` / `hya-client` on the v1
+Rust clients integrate through `hya-sdk-v1` on the v1
 contract.
 
 ## Tests

@@ -818,7 +818,7 @@ still sends its own name as `Host`, so it cannot drive the backend or read
 
 | Accepted | Why |
 | --- | --- |
-| `localhost`, `127.0.0.1`, `[::1]`, on any port | Loopback clients (the TUI, `hya-client`, curl, a relay bridge's `127.0.0.1:<port>`). The port is not compared: a bridge forwards its own port. |
+| `localhost`, `127.0.0.1`, `[::1]`, on any port | Loopback clients (the TUI, `hya-sdk-v1`, curl, a relay bridge's `127.0.0.1:<port>`). The port is not compared: a bridge forwards its own port. |
 | The host of `--bind` when it is not a wildcard (`--bind 192.168.1.20:8080` accepts `192.168.1.20`) | The address you chose to serve on. |
 | Each `--allow-host <HOST>` (case-insensitive, a trailing dot ignored, IPv6 with or without brackets) | Names you reach the server by on purpose. |
 

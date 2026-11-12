@@ -11,6 +11,7 @@ version-reference = "backend"
 workspace = true
 
 [dependencies]
+hya-proto = { workspace = true }
 futures = { workspace = true }
 hya-api = { workspace = true }
 eventsource-stream = { workspace = true }
@@ -24,7 +25,6 @@ tokio = { workspace = true }
 axum = { workspace = true }
 hya-bundle = { workspace = true }
 hya-core = { workspace = true }
-hya-proto = { workspace = true }
 hya-provider = { workspace = true }
 hya-server = { workspace = true }
 hya-store = { workspace = true }

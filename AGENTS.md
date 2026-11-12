@@ -121,10 +121,10 @@ frontend is the Bun/OpenTUI TUI in `packages/hya-tui` (v1 HTTP/JSON+SSE or
 direct gRPC client); `packages/hya-tui-web` renders the same TUI in a browser as the
 WebUI. Bare `hya` on a terminal starts both against the database's backend
 daemon (found or auto-started; it outlives its clients, ADR-0023).
-`hya-sdk-v1`, `hya-client`, and gRPC are the other supported ways to drive a
+`hya-sdk-v1` and gRPC are the other supported ways to drive a
 backend.
 
-The server exposes exactly one contract — `hya.v1` (18 services / 104 rpcs in
+The server exposes exactly one contract — `hya.v1` (18 services / 107 rpcs in
 `proto/hya/v1`) — over HTTP/JSON+SSE+WebSocket under `/v1` and over gRPC
 through `hya_server::V1Grpc`, which dispatches through the same router. Both
 are served on the same port from one server state (`hya_server::build`,
@@ -142,7 +142,7 @@ hya / hya-server
   -> hya-provider streaming model route
   -> hya-tool builtin, MCP, or plugin tools
   -> hya-store SQLite event log
-  -> v1 clients (hya-sdk-v1, hya-client, gRPC) over the same projection
+  -> v1 clients (hya-sdk-v1, gRPC) over the same projection
 ```
 
 Workflow authoring and normalization live in `hya-workflow`; durable execution
@@ -166,8 +166,7 @@ or verifiers; workers do not decide that their own objective is done.
 | `crates/hya-store` | Persistence. Stores events in SQLite, runs migrations, lists/deletes sessions, replays event logs, and folds projections on read through `hya-proto::Projection`. Also the Project tables (`project`, `project_root`, `session.project_id`/`kind`; ADR-0024) and project-scoped saved permissions. |
 | `crates/hya-server` | The `/v1` contract surface over `hya-core`: HTTP/JSON+SSE+WebSocket routes generated from the `hya.v1` IDL, plus `V1Grpc` (tonic) dispatching through the same router. Shared catalogs/guidance/PTY/worktree/git helpers live in `support`. Also the Host allowlist guard (`host.rs`, `--allow-host`), the relay host connector (`relay_host/`, driven by the loopback-only `RelayControl` rpcs), Projects and session placement (ADR-0024), and the reaper of unused ephemeral sessions (`ephemeral.rs`). The legacy Compat and native routes are deleted. |
 | `crates/hya-api` | The v1 dual-protocol contract crate: `proto/hya/v1` generated Rust types (prost/tonic/pbjson protojson), stable error-code table mapped to HTTP statuses and gRPC codes, and cursor helpers. Regenerate with `cargo run -p xtask -- gen-api` (vendored protoc; output committed). |
-| `crates/hya-sdk-v1` | Typed SDK for new frontends on the v1 API: bootstrap, sessions, event-driven turns, transcript/todo reads, curated replay, interactions, live SSE `StreamFrame` subscription, and `V1SessionMirror` transcript folding. |
-| `crates/hya-client` | Typed `reqwest` client for the v1 API: sessions, event-driven turns (admit+wait), curated and raw-envelope event replay, and pending-interaction list/respond. |
+| `crates/hya-sdk-v1` | Typed SDK for new frontends on the v1 API: bootstrap, sessions, event-driven turns, transcript/todo reads, curated replay, interactions, live SSE `StreamFrame` subscription, `V1SessionMirror` transcript folding, and the `Client` tooling/process-harness API. |
 | `crates/hya-updater` | `hya update`'s release installer: embeds `scripts/hya-install.sh` and pipes it to `sh` for the running prefix (`release_install`), plus the command surface (`cli`: `version`). Must not depend on runtime crates. See `docs/install.md`. |
 | `crates/hya-mcp` | MCP support. Implements the MCP protocol/client/manager and bridges MCP tools into `hya-tool` with namespaced `mcp__server__tool` names and permission checks. |
 | `crates/hya-plugin` | Out-of-process plugin host. Owns the JSON-RPC stdio protocol, plugin client/host, manifest/config loading, command/tool dispatch, hook dispatcher bridge, permission bridge, and plugin-backed tool adapter. |
@@ -219,7 +218,7 @@ cargo tree --workspace -i <crate> --depth 1 -e normal,dev --prefix none
 ```
 
 - Foundation crates (`hya-proto`, `hya-api`, `hya-tool`) have many dependents. Test the changed crate, then only the dependents that use the changed items (find them with `grep` or `xd://lsp` references), not the whole list.
-- `proto/hya/v1` changes: regenerate with `cargo run -p xtask -- gen-api`, then test `hya-api`, `hya-server`, `hya-sdk-v1`, `hya-client`, and `packages/hya-tui` when its generated catalog or protobuf definitions change.
+- `proto/hya/v1` changes: regenerate with `cargo run -p xtask -- gen-api`, then test `hya-api`, `hya-server`, `hya-sdk-v1`, and `packages/hya-tui` when its generated catalog or protobuf definitions change.
 - Version bumps: `cargo test -p xtask` (frontend `package.json`) and `cargo test -p hya-bundle` (bundle identities) check the coupled versions; `README.md` and `Cargo.lock` are checked only by `release-rehearsal`.
 - `crates/hya-e2e/matrix.toml` or new Track P tests: `cargo run -p xtask -- matrix-check`.
 

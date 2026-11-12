@@ -15,7 +15,7 @@ interactive frontend is the Bun/OpenTUI TUI in `packages/hya-tui`: running
 `hya` in a terminal starts it together with the WebUI, the same TUI rendered
 in a browser through `packages/hya-tui-web`, both connected to a backend
 daemon that `hya` starts when none runs and that keeps running after you quit
-(`hya serve status|stop|restart`; see [Run the TUI](#run-the-tui)). Other clients use `hya-sdk-v1`, `hya-client`,
+(`hya serve status|stop|restart`; see [Run the TUI](#run-the-tui)). Other clients use `hya-sdk-v1`,
 or any `hya.v1` client.
 
 
@@ -182,7 +182,7 @@ sample config.
   `hya.v1` contract under `/v1`, plus gRPC on the same port; see the
   [protocol guide](docs/protocol/README.md) and generated
   [API reference](docs/protocol/api-reference.md). Typed clients:
-  `hya-sdk-v1` and `hya-client` (crates), or any generated `hya.v1` stub.
+  `hya-sdk-v1` (crates), or any generated `hya.v1` stub.
 - MCP servers, plugins (including a Compat plugin adapter), and a formatter
   plane, all driven from the same config.
 

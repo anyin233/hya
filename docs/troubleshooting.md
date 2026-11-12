@@ -392,7 +392,7 @@ LAN name must be listed. See [docs/cli.md](cli.md#allowed-host-names).
 A request that arrived through the secure relay carried an `Origin` or
 `Sec-Fetch-*` header — it came from a web page, which may never drive a
 remote backend through a bridge. Use the TUI or the WebUI of `hya --connect`
-(its browser tab talks to the TUI, not to the bridge), `hya-client`, or
+(its browser tab talks to the TUI, not to the bridge), `hya-sdk-v1`, or
 curl; none of them send those headers.
 
 ## `401 unauthenticated: the hya bridge needs its token`

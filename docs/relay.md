@@ -125,8 +125,8 @@ and for every client stream it answers the Noise handshake and serves the
 same server as the TCP port over the decrypted bytes — REST, SSE, the PTY
 WebSocket, and gRPC (`content-type: application/grpc*`, HTTP/2) work
 unchanged. gRPC through the relay has the same restrictions as REST: every
-call carries the relay origin into its handler, so `RelayControl` and
-process stop/upgrade answer `PERMISSION_DENIED`, and calls with browser
+call carries the relay origin into its handler, so `RelayControl` calls
+answer `PERMISSION_DENIED`, and calls with browser
 headers are refused. Nothing listens on a new port: the connection to the
 relay is outbound.
 
@@ -266,7 +266,7 @@ refused before any route runs — `403 {"error":{"code":"permission_denied",
 "message":"browser requests are not accepted over the relay …"}}` — so a web
 page can neither fetch through a bridge (CORS request or preflight) nor open
 a WebSocket through it (browsers always send `Origin` on a WebSocket
-handshake). hya's own clients (the TUI, `hya-client`, the SDK, curl) send
+handshake). hya's own clients (the TUI, `hya-sdk-v1`, the SDK, curl) send
 none of these headers.
 
 **Allowed Host names.** Every request, local or relay-origin, must name an

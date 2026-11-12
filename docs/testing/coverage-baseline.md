@@ -45,7 +45,7 @@ even when a test fails.
 | Coverage | Lines | Missed | Crate |
 | ---: | ---: | ---: | --- |
 | 0.0% | 1 | 1 | hya-plugin-example |
-| 0.0% | 60 | 60 | hya-client |
+| 0.0% | 60 | 60 | hya-sdk-v1 |
 | 51.8% | 1,461 | 704 | hya |
 | 61.7% | 940 | 360 | hya-updater |
 | 64.3% | 709 | 253 | xtask |
@@ -63,7 +63,7 @@ even when a test fails.
 
 ### Reading these numbers honestly
 
-- **`hya-client` at 0% is an artifact of this measurement, not a real gap.**
+- **`hya-sdk-v1` at 0% is an artifact of this measurement, not a real gap.**
   It is consumed by `crates/hya-e2e`, which this run excludes. It is exercised
   in reality — by Track P, whose contribution this run cannot see. The Track P
   measurement below puts it at **98.3%**, which settles it.
@@ -152,7 +152,7 @@ files, against **6** before the change.
 | 57.4% | 1,937 | 825 | hya-bundle |
 | 72.5% | 756 | 208 | hya-proto |
 | 84.3% | 1,302 | 204 | hya-e2e |
-| 98.3% | 60 | 1 | hya-client |
+| 98.3% | 60 | 1 | hya-sdk-v1 |
 | **38.9%** | **42,675** | **26,091** | **all (Track P only)** |
 
 Totals: lines 38.86%, regions 36.71%, functions 35.18%.
@@ -162,8 +162,8 @@ Totals: lines 38.86%, regions 36.71%, functions 35.18%.
 - **The pass signal is `hya-server` and `hya-core` moving off 0.0%** — to 21.6%
   and 51.2%. Those two rows are the whole point; they are what a suite serving 25
   real sessions must touch, and they were previously reporting nothing at all.
-- **`hya-client` 98.3% (was 0.0%)** closes the hole flagged in the workspace
-  table above. `hya-client` is used only by this harness, so the workspace run's
+- **`hya-sdk-v1` 98.3% (was 0.0%)** closes the hole flagged in the workspace
+  table above. `hya-sdk-v1` is used only by this harness, so the workspace run's
   0.0% was always a measurement artifact, and this is the number that shows it.
 - **The line denominator here (42,675) is smaller than the workspace one
   (63,386)** because only the crates reachable from `cargo test -p hya-e2e` get

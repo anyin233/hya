@@ -92,28 +92,6 @@
         "x-server-streaming": false
       }
     },
-    "/v1/auth/{provider_id}/oauth/callback": {
-      "post": {
-        "operationId": "Auth.CompleteOauth",
-        "summary": "Complete a provider OAuth flow with the callback code.",
-        "tags": [
-          "Auth"
-        ],
-        "x-grpc-method": "hya.v1.Auth.CompleteOauth",
-        "x-server-streaming": false
-      }
-    },
-    "/v1/auth/{provider_id}/oauth/start": {
-      "post": {
-        "operationId": "Auth.StartOauth",
-        "summary": "Begin a provider OAuth flow; returns the authorization URL to open.",
-        "tags": [
-          "Auth"
-        ],
-        "x-grpc-method": "hya.v1.Auth.StartOauth",
-        "x-server-streaming": false
-      }
-    },
     "/v1/bootstrap": {
       "get": {
         "operationId": "Process.GetBootstrap",
@@ -531,28 +509,6 @@
           "Interactions"
         ],
         "x-grpc-method": "hya.v1.Interactions.DeleteSavedRule",
-        "x-server-streaming": false
-      }
-    },
-    "/v1/process/dispose": {
-      "post": {
-        "operationId": "Process.DisposeProcess",
-        "summary": "Ask the backend process to shut down gracefully.",
-        "tags": [
-          "Process"
-        ],
-        "x-grpc-method": "hya.v1.Process.DisposeProcess",
-        "x-server-streaming": false
-      }
-    },
-    "/v1/process/upgrade": {
-      "post": {
-        "operationId": "Process.UpgradeProcess",
-        "summary": "Ask the backend to self-update via the verified updater.",
-        "tags": [
-          "Process"
-        ],
-        "x-grpc-method": "hya.v1.Process.UpgradeProcess",
         "x-server-streaming": false
       }
     },
@@ -1555,57 +1511,6 @@
         "properties": {
           "provider": {
             "$ref": "#/components/schemas/ProviderInfo"
-          }
-        }
-      },
-      "StartOauthRequest": {
-        "type": "object",
-        "description": "",
-        "properties": {
-          "directory": {
-            "type": "string"
-          },
-          "provider_id": {
-            "type": "string"
-          }
-        }
-      },
-      "StartOauthResponse": {
-        "type": "object",
-        "description": "",
-        "properties": {
-          "authorization_url": {
-            "type": "string"
-          },
-          "state": {
-            "type": "string"
-          }
-        }
-      },
-      "CompleteOauthRequest": {
-        "type": "object",
-        "description": "",
-        "properties": {
-          "directory": {
-            "type": "string"
-          },
-          "provider_id": {
-            "type": "string"
-          },
-          "code": {
-            "type": "string"
-          },
-          "state": {
-            "type": "string"
-          }
-        }
-      },
-      "CompleteOauthResponse": {
-        "type": "object",
-        "description": "",
-        "properties": {
-          "status": {
-            "$ref": "#/components/schemas/AuthStatus"
           }
         }
       },
@@ -4199,15 +4104,6 @@
           },
           "patch": {
             "type": "object"
-          }
-        }
-      },
-      "UpgradeProcessResponse": {
-        "type": "object",
-        "description": "",
-        "properties": {
-          "status": {
-            "type": "string"
           }
         }
       },

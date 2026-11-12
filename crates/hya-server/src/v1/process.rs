@@ -1,4 +1,4 @@
-//! `/v1` process domain: health, location, config, dispose/upgrade, and
+//! `/v1` process domain: health, location, config, and
 //! the aggregated bootstrap snapshot.
 
 use std::collections::BTreeMap;
@@ -23,8 +23,6 @@ pub(crate) fn router() -> Router<ServerState> {
             "/v1/config",
             get(get_config).patch(axum::routing::patch(update_config)),
         )
-        .route("/v1/process/dispose", axum::routing::post(dispose))
-        .route("/v1/process/upgrade", axum::routing::post(upgrade))
         .route("/v1/bootstrap", get(bootstrap))
 }
 
@@ -122,24 +120,6 @@ fn merge_objects(base: Value, patch: Value) -> Value {
         }
         (_, patch) => patch,
     }
-}
-
-async fn dispose(
-    extensions: axum::http::Extensions,
-) -> Result<Json<pb::DisposeProcessResponse>, V1Error> {
-    super::relay::refuse_relay_origin(&extensions, "stopping the backend")?;
-    Err(V1Error::unavailable(
-        "process disposal is owned by the host process supervisor; HTTP dispose is not wired",
-    ))
-}
-
-async fn upgrade(
-    extensions: axum::http::Extensions,
-) -> Result<Json<pb::UpgradeProcessResponse>, V1Error> {
-    super::relay::refuse_relay_origin(&extensions, "upgrading the backend")?;
-    Err(V1Error::unavailable(
-        "self-update runs through the verified launcher updater; HTTP upgrade is not wired",
-    ))
 }
 
 async fn bootstrap(

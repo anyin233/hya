@@ -36,7 +36,7 @@ API clients / transcript renderers
 | Persistence | [`hya-store`](../../crates/hya-store) | Append and replay events from SQLite; fold projections on read. |
 | Runtime | [`hya-core`](../../crates/hya-core) | Own sessions, turn execution, durable Workflow execution/replay, event publication, hooks, compaction, goal/loop/team primitives. |
 | Composition/control | [`hya-app`](../../crates/hya-app), [`hya-bundle`](../../crates/hya-bundle) | Build runtime bindings, admit Workflow commands, and model AgentBundle/WorkflowBundle packages. |
-| Surfaces/transports | [`hya-backend`](../../crates/hya-backend) (the `hya` executable), [`hya-server`](../../crates/hya-server), [`hya-api`](../../crates/hya-api), [`hya-client`](../../crates/hya-client), [`hya-sdk-v1`](../../crates/hya-sdk-v1), [`hya-relay`](../../crates/hya-relay) | Expose the CLI, the `hya.v1` HTTP/SSE/WebSocket + gRPC contract, and typed clients; `hya-relay` carries that contract end to end encrypted through a third-party `hya proxy` ([Secure relay](../relay.md)). The interactive frontend is the Bun TUI in `packages/hya-tui` (the WebUI renders it in a browser, `packages/hya-tui-web`). |
+| Surfaces/transports | [`hya-backend`](../../crates/hya-backend) (the `hya` executable), [`hya-server`](../../crates/hya-server), [`hya-api`](../../crates/hya-api), [`hya-sdk-v1`](../../crates/hya-sdk-v1), [`hya-relay`](../../crates/hya-relay) | Expose the CLI, the `hya.v1` HTTP/SSE/WebSocket + gRPC contract, and typed clients; `hya-relay` carries that contract end to end encrypted through a third-party `hya proxy` ([Secure relay](../relay.md)). The interactive frontend is the Bun TUI in `packages/hya-tui` (the WebUI renders it in a browser, `packages/hya-tui-web`). |
 
 ## Turn Flow
 

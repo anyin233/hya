@@ -3627,45 +3627,6 @@ pub struct RemoveProviderAuthResponse {
     #[prost(message, optional, tag = "1")]
     pub provider: ::core::option::Option<ProviderInfo>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct StartOauthRequest {
-    /// Directory context for auth resolution.
-    #[prost(string, tag = "1")]
-    pub directory: ::prost::alloc::string::String,
-    /// Provider identifier to authenticate.
-    #[prost(string, tag = "2")]
-    pub provider_id: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct StartOauthResponse {
-    /// Authorization URL the client must open in a browser.
-    #[prost(string, tag = "1")]
-    pub authorization_url: ::prost::alloc::string::String,
-    /// State value to echo back in `CompleteOauth`.
-    #[prost(string, tag = "2")]
-    pub state: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CompleteOauthRequest {
-    /// Directory context for auth resolution.
-    #[prost(string, tag = "1")]
-    pub directory: ::prost::alloc::string::String,
-    /// Provider identifier completing the flow.
-    #[prost(string, tag = "2")]
-    pub provider_id: ::prost::alloc::string::String,
-    /// Authorization code returned by the provider callback.
-    #[prost(string, tag = "3")]
-    pub code: ::prost::alloc::string::String,
-    /// State value from `StartOauth` when the provider requires it.
-    #[prost(string, tag = "4")]
-    pub state: ::prost::alloc::string::String,
-}
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct CompleteOauthResponse {
-    /// Resulting auth status for the provider.
-    #[prost(enumeration = "AuthStatus", tag = "1")]
-    pub status: i32,
-}
 /// Generated client implementations.
 pub mod auth_client {
     #![allow(
@@ -3844,56 +3805,6 @@ pub mod auth_client {
                 .insert(GrpcMethod::new("hya.v1.Auth", "RemoveProviderAuth"));
             self.inner.unary(req, path, codec).await
         }
-        /// Begin a provider OAuth flow; returns the authorization URL to open.
-        ///
-        /// hya.http: POST /v1/auth/{provider_id}/oauth/start
-        pub async fn start_oauth(
-            &mut self,
-            request: impl tonic::IntoRequest<super::StartOauthRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::StartOauthResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static("/hya.v1.Auth/StartOauth");
-            let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new("hya.v1.Auth", "StartOauth"));
-            self.inner.unary(req, path, codec).await
-        }
-        /// Complete a provider OAuth flow with the callback code.
-        ///
-        /// hya.http: POST /v1/auth/{provider_id}/oauth/callback
-        pub async fn complete_oauth(
-            &mut self,
-            request: impl tonic::IntoRequest<super::CompleteOauthRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::CompleteOauthResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/hya.v1.Auth/CompleteOauth",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new("hya.v1.Auth", "CompleteOauth"));
-            self.inner.unary(req, path, codec).await
-        }
     }
 }
 /// Generated server implementations.
@@ -3940,26 +3851,6 @@ pub mod auth_server {
             request: tonic::Request<super::RemoveProviderAuthRequest>,
         ) -> std::result::Result<
             tonic::Response<super::RemoveProviderAuthResponse>,
-            tonic::Status,
-        >;
-        /// Begin a provider OAuth flow; returns the authorization URL to open.
-        ///
-        /// hya.http: POST /v1/auth/{provider_id}/oauth/start
-        async fn start_oauth(
-            &self,
-            request: tonic::Request<super::StartOauthRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::StartOauthResponse>,
-            tonic::Status,
-        >;
-        /// Complete a provider OAuth flow with the callback code.
-        ///
-        /// hya.http: POST /v1/auth/{provider_id}/oauth/callback
-        async fn complete_oauth(
-            &self,
-            request: tonic::Request<super::CompleteOauthRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::CompleteOauthResponse>,
             tonic::Status,
         >;
     }
@@ -4162,94 +4053,6 @@ pub mod auth_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = RemoveProviderAuthSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/hya.v1.Auth/StartOauth" => {
-                    #[allow(non_camel_case_types)]
-                    struct StartOauthSvc<T: Auth>(pub Arc<T>);
-                    impl<T: Auth> tonic::server::UnaryService<super::StartOauthRequest>
-                    for StartOauthSvc<T> {
-                        type Response = super::StartOauthResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::StartOauthRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as Auth>::start_oauth(&inner, request).await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = StartOauthSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/hya.v1.Auth/CompleteOauth" => {
-                    #[allow(non_camel_case_types)]
-                    struct CompleteOauthSvc<T: Auth>(pub Arc<T>);
-                    impl<
-                        T: Auth,
-                    > tonic::server::UnaryService<super::CompleteOauthRequest>
-                    for CompleteOauthSvc<T> {
-                        type Response = super::CompleteOauthResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::CompleteOauthRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as Auth>::complete_oauth(&inner, request).await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = CompleteOauthSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
@@ -10895,18 +10698,6 @@ pub struct UpdateConfigRequest {
     #[prost(message, optional, tag = "2")]
     pub patch: ::core::option::Option<::pbjson_types::Struct>,
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct DisposeProcessRequest {}
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct DisposeProcessResponse {}
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct UpgradeProcessRequest {}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct UpgradeProcessResponse {
-    /// Human-readable outcome of the upgrade attempt.
-    #[prost(string, tag = "1")]
-    pub status: ::prost::alloc::string::String,
-}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetBootstrapRequest {
     /// Directory scope (absolute). Optional:
@@ -11146,60 +10937,6 @@ pub mod process_client {
                 .insert(GrpcMethod::new("hya.v1.Process", "UpdateConfig"));
             self.inner.unary(req, path, codec).await
         }
-        /// Ask the backend process to shut down gracefully.
-        ///
-        /// hya.http: POST /v1/process/dispose
-        pub async fn dispose_process(
-            &mut self,
-            request: impl tonic::IntoRequest<super::DisposeProcessRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::DisposeProcessResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/hya.v1.Process/DisposeProcess",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("hya.v1.Process", "DisposeProcess"));
-            self.inner.unary(req, path, codec).await
-        }
-        /// Ask the backend to self-update via the verified updater.
-        ///
-        /// hya.http: POST /v1/process/upgrade
-        pub async fn upgrade_process(
-            &mut self,
-            request: impl tonic::IntoRequest<super::UpgradeProcessRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::UpgradeProcessResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/hya.v1.Process/UpgradeProcess",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("hya.v1.Process", "UpgradeProcess"));
-            self.inner.unary(req, path, codec).await
-        }
         /// Aggregated startup snapshot: config, catalogs, pending interactions,
         /// and session summaries in a single round trip. Frontends call this once
         /// at launch instead of fanning out over every list rpc.
@@ -11276,26 +11013,6 @@ pub mod process_server {
             request: tonic::Request<super::UpdateConfigRequest>,
         ) -> std::result::Result<
             tonic::Response<super::GetConfigResponse>,
-            tonic::Status,
-        >;
-        /// Ask the backend process to shut down gracefully.
-        ///
-        /// hya.http: POST /v1/process/dispose
-        async fn dispose_process(
-            &self,
-            request: tonic::Request<super::DisposeProcessRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::DisposeProcessResponse>,
-            tonic::Status,
-        >;
-        /// Ask the backend to self-update via the verified updater.
-        ///
-        /// hya.http: POST /v1/process/upgrade
-        async fn upgrade_process(
-            &self,
-            request: tonic::Request<super::UpgradeProcessRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::UpgradeProcessResponse>,
             tonic::Status,
         >;
         /// Aggregated startup snapshot: config, catalogs, pending interactions,
@@ -11547,96 +11264,6 @@ pub mod process_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = UpdateConfigSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/hya.v1.Process/DisposeProcess" => {
-                    #[allow(non_camel_case_types)]
-                    struct DisposeProcessSvc<T: Process>(pub Arc<T>);
-                    impl<
-                        T: Process,
-                    > tonic::server::UnaryService<super::DisposeProcessRequest>
-                    for DisposeProcessSvc<T> {
-                        type Response = super::DisposeProcessResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::DisposeProcessRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as Process>::dispose_process(&inner, request).await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = DisposeProcessSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/hya.v1.Process/UpgradeProcess" => {
-                    #[allow(non_camel_case_types)]
-                    struct UpgradeProcessSvc<T: Process>(pub Arc<T>);
-                    impl<
-                        T: Process,
-                    > tonic::server::UnaryService<super::UpgradeProcessRequest>
-                    for UpgradeProcessSvc<T> {
-                        type Response = super::UpgradeProcessResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::UpgradeProcessRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as Process>::upgrade_process(&inner, request).await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = UpgradeProcessSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

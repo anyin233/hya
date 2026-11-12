@@ -48,18 +48,6 @@
     "streaming": false
   },
   {
-    "method": "POST",
-    "path": "/v1/auth/{provider_id}/oauth/callback",
-    "operationId": "Auth.CompleteOauth",
-    "streaming": false
-  },
-  {
-    "method": "POST",
-    "path": "/v1/auth/{provider_id}/oauth/start",
-    "operationId": "Auth.StartOauth",
-    "streaming": false
-  },
-  {
     "method": "GET",
     "path": "/v1/bootstrap",
     "operationId": "Process.GetBootstrap",
@@ -291,18 +279,6 @@
     "method": "DELETE",
     "path": "/v1/permissions/rules/{rule}",
     "operationId": "Interactions.DeleteSavedRule",
-    "streaming": false
-  },
-  {
-    "method": "POST",
-    "path": "/v1/process/dispose",
-    "operationId": "Process.DisposeProcess",
-    "streaming": false
-  },
-  {
-    "method": "POST",
-    "path": "/v1/process/upgrade",
-    "operationId": "Process.UpgradeProcess",
     "streaming": false
   },
   {
