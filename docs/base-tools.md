@@ -97,10 +97,11 @@ Use `.dylib` instead of `.so` on macOS. The command embeds the raw library
 bytes as `extensions.libraries`, adds one tool declaration per policy entry,
 and writes the public package. Release builds put that package beside the
 backend's `bin` directory in `bundles/`. There, `ToolRegistry::builtins()` inspects
-the package, checks its identity and declared names, extracts the library to a
-private temporary directory, checks the lockstep ABI digest, and loads its
-tools. The extracted copy is deleted right after loading; the loaded library
-stays mapped for the process lifetime.
+the package, checks its identity and declared names, materializes the verified
+library in the private native cache (or a temporary directory when the cache
+is unavailable), checks the lockstep ABI digest, and loads its tools. Temporary
+copies are deleted after loading; verified cache copies can be reused. The
+loaded library stays mapped for the process lifetime.
 `builtin_bundle_origin(name)` returns the identity for a loaded native tool.
 Cargo builds load the library Cargo just linked instead: a library in the
 executable's `deps/` directory wins, then one beside the executable. A package
@@ -297,3 +298,114 @@ first-party core agents.
 Use `send.channel`, `archive.target`, `wait.targets`, `wait.timeout_secs`,
 and `workflow.action`; their former parameter aliases are removed.
 For example, wait for a worker with `{"targets":["worker"],"timeout_secs":30}`.
+
+## Replacing a native tool family
+
+Native families are replaceable trusted code. Replacement keeps the existing
+family identity and exposure policy while changing its implementations; it is
+not a stable third-party Rust ABI. Build the replacement and host together with
+the same workspace sources, dependency lockfile, compiler, target and build
+settings. Never copy an independently compiled trait object into the host.
+
+### Usage
+
+Implement `hya_tool::Tool` for every canonical name in the selected family's
+`exposure.yaml`, and export the three functions below from a `cdylib`. A minimal
+working replacement for the TODO family is in
+`crates/hya-tool/tests/fixtures/replacement_tools.rs`. To build and try that
+fixture in a disposable layout (Linux):
+
+```sh
+CARGO_BUILD_JOBS=8 cargo build --locked -p hya-tool --examples
+CARGO_BUILD_JOBS=8 cargo test --locked -p hya-tool --test native_replacement
+```
+
+The test copies its host into a private directory and installs the replacement
+as `libhya_todo_tools.so` beside it. It constructs only `hya/todo-tools` through
+`ToolRegistry::from_tool_families`, invokes `todo__read`, and checks the fixture's
+unique result and echoed input. A second library reports a wrong ABI digest;
+its registration aborts if called, proving rejection precedes registration.
+No shared build library is overwritten. `cargo test -p hya-tool` builds both
+fixture examples automatically; when running only this integration test, build
+both examples first with `cargo build --locked -p hya-tool --examples`.
+
+For deployment, package the replacement library with
+`package-native-tool-library` as shown above, preserving the family source's
+identity and declarations. Use the expected filename
+`libhya_<family>_tools.so` (`.dylib` on macOS). Discovery, in order, is
+`<executable-directory>/deps/<filename>`, then
+`<executable-directory>/<filename>`, then the family's `.hyabundle` under
+`bundles/` in the executable directory (or its parent for `bin/` and `deps/`).
+All families selected by the registry must be present. Libraries are cached by
+family for the process lifetime, so restart the host to select new bytes.
+
+### Interface definitions and validation
+
+All exports use `unsafe extern "C"` and unmangled symbol names:
+
+| Symbol | Parameters and contract |
+| --- | --- |
+| `hya_tool_bundle_abi_v1` | `out: *mut u8`: write exactly 32 bytes from `hya_tool::native_bundle::abi_digest_v1()` to the host's writable buffer. |
+| `hya_tool_bundle_register_v1` | `out: *mut Vec<Arc<dyn Tool>>`: append the family's implementations to the host's live vector, only after ABI validation. |
+| `hya_tool_bundle_with_runtime_v1` | `handle: *const c_void, callback: unsafe extern "C" fn(*mut c_void), state: *mut c_void`: synchronously poll through `hya_tool::native_bundle::with_runtime_v1`; retain neither pointer nor callback state. |
+
+The digest covers the native ABI v1 discriminator, backend version, OS,
+architecture, relevant Rust sizes/alignments, and `tool.rs` source bytes. It is
+a lockstep guard, not proof that arbitrary native code is safe or a complete
+compiler fingerprint. The loader resolves required symbols and rejects a
+mismatch with `built for a different hya-tool ABI` before registration. Registry
+construction also checks implementations against the selected exposure policy.
+Packaged libraries additionally pass package identity, digest, declared-tool-set
+and single `runtime` library validation; no process extension is allowed.
+Verified bytes use the disposable native cache described in
+[bundle runtime](bundle-runtime.md#native-tool-startup-cache).
+
+## Output limit audit
+
+The host cap remains necessary. Tool-local limits constrain different parts of
+a result and do not establish the host's complete envelope contract. In
+particular, native Grep allows 4,096 display rows, whereas the host allows 2,000;
+post-edit diagnostic text shows up to 20 errors per file and, for write, five
+other files, while raw diagnostic metadata is returned without that count
+bound. The host permits 16 diagnostic rows of at most 2 KiB each. The host also bounds
+titles to 512 bytes and serialized coding envelopes to 256 KiB. Hooks can
+replace results, and replacement native libraries can return different data.
+Thus no coding policy's entire second pass is provably redundant.
+
+The following are implementation limits, not promises of a fully bounded
+serialized response. `Default` results use the host's 5,000-character threshold
+and artifact spill; coding results use its structured field/envelope bounds.
+
+| Tool | Own limit before the host pass |
+| --- | --- |
+| `read` | File/directory text fitted to 50 KiB; file default 2,000 lines. Titles, paths, media attachments and channel-read data are not all bounded by this text limit. |
+| `write` | Output and display text each 50 KiB; diagnostic text has row limits but raw diagnostic metadata does not; title/path and the whole envelope have no equivalent cap. |
+| `edit` | Output and patch each 50 KiB; fallback text only included when at most 50 KiB. Raw diagnostic metadata and title/path still need host bounds. |
+| `grep` | Output and serialized display budgets 50 KiB; match limit at most 200, context at most five, display at most 4,096 rows; warnings at most 16 / 4,096 bytes total. Host row and envelope limits differ. |
+| `bash` | Captured inline bytes and rendered output bounded to 50 KiB, overflow saved to artifact; output path serialized limit 32 KiB. This does not establish every host metadata/title/envelope bound. |
+| `glob` | 100 results; no total text/serialized-byte bound. |
+| `ls` | No tool-local output bound. |
+| `find` | No result-row or byte bound. |
+| `ask_user` | No byte bound on selected/free-text answers. |
+| `apply_patch` | No complete output-envelope cap; diagnostic text uses shared row limits but raw diagnostic metadata does not. |
+| `lsp` | Plane response; no native wrapper output-byte cap. |
+| `skill` | File sample limited to ten entries; skill body has no output-byte cap. |
+| `list_agents` | Catalog response; no output-byte cap. |
+| `task` | Spawn-plane response; no output-byte cap. |
+| `workflow` | Workflow-plane response; no output-byte cap. |
+| `search_agent` | Search response; no output-byte cap. |
+| `archive` | Lifecycle-plane response; no output-byte cap. |
+| `plan_exit` | Interaction response; no output-byte cap. |
+| `project_activity` | Requested row limit (schema 1–200, default 50); no wrapper byte cap. |
+| `wait` | Both family implementations delegate to planes; no wrapper byte cap. |
+| `webfetch` | Response body rejected above 5 MiB; much larger than the host default threshold. |
+| `websearch` | Optional requested context character limit; no unconditional native output cap. |
+| `send` | Mailbox-plane response; no wrapper byte cap. |
+| `list_channel` | Mailbox-plane response; no wrapper byte cap. |
+| `report` | Lifecycle-plane response; no wrapper byte cap. |
+| `todo__read` | Entire todo snapshot; no byte cap. |
+| `todo__update_status` | Entire todo snapshot; no byte cap. |
+| `todo__update_content` | Entire todo snapshot plus added IDs; no byte cap. |
+
+MCP and plugin results also retain the host cap. Row limits and optional input
+limits alone cannot replace a serialized output bound.
