@@ -127,25 +127,28 @@ history and SQLite's sequence table):
 | `projection_snapshot` | Derived reducer cache; see below. |
 | `file_blob` | Per-session content-addressed bytes; see below. |
 | `project`, `project_root` | Mutable Project configuration; see below. |
-| `pending_resume` | Restore queue: `session_id BLOB PRIMARY KEY`, `prompt TEXT NOT NULL`, nullable `prompt_message_id BLOB`, `created_at INTEGER NOT NULL`. Cancellation and the row commit together for interrupted, non-archived root sessions. Prompt injection records its message id atomically; assistant start deletes the row. |
+| `pending_resume` | Event-derived restore index: `session_id BLOB PRIMARY KEY`, `message_id TEXT NOT NULL` (interrupted assistant), nullable `prompt_message_id BLOB` (injected user message UUID), `created_at INTEGER NOT NULL`. A shutdown finish and its row commit together for non-archived roots. Prompt injection records its message id atomically; any assistant start deletes the row. |
 
-The runtime owner's
-`cancel_turn_for_restart(session: SessionId, message: MessageId, owner: OwnerRunId, prompt: &str)`
-closes an open assistant message and its unfinished tool calls, then queues a
-restore for an eligible root in the same writer transaction. A finished
-message is left alone. `list_pending_resumes() -> Vec<PendingResume>` returns
-`PendingResume { session: SessionId, prompt: String }` in creation order.
+The single `append_event_in_transaction` writer upserts this index only for
+`MessageFinished { role: Assistant, finish: Cancelled, cause: Some(Shutdown) }`
+on a non-archived root. It deletes the session's row unconditionally on
+`MessageStarted { role: Assistant }`, including turns outside server restore.
+`list_pending_resumes() -> Vec<PendingResume>` returns
+`PendingResume { session: SessionId, message: MessageId }` in creation order.
 `take_restart_resume(session: SessionId, owner: OwnerRunId) -> Option<Vec<Envelope>>`
-appends `MessageStarted(User)`, `TextStart`, `TextDelta`, `TextEnd`, and
+builds prompt text from the indexed message's non-`Completed` tool parts and
+the shutdown-interrupted subagents identified by the roster, then appends
+`MessageStarted(User)`, `TextStart`, `TextDelta`, `TextEnd`, and
 `MessageFinished(User, Stop)` and records `prompt_message_id` in one
 transaction. An already injected prompt returns `Some([])` so startup can
 still start its turn after a crash. Missing rows return `None`; missing,
 archived, or child sessions have their rows deleted and also return `None`.
-The first assistant `MessageStarted` deletes an injected row in the same
-transaction. Session deletion also removes the row. Permission/question
+The first assistant `MessageStarted` deletes the row in the same transaction.
+Another shutdown cancellation inserts a fresh unmarked row: each interruption
+gets one prompt. Session deletion also removes the row. Permission/question
 requests live only in memory and are cancelled with their turn.
-These async methods return `Result<_, StoreError>`; cancellation and prompt
-injection require the runtime-owner claim.
+These async methods return `Result<_, StoreError>`; prompt injection requires
+the runtime-owner claim. No prompt text is stored at stop.
 
 ### Agent model preferences
 

@@ -144,10 +144,10 @@ CREATE TABLE model_effort_preference (
     PRIMARY KEY (provider_id, model_id)
 );
 
--- One restore prompt for each eligible root interrupted by a graceful stop.
+-- Event-derived index of roots interrupted by shutdown, retained until assistant start.
 CREATE TABLE pending_resume (
     session_id BLOB PRIMARY KEY,
-    prompt TEXT NOT NULL,
+    message_id TEXT NOT NULL,
     prompt_message_id BLOB,
     created_at INTEGER NOT NULL
 );

@@ -85,6 +85,9 @@ impl crate::AppState {
 }
 
 async fn resume_turn(st: &ServerState, session: SessionId) -> Result<bool, V1Error> {
+    if st.is_busy(session) {
+        return Err(V1Error::session_busy());
+    }
     let run = st.start_run(session).ok_or_else(V1Error::session_busy)?;
     if !st.engine.inject_restart_prompt(session).await? {
         return Ok(false);
