@@ -13,7 +13,8 @@ use serde_json::json;
 
 const ROOT: &str = "You are hya";
 const WORKER: &str = "You are hya-task";
-const NOTICE: &str = "HEADLESS RUN";
+/// Every harness notice opens with this; the hya-main prompt names `HEADLESS RUN` bare.
+const NOTICE: &str = "HEADLESS RUN —";
 
 fn spawn_worker() -> ScriptStep {
     tool_step(
