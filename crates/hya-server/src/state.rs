@@ -47,6 +47,7 @@ pub struct AppState {
     pure_guidance: bool,
     auto_title: bool,
     runs: runs::RunRegistry,
+    turn_spawn_barrier: Option<(hya_proto::SessionId, Arc<tokio::sync::Barrier>)>,
     session_list: SessionListHub,
     relay: RelayHost,
     hosts: Arc<HostPolicy>,
@@ -63,6 +64,31 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Drain engine turns and admitted server runs against one deadline.
+    pub async fn stop_for_restart(
+        &self,
+        deadline: std::time::Duration,
+    ) -> Result<hya_core::TurnDrainReport, hya_core::CoreError> {
+        let until = tokio::time::Instant::now() + deadline;
+        self.runs.begin_drain();
+        let report = self.engine.stop_for_restart(deadline).await?;
+        if !self.runs.wait_idle(until).await {
+            tracing::warn!("server runs did not settle before the drain deadline");
+        }
+        Ok(report)
+    }
+
+    /// Pause admitted turns before spawning, for lifecycle regression tests.
+    #[doc(hidden)]
+    pub fn with_turn_spawn_barrier(
+        mut self,
+        session: hya_proto::SessionId,
+        barrier: Arc<tokio::sync::Barrier>,
+    ) -> Self {
+        self.turn_spawn_barrier = Some((session, barrier));
+        self.reconfigured()
+    }
+
     /// Create state with empty pending queues and no-op MCP, Workflow, and Agent-model controls.
     #[must_use]
     pub fn new(engine: Arc<SessionEngine>, agent: Arc<AgentSpec>) -> Self {
@@ -89,6 +115,7 @@ impl AppState {
             pure_guidance: false,
             auto_title: false,
             runs: runs::RunRegistry::default(),
+            turn_spawn_barrier: None,
             session_list: SessionListHub::default(),
             relay: RelayHost::default(),
             hosts: Arc::new(HostPolicy::loopback()),
@@ -323,6 +350,7 @@ pub(crate) struct ServerState {
     pub(crate) engine: Arc<SessionEngine>,
     pub(crate) agent: Arc<AgentSpec>,
     pub(crate) runs: runs::RunRegistry,
+    pub(crate) turn_spawn_barrier: Option<(hya_proto::SessionId, Arc<tokio::sync::Barrier>)>,
     pub(crate) permission_requests: pending::PermissionRequests,
     pub(crate) question_requests: pending::QuestionRequests,
     pub(crate) global: support::global_state::GlobalState,
@@ -353,6 +381,7 @@ impl ServerState {
             engine: app.engine,
             agent: app.agent,
             runs: app.runs,
+            turn_spawn_barrier: app.turn_spawn_barrier,
             permission_requests: app.permission_requests,
             question_requests: app.question_requests,
             global,

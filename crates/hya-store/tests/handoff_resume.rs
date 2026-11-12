@@ -284,3 +284,82 @@ async fn restore_is_derived_from_the_indexed_messages_noncompleted_tools() {
         assert!(text.contains(&format!("- {name} (call ")));
     }
 }
+
+#[tokio::test]
+async fn restore_lists_children_interrupted_before_the_root_message_started() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let owner = OwnerRunId::new();
+    store.claim_runtime_owner(owner).unwrap();
+    let root = SessionId::new();
+    let child = SessionId::new();
+    create(&store, root).await;
+    create(&store, child).await;
+    store
+        .append_event(
+            root,
+            &Event::AgentRegistered {
+                session: root,
+                agent_session: child,
+                handle: "worker".into(),
+                parent: Some("main".into()),
+                agent_type: AgentName::new("test"),
+                mode: hya_proto::SubagentMode::Resident,
+            },
+        )
+        .await
+        .unwrap();
+    open_turn(&store, child).await;
+    store
+        .close_open_turns(child, FinishCause::Shutdown, "child stopped first")
+        .await
+        .unwrap();
+    // Explicit timestamps keep the ordering deterministic without a sleep.
+    let mut tx = store.begin_transaction().await.unwrap();
+    sqlx::query("UPDATE event_log SET ts = 1 WHERE session_id = ?")
+        .bind(child.storage_key())
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    open_turn(&store, root).await;
+    store
+        .close_open_turns(root, FinishCause::Shutdown, "root closes later")
+        .await
+        .unwrap();
+    let prompt = store
+        .take_restart_resume(root, owner)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(prompt.iter().any(|e| matches!(&e.event,
+        Event::TextDelta { delta, .. } if delta.contains("Interrupted subagents: main/worker."))));
+
+    // An assistant answer after that shutdown removes the child from the list.
+    let answer = open_turn(&store, child).await;
+    store
+        .append_event(
+            child,
+            &Event::MessageFinished {
+                session: child,
+                message: answer,
+                role: Role::Assistant,
+                finish: FinishReason::Stop,
+                tokens: None,
+                cause: None,
+            },
+        )
+        .await
+        .unwrap();
+    open_turn(&store, root).await;
+    store
+        .close_open_turns(root, FinishCause::Shutdown, "next interruption")
+        .await
+        .unwrap();
+    let prompt = store
+        .take_restart_resume(root, owner)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!prompt.iter().any(|e| matches!(&e.event,
+        Event::TextDelta { delta, .. } if delta.contains("Interrupted subagents:"))));
+}

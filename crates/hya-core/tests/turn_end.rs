@@ -392,6 +392,50 @@ async fn restore_prompt_count(engine: &SessionEngine, session: SessionId) -> usi
     )).count()
 }
 
+#[tokio::test]
+async fn drain_refusal_does_not_synthesize_an_answer_without_an_admitted_prompt() {
+    let (engine, agent, _) = engine_with_script().await;
+    let empty = make_session(&engine, None, "hya-main").await;
+    let answered = make_session(&engine, None, "hya-main").await;
+    engine
+        .admit_user_prompt(answered, "done".into())
+        .await
+        .unwrap();
+    engine
+        .run_turn(answered, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+    let before = engine.replay(answered).await.unwrap();
+    engine.begin_drain(FinishCause::Shutdown);
+    for session in [empty, answered] {
+        assert_eq!(
+            engine
+                .run_turn(session, &agent, CancellationToken::new())
+                .await
+                .unwrap(),
+            FinishReason::Cancelled
+        );
+    }
+    assert!(
+        engine
+            .read_projection(empty)
+            .await
+            .unwrap()
+            .session
+            .messages
+            .is_empty()
+    );
+    assert_eq!(engine.replay(answered).await.unwrap(), before);
+    assert!(
+        engine
+            .store()
+            .list_pending_resumes()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
 async fn pending_prompt(engine: &SessionEngine, session: SessionId) -> String {
     engine
         .store()
@@ -1035,7 +1079,7 @@ async fn drain_closes_every_session_turn_with_a_cause() {
         "the lead stays on the roster"
     );
 
-    // Draining refuses new turns.
+    // Draining refuses execution, but still closes an admitted prompt.
     engine
         .admit_user_prompt(root, "again".to_string())
         .await
@@ -1045,10 +1089,16 @@ async fn drain_closes_every_session_turn_with_a_cause() {
         .await
         .unwrap();
     assert_eq!(refused, FinishReason::Cancelled);
+    let finishes = assistant_finishes(&engine.replay(root).await.unwrap(), root);
+    assert_eq!(finishes.len(), 2);
     assert_eq!(
-        assistant_finishes(&engine.replay(root).await.unwrap(), root).len(),
+        finishes[1].1,
+        vec![(FinishReason::Cancelled, Some(FinishCause::Shutdown))]
+    );
+    assert_eq!(
+        provider.streams_for(root),
         1,
-        "no turn starts after the drain began"
+        "no model work starts after drain"
     );
 }
 

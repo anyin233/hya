@@ -42,7 +42,7 @@ impl SessionStore {
     }
 
     /// Append a pending prompt once, retaining the row until an assistant starts.
-    /// Missing, archived and child sessions lose their restore without an append.
+    /// Missing messages, missing/archived/child sessions lose their restore.
     pub async fn take_restart_resume(
         &self,
         session: SessionId,
@@ -60,17 +60,25 @@ impl SessionStore {
             return Ok(None);
         };
         let projection = replay_projection(&self.projections, &mut tx, session).await?;
-        if projection.session.id.is_none()
-            || projection.session.parent.is_some()
-            || projection.session.is_archived()
-        {
+        let interrupted: String = row.try_get("message_id")?;
+        let Some(interrupted) = projection
+            .session
+            .messages
+            .iter()
+            .find(|message| message.id.to_string() == interrupted)
+            .filter(|_| {
+                projection.session.id.is_some()
+                    && projection.session.parent.is_none()
+                    && !projection.session.is_archived()
+            })
+        else {
             sqlx::query("DELETE FROM pending_resume WHERE session_id = ?")
                 .bind(session.storage_key())
                 .execute(&mut *tx)
                 .await?;
             tx.commit().await?;
             return Ok(None);
-        }
+        };
         if row
             .try_get::<Option<Vec<u8>>, _>("prompt_message_id")?
             .is_some()
@@ -78,13 +86,6 @@ impl SessionStore {
             tx.commit().await?;
             return Ok(Some(Vec::new()));
         }
-        let interrupted: String = row.try_get("message_id")?;
-        let interrupted = projection
-            .session
-            .messages
-            .iter()
-            .find(|message| message.id.to_string() == interrupted)
-            .ok_or(sqlx::Error::RowNotFound)?;
         let unfinished = interrupted
             .parts
             .iter()
@@ -136,7 +137,6 @@ impl SessionStore {
                 .is_some_and(|message| {
                     message.finish == Some(FinishReason::Cancelled)
                         && message.cause == Some(FinishCause::Shutdown)
-                        && message.time_updated >= interrupted.time_created
                 })
             {
                 children.push(handle.as_str());

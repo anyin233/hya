@@ -283,6 +283,8 @@ pub(crate) struct PreparedServer {
     pub(crate) extra_url: Option<String>,
     /// The HTTP router and the gRPC services over one server state.
     server: hya_server::Server,
+    /// Shared run registry, retained until shutdown has settled admitted turns.
+    state: AppState,
     built: hya_app::BuiltSessionEngine,
     /// The database lock; released (and the discovery file removed) only
     /// after the server has drained and shut down.
@@ -304,6 +306,7 @@ pub(crate) async fn serve_until(
         listener,
         extra,
         server,
+        state,
         mut built,
         lock,
         streams,
@@ -324,7 +327,6 @@ pub(crate) async fn serve_until(
         })
     });
     let (drained, drain_result) = tokio::sync::oneshot::channel();
-    let draining_engine = Arc::clone(&engine);
     server
         .serve(listener, async move {
             next_signal(&mut signals).await;
@@ -334,9 +336,7 @@ pub(crate) async fn serve_until(
                 .map_or(hya_server::ShutdownReason::Signal, |notice| notice.reason);
             streams.close(reason);
             stopping.cancel();
-            let result = draining_engine
-                .stop_for_restart(hya_core::DRAIN_DEADLINE)
-                .await;
+            let result = state.stop_for_restart(hya_core::DRAIN_DEADLINE).await;
             let _ = drained.send(result);
             supervisor
                 .drain(hya_proto::FinishCause::Shutdown, hya_core::DRAIN_DEADLINE)
@@ -505,6 +505,7 @@ pub(crate) async fn prepare_server(
         extra,
         extra_url,
         streams: state.streams(),
+        state,
         server,
         built,
         lock,

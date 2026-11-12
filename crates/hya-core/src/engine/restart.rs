@@ -27,7 +27,7 @@ impl SessionEngine {
         Ok(true)
     }
 
-    /// Cancel every active turn and queue one restore prompt per interrupted session.
+    /// Cancel active turns; the store indexes their shutdown finishes for restore.
     pub async fn stop_for_restart(&self, deadline: Duration) -> Result<TurnDrainReport, CoreError> {
         Ok(self.drain_turns(FinishCause::Shutdown, deadline).await)
     }

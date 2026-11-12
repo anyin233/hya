@@ -36,7 +36,9 @@ Three rules replace the handoff.
    next turn sees the new catalog. A source that fails to load keeps its last
    published state.
 2. **A binary change is `stop` then `start`.** `hya serve stop` drains: it
-   cancels every active turn. The store's event writer atomically indexes each
+   cancels every active turn and waits for the server run registry to empty,
+   within the same drain deadline. This includes admitted requests still
+   preparing to spawn their engine turn. The store's event writer atomically indexes each
    assistant `MessageFinished { Cancelled, Shutdown }` in `pending_resume` for
    a non-archived root session, even when shutdown interrupted turn preparation
    before its assistant message started. Any assistant start deletes that row.
@@ -55,7 +57,8 @@ Three rules replace the handoff.
    starts the turn on the next launch without injecting a second prompt for
    that interruption. A second graceful stop is a new interruption and receives
    its own prompt. An ordinary assistant turn also clears a pending restore.
-   Missing, child, or archived sessions lose their rows; a session's restore failure
+   Missing, child, or archived sessions, and rows whose interrupted message was
+   removed by revert, lose their rows; a session's restore failure
    is logged with its id and does not block other sessions or server startup.
    The model decides what to redo.
 
@@ -91,6 +94,27 @@ and reasoning already streamed and records captured file changes from tools
 that already ran. A partial answer is therefore retained in replay. Use the
 normal turn cancellation operation (or `hya serve stop` for shutdown); no
 additional configuration is needed.
+
+Every admitted turn closes with an assistant `MessageStarted` and
+`MessageFinished` pair, including cancellation or failure during preparation
+or refusal by a draining engine. Admission is determined from the folded log:
+the latest user message has no subsequent assistant message. Internal turns
+without an unanswered admitted prompt do not receive a synthetic pair. A turn
+the user cancels before its assistant starts therefore leaves an empty cancelled
+assistant message in the transcript, with cause `UserCancel`, and clears any
+pending restore. For example, cancelling a restored turn while its sidecar is
+starting prevents the next `hya serve start` from restoring it again.
+
+`AppState::stop_for_restart(deadline: Duration) -> Result<TurnDrainReport,
+CoreError>` drains engine turns and waits for server runs against one shared
+deadline. The existing HTTP `POST /v1/sessions/{id}/turns/{turn}/cancel` operation
+and `MessageFinished { role: Assistant, finish, cause, tokens }` event contract
+are unchanged. A shutdown finish retains cause `Shutdown`; a preparation error
+closes with finish `Error` and its `Error { failed_message, code, message }` event.
+
+The restore prompt lists children whose latest assistant message ended with
+`Cancelled`/`Shutdown`, even if the child stopped before the root's assistant
+message started. A later assistant answer removes that child from the list.
 
 Stream collection returns `FinishReason::Cancelled`; tool collection returns
 `ToolError::Cancelled`. Completed, failed, and cancelled turns use the same
