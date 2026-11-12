@@ -17,3 +17,20 @@ stop admits nothing. `v1_restart` drives these through the real routes,
 
 A shell command stopped before `ToolCallRequested` still has no recorded
 command text, so its restore prompt cannot name the command.
+
+## Does a resident wake of the root lead own a prompt?
+
+Yes, when it admits mail as a user-role message. The wake carries the last
+admitted prompt id into `TurnRequestContext`, including when the session is
+`main`, so shutdown during binding still closes an assistant pair and indexes
+the root for restore. A synthesis-only wake inserts a system message and owns
+no prompt. Children use the same request path but remain excluded from restore
+rows by the store.
+
+## Does sidecar loss permit the caller to drop the turn?
+
+No. Resident and transient callers cancel the token and await the turn's normal
+cancelled result before recovery or cleanup. This retains streamed text and
+reasoning, completed tool results, and captured file changes. Actor takeover is
+different: the stale-claim fence forbids flushing, and recovery closes the open
+message. Replay/live equivalence excludes content produced after claim loss.

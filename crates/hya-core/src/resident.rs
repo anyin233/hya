@@ -1300,6 +1300,9 @@ impl TeamActor {
         if !self.owns_slot(session, claim.as_ref()) {
             return Ok(false);
         }
+        if cancel.is_cancelled() {
+            return Err(CoreError::Cancelled);
+        }
         let mut cursor = cursor;
         if let Some(entry) = projection.team.roster.get(&handle) {
             let durable = usize::try_from(entry.resident_cursor).unwrap_or(usize::MAX);
@@ -1417,12 +1420,13 @@ impl TeamActor {
                 }
             }
         }
+        let mut admitted_prompt = None;
         for (from, body) in &new_mail {
             if !self.owns_slot(session, claim.as_ref()) {
                 return Ok(false);
             }
             let prompt = format!("[mail from {from}] {body}");
-            match claim.as_ref() {
+            admitted_prompt = Some(match claim.as_ref() {
                 Some(claim) => {
                     self.engine
                         .admit_user_prompt_for_actor_with_binding(
@@ -1432,7 +1436,7 @@ impl TeamActor {
                             &binding,
                             agent.name.as_str(),
                         )
-                        .await?;
+                        .await?
                 }
                 None => {
                     self.engine
@@ -1442,9 +1446,9 @@ impl TeamActor {
                             &binding,
                             agent.name.as_str(),
                         )
-                        .await?;
+                        .await?
                 }
-            }
+            });
         }
         // Advance the cursor so a follow-up turn never re-injects the same mail.
         {
@@ -1467,6 +1471,7 @@ impl TeamActor {
                         &agent,
                         (binding, agents, resources, Arc::clone(&sidecar_tools)),
                         TurnRequestContext::new(cancel.clone(), &[], guidance, Some(claim), route)
+                            .with_admitted_prompt(admitted_prompt)
                             .with_lease(lease),
                     )
                     .await?;
@@ -1478,6 +1483,7 @@ impl TeamActor {
                         &agent,
                         (binding, agents, resources, Arc::clone(&sidecar_tools)),
                         TurnRequestContext::new(cancel.clone(), &[], guidance, None, route)
+                            .with_admitted_prompt(admitted_prompt)
                             .with_lease(lease),
                     )
                     .await?;
@@ -1489,6 +1495,7 @@ impl TeamActor {
                         &agent,
                         binding,
                         TurnRequestContext::new(cancel.clone(), &[], guidance, Some(claim), route)
+                            .with_admitted_prompt(admitted_prompt)
                             .with_lease(lease),
                     )
                     .await?;
@@ -1500,6 +1507,7 @@ impl TeamActor {
                         &agent,
                         binding,
                         TurnRequestContext::new(cancel, &[], guidance, None, route)
+                            .with_admitted_prompt(admitted_prompt)
                             .with_lease(lease),
                     )
                     .await?;
@@ -2019,39 +2027,26 @@ async fn resident_task(
                     let loss_token = sidecar_handle
                         .as_ref()
                         .and_then(|handle| handle.loss_token());
-                    let (turn_result, sidecar_lost) = match (sidecar_hooks.clone(), loss_token) {
-                        (Some(hooks), Some(loss_token)) => {
-                            tokio::select! {
-                                biased;
-                                _ = loss_token.cancelled() => (Err(CoreError::Cancelled), true),
-                                result = scope_activation_hooks(
-                                    session,
-                                    hooks,
-                                    team.run_one_turn(session, *plan, Arc::clone(&sidecar_tools)),
-                                ) => (result, false),
-                            }
+                    let turn_cancel = plan.cancel.clone();
+                    let turn = team.run_one_turn(session, *plan, Arc::clone(&sidecar_tools));
+                    let hooks = sidecar_hooks.clone();
+                    let mut run = Box::pin(async move {
+                        match hooks {
+                            Some(hooks) => scope_activation_hooks(session, hooks, turn).await,
+                            None => turn.await,
                         }
-                        (Some(hooks), None) => (
-                            scope_activation_hooks(
-                                session,
-                                hooks,
-                                team.run_one_turn(session, *plan, Arc::clone(&sidecar_tools)),
-                            )
-                            .await,
-                            false,
-                        ),
-                        (None, Some(loss_token)) => {
-                            tokio::select! {
-                                biased;
-                                _ = loss_token.cancelled() => (Err(CoreError::Cancelled), true),
-                                result = team.run_one_turn(session, *plan, Arc::clone(&sidecar_tools)) => (result, false),
+                    });
+                    let (turn_result, sidecar_lost) = if let Some(loss_token) = loss_token {
+                        tokio::select! {
+                            biased;
+                            _ = loss_token.cancelled() => {
+                                turn_cancel.cancel();
+                                (run.await.and(Err(CoreError::Cancelled)), true)
                             }
+                            result = &mut run => (result, false),
                         }
-                        (None, None) => (
-                            team.run_one_turn(session, *plan, Arc::clone(&sidecar_tools))
-                                .await,
-                            false,
-                        ),
+                    } else {
+                        (run.await, false)
                     };
                     if !team.owns_slot(session, task_claim.as_ref()) {
                         continue;

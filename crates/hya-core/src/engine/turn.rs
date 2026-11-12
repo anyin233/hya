@@ -148,6 +148,11 @@ impl<'a> TurnRequestContext<'a> {
         self.lease = Some(lease);
         self
     }
+
+    pub(crate) fn with_admitted_prompt(mut self, prompt: Option<MessageId>) -> Self {
+        self.admitted_prompt = prompt;
+        self
+    }
 }
 
 struct ToolHookContext<'a> {
@@ -2056,20 +2061,7 @@ impl SessionEngine {
                     self.restore_todo_plane(session).await;
                 }
                 let started = std::time::Instant::now();
-                // Prior content of the files this call may change (revert),
-                // captured before the permission check (a denied call changes
-                // nothing, so it records nothing).
-                let file_capture = match resources.resolve_tool(&tc.name) {
-                    Some(resolved) => {
-                        Box::pin(super::file_snapshot::capture_before(
-                            resolved.tool.name(),
-                            &tc.input,
-                            binding.workdir(),
-                        ))
-                        .await
-                    }
-                    None => super::file_snapshot::FileCapture::None,
-                };
+                let mut file_capture = super::file_snapshot::FileCapture::None;
                 let collect_tool = async {
                     Ok::<_, CoreError>(match resources.resolve_tool(&tc.name) {
                         Some(resolved) => {
@@ -2146,6 +2138,13 @@ impl SessionEngine {
                                     // actual dispatch boundary so takeover cannot turn a
                                     // previously valid resident into an unfenced launch.
                                     self.validate_actor_claim(actor_claim).await?;
+                                    file_capture = Box::pin(super::file_snapshot::capture_before(
+                                        resolved.tool.name(),
+                                        &tc.input,
+                                        binding.workdir(),
+                                    ))
+                                    .await;
+                                    self.validate_actor_claim(actor_claim).await?;
                                     resolved.tool.execute(&ctx, tc.input).await
                                 }
                                 Err(error) => Err(error),
@@ -2171,9 +2170,6 @@ impl SessionEngine {
                     file_capture,
                 ))
                 .await?;
-                if cancel.is_cancelled() {
-                    return Ok(FinishReason::Cancelled);
-                }
                 let mut artifact_guard = BashArtifactGuard::capture(
                     tc.name.as_str(),
                     result.as_ref().ok(),
@@ -2181,7 +2177,10 @@ impl SessionEngine {
                 );
                 let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
                 self.validate_actor_claim(actor_claim).await?;
-                let result = if self.hooks.is_some() || activation_hooks.is_some() {
+                let result = if !cancel.is_cancelled()
+                    && !matches!(&result, Err(ToolError::Cancelled))
+                    && (self.hooks.is_some() || activation_hooks.is_some())
+                {
                     let was_permission_err = matches!(&result, Err(ToolError::Permission(_)));
                     let mut native = match &result {
                         Ok(output) => ToolOutcomeNative::Ok {
@@ -2295,6 +2294,9 @@ impl SessionEngine {
                     artifact_guard.disarm();
                 } else {
                     artifact_guard.discard()?;
+                }
+                if cancel.is_cancelled() {
+                    return Ok(FinishReason::Cancelled);
                 }
             }
 

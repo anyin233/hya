@@ -266,10 +266,11 @@ not arbitrary input-key rendering. `env` values and ANSI terminal control data
 are not presentation metadata.
 
 When a tool-level cancellation reaches the terminal tool-event boundary, it is a
-durable `tool_error` with wire type `cancelled`; an actor-level turn cancellation
-may instead terminate the turn and finish the surrounding message/step with
-`cancelled` without emitting a per-call result. A nonzero Bash exit or timeout
-remains a completed structured result with status metadata; it is not converted
+durable `tool_error` with wire type `cancelled`. A result already produced stays
+a `tool_result` even if the turn is cancelled immediately afterwards; the
+surrounding message finishes with `cancelled`. Cancellation before a result
+exists closes an open call with a cancellation error. A nonzero Bash exit or
+timeout remains a completed structured result with status metadata; it is not converted
 to a durable `ToolError` unless execution itself is cancelled or fails before a
 terminal result is built.
 
