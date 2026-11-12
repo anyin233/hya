@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use crate::client::{DEFAULT_CALL_TIMEOUT, PluginClient};
 use crate::config::PluginSpec;
 use crate::error::PluginError;
-use crate::messages::{HookName, HookPosture, HostInfo};
+use crate::messages::{HookName, HostInfo};
 
 use super::{EVENT_CHANNEL_CAP, LiveClient, PluginConn, canonical_initialize, validate_initialize};
 
@@ -60,16 +60,12 @@ async fn connect_one_impl(
     validate_initialize(&spec.id, &init)?;
     let canonical_declaration = Arc::<[u8]>::from(canonical_initialize(&init)?);
     let contributions = init.contributions.clone();
-    let mut hooks = HashMap::new();
-    for registration in &contributions.hooks {
-        let default = registration.name.default_posture();
-        let declared = registration
-            .posture
-            .or_else(|| spec.posture_overrides.get(&registration.name).copied())
-            .unwrap_or(default);
-        hooks.insert(registration.name, force_safer(declared, default));
-    }
-    let has_event_hook = hooks.contains_key(&HookName::Event);
+    let hooks = contributions
+        .hooks
+        .iter()
+        .map(|hook| hook.name)
+        .collect::<HashSet<_>>();
+    let has_event_hook = hooks.contains(&HookName::Event);
     // Only bundle processes receive capabilities, so only they keep host reads.
     let host_reads = bundle_root.as_ref().and(host_reads);
     let (event_tx, event_rx) = mpsc::channel(EVENT_CHANNEL_CAP);
@@ -99,14 +95,6 @@ async fn connect_one_impl(
         spawn_event_drain(Arc::downgrade(&conn), event_rx);
     }
     Ok(conn)
-}
-
-fn force_safer(declared: HookPosture, default: HookPosture) -> HookPosture {
-    if declared == HookPosture::Safe || default == HookPosture::Safe {
-        HookPosture::Safe
-    } else {
-        HookPosture::Open
-    }
 }
 
 fn spawn_event_drain(conn: Weak<PluginConn>, mut rx: mpsc::Receiver<Envelope>) {

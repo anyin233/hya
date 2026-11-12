@@ -11,7 +11,7 @@ use hya_core::hooks::{
 use hya_plugin::PluginHost;
 use hya_plugin::config::PluginSpec;
 use hya_plugin::messages::{
-    HookName, HookPosture, HostInfo, ModelFallbackOutcomeWire, ModelFallbackParams, PluginKindWire,
+    HookName, HostInfo, ModelFallbackOutcomeWire, ModelFallbackParams, PluginKindWire,
 };
 use hya_proto::{AgentName, MessageId, ModelRef, SessionId};
 use serde_json::json;
@@ -62,7 +62,6 @@ for line in sys.stdin:
         command: vec!["python3".to_string(), "-c".to_string(), script],
         timeout_ms: Some(4000),
         env: BTreeMap::new(),
-        posture_overrides: BTreeMap::new(),
         plugin_dir: None,
     }
 }
@@ -90,7 +89,6 @@ fn model_fallback_name_round_trips_and_defaults_open() {
     assert_eq!(serde_json::to_string(&name).unwrap(), "\"model.fallback\"");
     assert_eq!(HookName::from_wire("model.fallback"), Some(name));
     assert_eq!(name.method(), "hook/model.fallback");
-    assert_eq!(name.default_posture(), HookPosture::Open);
 }
 
 #[test]

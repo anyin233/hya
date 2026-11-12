@@ -124,17 +124,6 @@ pub struct PreparedAgent {
     pub model_policy: ModelPolicy,
     /// Optional workdir override for turns of this agent.
     pub workdir: Option<String>,
-    /// Decode-only remnant of the removed `spawn_lifecycle` key (every
-    /// subagent is a resident actor since 0.41.0). Catalogs prepared by earlier
-    /// releases carry `"spawn_lifecycle": "transient"|"resident"`; keeping the
-    /// value lets them decode and digest-verify unchanged. Prepare never writes
-    /// it and the runtime ignores it.
-    #[serde(
-        default,
-        rename = "spawn_lifecycle",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub legacy_spawn_lifecycle: Option<String>,
     /// Per-agent allow/deny/alias resource view.
     pub resource_view: ResourceView,
     /// Stable agent ids this agent is allowed to spawn.
@@ -287,7 +276,7 @@ pub struct PreparedCheck {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreparedAgentBundle {
-    /// Prepared-document format version (currently `2`).
+    /// Prepared-document format version (currently `3`).
     pub format_version: u32,
     /// Bundle identity block.
     pub identity: BundleIdentity,
@@ -323,7 +312,7 @@ pub struct PreparedAgentBundle {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreparedAgentSetBundle {
-    /// Prepared-document format version (currently `2`).
+    /// Prepared-document format version (currently `3`).
     pub format_version: u32,
     /// Bundle identity block.
     pub identity: BundleIdentity,
@@ -406,7 +395,7 @@ pub struct PreparedWorkflow {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreparedWorkflowBundle {
-    /// Prepared-document format version (currently `2`).
+    /// Prepared-document format version (currently `3`).
     pub format_version: u32,
     /// Bundle identity block.
     pub identity: BundleIdentity,
@@ -1021,7 +1010,8 @@ pub(crate) struct PreparedDocument<'a> {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PreparedDocumentOwned {
-    pub format_version: u32,
+    #[serde(rename = "format_version")]
+    pub _format_version: u32,
     pub bundles: Vec<PreparedInstallableBundle>,
     pub index: Vec<PreparedBundleIndex>,
     #[serde(default)]

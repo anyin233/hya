@@ -462,13 +462,14 @@ impl InstalledBundleRefresh {
         }
 
         let snapshot = match &self.registry.get() {
-            Some(registry) => Some(registry.snapshot().await?),
+            Some(registry) => Some(
+                registry
+                    .snapshot()
+                    .await
+                    .map_err(crate::bundle_admin::registry_read_error)?,
+            ),
             None => None,
         };
-        // A row written by a different binary version cannot decode. Skip it
-        // with a named warning and keep the rest of the catalog usable: a single
-        // stale row must not wedge every later turn, and the operator needs to
-        // know which bundle to reinstall.
         let mut installed = Vec::with_capacity(
             snapshot
                 .as_ref()
@@ -476,17 +477,8 @@ impl InstalledBundleRefresh {
         );
         if let Some(snapshot) = &snapshot {
             for record in &snapshot.bundles {
-                match Self::decode_installed(record) {
-                    Ok(prepared) => installed.push(Arc::new(prepared)),
-                    Err(detail) => {
-                        tracing::warn!(
-                            bundle_id = %record.bundle_id,
-                            version = %record.version,
-                            error = %detail,
-                            "skipping unreadable installed bundle; reinstall it with `hya bundle install`"
-                        );
-                    }
-                }
+                let prepared = Self::decode_installed(record).map_err(CoreError::Invalid)?;
+                installed.push(Arc::new(prepared));
             }
         }
         let first_party = first_party_catalogs()?

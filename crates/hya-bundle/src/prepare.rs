@@ -24,7 +24,7 @@ const AGENT_SOURCE_KIND: &str = "AgentBundle";
 const AGENT_SET_SOURCE_KIND: &str = "AgentSetBundle";
 const WORKFLOW_SOURCE_KIND: &str = "WorkflowBundle";
 const PLUGIN_SOURCE_KIND: &str = "Plugin";
-const PREPARED_FORMAT_VERSION: u32 = 2;
+const PREPARED_FORMAT_VERSION: u32 = 3;
 fn prepared_check(check: &crate::source::SourceCheck) -> PreparedCheck {
     PreparedCheck {
         command: check.command.clone(),
@@ -135,7 +135,7 @@ impl PreparedCatalog {
     ///
     /// Returns a typed error for an outer digest mismatch, unsupported prepared
     /// format, malformed payload, non-canonical vectors, or any integrity
-    /// failure. Prepared format v1 is intentionally not upgraded.
+    /// failure. Older prepared formats require reinstalling; no migration is performed.
     pub fn decode(bytes: &[u8], expected_digest: &str) -> Result<Self, BundleError> {
         let actual_digest = digest_bytes(bytes);
         if actual_digest != expected_digest {
@@ -144,18 +144,30 @@ impl PreparedCatalog {
                 actual: actual_digest,
             });
         }
+        // Check the envelope before decoding fields removed from older payloads.
+        #[derive(serde::Deserialize)]
+        struct Format {
+            format_version: u32,
+        }
+        let format: Format =
+            serde_json::from_slice(bytes).map_err(|error| BundleError::PreparedDecode {
+                detail: error.to_string(),
+            })?;
+        if format.format_version != PREPARED_FORMAT_VERSION {
+            return Err(BundleError::UnsupportedPreparedFormat {
+                found: format.format_version,
+            });
+        }
         let document: PreparedDocumentOwned =
             serde_json::from_slice(bytes).map_err(|error| BundleError::PreparedDecode {
                 detail: error.to_string(),
             })?;
-        if document.format_version != PREPARED_FORMAT_VERSION
-            || !is_strictly_sorted(
-                document
-                    .bundles
-                    .iter()
-                    .map(|bundle| bundle.identity().id.as_str()),
-            )
-        {
+        if !is_strictly_sorted(
+            document
+                .bundles
+                .iter()
+                .map(|bundle| bundle.identity().id.as_str()),
+        ) {
             return Err(BundleError::NonCanonicalPreparedCatalog);
         }
         for bundle in &document.bundles {
@@ -2469,7 +2481,6 @@ fn prepare_agent(
         prompt_digest,
         model_policy: source.model_policy,
         workdir: source.workdir,
-        legacy_spawn_lifecycle: None,
         resource_view: source.resource_view,
         can_spawn: source.can_spawn.into_iter().map(AgentName::new).collect(),
         hook_refs: source.hook_refs,

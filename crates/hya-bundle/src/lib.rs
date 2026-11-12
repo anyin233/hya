@@ -34,10 +34,8 @@ pub use model::{
     PreparedTuiExtension, PreparedWorkflow, PreparedWorkflowBundle, ResourceView,
 };
 pub use package::{
-    PackageFormat, PackageInspection, PrivatePackageAuthentication, PrivatePackageInspection,
-    PrivatePackagePayload, PublicPackageInspection, StagedPackage, cleanup_orphaned_staging,
-    detect_package_format, inspect_private_package, inspect_public_package, stage_package,
-    write_public_package,
+    PackageFormat, PublicPackageInspection, StagedPackage, cleanup_orphaned_staging,
+    detect_package_format, inspect_public_package, stage_package, write_public_package,
 };
 pub use prepare::prepare_package;
 pub use source::{BundleSource, SourceFile, SourceTuiExtension};

@@ -77,7 +77,7 @@ fn catalog_without_historical() -> Arc<AgentCatalog> {
         .map(|stable_id| {
             PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
                 check: None,
-                format_version: 2,
+                format_version: 3,
                 identity: BundleIdentity {
                     id: format!("hya/historical-identity-{stable_id}"),
                     version: "0.0.0".to_string(),
@@ -95,7 +95,6 @@ fn catalog_without_historical() -> Arc<AgentCatalog> {
                     prompt_digest: None,
                     model_policy: ModelPolicy::default(),
                     workdir: None,
-                    legacy_spawn_lifecycle: None,
                     resource_view: ResourceView::default(),
                     can_spawn: Vec::new(),
                     hook_refs: Vec::new(),

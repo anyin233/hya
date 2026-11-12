@@ -1,16 +1,4 @@
-/**
- * Discovery of Claude Code plugin sources.
- *
- * Layouts understood (checked in order for one plugin directory):
- *
- * - `<dir>/plugin.json` — flat Claude Code plugin layout
- * - `<dir>/.claude-plugin/plugin.json` — metadata-subdirectory layout
- * - `<dir>/CLAUDE.md`-less legacy layout is not supported
- *
- * Environment-wide discovery scans the project `.claude/plugins/` and user
- * `~/.claude/plugins/` roots (one level deep, like Claude Code's marketplace
- * checkouts), plus the project-local `.claude-plugin/` source directory.
- */
+/** Read the explicitly selected Claude plugin source directory. */
 
 import fs from "node:fs"
 import path from "node:path"
@@ -30,7 +18,7 @@ export type PluginJson = {
   readonly description: string
 }
 
-/** One discovered plugin source directory plus its parsed manifest. */
+/** One explicitly selected plugin source directory plus its parsed manifest. */
 export type PluginSource = {
   /** Absolute or process-relative plugin directory. */
   readonly dir: string
@@ -38,14 +26,6 @@ export type PluginSource = {
   readonly manifestPath: string
   /** Parsed manifest values. */
   readonly manifest: PluginJson
-}
-
-/** Options for [`discoverPluginSources`]. */
-export type DiscoveryOptions = {
-  /** Project directory (defaults to `process.cwd()`). */
-  readonly cwd?: string
-  /** Home directory (defaults to env `HOME`). */
-  readonly home?: string
 }
 
 /**
@@ -78,58 +58,6 @@ export function readPluginJson(dir: string): PluginSource | undefined {
     manifestPath,
     manifest: { name: parsed.name, version, description },
   }
-}
-
-/**
- * Discover plugin sources under the project and user plugin roots.
- *
- * Each immediate subdirectory of `<root>/.claude/plugins/` that contains a
- * readable `plugin.json` (flat or nested layout) is returned, project roots
- * before user roots, each root sorted by directory name.
- */
-export function discoverPluginSources(options: DiscoveryOptions = {}): readonly PluginSource[] {
-  const cwd = options.cwd ?? process.cwd()
-  const home = options.home ?? process.env["HOME"] ?? ""
-  const projectRoot = path.join(cwd, ".claude/plugins")
-  const userRoot = path.join(home, ".claude/plugins")
-  const roots = userRoot === projectRoot ? [projectRoot] : [projectRoot, userRoot]
-  const found: PluginSource[] = []
-  // A project may itself be a plugin source with `.claude-plugin/plugin.json`.
-  try {
-    const projectSource = readPluginJson(cwd)
-    if (projectSource !== undefined) {
-      found.push(projectSource)
-    }
-  } catch {
-    // Discovery skips malformed candidates; direct import surfaces the error.
-  }
-  for (const root of roots) {
-    if (!fs.existsSync(root)) {
-      continue
-    }
-    let entries: readonly string[] = []
-    try {
-      entries = fs.readdirSync(root).sort()
-    } catch {
-      continue
-    }
-    for (const entry of entries) {
-      const candidate = path.join(root, entry)
-      if (!fs.statSync(candidate).isDirectory()) {
-        continue
-      }
-      try {
-        const source = readPluginJson(candidate)
-        if (source !== undefined) {
-          found.push(source)
-        }
-      } catch {
-        // Unreadable or invalid manifests are skipped during discovery; a
-        // direct `--plugin-dir` invocation surfaces the error instead.
-      }
-    }
-  }
-  return found
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

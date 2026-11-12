@@ -1206,10 +1206,6 @@ fn digest_plugin(spec: &PluginSpec) -> [u8; 32] {
         update_bytes(&mut digest, key.as_bytes());
         update_bytes(&mut digest, value.as_bytes());
     }
-    for (hook, posture) in &spec.posture_overrides {
-        update_bytes(&mut digest, hook.as_str().as_bytes());
-        update_bytes(&mut digest, format!("{posture:?}").as_bytes());
-    }
     digest.finalize().into()
 }
 
@@ -1298,7 +1294,6 @@ mod tests {
                 command: vec![revision_marker.to_string()],
                 timeout_ms: None,
                 env: BTreeMap::new(),
-                posture_overrides: BTreeMap::new(),
                 plugin_dir: None,
             },
         )
@@ -1845,7 +1840,6 @@ mod tests {
             prompt_digest: None,
             model_policy: ModelPolicy::default(),
             workdir: None,
-            legacy_spawn_lifecycle: None,
             resource_view: ResourceView {
                 allow: vec![prepared.stable_id.clone()],
                 deny: Vec::new(),
@@ -1858,7 +1852,7 @@ mod tests {
         let bundle = PreparedAgentBundle {
             check: None,
             tui: None,
-            format_version: 2,
+            format_version: 3,
             identity: BundleIdentity {
                 id: bundle_id.to_string(),
                 version: "1.0.0".to_string(),

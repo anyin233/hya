@@ -174,7 +174,7 @@ impl RuntimeCatalogRefresh for CountingRefresh {
 fn single_agent_catalog(stable_id: &str, prompt: &str) -> Arc<AgentCatalog> {
     let bundle = PreparedAgentBundle {
         check: None,
-        format_version: 2,
+        format_version: 3,
         identity: BundleIdentity {
             id: format!("hya/round-rebind-{stable_id}"),
             version: "0.0.0".to_string(),
@@ -192,7 +192,6 @@ fn single_agent_catalog(stable_id: &str, prompt: &str) -> Arc<AgentCatalog> {
             prompt_digest: None,
             model_policy: ModelPolicy::default(),
             workdir: None,
-            legacy_spawn_lifecycle: None,
             resource_view: ResourceView::default(),
             can_spawn: Vec::new(),
             hook_refs: Vec::new(),

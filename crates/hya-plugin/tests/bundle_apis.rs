@@ -89,7 +89,6 @@ fn spec(kind: PluginKindWire, apis: &str) -> PluginSpec {
         command: fixture(apis),
         timeout_ms: Some(5000),
         env,
-        posture_overrides: BTreeMap::new(),
         plugin_dir: None,
     }
 }

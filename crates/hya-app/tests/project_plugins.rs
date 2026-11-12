@@ -308,7 +308,6 @@ async fn project_sessions_bind_their_projects_plugins_and_config_plugins_win() {
             command: vec!["python3".to_string(), "-c".to_string(), config_script],
             timeout_ms: Some(5_000),
             env: BTreeMap::new(),
-            posture_overrides: BTreeMap::new(),
             plugin_dir: None,
         }],
         (WebSearchConfig::default(), InvocationPolicy::default()),

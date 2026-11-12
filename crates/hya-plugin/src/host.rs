@@ -4,7 +4,7 @@
 //! and exceeding the restart budget moves it to `Disabled`. Generalizes
 //! `hya_mcp::manager::McpManager`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -18,8 +18,7 @@ use crate::client::{ChildGuard, PluginClient};
 use crate::config::PluginSpec;
 use crate::error::PluginError;
 use crate::messages::{
-    EventNotificationParams, HookName, HookPosture, HostInfo, METHOD_EVENT, PluginContributionSet,
-    ToolCallReply,
+    EventNotificationParams, HookName, HostInfo, METHOD_EVENT, PluginContributionSet, ToolCallReply,
 };
 
 use crate::native_capability::BundleCapability;
@@ -94,7 +93,7 @@ struct LiveClient {
 
 pub(crate) struct PluginConn {
     pub(crate) id: String,
-    pub(crate) hooks: HashMap<HookName, HookPosture>,
+    pub(crate) hooks: HashSet<HookName>,
     pub(crate) contributions: PluginContributionSet,
     canonical_declaration: Arc<[u8]>,
     pub(crate) timeout: Duration,
@@ -117,8 +116,8 @@ pub(crate) struct PluginConn {
 }
 
 impl PluginConn {
-    pub(crate) fn posture(&self, hook: HookName) -> Option<HookPosture> {
-        self.hooks.get(&hook).copied()
+    pub(crate) fn has_hook(&self, hook: HookName) -> bool {
+        self.hooks.contains(&hook)
     }
 
     pub(crate) async fn call_hook(
@@ -327,15 +326,10 @@ fn validate_initialize(
 
 fn canonical_initialize(init: &crate::messages::InitializeResult) -> Result<Vec<u8>, PluginError> {
     let mut declaration = init.clone();
-    declaration.contributions.hooks.sort_by_key(|hook| {
-        (
-            hook.name,
-            hook.posture.map_or("", |posture| match posture {
-                HookPosture::Safe => "safe",
-                HookPosture::Open => "open",
-            }),
-        )
-    });
+    declaration
+        .contributions
+        .hooks
+        .sort_by_key(|hook| hook.name);
     declaration.contributions.tools.sort_by(|left, right| {
         left.name
             .cmp(&right.name)
@@ -555,7 +549,7 @@ impl PluginHost {
 
     pub(crate) fn fan_out_event(&self, envelope: &Envelope) {
         for conn in &self.plugins {
-            if conn.hooks.contains_key(&HookName::Event) {
+            if conn.hooks.contains(&HookName::Event) {
                 conn.enqueue_event(envelope);
             }
         }
@@ -599,8 +593,8 @@ mod tests {
 
     use super::canonical_initialize;
     use crate::messages::{
-        HookName, HookPosture, HookRegistration, InitializeResult, PROTOCOL_VERSION,
-        PluginContributionSet, PluginInfo, PluginKindWire, ToolInfo,
+        HookName, HookRegistration, InitializeResult, PROTOCOL_VERSION, PluginContributionSet,
+        PluginInfo, PluginKindWire, ToolInfo,
     };
 
     fn declaration() -> InitializeResult {
@@ -615,11 +609,9 @@ mod tests {
                 hooks: vec![
                     HookRegistration {
                         name: HookName::PermissionAsk,
-                        posture: Some(HookPosture::Safe),
                     },
                     HookRegistration {
                         name: HookName::CommandExecuteBefore,
-                        posture: Some(HookPosture::Open),
                     },
                 ],
                 tools: vec![
@@ -675,7 +667,7 @@ mod tests {
         );
 
         let mut changed_hook = original.clone();
-        changed_hook.contributions.hooks[0].posture = Some(HookPosture::Open);
+        changed_hook.contributions.hooks[0].name = HookName::SessionEnd;
 
         assert_ne!(
             canonical,

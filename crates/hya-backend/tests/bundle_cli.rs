@@ -242,6 +242,10 @@ fn bundle_install_list_info_uninstall_workflow() -> Result<(), Box<dyn std::erro
         .output()?;
     assert_success("info", &info);
     let info_stdout = String::from_utf8(info.stdout)?;
+    let expected_digest = format!(
+        "prepared_digest={}",
+        hya_bundle::inspect_public_package(&fs::read(&package)?)?.digest()
+    );
     for expected in [
         "name=hya/valid-public",
         "version=1.0.0",
@@ -251,7 +255,7 @@ fn bundle_install_list_info_uninstall_workflow() -> Result<(), Box<dyn std::erro
         "state=active",
         "immutable=false",
         "source_digest=43889c6597ed85a12b182d23634ebc5804392ee9b7d255e593cbf76c8e0d3f3e",
-        "prepared_digest=fb7a403bce9ad228efae42aabcc19793ea55cabce6651306b893016c141ce52d",
+        expected_digest.as_str(),
         "kind=AgentBundle",
         "agent=valid-public-lead",
     ] {
@@ -286,7 +290,7 @@ fn bundle_install_list_info_uninstall_workflow() -> Result<(), Box<dyn std::erro
 }
 
 #[tokio::test]
-async fn private_info_is_opaque_and_install_does_not_mutate_registry()
+async fn private_format_is_rejected_without_mutating_registry()
 -> Result<(), Box<dyn std::error::Error>> {
     let data_root = unique_data_root()?;
     let private_package = data_root.join("private.hyabundle");
@@ -298,38 +302,11 @@ async fn private_info_is_opaque_and_install_does_not_mutate_registry()
         .args(["bundle", "info", "-f"])
         .arg(&private_package)
         .output()?;
-    assert_success("private info", &info);
+    assert!(!info.status.success());
+    assert!(String::from_utf8(info.stderr)?.contains("invalid bundle package format"));
     assert!(
         !registry_path.exists(),
-        "private file inspection created a bundle registry"
-    );
-    let info_stdout = String::from_utf8(info.stdout)?;
-    for expected in [
-        "format: private-v1",
-        "target: x86_64-unknown-linux-gnu",
-        "protocol_minimum: 1",
-        "protocol_maximum: 1",
-        "ciphertext_length: 1",
-        "ciphertext_digest: 6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
-        "authentication: unverified",
-        "payload: opaque",
-        concat!("activation: unsupported-in-", env!("CARGO_PKG_VERSION")),
-    ] {
-        assert!(
-            info_stdout.lines().any(|line| line == expected),
-            "private bundle info omitted {expected:?}:\n{info_stdout}"
-        );
-    }
-    assert_eq!(
-        info_stdout
-            .lines()
-            .filter(|line| line.starts_with("ciphertext"))
-            .collect::<Vec<_>>(),
-        vec![
-            "ciphertext_length: 1",
-            "ciphertext_digest: 6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
-        ],
-        "private bundle info exposed ciphertext beyond length and digest:\n{info_stdout}"
+        "unsupported format created a registry"
     );
 
     fs::create_dir_all(&registry_dir)?;
@@ -351,7 +328,7 @@ async fn private_info_is_opaque_and_install_does_not_mutate_registry()
     );
     let install_stderr = String::from_utf8(install.stderr)?;
     assert!(
-        install_stderr.contains("PRIVATE_ACTIVATION_UNSUPPORTED"),
+        install_stderr.contains("invalid bundle package format"),
         "private bundle install omitted typed error:\n{install_stderr}"
     );
     let after = registry.snapshot().await?;
@@ -411,7 +388,7 @@ fn bundle_list_and_info_include_first_party_without_creating_registry()
     for expected in [
         "name=hya/plan-impl-review",
         "origin=first-party",
-        "format=prepared-v2",
+        "format=prepared-v3",
         "immutable=true",
         "kind=WorkflowBundle",
         "workflow=plan-impl-review",
@@ -560,6 +537,10 @@ fn public_info_file_prepares_without_registry_mutation() -> Result<(), Box<dyn s
         .output()?;
     assert_success("public package info", &info);
     let stdout = String::from_utf8(info.stdout)?;
+    let expected_digest = format!(
+        "prepared_digest: {}",
+        hya_bundle::inspect_public_package(&fs::read(&package)?)?.digest()
+    );
     assert_eq!(
         stdout.lines().collect::<Vec<_>>(),
         vec![
@@ -571,7 +552,7 @@ fn public_info_file_prepares_without_registry_mutation() -> Result<(), Box<dyn s
             "state: inspected",
             "immutable: false",
             "source_digest: 43889c6597ed85a12b182d23634ebc5804392ee9b7d255e593cbf76c8e0d3f3e",
-            "prepared_digest: fb7a403bce9ad228efae42aabcc19793ea55cabce6651306b893016c141ce52d",
+            expected_digest.as_str(),
             "kind: AgentBundle",
             "agent: valid-public-lead",
         ],

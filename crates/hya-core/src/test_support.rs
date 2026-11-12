@@ -18,7 +18,7 @@ pub(crate) fn runtime(tools: ToolRegistry) -> Arc<RuntimeRegistry> {
         .into_iter()
         .map(|stable_id| PreparedAgentBundle {
             check: None,
-            format_version: 2,
+            format_version: 3,
             identity: BundleIdentity {
                 id: format!("hya/core-unit-tests-{stable_id}"),
                 version: "0.0.0".to_string(),
@@ -36,7 +36,6 @@ pub(crate) fn runtime(tools: ToolRegistry) -> Arc<RuntimeRegistry> {
                 prompt_digest: None,
                 model_policy: ModelPolicy::default(),
                 workdir: None,
-                legacy_spawn_lifecycle: None,
                 resource_view: ResourceView::default(),
                 can_spawn: Vec::new(),
                 hook_refs: Vec::new(),
