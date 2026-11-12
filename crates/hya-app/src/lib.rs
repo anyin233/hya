@@ -25,8 +25,6 @@ mod installed_bundle_refresh;
 mod lsp;
 /// SQLite remote-model cache (`$XDG_CACHE_HOME/hya/model_cache.db`).
 pub mod model_cache;
-/// Legacy `models.yml.cache` reader (imported once into [`model_cache`]).
-pub mod models_cache;
 /// Interactive OAuth login and access-token refresh.
 pub mod oauth;
 /// Headless permission auto-reject responder for non-interactive runs.

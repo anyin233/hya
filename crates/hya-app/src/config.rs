@@ -46,10 +46,6 @@ pub struct ResolvedConfig {
     pub plugins: BTreeMap<String, PluginEntry>,
     /// Preferred primary agent id when workdir does not select one.
     pub default_agent: Option<String>,
-    /// Subagent concurrency and spawn limits from config.
-    pub subagents: SubagentLimits,
-    /// Logical model categories → ordered concrete `provider/model` candidates.
-    pub categories: CategoryRegistry,
     /// Compiled tool permission policy (`permission:` block).
     pub permission: InvocationPolicy,
     /// Web-search plane configuration.
@@ -145,8 +141,7 @@ struct ToolsConfig {
 #[derive(Debug, Default, Deserialize)]
 struct PermissionConfig {
     /// Policy model (`allow` / `default` / `strict` / `danger`).
-    /// Accepts the common alias `mode` so `permission.mode: allow` works.
-    #[serde(default, alias = "mode")]
+    #[serde(default)]
     model: PermissionModel,
     #[serde(default)]
     rules: Vec<PermissionRuleConfig>,
@@ -159,16 +154,12 @@ struct PermissionRuleConfig {
     permission: PermissionModeConfig,
 }
 
-/// Rule effect. Accepts both lowercase (`allow`) and PascalCase (`Allow`) so
-/// config stays consistent with `permission.model` casing.
+/// Rule effect, spelled in lowercase like `permission.model`.
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum PermissionModeConfig {
-    #[serde(alias = "Allow")]
     Allow,
-    #[serde(alias = "Deny")]
     Deny,
-    #[serde(alias = "Ask")]
     Ask,
 }
 
@@ -560,17 +551,17 @@ impl ProviderCredential {
 }
 
 /// Resolve optional auth for a provider from Hya login token or inline key.
-fn resolve_provider_credential(provider: &ParsedProvider) -> ProviderCredential {
-    if let Some(cred) = crate::auth::load_credential(&provider.id) {
+fn resolve_provider_credential(provider: &ParsedProvider) -> anyhow::Result<ProviderCredential> {
+    if let Some(cred) = crate::auth::load_credential(&provider.id)? {
         let token = cred.access_token().trim();
         let oauth = cred.oauth();
-        return ProviderCredential {
+        return Ok(ProviderCredential {
             token: (!token.is_empty()).then(|| token.to_string()),
             use_grok_session: provider.kind == ProviderKind::GrokBuild,
             use_codex_session: provider.kind == ProviderKind::OpenAiCodex,
             account_id: oauth.and_then(|o| o.account_id.clone()),
             use_oauth_refresh: oauth.is_some() && !token.is_empty(),
-        };
+        });
     }
     let token = provider
         .api_key
@@ -578,13 +569,13 @@ fn resolve_provider_credential(provider: &ParsedProvider) -> ProviderCredential 
         .map(str::trim)
         .filter(|token| !token.is_empty())
         .map(str::to_string);
-    ProviderCredential {
+    Ok(ProviderCredential {
         token,
         use_grok_session: provider.kind == ProviderKind::GrokBuild,
         use_codex_session: provider.kind == ProviderKind::OpenAiCodex,
         account_id: None,
         use_oauth_refresh: false,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -2405,7 +2396,7 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     let mut plans = Vec::new();
     let mut pending_discovery = Vec::new();
     for provider in parsed {
-        let credential = resolve_provider_credential(&provider);
+        let credential = resolve_provider_credential(&provider)?;
         let cached = cache.remove(&provider.id).unwrap_or_default();
         let pending = PendingCatalogDiscovery {
             provider_id: provider.id.clone(),
@@ -2475,8 +2466,6 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     {
         anyhow::bail!("invalid global reasoning effort `{value}`");
     }
-    let categories = resolve_categories(&file);
-    let subagents = resolve_subagent_limits(file.subagents.as_ref());
     let websearch = file
         .tools
         .map_or_else(WebSearchConfig::default, |tools| tools.websearch);
@@ -2487,8 +2476,6 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         mcp,
         default_agent: file.default_agent,
         plugins: file.plugins,
-        subagents,
-        categories,
         permission,
         websearch,
         pending_discovery,
@@ -2652,7 +2639,7 @@ pub async fn rebuild_providers(
     let mut plans = Vec::with_capacity(selected.len());
     let mut discovery = BTreeMap::new();
     for provider in selected {
-        let credential = resolve_provider_credential(&provider);
+        let credential = resolve_provider_credential(&provider)?;
         let mut cached = cache.remove(&provider.id).unwrap_or_default();
         let fetch = match mode {
             DiscoverMode::Always => true,
@@ -2701,13 +2688,13 @@ permission:
   rules:
     - target: tool
       selector: "^(read|grep)$"
-      permission: Allow
+      permission: allow
     - target: mcp
       selector: "^mcp__github__"
-      permission: Ask
+      permission: ask
     - target: command
       selector: "^git (status|diff)"
-      permission: Deny
+      permission: deny
 "#,
         )
         .unwrap();
@@ -2736,14 +2723,14 @@ permission:
             Mode::Allow
         );
         let invalid_regex = parse_config(
-            "permission:\n  rules:\n    - target: tool\n      selector: '('\n      permission: Allow\n",
+            "permission:\n  rules:\n    - target: tool\n      selector: '('\n      permission: allow\n",
         )
         .unwrap();
         assert!(resolve_permission(&invalid_regex).is_err());
         assert!(parse_config("permission:\n  model: unknown\n").is_err());
         assert!(
             parse_config(
-                "permission:\n  rules:\n    - target: unknown\n      selector: x\n      permission: Allow\n",
+                "permission:\n  rules:\n    - target: unknown\n      selector: x\n      permission: allow\n",
             )
             .is_err()
         );
@@ -2753,12 +2740,6 @@ permission:
         )
         .unwrap();
         assert!(resolve_permission(&lower).is_ok());
-        // `mode` is accepted as an alias for `model`.
-        let mode_alias = parse_config("permission:\n  mode: allow\n").unwrap();
-        assert_eq!(
-            resolve_permission(&mode_alias).unwrap().model(),
-            PermissionModel::Allow
-        );
     }
 
     #[test]

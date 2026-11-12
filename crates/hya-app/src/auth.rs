@@ -11,18 +11,18 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum OAuthType {
-    /// ChatGPT Codex subscription OAuth (`openai-codex` / `codex`).
+    /// ChatGPT Codex subscription OAuth (`openai-codex`).
     OpenaiCodex,
-    /// Grok Build / xAI CLI OAuth (`grok-build` / `grok` / `xai-oauth`).
+    /// Grok Build / xAI CLI OAuth (`grok-build`).
     GrokBuild,
 }
 
 impl OAuthType {
-    /// Parse a CLI/config type string.
+    /// Parse one canonical type id.
     pub fn parse(raw: &str) -> Option<Self> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "openai-codex" | "openai_codex" | "codex" => Some(Self::OpenaiCodex),
-            "grok-build" | "grok_build" | "grok" | "xai-oauth" => Some(Self::GrokBuild),
+        match raw.trim() {
+            "openai-codex" => Some(Self::OpenaiCodex),
+            "grok-build" => Some(Self::GrokBuild),
             _ => None,
         }
     }
@@ -142,7 +142,11 @@ struct AuthFile {
 }
 
 impl AuthFile {
-    fn into_credential(self) -> Option<AuthCredential> {
+    /// Build the credential this document describes.
+    ///
+    /// A document that is valid YAML but does not carry a complete credential
+    /// is an error, not an absent credential: it means the file is damaged.
+    fn into_credential(self) -> std::io::Result<AuthCredential> {
         let kind = self
             .kind
             .as_deref()
@@ -150,34 +154,22 @@ impl AuthFile {
             .filter(|s| !s.is_empty())
             .unwrap_or("api");
         if kind.eq_ignore_ascii_case("oauth") {
-            let access = self.access_token?.trim().to_string();
-            let refresh = self.refresh_token?.trim().to_string();
-            let expires_at = self.expires_at?.trim().to_string();
-            if access.is_empty() || refresh.is_empty() || expires_at.is_empty() {
-                return None;
-            }
-            let oauth_type = self.oauth_type?;
-            return Some(AuthCredential::OAuth(OAuthCredential {
+            let oauth_type = self
+                .oauth_type
+                .ok_or_else(|| invalid_credential("missing oauth_type"))?;
+            return Ok(AuthCredential::OAuth(OAuthCredential {
                 oauth_type,
-                access_token: access,
-                refresh_token: refresh,
-                expires_at,
-                account_id: self
-                    .account_id
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty()),
-                id_token: self
-                    .id_token
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty()),
+                access_token: required_field(self.access_token, "access_token")?,
+                refresh_token: required_field(self.refresh_token, "refresh_token")?,
+                expires_at: required_field(self.expires_at, "expires_at")?,
+                account_id: optional_field(self.account_id),
+                id_token: optional_field(self.id_token),
             }));
         }
-        let token = self
-            .token
-            .or(self.access_token)
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())?;
-        Some(AuthCredential::Api { token })
+        let token = optional_field(self.token)
+            .or_else(|| optional_field(self.access_token))
+            .ok_or_else(|| invalid_credential("missing token"))?;
+        Ok(AuthCredential::Api { token })
     }
 
     fn from_credential(cred: &AuthCredential) -> Self {
@@ -292,57 +284,52 @@ pub fn remove_token_in(dir: &Path, provider: &str) -> std::io::Result<bool> {
 }
 
 /// Load the bearer access token for `provider` under `dir`, if present.
-#[must_use]
-pub fn load_token_in(dir: &Path, provider: &str) -> Option<String> {
-    load_credential_in(dir, provider).map(|c| c.access_token().to_string())
+///
+/// # Errors
+/// Same as [`load_credential_in`].
+pub fn load_token_in(dir: &Path, provider: &str) -> std::io::Result<Option<String>> {
+    Ok(load_credential_in(dir, provider)?.map(|credential| credential.access_token().to_string()))
 }
 
 /// Load the full credential document for `provider` under `dir`.
-#[must_use]
-pub fn load_credential_in(dir: &Path, provider: &str) -> Option<AuthCredential> {
-    let content = std::fs::read_to_string(dir.join(format!("{provider}.yaml"))).ok()?;
-    parse_auth_document(&content)
-}
-
-/// Parse an on-disk auth YAML document into a credential.
-#[must_use]
-pub fn parse_auth_document(content: &str) -> Option<AuthCredential> {
-    if let Ok(file) = serde_norway::from_str::<AuthFile>(content)
-        && let Some(cred) = file.into_credential()
-    {
-        return Some(cred);
-    }
-    // Legacy hand-written `token: "..."` files without full YAML structure.
-    let token = parse_token_field(content)?;
-    (!token.is_empty()).then_some(AuthCredential::Api { token })
-}
-
-fn parse_token_field(content: &str) -> Option<String> {
-    let value = content
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("token:"))?
-        .trim();
-    Some(yaml_unquote(value))
-}
-
-fn yaml_unquote(s: &str) -> String {
-    if s.len() < 2 || !s.starts_with('"') || !s.ends_with('"') {
-        return s.to_string();
-    }
-    let mut out = String::with_capacity(s.len() - 2);
-    let mut chars = s[1..s.len() - 1].chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('n') => out.push('\n'),
-                Some(other) => out.push(other),
-                None => {}
-            }
-        } else {
-            out.push(c);
+///
+/// `Ok(None)` means no credential file exists. A file that cannot be read or
+/// parsed, and one that lacks a complete credential, are errors.
+///
+/// # Errors
+/// Returns I/O or YAML failures, or an incomplete credential document.
+pub fn load_credential_in(dir: &Path, provider: &str) -> std::io::Result<Option<AuthCredential>> {
+    let path = dir.join(format!("{provider}.yaml"));
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(std::io::Error::new(
+                error.kind(),
+                format!("read {}: {error}", path.display()),
+            ));
         }
-    }
-    out
+    };
+    let file: AuthFile = serde_norway::from_str(&content)
+        .map_err(|error| invalid_credential(&format!("parse {}: {error}", path.display())))?;
+    let credential = file.into_credential().map_err(|error| {
+        std::io::Error::new(error.kind(), format!("{}: {error}", path.display()))
+    })?;
+    Ok(Some(credential))
+}
+
+fn invalid_credential(reason: &str) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, reason.to_string())
+}
+
+fn required_field(value: Option<String>, name: &str) -> std::io::Result<String> {
+    optional_field(value).ok_or_else(|| invalid_credential(&format!("missing {name}")))
+}
+
+fn optional_field(value: Option<String>) -> Option<String> {
+    value
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// Save a plain API token for `provider` in the user auth directory.
@@ -364,9 +351,14 @@ pub fn remove_token(provider: &str) -> std::io::Result<bool> {
 }
 
 /// Load the full credential for `provider` from the user auth directory.
-#[must_use]
-pub fn load_credential(provider: &str) -> Option<AuthCredential> {
-    load_credential_in(&auth_dir()?, provider)
+///
+/// # Errors
+/// Same as [`load_credential_in`].
+pub fn load_credential(provider: &str) -> std::io::Result<Option<AuthCredential>> {
+    match auth_dir() {
+        Some(dir) => load_credential_in(&dir, provider),
+        None => Ok(None),
+    }
 }
 
 #[cfg(test)]
@@ -393,13 +385,13 @@ mod tests {
     #[test]
     fn round_trips_token_and_missing_is_none() {
         let dir = tempdir();
-        assert_eq!(load_token_in(&dir, "anthropic"), None);
+        assert_eq!(load_token_in(&dir, "anthropic").unwrap(), None);
         save_token_in(&dir, "anthropic", "  tok-123\n").unwrap();
         assert_eq!(
-            load_token_in(&dir, "anthropic"),
+            load_token_in(&dir, "anthropic").unwrap(),
             Some("tok-123".to_string())
         );
-        assert_eq!(load_token_in(&dir, "other"), None);
+        assert_eq!(load_token_in(&dir, "other").unwrap(), None);
     }
 
     #[test]
@@ -408,7 +400,10 @@ mod tests {
         save_token_in(&dir, "12th", "sk-xyz").unwrap();
         let raw = std::fs::read_to_string(dir.join("12th.yaml")).unwrap();
         assert!(raw.contains("token:"), "on-disk format is yaml: {raw}");
-        assert_eq!(load_token_in(&dir, "12th"), Some("sk-xyz".to_string()));
+        assert_eq!(
+            load_token_in(&dir, "12th").unwrap(),
+            Some("sk-xyz".to_string())
+        );
     }
 
     #[test]
@@ -416,7 +411,7 @@ mod tests {
         let dir = tempdir();
         let token = r#"sk-a:b"c\d e"#;
         save_token_in(&dir, "p", token).unwrap();
-        assert_eq!(load_token_in(&dir, "p"), Some(token.to_string()));
+        assert_eq!(load_token_in(&dir, "p").unwrap(), Some(token.to_string()));
     }
 
     #[test]
@@ -431,7 +426,7 @@ mod tests {
             vec!["anthropic".to_string(), "openai".to_string()]
         );
         assert!(remove_token_in(&dir, "openai").unwrap());
-        assert_eq!(load_token_in(&dir, "openai"), None);
+        assert_eq!(load_token_in(&dir, "openai").unwrap(), None);
         assert!(!remove_token_in(&dir, "missing").unwrap());
         assert_eq!(list_tokens_in(&dir).unwrap(), vec!["anthropic".to_string()]);
     }
@@ -448,8 +443,11 @@ mod tests {
             id_token: Some("id.jwt".to_string()),
         });
         save_credential_in(&dir, "codex", &cred).unwrap();
-        assert_eq!(load_token_in(&dir, "codex"), Some("access-abc".to_string()));
-        let loaded = load_credential_in(&dir, "codex").unwrap();
+        assert_eq!(
+            load_token_in(&dir, "codex").unwrap(),
+            Some("access-abc".to_string())
+        );
+        let loaded = load_credential_in(&dir, "codex").unwrap().unwrap();
         assert_eq!(loaded, cred);
         let raw = std::fs::read_to_string(dir.join("codex.yaml")).unwrap();
         assert!(raw.contains("type: oauth") || raw.contains("type:oauth"));
@@ -457,25 +455,37 @@ mod tests {
     }
 
     #[test]
-    fn legacy_token_only_yaml_still_loads() {
+    fn hand_written_token_only_yaml_loads() {
         let dir = tempdir();
-        std::fs::write(dir.join("legacy.yaml"), "token: \"sk-legacy\"\n").unwrap();
-        assert_eq!(load_token_in(&dir, "legacy"), Some("sk-legacy".to_string()));
+        std::fs::write(dir.join("hand.yaml"), "token: \"sk-hand\"\n").unwrap();
+        assert_eq!(
+            load_token_in(&dir, "hand").unwrap(),
+            Some("sk-hand".to_string())
+        );
         assert!(matches!(
-            load_credential_in(&dir, "legacy"),
-            Some(AuthCredential::Api { token }) if token == "sk-legacy"
+            load_credential_in(&dir, "hand").unwrap(),
+            Some(AuthCredential::Api { token }) if token == "sk-hand"
         ));
     }
 
     #[test]
-    fn oauth_type_parse_aliases() {
+    fn incomplete_or_malformed_credential_is_an_error() {
+        let dir = tempdir();
+        std::fs::write(dir.join("broken.yaml"), "type: oauth\ntoken: x\n").unwrap();
+        let error = load_credential_in(&dir, "broken").unwrap_err();
+        assert!(error.to_string().contains("missing oauth_type"), "{error}");
+        std::fs::write(dir.join("malformed.yaml"), "token: [\n").unwrap();
+        assert!(load_credential_in(&dir, "malformed").is_err());
+    }
+
+    #[test]
+    fn oauth_type_parse_accepts_canonical_ids_only() {
         assert_eq!(
             OAuthType::parse("openai-codex"),
             Some(OAuthType::OpenaiCodex)
         );
-        assert_eq!(OAuthType::parse("codex"), Some(OAuthType::OpenaiCodex));
         assert_eq!(OAuthType::parse("grok-build"), Some(OAuthType::GrokBuild));
-        assert_eq!(OAuthType::parse("grok"), Some(OAuthType::GrokBuild));
-        assert_eq!(OAuthType::parse("nope"), None);
+        assert_eq!(OAuthType::parse("codex"), None);
+        assert_eq!(OAuthType::parse("grok"), None);
     }
 }

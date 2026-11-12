@@ -89,11 +89,6 @@ pub struct OAuthLoginOptions {
     pub provider: String,
     /// Which OAuth implementation to run.
     pub oauth_type: OAuthType,
-    /// Prefer device-code (default for openai-codex and grok-build).
-    ///
-    /// For openai-codex, device-code is the Codex CLI default (no local callback).
-    /// Set `loopback` to use localhost PKCE instead.
-    pub device: bool,
     /// Use localhost PKCE callback for openai-codex instead of device-code.
     pub loopback: bool,
     /// Do not attempt to open a system browser (print URL only).
@@ -116,7 +111,6 @@ impl Default for OAuthLoginOptions {
         Self {
             provider: String::new(),
             oauth_type: OAuthType::GrokBuild,
-            device: false,
             loopback: false,
             no_browser: false,
             model: None,

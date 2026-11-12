@@ -1067,8 +1067,6 @@ pub struct RuntimeConfig {
     pub plugins: Vec<PluginSpec>,
     /// Preferred primary agent when workdir does not select one.
     pub default_agent: Option<String>,
-    /// Logical model categories the runtime resolves at subagent spawn time.
-    pub categories: CategoryRegistry,
     /// Set when no usable config or live provider was found.
     /// Interactive startup emits it; headless/machine-readable modes ignore it.
     pub offline_notice: Option<OfflineNotice>,
@@ -1123,7 +1121,6 @@ fn offline_runtime(model_override: Option<String>, strict: bool) -> RuntimeConfi
         mcp: BTreeMap::new(),
         plugins: Vec::new(),
         default_agent: None,
-        categories: CategoryRegistry::default(),
         offline_notice: Some(OfflineNotice {
             config_path: config::expected_config_path(),
         }),
@@ -1176,7 +1173,6 @@ pub async fn resolve_runtime_strict(
         mcp: cfg.mcp,
         plugins: plugins::resolve(cfg.plugins),
         default_agent: cfg.default_agent,
-        categories: cfg.categories,
         offline_notice,
         permission: cfg.permission,
         websearch: cfg.websearch,
@@ -3667,7 +3663,7 @@ for line in sys.stdin:
 
         std::fs::write(
             &config_path,
-            "permission:\n  rules:\n    - target: tool\n      selector: '('\n      permission: Allow\n",
+            "permission:\n  rules:\n    - target: tool\n      selector: '('\n      permission: allow\n",
         )
         .unwrap();
         let fallback = resolve_runtime(None).await;

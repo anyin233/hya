@@ -344,13 +344,13 @@ permission:
   rules:
     - target: tool                       # tool | mcp | command
       selector: "^(read|grep)$"
-      permission: Allow                  # Allow | Ask | Deny
+      permission: allow                  # allow | ask | deny
     - target: mcp
       selector: "^mcp__github__"
-      permission: Ask
+      permission: ask
     - target: command
       selector: "^git (status|diff)"
-      permission: Allow
+      permission: allow
 
 # Web search defaults to enabled, unauthenticated Exa when omitted.
 tools:
@@ -484,9 +484,7 @@ The model cache is a SQLite database at
 `$XDG_CACHE_HOME/hya/model_cache.db` (fallback `~/.cache/hya/model_cache.db`).
 It stores, per provider, each model the remote `/models` list returned: model
 id, display name, context limit, output limit, reasoning default and
-variants, tool support, and the fetch time. It replaces the old YAML
-`models.yml.cache` beside `config.yaml`: the first open of an empty cache
-imports that file once, and Hya no longer writes it (you may delete it).
+variants, tool support, and the fetch time.
 Deleting `model_cache.db` is safe; it only costs one model-list request per
 provider on the next start.
 
@@ -1238,21 +1236,20 @@ permission:
   rules:
     - target: tool
       selector: "^(read|grep)$"
-      permission: Allow
+      permission: allow
     - target: mcp
       selector: "^mcp__github__"
-      permission: Ask
+      permission: ask
     - target: command
       selector: "^git (status|diff)"
-      permission: Deny
+      permission: deny
 ```
 
-`model` (alias: `mode`) accepts lowercase `allow`, `default`, `strict`, or
-`danger`. Rule `target` accepts lowercase `tool`, `mcp`, or `command`; rule
-`permission` accepts `allow`/`Allow`, `ask`/`Ask`, or `deny`/`Deny`. Selectors
-use Rust regular-expression search semantics, so `read` also matches
-`read_file`; use `^read$` for an exact match. Invalid values or regular
-expressions produce a config error and a strict permission fallback.
+`model` accepts `allow`, `default`, `strict`, or `danger`. Rule `target`
+accepts `tool`, `mcp`, or `command`; rule `permission` accepts `allow`, `ask`,
+or `deny`. Selectors use Rust regular-expression search semantics, so `read`
+also matches `read_file`; use `^read$` for an exact match. Invalid values or
+regular expressions produce a config error and a strict permission fallback.
 
 Rules are evaluated in file order:
 

@@ -15,9 +15,6 @@ pub(crate) enum OauthCommand {
         /// OAuth provider type: `openai-codex` or `grok-build`.
         #[arg(long = "type", value_name = "TYPE")]
         oauth_type: String,
-        /// Use the device-code flow (default for openai-codex and grok-build).
-        #[arg(long)]
-        device: bool,
         /// openai-codex only: use localhost PKCE callback instead of Codex device-code.
         #[arg(long)]
         loopback: bool,
@@ -53,7 +50,6 @@ pub(crate) async fn run_oauth(command: OauthCommand) -> anyhow::Result<()> {
         OauthCommand::Login {
             provider,
             oauth_type,
-            device,
             loopback,
             no_browser,
             browser,
@@ -74,8 +70,6 @@ pub(crate) async fn run_oauth(command: OauthCommand) -> anyhow::Result<()> {
             // openai-codex defaults to Codex device-code (no local callback).
             // grok-build is always device-code. --loopback opts into localhost PKCE for codex.
             let use_loopback = loopback && matches!(oauth_type, OAuthType::OpenaiCodex);
-            let device = !use_loopback
-                && (device || matches!(oauth_type, OAuthType::GrokBuild | OAuthType::OpenaiCodex));
             // Codex default: print URL/code only (no auto-open). --browser enables open.
             // Other types open unless --no-browser.
             let no_browser = if browser {
@@ -88,7 +82,6 @@ pub(crate) async fn run_oauth(command: OauthCommand) -> anyhow::Result<()> {
             let result = oauth::login(OAuthLoginOptions {
                 provider,
                 oauth_type,
-                device,
                 loopback: use_loopback,
                 no_browser,
                 model,

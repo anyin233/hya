@@ -1155,12 +1155,13 @@ let metadata = tokio::fs::metadata(&root).await?;
 ### 3. Contracts
 
 - A normalized non-empty Hya model list is network-free and authoritative.
-- An empty list prefers `$XDG_CONFIG_HOME/hya/models.yml.cache` (same directory
-  as `config.yaml`) so startup does not block on discovery HTTP. Cache hits
-  publish discovered rows immediately (including `limit.context` /
-  `limit.output` and reasoning variants/default) and queue background refresh.
+- An empty list prefers the SQLite model cache at
+  `$XDG_CACHE_HOME/hya/model_cache.db` so startup does not block on discovery
+  HTTP. Cache hits publish discovered rows immediately (including
+  `limit.context` / `limit.output` and reasoning variants/default) and queue
+  background refresh.
 - Cache miss still performs one bounded optional-auth discovery sequence during
-  `config::load`, then writes `models.yml.cache`.
+  `config::load`, then writes the model cache.
 - Background refresh (`refresh_pending_catalogs`) rewrites the cache and swaps the
   live engine router/catalog; frontends pick up the swap on their next
   bootstrap/catalog fetch (the old Compat `catalog.updated` SSE nudge is
