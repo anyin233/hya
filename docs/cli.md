@@ -885,13 +885,14 @@ shared by all of them ([ADR-0023](adr/0023-persistent-backend-daemon.md)).
 Bare `hya` and the TUI start it on demand; these commands control it by
 hand. Plain `hya serve` (no action) still serves in the foreground.
 
-Stopping waits for engine turns and admitted server runs, including requests
-still preparing their first assistant message, within the five-second drain
-deadline. Each admitted prompt receives a terminal assistant message with the
-actual ending cause. Cancelling before the assistant starts leaves an empty
-cancelled assistant message in the transcript and prevents that turn from being
-restored on the next start. Internal work without an unanswered user prompt
-does not receive an extra assistant message.
+Stopping waits for engine turns and server runs within the five-second drain
+deadline. A prompt sent while the server is stopping is refused and not
+recorded. Each admitted prompt receives a terminal assistant message with the
+actual ending cause, written by the turn that admitted it. Cancelling before
+the assistant starts leaves an empty cancelled assistant message in the
+transcript and prevents that turn from being restored on the next start.
+Undoing (`/undo`) an injected restore prompt before its turn ran drops that
+restore.
 
 ```sh
 hya serve start                 # start the daemon of the default database (or find it)

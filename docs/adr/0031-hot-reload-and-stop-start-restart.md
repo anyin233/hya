@@ -36,9 +36,10 @@ Three rules replace the handoff.
    next turn sees the new catalog. A source that fails to load keeps its last
    published state.
 2. **A binary change is `stop` then `start`.** `hya serve stop` drains: it
-   cancels every active turn and waits for the server run registry to empty,
-   within the same drain deadline. This includes admitted requests still
-   preparing to spawn their engine turn. The store's event writer atomically indexes each
+   refuses new server runs, cancels every active turn, and waits for the
+   server run registry to empty, within the same drain deadline. A run
+   reserved before the stop began admits nothing once it has begun. The
+   store's event writer atomically indexes each
    assistant `MessageFinished { Cancelled, Shutdown }` in `pending_resume` for
    a non-archived root session, even when shutdown interrupted turn preparation
    before its assistant message started. Any assistant start deletes that row.
@@ -57,8 +58,9 @@ Three rules replace the handoff.
    starts the turn on the next launch without injecting a second prompt for
    that interruption. A second graceful stop is a new interruption and receives
    its own prompt. An ordinary assistant turn also clears a pending restore.
-   Missing, child, or archived sessions, and rows whose interrupted message was
-   removed by revert, lose their rows; a session's restore failure
+   Missing, child, or archived sessions, rows whose interrupted message was
+   removed by revert, and rows whose injected restore prompt was reverted
+   (`/undo`) lose their rows; a session's restore failure
    is logged with its id and does not block other sessions or server startup.
    The model decides what to redo.
 
@@ -95,19 +97,31 @@ that already ran. A partial answer is therefore retained in replay. Use the
 normal turn cancellation operation (or `hya serve stop` for shutdown); no
 additional configuration is needed.
 
-Every admitted turn closes with an assistant `MessageStarted` and
-`MessageFinished` pair, including cancellation or failure during preparation
-or refusal by a draining engine. Admission is determined from the folded log:
-the latest user message has no subsequent assistant message. Internal turns
-without an unanswered admitted prompt do not receive a synthetic pair. A turn
-the user cancels before its assistant starts therefore leaves an empty cancelled
-assistant message in the transcript, with cause `UserCancel`, and clears any
-pending restore. For example, cancelling a restored turn while its sidecar is
-starting prevents the next `hya serve start` from restoring it again.
+A prompt is owned by the turn that admitted it, and that turn closes it with
+an assistant `MessageStarted` and `MessageFinished` pair however it ends:
+cancellation or failure during preparation, refusal by a draining engine, or a
+drain deadline that closes the turn on its behalf. Ownership is explicit: the
+turn request carries the id of the prompt it admitted
+(`run_turn_with_external_dirs_and_guidance(.., admitted_prompt)`), and only
+such a turn emits a pair for a message that never started. A turn that admitted
+nothing (a second caller queued behind the owner, an internal turn, a turn
+after a background message) never answers a prompt, so one prompt never gets
+two answers. A turn the user cancels before its assistant starts therefore
+leaves an empty cancelled assistant message in the transcript, with cause
+`UserCancel`, and clears any pending restore. For example, cancelling a
+restored turn while its sidecar is starting prevents the next
+`hya serve start` from restoring it again.
+
+The server prepares a turn first (agent, guidance, external directories,
+attachment checks) and commits nothing until preparation succeeded; a failed
+preparation admits no prompt. It then reserves the session's run and hands it
+to a detached task that admits the prompt (or injects the restore prompt) and
+runs the turn that owns it. The HTTP handler only waits for the admission, so a
+client that disconnects cannot leave a committed prompt without its owner.
 
 `AppState::stop_for_restart(deadline: Duration) -> Result<TurnDrainReport,
-CoreError>` drains engine turns and waits for server runs against one shared
-deadline. The existing HTTP `POST /v1/sessions/{id}/turns/{turn}/cancel` operation
+CoreError>` refuses new server runs, drains engine turns, and waits for server
+runs against one shared deadline. The existing HTTP `POST /v1/sessions/{id}/turns/{turn}/cancel` operation
 and `MessageFinished { role: Assistant, finish, cause, tokens }` event contract
 are unchanged. A shutdown finish retains cause `Shutdown`; a preparation error
 closes with finish `Error` and its `Error { failed_message, code, message }` event.

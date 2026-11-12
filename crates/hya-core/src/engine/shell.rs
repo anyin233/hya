@@ -231,9 +231,11 @@ impl SessionEngine {
         let caller_cancel = cancel;
         let cancel = lease.bind_cancel(&caller_cancel);
         let message = MessageId::new();
-        lease.set_message(message);
+        lease.set_message(message, false);
         let prepare = async {
             self.admit_shell_user_message(session).await?;
+            // From here the turn owns the note it admitted.
+            lease.set_message(message, true);
             let projection = self.store.read_projection(session).await?;
             let workdir = session_workdir(agent, &projection);
             let binding = tokio::select! {

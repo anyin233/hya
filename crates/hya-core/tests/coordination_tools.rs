@@ -256,6 +256,7 @@ async fn a_narrow_bundle_member_reads_its_dm_and_reports_after_its_lead_mails_it
             &[],
             None,
             None,
+            None,
         )
         .await
         .unwrap();

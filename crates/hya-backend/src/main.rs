@@ -266,7 +266,7 @@ async fn cmd_exec(
         ));
         (task, done_tx)
     });
-    engine
+    let prompt = engine
         .admit_user_prompt(session, prompt)
         .await
         .context("admit prompt")?;
@@ -274,7 +274,15 @@ async fn cmd_exec(
     let (turn, stop) = run_until_stopped(
         &built,
         &cancel,
-        engine.run_turn(session, &agent, cancel.clone()),
+        engine.run_turn_with_external_dirs_and_guidance(
+            session,
+            &agent,
+            cancel.clone(),
+            &[],
+            None,
+            None,
+            Some(prompt),
+        ),
     )
     .await?;
     // End of the run: nothing may keep streaming after `exec` returns. Every

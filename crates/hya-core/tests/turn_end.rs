@@ -335,19 +335,36 @@ impl RuntimeCatalogRefresh for BindGate {
     }
 }
 
+/// Run the turn that owns `prompt`, which its caller admitted.
+async fn run_prompt(
+    engine: &SessionEngine,
+    session: SessionId,
+    agent: &AgentSpec,
+    prompt: MessageId,
+) -> Result<FinishReason, CoreError> {
+    engine
+        .run_turn_with_external_dirs_and_guidance(
+            session,
+            agent,
+            CancellationToken::new(),
+            &[],
+            None,
+            None,
+            Some(prompt),
+        )
+        .await
+}
+
 async fn stop_during_bind(
     engine: Arc<SessionEngine>,
     agent: AgentSpec,
     session: SessionId,
+    prompt: MessageId,
     gate: Arc<BindGate>,
 ) {
     let turn = {
         let engine = engine.clone();
-        tokio::spawn(async move {
-            engine
-                .run_turn(session, &agent, CancellationToken::new())
-                .await
-        })
+        tokio::spawn(async move { run_prompt(&engine, session, &agent, prompt).await })
     };
     tokio::time::timeout(Duration::from_secs(5), gate.entered.notified())
         .await
@@ -397,6 +414,13 @@ async fn drain_refusal_does_not_synthesize_an_answer_without_an_admitted_prompt(
     let (engine, agent, _) = engine_with_script().await;
     let empty = make_session(&engine, None, "hya-main").await;
     let answered = make_session(&engine, None, "hya-main").await;
+    // A prompt another caller admitted: a turn that does not own it never
+    // answers it, even when it is the unanswered tail of the log.
+    let unowned = make_session(&engine, None, "hya-main").await;
+    engine
+        .admit_user_prompt(unowned, "someone else's".into())
+        .await
+        .unwrap();
     engine
         .admit_user_prompt(answered, "done".into())
         .await
@@ -406,8 +430,9 @@ async fn drain_refusal_does_not_synthesize_an_answer_without_an_admitted_prompt(
         .await
         .unwrap();
     let before = engine.replay(answered).await.unwrap();
+    let unowned_before = engine.replay(unowned).await.unwrap();
     engine.begin_drain(FinishCause::Shutdown);
-    for session in [empty, answered] {
+    for session in [empty, answered, unowned] {
         assert_eq!(
             engine
                 .run_turn(session, &agent, CancellationToken::new())
@@ -426,6 +451,7 @@ async fn drain_refusal_does_not_synthesize_an_answer_without_an_admitted_prompt(
             .is_empty()
     );
     assert_eq!(engine.replay(answered).await.unwrap(), before);
+    assert_eq!(engine.replay(unowned).await.unwrap(), unowned_before);
     assert!(
         engine
             .store()
@@ -443,6 +469,7 @@ async fn pending_prompt(engine: &SessionEngine, session: SessionId) -> String {
         .await
         .unwrap()
         .unwrap()
+        .1
         .into_iter()
         .find_map(|envelope| match envelope.event {
             Event::TextDelta { delta, .. } => Some(delta),
@@ -455,24 +482,22 @@ async fn pending_prompt(engine: &SessionEngine, session: SessionId) -> String {
 async fn restart_regression_stop_before_assistant_start_restores_the_turn() {
     let (engine, agent, provider) = engine_with_script().await;
     let session = make_session(&engine, None, "hya-main").await;
-    engine
+    let prompt = engine
         .admit_user_prompt(session, "work".into())
         .await
         .unwrap();
     let gate = Arc::new(BindGate::default());
     let engine =
         Arc::new(next_engine(&engine, provider.clone()).with_catalog_refresh(gate.clone()));
-    stop_during_bind(engine.clone(), agent.clone(), session, gate).await;
+    stop_during_bind(engine.clone(), agent.clone(), session, prompt, gate).await;
     assert_eq!(
         engine.store().list_pending_resumes().await.unwrap().len(),
         1
     );
     let next = next_engine(&engine, provider.clone());
-    assert!(next.inject_restart_prompt(session).await.unwrap());
+    let restore = next.inject_restart_prompt(session).await.unwrap().unwrap();
     assert_eq!(
-        next.run_turn(session, &agent, CancellationToken::new())
-            .await
-            .unwrap(),
+        run_prompt(&next, session, &agent, restore).await.unwrap(),
         FinishReason::Stop
     );
     assert_eq!(restore_prompt_count(&next, session).await, 1);
@@ -491,20 +516,21 @@ async fn restart_regression_second_stop_before_restored_assistant_start_is_a_new
     let gate = Arc::new(BindGate::default());
     let second =
         Arc::new(next_engine(&engine, provider.clone()).with_catalog_refresh(gate.clone()));
-    assert!(second.inject_restart_prompt(session).await.unwrap());
+    let restore = second
+        .inject_restart_prompt(session)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(restore_prompt_count(&second, session).await, 1);
-    stop_during_bind(second.clone(), agent.clone(), session, gate).await;
+    stop_during_bind(second.clone(), agent.clone(), session, restore, gate).await;
     assert_eq!(
         second.store().list_pending_resumes().await.unwrap().len(),
         1
     );
     let third = next_engine(&second, provider);
-    assert!(third.inject_restart_prompt(session).await.unwrap());
+    let restore = third.inject_restart_prompt(session).await.unwrap().unwrap();
     assert_eq!(
-        third
-            .run_turn(session, &agent, CancellationToken::new())
-            .await
-            .unwrap(),
+        run_prompt(&third, session, &agent, restore).await.unwrap(),
         FinishReason::Stop
     );
     assert_eq!(restore_prompt_count(&third, session).await, 2);
@@ -528,18 +554,23 @@ async fn restart_crash_after_injection_starts_the_turn_without_another_prompt() 
         .unwrap();
     stop_mid_turn(engine.clone(), agent.clone(), session, &provider).await;
     let second = next_engine(&engine, provider.clone());
-    assert!(second.inject_restart_prompt(session).await.unwrap());
+    let injected = second
+        .inject_restart_prompt(session)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(restore_prompt_count(&second, session).await, 1);
     // No shutdown finish is emitted: this process died before starting a turn.
     drop(second);
     let third = next_engine(&engine, provider.clone());
-    assert!(third.inject_restart_prompt(session).await.unwrap());
+    assert_eq!(
+        third.inject_restart_prompt(session).await.unwrap(),
+        Some(injected),
+        "the next start answers the prompt the dead process injected"
+    );
     assert_eq!(restore_prompt_count(&third, session).await, 1);
     assert_eq!(
-        third
-            .run_turn(session, &agent, CancellationToken::new())
-            .await
-            .unwrap(),
+        run_prompt(&third, session, &agent, injected).await.unwrap(),
         FinishReason::Stop
     );
     assert_eq!(provider.streams_for(session), 2);
@@ -593,7 +624,7 @@ impl SidecarHandle for StartingSidecar {
 async fn restart_during_sidecar_start_emits_a_shutdown_pair_and_restore() {
     let (engine, agent, provider) = engine_with_script().await;
     let session = make_session(&engine, None, "hya-main").await;
-    engine
+    let prompt = engine
         .admit_user_prompt(session, "work".into())
         .await
         .unwrap();
@@ -603,11 +634,7 @@ async fn restart_during_sidecar_start_emits_a_shutdown_pair_and_restore() {
         Arc::new(next_engine(&engine, provider.clone()).with_sidecar_environment(sidecar.clone()));
     let turn = {
         let engine = engine.clone();
-        tokio::spawn(async move {
-            engine
-                .run_turn(session, &agent, CancellationToken::new())
-                .await
-        })
+        tokio::spawn(async move { run_prompt(&engine, session, &agent, prompt).await })
     };
     tokio::time::timeout(Duration::from_secs(5), sidecar.entered.notified())
         .await
@@ -634,7 +661,7 @@ async fn restart_during_sidecar_start_emits_a_shutdown_pair_and_restore() {
 async fn restart_deadline_closes_a_prestart_turn_while_sidecar_cleanup_is_blocked() {
     let (engine, agent, provider) = engine_with_script().await;
     let session = make_session(&engine, None, "hya-main").await;
-    engine
+    let prompt = engine
         .admit_user_prompt(session, "work".into())
         .await
         .unwrap();
@@ -642,11 +669,7 @@ async fn restart_deadline_closes_a_prestart_turn_while_sidecar_cleanup_is_blocke
     let engine = Arc::new(next_engine(&engine, provider).with_sidecar_environment(sidecar.clone()));
     let turn = {
         let engine = engine.clone();
-        tokio::spawn(async move {
-            engine
-                .run_turn(session, &agent, CancellationToken::new())
-                .await
-        })
+        tokio::spawn(async move { run_prompt(&engine, session, &agent, prompt).await })
     };
     tokio::time::timeout(Duration::from_secs(5), sidecar.entered.notified())
         .await
@@ -713,7 +736,7 @@ async fn restart_during_shell_binding_emits_a_shutdown_pair_and_restore() {
 async fn user_cancel_during_runtime_binding_keeps_its_assistant_finish() {
     let (engine, agent, provider) = engine_with_script().await;
     let session = make_session(&engine, None, "hya-main").await;
-    engine
+    let prompt = engine
         .admit_user_prompt(session, "work".into())
         .await
         .unwrap();
@@ -721,11 +744,7 @@ async fn user_cancel_during_runtime_binding_keeps_its_assistant_finish() {
     let engine = Arc::new(next_engine(&engine, provider).with_catalog_refresh(gate.clone()));
     let turn = {
         let engine = engine.clone();
-        tokio::spawn(async move {
-            engine
-                .run_turn(session, &agent, CancellationToken::new())
-                .await
-        })
+        tokio::spawn(async move { run_prompt(&engine, session, &agent, prompt).await })
     };
     tokio::time::timeout(Duration::from_secs(5), gate.entered.notified())
         .await
@@ -753,12 +772,12 @@ async fn user_cancel_during_runtime_binding_keeps_its_assistant_finish() {
 async fn restart_while_waiting_to_begin_a_turn_still_records_the_interruption() {
     let (engine, agent, _) = engine_with_script().await;
     let session = make_session(&engine, None, "hya-main").await;
-    engine
+    let prompt = engine
         .admit_user_prompt(session, "work".into())
         .await
         .unwrap();
     let lease = engine.try_begin_turn(session).unwrap();
-    let turn = engine.run_turn(session, &agent, CancellationToken::new());
+    let turn = run_prompt(&engine, session, &agent, prompt);
     tokio::pin!(turn);
     assert!(futures::poll!(&mut turn).is_pending());
     engine.begin_drain(FinishCause::Shutdown);
@@ -797,7 +816,7 @@ async fn restart_regression_ordinary_turn_discards_an_uninjected_restore() {
             .is_empty()
     );
     let next = next_engine(&ordinary, provider);
-    assert!(!next.inject_restart_prompt(session).await.unwrap());
+    assert!(next.inject_restart_prompt(session).await.unwrap().is_none());
     assert_eq!(restore_prompt_count(&next, session).await, 0);
 }
 
@@ -1079,15 +1098,12 @@ async fn drain_closes_every_session_turn_with_a_cause() {
         "the lead stays on the roster"
     );
 
-    // Draining refuses execution, but still closes an admitted prompt.
-    engine
+    // Draining refuses execution, but still closes the prompt the turn owns.
+    let prompt = engine
         .admit_user_prompt(root, "again".to_string())
         .await
         .unwrap();
-    let refused = engine
-        .run_turn(root, &agent, CancellationToken::new())
-        .await
-        .unwrap();
+    let refused = run_prompt(&engine, root, &agent, prompt).await.unwrap();
     assert_eq!(refused, FinishReason::Cancelled);
     let finishes = assistant_finishes(&engine.replay(root).await.unwrap(), root);
     assert_eq!(finishes.len(), 2);

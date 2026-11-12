@@ -8,8 +8,10 @@
 //! [`CoreError::TurnAlreadyActive`] (non-blocking claims) or waits for the
 //! active turn to end (queued `run_turn*` calls). Separate sessions — team
 //! members, subagents — hold separate leases and stream concurrently.
-//! A refused turn may still close an admitted prompt with an empty assistant
-//! start/finish pair, without executing or acquiring a lease.
+//! A turn that admitted its prompt owns it: a refused turn closes that prompt
+//! with an empty assistant start/finish pair without executing or acquiring a
+//! lease, and a lease records the ownership so a closer acting for the turn
+//! (drain deadline, stop deadline) can do the same.
 //!
 //! When a lease is released the gate wakes queued `run_turn*` callers and
 //! notifies the installed [`TurnBoundaryObserver`] (the resident supervisor),
@@ -75,6 +77,8 @@ struct ActiveTurn {
     cancel: CancellationToken,
     cause: Option<FinishCause>,
     message: Option<MessageId>,
+    /// `message` answers a prompt this turn admitted.
+    answers_prompt: bool,
     message_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -124,6 +128,7 @@ impl TurnGate {
                 cancel: CancellationToken::new(),
                 cause: None,
                 message: None,
+                answers_prompt: false,
                 message_lock: Arc::default(),
             },
         );
@@ -203,6 +208,15 @@ impl TurnGate {
             .active
             .get(&session)
             .and_then(|turn| turn.message)
+    }
+
+    /// Whether `message` is the active turn's answer to a prompt that turn
+    /// admitted: only then may a closer emit a start for it.
+    pub(crate) fn answers_prompt(&self, session: SessionId, message: MessageId) -> bool {
+        self.state()
+            .active
+            .get(&session)
+            .is_some_and(|turn| turn.message == Some(message) && turn.answers_prompt)
     }
 
     /// Serialize assistant start with deadline-driven terminalization.
@@ -360,12 +374,14 @@ pub struct TurnLease {
 impl TurnLease {
     /// Register the message before fallible preparation, so a drain can close
     /// this turn even if preparation or sidecar cleanup misses its deadline.
-    pub(crate) fn set_message(&self, message: MessageId) {
+    /// `answers_prompt`: the turn admitted the prompt `message` answers.
+    pub(crate) fn set_message(&self, message: MessageId, answers_prompt: bool) {
         let mut state = self.gate.state();
         if let Some(turn) = state.active.get_mut(&self.session)
             && turn.id == self.id
         {
             turn.message = Some(message);
+            turn.answers_prompt = answers_prompt;
         }
     }
 

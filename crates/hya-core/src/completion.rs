@@ -376,11 +376,20 @@ impl IterationExecutor for LeadTurnExecutor {
         directive: &str,
         cancel: &CancellationToken,
     ) -> Result<String, CoreError> {
-        self.engine
+        let prompt = self
+            .engine
             .admit_user_prompt(self.session, directive.to_string())
             .await?;
         self.engine
-            .run_turn(self.session, &self.agent, cancel.clone())
+            .run_turn_with_external_dirs_and_guidance(
+                self.session,
+                &self.agent,
+                cancel.clone(),
+                &[],
+                None,
+                None,
+                Some(prompt),
+            )
             .await?;
         let projection = self.engine.read_projection(self.session).await?;
         Ok(render_transcript(&projection))

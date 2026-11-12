@@ -219,6 +219,7 @@ async fn team(provider: Arc<ScriptProvider>) -> Team {
             &[],
             None,
             None,
+            None,
         )
         .await
         .unwrap();
