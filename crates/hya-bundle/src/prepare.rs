@@ -6,25 +6,69 @@ use sha2::{Digest, Sha256};
 
 use crate::error::BundleError;
 use crate::model::{
-    BundleIdentity, ChannelParticipantRole, ChannelScope, ChannelTemplateKind, PreparedAgent,
-    PreparedAgentBundle, PreparedAgentSetBundle, PreparedApi, PreparedBundleApis,
-    PreparedBundleIndex, PreparedBundlePermissionModes, PreparedBundleProcess,
+    Bundle, ChannelParticipantRole, ChannelScope, ChannelTemplateKind, PreparedAgent, PreparedApi,
+    PreparedBundleApis, PreparedBundleIndex, PreparedBundlePermissionModes, PreparedBundleProcess,
     PreparedBundleSchemas, PreparedCatalog, PreparedChannelParticipant, PreparedChannelTemplate,
-    PreparedCheck, PreparedDocument, PreparedDocumentOwned, PreparedInstallableBundle,
-    PreparedPermissionMode, PreparedPluginBundle, PreparedProcessExtension, PreparedResource,
-    PreparedSchema, PreparedTuiExtension, PreparedWorkflow, PreparedWorkflowBundle,
+    PreparedCheck, PreparedPermissionMode, PreparedProcessExtension, PreparedResource,
+    PreparedSchema, PreparedTuiExtension, PreparedWorkflow,
 };
 use crate::source::{
-    BundleSource, ParsedSource, SourceAgent, SourceAgentManifest, SourceAgentSetManifest,
-    SourceExtensions, SourceFile, SourceManifest, SourceMcpServer, SourcePluginManifest,
-    SourceResource, SourceResources, SourceTuiExtension, SourceWorkflowManifest,
+    BundleSource, ParsedSource, SourceAgent, SourceExtensions, SourceFile, SourceManifest,
+    SourceMcpServer, SourceResource, SourceResources, SourceTuiExtension,
 };
 
-const AGENT_SOURCE_KIND: &str = "AgentBundle";
-const AGENT_SET_SOURCE_KIND: &str = "AgentSetBundle";
-const WORKFLOW_SOURCE_KIND: &str = "WorkflowBundle";
-const PLUGIN_SOURCE_KIND: &str = "Plugin";
-const PREPARED_FORMAT_VERSION: u32 = 3;
+const PREPARED_FORMAT_VERSION: u32 = 4;
+
+/// Read manifest identity before preparing resources or starting providers.
+pub fn read_bundle_identity(root: &std::path::Path) -> Result<(String, String), BundleError> {
+    let yaml = root.join("bundle.yaml");
+    let path = if yaml.exists() {
+        yaml
+    } else {
+        root.join("bundle.hya.md")
+    };
+    let text = std::fs::read_to_string(&path).map_err(|error| BundleError::Io {
+        path: path.display().to_string(),
+        detail: error.to_string(),
+    })?;
+    let manifest_text = if path.extension().is_some_and(|ext| ext == "md") {
+        split_markdown(&text)
+            .ok_or_else(|| BundleError::InvalidManifest {
+                source_name: path.display().to_string(),
+                detail: "bundle.hya.md requires YAML frontmatter".into(),
+            })?
+            .0
+    } else {
+        &text
+    };
+    // Shadowing depends only on identity claims. Invalid declarations in an
+    // ignored source must neither start a provider nor produce a refresh error.
+    let invalid = |detail: String| BundleError::InvalidManifest {
+        source_name: path.display().to_string(),
+        detail,
+    };
+    let manifest: serde_json::Value =
+        serde_norway::from_str(manifest_text).map_err(|error| invalid(error.to_string()))?;
+    let kind = manifest["kind"]
+        .as_str()
+        .ok_or_else(|| invalid("kind must be a string".into()))?;
+    if kind != "Bundle" {
+        return Err(BundleError::WrongKind {
+            source_name: path.display().to_string(),
+            found: kind.to_string(),
+        });
+    }
+    let id = manifest["identity"]["id"]
+        .as_str()
+        .ok_or_else(|| invalid("identity.id must be a string".into()))?;
+    let namespace = match manifest.get("namespace") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(value)) => Some(value.clone()),
+        Some(_) => return Err(invalid("namespace must be a string".into())),
+    };
+    let namespace = resolve_namespace(id, id, &namespace)?;
+    Ok((id.to_string(), namespace))
+}
 fn prepared_check(check: &crate::source::SourceCheck) -> PreparedCheck {
     PreparedCheck {
         command: check.command.clone(),
@@ -43,88 +87,15 @@ fn prepared_check(check: &crate::source::SourceCheck) -> PreparedCheck {
 /// Returns a typed error when the source, Workflow graph, Agent closure,
 /// resources, or canonical prepared representation is invalid.
 pub fn prepare_package(source: BundleSource) -> Result<PreparedCatalog, BundleError> {
-    prepare_sources(vec![source])
-}
-
-fn prepare_sources(sources: Vec<BundleSource>) -> Result<PreparedCatalog, BundleError> {
-    let mut parsed = sources
-        .into_iter()
-        .map(parse_source)
-        .collect::<Result<Vec<_>, _>>()?;
-    parsed.sort_by(|left, right| {
-        manifest_identity(&left.manifest)
-            .id
-            .cmp(&manifest_identity(&right.manifest).id)
-    });
-
-    let mut bundle_ids = BTreeSet::new();
-    let mut stable_agent_ids = BTreeSet::new();
-    let mut bundles = Vec::with_capacity(parsed.len());
-    let mut schemas = Vec::new();
-    let mut process_extensions = Vec::new();
-    let mut apis = Vec::new();
-    let mut permission_modes = Vec::new();
-    for source in parsed {
-        let bundle_id = manifest_identity(&source.manifest).id.clone();
-        if !bundle_ids.insert(bundle_id.clone()) {
-            return Err(BundleError::DuplicateBundleId { bundle_id });
-        }
-        let (bundle, bundle_schemas, process, bundle_apis, bundle_modes) =
-            prepare_bundle(source, &mut stable_agent_ids)?;
-        if !bundle_modes.is_empty() {
-            permission_modes.push(PreparedBundlePermissionModes {
-                bundle_id: bundle.identity().id.clone(),
-                modes: bundle_modes,
-            });
-        }
-        if !bundle_apis.is_empty() {
-            apis.push(PreparedBundleApis {
-                bundle_id: bundle.identity().id.clone(),
-                apis: bundle_apis,
-            });
-        }
-        if !bundle_schemas.is_empty() {
-            schemas.push(PreparedBundleSchemas {
-                bundle_id: bundle.identity().id.clone(),
-                schemas: bundle_schemas,
-            });
-        }
-        if let Some(process) = process {
-            process_extensions.push(PreparedBundleProcess {
-                bundle_id: bundle.identity().id.clone(),
-                process,
-            });
-        }
-        bundles.push(bundle);
-    }
-    resolve_catalog_references(&mut bundles)?;
-    validate_prepared_references(&bundles)?;
-    validate_native_binary_bindings(&bundles, &process_extensions)?;
-
-    let index = build_index(&bundles);
-    let bytes = serde_json::to_vec(&PreparedDocument {
-        format_version: PREPARED_FORMAT_VERSION,
-        bundles: &bundles,
-        index: &index,
-        schemas: schemas.clone(),
-        extensions_process: process_extensions.clone(),
-        apis: apis.clone(),
-        permission_modes: permission_modes.clone(),
-    })
-    .map_err(|error| BundleError::PreparedEncode {
+    let source = parse_source(source)?;
+    let mut bundle = prepare_bundle(source, &mut BTreeSet::new())?;
+    resolve_catalog_references(std::slice::from_mut(&mut bundle))?;
+    let bytes = serde_json::to_vec(&bundle).map_err(|error| BundleError::PreparedEncode {
         detail: error.to_string(),
     })?;
     let digest = digest_bytes(&bytes);
-    Ok(PreparedCatalog {
-        bundles,
-        index,
-        schemas,
-        process_extensions,
-        apis,
-        permission_modes,
-        bytes,
-        digest,
-    })
+    // Decode through the same boundary validation as installed packages.
+    PreparedCatalog::decode(&bytes, &digest)
 }
 
 impl PreparedCatalog {
@@ -158,18 +129,11 @@ impl PreparedCatalog {
                 found: format.format_version,
             });
         }
-        let document: PreparedDocumentOwned =
+        let bundle: Bundle =
             serde_json::from_slice(bytes).map_err(|error| BundleError::PreparedDecode {
                 detail: error.to_string(),
             })?;
-        if !is_strictly_sorted(
-            document
-                .bundles
-                .iter()
-                .map(|bundle| bundle.identity().id.as_str()),
-        ) {
-            return Err(BundleError::NonCanonicalPreparedCatalog);
-        }
+        let document = catalog_from_bundle(bundle, bytes.to_vec(), expected_digest.to_string());
         for bundle in &document.bundles {
             if !prepared_bundle_is_canonical(bundle) {
                 return Err(BundleError::NonCanonicalPreparedCatalog);
@@ -183,41 +147,68 @@ impl PreparedCatalog {
         }
         validate_prepared_references(&document.bundles)?;
         validate_prepared_schema_rows(&document.bundles, &document.schemas)?;
-        validate_prepared_process_rows(&document.bundles, &document.extensions_process)?;
-        validate_native_binary_bindings(&document.bundles, &document.extensions_process)?;
+        validate_prepared_process_rows(&document.bundles, &document.process_extensions)?;
+        validate_native_binary_bindings(&document.bundles, &document.process_extensions)?;
         validate_prepared_api_rows(
             &document.bundles,
-            &document.extensions_process,
+            &document.process_extensions,
             &document.apis,
         )?;
         validate_prepared_permission_mode_rows(
             &document.bundles,
-            &document.extensions_process,
+            &document.process_extensions,
             &document.permission_modes,
         )?;
-        let expected_index = build_index(&document.bundles);
-        if expected_index != document.index {
-            return Err(BundleError::PreparedIndexMismatch);
-        }
-        Ok(Self {
-            bundles: document.bundles,
-            index: document.index,
-            schemas: document.schemas,
-            process_extensions: document.extensions_process,
-            apis: document.apis,
-            permission_modes: document.permission_modes,
-            bytes: bytes.to_vec(),
-            digest: expected_digest.to_string(),
-        })
+        Ok(document)
     }
 }
 
-fn manifest_identity(manifest: &SourceManifest) -> &BundleIdentity {
-    match manifest {
-        SourceManifest::Agent(manifest) => &manifest.identity,
-        SourceManifest::AgentSet(manifest) => &manifest.identity,
-        SourceManifest::Workflow(manifest) => &manifest.identity,
-        SourceManifest::Plugin(manifest) => &manifest.identity,
+fn catalog_from_bundle(bundle: Bundle, bytes: Vec<u8>, digest: String) -> PreparedCatalog {
+    let id = bundle.identity.id.clone();
+    let schemas = if bundle.schemas.is_empty() {
+        vec![]
+    } else {
+        vec![PreparedBundleSchemas {
+            bundle_id: id.clone(),
+            schemas: bundle.schemas.clone(),
+        }]
+    };
+    let process_extensions = bundle
+        .process
+        .clone()
+        .map(|process| PreparedBundleProcess {
+            bundle_id: id.clone(),
+            process,
+        })
+        .into_iter()
+        .collect();
+    let apis = if bundle.apis.is_empty() {
+        vec![]
+    } else {
+        vec![PreparedBundleApis {
+            bundle_id: id.clone(),
+            apis: bundle.apis.clone(),
+        }]
+    };
+    let permission_modes = if bundle.permission_modes.is_empty() {
+        vec![]
+    } else {
+        vec![PreparedBundlePermissionModes {
+            bundle_id: id,
+            modes: bundle.permission_modes.clone(),
+        }]
+    };
+    let bundles = vec![bundle];
+    let index = build_index(&bundles);
+    PreparedCatalog {
+        bundles,
+        index,
+        schemas,
+        process_extensions,
+        apis,
+        permission_modes,
+        bytes,
+        digest,
     }
 }
 
@@ -225,12 +216,7 @@ fn resolve_version_reference(
     manifest: &mut SourceManifest,
     source_name: &str,
 ) -> Result<(), BundleError> {
-    let (version_ref, identity) = match manifest {
-        SourceManifest::Agent(manifest) => (&mut manifest.version_ref, &mut manifest.identity),
-        SourceManifest::AgentSet(manifest) => (&mut manifest.version_ref, &mut manifest.identity),
-        SourceManifest::Workflow(manifest) => (&mut manifest.version_ref, &mut manifest.identity),
-        SourceManifest::Plugin(manifest) => (&mut manifest.version_ref, &mut manifest.identity),
-    };
+    let (version_ref, identity) = (&mut manifest.version_ref, &mut manifest.identity);
     let Some(version_ref) = version_ref.take() else {
         return Ok(());
     };
@@ -250,7 +236,7 @@ fn resolve_version_reference(
     Ok(())
 }
 
-fn prepared_bundle_is_canonical(bundle: &PreparedInstallableBundle) -> bool {
+fn prepared_bundle_is_canonical(bundle: &Bundle) -> bool {
     let common = validate_identity(&bundle.identity().id, &bundle.identity().version).is_ok()
         && resources_are_canonical(bundle, "tool", bundle.tools())
         && resources_are_canonical(bundle, "skill", bundle.skills())
@@ -265,35 +251,22 @@ fn prepared_bundle_is_canonical(bundle: &PreparedInstallableBundle) -> bool {
     if !common {
         return false;
     }
-    match bundle {
-        PreparedInstallableBundle::Agent(bundle) => {
-            bundle.format_version == PREPARED_FORMAT_VERSION
-        }
-        PreparedInstallableBundle::AgentSet(bundle) => {
-            bundle.format_version == PREPARED_FORMAT_VERSION
-                && (!bundle.agents.is_empty() || !bundle.channels.is_empty())
-                && is_strictly_sorted(bundle.agents.iter().map(|agent| agent.id.as_str()))
-                && channels_are_canonical(
-                    &bundle.channels,
-                    &bundle
-                        .agents
-                        .iter()
-                        .map(|agent| agent.id.as_str())
-                        .collect::<BTreeSet<_>>(),
-                )
-        }
-        PreparedInstallableBundle::Workflow(bundle) => {
-            bundle.format_version == PREPARED_FORMAT_VERSION
-                && is_strictly_sorted(bundle.agents.iter().map(|agent| agent.id.as_str()))
-                && valid_workflow_identifier(&bundle.workflow.id)
-                && is_canonical_workflow_path(&bundle.workflow.source_path)
-                && is_hex_digest(&bundle.workflow.source_digest)
-                && is_hex_digest(&bundle.workflow.compiler_revision)
-        }
-        PreparedInstallableBundle::Plugin(bundle) => {
-            bundle.format_version == PREPARED_FORMAT_VERSION
-        }
-    }
+    bundle.format_version == PREPARED_FORMAT_VERSION
+        && is_strictly_sorted(bundle.agents.iter().map(|agent| agent.id.as_str()))
+        && channels_are_canonical(
+            &bundle.channels,
+            &bundle
+                .agents
+                .iter()
+                .map(|agent| agent.id.as_str())
+                .collect(),
+        )
+        && bundle.workflow.as_ref().is_none_or(|workflow| {
+            valid_workflow_identifier(&workflow.id)
+                && is_canonical_workflow_path(&workflow.source_path)
+                && is_hex_digest(&workflow.source_digest)
+                && is_hex_digest(&workflow.compiler_revision)
+        })
 }
 
 fn agent_is_canonical(agent: &PreparedAgent) -> bool {
@@ -303,7 +276,7 @@ fn agent_is_canonical(agent: &PreparedAgent) -> bool {
         && is_strictly_sorted(agent.resource_view.deny.iter().map(String::as_str))
 }
 
-fn validate_prepared_references(bundles: &[PreparedInstallableBundle]) -> Result<(), BundleError> {
+fn validate_prepared_references(bundles: &[Bundle]) -> Result<(), BundleError> {
     let mut stable_agents = BTreeSet::new();
     let mut agent_references = BTreeSet::new();
     let mut resource_references = BTreeSet::new();
@@ -394,8 +367,8 @@ fn validate_prepared_references(bundles: &[PreparedInstallableBundle]) -> Result
                 bundle.skills(),
             )?;
         }
-        if let PreparedInstallableBundle::Workflow(workflow) = bundle {
-            validate_prepared_workflow(workflow)?;
+        if let Some(workflow) = &bundle.workflow {
+            validate_prepared_workflow(bundle, workflow)?;
         }
     }
     Ok(())
@@ -490,7 +463,7 @@ fn is_valid_scheme_token(scheme: &str) -> bool {
 /// rows strictly sorted by bundle id, every row naming a bundle in the
 /// document, and every row's declarations valid against that bundle's tools.
 fn validate_prepared_schema_rows(
-    bundles: &[PreparedInstallableBundle],
+    bundles: &[Bundle],
     rows: &[PreparedBundleSchemas],
 ) -> Result<(), BundleError> {
     if !is_strictly_sorted(rows.iter().map(|row| row.bundle_id.as_str())) {
@@ -705,7 +678,7 @@ fn is_valid_api_id(id: &str) -> bool {
 /// declarations canonical (valid, non-overlapping, strictly sorted by id,
 /// schema files resolving to the bundle's declared extension files).
 fn validate_prepared_api_rows(
-    bundles: &[PreparedInstallableBundle],
+    bundles: &[Bundle],
     processes: &[PreparedBundleProcess],
     rows: &[PreparedBundleApis],
 ) -> Result<(), BundleError> {
@@ -878,7 +851,7 @@ fn is_valid_permission_mode_id(id: &str) -> bool {
 /// bundle in the document, and every row's declarations canonical (valid,
 /// strictly sorted by id, backed by the bundle's process and hook).
 fn validate_prepared_permission_mode_rows(
-    bundles: &[PreparedInstallableBundle],
+    bundles: &[Bundle],
     processes: &[PreparedBundleProcess],
     rows: &[PreparedBundlePermissionModes],
 ) -> Result<(), BundleError> {
@@ -924,7 +897,7 @@ fn validate_prepared_permission_mode_rows(
 /// prepared catalog: rows strictly sorted by bundle id, every row naming a
 /// bundle in the document, and every declaration carrying a usable command.
 fn validate_prepared_process_rows(
-    bundles: &[PreparedInstallableBundle],
+    bundles: &[Bundle],
     rows: &[PreparedBundleProcess],
 ) -> Result<(), BundleError> {
     if !is_strictly_sorted(rows.iter().map(|row| row.bundle_id.as_str())) {
@@ -943,7 +916,7 @@ fn validate_prepared_process_rows(
 }
 
 fn validate_native_binary_bindings(
-    bundles: &[PreparedInstallableBundle],
+    bundles: &[Bundle],
     rows: &[PreparedBundleProcess],
 ) -> Result<(), BundleError> {
     for bundle in bundles {
@@ -995,20 +968,24 @@ fn validate_process_command(command: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn resources_are_canonical(
-    bundle: &PreparedInstallableBundle,
-    kind: &str,
-    resources: &[PreparedResource],
-) -> bool {
+fn resources_are_canonical(bundle: &Bundle, kind: &str, resources: &[PreparedResource]) -> bool {
     let mut names = BTreeSet::new();
     is_strictly_sorted(resources.iter().map(|resource| resource.local_id.as_str()))
         && resources.iter().all(|resource| {
-            resource.stable_id
+            (resource.stable_id
                 == format!(
                     "bundle:{}/{kind}/{}",
                     bundle.identity().id,
                     resource.local_id
                 )
+                || (kind == "extension"
+                    && resource.binary_base64.is_some()
+                    && resource.stable_id
+                        == format!(
+                            "bundle:{}/library/{}",
+                            bundle.identity().id,
+                            resource.local_id
+                        )))
                 && is_strictly_sorted(resource.aliases.iter().map(String::as_str))
                 && names.insert(resource.local_id.as_str())
                 && resource
@@ -1018,9 +995,7 @@ fn resources_are_canonical(
         })
 }
 
-fn validate_prepared_content_digests(
-    bundle: &PreparedInstallableBundle,
-) -> Result<(), BundleError> {
+fn validate_prepared_content_digests(bundle: &Bundle) -> Result<(), BundleError> {
     for agent in bundle.agents() {
         validate_prepared_agent_content(&bundle.identity().id, agent)?;
     }
@@ -1100,9 +1075,7 @@ fn validate_prepared_agent_content(
     Ok(())
 }
 
-fn resolve_catalog_references(
-    bundles: &mut [PreparedInstallableBundle],
-) -> Result<(), BundleError> {
+fn resolve_catalog_references(bundles: &mut [Bundle]) -> Result<(), BundleError> {
     for bundle in bundles.iter_mut() {
         let bundle_id = bundle.identity().id.clone();
         let mut local_resources: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -1136,32 +1109,13 @@ fn resolve_catalog_references(
             .chain(bundle.extensions())
             .map(|resource| resource.stable_id.clone())
             .collect::<BTreeSet<_>>();
-        match bundle {
-            PreparedInstallableBundle::Agent(bundle) => resolve_agents(
-                &bundle_id,
-                std::slice::from_mut(&mut bundle.agent),
-                &resources,
-                &local_resources,
-                &hook_resources,
-            )?,
-            PreparedInstallableBundle::AgentSet(bundle) => resolve_agents(
-                &bundle_id,
-                &mut bundle.agents,
-                &resources,
-                &local_resources,
-                &hook_resources,
-            )?,
-            PreparedInstallableBundle::Workflow(bundle) => resolve_agents(
-                &bundle_id,
-                &mut bundle.agents,
-                &resources,
-                &local_resources,
-                &hook_resources,
-            )?,
-            // Plugins have no agent references to resolve. Their digest was
-            // already computed during preparation (including native payloads).
-            PreparedInstallableBundle::Plugin(_) => continue,
-        }
+        resolve_agents(
+            &bundle_id,
+            &mut bundle.agents,
+            &resources,
+            &local_resources,
+            &hook_resources,
+        )?;
         set_bundle_digest(bundle)?;
     }
     Ok(())
@@ -1287,133 +1241,47 @@ fn parse_source(source: BundleSource) -> Result<ParsedSource, BundleError> {
     let files = collect_files(&name, source_files)?;
     let yaml = files.get("bundle.yaml");
     let markdown = files.get("bundle.hya.md");
-    let (mut manifest, markdown_prompt) =
-        match (yaml, markdown) {
-            (Some(_), Some(_)) => {
-                return Err(BundleError::InvalidManifest {
-                    source_name: name,
-                    detail: "source contains both bundle.yaml and bundle.hya.md".to_string(),
-                });
-            }
-            (Some(bytes), None) => (parse_yaml_manifest(&name, bytes)?, None),
-            (None, Some(bytes)) => {
-                let text =
-                    std::str::from_utf8(bytes).map_err(|error| BundleError::InvalidManifest {
-                        source_name: name.clone(),
-                        detail: format!("bundle.hya.md is not UTF-8: {error}"),
-                    })?;
-                let (frontmatter, body) =
-                    split_markdown(text).ok_or_else(|| BundleError::InvalidManifest {
-                        source_name: name.clone(),
-                        detail: "bundle.hya.md requires YAML frontmatter".to_string(),
-                    })?;
-                let kind = serde_norway::from_str::<crate::source::SourceKind>(frontmatter)
-                    .map_err(|error| BundleError::InvalidManifest {
-                        source_name: name.clone(),
-                        detail: error.to_string(),
-                    })?;
-                if kind.kind != AGENT_SOURCE_KIND {
-                    return Err(BundleError::InvalidManifest {
-                        source_name: name,
-                        detail: format!("{} sources must use explicit bundle.yaml", kind.kind),
-                    });
-                }
-                let manifest = serde_norway::from_str::<SourceAgentManifest>(frontmatter).map_err(
-                    |error| BundleError::InvalidManifest {
-                        source_name: name.clone(),
-                        detail: error.to_string(),
-                    },
-                )?;
-                (
-                    SourceManifest::Agent(Box::new(manifest)),
-                    Some(body.trim().to_string()),
-                )
-            }
-            (None, None) => {
-                return Err(BundleError::UnsupportedSource { source_name: name });
-            }
-        };
+    let (mut manifest, markdown_prompt) = match (yaml, markdown) {
+        (Some(_), Some(_)) => {
+            return Err(BundleError::InvalidManifest {
+                source_name: name,
+                detail: "source contains both bundle.yaml and bundle.hya.md".to_string(),
+            });
+        }
+        (Some(bytes), None) => (parse_yaml_manifest(&name, bytes)?, None),
+        (None, Some(bytes)) => {
+            let text =
+                std::str::from_utf8(bytes).map_err(|error| BundleError::InvalidManifest {
+                    source_name: name.clone(),
+                    detail: format!("bundle.hya.md is not UTF-8: {error}"),
+                })?;
+            let (frontmatter, body) =
+                split_markdown(text).ok_or_else(|| BundleError::InvalidManifest {
+                    source_name: name.clone(),
+                    detail: "bundle.hya.md requires YAML frontmatter".to_string(),
+                })?;
+            (
+                parse_yaml_manifest(&name, frontmatter.as_bytes())?,
+                Some(body.trim().to_string()),
+            )
+        }
+        (None, None) => {
+            return Err(BundleError::UnsupportedSource { source_name: name });
+        }
+    };
 
     resolve_version_reference(&mut manifest, &name)?;
 
-    if let SourceManifest::Agent(manifest) = &manifest {
-        for (present, key, guidance) in [
-            (
-                manifest.api_version.is_some(),
-                "api_version",
-                "delete it; the AgentBundle manifest is no longer versioned",
-            ),
-            (
-                manifest.agents.is_some(),
-                "agents",
-                "a bundle defines exactly one agent: replace the `agents:` list with a single `agent:` map",
-            ),
-            (
-                manifest.agent.harness_access.is_some(),
-                "harness_access",
-                "the tool plane is host-controlled: a bundle agent always gets the internal public tools plus its own bundle resources",
-            ),
-        ] {
-            if present {
-                return Err(BundleError::RemovedManifestKey {
-                    source_name: name,
-                    key: key.to_string(),
-                    guidance: guidance.to_string(),
-                });
-            }
-        }
-        if manifest.kind != AGENT_SOURCE_KIND {
-            return Err(BundleError::WrongKind {
-                source_name: name,
-                found: manifest.kind.clone(),
-            });
-        }
-    } else {
-        match &manifest {
-            SourceManifest::AgentSet(manifest) if manifest.kind != AGENT_SET_SOURCE_KIND => {
-                return Err(BundleError::WrongKind {
-                    source_name: name,
-                    found: manifest.kind.clone(),
-                });
-            }
-            SourceManifest::Workflow(manifest) if manifest.kind != WORKFLOW_SOURCE_KIND => {
-                return Err(BundleError::WrongKind {
-                    source_name: name,
-                    found: manifest.kind.clone(),
-                });
-            }
-            SourceManifest::Plugin(manifest) if manifest.kind != PLUGIN_SOURCE_KIND => {
-                return Err(BundleError::WrongKind {
-                    source_name: name,
-                    found: manifest.kind.clone(),
-                });
-            }
-            _ => {}
-        }
-    }
-
-    let markdown_prompt = match (&manifest, markdown_prompt) {
-        (SourceManifest::Agent(manifest), Some(body))
-            if body.is_empty() && manifest.agent.prompt.is_some() =>
-        {
-            None
-        }
-        (_, prompt) => prompt,
-    };
-    if let (SourceManifest::Agent(manifest), Some(_)) = (&manifest, markdown_prompt.as_ref())
-        && manifest.agent.prompt.is_some()
+    let markdown_prompt = markdown_prompt.filter(|body| !body.is_empty());
+    if markdown_prompt.is_some()
+        && (manifest.agents.len() != 1 || manifest.agents[0].prompt.is_some())
     {
         return Err(BundleError::InvalidManifest {
             source_name: name,
-            detail: "bundle.hya.md uses its body as the agent prompt, so the agent must not also name a prompt resource".to_string(),
+            detail: "a Markdown body requires exactly one agent without an explicit prompt".into(),
         });
     }
-    if let Some(check) = match &manifest {
-        SourceManifest::Agent(m) => m.check.as_ref(),
-        SourceManifest::AgentSet(m) => m.check.as_ref(),
-        SourceManifest::Workflow(m) => m.check.as_ref(),
-        SourceManifest::Plugin(m) => m.check.as_ref(),
-    } {
+    if let Some(check) = &manifest.check {
         check.validate(&name)?;
     }
     Ok(ParsedSource {
@@ -1424,46 +1292,18 @@ fn parse_source(source: BundleSource) -> Result<ParsedSource, BundleError> {
 }
 
 fn parse_yaml_manifest(name: &str, bytes: &[u8]) -> Result<SourceManifest, BundleError> {
-    let kind = serde_norway::from_slice::<crate::source::SourceKind>(bytes).map_err(|error| {
-        BundleError::InvalidManifest {
+    let manifest: SourceManifest =
+        serde_norway::from_slice(bytes).map_err(|error| BundleError::InvalidManifest {
             source_name: name.to_string(),
             detail: error.to_string(),
-        }
-    })?;
-    match kind.kind.as_str() {
-        AGENT_SOURCE_KIND => serde_norway::from_slice::<SourceAgentManifest>(bytes)
-            .map(Box::new)
-            .map(SourceManifest::Agent)
-            .map_err(|error| BundleError::InvalidManifest {
-                source_name: name.to_string(),
-                detail: error.to_string(),
-            }),
-        AGENT_SET_SOURCE_KIND => serde_norway::from_slice::<SourceAgentSetManifest>(bytes)
-            .map(Box::new)
-            .map(SourceManifest::AgentSet)
-            .map_err(|error| BundleError::InvalidManifest {
-                source_name: name.to_string(),
-                detail: error.to_string(),
-            }),
-        WORKFLOW_SOURCE_KIND => serde_norway::from_slice::<SourceWorkflowManifest>(bytes)
-            .map(Box::new)
-            .map(SourceManifest::Workflow)
-            .map_err(|error| BundleError::InvalidManifest {
-                source_name: name.to_string(),
-                detail: error.to_string(),
-            }),
-        PLUGIN_SOURCE_KIND => serde_norway::from_slice::<SourcePluginManifest>(bytes)
-            .map(Box::new)
-            .map(SourceManifest::Plugin)
-            .map_err(|error| BundleError::InvalidManifest {
-                source_name: name.to_string(),
-                detail: error.to_string(),
-            }),
-        found => Err(BundleError::WrongKind {
+        })?;
+    if manifest.kind != "Bundle" {
+        return Err(BundleError::WrongKind {
             source_name: name.to_string(),
-            found: found.to_string(),
-        }),
+            found: manifest.kind,
+        });
     }
+    Ok(manifest)
 }
 
 fn collect_files(
@@ -1526,65 +1366,6 @@ fn split_markdown(content: &str) -> Option<(&str, &str)> {
     ))
 }
 
-fn prepare_bundle(
-    source: ParsedSource,
-    stable_agent_ids: &mut BTreeSet<String>,
-) -> Result<PreparedBundleParts, BundleError> {
-    match source.manifest {
-        SourceManifest::Agent(manifest) => prepare_agent_bundle(
-            source.files,
-            source.markdown_prompt,
-            *manifest,
-            stable_agent_ids,
-        ),
-        SourceManifest::AgentSet(manifest) => {
-            prepare_agent_set_bundle(source.files, *manifest, stable_agent_ids)
-        }
-        SourceManifest::Workflow(manifest) => {
-            prepare_workflow_bundle(source.files, *manifest, stable_agent_ids)
-        }
-        SourceManifest::Plugin(manifest) => prepare_plugin_bundle(source.files, *manifest),
-    }
-}
-
-fn prepare_plugin_bundle(
-    files: BTreeMap<String, Vec<u8>>,
-    manifest: SourcePluginManifest,
-) -> Result<PreparedBundleParts, BundleError> {
-    let check = manifest.check.as_ref().map(prepared_check);
-    let bundle_id = manifest.identity.id.clone();
-    validate_identity(&bundle_id, &manifest.identity.version)?;
-    let namespace = resolve_namespace(&bundle_id, &manifest.identity, &manifest.namespace)?;
-    validate_unsupported(&bundle_id, &manifest.extensions)?;
-    let process = declared_process_extension(&bundle_id, &manifest.extensions)?;
-    let (tools, skills, mcp, hooks, extensions) =
-        prepare_resource_sets(&bundle_id, &files, manifest.resources, manifest.extensions)?;
-    let tui = prepare_tui(&bundle_id, manifest.tui.as_ref(), &extensions)?;
-    let schemas = validate_declared_schemas(&bundle_id, &manifest.schemas, &tools)?;
-    let apis = validate_declared_apis(&bundle_id, &manifest.apis, process.as_ref(), &extensions)?;
-    let permission_modes = validate_declared_permission_modes(
-        &bundle_id,
-        &manifest.permission_modes,
-        process.as_ref(),
-        &hooks,
-    )?;
-    let mut bundle = PreparedInstallableBundle::Plugin(Box::new(PreparedPluginBundle {
-        format_version: PREPARED_FORMAT_VERSION,
-        check,
-        identity: manifest.identity,
-        namespace,
-        digest: String::new(),
-        tui,
-        tools,
-        skills,
-        mcp,
-        hooks,
-        extensions,
-    }));
-    set_bundle_digest(&mut bundle)?;
-    Ok((bundle, schemas, process, apis, permission_modes))
-}
-
 /// Reserved namespace tokens that contributed sources may not claim.
 const RESERVED_NAMESPACES: [&str; 4] = ["mcp", "harness", "builtin", "plugin"];
 
@@ -1616,9 +1397,9 @@ fn validate_namespace_token(namespace: &str) -> Result<(), String> {
 /// [`BundleError::InvalidNamespace`] when the result is not a valid token.
 fn resolve_namespace(
     source_name: &str,
-    identity: &crate::model::BundleIdentity,
+    identity_id: &str,
     declared: &Option<String>,
-) -> Result<Option<String>, BundleError> {
+) -> Result<String, BundleError> {
     let invalid = |namespace: &str, guidance: String| {
         Err(BundleError::InvalidNamespace {
             source_name: source_name.to_string(),
@@ -1628,15 +1409,13 @@ fn resolve_namespace(
     };
     let namespace = match declared {
         // An explicit empty declaration means "use the identity default".
-        Some(value) if value.is_empty() => identity
-            .id
+        Some(value) if value.is_empty() => identity_id
             .rsplit('/')
             .next()
             .unwrap_or_default()
             .to_string(),
         Some(value) => value.clone(),
-        None => identity
-            .id
+        None => identity_id
             .rsplit('/')
             .next()
             .unwrap_or_default()
@@ -1650,19 +1429,26 @@ fn resolve_namespace(
         };
         return invalid(&namespace, guidance);
     }
-    Ok(Some(namespace))
+    Ok(namespace)
 }
 
-fn prepare_agent_bundle(
-    files: BTreeMap<String, Vec<u8>>,
-    markdown_prompt: Option<String>,
-    manifest: SourceAgentManifest,
+fn prepare_bundle(
+    source: ParsedSource,
     stable_agent_ids: &mut BTreeSet<String>,
-) -> Result<PreparedBundleParts, BundleError> {
+) -> Result<Bundle, BundleError> {
+    let ParsedSource {
+        files,
+        manifest,
+        markdown_prompt,
+    } = source;
     let check = manifest.check.as_ref().map(prepared_check);
     let bundle_id = manifest.identity.id.clone();
     validate_identity(&bundle_id, &manifest.identity.version)?;
-    let namespace = resolve_namespace(&bundle_id, &manifest.identity, &manifest.namespace)?;
+    let namespace = Some(resolve_namespace(
+        &bundle_id,
+        &manifest.identity.id,
+        &manifest.namespace,
+    )?);
     validate_unsupported(&bundle_id, &manifest.extensions)?;
     let process = declared_process_extension(&bundle_id, &manifest.extensions)?;
     let (tools, skills, mcp, hooks, extensions) =
@@ -1676,66 +1462,20 @@ fn prepare_agent_bundle(
         process.as_ref(),
         &hooks,
     )?;
-    let agent = prepare_agent(
-        &bundle_id,
-        &files,
-        markdown_prompt.as_deref(),
-        manifest.agent,
-        stable_agent_ids,
-    )?;
-    validate_resource_views(&bundle_id, &agent, &tools, &skills)?;
-    let mut bundle = PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
-        format_version: PREPARED_FORMAT_VERSION,
-        check,
-        identity: manifest.identity,
-        namespace,
-        digest: String::new(),
-        tui,
-        agent,
-        tools,
-        skills,
-        mcp,
-        hooks,
-        extensions,
-    }));
-    set_bundle_digest(&mut bundle)?;
-    Ok((bundle, schemas, process, apis, permission_modes))
-}
-
-fn prepare_agent_set_bundle(
-    files: BTreeMap<String, Vec<u8>>,
-    manifest: SourceAgentSetManifest,
-    stable_agent_ids: &mut BTreeSet<String>,
-) -> Result<PreparedBundleParts, BundleError> {
-    let check = manifest.check.as_ref().map(prepared_check);
-    let bundle_id = manifest.identity.id.clone();
-    validate_identity(&bundle_id, &manifest.identity.version)?;
-    let namespace = resolve_namespace(&bundle_id, &manifest.identity, &manifest.namespace)?;
-    validate_unsupported(&bundle_id, &manifest.extensions)?;
-    let process = declared_process_extension(&bundle_id, &manifest.extensions)?;
-    let (tools, skills, mcp, hooks, extensions) =
-        prepare_resource_sets(&bundle_id, &files, manifest.resources, manifest.extensions)?;
-    let tui = prepare_tui(&bundle_id, manifest.tui.as_ref(), &extensions)?;
-    let schemas = validate_declared_schemas(&bundle_id, &manifest.schemas, &tools)?;
-    let apis = validate_declared_apis(&bundle_id, &manifest.apis, process.as_ref(), &extensions)?;
-    let permission_modes = validate_declared_permission_modes(
-        &bundle_id,
-        &manifest.permission_modes,
-        process.as_ref(),
-        &hooks,
-    )?;
-    if manifest.agents.is_empty() && manifest.channels.is_empty() {
-        return Err(BundleError::InvalidManifest {
-            source_name: bundle_id,
-            detail: "AgentSetBundle must declare at least one agent or channel template"
-                .to_string(),
-        });
-    }
     let mut source_agents = manifest.agents;
     source_agents.sort_by(|left, right| left.id.cmp(&right.id));
     let mut agents = Vec::with_capacity(source_agents.len());
     let mut local_agent_ids = BTreeSet::new();
     for source_agent in source_agents {
+        if manifest.workflow.is_some()
+            && let Some(prompt) = &source_agent.prompt
+            && !normalize_source_path(&bundle_id, prompt)?.starts_with("prompts/")
+        {
+            return Err(BundleError::InvalidManifest {
+                source_name: bundle_id.clone(),
+                detail: "Workflow Agent prompt paths must be under `prompts/`".to_string(),
+            });
+        }
         if source_agent.harness_access.is_some() {
             return Err(BundleError::RemovedManifestKey {
                 source_name: bundle_id.clone(),
@@ -1752,7 +1492,7 @@ fn prepare_agent_set_bundle(
         agents.push(prepare_agent(
             &bundle_id,
             &files,
-            None,
+            markdown_prompt.as_deref(),
             source_agent,
             stable_agent_ids,
         )?);
@@ -1762,7 +1502,11 @@ fn prepare_agent_set_bundle(
         validate_resource_views(&bundle_id, agent, &tools, &skills)?;
     }
     let channels = prepare_channel_templates(&bundle_id, manifest.channels, &local_agent_ids)?;
-    let mut bundle = PreparedInstallableBundle::AgentSet(Box::new(PreparedAgentSetBundle {
+    let workflow = manifest
+        .workflow
+        .map(|workflow| prepare_workflow(&bundle_id, &files, workflow, &agents))
+        .transpose()?;
+    let mut bundle = Bundle {
         format_version: PREPARED_FORMAT_VERSION,
         check,
         identity: manifest.identity,
@@ -1776,9 +1520,14 @@ fn prepare_agent_set_bundle(
         mcp,
         hooks,
         extensions,
-    }));
+        schemas: schemas.clone(),
+        process: process.clone(),
+        apis: apis.clone(),
+        permission_modes: permission_modes.clone(),
+        workflow,
+    };
     set_bundle_digest(&mut bundle)?;
-    Ok((bundle, schemas, process, apis, permission_modes))
+    Ok(bundle)
 }
 
 fn prepare_channel_templates(
@@ -1848,21 +1597,16 @@ fn is_strictly_ordered<T: Ord>(values: &[T]) -> bool {
     values.windows(2).all(|pair| pair[0] < pair[1])
 }
 
-fn prepare_workflow_bundle(
-    files: BTreeMap<String, Vec<u8>>,
-    manifest: SourceWorkflowManifest,
-    stable_agent_ids: &mut BTreeSet<String>,
-) -> Result<PreparedBundleParts, BundleError> {
-    let check = manifest.check.as_ref().map(prepared_check);
-    let bundle_id = manifest.identity.id.clone();
-    validate_identity(&bundle_id, &manifest.identity.version)?;
-    let namespace = resolve_namespace(&bundle_id, &manifest.identity, &manifest.namespace)?;
-    validate_unsupported(&bundle_id, &manifest.extensions)?;
-    let process = declared_process_extension(&bundle_id, &manifest.extensions)?;
-    let workflow_path = normalize_source_path(&bundle_id, &manifest.workflow.path)?;
+fn prepare_workflow(
+    bundle_id: &str,
+    files: &BTreeMap<String, Vec<u8>>,
+    workflow: crate::source::SourceWorkflow,
+    agents: &[PreparedAgent],
+) -> Result<PreparedWorkflow, BundleError> {
+    let workflow_path = normalize_source_path(bundle_id, &workflow.path)?;
     if !is_canonical_workflow_path(&workflow_path) {
         return Err(BundleError::InvalidManifest {
-            source_name: bundle_id.clone(),
+            source_name: bundle_id.to_string(),
             detail: "Workflow source path must match `workflows/*.hya.md`".to_string(),
         });
     }
@@ -1870,122 +1614,39 @@ fn prepare_workflow_bundle(
         files
             .get(&workflow_path)
             .ok_or_else(|| BundleError::MissingReference {
-                bundle_id: bundle_id.clone(),
+                bundle_id: bundle_id.to_string(),
                 path: workflow_path.clone(),
             })?;
     let workflow_source =
         std::str::from_utf8(workflow_bytes).map_err(|error| BundleError::InvalidManifest {
-            source_name: bundle_id.clone(),
+            source_name: bundle_id.to_string(),
             detail: format!("Workflow source `{workflow_path}` is not UTF-8: {error}"),
         })?;
     let compiled =
         compile(WorkflowSource::new(&workflow_path, workflow_source)).map_err(|error| {
             BundleError::WorkflowCompile {
-                bundle_id: bundle_id.clone(),
+                bundle_id: bundle_id.to_string(),
                 source_path: workflow_path.clone(),
                 detail: error.to_string(),
             }
         })?;
-    if manifest.workflow.id != compiled.definition().name() {
+    if workflow.id != compiled.definition().name() {
         return Err(BundleError::WorkflowIdMismatch {
-            bundle_id,
-            manifest_id: manifest.workflow.id,
+            bundle_id: bundle_id.to_string(),
+            manifest_id: workflow.id,
             compiled_id: compiled.definition().name().to_string(),
         });
     }
-    let (tools, skills, mcp, hooks, extensions) = prepare_resource_sets(
-        &manifest.identity.id,
-        &files,
-        manifest.resources,
-        manifest.extensions,
-    )?;
-    let tui = prepare_tui(&bundle_id, manifest.tui.as_ref(), &extensions)?;
-    let schemas = validate_declared_schemas(&manifest.identity.id, &manifest.schemas, &tools)?;
-    let apis = validate_declared_apis(
-        &manifest.identity.id,
-        &manifest.apis,
-        process.as_ref(),
-        &extensions,
-    )?;
-    let permission_modes = validate_declared_permission_modes(
-        &manifest.identity.id,
-        &manifest.permission_modes,
-        process.as_ref(),
-        &hooks,
-    )?;
-    let mut source_agents = manifest.agents;
-    for source_agent in &source_agents {
-        if let Some(prompt) = &source_agent.prompt {
-            let prompt_path = normalize_source_path(&manifest.identity.id, prompt)?;
-            if !is_canonical_prompt_path(&prompt_path) {
-                return Err(BundleError::InvalidManifest {
-                    source_name: manifest.identity.id.clone(),
-                    detail: "WorkflowBundle Agent prompt paths must be under `prompts/`"
-                        .to_string(),
-                });
-            }
-        }
-    }
-    source_agents.sort_by(|left, right| left.id.cmp(&right.id));
-    let mut agents = Vec::with_capacity(source_agents.len());
-    let mut local_agent_ids = BTreeSet::new();
-    for source_agent in source_agents {
-        if !local_agent_ids.insert(source_agent.id.clone()) {
-            return Err(BundleError::NamespaceCollision {
-                bundle_id: manifest.identity.id.clone(),
-                name: source_agent.id,
-            });
-        }
-        agents.push(prepare_agent(
-            &manifest.identity.id,
-            &files,
-            None,
-            source_agent,
-            stable_agent_ids,
-        )?);
-    }
-    agents.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
-    validate_workflow_agent_closure(&manifest.identity.id, &compiled, &agents)?;
-    for agent in &agents {
-        validate_resource_views(&manifest.identity.id, agent, &tools, &skills)?;
-    }
-    let mut bundle = PreparedInstallableBundle::Workflow(Box::new(PreparedWorkflowBundle {
-        format_version: PREPARED_FORMAT_VERSION,
-        check,
-        identity: manifest.identity,
-        namespace,
-        digest: String::new(),
-        tui,
-        workflow: PreparedWorkflow {
-            id: compiled.definition().name().to_string(),
-            source_path: workflow_path,
-            source: workflow_source.to_string(),
-            source_digest: digest_bytes(workflow_bytes),
-            compiler_revision: compiled.revision().to_string(),
-        },
-        agents,
-        tools,
-        skills,
-        mcp,
-        hooks,
-        extensions,
-    }));
-    set_bundle_digest(&mut bundle)?;
-    Ok((bundle, schemas, process, apis, permission_modes))
+    validate_workflow_agent_closure(bundle_id, &compiled, agents)?;
+    Ok(PreparedWorkflow {
+        id: compiled.definition().name().to_string(),
+        source_path: workflow_path,
+        source: workflow_source.to_string(),
+        source_digest: digest_bytes(workflow_bytes),
+        compiler_revision: compiled.revision().to_string(),
+    })
 }
 
-/// One prepared bundle plus its document-level sections: schema claims, the
-/// optional explicit process extension, HTTP endpoint declarations, and
-/// session permission modes.
-type PreparedBundleParts = (
-    PreparedInstallableBundle,
-    Vec<PreparedSchema>,
-    Option<PreparedProcessExtension>,
-    Vec<PreparedApi>,
-    Vec<PreparedPermissionMode>,
-);
-
-/// Prepared resource vectors in tool, Skill, MCP, hook, and extension order.
 type PreparedResourceSets = (
     Vec<PreparedResource>,
     Vec<PreparedResource>,
@@ -2246,27 +1907,29 @@ fn require_workflow_agent<'a>(
     Ok(())
 }
 
-fn validate_prepared_workflow(bundle: &PreparedWorkflowBundle) -> Result<(), BundleError> {
-    let compiled = compile(WorkflowSource::new(
-        &bundle.workflow.source_path,
-        &bundle.workflow.source,
-    ))
-    .map_err(|error| BundleError::WorkflowCompile {
-        bundle_id: bundle.identity.id.clone(),
-        source_path: bundle.workflow.source_path.clone(),
-        detail: error.to_string(),
-    })?;
-    if bundle.workflow.id != compiled.definition().name() {
+fn validate_prepared_workflow(
+    bundle: &Bundle,
+    workflow: &PreparedWorkflow,
+) -> Result<(), BundleError> {
+    let compiled =
+        compile(WorkflowSource::new(&workflow.source_path, &workflow.source)).map_err(|error| {
+            BundleError::WorkflowCompile {
+                bundle_id: bundle.identity.id.clone(),
+                source_path: workflow.source_path.clone(),
+                detail: error.to_string(),
+            }
+        })?;
+    if workflow.id != compiled.definition().name() {
         return Err(BundleError::WorkflowIdMismatch {
             bundle_id: bundle.identity.id.clone(),
-            manifest_id: bundle.workflow.id.clone(),
+            manifest_id: workflow.id.clone(),
             compiled_id: compiled.definition().name().to_string(),
         });
     }
-    if bundle.workflow.compiler_revision != compiled.revision().to_string() {
+    if workflow.compiler_revision != compiled.revision().to_string() {
         return Err(BundleError::PreparedContentDigestMismatch {
             bundle_id: bundle.identity.id.clone(),
-            source_path: bundle.workflow.source_path.clone(),
+            source_path: workflow.source_path.clone(),
         });
     }
     validate_workflow_agent_closure(&bundle.identity.id, &compiled, &bundle.agents)
@@ -2277,10 +1940,6 @@ fn is_canonical_workflow_path(path: &str) -> bool {
         return false;
     };
     !name.is_empty() && !name.contains('/') && name.ends_with(".hya.md")
-}
-fn is_canonical_prompt_path(path: &str) -> bool {
-    path.strip_prefix("prompts/")
-        .is_some_and(|name| !name.is_empty() && !name.split('/').any(|part| part.is_empty()))
 }
 
 fn valid_workflow_identifier(value: &str) -> bool {
@@ -2602,7 +2261,7 @@ fn read_text_reference(
     Ok(text.trim_end().to_string())
 }
 
-fn build_index(bundles: &[PreparedInstallableBundle]) -> Vec<PreparedBundleIndex> {
+fn build_index(bundles: &[Bundle]) -> Vec<PreparedBundleIndex> {
     bundles
         .iter()
         .map(|bundle| PreparedBundleIndex {
@@ -2622,7 +2281,7 @@ fn build_index(bundles: &[PreparedInstallableBundle]) -> Vec<PreparedBundleIndex
         .collect()
 }
 
-fn prepared_bundle_digest(bundle: &PreparedInstallableBundle) -> Result<String, BundleError> {
+fn prepared_bundle_digest(bundle: &Bundle) -> Result<String, BundleError> {
     let mut value = serde_json::to_value(bundle).map_err(|error| BundleError::PreparedEncode {
         detail: error.to_string(),
     })?;
@@ -2638,14 +2297,9 @@ fn prepared_bundle_digest(bundle: &PreparedInstallableBundle) -> Result<String, 
     Ok(digest_bytes(&bytes))
 }
 
-fn set_bundle_digest(bundle: &mut PreparedInstallableBundle) -> Result<(), BundleError> {
+fn set_bundle_digest(bundle: &mut Bundle) -> Result<(), BundleError> {
     let digest = prepared_bundle_digest(bundle)?;
-    match bundle {
-        PreparedInstallableBundle::Agent(bundle) => bundle.digest = digest,
-        PreparedInstallableBundle::AgentSet(bundle) => bundle.digest = digest,
-        PreparedInstallableBundle::Workflow(bundle) => bundle.digest = digest,
-        PreparedInstallableBundle::Plugin(bundle) => bundle.digest = digest,
-    }
+    bundle.digest = digest;
     Ok(())
 }
 

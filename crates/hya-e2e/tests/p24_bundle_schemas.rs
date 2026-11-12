@@ -29,7 +29,7 @@ fn materialized_package() -> PathBuf {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: AgentBundle
+                br#"kind: Bundle
 identity: { id: hya/schema-demo, version: 1.0.0, publisher: hya }
 schemas: [{ scheme: db, tool: query, writable: false }]
 resources:
@@ -40,10 +40,10 @@ extensions:
   files:
     - { id: runtime, path: runtime.py }
     - { id: mcp-runtime, path: mcp.py }
-agent:
-  id: schema-lead
-  role: main
-  resource_view: { allow: [query, 'harness:tool/read'] }
+agents:
+  - id: schema-lead
+    role: main
+    resource_view: { allow: [query, 'harness:tool/read'] }
 "#,
             ),
             SourceFile::new("tool.json", "{}"),

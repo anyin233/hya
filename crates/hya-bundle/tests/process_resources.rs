@@ -12,7 +12,7 @@ fn process_resources_accept_native_hooks_and_declared_support_files() {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Plugin
+                br#"kind: Bundle
 identity: { id: acme/process, version: 1.0.0, publisher: acme }
 extensions:
   process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
@@ -44,7 +44,7 @@ fn static_support_files_remain_inert_declared_assets() {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Plugin
+                br#"kind: Bundle
 identity: { id: acme/orphan, version: 1.0.0, publisher: acme }
 extensions:
   files: [{ id: orphan, path: orphan.py }]
@@ -70,7 +70,7 @@ fn native_process_bundle_packages_non_utf8_executable_bytes() {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Plugin
+                br#"kind: Bundle
 identity: { id: acme/native, version: 1.0.0, publisher: acme }
 extensions:
   rust: [{ id: provider, path: bin/provider }]
@@ -106,7 +106,7 @@ fn native_library_bundle_packages_raw_bytes_without_a_process() {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Plugin
+                br#"kind: Bundle
 identity: { id: hya/todo-tools, version: 1.0.0, publisher: hya }
 extensions:
   libraries: [{ id: runtime, path: native/libhya_todo_tools.dylib }]
@@ -134,7 +134,7 @@ fn process_backed_plugins_may_declare_chat_params_and_model_fallback_hooks() {
                 SourceFile::new(
                     "bundle.yaml",
                     format!(
-                        r#"kind: Plugin
+                        r#"kind: Bundle
 identity: {{ id: acme/router, version: 1.0.0, publisher: acme }}
 extensions:
 {process}  js: [{{ id: runtime, path: runtime.js }}]

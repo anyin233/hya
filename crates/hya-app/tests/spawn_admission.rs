@@ -11,8 +11,7 @@ use std::time::Duration;
 
 use hya_app::spawn_team_supervisor;
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-    PreparedInstallableBundle, ResourceView,
+    AgentRole, Bundle, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, ResourceView,
 };
 use hya_core::{
     AgentSpec, BoundSpawnSender, CategoryRegistry, CreateSession, EventBus, ResidentSupervisor,
@@ -1238,12 +1237,7 @@ async fn queued_spawn_uses_parent_turn_binding_after_catalog_publication() {
     let mut published_bundles = old_binding.bundle_catalog().bundles().to_vec();
     let quick = published_bundles
         .iter_mut()
-        .filter_map(|bundle| match bundle {
-            PreparedInstallableBundle::Agent(bundle) => Some(&mut bundle.agent),
-            PreparedInstallableBundle::AgentSet(_)
-            | PreparedInstallableBundle::Workflow(_)
-            | PreparedInstallableBundle::Plugin(_) => None,
-        })
+        .flat_map(|bundle| &mut bundle.agents)
         .find(|agent| agent.id.as_str() == "quick")
         .expect("quick agent in old prepared catalog");
     assert_eq!(quick.prompt.as_deref(), Some(OLD_QUICK_PROMPT));
@@ -2059,38 +2053,43 @@ const ROOT_ONLY_SPAWN_TARGET: &str = "root-only-helper";
 /// The harness plane is no longer part of the divergence: it is derived from
 /// origin, so every installed bundle agent here shares the clamped plane.
 fn nested_root_divergence_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegistry> {
-    let bundle = |stable_id: &str, role: AgentRole, prompt: &str, can_spawn: &[&str]| {
-        PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
-            check: None,
-            tui: None,
-            format_version: 3,
-            identity: BundleIdentity {
-                id: format!("hya/nested-root-divergence-{stable_id}"),
-                version: "0.0.0".to_string(),
-                publisher: "hya-tests".to_string(),
-            },
-            namespace: None,
-            digest: format!("test-only-{stable_id}"),
-            agent: PreparedAgent {
-                id: AgentName::new(stable_id),
-                description: None,
-                role,
-                color: None,
-                prompt: Some(prompt.to_string()),
-                prompt_source: None,
-                prompt_digest: None,
-                model_policy: ModelPolicy::default(),
-                workdir: None,
-                resource_view: ResourceView::default(),
-                can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
-                hook_refs: Vec::new(),
-            },
-            tools: Vec::new(),
-            skills: Vec::new(),
-            mcp: Vec::new(),
-            hooks: Vec::new(),
-            extensions: Vec::new(),
-        }))
+    let bundle = |stable_id: &str, role: AgentRole, prompt: &str, can_spawn: &[&str]| Bundle {
+        check: None,
+        tui: None,
+        format_version: 4,
+        identity: BundleIdentity {
+            id: format!("hya/nested-root-divergence-{stable_id}"),
+            version: "0.0.0".to_string(),
+            publisher: "hya-tests".to_string(),
+        },
+        namespace: None,
+        digest: format!("test-only-{stable_id}"),
+        agents: vec![PreparedAgent {
+            id: AgentName::new(stable_id),
+            description: None,
+            role,
+            color: None,
+            prompt: Some(prompt.to_string()),
+            prompt_source: None,
+            prompt_digest: None,
+            model_policy: ModelPolicy::default(),
+            workdir: None,
+            resource_view: ResourceView::default(),
+            can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
+            hook_refs: Vec::new(),
+        }],
+        tools: Vec::new(),
+        skills: Vec::new(),
+        mcp: Vec::new(),
+        hooks: Vec::new(),
+        extensions: Vec::new(),
+
+        workflow: None,
+        channels: vec![],
+        schemas: vec![],
+        process: None,
+        apis: vec![],
+        permission_modes: vec![],
     };
     let bundles = vec![
         // Root main: root-only can_spawn target.
@@ -2362,25 +2361,30 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
             ("quick", AgentRole::Subagent, &[][..]),
         ]
         .into_iter()
-        .map(|(stable_id, role, can_spawn)| {
-            PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
-                check: None,
-                tui: None,
-                format_version: 3,
-                identity: BundleIdentity {
-                    id: format!("hya/missing-root-def-{stable_id}"),
-                    version: "0.0.0".to_string(),
-                    publisher: "hya-tests".to_string(),
-                },
-                namespace: None,
-                digest: format!("test-only-{stable_id}"),
-                agent: agent(stable_id, role, can_spawn),
-                tools: Vec::new(),
-                skills: Vec::new(),
-                mcp: Vec::new(),
-                hooks: Vec::new(),
-                extensions: Vec::new(),
-            }))
+        .map(|(stable_id, role, can_spawn)| Bundle {
+            check: None,
+            tui: None,
+            format_version: 4,
+            identity: BundleIdentity {
+                id: format!("hya/missing-root-def-{stable_id}"),
+                version: "0.0.0".to_string(),
+                publisher: "hya-tests".to_string(),
+            },
+            namespace: None,
+            digest: format!("test-only-{stable_id}"),
+            agents: vec![agent(stable_id, role, can_spawn)],
+            tools: Vec::new(),
+            skills: Vec::new(),
+            mcp: Vec::new(),
+            hooks: Vec::new(),
+            extensions: Vec::new(),
+
+            workflow: None,
+            channels: vec![],
+            schemas: vec![],
+            process: None,
+            apis: vec![],
+            permission_modes: vec![],
         })
         .collect::<Vec<_>>();
         let catalog = BundleCatalog::from_prepared(&bundles).expect("missing-root catalog");

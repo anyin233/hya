@@ -1,4 +1,4 @@
-//! In-memory AgentBundle source trees and directory loaders.
+//! In-memory Bundle source trees and directory loaders.
 //!
 //! Runtime code should embed/decode [`crate::PreparedCatalog`] bytes instead of
 //! calling [`BundleSource::read_directory`] at process start.
@@ -47,7 +47,7 @@ impl SourceFile {
     }
 }
 
-/// Named collection of source files that prepare into one or more bundles.
+/// Named collection of source files that prepare into one complete Bundle.
 ///
 /// The `name` is diagnostic only (directory display path or package label).
 #[derive(Clone, Debug)]
@@ -144,13 +144,6 @@ fn collect_directory(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) -> Resul
     Ok(())
 }
 
-/// Minimal source-manifest discriminator used before strict kind parsing.
-#[derive(Debug, Deserialize)]
-pub(crate) struct SourceKind {
-    /// Manifest payload kind (`AgentBundle`, `AgentSetBundle`, `WorkflowBundle`, or `Plugin`).
-    pub kind: String,
-}
-
 /// A bundle-owned argv check run against the source tree before publication.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -183,51 +176,10 @@ impl SourceCheck {
     }
 }
 
+/// Strict source manifest shape for a closed Bundle.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct SourceAgentManifest {
-    /// Optional source-root self-check.
-    #[serde(default)]
-    pub check: Option<SourceCheck>,
-    pub kind: String,
-    /// Aggregate release version to resolve for this source manifest.
-    #[serde(default)]
-    pub version_ref: Option<String>,
-    pub identity: BundleIdentity,
-    /// Provider-facing namespace for this bundle's tools and schemas; the
-    /// identity name segment is the default.
-    #[serde(default)]
-    pub namespace: Option<String>,
-    /// External URI-scheme extensions this bundle provides.
-    #[serde(default)]
-    pub schemas: Vec<SourceSchema>,
-    #[serde(default)]
-    pub resources: SourceResources,
-    #[serde(default)]
-    pub extensions: SourceExtensions,
-    /// HTTP endpoints served by the explicit `extensions.process`.
-    #[serde(default)]
-    pub apis: Vec<SourceApi>,
-    /// Session permission modes approved by the explicit `extensions.process`.
-    #[serde(default)]
-    pub permission_modes: Vec<SourcePermissionMode>,
-    /// Optional bundle-owned frontend extension.
-    #[serde(default)]
-    pub tui: Option<SourceTuiExtension>,
-    /// The one Agent this bundle defines.
-    pub agent: SourceAgent,
-    /// Keys removed with the single-agent format. Captured only so prepare can
-    /// name them; `deny_unknown_fields` alone gives an unhelpful serde message.
-    #[serde(default)]
-    pub api_version: Option<IgnoredAny>,
-    #[serde(default)]
-    pub agents: Option<IgnoredAny>,
-}
-
-/// Strict source manifest shape for a closed AgentSetBundle.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SourceAgentSetManifest {
+pub(crate) struct SourceManifest {
     pub kind: String,
     /// Aggregate release version to resolve for this source manifest.
     #[serde(default)]
@@ -261,74 +213,9 @@ pub(crate) struct SourceAgentSetManifest {
     /// Channel policies/templates. Concrete channel ids are minted by the runtime.
     #[serde(default)]
     pub channels: Vec<PreparedChannelTemplate>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SourcePluginManifest {
-    pub kind: String,
-    /// Aggregate release version to resolve for this source manifest.
+    /// Optional packaged Workflow.
     #[serde(default)]
-    pub version_ref: Option<String>,
-    pub identity: BundleIdentity,
-    /// Optional source-root self-check.
-    #[serde(default)]
-    pub check: Option<SourceCheck>,
-    #[serde(default)]
-    pub namespace: Option<String>,
-    #[serde(default)]
-    pub schemas: Vec<SourceSchema>,
-    #[serde(default)]
-    pub resources: SourceResources,
-    #[serde(default)]
-    pub extensions: SourceExtensions,
-    /// HTTP endpoints served by the explicit `extensions.process`.
-    #[serde(default)]
-    pub apis: Vec<SourceApi>,
-    /// Session permission modes approved by the explicit `extensions.process`.
-    #[serde(default)]
-    pub permission_modes: Vec<SourcePermissionMode>,
-    /// Optional bundle-owned frontend extension.
-    #[serde(default)]
-    pub tui: Option<SourceTuiExtension>,
-}
-
-/// Strict source manifest shape for a WorkflowBundle.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SourceWorkflowManifest {
-    pub kind: String,
-    /// Aggregate release version to resolve for this source manifest.
-    #[serde(default)]
-    pub version_ref: Option<String>,
-    pub identity: BundleIdentity,
-    /// Optional source-root self-check.
-    #[serde(default)]
-    pub check: Option<SourceCheck>,
-    /// Provider-facing namespace for this bundle's tools and schemas; the
-    /// identity name segment is the default.
-    #[serde(default)]
-    pub namespace: Option<String>,
-    /// The one Workflow source declaration owned by this bundle.
-    pub workflow: SourceWorkflow,
-    /// Candidate Agent set from which the exact compiled closure is selected.
-    pub agents: Vec<SourceAgent>,
-    /// External URI-scheme extensions this bundle provides.
-    #[serde(default)]
-    pub schemas: Vec<SourceSchema>,
-    #[serde(default)]
-    pub resources: SourceResources,
-    #[serde(default)]
-    pub extensions: SourceExtensions,
-    /// HTTP endpoints served by the explicit `extensions.process`.
-    #[serde(default)]
-    pub apis: Vec<SourceApi>,
-    /// Session permission modes approved by the explicit `extensions.process`.
-    #[serde(default)]
-    pub permission_modes: Vec<SourcePermissionMode>,
-    /// Optional bundle-owned frontend extension.
-    #[serde(default)]
-    pub tui: Option<SourceTuiExtension>,
+    pub workflow: Option<SourceWorkflow>,
 }
 
 /// One `apis:` entry: an HTTP endpoint the bundle's explicit
@@ -382,7 +269,7 @@ pub(crate) struct SourceSchema {
     pub writable: bool,
 }
 
-/// Workflow source declaration in a WorkflowBundle manifest.
+/// Workflow source declaration in a Bundle manifest.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SourceWorkflow {
@@ -390,18 +277,6 @@ pub(crate) struct SourceWorkflow {
     pub id: String,
     /// Relative path to the Workflow Markdown document.
     pub path: String,
-}
-
-/// Strictly dispatched source manifest.
-#[derive(Debug)]
-pub(crate) enum SourceManifest {
-    /// Singular AgentBundle manifest.
-    Agent(Box<SourceAgentManifest>),
-    /// Closed AgentSetBundle manifest.
-    AgentSet(Box<SourceAgentSetManifest>),
-    Plugin(Box<SourcePluginManifest>),
-    /// WorkflowBundle manifest.
-    Workflow(Box<SourceWorkflowManifest>),
 }
 
 #[derive(Debug, Deserialize)]

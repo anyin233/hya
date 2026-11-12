@@ -47,7 +47,7 @@ const PUBLIC_RATIO_PREFLIGHT_LZMA2: [u8; 409] = [
 ];
 
 const PUBLIC_ARCHIVE_MANIFEST: &[u8] = br#"---
-kind: AgentBundle
+kind: Bundle
 identity:
   id: hya/archive-js
   version: 1.0.0
@@ -65,15 +65,15 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agent:
-  id: lead
-  role: main
-  resource_view:
-    allow:
-      - echo
-      - runtime
-  hook_refs:
-    - bundle:hya/archive-js/hook/event
+agents:
+  - id: lead
+    role: main
+    resource_view:
+      allow:
+        - echo
+        - runtime
+    hook_refs:
+      - bundle:hya/archive-js/hook/event
 ---
 Archive JS lead.
 "#;
@@ -244,7 +244,7 @@ fn public_archive_rejects_unreferenced_regular_file() {
 #[test]
 fn public_archive_rejects_ascii_case_colliding_paths() {
     let manifest = br#"---
-kind: AgentBundle
+kind: Bundle
 identity:
   id: hya/archive-case
   version: 1.0.0
@@ -255,13 +255,13 @@ resources:
       path: tools/echo.js
     - id: upper-echo
       path: Tools/Echo.js
-agent:
-  id: lead
-  role: main
-  resource_view:
-    allow:
-      - echo
-      - upper-echo
+agents:
+  - id: lead
+    role: main
+    resource_view:
+      allow:
+        - echo
+        - upper-echo
 ---
 Archive case lead.
 "#;
@@ -300,7 +300,7 @@ fn public_archive_rejects_wrapper_root() {
 #[test]
 fn public_archive_rejects_traversal_path() {
     let manifest = br#"---
-kind: AgentBundle
+kind: Bundle
 identity:
   id: hya/archive-traversal
   version: 1.0.0
@@ -309,12 +309,12 @@ resources:
   tools:
     - id: escape
       path: ../escape.js
-agent:
-  id: lead
-  role: main
-  resource_view:
-    allow:
-      - escape
+agents:
+  - id: lead
+    role: main
+    resource_view:
+      allow:
+        - escape
 ---
 Traversal lead.
 "#;
@@ -332,7 +332,7 @@ Traversal lead.
 #[test]
 fn public_archive_rejects_exact_duplicate_path() {
     let manifest = br#"---
-kind: AgentBundle
+kind: Bundle
 identity:
   id: hya/archive-duplicate
   version: 1.0.0
@@ -341,12 +341,12 @@ resources:
   tools:
     - id: echo
       path: tools/echo.js
-agent:
-  id: lead
-  role: main
-  resource_view:
-    allow:
-      - echo
+agents:
+  - id: lead
+    role: main
+    resource_view:
+      allow:
+        - echo
 ---
 Duplicate lead.
 "#;
@@ -696,21 +696,21 @@ fn strict_encoded_header_verifies_single_substream_crc() {
 /// cargo test -p hya-bundle --test package_inspection -- --ignored regenerate
 /// ```
 const FIXTURE_MANIFEST: &[u8] = br#"---
-kind: AgentBundle
+kind: Bundle
 identity:
   id: hya/valid-public
   version: 1.0.0
   publisher: hya
-agent:
-  id: valid-public-lead
-  role: main
+agents:
+  - id: valid-public-lead
+    role: main
 ---
 
 You are the valid public bundle lead.
 "#;
 
 const FIXTURE_JS_MANIFEST: &[u8] = br#"---
-kind: AgentBundle
+kind: Bundle
 identity:
   id: hya/archive-js
   version: 1.0.0
@@ -728,14 +728,14 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agent:
-  id: archive-js-lead
-  role: main
-  resource_view:
-    allow:
-      - echo
-  hook_refs:
-    - event
+agents:
+  - id: archive-js-lead
+    role: main
+    resource_view:
+      allow:
+        - echo
+    hook_refs:
+      - event
 ---
 
 Archive JS lead.

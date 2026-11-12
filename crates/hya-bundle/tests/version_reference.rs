@@ -9,7 +9,7 @@ fn resolves_backend_version_reference_in_bundle_source() {
         "version-reference",
         vec![SourceFile::new(
             "bundle.yaml",
-            "kind: Plugin\nversion_ref: backend\nidentity:\n  id: hya/version-reference\n  version: 0.0.0\n  publisher: hya\n",
+            "kind: Bundle\nversion_ref: backend\nidentity:\n  id: hya/version-reference\n  version: 0.0.0\n  publisher: hya\n",
         )],
     );
     let Ok(prepared) = prepare_package(source) else {

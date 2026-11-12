@@ -5,12 +5,12 @@
 //!
 //! ```json
 //! {
-//!   "manifest": "kind: Plugin\n...",
+//!   "manifest": "kind: Bundle\n...",
 //!   "files": [{ "path": "skills/review.md", "content": "…" }]
 //! }
 //! ```
 //!
-//! `manifest` is a complete hya `Plugin` or `AgentSetBundle` source manifest
+//! `manifest` is a complete hya `Plugin` or `Bundle` source manifest
 //! (`bundle.yaml`)
 //! whose `resources.*[].path` references the translated files; `files` carries
 //! those translated file contents verbatim. The Rust side materializes both
@@ -60,10 +60,10 @@ mod tests {
     #[test]
     fn parses_the_emit_envelope() {
         let emit = parse_manifest_emit(
-            r#"{"manifest": "kind: AgentBundle\n", "files": [{"path": "skills/a.md", "content": "A"}]}"#,
+            r#"{"manifest": "kind: Bundle\n", "files": [{"path": "skills/a.md", "content": "A"}]}"#,
         )
         .unwrap_or_else(|error| panic!("envelope must parse: {error}"));
-        assert_eq!(emit.manifest, "kind: AgentBundle\n");
+        assert_eq!(emit.manifest, "kind: Bundle\n");
         assert_eq!(emit.files.len(), 1);
         assert_eq!(emit.files[0].path, "skills/a.md");
         assert_eq!(emit.files[0].content, "A");

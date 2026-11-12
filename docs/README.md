@@ -43,15 +43,15 @@ If you want to compare hya with adjacent coding agents:
 
 1. [hya, Pi, and Compat Feature Comparison](hya-pi-compat-comparison.md)
 
-If you want to package a public Plugin, AgentBundle, AgentSetBundle, or WorkflowBundle:
+If you want to package a public Bundle:
 
 1. Run `hya bundle info -f example.hyabundle`, then
    `hya bundle install example.hyabundle`.
-2. Read [AgentBundle Authoring](agent-bundle-authoring.md) for agentless Plugin, singular or
-   multi-agent (`AgentSetBundle`) payloads, or [Workflows](workflows.md#packaging-a-workflowbundle) for one
-   Workflow plus its exact reachable Agent closure. Sources use exactly one
-   root form: `bundle.yaml` for all four kinds, or `bundle.hya.md` only for an
-   AgentBundle body prompt. Start from the
+2. Read [Bundle Authoring](agent-bundle-authoring.md) for resources and Agents,
+   or [Workflows](workflows.md#packaging-a-bundle) for a Workflow and its exact
+   reachable Agent closure. All use `kind: Bundle` with `agents[]`, optional
+   `workflow`, and `channels[]`. Use `bundle.yaml` with explicit prompt paths,
+   or `bundle.hya.md` with a body prompt for one Agent. Start from the
    [single-file static example](examples/bundle.hya.md), the
    [per-activation Bun example](examples/bun-transient/), the
    [resident Bun example](examples/bun-resident/), the
@@ -92,10 +92,10 @@ If you want to understand the codebase:
 | [OpenTUI frontend](tui.md) | Connect the terminal frontend to a backend, use its commands, and inspect its v1 contracts. |
 | [CLI Reference](cli.md) | Document the shipped `hya` commands, flags, and exit codes. |
 | [Skills](skills.md) | Skill discovery, authoring, and the trusted `hya/core-skills` bundle. |
-| [Workflows](workflows.md) | Workflow DAGs, governance, discovery, CLI/tool execution, and WorkflowBundle packaging. |
+| [Workflows](workflows.md) | Workflow DAGs, governance, discovery, CLI/tool execution, and Bundle packaging. |
 | [Plugin protocol](plugin-protocol.md) | Native stdio JSON-RPC ABI for out-of-process plugins. |
 | [Bundle-owned TUI extensions](tui-extensions.md) | `tui:` manifest, permissions, contributions, `/extensions`, wire contract, catalog files, sandbox and security. |
-| [AgentBundle Authoring](agent-bundle-authoring.md) | Package, inspect, install, list, describe, and uninstall public Plugin, AgentBundle, and AgentSetBundle payloads, including static and Bun-sidecar forms. |
+| [Bundle Authoring](agent-bundle-authoring.md) | Package, inspect, install, list, describe, and uninstall public Bundle payloads, including static and Bun-sidecar forms. |
 | [Bundle Runtime](bundle-runtime.md) | Packaged process/MCP startup, scoped tools/hooks, immutable bindings, and failure rollback. |
 | [Core agents](core-agents.md) | Trusted first-party agent preset and reserved-agent provenance. |
 | [Tool-family presets](base-tools.md) | Five trusted tool groups, exposure, aliases, and permission defaults. |

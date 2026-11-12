@@ -124,7 +124,7 @@ async fn fixture(
     let tools = ToolRegistry::builtins();
     let plugin = hya_bundle::prepare_package(hya_bundle::BundleSource::new(
         "registration-hooks",
-        vec![hya_bundle::SourceFile::new("bundle.yaml", "kind: Plugin\nidentity: { id: test/registration-hooks, version: 1.0.0, publisher: test }\n")],
+        vec![hya_bundle::SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: test/registration-hooks, version: 1.0.0, publisher: test }\n")],
     )).unwrap();
     let catalog = AgentCatalog::new(Arc::new(
         hya_bundle::BundleCatalog::from_verified_catalogs(&[&plugin]).unwrap(),

@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-    PreparedInstallableBundle, ResourceView,
+    AgentRole, Bundle, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, ResourceView,
 };
 use hya_proto::AgentName;
 use hya_tool::ToolRegistry;
@@ -16,9 +15,9 @@ pub(crate) fn runtime(tools: ToolRegistry) -> Arc<RuntimeRegistry> {
     // unit tests spawn.
     let bundles = ["resident", "reviewer"]
         .into_iter()
-        .map(|stable_id| PreparedAgentBundle {
+        .map(|stable_id| Bundle {
             check: None,
-            format_version: 3,
+            format_version: 4,
             identity: BundleIdentity {
                 id: format!("hya/core-unit-tests-{stable_id}"),
                 version: "0.0.0".to_string(),
@@ -26,7 +25,7 @@ pub(crate) fn runtime(tools: ToolRegistry) -> Arc<RuntimeRegistry> {
             },
             namespace: None,
             digest: format!("test-only-{stable_id}"),
-            agent: PreparedAgent {
+            agents: vec![PreparedAgent {
                 id: AgentName::new(stable_id),
                 description: None,
                 role: AgentRole::Main,
@@ -39,19 +38,23 @@ pub(crate) fn runtime(tools: ToolRegistry) -> Arc<RuntimeRegistry> {
                 resource_view: ResourceView::default(),
                 can_spawn: Vec::new(),
                 hook_refs: Vec::new(),
-            },
+            }],
             tools: Vec::new(),
             skills: Vec::new(),
             mcp: Vec::new(),
             hooks: Vec::new(),
             extensions: Vec::new(),
             tui: None,
+
+            workflow: None,
+            channels: vec![],
+            schemas: vec![],
+            process: None,
+            apis: vec![],
+            permission_modes: vec![],
         })
         .collect::<Vec<_>>();
-    let bundles = bundles
-        .into_iter()
-        .map(|bundle| PreparedInstallableBundle::Agent(Box::new(bundle)))
-        .collect::<Vec<_>>();
+    let bundles = bundles.into_iter().map(|bundle| bundle).collect::<Vec<_>>();
     let catalog = BundleCatalog::from_prepared(&bundles);
     let Ok(catalog) = catalog else {
         panic!("unit-test catalog must be valid: {catalog:?}");

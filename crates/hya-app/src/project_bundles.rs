@@ -18,10 +18,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use hya_bundle::{
-    BundleCatalog, BundleError, BundleSource, PreparedCatalog, PreparedInstallableBundle,
-    SourceFile,
-};
+use hya_bundle::{Bundle, BundleCatalog, BundleError, BundleSource, PreparedCatalog, SourceFile};
 use hya_store::{BundleInstallAction, NamespaceInstallPolicy, StoreError};
 
 /// One loaded project bundle: its prepared catalog, source directory, and the
@@ -339,7 +336,7 @@ fn io_error(path: &Path, error: &std::io::Error) -> ProjectBundleError {
 pub struct ProjectBundle {
     dir: PathBuf,
     prepared: std::sync::Arc<PreparedCatalog>,
-    bundle: PreparedInstallableBundle,
+    bundle: Bundle,
 }
 
 impl ProjectBundle {
@@ -357,7 +354,7 @@ impl ProjectBundle {
 
     /// The prepared bundle.
     #[must_use]
-    pub fn bundle(&self) -> &PreparedInstallableBundle {
+    pub fn bundle(&self) -> &Bundle {
         &self.bundle
     }
 

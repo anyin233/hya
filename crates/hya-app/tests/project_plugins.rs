@@ -389,7 +389,7 @@ async fn editing_plugin_toml_respawns_the_projects_plugins_at_the_next_bind() {
     std::fs::create_dir_all(&bundle).unwrap();
     std::fs::write(
         bundle.join("bundle.hya.md"),
-        "---\nkind: AgentBundle\nidentity:\n  id: hya/tools\n  version: 1.0.0\n  publisher: hya\nagent:\n  id: tools-agent\n  role: main\n---\nTools.\n",
+        "---\nkind: Bundle\nidentity:\n  id: hya/tools\n  version: 1.0.0\n  publisher: hya\nagents:\n  - id: tools-agent\n    role: main\n---\nTools.\n",
     )
     .unwrap();
     let with_bundle = harness.bind(&scope).await;

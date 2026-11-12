@@ -762,7 +762,8 @@ fn goal_loop_hook_chain(binding: &TurnBinding, stable_agent_id: &str) -> Arc<dyn
         .bundles()
         .iter()
         .filter(|bundle| {
-            bundle.plugin_bundle().is_some() && bundle.identity().id != "hya/goal-loop"
+            (bundle.agents().is_empty() && bundle.workflow().is_none())
+                && bundle.identity().id != "hya/goal-loop"
         })
         .filter_map(|bundle| binding.bundle_hooks(&bundle.identity().id))
         .collect();

@@ -51,7 +51,7 @@ fn write_project_bundle_in(
         format!("namespace: {namespace}\n")
     });
     let manifest = format!(
-        "---\nkind: AgentBundle\nidentity:\n  id: {bundle_id}\n  version: 1.0.0\n  publisher: hya\n{namespace}resources:\n  skills:\n    - id: {name}-skill\n      path: resources/skills/{name}-skill.md\nagent:\n  id: {name}-agent\n  role: main\n---\n{prompt}\n"
+        "---\nkind: Bundle\nidentity:\n  id: {bundle_id}\n  version: 1.0.0\n  publisher: hya\n{namespace}resources:\n  skills:\n    - id: {name}-skill\n      path: resources/skills/{name}-skill.md\nagents:\n  - id: {name}-agent\n    role: main\n---\n{prompt}\n"
     );
     std::fs::write(dir.join("bundle.hya.md"), manifest).expect("write project manifest");
     let skills = dir.join("resources/skills");
@@ -70,7 +70,7 @@ fn write_project_plugin(root: &Path, name: &str, bundle_id: &str, body: &str) {
     let dir = root.join(".hya/bundles").join(name);
     std::fs::create_dir_all(dir.join("resources/skills")).expect("create project plugin dir");
     let manifest = format!(
-        "kind: Plugin\nidentity:\n  id: {bundle_id}\n  version: 1.0.0\n  publisher: hya\nresources:\n  skills:\n    - id: {name}-skill\n      path: resources/skills/{name}-skill.md\n"
+        "kind: Bundle\nidentity:\n  id: {bundle_id}\n  version: 1.0.0\n  publisher: hya\nresources:\n  skills:\n    - id: {name}-skill\n      path: resources/skills/{name}-skill.md\n"
     );
     std::fs::write(dir.join("bundle.yaml"), manifest).expect("write project plugin manifest");
     std::fs::write(
@@ -97,7 +97,7 @@ for line in sys.stdin:
 
 fn process_manifest(bundle_id: &str) -> String {
     format!(
-        "kind: Plugin\nidentity: {{ id: {bundle_id}, version: 1.0.0, publisher: acme }}\nextensions:\n  process: {{ kind: rust, command: [python3, '${{BUNDLE_ROOT}}/runtime.py'] }}\n  files: [{{ id: runtime, path: runtime.py }}]\nresources:\n  tools: [{{ id: echo, path: tool.json }}]\n"
+        "kind: Bundle\nidentity: {{ id: {bundle_id}, version: 1.0.0, publisher: acme }}\nextensions:\n  process: {{ kind: rust, command: [python3, '${{BUNDLE_ROOT}}/runtime.py'] }}\n  files: [{{ id: runtime, path: runtime.py }}]\nresources:\n  tools: [{{ id: echo, path: tool.json }}]\n"
     )
 }
 
@@ -142,7 +142,7 @@ fn installed_agent_source(
         vec![hya_bundle::SourceFile::new(
             "bundle.hya.md",
             format!(
-                "---\nkind: AgentBundle\nidentity:\n  id: {bundle_id}\n  version: 1.0.0\n  publisher: hya\nnamespace: {namespace}\nagent:\n  id: {agent}\n  role: main\n---\n{prompt}\n"
+                "---\nkind: Bundle\nidentity:\n  id: {bundle_id}\n  version: 1.0.0\n  publisher: hya\nnamespace: {namespace}\nagents:\n  - id: {agent}\n    role: main\n---\n{prompt}\n"
             ),
         )],
     )

@@ -132,10 +132,7 @@ fn bundle_authoring_docs_capture_hook_and_entrypoint_contract() {
         ),
         ("tool-only", "tool-only reports zero hooks"),
         ("hook-only", "hook-only reports zero tools"),
-        (
-            "one agent per AgentBundle",
-            "An AgentBundle defines exactly one agent",
-        ),
+        ("Bundle agents", "`agents`"),
         (
             "host-controlled tool plane",
             "derived from its origin, not declared",
@@ -180,7 +177,7 @@ fn bundle_authoring_docs_capture_hook_and_entrypoint_contract() {
         ),
         (
             "Harness host hooks",
-            "Harness host hooks stay outside AgentBundle metadata",
+            "Harness host hooks stay outside Bundle metadata",
         ),
     ];
 
@@ -287,7 +284,7 @@ fn bundle_cli_docs_distinguish_catalog_publication_from_activation_closure() {
 fn workflow_docs_cover_control_replay_and_client_state() {
     let paths = workflow_doc_paths();
     let required_markers = [
-        "WorkflowBundle",
+        "Bundle",
         "session.updated",
         "interrupted",
         "unavailable",

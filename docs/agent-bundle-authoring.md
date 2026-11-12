@@ -1,10 +1,9 @@
-# Plugin, AgentBundle, and AgentSetBundle Authoring
+# Bundle Authoring
 
-Author and install a public `Plugin`, `AgentBundle`, or `AgentSetBundle`. A
-`Plugin` distributes resources without an Agent, Workflow, or channel. An AgentBundle defines exactly one agent. An `AgentSetBundle` distributes agents
-sharing one resource plane and/or [channel policies](agent-channels.md), without
-a Workflow graph. A packaged Workflow and its exact Agent closure use the
-separate `WorkflowBundle` payload described in [Workflows](workflows.md#packaging-a-workflowbundle).
+A `Bundle` packages zero or more `agents`, an optional `workflow`, optional
+`channels`, and shared resources and extensions as one installable unit.
+An agentless bundle supplies capabilities to existing agents. A Workflow bundle
+contains its compiled Agent closure. All declarations contribute to one digest.
 
 Static bundles remain process-free. Executable bundles may carry native process
 providers, managed MCP servers, or Bun extensions; agent-bearing JavaScript
@@ -28,9 +27,9 @@ task and archive. Its source is
 [`bundles/presets/core-agents`](../bundles/presets/core-agents/). Public bundle
 payloads cannot request that trusted origin.
 
-## Plugin
+## Agentless bundles
 
-`Plugin` packages reusable tools, hooks, Skills, MCP declarations, and extensions
+An agentless `Bundle` packages reusable tools, hooks, Skills, MCP declarations, and extensions
 without creating an Agent. Use it for capabilities shared by existing agents.
 It uses the same immutable package, catalog, namespace, and digest contracts as
 other hyabundle payloads.
@@ -38,7 +37,7 @@ other hyabundle payloads.
 Create `bundle.yaml` in a source directory:
 
 ```yaml
-kind: Plugin
+kind: Bundle
 identity:
   id: acme/skill-pack
   version: 1.0.0
@@ -93,29 +92,10 @@ The check is part of the prepared bundle only as a declaration; it never runs
 inside the backend. Use it for the tests that prove the bundle, for example a
 Bun extension's `bun test` or `[sh, -c, 'cargo test --manifest-path native/Cargo.toml']`.
 
-The closed manifest accepts only these top-level fields:
-
-| Field | Type | Contract |
-| --- | --- | --- |
-| `kind` | string | Required, exactly `Plugin`. |
-| `identity` | object | Required `{ id: string, version: string, publisher: string }`; same identity rules as AgentBundle. |
-| `namespace` | optional string | Same namespace validation and default as AgentBundle. |
-| `resources` | object | Optional `tools`, `skills`, `mcp`, and `hooks` resource arrays, using the shared resource schema below. |
-| `extensions` | object | Optional `js`, `files`, `rust`, `libraries`, and `process` fields, with the same support limits described below. |
-| `schemas` | array | Optional `{ scheme: string, tool: string, writable: boolean = false }` declarations. |
-| `check` | optional object | The bundle's self-check `{ command: [argv…], timeout_secs: 1–600 = 120 }`; see [Source self-check](#source-self-check). |
-
-Unknown fields, including `agent`, `agents`, `workflow`, and `channels`, are
-rejected even when empty. Use `bundle.yaml`; `bundle.hya.md` is only supported
-by AgentBundle. No synthetic Agent or Workflow is added to the catalog.
-
-The prepared interface is `PreparedInstallableBundle::Plugin`, tagged with
-`kind: "Plugin"` in canonical format-v3 JSON. `PreparedPluginBundle` contains
-`format_version: u32`, `identity: BundleIdentity`, `namespace: Option<String>`,
-`digest: String`, and `tools`, `skills`, `mcp`, `hooks`, `extensions` arrays of
-`PreparedResource`. Schema and process declarations remain in the existing
-catalog-level tables. `agents()` returns an empty slice and `workflow()` returns
-`None`; `plugin_bundle()` exposes the prepared payload.
+The same closed [Bundle manifest](#bundle-manifest-reference) applies to both
+agentless and agent-bearing packages. Omit `agents` for an agentless package.
+Prepared process, schema, API and mode declarations belong to the complete
+Bundle; they are not separate catalog documents.
 
 Static Skills use the existing runtime resource registry. Full-plane agents such
 as `hya-main` can invoke `skill` with `{"name":"plugin-help"}` after installation.
@@ -129,7 +109,7 @@ private agent views, and failure behavior.
 
 An installed Plugin's hooks are global: they run for every agent's sessions.
 That includes built-in agents such as `hya-main` and `hya-scout`, and every
-bundle-defined agent from an AgentBundle, AgentSetBundle, or WorkflowBundle. A
+bundle-defined agent from a Bundle. A
 bundle agent does not select Plugin hooks, so its `hook_refs` do not list them.
 
 | Session's agent | Hooks that run, in order |
@@ -145,19 +125,15 @@ the installed-bundle part of the chain (Plugins, own hooks, sidecar) runs
 before the configured plugins' permission hooks. The first answer that is not
 `defer` wins, so a Plugin's answer comes before the bundle's own hook.
 
-## AgentSetBundle
+## Agent bundles
 
-`AgentSetBundle` is the multi-agent payload with no Workflow graph. It exists so a
-set of agents can be installed, cataloged, versioned, and replaced as one
-immutable bundle while retaining the same prompt, resource, namespace, and
-digest rules as the existing payload kinds. The current contract accepts an
-explicit `bundle.yaml`; markdown-body sources remain limited to singular
-`AgentBundle`.
+Declare each Agent under `agents:`. Agents share the bundle's resource plane.
+A bundle may also declare channel templates and a Workflow.
 
 Minimal source:
 
 ```yaml
-kind: AgentSetBundle
+kind: Bundle
 identity:
   id: acme/review-team
   version: 1.0.0
@@ -171,29 +147,10 @@ agents:
     prompt: prompts/verifier.md
 ```
 
-`agents` must contain at least one entry unless nonempty `channels` are present;
-channel-only AgentSets may omit `agents`. Agent ids are sorted and must be unique
-within the bundle and across the merged catalog. `can_spawn` keeps the existing late-bound allowlist semantics and may reference agents from other bundles; this payload does not require a Workflow reachability closure. Each entry uses the same
-`PreparedAgent` fields as a WorkflowBundle agent (`description`, `role`,
-`color`, `prompt`, `model_policy`, `workdir`, `resource_view`, `can_spawn`,
-and `hook_refs`). Resources and extensions use
-the same `resources`, `extensions`, and `schemas` sections as AgentBundle.
-`workflow` is not accepted, and unknown manifest fields fail preparation.
-Optional `channels` declare restrictive unit/parent-DM templates; see
-[Agent Channels](agent-channels.md) for the exact contract. Runtime channel ids
-continue to be created from spawn events.
-
-The prepared interface is the `AgentSetBundle` member of
-`PreparedInstallableBundle`: `{ format_version, identity, namespace, digest,
-agents, channels, tools, skills, mcp, hooks, extensions }`. The catalog exposes each
-agent by its stable id and `bundle:<bundle-id>/agent/<agent-id>`; no Workflow id
-is emitted for this payload. Build and install it with the existing commands:
-
-```sh
-cargo run -p xtask -- package-bundle path/to/review-team review-team.hyabundle
-hya bundle info -f review-team.hyabundle
-hya bundle install review-team.hyabundle
-```
+`agents` defaults to an empty list. Agent ids must be unique locally and in the
+merged catalog. Without a Workflow, `can_spawn` remains a late-bound allowlist.
+A Workflow requires its exact reachable closure. Optional `channels` follow the
+[Agent Channels](agent-channels.md) contract; concrete ids remain runtime events.
 
 ## Runtime boundary
 
@@ -217,15 +174,14 @@ A public bundle source directory must contain exactly one of:
 
 | File | Form |
 | --- | --- |
-| `bundle.yaml` | Plain YAML manifest (no embedded prompt body). Required for `Plugin`, `AgentSetBundle`, and `WorkflowBundle`; also supported by `AgentBundle`. |
-| `bundle.hya.md` | YAML frontmatter fenced by `---` plus a Markdown body. Supported only by `AgentBundle`. |
+| `bundle.yaml` | Plain YAML manifest with explicit prompt paths. |
+| `bundle.hya.md` | YAML frontmatter fenced by `---` plus an optional Markdown body. |
 
 Rules ([`prepare.rs` `parse_source`](../crates/hya-bundle/src/prepare.rs)):
 
 - **Both present** → hard error (`source contains both bundle.yaml and bundle.hya.md`).
 - **Neither present** → `UnsupportedSource`.
 - The manifest (YAML portion) is parsed with **`deny_unknown_fields`**: an unrecognised key is a hard error, not a warning.
-- A `WorkflowBundle` in `bundle.hya.md` fails preparation; use explicit `bundle.yaml`.
 
 ### `bundle.hya.md` constraints
 
@@ -233,8 +189,8 @@ Rules ([`prepare.rs` `parse_source`](../crates/hya-bundle/src/prepare.rs)):
 - A **nonempty** markdown body becomes the agent's prompt. The agent must **not** also set `prompt:` to a file path.
 - An **empty** body plus an explicit `prompt:` path is allowed: the body is "absent", not "an empty prompt", so the named file wins.
 
-Because an AgentBundle defines exactly one agent, the body is unambiguously that
-agent's prompt. A WorkflowBundle has no manifest body; each packaged Agent uses an explicit `prompts/` path.
+A nonempty body requires exactly one entry in `agents`, without an explicit
+prompt path. Multiple Agents use explicit prompt files and an empty body.
 
 The archive rules are: undeclared directory files are ignored; unreferenced archive files
 are rejected.
@@ -245,7 +201,7 @@ are rejected.
 - Required whenever the agent uses `prompt: path/to/file.md` instead of a body prompt.
 - Real example: [`crates/hya-bundle/tests/fixtures/directory/bundle.yaml`](../crates/hya-bundle/tests/fixtures/directory/bundle.yaml).
 
-A public archive contains the root manifest plus exactly the normalized source closure represented by its prepared payload, and nothing else. Undeclared directory files are ignored; unreferenced archive files are rejected. Missing declared files, wrapper directories, duplicate normalized paths, traversal, absolute paths, and non-regular files fail closed. Directory and archive forms of the same declared closure prepare to the same canonical format-v3 identity and digest.
+A public archive contains the root manifest plus exactly the normalized source closure represented by its prepared payload, and nothing else. Undeclared directory files are ignored; unreferenced archive files are rejected. Missing declared files, wrapper directories, duplicate normalized paths, traversal, absolute paths, and non-regular files fail closed. Directory and archive forms of the same declared closure prepare to the same canonical format-v4 identity and digest.
 
 The canonical package writer accepts a source directory and emits deterministic
 public `.hyabundle` bytes:
@@ -284,32 +240,35 @@ Public package extraction enforces ([`package.rs`](../crates/hya-bundle/src/pack
 
 ---
 
-## AgentBundle manifest reference
+## Bundle manifest reference
 
-The AgentBundle marker is required at the top of the YAML:
+The Bundle marker is required at the top of the YAML:
 
 ```yaml
-kind: AgentBundle
+kind: Bundle
 ```
 
 ### Top-level keys
 
 | Key | Required | Meaning |
 | --- | --- | --- |
-| `kind` | yes | Must be `AgentBundle`. |
+| `kind` | yes | Must be `Bundle`. |
 | `identity` | yes | Bundle identity block (see below). |
 | `namespace` | no | Provider-facing namespace for the bundle's tools and schemas; defaults to the identity name segment (the part after `/`). Token rules: `[a-zA-Z0-9_-]`, no `__`, and the reserved tokens `mcp`, `harness`, `builtin`, `plugin` are rejected. |
 | `schemas` | no | External URI-scheme extensions this bundle provides (see [Schema extensions (`schemas:`)](#schema-extensions-schemas)). |
 | `apis` | no | HTTP endpoints served by `extensions.process` (see [API endpoints (`apis:`)](#api-endpoints-apis)). |
 | `permission_modes` | no | Session permission modes approved by `extensions.process` (see [Permission modes (`permission_modes:`)](#permission-modes-permission_modes)). |
 | `resources` | no | `tools`, `skills`, `mcp`, `hooks` resource lists. |
-| `extensions` | no | `js`, `files`, `rust` extension lists plus the optional `process` declaration. |
-| `agent` | yes | The single agent this bundle defines. |
+| `extensions` | no | `js`, `files`, `rust`, `libraries` extension lists plus the optional `process` declaration. |
+| `agents` | no | Agent definitions, `Agent[]`, default `[]`; fields below. |
+| `workflow` | no | `{id: string, path: string}`; path is `workflows/*.hya.md`, id matches the compiled Workflow name. |
+| `channels` | no | Channel template list, default `[]`; see [Agent Channels](agent-channels.md). |
+| `check` | no | `{command: string[], timeout_secs?: integer}`; timeout defaults to 120 seconds. |
+| `version_ref` | no | `backend` resolves identity version `0.0.0` to the backend aggregate. |
+| `tui` | no | Bundle-owned frontend extension; see below. |
 
-**Removed AgentBundle keys.** `api_version` and per-agent `harness_access` no longer exist,
-and `agents:` (a list) is replaced by singular `agent:` for this payload kind. A
-WorkflowBundle uses `agents:` under its separate closed schema. An AgentBundle
-manifest that carries a removed key is rejected by name with `RemovedManifestKey`.
+`agent`, `api_version`, and per-agent `harness_access` are rejected. Use an
+`agents` list, including for a single Agent.
 
 **Unsupported in the current release:** per-agent `resource_profile`. Native
 executables use `extensions.rust` together with `extensions.process` of kind
@@ -434,12 +393,12 @@ only when that agent's compiled view also resolves the owning bundle tool.
 A bundle can register its **own HTTP endpoints** on the hya server — for
 example a token-usage report of a session, or a small store the bundle keeps —
 that any v1 client calls over HTTP or gRPC without running a turn. Every
-bundle kind (`Plugin`, `AgentBundle`, `AgentSetBundle`, `WorkflowBundle`) may
+Bundle may
 declare endpoints, but only together with an explicit `extensions.process`,
 because that generation-owned process answers them:
 
 ```yaml
-kind: Plugin
+kind: Bundle
 identity: { id: acme/notes, version: 1.0.0, publisher: acme }
 extensions:
   process: { kind: bun, command: [bun, run, '${BUNDLE_ROOT}/notes.ts'] }
@@ -521,7 +480,7 @@ user's config. Every bundle kind may declare modes, but only together with an
 explicit `extensions.process` that registers the `permission.approve` hook:
 
 ```yaml
-kind: Plugin
+kind: Bundle
 identity: { id: acme/approver, version: 1.0.0, publisher: acme }
 extensions:
   process: { kind: bun, command: [bun, run, '${BUNDLE_ROOT}/approver.ts'] }
@@ -635,16 +594,16 @@ line per mode.
 Example agent with `model_policy`:
 
 ```yaml
-agent:
-  id: acme-builder
-  description: Coding agent
-  role: main
-  prompt: prompts/builder.md
-  model_policy:
-    model: anthropic/claude-sonnet-4-6
-    category: deep
-    reasoning: high
-  can_spawn: [hya-scout, hya-task]
+agents:
+  - id: acme-builder
+    description: Coding agent
+    role: main
+    prompt: prompts/builder.md
+    model_policy:
+      model: anthropic/claude-sonnet-4-6
+      category: deep
+      reasoning: high
+    can_spawn: [hya-scout, hya-task]
 ```
 
 ---
@@ -765,16 +724,16 @@ Harness-only views do not need `namespace` (it would be a no-op). Short aliases
 and deny still apply:
 
 ```yaml
-agent:
-  id: acme-scout
-  role: subagent
-  prompt: prompts/scout.md
-  resource_view:
-    allow:
-      - harness:tool/write
-    deny:
-    aliases:
-      search: harness:tool/grep
+agents:
+  - id: acme-scout
+    role: subagent
+    prompt: prompts/scout.md
+    resource_view:
+      allow:
+        - harness:tool/write
+      deny:
+      aliases:
+        search: harness:tool/grep
 ```
 
 ### Example: `namespace` on a bundle-local resource
@@ -786,15 +745,15 @@ that resource’s qualified public name (short name unchanged):
 # Bundle id is e.g. hya/docs-probe; a local skill local_id is "probe".
 # With namespace: custom.ns the skill is also addressable as
 # bundle:custom.ns/skill/probe (not bundle:hya/docs-probe/skill/probe).
-agent:
-  id: main
-  role: main
-  prompt: prompts/main.md
-  resource_view:
-    namespace: custom.ns
-    allow:
-      - harness:tool/skill
-      - probe   # bare bundle-local skill id
+agents:
+  - id: main
+    role: main
+    prompt: prompts/main.md
+    resource_view:
+      namespace: custom.ns
+      allow:
+        - harness:tool/skill
+        - probe   # bare bundle-local skill id
 ```
 
 ---
@@ -866,7 +825,7 @@ directory deterministically:
 cargo run -p xtask -- package-bundle docs/examples/bun-disjoint bun-disjoint.hyabundle
 ```
 
-`hook_refs` select Bundle-local Hook resources only; all `harness:hook/*` spellings reject; supported hook IDs are exactly `event`, `tool.execute.before`, and `tool.execute.after`; aliases do not rename hooks. Harness host hooks stay outside AgentBundle metadata.
+`hook_refs` select Bundle-local Hook resources only; all `harness:hook/*` spellings reject; supported hook IDs are exactly `event`, `tool.execute.before`, and `tool.execute.after`; aliases do not rename hooks. Harness host hooks stay outside Bundle metadata.
 
 Each selected Tool or Hook source path must exact-path match exactly one JavaScript Extension resource in the referenced resource's owning bundle; cross-bundle selection joins in the owner. Never basename/prefix/digest/alias inference. The activation rule is: only selected Tool/Hook resources determine a deduplicated deterministic entrypoint list; staged does not mean activated.
 
@@ -947,42 +906,25 @@ They differ from bundle agents in three ways:
 
 ## Prepared catalog format
 
-Prepared catalogs use **`PREPARED_FORMAT_VERSION = 2`** and a closed payload
-union in the document shape:
+Prepared format **4** stores one complete `Bundle` JSON object:
 
 ```text
-{ format_version, bundles: [Plugin | AgentBundle | AgentSetBundle | WorkflowBundle], index[],
-  schemas?, extensions_process?, apis?, permission_modes? }
+{format_version: 4, identity, namespace?, check?, digest, agents[], workflow?,
+ channels[], tools[], skills[], mcp[], hooks[], extensions[], tui?,
+ schemas[], process?, apis[], permission_modes[]}
 ```
 
-`schemas` (per-bundle rows of `{bundle_id, schemas[]}` sorted by bundle id),
-`extensions_process` (per-bundle rows of `{bundle_id, process}`), and `apis`
-(per-bundle rows of `{bundle_id, apis: [{id, method, scope, path,
-description, request_schema?, response_schema?}]}`, rows sorted by bundle id
-and endpoints strictly by id; a row requires the bundle's `extensions_process`
-row, and decode re-validates the templates, the overlap rule, and the schema
-files), and `permission_modes` (per-bundle rows of `{bundle_id, modes: [{id,
-title, description}]}`, rows sorted by bundle id and modes strictly by id;
-decode re-validates them against the bundle's process and `permission.approve`
-hook) are document-level sections skipped entirely when no
-bundle declares any, so documents written before those sections keep their
-exact byte layout and stay decodable.
+The bundle digest hashes the canonical complete object with only `digest`
+removed. Process argv, URI schemes, API routes, permission modes, TUI metadata,
+Agent and channel declarations, and embedded resource bytes all contribute.
+Workflow revision combines compiler revision and this complete bundle digest.
+Changing only `extensions.process.command` therefore invalidates the revision.
 
-**Canonical ordering** (non-canonical catalogs are rejected on decode):
-
-- bundles sorted by id
-- agents by `stable_id`
-- resources by `local_id`
-- `allow` / `deny` / `can_spawn` / `hook_refs` each strictly sorted
-
-`PreparedCatalog::decode` verifies before anything loads:
-
-- catalog SHA-256 against the expected digest
-- rejection of non-canonical ordering
-- recomputation of every per-resource and per-prompt content digest
-- recomputation of each bundle digest (bundle JSON minus its own `digest` field)
-- re-validation of all references
-- rebuild-and-compare of the `index`
+Agent ids, resource ids, references, API ids, and mode ids are canonically sorted.
+Decode validates embedded content digests, declarations, references and Workflow
+closure. Catalog indexes and per-bundle discovery rows are reconstructed in
+memory; they are never persisted. Older prepared records fail with **please
+reinstall**; there is no migration or old-manifest reader.
 
 **Catalog semantic identity v1** is a domain-separated encoding over
 `b"hya.bundle-catalog.semantic-identity/v1"` plus sorted per-catalog records of

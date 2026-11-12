@@ -1,4 +1,4 @@
-//! Typed failures at the AgentBundle prepare, package, and catalog boundaries.
+//! Typed failures at the Bundle prepare, package, and catalog boundaries.
 
 use thiserror::Error;
 
@@ -67,7 +67,7 @@ pub enum BundleError {
         /// What the author should do instead.
         guidance: String,
     },
-    /// `kind` is not `AgentBundle`.
+    /// `kind` is not `Bundle`.
     #[error("unsupported bundle kind `{found}` in `{source_name}`")]
     WrongKind {
         /// Source root or package name for diagnostics.
@@ -87,7 +87,7 @@ pub enum BundleError {
     },
     /// Manifest Workflow identity differs from the compiled Workflow name.
     #[error(
-        "WorkflowBundle `{bundle_id}` declares Workflow `{manifest_id}`, but the source compiles as `{compiled_id}`"
+        "Bundle `{bundle_id}` declares Workflow `{manifest_id}`, but the source compiles as `{compiled_id}`"
     )]
     WorkflowIdMismatch {
         /// Bundle identity owning the Workflow.
@@ -99,7 +99,7 @@ pub enum BundleError {
     },
     /// A Workflow stage or reachable Agent names a non-built-in Agent absent from the bundle.
     #[error(
-        "WorkflowBundle `{bundle_id}` is missing reachable Agent `{agent_id}` referenced by `{reference}`"
+        "Bundle `{bundle_id}` is missing reachable Agent `{agent_id}` referenced by `{reference}`"
     )]
     WorkflowAgentMissing {
         /// Bundle identity owning the Workflow.
@@ -109,8 +109,8 @@ pub enum BundleError {
         /// Stage, verifier, or Agent that required the missing id.
         reference: String,
     },
-    /// A WorkflowBundle carries an Agent outside the exact compiled reachable closure.
-    #[error("WorkflowBundle `{bundle_id}` carries unreachable Agent `{agent_id}`")]
+    /// A Bundle carries an Agent outside the exact compiled reachable closure.
+    #[error("Bundle `{bundle_id}` carries unreachable Agent `{agent_id}`")]
     WorkflowAgentUnreachable {
         /// Bundle identity owning the Workflow.
         bundle_id: String,
@@ -275,9 +275,6 @@ pub enum BundleError {
         /// Source path of the mismatched resource.
         source_path: String,
     },
-    /// Index rows do not match the prepared bundles vector (ids/versions/digests).
-    #[error("prepared catalog index does not match its canonical bundles")]
-    PreparedIndexMismatch,
     /// Bundles/index not in the required deterministic order.
     #[error("prepared catalog is not canonically ordered")]
     NonCanonicalPreparedCatalog,

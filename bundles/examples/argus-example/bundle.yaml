@@ -1,4 +1,4 @@
-kind: WorkflowBundle
+kind: Bundle
 identity:
   id: hya/argus-example
   version: 0.43.54
