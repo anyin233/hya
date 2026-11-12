@@ -840,3 +840,69 @@ async fn resident_finalization_closes_its_member_row_on_the_parent_log() {
         assert_eq!(row.status, expected);
     }
 }
+
+#[tokio::test]
+async fn registration_rolls_back_claim_and_all_sessions_on_prompt_failure() {
+    let db = TempDb::new("registration");
+    let store = SessionStore::connect(db.path()).await.unwrap();
+    let mut conn = SqliteConnection::connect(&format!("sqlite://{}", db.path()))
+        .await
+        .unwrap();
+    sqlx::query("CREATE TRIGGER reject_initial_prompt BEFORE INSERT ON event_log WHEN instr(NEW.payload, 'reject_initial_prompt') > 0 BEGIN SELECT RAISE(ABORT, 'prompt failure'); END")
+        .execute(&mut conn).await.unwrap();
+    let child = SessionId::new();
+    let root = SessionId::new();
+    let result = store
+        .commit_resident_registration(
+            child,
+            OwnerRunId::new(),
+            None,
+            vec![
+                Event::SessionCreated {
+                    session: root,
+                    parent: None,
+                    agent: AgentName::new("main"),
+                    model: hya_proto::ModelRef::new("fake"),
+                    workdir: "/tmp".into(),
+                    project: None,
+                    kind: hya_proto::SessionKind::Project,
+                },
+                Event::SessionCreated {
+                    session: child,
+                    parent: Some(root),
+                    agent: AgentName::new("worker"),
+                    model: hya_proto::ModelRef::new("fake"),
+                    workdir: "/tmp".into(),
+                    project: None,
+                    kind: hya_proto::SessionKind::Project,
+                },
+                Event::AgentRegistered {
+                    session: root,
+                    agent_session: child,
+                    handle: "worker-1".into(),
+                    parent: Some("main".into()),
+                    agent_type: AgentName::new("worker"),
+                    mode: SubagentMode::Resident,
+                },
+                Event::TextDelta {
+                    session: child,
+                    message: MessageId::new(),
+                    part: PartId::new(),
+                    delta: "reject_initial_prompt".into(),
+                },
+            ],
+        )
+        .await;
+    assert!(result.unwrap_err().to_string().contains("prompt failure"));
+    assert!(store.active_actor_ids().await.unwrap().is_empty());
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM event_log")
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM session")
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}

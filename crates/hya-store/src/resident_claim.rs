@@ -39,6 +39,18 @@ impl SessionStore {
         actor_id: SessionId,
         owner_run_id: OwnerRunId,
     ) -> Result<ActorClaim, StoreError> {
+        let mut tx = self.begin_transaction().await?;
+        let claim = Self::try_claim_new_in_transaction(&mut tx, actor_id, owner_run_id).await?;
+        tx.commit().await?;
+        Ok(claim)
+    }
+
+    /// Claim an actor as part of the caller's registration transaction.
+    pub async fn try_claim_new_in_transaction(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        actor_id: SessionId,
+        owner_run_id: OwnerRunId,
+    ) -> Result<ActorClaim, StoreError> {
         let row = sqlx::query(
             "INSERT INTO resident_actor_claim (actor_id, epoch, owner_run_id, state) \
              VALUES (?, 1, ?, 'active') \
@@ -52,13 +64,38 @@ impl SessionStore {
         )
         .bind(actor_id.storage_key())
         .bind(owner_run_id.as_uuid().as_bytes().as_slice())
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut **tx)
         .await?;
 
         match row {
             Some(row) => decode_claim(row),
             None => Err(StoreError::ActorAlreadyClaimed { actor_id }),
         }
+    }
+
+    /// Commit registration events across child, parent and root with the claim.
+    /// Returned envelopes must be published only after this method succeeds.
+    pub async fn commit_resident_registration(
+        &self,
+        actor_id: SessionId,
+        owner_run_id: OwnerRunId,
+        parent_claim: Option<&ActorClaim>,
+        events: Vec<Event>,
+    ) -> Result<(ActorClaim, Vec<Envelope>), StoreError> {
+        let mut tx = self.begin_transaction().await?;
+        if let Some(parent_claim) = parent_claim {
+            fence_actor_claim(&mut tx, parent_claim).await?;
+        }
+        let claim = Self::try_claim_new_in_transaction(&mut tx, actor_id, owner_run_id).await?;
+        let mut envelopes = Vec::with_capacity(events.len());
+        for event in events {
+            let session = event.session().ok_or_else(|| {
+                StoreError::ActorClaimData("registration event has no session".into())
+            })?;
+            envelopes.push(crate::append_event_in_transaction(&mut tx, session, event).await?);
+        }
+        tx.commit().await?;
+        Ok((claim, envelopes))
     }
 
     /// Take over one active actor before runtime readiness.

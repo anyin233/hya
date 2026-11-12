@@ -731,6 +731,53 @@ impl SessionEngine {
         Ok(message)
     }
 
+    pub(crate) async fn prepare_initial_resident_prompt(
+        &self,
+        session: SessionId,
+        text: String,
+        binding: &TurnBinding,
+        stable_id: &str,
+    ) -> Result<Vec<Event>, CoreError> {
+        let text = self
+            .user_text_after_hooks(binding, stable_id, session, text)
+            .await;
+        let message = MessageId::new();
+        let part = PartId::new();
+        Ok(vec![
+            Event::MessageStarted {
+                session,
+                message,
+                role: Role::User,
+                agent: None,
+                model: None,
+            },
+            Event::TextStart {
+                session,
+                message,
+                part,
+            },
+            Event::TextDelta {
+                session,
+                message,
+                part,
+                delta: text,
+            },
+            Event::TextEnd {
+                session,
+                message,
+                part,
+            },
+            Event::MessageFinished {
+                session,
+                message,
+                role: Role::User,
+                finish: FinishReason::Stop,
+                tokens: None,
+                cause: None,
+            },
+        ])
+    }
+
     pub(crate) async fn admit_user_prompt_for_actor_with_binding(
         &self,
         claim: &ActorClaim,
