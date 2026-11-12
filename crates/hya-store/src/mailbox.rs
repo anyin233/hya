@@ -1,7 +1,7 @@
 use hya_proto::{
-    ActorClaim, ArchiveReason, Envelope, Event, FinishCause, FinishReason, MailEndpoint, MailKind,
-    MemberId, MemberRunStatus, MessageId, PartId, Projection, ReportOutcome, Role, RosterEntry,
-    RosterStatus, SessionId, SubagentMode, now_millis, scope,
+    ActorClaim, ActorEpoch, ArchiveReason, Envelope, Event, FinishCause, FinishReason,
+    MailEndpoint, MailKind, MemberId, MemberRunStatus, MessageId, PartId, Projection,
+    ReportOutcome, Role, RosterEntry, RosterStatus, SessionId, SubagentMode, now_millis, scope,
 };
 
 use crate::{
@@ -55,6 +55,25 @@ pub struct ResidentArchive {
     pub check_gate: bool,
     /// Cursor and active work observed before preparing the handoff.
     pub expected_work: Option<(u64, Option<hya_proto::ResidentWorkProjection>)>,
+}
+
+/// Capability used for a terminal transaction.
+#[derive(Clone, Copy, Debug)]
+pub enum ResidentArchiveOwner<'a> {
+    /// The episode ending itself under its current claim.
+    Claim(&'a ActorClaim),
+    /// End an orphan: the caller guarantees there is no in-memory episode.
+    /// Takes over the active claim and fences the previous owner atomically.
+    Takeover,
+}
+
+/// Durable result of a terminal transaction, distinct from a store failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResidentArchiveOutcome {
+    /// Terminal effects committed (or were already committed for this claim).
+    Committed,
+    /// Only a harness notice committed; the episode remains live.
+    Refused,
 }
 
 impl SessionStore {
@@ -345,30 +364,41 @@ impl SessionStore {
         })
     }
 
-    /// Commit prepared archive effects together with terminal cleanup and claim release.
+    /// Commit terminal effects, or only a refusal notice for a voluntary report.
+    /// Publish returned envelopes and refund admissions only after success.
     pub async fn finalize_resident_archive(
         &self,
-        claim: Option<&ActorClaim>,
+        owner: ResidentArchiveOwner<'_>,
         root: SessionId,
         handle: &str,
         archive: ResidentArchive,
         cause: FinishCause,
-    ) -> Result<(Vec<Envelope>, Vec<AdmissionRecord>), StoreError> {
+    ) -> Result<(ResidentArchiveOutcome, Vec<Envelope>, Vec<AdmissionRecord>), StoreError> {
         let actor_id = archive.actor;
         let reason = archive.note.as_str();
         let member_status = archive.member_status;
         let mut tx = self.begin_transaction().await?;
         let owned_claim;
-        let claim = match claim {
-            Some(claim) => claim,
-            None => {
-                owned_claim = Self::try_claim_new_in_transaction(
-                    &mut tx,
-                    actor_id,
-                    hya_proto::OwnerRunId::new(),
+        let (claim, admission_epoch) = match owner {
+            ResidentArchiveOwner::Claim(claim) => (claim, claim.epoch.get()),
+            ResidentArchiveOwner::Takeover => {
+                let owner_run_id = hya_proto::OwnerRunId::new();
+                let epoch: Option<i64> = sqlx::query_scalar(
+                    "UPDATE resident_actor_claim SET epoch = epoch + 1, owner_run_id = ? \
+                     WHERE actor_id = ? AND state = 'active' AND epoch < 9223372036854775807 \
+                     RETURNING epoch",
                 )
+                .bind(owner_run_id.as_uuid().as_bytes().as_slice())
+                .bind(actor_id.storage_key())
+                .fetch_optional(&mut *tx)
                 .await?;
-                &owned_claim
+                let epoch = epoch.ok_or(StoreError::ActorClaimUnavailable { actor_id })? as u64;
+                owned_claim = ActorClaim {
+                    actor_id,
+                    epoch: ActorEpoch::from_storage(epoch),
+                    owner_run_id,
+                };
+                (&owned_claim, epoch - 1)
             }
         };
         if let Err(error) = fence_actor_claim(&mut tx, claim).await {
@@ -381,7 +411,7 @@ impl SessionStore {
                     .await?
             {
                 tx.commit().await?;
-                return Ok((Vec::new(), Vec::new()));
+                return Ok((ResidentArchiveOutcome::Committed, Vec::new(), Vec::new()));
             }
             return Err(error);
         }
@@ -407,16 +437,16 @@ impl SessionStore {
             .handoff
             .as_ref()
             .map_or(1, |handoff| handoff.generation.saturating_add(1));
-        if archive
+        let mut refusal = if archive
             .expected_work
             .is_some_and(|work| work != (entry.resident_cursor, entry.resident_work))
             || archive.generation != generation
         {
-            return Err(StoreError::MailboxRejected(
-                "resident episode changed during handoff".into(),
-            ));
-        }
-        if archive.check_gate {
+            Some("your episode changed during handoff".to_string())
+        } else {
+            None
+        };
+        if archive.check_gate && refusal.is_none() {
             let read_through = entry.resident_work.map_or(entry.resident_cursor, |work| {
                 entry.resident_cursor.max(work.inbox_through)
             });
@@ -425,17 +455,51 @@ impl SessionStore {
                 .inboxes
                 .get(handle)
                 .map_or(0, |inbox| inbox.len() as u64);
-            if read_through < inbox_len
-                || projection
-                    .team
-                    .roster
-                    .keys()
-                    .any(|path| scope::parent_path(path) == Some(handle))
+            if read_through < inbox_len {
+                let unread = &projection.team.inboxes[handle][read_through as usize..];
+                let channels: std::collections::BTreeSet<_> = unread
+                    .iter()
+                    .map(|mail| match &mail.to {
+                        MailEndpoint::Channel(channel) => format!("#{channel}"),
+                        MailEndpoint::Handle(_) => format!("your inbox (`{handle}`)"),
+                    })
+                    .collect();
+                refusal = Some(format!(
+                    "{} unread mail on {}",
+                    inbox_len - read_through,
+                    channels.into_iter().collect::<Vec<_>>().join(", ")
+                ));
+            } else if let Some(child) = projection
+                .team
+                .roster
+                .keys()
+                .find(|path| scope::parent_path(path) == Some(handle))
             {
-                return Err(StoreError::MailboxRejected(
-                    "report rejected: unread mail or live children arrived before archive".into(),
+                refusal = Some(format!(
+                    "live subagent `{child}`; answer or archive it first"
                 ));
             }
+        }
+        if let Some(reason) = refusal {
+            if !archive.check_gate {
+                return Err(StoreError::MailboxRejected(reason));
+            }
+            let notice = append_event_in_transaction(
+                &mut tx,
+                root,
+                Event::MailSent {
+                    session: root,
+                    from: scope::HARNESS_HANDLE.into(),
+                    to: MailEndpoint::Handle(handle.into()),
+                    kind: MailKind::Message,
+                    body: format!(
+                        "Your report was not accepted: {reason}. Read and answer it, then call report again."
+                    ),
+                },
+            )
+            .await?;
+            tx.commit().await?;
+            return Ok((ResidentArchiveOutcome::Refused, vec![notice], Vec::new()));
         }
 
         let mut envelopes = append_resident_effects_in_transaction(
@@ -475,7 +539,9 @@ impl SessionStore {
         .bind(reason)
         .bind(now_millis())
         .bind(claim.actor_id.storage_key())
-        .bind(epoch)
+        .bind(i64::try_from(admission_epoch).map_err(|_| {
+            StoreError::ActorClaimData("actor epoch exceeds SQLite INTEGER range".to_string())
+        })?)
         .fetch_all(&mut *tx)
         .await?;
         let admissions = rows
@@ -599,7 +665,7 @@ impl SessionStore {
             );
         }
         tx.commit().await?;
-        Ok((envelopes, admissions))
+        Ok((ResidentArchiveOutcome::Committed, envelopes, admissions))
     }
 }
 
