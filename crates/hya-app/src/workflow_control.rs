@@ -603,12 +603,14 @@ struct RunRequest {
 struct ActiveWorkflowRun {
     run: WorkflowRunId,
     cancel: CancellationToken,
+    done: CancellationToken,
 }
 
 struct WorkflowAdmissionGuard {
     active: Arc<std::sync::Mutex<BTreeMap<SessionId, ActiveWorkflowRun>>>,
     session: SessionId,
     run: WorkflowRunId,
+    done: CancellationToken,
 }
 
 impl Drop for WorkflowAdmissionGuard {
@@ -619,6 +621,7 @@ impl Drop for WorkflowAdmissionGuard {
         if active.get(&self.session).map(|active| active.run) == Some(self.run) {
             active.remove(&self.session);
         }
+        self.done.cancel();
     }
 }
 
@@ -1198,11 +1201,20 @@ impl WorkflowControl {
                 run: active_run.run,
             });
         }
-        active.insert(session, ActiveWorkflowRun { run, cancel });
+        let done = CancellationToken::new();
+        active.insert(
+            session,
+            ActiveWorkflowRun {
+                run,
+                cancel,
+                done: done.clone(),
+            },
+        );
         Ok(WorkflowAdmissionGuard {
             active: Arc::clone(&self.active_runs),
             session,
             run,
+            done,
         })
     }
 
@@ -1217,6 +1229,25 @@ impl WorkflowControl {
             .map_err(|_| {
                 WorkflowControlError::Execution("Workflow run registry is poisoned".to_string())
             })
+    }
+
+    /// Join the local execution owner, including its terminal log writes.
+    pub(crate) async fn wait_run_idle(
+        &self,
+        session: SessionId,
+    ) -> Result<(), WorkflowControlError> {
+        let done = self
+            .active_runs
+            .lock()
+            .map_err(|_| {
+                WorkflowControlError::Execution("Workflow run registry is poisoned".to_string())
+            })?
+            .get(&session)
+            .map(|active| active.done.clone());
+        if let Some(done) = done {
+            done.cancelled().await;
+        }
+        Ok(())
     }
 
     /// Cancel the active Workflow execution for one Session, when present.

@@ -439,7 +439,8 @@ server) made it. Child (subagent) sessions never produce these frames.
   (as before) but never `busy` or `sessionDeleted`.
 - **Busy.** `sessionUpdated.busy` mirrors `SessionInfo.busy`: `true` when a
   turn (prompt, command, shell, engine wake) or a Workflow run starts on the
-  session, `false` when it is idle again. It is sent once per transition —
+  session, `false` when it is idle again. A server turn stays busy until its
+  automatic title call also finishes or is cancelled. It is sent once per transition —
   never per token — with `seq` 0 and no other field set; a transition that
   the server notices late (an engine-internal turn, a Workflow run) arrives
   within about a second.
@@ -449,9 +450,19 @@ server) made it. Child (subagent) sessions never produce these frames.
   subagent session and its session-scoped persisted state. Both
   `DELETE /v1/sessions/{session}` and `hya.v1.Session.DeleteSession`
   (`DeleteSessionRequest { session: string }` → empty `DeleteSessionResponse`)
-  await engine teardown of live root-team episodes and sidecars before removing
-  their rows; deleted sessions receive no later episode writes. For example,
-  deleting a root with an active member stops that member before replying.
+  cancel and await server turns, automatic titling, and background Workflow runs
+  in the tree, then await engine teardown of live root-team episodes and sidecars
+  before removing their rows. Deleted sessions receive no later execution writes.
+  Admission stays closed during deletion. If writers or resident endings do not
+  settle within the existing five-second drain bound, deletion fails and removes
+  no rows (writer timeout: HTTP 503 / gRPC `UNAVAILABLE`, code `unavailable`).
+  Retry after the writers settle. For example, deleting a root mid-Workflow stops
+  the run before its logs disappear, including its terminal lifecycle events.
+  Deleting an individual registered team member, live or archived, returns HTTP
+  400 / gRPC `INVALID_ARGUMENT` (`invalid_argument`): archive the subagent or
+  delete the root. An archive keeps the member's identity so mail may revive it;
+  deleting the root removes the entire team. Ordinary unregistered child rows
+  remain deletable.
   Child sessions never
   produce these frames, so the live list notice names only the requested root
   session. It also follows the server's own drop of an unused

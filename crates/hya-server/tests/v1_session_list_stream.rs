@@ -32,6 +32,7 @@ use tower::ServiceExt;
 /// permit to `gate`, so a turn stays running (busy) until released.
 struct GatedProvider {
     gate: Arc<Semaphore>,
+    entered: Option<Arc<Semaphore>>,
 }
 
 #[async_trait]
@@ -55,6 +56,9 @@ impl Provider for GatedProvider {
         session: SessionId,
         message: MessageId,
     ) -> Result<EventStream, ProviderError> {
+        if let Some(entered) = &self.entered {
+            entered.add_permits(1);
+        }
         let gate = Arc::clone(&self.gate);
         let part = PartId::new();
         let events = vec![
@@ -92,7 +96,11 @@ impl Provider for GatedProvider {
 }
 
 async fn state(gate: Arc<Semaphore>) -> AppState {
-    let providers = Arc::new(ProviderRouter::new().with(Arc::new(GatedProvider { gate })));
+    state_with_entered(gate, None).await
+}
+
+async fn state_with_entered(gate: Arc<Semaphore>, entered: Option<Arc<Semaphore>>) -> AppState {
+    let providers = Arc::new(ProviderRouter::new().with(Arc::new(GatedProvider { gate, entered })));
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let engine = SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
@@ -644,4 +652,270 @@ async fn http_delete_joins_live_team_before_removing_sessions() {
 #[tokio::test]
 async fn grpc_delete_joins_live_team_before_removing_sessions() {
     delete_live_team_joins_episodes(true).await;
+}
+
+async fn public_delete(state: AppState, session: SessionId, grpc: bool) -> Result<(), String> {
+    if grpc {
+        pb::session_server::Session::delete_session(
+            &V1Grpc::new(state),
+            tonic::Request::new(pb::DeleteSessionRequest {
+                session: session.to_string(),
+            }),
+        )
+        .await
+        .map(|_| ())
+        .map_err(|error| {
+            assert_eq!(error.code(), tonic::Code::InvalidArgument);
+            error.message().to_owned()
+        })
+    } else {
+        let (status, body) = call(
+            &router(state),
+            Method::DELETE,
+            &format!("/v1/sessions/{session}"),
+            Value::Null,
+        )
+        .await;
+        if status == StatusCode::OK {
+            Ok(())
+        } else {
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert_eq!(body["error"]["code"], "invalid_argument");
+            Err(body["error"]["message"].as_str().unwrap().to_owned())
+        }
+    }
+}
+
+async fn spawn_member(
+    engine: &SessionEngine,
+    supervisor: &hya_core::ResidentSupervisor,
+    parent: SessionId,
+) -> (SessionId, String) {
+    let agent = AgentSpec {
+        name: AgentName::new("hya-scout"),
+        model: ModelRef::new("fake"),
+        workdir: ".".into(),
+        system_prompt: String::new(),
+        reasoning: None,
+    };
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
+    let (child, handle) = supervisor
+        .spawn_resident(
+            parent,
+            agent,
+            (binding, Arc::from([]), resources, None),
+            "work".into(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !engine.turn_active(child) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    (child, handle)
+}
+
+async fn member_delete_is_refused(grpc: bool, archived: bool) {
+    let gate = Arc::new(Semaphore::new(0));
+    let state = state(gate).await;
+    let engine = state.engine.clone();
+    let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
+    let app = router(state.clone());
+    let root: SessionId = create(&app, None).await.parse().unwrap();
+    let (child, handle) = spawn_member(&engine, &supervisor, root).await;
+    let (grandchild, _) = spawn_member(&engine, &supervisor, child).await;
+    if archived {
+        engine.archive_subagent(child).await.unwrap();
+    }
+    let error = public_delete(state.clone(), child, grpc)
+        .await
+        .expect_err("member deletion must not bypass episode ownership");
+    assert!(
+        error.contains("archive the subagent or delete the root"),
+        "{error}"
+    );
+    for session in [child, grandchild] {
+        assert!(engine.store().session_exists(session).await.unwrap());
+    }
+    let projection = engine.read_projection(root).await.unwrap();
+    if archived {
+        assert_eq!(supervisor.episode_count(), 0);
+        assert!(engine.store().active_actor_ids().await.unwrap().is_empty());
+        assert_eq!(projection.team.archived[&handle].session, child);
+    } else {
+        assert_eq!(supervisor.episode_count(), 2);
+        assert!(engine.turn_active(child));
+        assert!(engine.turn_active(grandchild));
+        assert_eq!(projection.team.roster[&handle].session, child);
+    }
+    // Root deletion remains the supported way to remove the entire team.
+    public_delete(state, root, grpc).await.unwrap();
+    supervisor
+        .drain(hya_proto::FinishCause::UserCancel, Duration::from_secs(5))
+        .await;
+    for session in [root, child, grandchild] {
+        assert!(!engine.store().session_exists(session).await.unwrap());
+        assert!(engine.replay(session).await.unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn http_delete_refuses_live_member_subtree() {
+    member_delete_is_refused(false, false).await;
+}
+#[tokio::test]
+async fn grpc_delete_refuses_live_member_subtree() {
+    member_delete_is_refused(true, false).await;
+}
+#[tokio::test]
+async fn http_delete_refuses_archived_member() {
+    member_delete_is_refused(false, true).await;
+}
+#[tokio::test]
+async fn grpc_delete_refuses_archived_member() {
+    member_delete_is_refused(true, true).await;
+}
+
+async fn delete_inflight_root(grpc: bool, title: bool) {
+    let gate = Arc::new(Semaphore::new(0));
+    let entered = Arc::new(Semaphore::new(0));
+    let state = state_with_entered(gate.clone(), Some(entered.clone()))
+        .await
+        .with_auto_title(title);
+    let engine = state.engine.clone();
+    let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
+    let app = router(state.clone());
+    let root: SessionId = create(&app, None).await.parse().unwrap();
+    let (status, body) = call(
+        &app,
+        Method::POST,
+        &format!("/v1/sessions/{root}/turns"),
+        json!({ "prompt": { "text": "hi" } }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !engine.turn_active(root) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    if title {
+        tokio::time::timeout(Duration::from_secs(5), entered.acquire_many(2))
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+    }
+    public_delete(state, root, grpc).await.unwrap();
+    assert!(
+        !engine.turn_active(root),
+        "delete replied before the root writer settled"
+    );
+    gate.add_permits(10);
+    supervisor
+        .drain(hya_proto::FinishCause::UserCancel, Duration::from_secs(5))
+        .await;
+    assert_eq!(supervisor.episode_count(), 0);
+    assert!(supervisor.team_cancel(root).is_none());
+    assert!(!engine.store().session_exists(root).await.unwrap());
+    assert!(
+        engine.replay(root).await.unwrap().is_empty(),
+        "post-delete events"
+    );
+}
+
+#[tokio::test]
+async fn http_delete_settles_inflight_root_turn() {
+    delete_inflight_root(false, false).await;
+}
+#[tokio::test]
+async fn grpc_delete_settles_inflight_root_turn() {
+    delete_inflight_root(true, false).await;
+}
+
+async fn delete_waits_for_reserved_admission(grpc: bool) {
+    let state = state(Arc::new(Semaphore::new(0))).await;
+    let engine = state.engine.clone();
+    let root: SessionId = create(&router(state.clone()), None).await.parse().unwrap();
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let state = state.with_turn_spawn_barrier(root, barrier.clone());
+    let app = router(state.clone());
+    let turn_app = app.clone();
+    let turn = tokio::spawn(async move {
+        call(
+            &turn_app,
+            Method::POST,
+            &format!("/v1/sessions/{root}/turns"),
+            json!({ "prompt": { "text": "must not be admitted" } }),
+        )
+        .await
+    });
+    barrier.wait().await;
+    let before = engine.replay(root).await.unwrap().len();
+    if grpc {
+        let error = pb::session_server::Session::delete_session(
+            &V1Grpc::new(state.clone()),
+            tonic::Request::new(pb::DeleteSessionRequest {
+                session: root.to_string(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unavailable);
+        assert!(error.message().contains("no sessions were deleted"));
+    } else {
+        let (status, body) = call(
+            &app,
+            Method::DELETE,
+            &format!("/v1/sessions/{root}"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+        assert_eq!(body["error"]["code"], "unavailable");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("no sessions were deleted")
+        );
+    }
+    assert!(engine.store().session_exists(root).await.unwrap());
+    assert_eq!(engine.replay(root).await.unwrap().len(), before);
+    // Releasing the already cancelled reservation must admit nothing. A later
+    // delete can retry once that writer has actually left.
+    barrier.wait().await;
+    let (status, body) = turn.await.unwrap();
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(engine.replay(root).await.unwrap().len(), before);
+    public_delete(state, root, grpc).await.unwrap();
+    assert!(engine.replay(root).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn http_delete_timeout_preserves_rows_and_cancels_reserved_admission() {
+    delete_waits_for_reserved_admission(false).await;
+}
+
+#[tokio::test]
+async fn grpc_delete_timeout_preserves_rows_and_cancels_reserved_admission() {
+    delete_waits_for_reserved_admission(true).await;
+}
+
+#[tokio::test]
+async fn http_delete_settles_automatic_title_writer() {
+    delete_inflight_root(false, true).await;
+}
+
+#[tokio::test]
+async fn grpc_delete_settles_automatic_title_writer() {
+    delete_inflight_root(true, true).await;
 }
