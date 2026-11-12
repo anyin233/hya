@@ -42,6 +42,8 @@ pub mod runtime;
 mod runtime_reconcile;
 /// Opt-in `HYA_STARTUP_TRACE` phase marks for `hya serve` startup.
 pub mod startup_trace;
+#[cfg(test)]
+mod test_env;
 /// Shared Workflow discovery, selection, state, and execution control.
 pub mod workflow_control;
 

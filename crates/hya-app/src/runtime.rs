@@ -2716,36 +2716,8 @@ mod tests {
     use tokio::io::AsyncBufReadExt;
     use tokio_util::sync::CancellationToken;
 
-    /// Guards the process-global environment that `EnvGuard` mutates.
-    ///
-    /// A `RwLock`, not a `Mutex`, because two different populations need it:
-    ///
-    /// - **Writers** (`EnvGuard::set`) repoint `HOME`, `XDG_*` and the process
-    ///   current directory while they run.
-    /// - **Readers** (`StableEnvGuard`) do not touch the environment, but their
-    ///   assertions depend on it holding still.
-    ///
-    /// The second population is not obvious, so it is worth stating why it
-    /// exists. `hya_tool::skill_dirs_for_workdir` builds the skill search path
-    /// from `HOME` (`crates/hya-tool/src/skill_catalog.rs:46-61`), the skill set
-    /// feeds `TurnBinding::semantic_fingerprint_v1`, and durable spawn admission
-    /// compares the fingerprint recorded in an intent against one recomputed
-    /// later. If `HOME` changes in between, the two disagree and resolution
-    /// fails closed as `SpawnError::Unavailable` — surfacing only as a resolved
-    /// launch count of 0. Any test that spans a fingerprint capture and a
-    /// fingerprint recomputation therefore needs `HOME` pinned for its duration.
-    ///
-    /// Readers still run concurrently with each other, so this costs
-    /// parallelism only against the handful of writers.
-    static ENV_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(());
+    use crate::test_env::{EnvGuard, StableEnvGuard};
 
-    /// Read-side companion to [`EnvGuard`]: pins the process environment for the
-    /// lifetime of a test that must observe a stable `HOME`-derived runtime
-    /// fingerprint, without mutating anything itself.
-    ///
-    /// Poisoning is ignored deliberately — a panic in one environment test must
-    /// not cascade into spurious failures in every other test that takes this
-    /// guard. Same rationale as the `hya-sdk` `ENV_GUARD` added in `0acfc919`.
     struct CountingDevProvider {
         calls: Arc<AtomicUsize>,
         inner: DevProvider,
@@ -2846,6 +2818,7 @@ mod tests {
 
     #[test]
     fn builtin_agent_catalog_retains_semantic_identity_with_first_party() {
+        let _env = StableEnvGuard::new();
         let catalog = builtin_agent_catalog().expect("builtin agent catalog must build");
         assert!(
             catalog
@@ -2890,6 +2863,7 @@ mod tests {
 
     #[tokio::test]
     async fn review_drain_joins_late_registration_before_killing_team() {
+        let _env = StableEnvGuard::new();
         let (mut built, agent, root) = review_runtime().await;
         let engine = built.engine();
         let binding = engine.bind_runtime(&agent.workdir).unwrap();
@@ -2941,6 +2915,7 @@ mod tests {
 
     #[test]
     fn review_workflow_catalog_does_not_block_runtime_worker() {
+        let _env = StableEnvGuard::new();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .max_blocking_threads(1)
@@ -2995,6 +2970,7 @@ mod tests {
 
     #[tokio::test]
     async fn review_workflow_token_taken_after_shutdown_rejects_request() {
+        let _env = StableEnvGuard::new();
         let (mut built, _, root) = review_runtime().await;
         let control = built.workflow_control();
         built.shutdown().await.unwrap();
@@ -3030,6 +3006,7 @@ mod tests {
 
     #[tokio::test]
     async fn built_session_engine_shutdown_drains_supervisor() {
+        let _env = StableEnvGuard::new();
         let (router, model) = offline_router(None);
         let agent = agent_with_model(&model, None);
         let mut built = build_session_engine(
@@ -3070,6 +3047,7 @@ mod tests {
 
     #[tokio::test]
     async fn built_shutdown_cancels_and_joins_deferred_mcp_preparation() {
+        let _env = StableEnvGuard::new();
         use tokio::io::AsyncReadExt;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
@@ -3122,6 +3100,7 @@ mod tests {
 
     #[tokio::test]
     async fn built_shutdown_cancels_and_joins_started_workflow() {
+        let _env = StableEnvGuard::new();
         let workdir = tempdir();
         let workflow_dir = workdir.join(".hya/workflows");
         std::fs::create_dir_all(&workflow_dir).unwrap();
@@ -3231,6 +3210,7 @@ flowchart TD
     /// left open (`cause: interrupted`) before any turn of its own runs.
     #[tokio::test]
     async fn build_session_engine_closes_turns_a_crash_left_open() {
+        let _env = StableEnvGuard::new();
         let store = SessionStore::connect_memory().await.unwrap();
         let session = SessionId::new();
         let message = hya_proto::MessageId::new();
@@ -3275,6 +3255,7 @@ flowchart TD
     /// fails the release and every successor with `RUNTIME_OWNER_BUSY`.
     #[tokio::test]
     async fn built_engine_can_release_the_runtime_owner_it_claimed() {
+        let _env = StableEnvGuard::new();
         let store = SessionStore::connect_memory().await.unwrap();
         let (router, model) = offline_router(None);
         let agent = agent_with_model(&model, None);
@@ -3305,6 +3286,7 @@ flowchart TD
     /// any supervisor can admit a Stage.
     #[tokio::test]
     async fn build_session_engine_interrupts_prior_workflow_owner() {
+        let _env = StableEnvGuard::new();
         let store = SessionStore::connect_memory().await.unwrap();
         let session = SessionId::new();
         let run = hya_proto::WorkflowRunId::new();
@@ -3374,6 +3356,7 @@ flowchart TD
     /// Reads remain responsive during a gated run; shutdown cancels and joins it.
     #[tokio::test]
     async fn workflow_supervisor_stop_drains_an_in_flight_run() {
+        let _env = StableEnvGuard::new();
         let workdir = tempdir();
         let workflow_dir = workdir.join(".hya/workflows");
         std::fs::create_dir_all(&workflow_dir).unwrap();
@@ -3620,61 +3603,6 @@ for line in sys.stdin:
             ),
         ]
     }
-    struct EnvGuard {
-        _lock: std::sync::RwLockWriteGuard<'static, ()>,
-        home: Option<std::ffi::OsString>,
-        xdg_config_home: Option<std::ffi::OsString>,
-        xdg_data_home: Option<std::ffi::OsString>,
-        current_dir: PathBuf,
-    }
-
-    impl EnvGuard {
-        fn set(home: &Path, cwd: &Path) -> Self {
-            let lock = ENV_LOCK
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let guard = Self {
-                _lock: lock,
-                home: std::env::var_os("HOME"),
-                xdg_config_home: std::env::var_os("XDG_CONFIG_HOME"),
-                xdg_data_home: std::env::var_os("XDG_DATA_HOME"),
-                current_dir: std::env::current_dir().unwrap(),
-            };
-            std::fs::create_dir_all(home).unwrap();
-            std::fs::create_dir_all(cwd).unwrap();
-            unsafe {
-                std::env::set_var("HOME", home);
-                std::env::set_var("XDG_CONFIG_HOME", home);
-                std::env::set_var("XDG_DATA_HOME", home);
-            }
-            std::env::set_current_dir(cwd).unwrap();
-            guard
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            let _ = std::env::set_current_dir(&self.current_dir);
-            unsafe {
-                if let Some(home) = &self.home {
-                    std::env::set_var("HOME", home);
-                } else {
-                    std::env::remove_var("HOME");
-                }
-                if let Some(xdg_config_home) = &self.xdg_config_home {
-                    std::env::set_var("XDG_CONFIG_HOME", xdg_config_home);
-                } else {
-                    std::env::remove_var("XDG_CONFIG_HOME");
-                }
-                if let Some(xdg_data_home) = &self.xdg_data_home {
-                    std::env::set_var("XDG_DATA_HOME", xdg_data_home);
-                } else {
-                    std::env::remove_var("XDG_DATA_HOME");
-                }
-            }
-        }
-    }
-
     fn tempdir() -> PathBuf {
         static NEXT_TEMP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
@@ -3731,7 +3659,7 @@ for line in sys.stdin:
     #[tokio::test]
     async fn builder_uses_the_parsed_startup_snapshot() {
         let dir = tempdir();
-        let _env = EnvGuard::set(&dir, &dir);
+        let _env = EnvGuard::with_home(&dir, &dir);
         let path = dir.join("hya/config.yaml");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "reasoning: high\n").unwrap();
@@ -3763,7 +3691,7 @@ for line in sys.stdin:
     #[tokio::test]
     async fn resolve_runtime_without_config_carries_but_does_not_print_the_notice() {
         let dir = tempdir();
-        let _env = EnvGuard::set(&dir, &dir);
+        let _env = EnvGuard::with_home(&dir, &dir);
         let config_path = dir.join("hya/config.yaml");
         let _ = std::fs::remove_file(&config_path);
 
@@ -3784,7 +3712,7 @@ for line in sys.stdin:
     #[tokio::test]
     async fn permission_only_config_is_kept_and_config_errors_fall_back_to_strict() {
         let dir = tempdir();
-        let _env = EnvGuard::set(&dir, &dir);
+        let _env = EnvGuard::with_home(&dir, &dir);
         let config_path = dir.join("hya/config.yaml");
         std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
         std::fs::write(&config_path, "permission:\n  model: allow\n").unwrap();
@@ -3810,7 +3738,7 @@ for line in sys.stdin:
     #[tokio::test]
     async fn websearch_only_config_reaches_runtime() {
         let dir = tempdir();
-        let _env = EnvGuard::set(&dir, &dir);
+        let _env = EnvGuard::with_home(&dir, &dir);
         let config_path = dir.join("hya/config.yaml");
         std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
         std::fs::write(
@@ -3836,6 +3764,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn disabled_websearch_is_not_exposed_by_engine() {
+        let _env = StableEnvGuard::new();
         let store = SessionStore::connect_memory().await.unwrap();
         let (router, model) = offline_router(None);
         let agent = agent_with_model(&model, None);
@@ -3874,7 +3803,7 @@ for line in sys.stdin:
     async fn built_engine_lazily_refreshes_installed_catalog_at_root_binding() {
         let home = tempdir();
         let workdir = tempdir();
-        let _env = EnvGuard::set(&home, &workdir);
+        let _env = EnvGuard::with_home(&home, &workdir);
         let registry_path = home.join("hya/bundles/registry.sqlite3");
         assert!(!registry_path.exists());
 
@@ -3961,6 +3890,7 @@ You are the runtime-installed agent.
 
     #[tokio::test]
     async fn engine_snapshot_rejects_builder_bypass_and_publishes_deferred_set_atomically() {
+        let _env = StableEnvGuard::new();
         let (router, _model) = offline_router(None);
         let builder = Arc::new(ToolRegistry::builtins());
         let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
@@ -4037,6 +3967,7 @@ You are the runtime-installed agent.
 
     #[tokio::test]
     async fn engine_build_aborts_nonterminal_admissions_before_spawn_readiness() {
+        let _env = StableEnvGuard::new();
         let database = tempdir().join("admission-recovery.db");
         let store = SessionStore::connect(database.to_str().unwrap())
             .await
@@ -4086,6 +4017,7 @@ You are the runtime-installed agent.
 
     #[tokio::test]
     async fn engine_build_fences_running_resident_and_resumes_queued_mail_before_readiness() {
+        let _env = StableEnvGuard::new();
         let database = tempdir().join("resident-recovery.db");
         let store = SessionStore::connect(database.to_str().unwrap())
             .await
@@ -4239,7 +4171,7 @@ You are the runtime-installed agent.
     async fn startup_recovery_rebuilds_executable_resident_sidecar_before_queued_mail() {
         let home = tempdir();
         let workdir = tempdir();
-        let _env = EnvGuard::set(&home, &workdir);
+        let _env = EnvGuard::with_home(&home, &workdir);
         let registry_path = bundle_registry_path();
         std::fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
         let stable_id = "runtime-installed-resident-agent";
@@ -4438,6 +4370,7 @@ You are the installed resident agent.
 
     #[tokio::test]
     async fn deferred_mcp_returns_before_slow_child_handshake() {
+        let _env = StableEnvGuard::new();
         let store = SessionStore::connect_memory().await.unwrap();
         let (router, model) = offline_router(None);
         let agent = agent_with_model(&model, None);
@@ -4487,6 +4420,7 @@ You are the installed resident agent.
 
     #[tokio::test]
     async fn hot_reload_global_plugin_publishes_hooks_in_source() {
+        let _env = StableEnvGuard::new();
         let (router, model) = offline_router(None);
         let agent = agent_with_model(&model, None);
         let mut command = plugin_fixture("source-hooks");
@@ -4527,6 +4461,7 @@ You are the installed resident agent.
 
     #[tokio::test]
     async fn hot_reload_deferred_mcp_does_not_retry_failed_startup_plugin() {
+        let _env = StableEnvGuard::new();
         let root = std::env::temp_dir().join(format!("hya-boot-failure-{}", SessionId::new()));
         std::fs::create_dir_all(&root).unwrap();
         let log = root.join("starts");
@@ -4589,6 +4524,7 @@ You are the installed resident agent.
 
     #[tokio::test]
     async fn startup_mixed_mcp_plugin_publishes_complete_sources() {
+        let _env = StableEnvGuard::new();
         let mut mcp = BTreeMap::new();
         mcp.insert(
             "mixed".to_string(),
@@ -4654,6 +4590,7 @@ You are the installed resident agent.
 
     #[tokio::test]
     async fn compat_mcp_control_publishes_and_removes_through_one_runtime_registry() {
+        let _env = StableEnvGuard::new();
         let (router, model) = offline_router(None);
         let agent = agent_with_model(&model, None);
         let mut built = build_session_engine(
@@ -4719,7 +4656,7 @@ You are the installed resident agent.
     #[tokio::test]
     async fn selected_model_reasoning_default_reaches_first_agent() {
         let dir = tempdir();
-        let _env = EnvGuard::set(&dir, &dir);
+        let _env = EnvGuard::with_home(&dir, &dir);
         let config_path = dir.join("hya/config.yaml");
         std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
         std::fs::write(
@@ -4745,7 +4682,7 @@ You are the installed resident agent.
     fn agent_with_model_omits_process_cwd_skill_index() {
         let home = tempdir();
         let workdir = tempdir();
-        let _env = EnvGuard::set(&home, &workdir);
+        let _env = EnvGuard::with_home(&home, &workdir);
         write_skill(
             &workdir.join(".hya/skills/baseline"),
             "baseline-skill",
@@ -4770,7 +4707,7 @@ You are the installed resident agent.
     fn agent_with_model_pure_keeps_environment_but_drops_agents_context() {
         let home = tempdir();
         let workdir = tempdir();
-        let _env = EnvGuard::set(&home, &workdir);
+        let _env = EnvGuard::with_home(&home, &workdir);
         let agents_marker = "PURE_MODE_MUST_NOT_SEE_THIS";
         std::fs::write(workdir.join("AGENTS.md"), agents_marker).unwrap();
 
@@ -4795,6 +4732,7 @@ You are the installed resident agent.
 
     #[test]
     fn with_pure_clears_mcp_marks_runtime_and_keeps_websearch() {
+        let _env = StableEnvGuard::new();
         let mut runtime = offline_runtime(None, false);
         runtime.mcp.insert(
             "external".to_string(),
@@ -4824,7 +4762,7 @@ You are the installed resident agent.
     fn agent_with_model_retains_environment_and_agents_context() {
         let home = tempdir();
         let workdir = tempdir();
-        let _env = EnvGuard::set(&home, &workdir);
+        let _env = EnvGuard::with_home(&home, &workdir);
         let agents_marker = "DIRECT_MODE_AGENTS_CONTEXT_MARKER";
         std::fs::write(workdir.join("AGENTS.md"), agents_marker).unwrap();
 
@@ -4857,7 +4795,7 @@ You are the installed resident agent.
     fn agent_base_with_model_excludes_prebaked_agents_and_environment() {
         let home = tempdir();
         let workdir = tempdir();
-        let _env = EnvGuard::set(&home, &workdir);
+        let _env = EnvGuard::with_home(&home, &workdir);
         let agents_marker = "SERVER_BASE_MUST_NOT_BAKE_AGENTS";
         std::fs::write(workdir.join("AGENTS.md"), agents_marker).unwrap();
 
@@ -4882,7 +4820,7 @@ You are the installed resident agent.
     fn server_base_has_no_workdir_and_direct_agents_name_the_caller_cwd() {
         let home = tempdir();
         let workdir = tempdir();
-        let _env = EnvGuard::set(&home, &workdir);
+        let _env = EnvGuard::with_home(&home, &workdir);
 
         assert_eq!(agent_base_with_model("fake", None).workdir, PathBuf::new());
         for agent in [
@@ -4966,6 +4904,7 @@ You are the installed resident agent.
 
     #[tokio::test]
     async fn recovered_resident_missing_definition_fails_closed_without_synthesis() {
+        let _env = StableEnvGuard::new();
         let workdir = tempdir();
         let engine = engine_with_catalog(catalog_with_agents(&[])).await;
         let base = AgentSpec {
@@ -5006,6 +4945,7 @@ You are the installed resident agent.
 
     #[tokio::test]
     async fn recovered_resident_exact_lookup_preserves_recorded_id_without_can_spawn() {
+        let _env = StableEnvGuard::new();
         let workdir = tempdir();
         // Agent present for exact lookup but not in anyone's can_spawn (empty lists).
         let engine = engine_with_catalog(catalog_with_agents(&["resident-helper"])).await;
@@ -5055,6 +4995,7 @@ You are the installed resident agent.
 
     #[tokio::test]
     async fn recovered_resident_uses_session_workdir_not_base_workdir() {
+        let _env = StableEnvGuard::new();
         let session_dir = tempdir();
         let base_dir = tempdir();
         let engine = engine_with_catalog(catalog_with_agents(&["resident-helper"])).await;
@@ -5147,6 +5088,7 @@ You are the installed resident agent.
 
     #[tokio::test]
     async fn unconfigured_spawn_uses_remembered_model_below_explicit_override() {
+        let _env = StableEnvGuard::new();
         let workdir = tempdir();
         let engine = engine_with_catalog(catalog_with_worker_policy(ModelPolicy::default())).await;
         engine.runtime_registry().publish_agent_model_preferences(
@@ -5221,6 +5163,7 @@ You are the installed resident agent.
     /// is rejected before anything spawns.
     #[tokio::test]
     async fn spawn_effort_becomes_the_child_model_suffix() {
+        let _env = StableEnvGuard::new();
         let workdir = tempdir();
         let engine = engine_with_catalog(catalog_with_worker_policy(ModelPolicy::default())).await;
         engine.runtime_registry().publish_agent_model_preferences(
@@ -5297,6 +5240,7 @@ You are the installed resident agent.
     /// while lower layers remain present so the winner is unambiguous.
     #[tokio::test]
     async fn resolve_spawn_member_model_precedence_highest_to_lowest() {
+        let _env = StableEnvGuard::new();
         let workdir = tempdir();
         let categories = precedence_categories();
         let is_servable = |_: &ModelRef| true;
@@ -5473,6 +5417,7 @@ You are the installed resident agent.
 
     #[tokio::test]
     async fn executable_spawn_resolution_captures_sidecar_factory_before_admission() {
+        let _env = StableEnvGuard::new();
         let workdir = tempdir();
         let engine = engine_with_catalog(Arc::new(to_agent_catalog(
             BundleCatalog::from_prepared(&agent_bundles([materialized_bundle("executable")]))
@@ -5554,6 +5499,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn bundle_sidecar_ignores_unsupported_workspace_adapters() {
+        let _env = StableEnvGuard::new();
         let root = tempdir();
         let staging = tempdir();
         let catalog = Arc::new(to_agent_catalog(
@@ -5590,6 +5536,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn bundle_sidecar_factory_exposes_declared_activation_hooks_after_ack() {
+        let _env = StableEnvGuard::new();
         let mut bundle = materialized_bundle("activation-hooks");
         let event_hook_id = bundle.hooks[0].stable_id.clone();
         let before_hook = materialized_resource(
@@ -5658,6 +5605,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn bundle_sidecar_hook_declarations_match_captured_selected_set() {
+        let _env = StableEnvGuard::new();
         let catalog = Arc::new(to_agent_catalog(
             BundleCatalog::from_prepared(&agent_bundles([disjoint_materialized_bundle(
                 "selected-hooks",
@@ -5742,6 +5690,7 @@ for line in sys.stdin:
     /// Initialization validates packaged Skills independently of an agent's view.
     #[tokio::test]
     async fn bundle_sidecar_skill_declarations_match_complete_package() {
+        let _env = StableEnvGuard::new();
         let make_skill = |local_id: &str| {
             let content = format!(
                 "---\nname: {local_id}\ndescription: {local_id} fixture\n---\n{local_id} body\n"
@@ -5848,6 +5797,7 @@ export default {server: async () => ({
 
     #[tokio::test]
     async fn bundle_sidecar_handle_shutdown_reaps_child_and_removes_activation_staging() {
+        let _env = StableEnvGuard::new();
         let catalog = Arc::new(to_agent_catalog(
             BundleCatalog::from_prepared(&agent_bundles([materialized_tool_bundle("shutdown")]))
                 .expect("shutdown fixture catalog"),
@@ -5924,6 +5874,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn bundle_sidecar_handle_drop_removes_activation_staging() {
+        let _env = StableEnvGuard::new();
         let catalog = Arc::new(to_agent_catalog(
             BundleCatalog::from_prepared(&agent_bundles([materialized_tool_bundle(
                 "drop-cleanup",
@@ -6006,6 +5957,7 @@ for line in sys.stdin:
     #[cfg(unix)]
     #[tokio::test]
     async fn bundle_sidecar_factory_start_cancellation_removes_activation_staging() {
+        let _env = StableEnvGuard::new();
         let catalog = Arc::new(to_agent_catalog(
             BundleCatalog::from_prepared(&agent_bundles([materialized_tool_bundle(
                 "cancel-start",
@@ -6097,6 +6049,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn bundle_sidecar_handle_exposes_transport_loss_token() {
+        let _env = StableEnvGuard::new();
         let catalog = Arc::new(to_agent_catalog(
             BundleCatalog::from_prepared(&agent_bundles([materialized_tool_bundle("loss-token")]))
                 .expect("loss token fixture catalog"),
@@ -6156,6 +6109,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn directory_bundle_importing_undeclared_authoring_helper_fails_before_ack() {
+        let _env = StableEnvGuard::new();
         let authoring_root = tempdir();
         let staging_root = tempdir();
         let turn_dir = tempdir();
@@ -6289,6 +6243,7 @@ export default {
 
     #[tokio::test]
     async fn bundle_sidecar_factory_passes_materialized_extension_to_bun() {
+        let _env = StableEnvGuard::new();
         let bundle = materialized_bun_bundle("bun-extension");
         let catalog = Arc::new(to_agent_catalog(
             BundleCatalog::from_prepared(&agent_bundles([bundle]))
@@ -6350,6 +6305,7 @@ export default {
 
     #[tokio::test]
     async fn bun_sidecars_load_only_each_agent_captured_entrypoint() {
+        let _env = StableEnvGuard::new();
         let mut bundles = disjoint_materialized_bundles("bun-disjoint");
         for bundle in &mut bundles {
             set_materialized_extension_content_for_path(
@@ -6537,6 +6493,7 @@ export default {
 
     #[tokio::test]
     async fn one_bun_module_serves_two_agents_with_disjoint_tool_views() {
+        let _env = StableEnvGuard::new();
         let root = tempdir();
         std::fs::write(
             root.join("bundle.yaml"),
@@ -6671,11 +6628,13 @@ extensions:
 
     #[tokio::test]
     async fn one_bun_module_enforces_disjoint_views_in_engine_turns() {
+        let _env = StableEnvGuard::new();
         disjoint_engine_turns(false).await;
     }
 
     #[tokio::test]
     async fn one_bundle_process_enforces_disjoint_views_in_engine_turns() {
+        let _env = StableEnvGuard::new();
         disjoint_engine_turns(true).await;
     }
 
@@ -6892,6 +6851,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn bun_sidecar_rejects_exports_declared_only_in_an_unloaded_module() {
+        let _env = StableEnvGuard::new();
         let mut bundle = disjoint_materialized_bundle("bun-generic-superset");
         set_materialized_extension_content_for_path(
             &mut bundle,
@@ -6975,6 +6935,7 @@ export default {
 
     #[tokio::test]
     async fn transient_bun_bundle_runs_harness_tool_loop_and_reaps_sidecar() {
+        let _env = StableEnvGuard::new();
         let canonical = "bundle:hya/materialized/tool/echo";
         let catalog = Arc::new(to_agent_catalog(
             BundleCatalog::from_prepared(&agent_bundles([materialized_bun_bundle("bun-e2e")]))
@@ -7143,6 +7104,7 @@ export default {
 
     #[tokio::test]
     async fn selected_main_bun_bundle_runs_harness_tool_hook_event_loop_and_reaps_sidecar() {
+        let _env = StableEnvGuard::new();
         let canonical = "bundle:hya/materialized/tool/echo";
         let mut bundle = materialized_bun_bundle("bun-root-hooks");
         let event_hook =
@@ -7321,6 +7283,7 @@ export default {
 
     #[tokio::test]
     async fn resident_bun_bundle_reuses_one_sidecar_across_two_mailbox_turns() {
+        let _env = StableEnvGuard::new();
         let canonical = "bundle:hya/materialized/tool/echo";
         let mut bundle = materialized_bun_bundle("bun-resident");
         set_materialized_extension_content(
@@ -7481,19 +7444,23 @@ export default {
             )
             .await
             .expect("send first resident mail");
-        loop {
-            let envelope = bus.recv().await.expect("resident bus remains open");
-            if matches!(
-                &envelope.event,
-                Event::AgentActivityChanged {
-                    handle: event_handle,
-                    status: RosterStatus::Idle,
-                    ..
-                } if event_handle == &handle
-            ) {
-                break;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let envelope = bus.recv().await.expect("resident bus remains open");
+                if matches!(
+                    &envelope.event,
+                    Event::AgentActivityChanged {
+                        handle: event_handle,
+                        status: RosterStatus::Idle,
+                        ..
+                    } if event_handle == &handle
+                ) {
+                    break;
+                }
             }
-        }
+        })
+        .await
+        .expect("first resident mailbox turn must become idle");
         let first_projection = engine
             .read_projection(lead)
             .await
@@ -7544,19 +7511,23 @@ export default {
             )
             .await
             .expect("send second resident mail");
-        loop {
-            let envelope = bus.recv().await.expect("resident bus remains open");
-            if matches!(
-                &envelope.event,
-                Event::AgentActivityChanged {
-                    handle: event_handle,
-                    status: RosterStatus::Idle,
-                    ..
-                } if event_handle == &handle
-            ) {
-                break;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let envelope = bus.recv().await.expect("resident bus remains open");
+                if matches!(
+                    &envelope.event,
+                    Event::AgentActivityChanged {
+                        handle: event_handle,
+                        status: RosterStatus::Idle,
+                        ..
+                    } if event_handle == &handle
+                ) {
+                    break;
+                }
             }
-        }
+        })
+        .await
+        .expect("second resident mailbox turn must become idle");
         let second_projection = engine
             .read_projection(lead)
             .await
@@ -7608,6 +7579,9 @@ export default {
 
     #[tokio::test]
     async fn resident_idle_sidecar_loss_restarts_before_next_mail() {
+        let env_root = tempdir();
+        let workdir = env_root.join("agent-workdir");
+        let env_guard = EnvGuard::with_home(&env_root, &workdir);
         let canonical = "bundle:hya/materialized/tool/echo";
         let bundle = materialized_tool_bundle("bun-resident-loss");
         let catalog = Arc::new(to_agent_catalog(
@@ -7652,9 +7626,6 @@ export default {
             permission,
             EventBus::default(),
         ));
-        let env_root = tempdir();
-        let workdir = env_root.join("agent-workdir");
-        let env_guard = EnvGuard::set(&env_root, &workdir);
         let lead = engine
             .create(CreateSession {
                 parent: None,
@@ -7952,6 +7923,9 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn resident_running_sidecar_loss_fences_epoch_and_resumes_queued_mail_once() {
+        let env_root = tempdir();
+        let workdir = env_root.join("agent-workdir");
+        let env_guard = EnvGuard::with_home(&env_root, &workdir);
         let canonical = "bundle:hya/materialized/tool/echo";
         let bundle = materialized_tool_bundle("bun-resident-running-loss");
         let catalog = Arc::new(to_agent_catalog(
@@ -7992,9 +7966,6 @@ for line in sys.stdin:
             permission,
             EventBus::default(),
         ));
-        let env_root = tempdir();
-        let workdir = env_root.join("agent-workdir");
-        let env_guard = EnvGuard::set(&env_root, &workdir);
         let lead = engine
             .create(CreateSession {
                 parent: None,
@@ -8422,6 +8393,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn bundle_sidecar_rejects_task_context_hook_before_ack() {
+        let _env = StableEnvGuard::new();
         let catalog = Arc::new(to_agent_catalog(
             BundleCatalog::from_prepared(&agent_bundles([materialized_bundle("unsupported-hook")]))
                 .expect("unsupported hook fixture catalog"),
@@ -8473,6 +8445,7 @@ for line in sys.stdin:
 
     #[test]
     fn bundle_sidecar_duplicate_hook_declaration_is_rejected() {
+        let _env = StableEnvGuard::new();
         let registrations = [
             HookRegistration {
                 name: HookName::Event,
@@ -8697,6 +8670,7 @@ for line in sys.stdin:
 
     #[test]
     fn a_bundle_cannot_select_another_bundles_tool() {
+        let _env = StableEnvGuard::new();
         // A bundle agent's plane admits only its OWN bundle resources. Before
         // this rule, the allow-driven re-resolution searched every bundle, so a
         // selector could borrow the owner's tool.
@@ -8788,6 +8762,7 @@ export default {
 
     #[test]
     fn sidecar_resources_materialize_from_captured_turn_binding() {
+        let _env = StableEnvGuard::new();
         let old_catalog = Arc::new(to_agent_catalog(
             BundleCatalog::from_prepared(&agent_bundles([materialized_bundle("old")]))
                 .expect("old fixture catalog"),
@@ -8837,6 +8812,7 @@ export default {
 
     #[test]
     fn sidecar_materialization_uses_only_captured_agent_selected_closure() {
+        let _env = StableEnvGuard::new();
         let old_catalog = Arc::new(to_agent_catalog(
             BundleCatalog::from_prepared(&agent_bundles(disjoint_materialized_bundles("old")))
                 .expect("old disjoint fixture catalog"),
@@ -8912,6 +8888,7 @@ export default {
 
     #[test]
     fn sidecar_materialization_orders_deduplicated_extensions_by_canonical_identity() {
+        let _env = StableEnvGuard::new();
         let mut bundle = disjoint_materialized_bundle("ordered");
         bundle.agents[0]
             .resource_view
@@ -9005,6 +8982,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn bundle_sidecar_tool_declaration_binds_canonical_captured_resource() {
+        let _env = StableEnvGuard::new();
         let old_catalog = Arc::new(to_agent_catalog(
             BundleCatalog::from_prepared(&agent_bundles([materialized_bundle("old")]))
                 .expect("old fixture catalog"),
@@ -9046,6 +9024,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn bundle_sidecar_tool_declarations_match_loaded_module_set() {
+        let _env = StableEnvGuard::new();
         let catalog = Arc::new(to_agent_catalog(
             BundleCatalog::from_prepared(&agent_bundles([disjoint_materialized_bundle(
                 "selected-tools",
@@ -9097,6 +9076,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn bundle_sidecar_initialize_declarations_ignore_tool_and_hook_order() {
+        let _env = StableEnvGuard::new();
         let mut bundle = disjoint_materialized_bundle("order-independent");
         let selected_tool_ids = bundle
             .tools
@@ -9165,6 +9145,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn bundle_sidecar_hook_only_declaration_accepts_zero_tools() {
+        let _env = StableEnvGuard::new();
         let mut bundle = materialized_bundle("hook-only");
         bundle.tools.clear();
         bundle.agents[0].resource_view = ResourceView::default();
@@ -9193,6 +9174,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn bundle_sidecar_tool_cancellation_returns_without_rpc_reply() {
+        let _env = StableEnvGuard::new();
         let session = SessionId::new();
         let call = hya_proto::ToolCallId::new();
         let canonical_name = "bundle:hya/materialized/tool/echo".to_string();
@@ -9319,6 +9301,7 @@ for line in sys.stdin:
 
     #[test]
     fn sidecar_factory_is_scoped_to_the_selected_agent_effective_capability() {
+        let _env = StableEnvGuard::new();
         // Two bundles: `worker` selects the bundle tool, `lead` denies it. The
         // sidecar factory follows each agent's own effective capability.
         let worker_bundle = materialized_bundle("selected-agent");
@@ -9383,6 +9366,7 @@ for line in sys.stdin:
 
     #[test]
     fn executable_bundle_builds_bound_sidecar_factory_while_static_bundle_stays_process_free() {
+        let _env = StableEnvGuard::new();
         let executable_catalog = Arc::new(to_agent_catalog(
             BundleCatalog::from_prepared(&agent_bundles([materialized_bundle("executable")]))
                 .expect("executable fixture catalog"),
@@ -9491,6 +9475,7 @@ for line in sys.stdin:
     /// stops with the lifecycle token.
     #[tokio::test]
     async fn catalog_scope_sweeper_evicts_idle_scopes_until_stopped() {
+        let _env = StableEnvGuard::new();
         let (router, _model) = offline_router(None);
         let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
         let runtime = Arc::new(RuntimeRegistry::new(
