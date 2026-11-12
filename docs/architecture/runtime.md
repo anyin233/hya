@@ -1106,6 +1106,26 @@ applies. A fraction outside `(0.0, 1.0]` falls back to the flat threshold.
 `max_output_tokens`, and `handoff` (send the verbatim transcript plus one
 trailing handoff prompt instead of the rendered serialization).
 
+### Final request window check
+
+Each round accounts for the composed system prompt and tool schemas when
+measuring context for the reduction ladder. Its threshold includes this
+fixed request material as well as the transcript. For example, a large system
+prompt can trigger reduction even when the conversation alone is small.
+
+After reduction and `chat.params` rewriting, immediately before opening a
+provider stream, the engine estimates the final
+`CompletionRequest` with `TokenAccounting`, using the selected model's reasoning
+replay policy. It includes `system`, `messages` (including images), and `tools`
+(name, description, and input schema), plus any explicit `max_output_tokens`
+reservation. The guard runs for every configured, hook-selected, and Workflow
+fallback candidate against that candidate's advertised nonzero `max_context`.
+An oversized request fails with a `ProviderError::Incompatible` containing the
+model, estimated input/output tokens, and context window; that request is never
+sent. Unknown models still use the router's normal unknown-model error.
+No new configuration is required; existing compaction settings control reduction.
+Estimates are local estimates, not a provider tokenizer guarantee.
+
 ### The reduction ladder
 
 When the window is over threshold, the turn walks

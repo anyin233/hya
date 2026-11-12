@@ -1234,11 +1234,11 @@ async fn recorded_observability_never_enters_the_parent_model_input() {
             Arc::new(LeakProbeSummarizer),
             hya_core::CompactionConfig {
                 // The fake route advertises a 200k window, so the threshold is
-                // window-scaled; 0.001 clamps to MIN_RESOLVED_THRESHOLD (1000).
-                // The child's directive clears that; the lead's prompt does not.
+                // window-scaled to 20k, above the lead's system and tool schemas.
+                // The child's directive clears that; the lead's request does not.
                 token_threshold: 1_000_000,
                 keep_recent: 0,
-                context_fraction: 0.001,
+                context_fraction: 0.1,
                 ..hya_core::CompactionConfig::default()
             },
         ),
@@ -1262,10 +1262,10 @@ async fn recorded_observability_never_enters_the_parent_model_input() {
         .await
         .unwrap();
 
-    // >1000 tokens (>4000 chars) so the child crosses the resolved threshold.
+    // The child crosses 20k tokens even after counting the fixed request material.
     let directive = format!(
         "SECRET_DIRECTIVE_MARKER audit the retry paths. {}",
-        "x".repeat(8000)
+        "x".repeat(128_000)
     );
     let mut spec = member(&engine, &agent, &directive);
     spec.tool_call = Some(ToolCallId::new());

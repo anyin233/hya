@@ -668,7 +668,7 @@ async fn under_threshold_turn_does_not_require_or_lookup_fixed_compaction() {
     let engine = engine_with(
         catalog(&[AgentFixture::main("hya-main")]),
         provider.clone() as Arc<dyn Provider>,
-        true,
+        false,
     )
     .await;
     let session = engine
