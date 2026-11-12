@@ -230,7 +230,7 @@ async fn router_clears_reasoning_for_provider_without_reasoning_request() {
 }
 
 #[tokio::test]
-async fn router_fails_over_after_retryable_pre_stream_failure() {
+async fn router_returns_retryable_pre_stream_failure_without_failover() {
     let primary = Arc::new(FailingProvider {
         calls: AtomicUsize::new(0),
         fail_after_stream_start: false,
@@ -251,16 +251,10 @@ async fn router_fails_over_after_retryable_pre_stream_failure() {
         headers: Default::default(),
     };
 
-    let events = router
-        .stream(req, SessionId::new(), MessageId::new())
-        .await
-        .unwrap()
-        .collect::<Vec<_>>()
-        .await;
-
-    assert!(events.iter().all(Result::is_ok));
+    let result = router.stream(req, SessionId::new(), MessageId::new()).await;
+    assert!(matches!(result, Err(ProviderError::Transport(_))));
     assert_eq!(primary.calls.load(Ordering::SeqCst), 1);
-    assert!(backup.recorded.lock().unwrap().is_some());
+    assert!(backup.recorded.lock().unwrap().is_none());
 }
 
 #[tokio::test]

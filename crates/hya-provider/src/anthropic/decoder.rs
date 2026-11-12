@@ -5,6 +5,7 @@ use hya_proto::{
 };
 use serde_json::{Value, json};
 
+use crate::wire::ToolAsm;
 use crate::{Decoder, ProviderError, ReasoningEffort};
 
 enum BlockKind {
@@ -16,10 +17,7 @@ enum BlockKind {
 
 struct Block {
     kind: BlockKind,
-    part: PartId,
-    call: ToolCallId,
-    name: String,
-    args: String,
+    tool: ToolAsm,
     signature: Option<String>,
     redacted_data: Option<String>,
 }
@@ -63,13 +61,13 @@ impl AnthropicDecoder {
         let mut out = Vec::new();
         for (_, block) in std::mem::take(&mut self.blocks) {
             if matches!(block.kind, BlockKind::Tool) {
-                let input = serde_json::from_str(&block.args).unwrap_or(Value::Null);
+                let input = block.tool.input();
                 out.push(Event::ToolCallRequested {
                     session,
                     message,
-                    part: block.part,
-                    call: block.call,
-                    name: ToolName::new(block.name),
+                    part: block.tool.part,
+                    call: block.tool.call,
+                    name: ToolName::new(block.tool.name),
                     input,
                 });
             }
@@ -121,10 +119,10 @@ impl Decoder for AnthropicDecoder {
                             index,
                             Block {
                                 kind: BlockKind::Text,
-                                part,
-                                call: ToolCallId::new(),
-                                name: String::new(),
-                                args: String::new(),
+                                tool: ToolAsm {
+                                    part,
+                                    ..ToolAsm::new()
+                                },
                                 signature: None,
                                 redacted_data: None,
                             },
@@ -141,10 +139,10 @@ impl Decoder for AnthropicDecoder {
                             index,
                             Block {
                                 kind: BlockKind::Reasoning,
-                                part,
-                                call: ToolCallId::new(),
-                                name: String::new(),
-                                args: String::new(),
+                                tool: ToolAsm {
+                                    part,
+                                    ..ToolAsm::new()
+                                },
                                 signature: None,
                                 redacted_data: None,
                             },
@@ -168,10 +166,10 @@ impl Decoder for AnthropicDecoder {
                             index,
                             Block {
                                 kind: BlockKind::RedactedReasoning,
-                                part,
-                                call: ToolCallId::new(),
-                                name: String::new(),
-                                args: String::new(),
+                                tool: ToolAsm {
+                                    part,
+                                    ..ToolAsm::new()
+                                },
                                 signature: None,
                                 redacted_data: data,
                             },
@@ -197,10 +195,12 @@ impl Decoder for AnthropicDecoder {
                             index,
                             Block {
                                 kind: BlockKind::Tool,
-                                part,
-                                call,
-                                name: name.clone(),
-                                args: String::new(),
+                                tool: ToolAsm {
+                                    part,
+                                    call,
+                                    name: name.clone(),
+                                    ..ToolAsm::new()
+                                },
                                 signature: None,
                                 redacted_data: None,
                             },
@@ -228,7 +228,7 @@ impl Decoder for AnthropicDecoder {
                                 out.push(Event::TextDelta {
                                     session,
                                     message,
-                                    part: block.part,
+                                    part: block.tool.part,
                                     delta: text.to_string(),
                                 });
                             }
@@ -241,7 +241,7 @@ impl Decoder for AnthropicDecoder {
                                 out.push(Event::ReasoningDelta {
                                     session,
                                     message,
-                                    part: block.part,
+                                    part: block.tool.part,
                                     delta: text.to_string(),
                                 });
                             }
@@ -257,15 +257,7 @@ impl Decoder for AnthropicDecoder {
                                 .and_then(|d| d.get("partial_json"))
                                 .and_then(Value::as_str)
                             {
-                                block.args.push_str(pj);
-                                out.push(Event::ToolInputDelta {
-                                    session,
-                                    message,
-                                    part: block.part,
-                                    call: block.call,
-                                    name: ToolName::new(&block.name),
-                                    delta: pj.to_string(),
-                                });
+                                out.push(block.tool.delta(session, message, pj));
                             }
                         }
                         _ => {}
@@ -279,12 +271,12 @@ impl Decoder for AnthropicDecoder {
                         BlockKind::Text => out.push(Event::TextEnd {
                             session,
                             message,
-                            part: block.part,
+                            part: block.tool.part,
                         }),
                         BlockKind::Reasoning => out.push(Event::ReasoningEnd {
                             session,
                             message,
-                            part: block.part,
+                            part: block.tool.part,
                             provider_data: block.signature.as_ref().map(
                                 |signature| json!({"type": "thinking", "signature": signature}),
                             ),
@@ -292,7 +284,7 @@ impl Decoder for AnthropicDecoder {
                         BlockKind::RedactedReasoning => out.push(Event::ReasoningEnd {
                             session,
                             message,
-                            part: block.part,
+                            part: block.tool.part,
                             provider_data: block
                                 .redacted_data
                                 .as_ref()
