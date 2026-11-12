@@ -794,13 +794,19 @@ together. Forced handoffs retain prior state and remain searchable. `wait`
 returns the current episode's failure reason, including a kill before its first
 turn. A refused voluntary report is discarded; handling late mail requires a
 new `report` call. Terminal errors are returned or logged with the session id,
-without fallback writes. Root teardown cancels member turns before archiving.
+without a competing terminal writer. Root teardown requests each episode's
+ending, awaits its completion, then reconciles orphans; it sends no report mail.
 
-Spawn and revival wait for a killed team's slots to finish cleanup, then
-restore `main` and fresh activity budgets on an uncancelled team. For example,
-mail a new directive to a budget-killed child: it revives under the same session
-and can wake its parent again. A refused competing revival writes neither its
-prior-handoff message nor its directive.
+A killed team leaves the live map immediately. New tasks use fresh activity
+counters and the triggering turn's `main` context while old episodes finish.
+Only revival of the same member waits for its previous episode. For example,
+mail a new directive to an archived budget-killed child: it revives under the
+same session and can wake its parent again. A refused competing revival writes
+neither its prior-handoff message nor its directive. Registration plus episode
+installation and orphan Takeover share a supervisor claim-write boundary across
+team generations; kill does not wait on it. Shutdown joins composition intake
+before resident draining, overlaps turn drain with episode endings, and joins
+the supervisor bus listener before returning.
 
 ## AgentBundle activation sidecars (0.34.11)
 

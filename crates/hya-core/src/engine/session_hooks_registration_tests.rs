@@ -450,6 +450,7 @@ async fn revived_resident_ignores_stale_initialization(at_start: bool) {
     let hooks = Arc::new(Hooks::default());
     let (engine, supervisor, agent, root) =
         fixture(SubagentLimits::default(), Some(hooks.clone())).await;
+    let _lead = engine.try_begin_turn(root).unwrap();
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let pause = if at_start {
@@ -810,10 +811,26 @@ async fn team_turn_budget_kill_before_first_turn_closes_initial_task() {
         None,
     )
     .await;
-    assert_eq!(
-        engine.governor().unwrap().charge_team_turn(root),
-        crate::TeamBudget::Ok
-    );
+    let _lead = engine.try_begin_turn(root).unwrap();
+    let (first, _) = spawn(&supervisor, &engine, &agent, root, None)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while engine.turn_active(first)
+            || engine
+                .read_projection(first)
+                .await
+                .unwrap()
+                .session
+                .messages
+                .last()
+                .is_none_or(|m| m.role != hya_proto::Role::Assistant || m.finish.is_none())
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     let (child, handle) = spawn(&supervisor, &engine, &agent, root, None)
         .await
         .unwrap();
@@ -986,8 +1003,8 @@ async fn mail_to_a_killed_team_waits_for_cleanup_and_restores_main() {
         .unwrap()
         .unwrap();
     assert!(
-        matches!(spawned, Ok((session, _)) if session == child),
-        "committed registration must survive initialization cancellation: {spawned:?}"
+        matches!(spawned, Err(crate::CoreError::Cancelled)),
+        "cancelled initialization must report the ending spawn: {spawned:?}"
     );
     tokio::time::timeout(Duration::from_secs(5), revive)
         .await
@@ -1169,11 +1186,11 @@ async fn wait_after_a_revived_member_is_killed_before_its_first_turn_uses_this_e
     );
     *hooks.pause_spawn.lock().unwrap() = None;
     release.notify_waiters();
-    tokio::time::timeout(Duration::from_secs(5), reviving)
+    let result = tokio::time::timeout(Duration::from_secs(5), reviving)
         .await
         .unwrap()
-        .unwrap()
         .unwrap();
+    assert!(matches!(result, Err(crate::CoreError::Cancelled)));
 }
 
 #[tokio::test]

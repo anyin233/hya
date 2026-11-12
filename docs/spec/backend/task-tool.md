@@ -508,23 +508,42 @@ archive commits. Terminal activity never consumes unread mail based on the
 terminal note; only explicit delivery/consumption advances the cursor.
 
 For example, after a budget kill, send a new directive to the archived child to
-revive it through the existing mail revival path. Spawn and revival wait for a
-killed team's slots to finish cleanup before registration; then a fresh team
-restores `main`, resets activity budgets and uses a fresh cancellation token.
-Registration and the decision to kill share an async gate, held only through
-durable registration and slot installation, never across lifecycle hooks.
-Revival's prior-handoff message commits with its new claim and arming directive;
-a competing claim refuses the whole registration without transcript writes.
-Revival still retains the
-existing transcript; bounded episode context is separate work.
+revive it through the existing mail revival path. A killed team leaves the live
+map immediately. A new `task` uses fresh turn/message counters and the new
+triggering turn's `main` guidance; it does not wait for unrelated endings.
+Revival waits only for the same member's previous episode completion.
 
-Root teardown obtains its owned capability through
-`ArchiveReviver::resident_claim(root: SessionId, child: SessionId) -> Option<ActorClaim>`.
-The supervisor returns the slot's claim. Orphan reconciliation takes the
-registration lock and verifies that no episode exists before Takeover.
-Forced teardown holds further resident wakes and cancels each member's turn
-before acquiring its handoff lease. The orphan finalizer uses the runtime-owning
-store, never a gate-checked voluntary report.
+The supervisor serializes claim commit plus episode installation with orphan
+Takeover across team generations. Kill itself never waits on registration or
+plugin hooks. Registration committed during a kill installs an already-ending
+episode. Its registration envelopes publish before its archive envelopes; if
+initialization is cancelled, the spawn returns `CoreError::Cancelled`, which the
+`task` reply represents as a failed member rather than `status: "running"`.
+Revival's prior-handoff message still commits with its new claim and arming
+directive; bounded episode context is separate work.
+
+`SessionEngine::force_archive_team(root: SessionId) -> Result<(), CoreError>`
+requests `RootTeardown` endings for all live episodes, awaits their completion,
+then reconciles remaining roster orphans with Takeover. It does not acquire a
+member's turn lease or mail failure reports to parents. A root delete waits for
+this boundary before deleting its log, and propagates a terminal write failure.
+`ResidentSupervisor::drain(cause: FinishCause, deadline: Duration) -> TurnDrainReport`
+refuses new turns, drains active turns alongside `Shutdown` endings, awaits all
+episodes, reconciles actors already orphaned when draining began, and cancels and
+joins the bus listener. A terminal write failure during this drain leaves an
+orphan for the next ending request. Runtime
+intake and registration handlers must already have been joined before calling
+this lower-level drain. An ending that cannot stop its sidecar within five
+seconds drops the handle and still removes the episode; a forced ending's member
+summary includes `sidecar did not stop: ...`.
+
+Budget endings use `AgentArchived { reason: Killed }` and
+`MemberFinished { status: Failed }`; teardown uses `RootTeardown` / `Cancelled`;
+shutdown uses `Shutdown` / `Cancelled`. None sends report mail. The first ending
+request wins. Cancelling the public team token requests shutdown even while an
+episode is idle or generating a report handoff. Terminal envelopes are published
+after removing the episode from memory, before resolving its completion; the
+next episode cannot publish a new registration ahead of those envelopes.
 
 ### Mail during a running turn
 
@@ -550,7 +569,7 @@ endings; requesters only set the first ending and await its completion.
 is the Workflow cancellation entry. Parent/user archive retain the tool and API
 schemas above. A dropped caller never cancels the ending. A failed terminal write
 removes the episode, returns its error to archive waiters and leaves an orphan;
-a later archive reconciles it with Takeover under the registration lock.
+a later archive reconciles it with Takeover under the supervisor claim-write boundary.
 
 Direct user prompts and turns on any registered team member, live or archived,
 return `CoreError::Invalid` telling the caller to steer the subagent with mail.

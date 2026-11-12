@@ -295,7 +295,6 @@ async fn i18_shutdown_bounds_stuck_turn_and_sidecar_and_leaves_no_claim() {
 }
 
 #[tokio::test]
-#[ignore = "M4-3: I5"]
 async fn i5_post_kill_task_uses_fresh_team_without_waiting_for_other_endings() {
     let test = "i5_post_kill_task_uses_fresh_team_without_waiting_for_other_endings";
     if support::lifecycle::isolated_sidecar_config_with(test, &[("HYA_SUBAGENT_TURN_BUDGET", "3")])
@@ -303,6 +302,7 @@ async fn i5_post_kill_task_uses_fresh_team_without_waiting_for_other_endings() {
         return;
     }
     let (mut h, plugin, mut control, _, stuck) = blocked_sidecar().await;
+    let killed = h.built.resident_supervisor().team_cancel(h.root).unwrap();
     let (other, handle) = h.spawn(vec![Round::text("another real activation")]).await;
     h.until(other, |p| {
         p.session
@@ -311,15 +311,7 @@ async fn i5_post_kill_task_uses_fresh_team_without_waiting_for_other_endings() {
             .any(|m| m.role == hya_proto::Role::Assistant && m.finish.is_some())
     })
     .await;
-    if !h
-        .engine
-        .read_projection(h.root)
-        .await
-        .unwrap()
-        .team
-        .archived
-        .contains_key(&stuck)
-    {
+    if !killed.is_cancelled() {
         h.mail(
             &handle,
             "one more real activation trips the turn budget".into(),
@@ -327,17 +319,9 @@ async fn i5_post_kill_task_uses_fresh_team_without_waiting_for_other_endings() {
         .await
         .unwrap();
     }
-    h.archived(&stuck).await;
-    assert_eq!(
-        h.engine
-            .read_projection(h.root)
-            .await
-            .unwrap()
-            .team
-            .archived[&stuck]
-            .reason,
-        ArchiveReason::Killed
-    );
+    tokio::time::timeout(support::lifecycle::BOUND, killed.cancelled())
+        .await
+        .unwrap();
     let mut requests = h.provider.requests.subscribe();
     let directive = h
         .provider
@@ -378,6 +362,19 @@ async fn i5_post_kill_task_uses_fresh_team_without_waiting_for_other_endings() {
     } else {
         false
     };
+    // New work was checked while the old member was still ending. Revival
+    // targets its archived identity, after that member's own bounded ending.
+    h.archived(&stuck).await;
+    assert_eq!(
+        h.engine
+            .read_projection(h.root)
+            .await
+            .unwrap()
+            .team
+            .archived[&stuck]
+            .reason,
+        ArchiveReason::Killed
+    );
     let revive_marker = h.provider.script(vec![report("revived after kill")]);
     let mut revive = tokio::spawn({
         let engine = h.engine.clone();
@@ -873,7 +870,6 @@ async fn i6_turn_budget_kill_records_failure_reason() {
 }
 
 #[tokio::test]
-#[ignore = "M4-3: I6"]
 async fn i6_workflow_cancel_records_parent_archive_reason() {
     let mut h = Harness::new().await;
     let gate = Arc::new(Gate::default());
@@ -1466,7 +1462,6 @@ async fn i6_shutdown_records_shutdown_reason_and_releases_claim() {
 }
 
 #[tokio::test]
-#[ignore = "M4-3: I17"]
 async fn i17_root_delete_does_not_send_failure_mail_or_wake_members() {
     let mut h = Harness::new().await;
     let gate = Arc::new(Gate::default());
@@ -1958,4 +1953,381 @@ async fn e1_orphan_archives_and_revival_share_the_registration_lock() {
     }
     assert_eq!(h.built.resident_supervisor().episode_count(), 0);
     h.shutdown().await;
+}
+
+#[tokio::test]
+async fn a1_cancel_wakes_an_idle_episode() {
+    let mut h = Harness::new().await;
+    let (child, handle) = h.spawn(vec![Round::text("idle before cancel")]).await;
+    h.idle(child, &handle).await;
+    h.built
+        .resident_supervisor()
+        .team_cancel(h.root)
+        .unwrap()
+        .cancel();
+    h.archived(&handle).await;
+    assert_eq!(h.built.resident_supervisor().episode_count(), 0);
+    assert_eq!(
+        h.engine
+            .read_projection(h.root)
+            .await
+            .unwrap()
+            .team
+            .archived[&handle]
+            .reason,
+        ArchiveReason::Shutdown
+    );
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn a1_cancel_during_report_handoff_ends_without_spinning() {
+    let test = "a1_cancel_during_report_handoff_ends_without_spinning";
+    if support::lifecycle::isolated_config(test, &[]) {
+        return;
+    }
+    let mut h = Harness::new().await;
+    let gate = Arc::new(Gate::default());
+    h.provider
+        .handoffs
+        .lock()
+        .unwrap()
+        .push_back(Round::text(support::lifecycle::HANDOFF).gated(gate.clone()));
+    let (_, handle) = h.spawn(vec![report("report interrupted by cancel")]).await;
+    gate.arrived().await;
+    h.built
+        .resident_supervisor()
+        .team_cancel(h.root)
+        .unwrap()
+        .cancel();
+    h.archived(&handle).await;
+    gate.release();
+    assert_eq!(h.built.resident_supervisor().episode_count(), 0);
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn a4_delete_racing_report_resolves_every_ending_waiter() {
+    let mut h = Harness::new().await;
+    let gate = Arc::new(Gate::default());
+    h.provider
+        .handoffs
+        .lock()
+        .unwrap()
+        .push_back(Round::text(support::lifecycle::HANDOFF).gated(gate.clone()));
+    let (child, handle) = h.spawn(vec![report("report racing teardown")]).await;
+    gate.arrived().await;
+    let mut events = h.engine.bus().subscribe();
+    let supervisor = h.built.resident_supervisor();
+    let root = h.root;
+    let archive = supervisor.end_member(root, &handle);
+    let second = supervisor.end_member(root, &handle);
+    tokio::pin!(archive, second);
+    assert!(futures::poll!(&mut archive).is_pending());
+    assert!(futures::poll!(&mut second).is_pending());
+    assert!(
+        tokio::time::timeout(support::lifecycle::BOUND, h.engine.delete_session(h.root))
+            .await
+            .unwrap()
+            .unwrap()
+    );
+    tokio::time::timeout(support::lifecycle::BOUND, archive)
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(support::lifecycle::BOUND, second)
+        .await
+        .unwrap()
+        .unwrap();
+    gate.release();
+    assert_eq!(h.built.resident_supervisor().episode_count(), 0);
+    assert!(
+        !h.engine
+            .store()
+            .active_actor_ids()
+            .await
+            .unwrap()
+            .contains(&child)
+    );
+    while let Ok(event) = events.try_recv() {
+        assert!(
+            !matches!(event.event, Event::MailSent { .. }),
+            "teardown mailed a parent"
+        );
+    }
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn a4_delete_racing_init_resolves_every_ending_waiter() {
+    let plugin = support::lifecycle::BlockingPlugin::new().await;
+    let mut h = Harness::with_plugins(vec![plugin.spec.clone()]).await;
+    plugin.arm();
+    let spawning = h.start_tool("task", json!({"description":"init racing delete", "prompt":"must not run", "subagent_type":"hya-task", "model":"fake"})).await;
+    plugin.gate.arrived().await;
+    let root = h.engine.read_projection(h.root).await.unwrap();
+    let (handle, child) = root
+        .team
+        .roster
+        .iter()
+        .find(|(path, _)| path.as_str() != "main")
+        .map(|(path, entry)| (path.clone(), entry.session))
+        .unwrap();
+    let supervisor = h.built.resident_supervisor();
+    let root = h.root;
+    let archive = supervisor.end_member(root, &handle);
+    let second = supervisor.end_member(root, &handle);
+    tokio::pin!(archive, second);
+    assert!(futures::poll!(&mut archive).is_pending());
+    assert!(futures::poll!(&mut second).is_pending());
+    assert!(
+        tokio::time::timeout(support::lifecycle::BOUND, h.engine.delete_session(h.root))
+            .await
+            .unwrap()
+            .unwrap()
+    );
+    tokio::time::timeout(support::lifecycle::BOUND, archive)
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(support::lifecycle::BOUND, second)
+        .await
+        .unwrap()
+        .unwrap();
+    let _ = tokio::time::timeout(support::lifecycle::BOUND, spawning)
+        .await
+        .unwrap()
+        .unwrap();
+    plugin.gate.release();
+    assert_eq!(h.built.resident_supervisor().episode_count(), 0);
+    assert!(
+        !h.engine
+            .store()
+            .active_actor_ids()
+            .await
+            .unwrap()
+            .contains(&child)
+    );
+    h.shutdown().await;
+    drop(h);
+    plugin.shutdown().await;
+}
+
+#[tokio::test]
+async fn a6_reports_record_done_and_failed_run_status() {
+    let mut h = Harness::new().await;
+    for (outcome, expected) in [
+        ("done", hya_proto::MemberRunStatus::Done),
+        ("failed", hya_proto::MemberRunStatus::Failed),
+    ] {
+        let (child, handle) = h
+            .spawn(vec![Round::tool(
+                "report",
+                json!({"result":"reported outcome", "outcome":outcome}),
+            )])
+            .await;
+        h.archived(&handle).await;
+        let root = h.engine.read_projection(h.root).await.unwrap();
+        assert_eq!(
+            root.session
+                .members
+                .iter()
+                .find(|row| row.child == Some(child))
+                .unwrap()
+                .status,
+            expected
+        );
+    }
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn a3_kill_terminate_error_removes_episode_within_bound() {
+    let test = "a3_kill_terminate_error_removes_episode_within_bound";
+    if support::lifecycle::isolated_config(test, &[("HYA_SUBAGENT_MESSAGE_BUDGET", "1")]) {
+        return;
+    }
+    let mut h = Harness::new().await;
+    let stopping = Arc::new(Gate::default());
+    let (child, handle) = h
+        .spawn_with_sidecar(
+            vec![Round::text("idle sidecar")],
+            Arc::new(support::lifecycle::EndingSidecar {
+                stopping: stopping.clone(),
+                fail: true,
+            }),
+        )
+        .await
+        .unwrap();
+    h.idle(child, &handle).await;
+    let mut events = h.engine.bus().subscribe();
+    h.mail(&handle, "first message".into()).await.unwrap();
+    h.mail(&handle, "second message kills team".into())
+        .await
+        .unwrap();
+    stopping.arrived().await;
+    stopping.release();
+    h.archived(&handle).await;
+    tokio::time::timeout(support::lifecycle::BOUND, async {
+        loop {
+            if h.built.resident_supervisor().episode_count() == 0 {
+                break;
+            }
+            events.recv().await.unwrap();
+        }
+    })
+    .await
+    .expect("terminate failure retained an episode beyond its ending bound");
+    assert!(
+        h.engine
+            .read_projection(h.root)
+            .await
+            .unwrap()
+            .session
+            .members
+            .iter()
+            .any(|m| m.child == Some(child) && m.summary.contains("sidecar did not stop"))
+    );
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn a6_archive_bus_observation_implies_episode_gone() {
+    let mut h = Harness::new().await;
+    let stopping = Arc::new(Gate::default());
+    let mut bus = h.engine.bus().subscribe();
+    let (child, handle) = h
+        .spawn_with_sidecar(
+            vec![report("sidecar report")],
+            Arc::new(support::lifecycle::EndingSidecar {
+                stopping: stopping.clone(),
+                fail: false,
+            }),
+        )
+        .await
+        .unwrap();
+    stopping.arrived().await;
+    let events = std::iter::from_fn(|| bus.try_recv().ok()).collect::<Vec<_>>();
+    let premature = events.iter().any(
+        |event| matches!(event.event, Event::AgentArchived { child: actor, .. } if actor == child),
+    );
+    stopping.release();
+    h.archived(&handle).await;
+    if !premature {
+        tokio::time::timeout(support::lifecycle::BOUND, async {
+            loop {
+                let event = bus.recv().await.unwrap();
+                if matches!(event.event, Event::AgentArchived { child: actor, .. } if actor == child) { break; }
+            }
+        }).await.unwrap();
+    }
+    assert_eq!(h.built.resident_supervisor().episode_count(), 0);
+    h.shutdown().await;
+    assert!(
+        !premature,
+        "archive published while sidecar termination still owned the episode"
+    );
+}
+
+#[tokio::test]
+async fn a5_kill_during_init_publishes_registration_first_and_spawn_fails() {
+    let test = "a5_kill_during_init_publishes_registration_first_and_spawn_fails";
+    if support::lifecycle::isolated_config(test, &[("HYA_SUBAGENT_MESSAGE_BUDGET", "1")]) {
+        return;
+    }
+    let plugin = support::lifecycle::BlockingPlugin::new().await;
+    let mut h = Harness::with_plugins(vec![plugin.spec.clone()]).await;
+    let (sibling, sibling_handle) = h.spawn(vec![Round::text("sibling")]).await;
+    h.idle(sibling, &sibling_handle).await;
+    plugin.arm();
+    let mut bus = h.engine.bus().subscribe();
+    // The public spawn call exposes its result independently of the lead turn
+    // that the budget kill also cancels.
+    let result = {
+        let spawning = h.spawn_with_sidecar(
+            vec![Round::text("must not run")],
+            Arc::new(support::lifecycle::EndingSidecar {
+                stopping: Arc::new(Gate::default()),
+                fail: false,
+            }),
+        );
+        tokio::pin!(spawning);
+        tokio::time::timeout(support::lifecycle::BOUND, async {
+            tokio::select! {
+                result = &mut spawning => panic!("initializer was not gated: {result:?}"),
+                () = plugin.gate.arrived() => {},
+            }
+            h.mail(&sibling_handle, "first budget message".into())
+                .await
+                .unwrap();
+            h.mail(&sibling_handle, "second budget message".into())
+                .await
+                .unwrap();
+            spawning.await
+        })
+        .await
+        .unwrap()
+    };
+    plugin.gate.release();
+    let root = h.engine.read_projection(h.root).await.unwrap();
+    let child = root.session.members.last().unwrap().child.unwrap();
+    let mut events = Vec::new();
+    tokio::time::timeout(support::lifecycle::BOUND, async {
+        loop {
+            let event = bus.recv().await.unwrap();
+            let ended =
+                matches!(event.event, Event::AgentArchived { child: actor, .. } if actor == child);
+            events.push(event.event);
+            if ended {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let registered = events.iter().position(|event| matches!(event, Event::AgentRegistered { agent_session, .. } if *agent_session == child)).unwrap();
+    let archived = events
+        .iter()
+        .position(
+            |event| matches!(event, Event::AgentArchived { child: actor, .. } if *actor == child),
+        )
+        .unwrap();
+    assert!(
+        registered < archived,
+        "archive preceded registration: {events:?}"
+    );
+    assert!(
+        matches!(result, Err(hya_core::CoreError::Cancelled)),
+        "cancelled init reported spawn success: {result:?}"
+    );
+    h.shutdown().await;
+    drop(h);
+    plugin.shutdown().await;
+}
+
+#[tokio::test]
+async fn i18_shutdown_reconciles_an_already_orphaned_member() {
+    let mut h = Harness::new().await;
+    let (child, handle) = h.spawn(vec![Round::text("orphan before shutdown")]).await;
+    h.idle(child, &handle).await;
+    let epoch = h.claim_epoch(child).await;
+    h.trigger("agent_archived").await;
+    assert!(matches!(
+        h.tool("archive", json!({"target":handle})).await,
+        ToolPartState::Error { .. }
+    ));
+    assert_eq!(h.built.resident_supervisor().episode_count(), 0);
+    h.heal().await;
+    h.shutdown().await;
+    let root = h.engine.read_projection(h.root).await.unwrap();
+    assert_eq!(root.team.archived[&handle].reason, ArchiveReason::Shutdown);
+    assert!(
+        !h.engine
+            .store()
+            .active_actor_ids()
+            .await
+            .unwrap()
+            .contains(&child)
+    );
+    assert_eq!(h.claim_epoch(child).await, epoch + 1);
 }

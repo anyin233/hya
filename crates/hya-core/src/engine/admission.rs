@@ -284,68 +284,46 @@ impl SessionEngine {
         Ok((outcome.work, aborted_operations))
     }
 
-    /// Root-turn teardown (ADR-0015): force-archive every live descendant with
-    /// a degraded handoff and a synthesized failure report, then hand claim
-    /// release to the installed supervisor seam. The durable log keeps
-    /// everything; the roster empties below the root.
-    ///
-    /// # Errors
-    /// Propagates store/event failures; a failed row aborts the sweep.
+    /// Root teardown requests episode-owned endings, then reconciles orphans.
+    /// No failure reports are mailed to parents during teardown.
     pub async fn force_archive_team(&self, root: SessionId) -> Result<(), CoreError> {
-        if let Some(reviver) = self.archive_reviver() {
-            reviver.stop_for_user(root);
+        if let Some(supervisor) = self.archive_reviver() {
+            return supervisor.teardown_root(root).await;
         }
+        // Without a supervisor there can be no in-memory episode. The store's
+        // runtime-owner check remains authoritative for orphan Takeover.
         let projection = self.read_projection(root).await?;
-        // Deepest paths first so a child's report mail still finds its (live)
-        // parent inside the same sweep.
-        let mut paths: Vec<&String> = projection
+        let mut members = projection
             .team
             .roster
-            .keys()
-            .filter(|path| path.as_str() != hya_proto::ROOT_HANDLE)
-            .collect();
-        paths.sort_by_key(|path| std::cmp::Reverse(path.len()));
-        for path in paths {
-            let child = projection.team.roster[path].session;
-            self.stop_turn(
-                child,
-                hya_proto::FinishCause::Archived,
-                super::DRAIN_DEADLINE,
-            )
-            .await;
-            let claim = self
-                .archive_reviver()
-                .and_then(|reviver| reviver.resident_claim(root, child));
-            crate::resident::archive_reported_agent(
-                self,
-                root,
-                path,
-                child,
-                claim.as_ref(),
-                hya_proto::ReportOutcome::Failed,
-                "root turn teardown".to_string(),
-                hya_proto::ArchiveReason::RootTeardown,
-                true,
-            )
-            .await?;
-        }
-        if let Some(reviver) = self.archive_reviver() {
-            reviver.teardown_root(root).await?;
-        }
-        Ok(())
-    }
-
-    pub(crate) async fn release_resident_actor_claim(
-        &self,
-        claim: &ActorClaim,
-    ) -> Result<(), CoreError> {
-        let records = self.store.release_claim(claim).await?;
-        if let Some(governor) = &self.governor {
-            for record in records {
-                if record.logical_released {
-                    governor.release_operation(record.operation_id);
-                }
-            }
+            .iter()
+            .filter(|(path, _)| path.as_str() != hya_proto::ROOT_HANDLE)
+            .collect::<Vec<_>>();
+        members.sort_by_key(|(path, _)| std::cmp::Reverse(path.len()));
+        for (handle, member) in members {
+            let handoff = self.degraded_terminal_handoff(member.session).await;
+            let (_, envelopes, admissions) = self
+                .store
+                .finalize_resident_archive(
+                    hya_store::ResidentArchiveOwner::Takeover,
+                    root,
+                    handle,
+                    hya_store::ResidentArchive {
+                        actor: member.session,
+                        generation: handoff.generation,
+                        doc: handoff.doc,
+                        degraded: handoff.degraded,
+                        reason: hya_proto::ArchiveReason::RootTeardown,
+                        note: "root turn teardown".into(),
+                        member_status: hya_proto::MemberRunStatus::Cancelled,
+                        report: None,
+                        check_gate: false,
+                        expected_work: None,
+                    },
+                    hya_proto::FinishCause::Archived,
+                )
+                .await?;
+            self.publish_resident_finalization((envelopes, admissions));
         }
         Ok(())
     }
@@ -1175,8 +1153,10 @@ mod tests {
         );
         assert_eq!(governor.remaining_budget(actor), 0);
 
-        engine.release_resident_actor_claim(&claim).await.unwrap();
-        engine.release_resident_actor_claim(&claim).await.unwrap();
+        for _ in 0..2 {
+            let admissions = store.release_claim(&claim).await.unwrap();
+            engine.publish_resident_finalization((Vec::new(), admissions));
+        }
 
         assert_eq!(governor.remaining_budget(actor), 1);
         assert_eq!(

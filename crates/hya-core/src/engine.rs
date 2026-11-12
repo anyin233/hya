@@ -526,9 +526,8 @@ pub trait ArchiveReviver: Send + Sync {
         body: String,
     ) -> Result<(), CoreError>;
 
-    /// Root-turn teardown (ADR-0015): release every live actor claim under
-    /// `root` and stop the resident tasks. Event emission happens engine-side
-    /// before this is called.
+    /// End every episode under `root`, await its result, then reconcile orphan
+    /// claims. The episode owners publish their own terminal events.
     async fn teardown_root(&self, root: SessionId) -> Result<(), CoreError>;
 
     /// Whether an episode owns this member's turns. Clients steer it with mail.
@@ -549,11 +548,6 @@ pub trait ArchiveReviver: Send + Sync {
         Err(CoreError::Invalid(
             "resident orphan has no supervisor".into(),
         ))
-    }
-
-    /// Current capability for a resident owned by this supervisor.
-    fn resident_claim(&self, _root: SessionId, _child: SessionId) -> Option<ActorClaim> {
-        None
     }
 
     /// Archive `target` (a handle or session id) on behalf of `caller`, as
@@ -2049,9 +2043,9 @@ impl SessionEngine {
     pub async fn delete_session(&self, session: SessionId) -> Result<bool, CoreError> {
         // Root-turn teardown (ADR-0015 §1): deleting a team root force-archives
         // every live descendant (claims release, roster exits) before the log
-        // goes away. Best-effort — the store delete proceeds regardless.
+        // goes away. A failed ending must not leave tasks writing a deleted log.
         if let Ok((root, 0)) = self.session_lineage(session).await {
-            let _ = self.force_archive_team(root).await;
+            self.force_archive_team(root).await?;
         }
         let deleted = self.store.delete_session(session).await?;
         if deleted {

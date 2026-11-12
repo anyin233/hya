@@ -140,7 +140,7 @@ pub use loop_mode::{
     VerifierVerdict, drive_loop, run_loop, validate_budget,
 };
 pub use mailbox::run_mailbox_service;
-pub use orchestrator::{OperationReservation, SubagentGovernor, SubagentLimits, TeamBudget};
+pub use orchestrator::{OperationReservation, SubagentGovernor, SubagentLimits};
 pub use permission_mode::{PublishedPermissionMode, RuntimePermissionMode, SessionPermissionMode};
 pub use prompt::{
     PromptEnv, build_system_prompt, context_file_reads, discover_context_files,

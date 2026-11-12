@@ -25,8 +25,8 @@
 //!   main actor) is busy: its wake stays queued and quiescence is held back
 //!   until that turn's lease is released, when the supervisor (the engine's
 //!   `TurnBoundaryObserver`) delivers the deferred work.
-//! - **Runaway kill.** Per-team turn and message budgets (on the
-//!   [`SubagentGovernor`]) cancel the whole team when tripped.
+//! - **Runaway kill.** Per-team turn and message counters live on the team;
+//!   exceeding their configured limits cancels its episodes and harness lead turn.
 //!
 //! ## Concurrency model
 //! All accounting (busy count, per-slot status/pending, quiescence, kill) lives
@@ -38,7 +38,7 @@
 //! queued, and it can never hang (the last resident to idle always runs the check).
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use hya_bundle::{ChannelCapability, ChannelParticipantRole, ChannelTemplateKind};
@@ -59,7 +59,6 @@ use crate::error::CoreError;
 use crate::hooks::{
     AgentSpawnInput, HookDispatcher, SessionLifecycleInput, scope_activation_hooks,
 };
-use crate::orchestrator::TeamBudget;
 use crate::sidecar::{BoundSidecarFactory, SidecarHandle, SidecarStart};
 use crate::workflow::WorkflowTurnRoute;
 use crate::{AgentResourcePolicy, ChannelPolicy, TurnBinding};
@@ -200,12 +199,10 @@ struct Episode {
     synth_pending: bool,
     /// Present for resident subagents; the main/root actor remains transient.
     claim: Option<ActorClaim>,
-    /// Durable kill finalization completed for this slot's current claim.
-    kill_finalized: bool,
     /// Slot-local cancellation, inherited from the team's cancellation token.
     cancel: CancellationToken,
     ending: Option<Ending>,
-    done: watch::Sender<Option<Result<(), CoreError>>>,
+    done: EpisodeCompletion,
     /// The committed initial directive is an input even when no mail is owed.
     initial_prompt: Option<hya_proto::MessageId>,
     /// Accepted-but-not-yet-executed terminal report (ADR-0015).
@@ -231,14 +228,41 @@ enum Ending {
     Reported(PendingReport),
     Failed(String),
     Archived(String),
+    Killed(String),
+    Teardown,
+    Shutdown,
 }
 
 impl Ending {
     fn cause(&self) -> FinishCause {
         match self {
-            Self::Archived(_) => FinishCause::Archived,
+            Self::Archived(_) | Self::Teardown => FinishCause::Archived,
+            Self::Shutdown => FinishCause::Shutdown,
+            Self::Killed(_) => FinishCause::Other,
             Self::Failed(_) => FinishCause::Other,
             Self::Reported(_) => FinishCause::UserCancel,
+        }
+    }
+
+    fn forced_fields(&self) -> (ArchiveReason, MemberRunStatus, String) {
+        match self {
+            Self::Archived(note) => (
+                ArchiveReason::ArchivedByParent,
+                MemberRunStatus::Cancelled,
+                note.clone(),
+            ),
+            Self::Killed(note) => (ArchiveReason::Killed, MemberRunStatus::Failed, note.clone()),
+            Self::Teardown => (
+                ArchiveReason::RootTeardown,
+                MemberRunStatus::Cancelled,
+                "root turn teardown".into(),
+            ),
+            Self::Shutdown => (
+                ArchiveReason::Shutdown,
+                MemberRunStatus::Cancelled,
+                "stopped: shutdown".into(),
+            ),
+            Self::Reported(_) | Self::Failed(_) => unreachable!("report is not a forced ending"),
         }
     }
 }
@@ -252,7 +276,9 @@ impl Episode {
     ) -> watch::Receiver<Option<Result<(), CoreError>>> {
         let done = self.done.subscribe();
         if self.ending.is_none() {
-            engine.cancel_turn(session, ending.cause());
+            if !self.is_main {
+                engine.cancel_turn(session, ending.cause());
+            }
             self.ending = Some(ending);
             self.report = None;
             self.cancel.cancel();
@@ -268,12 +294,29 @@ impl Episode {
     }
 }
 
+#[derive(Clone)]
+enum TeamPhase {
+    Live,
+    Killed(Ending),
+}
+
+impl TeamPhase {
+    fn killed(&self) -> bool {
+        matches!(self, Self::Killed(_))
+    }
+}
+
+type EpisodeDone = watch::Receiver<Option<Result<(), CoreError>>>;
+type EpisodeCompletion = watch::Sender<Option<Result<(), CoreError>>>;
+
 /// The mutable, lock-guarded state of one team.
 struct TeamState {
     residents: HashMap<SessionId, Episode>,
     /// Number of non-idle residents (incl. main). Quiescence = this is 0.
     busy: usize,
-    killed: bool,
+    phase: TeamPhase,
+    turns_used: u64,
+    messages_used: u64,
     /// Monotonic counter bumped on every unit of new work (mail, registration).
     /// Quiescence re-fires only when this advances past the last synthesis.
     work_seq: u64,
@@ -281,11 +324,6 @@ struct TeamState {
     /// so the FIRST quiescence always fires (any real `work_seq` differs from it).
     last_synth_work_seq: u64,
     main_session: Option<SessionId>,
-    /// Root activation context survives slot cleanup so a fresh team can wake main.
-    main: Option<MainActivation>,
-    kill_reason: Option<String>,
-    /// Guards the one-time release of the team's governor counters.
-    team_budget_released: bool,
     /// The lead's (main actor's) last turn failed. While set the harness
     /// starts no main turn on its own — no quiescence synthesis, no mail
     /// wake — until a turn on the lead starts from outside the supervisor
@@ -403,11 +441,6 @@ enum Action {
     },
     /// The episode task runs the requested ending after its current turn.
     End(Ending),
-    /// The team was killed; the resident task must exit. `killed_now` is set for
-    /// the single caller that observed the transition, so kill side-effects run once.
-    Stop { killed_now: bool },
-    /// The team was killed, but this slot's durable finalization is still pending.
-    WaitForKillFinalization,
 }
 
 /// A single team's actor group: its residents, budgets, and cancellation.
@@ -416,35 +449,35 @@ struct TeamActor {
     engine: Arc<SessionEngine>,
     cancel: CancellationToken,
     state: Mutex<TeamState>,
-    /// Serializes registration with the decision to kill, never plugin work.
-    registration: Arc<tokio::sync::Mutex<()>>,
-    drained: Notify,
+    supervisor: Weak<ResidentSupervisor>,
 }
 
 impl TeamActor {
-    fn new(root: SessionId, engine: Arc<SessionEngine>) -> Self {
+    fn new(
+        root: SessionId,
+        engine: Arc<SessionEngine>,
+        supervisor: Weak<ResidentSupervisor>,
+    ) -> Self {
         Self {
             root,
             engine,
             cancel: CancellationToken::new(),
-            registration: Arc::new(tokio::sync::Mutex::new(())),
-            drained: Notify::new(),
+            supervisor,
             state: Mutex::new(TeamState {
                 residents: HashMap::new(),
                 busy: 0,
-                killed: false,
+                phase: TeamPhase::Live,
+                turns_used: 0,
+                messages_used: 0,
                 work_seq: 0,
                 last_synth_work_seq: u64::MAX,
                 main_session: None,
-                main: None,
-                kill_reason: None,
-                team_budget_released: false,
                 lead_failed: false,
             }),
         }
     }
 
-    /// The caller holds registration, so a kill cannot cross installation.
+    /// Main is installed before a fresh team is published to the supervisor.
     fn install_main(self: &Arc<Self>, context: MainActivation) {
         let notify = Arc::new(Notify::new());
         let cancel = self.cancel.child_token();
@@ -453,7 +486,6 @@ impl TeamActor {
             if state.residents.contains_key(&self.root) {
                 return;
             }
-            state.main = Some(context.clone());
             state.main_session = Some(self.root);
             state.residents.insert(
                 self.root,
@@ -473,7 +505,6 @@ impl TeamActor {
                     user_stopped: false,
                     synth_pending: false,
                     claim: None,
-                    kill_finalized: false,
                     cancel: cancel.clone(),
                     ending: None,
                     done: watch::channel(None).0,
@@ -498,7 +529,7 @@ impl TeamActor {
     fn install_episode(
         self: &Arc<Self>,
         session: SessionId,
-        slot: Episode,
+        mut slot: Episode,
         init: Option<EpisodeInit>,
     ) {
         let claim = slot.claim;
@@ -511,8 +542,18 @@ impl TeamActor {
                 !state.residents.contains_key(&session),
                 "episode installed twice"
             );
+            if let TeamPhase::Killed(ending) = &state.phase {
+                slot.request_end(&self.engine, session, ending.clone());
+            }
             state.work_seq = state.work_seq.saturating_add(1);
             state.residents.insert(session, slot);
+        }
+        if let Some(supervisor) = self.supervisor.upgrade() {
+            supervisor
+                .episodes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(session, self.clone());
         }
         tokio::spawn(episode_task(
             self.clone(),
@@ -671,25 +712,17 @@ impl TeamActor {
 
     /// Decide atomically what this claim does next, charging the turn budget.
     async fn next_action(&self, session: SessionId, claim: Option<&ActorClaim>) -> Action {
-        let _registration = self.registration.lock().await;
         let mut st = self.lock();
-        let killed = st.killed;
         let lead_failed = st.lead_failed;
         let Some(slot) = st
             .residents
             .get_mut(&session)
             .filter(|slot| slot.claim.as_ref() == claim)
         else {
-            return Action::Stop { killed_now: false };
+            unreachable!("episode task lost its slot");
         };
         if let Some(ending) = slot.ending.clone() {
             return Action::End(ending);
-        }
-        if killed {
-            if !slot.kill_finalized {
-                return Action::WaitForKillFinalization;
-            }
-            return Action::Stop { killed_now: false };
         }
         // A failed lead is never woken by the harness: its owed work (mail)
         // waits for the user to resume it.
@@ -791,6 +824,10 @@ impl TeamActor {
         if !has_work {
             self.maybe_fire_quiescence(&mut state);
         }
+        drop(state);
+        if let Some(supervisor) = self.supervisor.upgrade() {
+            supervisor.retire_team(self);
+        }
     }
 
     fn replace_recovered_claim(
@@ -829,7 +866,9 @@ impl TeamActor {
             ));
         }
         slot.claim = Some(recovered);
-        slot.kill_finalized = false;
+        if matches!(disposition, ResidentRecovery::AbortedRunning { .. }) {
+            slot.initial_prompt = None;
+        }
         if let Some(cursor) = cursor {
             slot.cursor = cursor;
         }
@@ -858,42 +897,26 @@ impl TeamActor {
                 state.main_session = None;
             }
         }
-        self.release_team_budget_if_empty();
+        self.forget_episode(session, claim);
     }
 
-    fn release_team_budget_if_empty(&self) {
-        let mut state = self.lock();
-        if state.killed && state.residents.is_empty() && !state.team_budget_released {
-            if let Some(governor) = self.engine.governor() {
-                governor.release_team(self.root);
+    fn forget_episode(&self, session: SessionId, claim: Option<&ActorClaim>) {
+        if let Some(supervisor) = self.supervisor.upgrade() {
+            let mut episodes = supervisor
+                .episodes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if episodes
+                .get(&session)
+                .is_some_and(|team| std::ptr::eq(team.as_ref(), self))
+            {
+                episodes.remove(&session);
             }
-            state.team_budget_released = true;
-            self.drained.notify_waiters();
+            drop(episodes);
+            if claim.is_some() {
+                supervisor.retire_team(self);
+            }
         }
-    }
-
-    fn mark_kill_finalized(&self, session: SessionId, handle: &str, claim: Option<&ActorClaim>) {
-        let mut state = self.lock();
-        let Some(slot) = state.residents.get_mut(&session) else {
-            return;
-        };
-        let same_claim = match (slot.claim.as_ref(), claim) {
-            (Some(current), Some(expected)) => current == expected,
-            (None, None) => true,
-            _ => false,
-        };
-        if slot.handle == handle && same_claim {
-            slot.kill_finalized = true;
-            slot.notify.notify_one();
-        }
-    }
-
-    fn kill_finalized(&self, session: SessionId, claim: Option<&ActorClaim>) -> bool {
-        let state = self.lock();
-        state
-            .residents
-            .get(&session)
-            .is_none_or(|slot| slot.claim.as_ref() != claim || slot.kill_finalized)
     }
 
     /// If the team just went fully idle with new work since the last synthesis,
@@ -904,7 +927,7 @@ impl TeamActor {
     fn maybe_fire_quiescence(&self, st: &mut TeamState) {
         // A failed lead gets no synthesis turn: the lead is dead until the
         // user resumes it (the synthesis re-fires after its next turn).
-        if st.killed || st.busy != 0 || st.lead_failed {
+        if st.phase.killed() || st.busy != 0 || st.lead_failed {
             return;
         }
         // Nor does a lead the user stopped: the user, not the harness, says
@@ -966,7 +989,7 @@ impl TeamActor {
     /// re-check quiescence, which that turn was holding back.
     fn on_turn_released(&self, session: SessionId) {
         let mut st = self.lock();
-        if st.killed {
+        if st.phase.killed() {
             return;
         }
         if let Some(slot) = st.residents.get(&session)
@@ -1034,7 +1057,7 @@ impl TeamActor {
     /// running or owes a turn (there is nothing to interrupt).
     fn stop_for_user(&self, session: SessionId) -> Vec<SessionId> {
         let mut st = self.lock();
-        if st.killed {
+        if st.phase.killed() {
             return Vec::new();
         }
         let stopped = Self::subtree(&st, self.root, session);
@@ -1080,129 +1103,26 @@ impl TeamActor {
             .any(|slot| slot.handle == handle && slot.user_stopped)
     }
 
-    /// Mark the team killed and cancel every in-flight turn. Idempotent. Wakes all
-    /// residents so their parked tasks observe `killed` and exit.
-    fn kill_locked(&self, st: &mut TeamState, reason: &str) {
-        if st.killed {
-            return;
-        }
-        st.killed = true;
-        st.kill_reason = Some(reason.to_string());
-        self.cancel.cancel();
-        for slot in st.residents.values() {
-            slot.notify.notify_one();
-        }
-    }
-
-    /// Kill the team from an async context (message-budget trip). Records the
-    /// terminal `Failed` roster status for every member so observers see the reason.
-    async fn kill(&self, reason: &str) {
-        let registration = self.registration.lock().await;
-        let (already, residents) = {
-            let mut st = self.lock();
-            let already = st.killed;
-            self.kill_locked(&mut st, reason);
-            let residents = st
-                .residents
-                .iter()
-                .map(|(session, slot)| (*session, slot.handle.clone(), slot.claim))
-                .collect::<Vec<_>>();
-            (already, residents)
+    /// Request every ending before publishing any terminal activity. The team
+    /// leaves the live map immediately; episode owners remain indexed until done.
+    async fn kill(&self, ending: Ending) -> Vec<EpisodeDone> {
+        let Some(supervisor) = self.supervisor.upgrade() else {
+            return Vec::new();
         };
-        drop(registration);
-        if already {
-            return;
-        }
-        self.emit_kill(&residents, reason).await;
-    }
-
-    /// Atomically terminalize each claimed resident, retaining failed slots for a
-    /// later explicit stop retry. Claim-less main actors keep the existing activity
-    /// event behavior and may clean up locally after the event attempt.
-    async fn emit_kill(&self, residents: &[(SessionId, String, Option<ActorClaim>)], reason: &str) {
-        for (session, handle, claim) in residents {
-            let finalized = if *session == self.root {
-                let _ = self
-                    .record_activity(
-                        None,
-                        handle.clone(),
-                        RosterStatus::Failed,
-                        Some(reason.to_string()),
-                    )
-                    .await;
-                true
-            } else {
-                archive_stopped_agent(
-                    &self.engine,
-                    self.root,
-                    handle,
-                    *session,
-                    claim.as_ref(),
-                    ArchiveReason::Killed,
-                    MemberRunStatus::Failed,
-                    FinishCause::Other,
-                    reason,
-                )
-                .await
-                .is_ok()
+        let (first, done) = supervisor.request_team_end(self, ending.clone());
+        if first {
+            let (status, note) = match ending {
+                Ending::Killed(note) => (RosterStatus::Failed, Some(note)),
+                _ => (RosterStatus::Idle, None),
             };
-            if finalized {
-                self.mark_kill_finalized(*session, handle, claim.as_ref());
+            if let Err(error) = self
+                .record_activity(None, scope::ROOT_HANDLE.into(), status, note)
+                .await
+            {
+                tracing::error!(root = %self.root, %error, "team lead terminal activity failed");
             }
         }
-    }
-
-    /// Graceful-stop terminalization of this team (after its turns were
-    /// drained): kill the team so no slot wakes again, archive every member
-    /// (reason `shutdown`, deepest first so a parent stays live while its
-    /// children archive; claim released, member row cancelled, degraded
-    /// handoff) so a later run on the same database can wake it with mail,
-    /// and park the lead as `idle`: the lead is never archived, its session
-    /// stays resumable.
-    async fn drain_stop(&self, reason: &str) {
-        let registration = self.registration.lock().await;
-        let mut residents = {
-            let mut st = self.lock();
-            // Nothing to stop, or already terminalized (an earlier drain, a
-            // budget kill).
-            if st.residents.is_empty() || st.killed {
-                return;
-            }
-            self.kill_locked(&mut st, reason);
-            st.residents
-                .iter()
-                .map(|(session, slot)| (*session, slot.handle.clone(), slot.claim, slot.is_main))
-                .collect::<Vec<_>>()
-        };
-        drop(registration);
-        residents.sort_by_key(|(_, handle, _, _)| {
-            std::cmp::Reverse(handle.matches(scope::PATH_SEPARATOR).count())
-        });
-        for (session, handle, claim, is_main) in residents {
-            if is_main {
-                let _ = self
-                    .record_activity(None, handle.clone(), RosterStatus::Idle, None)
-                    .await;
-                self.mark_kill_finalized(session, &handle, claim.as_ref());
-                continue;
-            }
-            let finalized = archive_stopped_agent(
-                &self.engine,
-                self.root,
-                &handle,
-                session,
-                claim.as_ref(),
-                ArchiveReason::Shutdown,
-                MemberRunStatus::Cancelled,
-                FinishCause::Shutdown,
-                reason,
-            )
-            .await
-            .is_ok();
-            if finalized {
-                self.mark_kill_finalized(session, &handle, claim.as_ref());
-            }
-        }
+        done
     }
 
     /// Open `session`'s member row on its parent's log (`running`) as its
@@ -1359,12 +1279,17 @@ impl TeamActor {
         }
 
         // An empty notification is not a turn and consumes no team budget.
-        if self
-            .engine
-            .governor()
-            .is_some_and(|gov| gov.charge_team_turn(self.root) == TeamBudget::Exceeded)
-        {
-            self.kill("per-team turn budget exceeded").await;
+        let exceeded = {
+            let mut state = self.lock();
+            state.turns_used = state.turns_used.saturating_add(1);
+            self.engine.governor().is_some_and(|gov| {
+                let limit = gov.limits().per_team_turn_budget;
+                limit != 0 && state.turns_used > limit
+            })
+        };
+        if exceeded {
+            self.kill(Ending::Killed("per-team turn budget exceeded".into()))
+                .await;
             return Err(CoreError::Cancelled);
         }
         let task_label = if synth && is_main {
@@ -1589,51 +1514,67 @@ impl TeamActor {
             .and_then(|slot| slot.report.clone())
     }
 
+    fn take_episode(
+        &self,
+        session: SessionId,
+        claim: Option<&ActorClaim>,
+    ) -> Option<EpisodeCompletion> {
+        let done = {
+            let mut state = self.lock();
+            let std::collections::hash_map::Entry::Occupied(entry) = state.residents.entry(session)
+            else {
+                return None;
+            };
+            if entry.get().claim.as_ref() != claim {
+                return None;
+            }
+            let slot = entry.remove();
+            if slot.status == SlotStatus::Busy {
+                state.busy = state.busy.saturating_sub(1);
+            }
+            if state.main_session == Some(session) {
+                state.main_session = None;
+            }
+            self.maybe_fire_quiescence(&mut state);
+            slot.done
+        };
+        self.forget_episode(session, claim);
+        Some(done)
+    }
+
     fn complete_episode(
         &self,
         session: SessionId,
         claim: Option<&ActorClaim>,
         result: Result<(), CoreError>,
     ) {
-        let done = {
-            let mut state = self.lock();
-            let std::collections::hash_map::Entry::Occupied(entry) = state.residents.entry(session)
-            else {
-                return;
-            };
-            if entry.get().claim.as_ref() != claim {
-                return;
-            }
-            let slot = entry.remove();
-            if slot.status == SlotStatus::Busy {
-                state.busy = state.busy.saturating_sub(1);
-            }
-            self.maybe_fire_quiescence(&mut state);
-            slot.done
-        };
-        self.release_team_budget_if_empty();
-        done.send_replace(Some(result));
+        if let Some(done) = self.take_episode(session, claim) {
+            done.send_replace(Some(result));
+        }
     }
 
     /// Handle one `MailSent` for this team: charge the message budget, count the
     /// work, and deliver a wake to every resident recipient (never the sender).
     async fn on_mail(&self, from: &str, to: &MailEndpoint) {
         let exceeded = {
-            let state = self.lock();
-            if state.killed {
+            let mut state = self.lock();
+            if state.phase.killed() {
                 return;
             }
-            self.engine
-                .governor()
-                .is_some_and(|gov| gov.charge_team_message(self.root) == TeamBudget::Exceeded)
+            state.messages_used = state.messages_used.saturating_add(1);
+            self.engine.governor().is_some_and(|gov| {
+                let limit = gov.limits().per_team_message_budget;
+                limit != 0 && state.messages_used > limit
+            })
         };
         if exceeded {
-            self.kill("per-team message budget exceeded").await;
+            self.kill(Ending::Killed("per-team message budget exceeded".into()))
+                .await;
             return;
         }
         {
             let mut st = self.lock();
-            if st.killed {
+            if st.phase.killed() {
                 return;
             }
             st.work_seq = st.work_seq.saturating_add(1);
@@ -1719,7 +1660,7 @@ impl TeamActor {
         let mut consumed = Vec::new();
         {
             let mut st = self.lock();
-            if st.killed {
+            if st.phase.killed() {
                 return;
             }
             for slot in st.residents.values_mut() {
@@ -1921,6 +1862,11 @@ async fn initialize_episode(
         _ = cancel.cancelled() => Ok(()),
         result = initialize => result,
     };
+    let result = if cancel.is_cancelled() {
+        Err(CoreError::Cancelled)
+    } else {
+        result
+    };
     let _ = ready.send(result.clone());
     result
 }
@@ -1942,6 +1888,15 @@ async fn episode_task(
         };
         let result = initialize_episode(&team, claim, &cancel, init).await;
         if let Err(error) = result {
+            if cancel.is_cancelled()
+                && team
+                    .lock()
+                    .residents
+                    .get(&session)
+                    .is_none_or(|slot| slot.ending.is_none())
+            {
+                team.kill(Ending::Shutdown).await;
+            }
             finish_episode(
                 &team,
                 claim,
@@ -1954,6 +1909,16 @@ async fn episode_task(
         }
     }
     loop {
+        if cancel.is_cancelled() && !team.lock().phase.killed() {
+            let requested = team
+                .lock()
+                .residents
+                .get(&session)
+                .is_some_and(|slot| slot.ending.is_some());
+            if !requested {
+                team.kill(Ending::Shutdown).await;
+            }
+        }
         if !team.owns_slot(session, task_claim.as_ref()) {
             if let Some(handle) = sidecar_handle.as_mut() {
                 let _ = handle.terminate().await;
@@ -1965,8 +1930,12 @@ async fn episode_task(
             .residents
             .get(&session)
             .and_then(|slot| slot.ending.clone());
-        if let (Some(claim), Some(ending)) = (task_claim.as_ref(), ending) {
-            finish_episode(&team, claim, ending, &mut sidecar_handle, None).await;
+        if let Some(ending) = ending {
+            if let Some(claim) = task_claim.as_ref() {
+                finish_episode(&team, claim, ending, &mut sidecar_handle, None).await;
+            } else {
+                team.complete_episode(session, None, Ok(()));
+            }
             return;
         }
         if let (Some(claim), Some(pending)) = (
@@ -1974,21 +1943,19 @@ async fn episode_task(
             team.pending_report(session, task_claim.as_ref()),
         ) {
             let ending = Ending::Reported(pending);
-            match commit_episode_ending(&team, claim, &ending).await {
+            match commit_episode_ending(&team, claim, &ending, None).await {
                 Err(CoreError::Cancelled) => {
-                    if !team.lock().killed {
-                        continue;
-                    }
-                    if let Some(slot) = team
+                    if team
                         .lock()
                         .residents
-                        .get_mut(&session)
-                        .filter(|slot| slot.claim == task_claim)
+                        .get(&session)
+                        .is_none_or(|slot| slot.ending.is_none())
                     {
-                        slot.report = None;
+                        team.kill(Ending::Shutdown).await;
                     }
+                    continue;
                 }
-                Ok(hya_store::ResidentArchiveOutcome::Refused) => {
+                Ok((hya_store::ResidentArchiveOutcome::Refused, _)) => {
                     let mut state = team.lock();
                     if let Some(slot) = state
                         .residents
@@ -2004,7 +1971,7 @@ async fn episode_task(
                         claim,
                         ending,
                         &mut sidecar_handle,
-                        Some(result.map(|_| ())),
+                        Some(result.map(|(_, finalization)| finalization)),
                     )
                     .await;
                     return;
@@ -2025,10 +1992,14 @@ async fn episode_task(
                     }
                     continue;
                 }
+                _ = cancel.cancelled() => continue,
                 _ = notify.notified() => {}
             }
         } else {
-            notify.notified().await;
+            tokio::select! {
+                _ = cancel.cancelled() => continue,
+                _ = notify.notified() => {}
+            }
         }
         loop {
             match team.next_action(session, task_claim.as_ref()).await {
@@ -2140,6 +2111,9 @@ async fn episode_task(
                     let (turn_result, sidecar_lost) = tokio::select! {
                         result = &mut completion => result,
                         _ = cancel.cancelled() => {
+                            if team.lock().residents.get(&session).is_none_or(|slot| slot.ending.is_none()) {
+                                team.kill(Ending::Shutdown).await;
+                            }
                             let ending = team.lock().residents.get(&session).and_then(|slot| slot.ending.clone());
                             if let Some(ending) = ending {
                                 match tokio::time::timeout(DRAIN_DEADLINE, &mut completion).await {
@@ -2400,6 +2374,8 @@ async fn episode_task(
                 Action::End(ending) => {
                     if let Some(claim) = task_claim.as_ref() {
                         finish_episode(&team, claim, ending, &mut sidecar_handle, None).await;
+                    } else {
+                        team.complete_episode(session, None, Ok(()));
                     }
                     return;
                 }
@@ -2415,36 +2391,6 @@ async fn episode_task(
                     }
                     break;
                 }
-                Action::Stop { killed_now } => {
-                    if killed_now {
-                        let (residents, reason) = {
-                            let st = team.lock();
-                            (
-                                st.residents
-                                    .iter()
-                                    .map(|(session, slot)| {
-                                        (*session, slot.handle.clone(), slot.claim)
-                                    })
-                                    .collect::<Vec<_>>(),
-                                st.kill_reason.clone().unwrap_or_default(),
-                            )
-                        };
-                        team.emit_kill(&residents, &reason).await;
-                    }
-                    if !team.kill_finalized(session, task_claim.as_ref()) {
-                        break;
-                    }
-                    if let Some(handle) = sidecar_handle.as_mut()
-                        && handle.terminate().await.is_err()
-                    {
-                        notify.notified().await;
-                        break;
-                    }
-                    sidecar_handle.take();
-                    team.remove_slot(session, task_claim.as_ref());
-                    return;
-                }
-                Action::WaitForKillFinalization => break,
             }
         }
     }
@@ -2460,19 +2406,28 @@ pub struct ResidentSupervisor {
     engine: Arc<SessionEngine>,
     owner_run_id: OwnerRunId,
     teams: Mutex<HashMap<SessionId, Arc<TeamActor>>>,
+    /// Includes episodes on teams already removed by a kill.
+    episodes: Mutex<HashMap<SessionId, Arc<TeamActor>>>,
+    /// Claim commit + install and orphan Takeover share this boundary across
+    /// team generations. Kills never wait for it or for registration hooks.
+    claim_writes: tokio::sync::Mutex<()>,
+    self_ref: Weak<ResidentSupervisor>,
+    listener_stop: CancellationToken,
+    listener: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// `wait` stall notices already given: (waiting session, member session)
     /// → the member's last assistant message when it was reported stopped.
     /// In-memory only: after a restart a stopped member is reported once more.
     wait_stalls: Mutex<HashMap<(SessionId, SessionId), Option<hya_proto::MessageId>>>,
 }
 
-/// The owner calls this only after its turn has gone. The registration lock
-/// protects the separate orphan path; neither path waits for a turn lease.
+type EpisodeFinalization = (Vec<hya_proto::Envelope>, Vec<hya_store::AdmissionRecord>);
+
 async fn commit_episode_ending(
     team: &TeamActor,
     claim: &ActorClaim,
     ending: &Ending,
-) -> Result<hya_store::ResidentArchiveOutcome, CoreError> {
+    sidecar_error: Option<String>,
+) -> Result<(hya_store::ResidentArchiveOutcome, EpisodeFinalization), CoreError> {
     let (handle, child, cancel) = {
         let state = team.lock();
         let slot = state
@@ -2498,10 +2453,13 @@ async fn commit_episode_ending(
         }
         _ => team.engine.degraded_terminal_handoff(child).await,
     };
-    let (reason, status, report, note, check_gate) = match ending {
+    let (reason, status, report, mut note, check_gate) = match ending {
         Ending::Reported(pending) => (
             ArchiveReason::Reported,
-            MemberRunStatus::Cancelled,
+            match pending.outcome {
+                ReportOutcome::Done => MemberRunStatus::Done,
+                ReportOutcome::Failed => MemberRunStatus::Failed,
+            },
             Some((pending.outcome, pending.report.clone())),
             pending.report.clone(),
             true,
@@ -2513,14 +2471,14 @@ async fn commit_episode_ending(
             note.clone(),
             false,
         ),
-        Ending::Archived(note) => (
-            ArchiveReason::ArchivedByParent,
-            MemberRunStatus::Cancelled,
-            None,
-            note.clone(),
-            false,
-        ),
+        ending => {
+            let (reason, status, note) = ending.forced_fields();
+            (reason, status, None, note, false)
+        }
     };
+    if let Some(error) = sidecar_error {
+        note.push_str(&format!("; sidecar did not stop: {error}"));
+    }
     let (outcome, envelopes, admissions) = team
         .engine
         .store()
@@ -2543,9 +2501,13 @@ async fn commit_episode_ending(
             ending.cause(),
         )
         .await?;
-    team.engine
-        .publish_resident_finalization((envelopes, admissions));
-    Ok(outcome)
+    if outcome == hya_store::ResidentArchiveOutcome::Refused {
+        team.engine
+            .publish_resident_finalization((envelopes, admissions));
+        Ok((outcome, (Vec::new(), Vec::new())))
+    } else {
+        Ok((outcome, (envelopes, admissions)))
+    }
 }
 
 /// Finish once, even on a failed store write. The durable active claim then
@@ -2555,7 +2517,7 @@ async fn finish_episode(
     claim: &ActorClaim,
     mut ending: Ending,
     sidecar: &mut Option<Box<dyn SidecarHandle>>,
-    committed: Option<Result<(), CoreError>>,
+    committed: Option<Result<EpisodeFinalization, CoreError>>,
 ) {
     if committed.is_none() {
         let mut state = team.lock();
@@ -2567,120 +2529,42 @@ async fn finish_episode(
             ending = slot.ending.get_or_insert(ending).clone();
         }
     }
-    if let Some(mut handle) = sidecar.take() {
-        let stopped = tokio::time::timeout(Duration::from_secs(5), handle.terminate()).await;
-        let failure = match stopped {
+    let sidecar_error = if let Some(mut handle) = sidecar.take() {
+        match tokio::time::timeout(Duration::from_secs(5), handle.terminate()).await {
             Ok(Ok(())) => None,
             Ok(Err(error)) => Some(error.to_string()),
             Err(_) => Some("deadline exceeded".into()),
-        };
-        if let Some(error) = failure {
-            let note = match &mut ending {
-                Ending::Archived(note) | Ending::Failed(note) => note,
-                Ending::Reported(report) => &mut report.report,
-            };
-            note.push_str(&format!("; sidecar did not stop: {error}"));
         }
+    } else {
+        None
+    };
+    if committed.is_some()
+        && let Some(error) = &sidecar_error
+    {
+        tracing::error!(session = %claim.actor_id, %error, "reported episode sidecar did not stop");
     }
     let result = match committed {
         Some(result) => result,
-        None => commit_episode_ending(team, claim, &ending)
+        None => commit_episode_ending(team, claim, &ending, sidecar_error)
             .await
-            .map(|_| ()),
+            .map(|(_, finalization)| finalization),
     };
     if let Err(error) = &result {
         tracing::error!(session = %claim.actor_id, ?claim, %error, "episode terminal transition failed; leaving orphan");
     }
-    team.complete_episode(claim.actor_id, Some(claim), result);
-}
-
-/// Prepare a handoff, then commit report/mail/archive and claim release in
-/// one fenced store transaction. The caller owns slot teardown.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn archive_reported_agent(
-    engine: &SessionEngine,
-    root: SessionId,
-    canonical: &str,
-    child: SessionId,
-    claim: Option<&ActorClaim>,
-    outcome: ReportOutcome,
-    report: String,
-    reason: ArchiveReason,
-    force_degraded: bool,
-) -> Result<hya_store::ResidentArchiveOutcome, CoreError> {
-    let result = async {
-        // The lead (the user-started root agent) is never archived: its session
-        // stays live and resumable whatever happens to one of its turns.
-        if child == root || canonical == scope::ROOT_HANDLE {
-            return Err(CoreError::Invalid(
-                "the team lead is never archived".to_string(),
-            ));
-        }
-        let _lease = engine
-            .begin_turn(child, &CancellationToken::new())
-            .await?
-            .ok_or(CoreError::Cancelled)?;
-        let projection = engine.read_projection(root).await?;
-        let expected_work = projection
-            .team
-            .roster
-            .get(canonical)
-            .map(|entry| (entry.resident_cursor, entry.resident_work));
-        let handoff = if force_degraded {
-            engine.degraded_terminal_handoff(child).await
-        } else {
-            engine.terminal_handoff_claimed(child).await
-        };
-
-        let archive = hya_store::ResidentArchive {
-            actor: child,
-            generation: handoff.generation,
-            doc: handoff.doc,
-            degraded: handoff.degraded,
-            reason,
-            note: report.clone(),
-            member_status: MemberRunStatus::Cancelled,
-            report: Some((outcome, report)),
-            check_gate: !force_degraded,
-            expected_work,
-        };
-        let outcome = if let Some(claim) = claim {
-            let (outcome, envelopes, admissions) = engine
-                .store()
-                .finalize_resident_archive(
-                    hya_store::ResidentArchiveOwner::Claim(claim),
-                    root,
-                    canonical,
-                    archive,
-                    FinishCause::UserCancel,
-                )
-                .await?;
-            engine.publish_resident_finalization((envelopes, admissions));
-            outcome
-        } else if let Some(supervisor) = engine.archive_reviver() {
-            supervisor
-                .reconcile_orphan(root, canonical, archive, FinishCause::UserCancel)
-                .await?
-        } else {
-            let (outcome, envelopes, admissions) = engine
-                .store()
-                .finalize_resident_archive(
-                    hya_store::ResidentArchiveOwner::Takeover,
-                    root,
-                    canonical,
-                    archive,
-                    FinishCause::UserCancel,
-                )
-                .await?;
-            engine.publish_resident_finalization((envelopes, admissions));
-            outcome
-        };
-        Ok(outcome)
+    // No archive envelope is observable while this episode is installed. Hold
+    // the claim-write boundary until publication and done, so revival cannot
+    // publish a new registration ahead of the old archive.
+    let supervisor = team.supervisor.upgrade();
+    let _write = match &supervisor {
+        Some(supervisor) => Some(supervisor.claim_writes.lock().await),
+        None => None,
+    };
+    if let Some(done) = team.take_episode(claim.actor_id, Some(claim)) {
+        let result =
+            result.map(|finalization| team.engine.publish_resident_finalization(finalization));
+        done.send_replace(Some(result));
     }
-    .await;
-    result.inspect_err(|error| {
-        tracing::error!(session = %child, %error, "resident terminal transition failed");
-    })
 }
 
 /// Explicit stop uses the same terminal transaction without parent report mail.
@@ -2706,10 +2590,9 @@ pub(crate) async fn archive_stopped_agent(
     let (_, envelopes, admissions) = engine
         .store()
         .finalize_resident_archive(
-            claim.map_or(
-                hya_store::ResidentArchiveOwner::Takeover,
-                hya_store::ResidentArchiveOwner::Claim,
-            ),
+            hya_store::ResidentArchiveOwner::Claim(claim.ok_or_else(|| {
+                CoreError::Invalid("sidecar recovery requires its episode claim".into())
+            })?),
             root,
             canonical,
             hya_store::ResidentArchive {
@@ -3040,8 +2923,8 @@ impl ArchiveReviver for ResidentSupervisor {
         archive: hya_store::ResidentArchive,
         cause: FinishCause,
     ) -> Result<hya_store::ResidentArchiveOutcome, CoreError> {
-        let (team, _registration) = self.team_for(root).await?;
-        if team.lock().residents.contains_key(&archive.actor) {
+        let _write = self.claim_writes.lock().await;
+        if self.team_with_resident(archive.actor).is_some() {
             return Err(CoreError::Invalid(
                 "a live episode owns this archive; request its ending".into(),
             ));
@@ -3060,15 +2943,6 @@ impl ArchiveReviver for ResidentSupervisor {
         self.engine
             .publish_resident_finalization((envelopes, admissions));
         Ok(outcome)
-    }
-
-    fn resident_claim(&self, root: SessionId, child: SessionId) -> Option<ActorClaim> {
-        self.teams().get(&root).and_then(|team| {
-            team.lock()
-                .residents
-                .get(&child)
-                .and_then(|slot| slot.claim)
-        })
     }
 
     async fn revive(
@@ -3126,31 +3000,28 @@ impl ArchiveReviver for ResidentSupervisor {
     }
 
     async fn teardown_root(&self, root: SessionId) -> Result<(), CoreError> {
-        let claims = {
-            let team = self.teams().get(&root).cloned();
-            let Some(team) = team else {
-                return Ok(());
-            };
-            let mut state = team.lock();
-            if state.residents.is_empty() {
-                return Ok(());
-            }
-            // Kill the team: every parked task observes `killed` and exits,
-            // and in-flight turns see the cancelled team token.
-            let claims: Vec<hya_store::ActorClaim> = state
-                .residents
-                .values()
-                .filter_map(|slot| slot.claim)
-                .collect();
-            for slot in state.residents.values() {
-                slot.notify.notify_one();
-            }
-            state.residents.clear();
-            state.main_session = None;
-            claims
+        let team = self.teams().get(&root).cloned();
+        let mut done = match team {
+            Some(team) => team.kill(Ending::Teardown).await,
+            None => Vec::new(),
         };
-        for claim in claims {
-            let _ = self.engine.release_resident_actor_claim(&claim).await;
+        // Wait for any claim commit already in flight to install into its
+        // killed team, then request all generations, including old killed teams.
+        {
+            let _write = self.claim_writes.lock().await;
+            let teams = self.episode_teams(root);
+            for team in teams {
+                done.extend(team.kill(Ending::Teardown).await);
+            }
+        }
+        let results = futures::future::join_all(done.into_iter().map(await_episode)).await;
+        // A failed ending has become an orphan. Reconcile it under the same
+        // claim-write boundary; never take a member's turn lease from outside.
+        self.reconcile_root(root, Ending::Teardown).await?;
+        for result in results {
+            if let Err(error) = result {
+                tracing::error!(%root, %error, "root teardown reconciled a failed ending");
+            }
         }
         Ok(())
     }
@@ -3172,10 +3043,15 @@ impl ResidentSupervisor {
     /// Start a supervisor owned by `owner_run_id` (cancels with the owner).
     pub fn start_with_owner(engine: Arc<SessionEngine>, owner_run_id: OwnerRunId) -> Arc<Self> {
         let rx = engine.bus().subscribe();
-        let supervisor = Arc::new(Self {
+        let supervisor = Arc::new_cyclic(|self_ref| Self {
             engine,
             owner_run_id,
             teams: Mutex::new(HashMap::new()),
+            episodes: Mutex::new(HashMap::new()),
+            claim_writes: tokio::sync::Mutex::new(()),
+            self_ref: self_ref.clone(),
+            listener_stop: CancellationToken::new(),
+            listener: Mutex::new(None),
             wait_stalls: Mutex::new(HashMap::new()),
         });
         // The supervisor is the engine's revive seam (ADR-0015): wire it before
@@ -3190,7 +3066,11 @@ impl ResidentSupervisor {
             .engine
             .set_turn_observer(Arc::downgrade(&observer));
         let listener = supervisor.clone();
-        tokio::spawn(async move { listener.run_bus(rx).await });
+        *supervisor
+            .listener
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(tokio::spawn(async move { listener.run_bus(rx).await }));
         supervisor
     }
 
@@ -3218,7 +3098,12 @@ impl ResidentSupervisor {
         mut rx: tokio::sync::broadcast::Receiver<hya_proto::Envelope>,
     ) {
         loop {
-            match rx.recv().await {
+            let received = tokio::select! {
+                biased;
+                () = self.listener_stop.cancelled() => break,
+                received = rx.recv() => received,
+            };
+            match received {
                 Ok(envelope) => {
                     if let Event::MailSent {
                         session: root,
@@ -3255,61 +3140,172 @@ impl ResidentSupervisor {
     /// supervisor lock is held throughout, matching the supervisor→team lock
     /// order every other path obeys.
     fn team_with_resident(&self, session: SessionId) -> Option<Arc<TeamActor>> {
-        self.teams()
-            .values()
-            .find(|team| team.lock().residents.contains_key(&session))
+        self.episodes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&session)
             .cloned()
+            .or_else(|| self.teams().get(&session).cloned())
     }
 
-    /// Registration never enters a killed team. Wait for its last slot and
-    /// budget release, then restore main on a fresh, uncancelled team.
-    async fn team_for(
+    /// Resolve before taking the map lock; install main before exposing the new
+    /// team. A killed team's old context and counters are never copied forward.
+    async fn team_for(&self, root: SessionId) -> Result<Arc<TeamActor>, CoreError> {
+        self.team_for_with_main(root, None).await
+    }
+
+    async fn team_for_with_main(
         &self,
         root: SessionId,
-    ) -> Result<(Arc<TeamActor>, tokio::sync::OwnedMutexGuard<()>), CoreError> {
-        loop {
-            let team = self
-                .teams()
-                .entry(root)
-                .or_insert_with(|| Arc::new(TeamActor::new(root, self.engine.clone())))
-                .clone();
-            let registration = team.registration.clone().lock_owned().await;
-            let drained = team.drained.notified();
-            tokio::pin!(drained);
-            drained.as_mut().enable();
-            let (killed, empty, main) = {
-                let state = team.lock();
-                (state.killed, state.residents.is_empty(), state.main.clone())
-            };
-            if !killed {
-                return Ok((team.clone(), registration));
-            }
-            if !empty {
-                drop(registration);
-                drained.await;
-                continue;
-            }
-            team.release_team_budget_if_empty();
-            let main = match main {
-                Some(main) => main,
-                None => self.resolve_main_activation(root).await?,
-            };
-            let fresh = Arc::new(TeamActor::new(root, self.engine.clone()));
-            let fresh_registration = fresh.registration.clone().lock_owned().await;
-            {
-                let mut teams = self.teams();
-                if !teams
-                    .get(&root)
-                    .is_some_and(|current| Arc::ptr_eq(current, &team))
-                {
-                    continue;
-                }
-                teams.insert(root, fresh.clone());
-            }
-            drop(registration);
-            fresh.install_main(main);
-            return Ok((fresh, fresh_registration));
+        main: Option<MainActivation>,
+    ) -> Result<Arc<TeamActor>, CoreError> {
+        if let Some(team) = self.teams().get(&root).cloned() {
+            return Ok(team);
         }
+        let main = match main {
+            Some(main) => main,
+            None => self.resolve_main_activation(root).await?,
+        };
+        let mut teams = self.teams();
+        Ok(teams
+            .entry(root)
+            .or_insert_with(|| {
+                let team = Arc::new(TeamActor::new(
+                    root,
+                    self.engine.clone(),
+                    self.self_ref.clone(),
+                ));
+                team.install_main(main);
+                team
+            })
+            .clone())
+    }
+
+    fn request_team_end(&self, team: &TeamActor, ending: Ending) -> (bool, Vec<EpisodeDone>) {
+        let mut teams = self.teams();
+        if teams
+            .get(&team.root)
+            .is_some_and(|current| std::ptr::eq(current.as_ref(), team))
+        {
+            teams.remove(&team.root);
+        }
+        let mut state = team.lock();
+        let first = !state.phase.killed();
+        if first {
+            state.phase = TeamPhase::Killed(ending.clone());
+        }
+        let TeamPhase::Killed(ending) = state.phase.clone() else {
+            unreachable!()
+        };
+        if matches!(ending, Ending::Teardown | Ending::Shutdown) {
+            self.engine.cancel_turn(team.root, ending.cause());
+        }
+        let done = state
+            .residents
+            .iter_mut()
+            .map(|(session, slot)| slot.request_end(&self.engine, *session, ending.clone()))
+            .collect();
+        team.cancel.cancel();
+        (first, done)
+    }
+
+    fn retire_team(&self, team: &TeamActor) {
+        let mut teams = self.teams();
+        if !teams
+            .get(&team.root)
+            .is_some_and(|current| std::ptr::eq(current.as_ref(), team))
+        {
+            return;
+        }
+        let mut state = team.lock();
+        if state.phase.killed()
+            || state.busy != 0
+            || self.engine.turn_active(team.root)
+            || state
+                .residents
+                .values()
+                .any(|slot| !slot.is_main || slot.has_work() || slot.report.is_some())
+        {
+            return;
+        }
+        teams.remove(&team.root);
+        for (session, slot) in &mut state.residents {
+            slot.request_end(&self.engine, *session, Ending::Shutdown);
+        }
+        team.cancel.cancel();
+    }
+
+    fn episode_teams(&self, root: SessionId) -> Vec<Arc<TeamActor>> {
+        let mut teams = Vec::new();
+        for team in self
+            .episodes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+        {
+            if team.root == root && !teams.iter().any(|current| Arc::ptr_eq(current, team)) {
+                teams.push(team.clone());
+            }
+        }
+        teams
+    }
+
+    async fn reconcile_root(&self, root: SessionId, ending: Ending) -> Result<(), CoreError> {
+        let projection = self.engine.read_projection(root).await?;
+        let mut members = projection
+            .team
+            .roster
+            .iter()
+            .filter(|(path, _)| path.as_str() != scope::ROOT_HANDLE)
+            .collect::<Vec<_>>();
+        members.sort_by_key(|(path, _)| std::cmp::Reverse(path.len()));
+        for (handle, member) in members {
+            self.end_orphan(root, handle, member.session, &ending)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn end_orphan(
+        &self,
+        root: SessionId,
+        handle: &str,
+        actor: SessionId,
+        ending: &Ending,
+    ) -> Result<(), CoreError> {
+        let _write = self.claim_writes.lock().await;
+        if self.team_with_resident(actor).is_some() {
+            return Err(CoreError::Invalid(
+                "a live episode owns this archive; request its ending".into(),
+            ));
+        }
+        let handoff = self.engine.degraded_terminal_handoff(actor).await;
+        let (reason, status, note) = ending.forced_fields();
+        let (_, envelopes, admissions) = self
+            .engine
+            .store()
+            .finalize_resident_archive(
+                hya_store::ResidentArchiveOwner::Takeover,
+                root,
+                handle,
+                hya_store::ResidentArchive {
+                    actor,
+                    generation: handoff.generation,
+                    doc: handoff.doc,
+                    degraded: handoff.degraded,
+                    reason,
+                    note,
+                    member_status: status,
+                    report: None,
+                    check_gate: false,
+                    expected_work: None,
+                },
+                ending.cause(),
+            )
+            .await?;
+        self.engine
+            .publish_resident_finalization((envelopes, admissions));
+        Ok(())
     }
 
     async fn resolve_main_activation(&self, root: SessionId) -> Result<MainActivation, CoreError> {
@@ -3353,15 +3349,91 @@ impl ResidentSupervisor {
     /// ([`SessionEngine::drain_turns`]), then make every team member terminal
     /// and park each lead. New turns are refused from the first step on.
     pub async fn drain(&self, cause: FinishCause, deadline: Duration) -> TurnDrainReport {
-        let report = self.engine.drain_turns(cause, deadline).await;
-        let reason = match cause {
-            FinishCause::UserCancel => "stopped: cancelled by the user",
-            FinishCause::LeaderFailed => "stopped: the team lead failed",
-            _ => "stopped: shutdown",
+        self.engine.begin_drain(cause);
+        let endings = async {
+            let teams: Vec<Arc<TeamActor>> = self.teams().values().cloned().collect();
+            let mut roots = teams.iter().map(|team| team.root).collect::<Vec<_>>();
+            for team in self
+                .episodes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .values()
+            {
+                if !roots.contains(&team.root) {
+                    roots.push(team.root);
+                }
+            }
+            let mut orphans = Vec::new();
+            match self.engine.store().active_actor_ids().await {
+                Ok(actors) => {
+                    for actor in actors {
+                        if self.team_with_resident(actor).is_some() {
+                            continue;
+                        }
+                        match self.engine.session_lineage(actor).await {
+                            Ok((root, _)) => match self.engine.read_projection_shared(root).await {
+                                Ok(projection) => {
+                                    if let Some((handle, _)) =
+                                        projection.team.roster.iter().find(|(handle, entry)| {
+                                            handle.as_str() != scope::ROOT_HANDLE
+                                                && entry.session == actor
+                                        })
+                                    {
+                                        orphans.push((root, handle.clone(), actor));
+                                    }
+                                }
+                                Err(error) => {
+                                    tracing::error!(%root, %error, "shutdown could not read orphan roster")
+                                }
+                            },
+                            Err(error) => {
+                                tracing::error!(%actor, %error, "shutdown could not resolve orphan root")
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(%error, "shutdown could not read active actor claims")
+                }
+            }
+            let mut done = Vec::new();
+            for team in teams {
+                done.extend(team.kill(Ending::Shutdown).await);
+            }
+            for root in &roots {
+                for team in self.episode_teams(*root) {
+                    done.extend(team.kill(Ending::Shutdown).await);
+                }
+            }
+            for result in futures::future::join_all(done.into_iter().map(await_episode)).await {
+                if let Err(error) = result {
+                    tracing::error!(%error, "resident shutdown ending failed");
+                }
+            }
+            // Only actors already orphaned at entry are reconciled here. A
+            // failed write in this drain leaves an orphan for the next request.
+            for (root, handle, actor) in orphans {
+                if let Err(error) = self
+                    .end_orphan(root, &handle, actor, &Ending::Shutdown)
+                    .await
+                {
+                    tracing::error!(%root, %actor, %error, "resident shutdown orphan reconciliation failed");
+                }
+            }
         };
-        let teams: Vec<Arc<TeamActor>> = self.teams().values().cloned().collect();
-        for team in teams {
-            team.drain_stop(reason).await;
+        // The turn drain and each episode's own cancellation deadline run
+        // together, so shutdown pays one drain deadline, not two in series.
+        let (report, ()) = tokio::join!(self.engine.drain_turns(cause, deadline), endings);
+        self.listener_stop.cancel();
+        let listener = self
+            .listener
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(listener) = listener
+            && let Err(error) = listener.await
+        {
+            tracing::error!(%error, "resident bus listener failed");
         }
         report
     }
@@ -3371,23 +3443,19 @@ impl ResidentSupervisor {
     /// claim remains active for later reconciliation.
     #[must_use]
     pub fn episode_count(&self) -> usize {
-        self.teams()
-            .values()
-            .map(|team| {
-                team.lock()
-                    .residents
-                    .values()
-                    .filter(|slot| slot.claim.is_some())
-                    .count()
-            })
-            .sum()
+        self.episodes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
     }
 
     /// Whether the resident slot for `session` has work in flight: a running
     /// turn, owed mail or directive, or an accepted report still to execute.
     /// `None` when this process tracks no such slot.
     pub(crate) fn member_busy(&self, root: SessionId, session: SessionId) -> Option<bool> {
-        let team = self.teams().get(&root).cloned()?;
+        let team = self
+            .team_with_resident(session)
+            .filter(|team| team.root == root)?;
         let state = team.lock();
         let slot = state.residents.get(&session)?;
         Some(
@@ -3403,23 +3471,27 @@ impl ResidentSupervisor {
     /// or an `archive` in progress): its report mail may already be out while
     /// the archive marker is not.
     pub(crate) fn member_archiving(&self, root: SessionId, session: SessionId) -> bool {
-        self.teams().get(&root).cloned().is_some_and(|team| {
-            team.lock()
-                .residents
-                .get(&session)
-                .is_some_and(|slot| slot.ending.is_some() || slot.report.is_some())
-        })
+        self.team_with_resident(session)
+            .filter(|team| team.root == root)
+            .is_some_and(|team| {
+                team.lock()
+                    .residents
+                    .get(&session)
+                    .is_some_and(|slot| slot.ending.is_some() || slot.report.is_some())
+            })
     }
 
     /// Whether the user stopped `session`'s slot (see
     /// [`ArchiveReviver::stop_for_user`]).
     pub(crate) fn member_stopped_by_user(&self, root: SessionId, session: SessionId) -> bool {
-        self.teams().get(&root).cloned().is_some_and(|team| {
-            team.lock()
-                .residents
-                .get(&session)
-                .is_some_and(|slot| slot.user_stopped)
-        })
+        self.team_with_resident(session)
+            .filter(|team| team.root == root)
+            .is_some_and(|team| {
+                team.lock()
+                    .residents
+                    .get(&session)
+                    .is_some_and(|slot| slot.user_stopped)
+            })
     }
 
     /// The team `session` belongs to: the one it leads, or the one it is a
@@ -3472,13 +3544,20 @@ impl ResidentSupervisor {
     /// Request an archive and wait for the episode's own ending. Dropping
     /// this wait never cancels the episode task.
     pub async fn end_member(&self, root: SessionId, handle: &str) -> Result<(), CoreError> {
-        let live = self.teams().get(&root).cloned().and_then(|team| {
-            team.lock()
-                .residents
-                .iter()
-                .find(|(_, slot)| slot.handle == handle)
-                .map(|(session, _)| *session)
-        });
+        let live = self
+            .episodes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .find_map(|(session, team)| {
+                (team.root == root
+                    && team
+                        .lock()
+                        .residents
+                        .get(session)
+                        .is_some_and(|slot| slot.handle == handle))
+                .then_some(*session)
+            });
         if let Some(child) = live {
             self.stop_and_archive_live(root, handle, child, "Workflow run cancelled")
                 .await?;
@@ -3658,48 +3737,46 @@ impl ResidentSupervisor {
         if child == root || handle == scope::ROOT_HANDLE {
             return Err(CoreError::Invalid("the team lead is never archived".into()));
         }
-        // This is the same lock held from registration/revival's claim commit
-        // through installation. Keep it until Takeover commits for an orphan.
-        let existing = self.teams().get(&root).cloned();
-        let (team, registration) = match existing {
-            Some(team) => {
-                let registration = team.registration.clone().lock_owned().await;
-                (team, registration)
-            }
-            None => self.team_for(root).await?,
-        };
-        let requested = {
+        let write = self.claim_writes.lock().await;
+        let requested = self.team_with_resident(child).and_then(|team| {
             let mut state = team.lock();
             state.residents.get_mut(&child).map(|slot| {
                 let cancelled = self.engine.turn_active(child);
-                let done = slot.request_end(&self.engine, child, Ending::Archived(note.into()));
-                (done, cancelled)
+                (
+                    slot.request_end(&self.engine, child, Ending::Archived(note.into())),
+                    cancelled,
+                )
             })
-        };
-        if let Some((mut done, cancelled)) = requested {
-            drop(registration);
-            loop {
-                if let Some(result) = done.borrow().clone() {
-                    return result.map(|()| cancelled);
-                }
-                done.changed().await.map_err(|_| {
-                    CoreError::Invalid("episode exited without its ending result".into())
-                })?;
-            }
+        });
+        if let Some((done, cancelled)) = requested {
+            drop(write);
+            return await_episode(done).await.map(|()| cancelled);
         }
-        archive_stopped_agent(
-            &self.engine,
-            root,
-            handle,
-            child,
-            None,
-            ArchiveReason::ArchivedByParent,
-            MemberRunStatus::Cancelled,
-            FinishCause::Archived,
-            note,
-        )
-        .await?;
-        drop(registration);
+        let handoff = self.engine.degraded_terminal_handoff(child).await;
+        let (_, envelopes, admissions) = self
+            .engine
+            .store()
+            .finalize_resident_archive(
+                hya_store::ResidentArchiveOwner::Takeover,
+                root,
+                handle,
+                hya_store::ResidentArchive {
+                    actor: child,
+                    generation: handoff.generation,
+                    doc: handoff.doc,
+                    degraded: handoff.degraded,
+                    reason: ArchiveReason::ArchivedByParent,
+                    member_status: MemberRunStatus::Cancelled,
+                    note: note.into(),
+                    report: None,
+                    check_gate: false,
+                    expected_work: None,
+                },
+                FinishCause::Archived,
+            )
+            .await?;
+        self.engine
+            .publish_resident_finalization((envelopes, admissions));
         Ok(false)
     }
 
@@ -3879,14 +3956,17 @@ impl ResidentSupervisor {
         self.engine
             .ensure_root_registered_for_actor(root, actor_claim)
             .await?;
-        let (team, _registration) = self.team_for(root).await?;
-        team.install_main(MainActivation {
-            agent,
-            binding,
-            agents,
-            resources,
-            guidance,
-        });
+        self.team_for_with_main(
+            root,
+            Some(MainActivation {
+                agent,
+                binding,
+                agents,
+                resources,
+                guidance,
+            }),
+        )
+        .await?;
         Ok(())
     }
 
@@ -4241,14 +4321,16 @@ impl ResidentSupervisor {
         }
         let channel_policy =
             ChannelPolicy::from_binding(&binding)?.snapshot_for(agent.name.as_str());
-        let (mut team, mut registration) = self.team_for(root).await?;
+        let mut team = self.team_for(root).await?;
+        let mut write = self.claim_writes.lock().await;
         loop {
-            let previous = team
-                .lock()
-                .residents
-                .get(&session)
-                .map(|slot| slot.done.subscribe());
-            let Some(mut done) = previous else {
+            let previous = self.team_with_resident(session).and_then(|team| {
+                team.lock()
+                    .residents
+                    .get(&session)
+                    .map(|slot| slot.done.subscribe())
+            });
+            let Some(done) = previous else {
                 break;
             };
             if !projection.team.archived.contains_key(&handle) {
@@ -4256,16 +4338,12 @@ impl ResidentSupervisor {
                     "resident already has a live episode".into(),
                 ));
             }
-            drop(registration);
-            loop {
-                if done.borrow().is_some() {
-                    break;
-                }
-                done.changed().await.map_err(|_| {
-                    CoreError::Invalid("previous episode exited without completion".into())
-                })?;
-            }
-            (team, registration) = self.team_for(root).await?;
+            drop(write);
+            // A failed old write still leaves an orphan; the registration's
+            // existing store fence determines whether it can be revived.
+            let _ = await_episode(done).await;
+            team = self.team_for(root).await?;
+            write = self.claim_writes.lock().await;
         }
         let (claim, envelopes) = self
             .engine
@@ -4315,7 +4393,6 @@ impl ResidentSupervisor {
                 user_stopped: false,
                 synth_pending: false,
                 claim: Some(claim),
-                kill_finalized: false,
                 cancel: team.cancel.child_token(),
                 ending: None,
                 done: watch::channel(None).0,
@@ -4327,7 +4404,7 @@ impl ResidentSupervisor {
             },
             Some(init),
         );
-        drop(registration);
+        drop(write);
         initialized
             .await
             .map_err(|_| CoreError::Invalid("resident initialization task exited".into()))??;
@@ -4345,7 +4422,8 @@ impl ResidentSupervisor {
         disposition: ResidentRecovery,
     ) -> Result<(), CoreError> {
         let (binding, agents, resources, sidecar_factory) = resolved;
-        let (team, _registration) = self.team_for(root).await?;
+        let team = self.team_for(root).await?;
+        let _write = self.claim_writes.lock().await;
         self.engine
             .store()
             .validate_actor_claim(&recovered.claim)
@@ -4405,7 +4483,6 @@ impl ResidentSupervisor {
                 user_stopped: false,
                 synth_pending: false,
                 claim: Some(recovered.claim),
-                kill_finalized: false,
                 cancel: team.cancel.child_token(),
                 ending: None,
                 done: watch::channel(None).0,
@@ -4418,5 +4495,16 @@ impl ResidentSupervisor {
             None,
         );
         Ok(())
+    }
+}
+
+async fn await_episode(mut done: EpisodeDone) -> Result<(), CoreError> {
+    loop {
+        if let Some(result) = done.borrow().clone() {
+            return result;
+        }
+        done.changed()
+            .await
+            .map_err(|_| CoreError::Invalid("episode exited without its ending result".into()))?;
     }
 }

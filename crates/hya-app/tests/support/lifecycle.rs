@@ -419,6 +419,49 @@ impl Harness {
         (child, handle)
     }
 
+    /// Use the public spawn boundary with a controlled activation sidecar.
+    pub async fn spawn_with_sidecar(
+        &self,
+        rounds: Vec<Round>,
+        sidecar: Arc<dyn hya_core::BoundSidecarFactory>,
+    ) -> Result<(SessionId, String), hya_core::CoreError> {
+        let binding = self
+            .engine
+            .bind_session_runtime(self.root, &self.dir)
+            .await?;
+        let agents = self.engine.agent_roster_for_binding(&binding, "hya-main")?;
+        let resources = self
+            .engine
+            .agent_resource_policy_for_binding(&binding, "hya-main")?;
+        let supervisor = self.built.resident_supervisor();
+        supervisor
+            .ensure_main(
+                self.root,
+                self.agent.clone(),
+                (binding.clone(), agents, resources),
+                None,
+                None,
+            )
+            .await?;
+        let agent = self
+            .engine
+            .agent_spec_for_binding(&binding, &self.agent, "hya-task")?;
+        let agents = self.engine.agent_roster_for_binding(&binding, "hya-task")?;
+        let resources = self
+            .engine
+            .agent_resource_policy_for_binding(&binding, "hya-task")?;
+        supervisor
+            .spawn_resident(
+                self.root,
+                agent,
+                (binding, agents, resources, Some(sidecar)),
+                self.provider.script(rounds),
+                None,
+                None,
+            )
+            .await
+    }
+
     pub async fn mail(&self, handle: &str, body: String) -> Result<(), hya_core::CoreError> {
         self.engine
             .mail_send(
@@ -1110,6 +1153,40 @@ impl SidecarControl {
             if let Err(error) = ended {
                 assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
             }
+        }
+    }
+}
+
+/// Faults are confined to the public opaque sidecar contract.
+pub struct EndingSidecar {
+    pub stopping: Arc<Gate>,
+    pub fail: bool,
+}
+
+#[async_trait]
+impl hya_core::BoundSidecarFactory for EndingSidecar {
+    async fn start(
+        &self,
+        _: hya_core::SidecarStart,
+    ) -> Result<Box<dyn hya_core::SidecarHandle>, hya_core::CoreError> {
+        Ok(Box::new(Self {
+            stopping: self.stopping.clone(),
+            fail: self.fail,
+        }))
+    }
+}
+
+#[async_trait]
+impl hya_core::SidecarHandle for EndingSidecar {
+    async fn ready(&mut self) -> Result<(), hya_core::CoreError> {
+        Ok(())
+    }
+    async fn shutdown(&mut self) -> Result<(), hya_core::CoreError> {
+        self.stopping.block().await;
+        if self.fail {
+            Err(hya_core::CoreError::Invalid("M4 terminate failure".into()))
+        } else {
+            Ok(())
         }
     }
 }
