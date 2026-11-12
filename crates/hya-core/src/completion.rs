@@ -60,11 +60,18 @@ pub enum RunOutcome {
         /// Which cap fired (`max_iterations`, `max_wall_clock`, …).
         which: &'static str,
     },
-    /// Two consecutive iterations produced identical activity (stall guard):
-    /// the run stopped itself instead of burning the remaining budget.
+    /// Progress stopped: repeated activity, unchanged gaps, or a repeated
+    /// directive ended the run before exhausting the remaining budget.
     Stalled {
         /// Iterations completed including the repeated one.
         iterations: u32,
+    },
+    /// The deterministic loop condition could not be evaluated.
+    InvalidCondition {
+        /// Completed worker iterations.
+        iterations: u32,
+        /// Condition failure description.
+        reason: String,
     },
     /// Cancellation token tripped.
     Cancelled,
@@ -75,6 +82,13 @@ pub enum GateOutcome {
     /// Stop the driver successfully.
     Stop {
         /// Reason recorded on [`RunOutcome::Achieved`].
+        reason: String,
+    },
+    /// Stop without achieving the target.
+    Stalled,
+    /// Stop because the deterministic condition is unusable.
+    InvalidCondition {
+        /// Condition failure description.
         reason: String,
     },
     /// Run another worker iteration with this directive.
@@ -199,9 +213,18 @@ impl IterationDriver {
             }
             previous_activity = Some(activity_fp);
             previous_transcript = Some(transcript.clone());
-            match gate.judge(&transcript).await? {
+            let judgment = tokio::select! {
+                biased;
+                () = cancel.cancelled() => return Ok(RunOutcome::Cancelled),
+                judgment = gate.judge(&transcript) => judgment?,
+            };
+            match judgment {
                 GateOutcome::Stop { reason } => {
                     return Ok(RunOutcome::Achieved { iterations, reason });
+                }
+                GateOutcome::Stalled => return Ok(RunOutcome::Stalled { iterations }),
+                GateOutcome::InvalidCondition { reason } => {
+                    return Ok(RunOutcome::InvalidCondition { iterations, reason });
                 }
                 GateOutcome::Continue { directive: next } => directive = next,
             }

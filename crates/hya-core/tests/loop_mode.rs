@@ -421,7 +421,7 @@ async fn should_stop_hook_stops_before_verifier_satisfied_check() {
                 "the hook stop must carry the documented prefix"
             );
         }
-        GateOutcome::Continue { .. } => panic!("expected a stop, got continue"),
+        _ => panic!("expected a stop, got continue"),
     }
     assert_eq!(
         hook.calls.load(Ordering::SeqCst),
@@ -449,7 +449,7 @@ async fn should_stop_hook_none_falls_through_to_verifier() {
         GateOutcome::Stop { reason } => {
             assert_eq!(reason, "satisfied: score 100");
         }
-        GateOutcome::Continue { .. } => panic!("expected the satisfied stop, got continue"),
+        _ => panic!("expected the satisfied stop, got continue"),
     }
     assert_eq!(verifier.calls.load(Ordering::SeqCst), 1);
 }
@@ -463,13 +463,13 @@ async fn gate_without_hook_stops_on_satisfied_verifier() {
         GateOutcome::Stop { reason } => {
             assert_eq!(reason, "satisfied: score 100");
         }
-        GateOutcome::Continue { .. } => panic!("expected the satisfied stop, got continue"),
+        _ => panic!("expected the satisfied stop, got continue"),
     }
 }
 
 /// Ordering: a broken deterministic predicate outranks the hook — the run
 /// stops as a failure (never success) even when the hook asks to stop, and
-/// the broken detail stays observable via `LoopGate::broken_condition`.
+/// the failure is exposed as a typed invalid condition.
 #[tokio::test]
 async fn broken_predicate_wins_over_should_stop_hook() {
     let hook = Arc::new(StopHook {
@@ -497,20 +497,16 @@ async fn broken_predicate_wins_over_should_stop_hook() {
         Some(hook),
     );
     match gate.judge(&transcript("work")).await.unwrap() {
-        GateOutcome::Stop { reason } => {
+        GateOutcome::InvalidCondition { reason } => {
             assert!(
                 reason.starts_with("broken condition"),
                 "broken condition must win and read as a failure: {reason}"
             );
         }
-        GateOutcome::Continue { .. } => {
-            panic!("expected a broken-condition stop, got continue")
+        _ => {
+            panic!("expected a broken-condition stop")
         }
     }
-    assert!(
-        gate.broken_condition().is_some(),
-        "the broken detail must stay observable on the gate"
-    );
 }
 
 /// `clamp_budget` maps any requested budget into the range `validate_budget`

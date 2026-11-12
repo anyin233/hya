@@ -718,11 +718,7 @@ async fn cmd_loop(
         }
     };
     println!("loop outcome: {outcome:?}");
-    // A broken deterministic condition stops with a "broken condition"
-    // reason: surface it as a failure, never as a finished loop.
-    if let RunOutcome::Achieved { reason, .. } = &outcome
-        && reason.starts_with("broken condition")
-    {
+    if let RunOutcome::InvalidCondition { reason, .. } = &outcome {
         eprintln!(
             "warning: the loop condition itself is broken, so this is NOT a success: {reason}"
         );

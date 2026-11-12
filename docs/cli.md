@@ -1436,3 +1436,24 @@ advice table per failure kind.
 | Binary | Success | Failure / notes |
 | --- | --- | --- |
 | `hya` | **0** on success (including the bare guidance banner, `serve` graceful signal shutdown, `serve stop` with nothing running, `proxy` and `bridge` graceful SIGINT/SIGTERM shutdown, and `tail-session` broken-pipe). **75** from `serve` on a database another process holds. **1** from `serve status` and `serve relay …` when no server runs (and from `serve relay …` when its rpc fails). **130** / **143** when `exec`/`-p`/`loop` was stopped by SIGINT / SIGTERM (after the drain). Bare `hya` on a terminal exits with the terminal TUI's status, or `128 + signal` (130 / 143 / 129) when `hya` was stopped by SIGINT / SIGTERM / SIGHUP. | **1** with the full `anyhow` error chain printed to stderr on any error — CLI validation failures use the same path; `hya relay doctor` also exits **1** (with its report still printed) when neither relay binding works. |
+
+### Loop results
+
+`hya loop` prints `loop outcome: <result>`. The engine returns a typed
+`RunOutcome`: `Achieved { iterations, reason }` for a satisfied predicate,
+verifier, or explicit `loop.should_stop` hook; `Stalled { iterations }` for
+unchanged gaps or repeated directives; `InvalidCondition { iterations, reason }`
+for a failed, timed-out, or unusable predicate; and `Cancelled` for cancellation.
+Budget exits remain `Capped` or `BudgetLimited`. Stalls no longer report
+`Achieved`. Invalid conditions retain the warning and exit code 1; other
+completed loop results retain exit code 0. Signal handling retains its existing
+exit codes. Predicate waits are asynchronous and interrupted by cancellation.
+
+For example, `hya loop --target 'finish the task' --until 'test -f done'` evaluates
+`sh -c 'test -f done'` between iterations: exit 0 achieves the condition,
+exit 1 continues, and other exit codes report `InvalidCondition`. `--while`
+reverses the meaning of exit 0 and 1. Predicate evaluation has a 30-second timeout.
+The gate returns `GateOutcome::Stop { reason: String }`, `Stalled`,
+`InvalidCondition { reason: String }`, or `Continue { directive: String }`;
+the driver attaches iteration counts and selects cancellation as `Cancelled`.
+These outcome types are internal Rust contracts; no event or protobuf schema changes.

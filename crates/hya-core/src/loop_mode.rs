@@ -201,50 +201,39 @@ impl LoopPredicate {
         }
     }
 
-    /// Evaluate the condition once, synchronously, with the configured
-    /// timeout. Blocking by design: loop gates run between iterations.
-    #[must_use]
-    pub fn evaluate(&self) -> LoopPredicateOutcome {
-        let Ok(mut child) = std::process::Command::new("sh")
+    /// Evaluate asynchronously. Dropping this future terminates the child,
+    /// allowing the iteration driver's cancellation to interrupt the wait.
+    pub async fn evaluate(&self) -> LoopPredicateOutcome {
+        let Ok(mut child) = tokio::process::Command::new("sh")
             .arg("-c")
             .arg(&self.command)
             .current_dir(&self.workdir)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
             .spawn()
         else {
             return LoopPredicateOutcome::Broken {
                 detail: format!("failed to spawn condition command `{}`", self.command),
             };
         };
-        let deadline = std::time::Instant::now() + self.timeout;
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break Some(status),
-                Ok(None) => {
-                    if std::time::Instant::now() >= deadline {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        break None;
-                    }
-                    std::thread::sleep(Duration::from_millis(25));
-                }
-                Err(error) => {
-                    let _ = child.kill();
-                    return LoopPredicateOutcome::Broken {
-                        detail: format!("condition wait failed: {error}"),
-                    };
-                }
+        let status = match tokio::time::timeout(self.timeout, child.wait()).await {
+            Ok(Ok(status)) => status,
+            Ok(Err(error)) => {
+                return LoopPredicateOutcome::Broken {
+                    detail: format!("condition wait failed: {error}"),
+                };
             }
-        };
-        let Some(status) = status else {
-            return LoopPredicateOutcome::Broken {
-                detail: format!(
-                    "condition `{}` timed out after {:?}",
-                    self.command, self.timeout
-                ),
-            };
+            Err(_) => {
+                let _ = child.kill().await;
+                return LoopPredicateOutcome::Broken {
+                    detail: format!(
+                        "condition `{}` timed out after {:?}",
+                        self.command, self.timeout
+                    ),
+                };
+            }
         };
         let Some(code) = status.code() else {
             return LoopPredicateOutcome::Broken {
@@ -322,7 +311,6 @@ pub struct LoopGate {
     /// deterministic predicate and before the verifier.
     should_stop: Option<Arc<dyn HookDispatcher>>,
     state: Mutex<LoopState>,
-    broken_condition: std::sync::Mutex<Option<String>>,
 }
 
 impl LoopGate {
@@ -341,7 +329,6 @@ impl LoopGate {
             config,
             should_stop: None,
             state: Mutex::new(LoopState::default()),
-            broken_condition: std::sync::Mutex::new(None),
         }
     }
 
@@ -354,17 +341,6 @@ impl LoopGate {
         self.should_stop = hook;
         self
     }
-
-    /// The broken-condition detail when the last judgment stopped because the
-    /// deterministic predicate itself failed (bad exit code or timeout).
-    /// Entry points must surface this as a failure, never as success.
-    #[must_use]
-    pub fn broken_condition(&self) -> Option<String> {
-        self.broken_condition
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-    }
 }
 
 #[async_trait]
@@ -373,7 +349,7 @@ impl IterationGate for LoopGate {
         // The deterministic predicate outranks the model verdict: it alone
         // decides stop-vs-continue, and a broken condition stops as a failure.
         if let Some(predicate) = &self.config.predicate {
-            match predicate.evaluate() {
+            match predicate.evaluate().await {
                 LoopPredicateOutcome::Satisfied { reason } => {
                     return Ok(GateOutcome::Stop {
                         reason: format!(
@@ -386,11 +362,7 @@ impl IterationGate for LoopGate {
                     });
                 }
                 LoopPredicateOutcome::Broken { detail } => {
-                    *self
-                        .broken_condition
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(detail.clone());
-                    return Ok(GateOutcome::Stop {
+                    return Ok(GateOutcome::InvalidCondition {
                         reason: format!("broken condition: {detail}"),
                     });
                 }
@@ -407,8 +379,8 @@ impl IterationGate for LoopGate {
                 reason: format!("loop.should_stop: {reason}"),
             });
         }
-        let mut st = self.state.lock().await;
         let verdict = self.verifier.grade(&self.target, transcript).await?;
+        let mut st = self.state.lock().await;
         st.history.push(verdict.iteration_summary.clone());
 
         // Engine authority: only the verifier (not the planner) can declare success.
@@ -433,23 +405,22 @@ impl IterationGate for LoopGate {
                 st.last_gap_fp = Some(gap_fp);
             }
             if st.no_progress >= self.config.max_no_progress {
-                return Ok(GateOutcome::Stop {
-                    reason: format!("no progress for {} iterations", self.config.max_no_progress),
-                });
+                return Ok(GateOutcome::Stalled);
             }
         }
 
         let notes = st.planner_notes.clone();
+        let history = st.history.clone();
+        drop(st);
         let plan = self
             .planner
-            .plan_next(&self.target, &st.history, &verdict, &notes)
+            .plan_next(&self.target, &history, &verdict, &notes)
             .await?;
 
+        let mut st = self.state.lock().await;
         let directive_fp = fingerprint(std::slice::from_ref(&plan.directive));
         if st.recent_directive_fps.contains(&directive_fp) && !plan.strategy_change {
-            return Ok(GateOutcome::Stop {
-                reason: "repeated directive without strategy change".to_string(),
-            });
+            return Ok(GateOutcome::Stalled);
         }
         st.recent_directive_fps.push(directive_fp);
         if st.recent_directive_fps.len() > 2 {
