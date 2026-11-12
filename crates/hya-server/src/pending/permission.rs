@@ -146,48 +146,6 @@ impl PermissionRequests {
         self.events.subscribe()
     }
 
-    /// Pending-plane bridge retained for the interaction event stream.
-    #[allow(dead_code)]
-    #[allow(dead_code)]
-    pub(crate) async fn snapshot_asked(&self) -> Vec<Value> {
-        let pending = {
-            let entries = self.inner.lock().await;
-            entries
-                .iter()
-                .map(|(id, entry)| {
-                    (
-                        id.clone(),
-                        entry.session,
-                        entry.message_id,
-                        entry.call_id,
-                        entry.tool.clone(),
-                        entry.action,
-                        entry.resource.clone(),
-                        entry.remember.clone(),
-                    )
-                })
-                .collect::<Vec<_>>()
-        };
-        pending
-            .into_iter()
-            .map(
-                |(id, session, message_id, call_id, tool, action, resource, remember)| {
-                    let properties = legacy_permission_view_from_fields(
-                        &id,
-                        session
-                            .map(|session| session.to_string())
-                            .unwrap_or_default(),
-                        (message_id, call_id, tool.as_ref()),
-                        action,
-                        &resource,
-                        &remember,
-                    );
-                    permission_asked_event_from_view(&id, properties)
-                },
-            )
-            .collect()
-    }
-
     fn publish_replied(&self, session: Option<SessionId>, id: &str, reply: PermissionReply) {
         let _published = self
             .events
@@ -218,20 +176,6 @@ impl PermissionRequests {
                 entry
                     .session
                     .map(|session| legacy_permission_view(id, entry, session.to_string()))
-            })
-            .collect()
-    }
-
-    #[allow(dead_code)]
-    pub(crate) async fn list_session(&self, session: SessionId) -> Vec<PermissionRequestView> {
-        self.inner
-            .lock()
-            .await
-            .iter()
-            .filter_map(|(id, entry)| {
-                (entry.session == Some(session))
-                    .then(|| permission_view(id, entry))
-                    .flatten()
             })
             .collect()
     }

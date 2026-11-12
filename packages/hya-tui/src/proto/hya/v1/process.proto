@@ -31,16 +31,6 @@ service Process {
   // hya.http: PATCH /v1/config
   rpc UpdateConfig(UpdateConfigRequest) returns (GetConfigResponse);
 
-  // Ask the backend process to shut down gracefully.
-  //
-  // hya.http: POST /v1/process/dispose
-  rpc DisposeProcess(DisposeProcessRequest) returns (DisposeProcessResponse);
-
-  // Ask the backend to self-update via the verified updater.
-  //
-  // hya.http: POST /v1/process/upgrade
-  rpc UpgradeProcess(UpgradeProcessRequest) returns (UpgradeProcessResponse);
-
   // Aggregated startup snapshot: config, catalogs, pending interactions,
   // and session summaries in a single round trip. Frontends call this once
   // at launch instead of fanning out over every list rpc.
@@ -92,17 +82,6 @@ message UpdateConfigRequest {
   string directory = 1;
   // JSON object deep-merged into the stored config.
   google.protobuf.Struct patch = 2;
-}
-
-message DisposeProcessRequest {}
-
-message DisposeProcessResponse {}
-
-message UpgradeProcessRequest {}
-
-message UpgradeProcessResponse {
-  // Human-readable outcome of the upgrade attempt.
-  string status = 1;
 }
 
 message GetBootstrapRequest {

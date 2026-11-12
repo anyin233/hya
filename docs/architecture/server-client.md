@@ -52,9 +52,8 @@ git) lives under `hya_server::support`.
 
 ## The v1 surface
 
-Eighteen services, 104 rpcs: AgentModels (durable per-agent model
-preferences, configuration saves, per-agent default efforts, and per-model effort preferences), Process (health/location/config/dispose/
-upgrade/bootstrap), Catalog (agents/models/providers/commands/skills/
+Eighteen services, 107 rpcs: AgentModels (durable per-agent model
+preferences, configuration saves, per-agent default efforts, and per-model effort preferences), Process (health/location/config/bootstrap), Catalog (agents/models/providers/commands/skills/
 tools/permission modes, plus provider upsert/refresh/model overrides/model
 test), Auth (keys applied live), Session (lifecycle + permission mode +
 fork/compact/summarize/revert), BundleApi
@@ -135,9 +134,7 @@ methods `Any`.
 ## Clients
 
 - [`../../crates/hya-sdk-v1`](../../crates/hya-sdk-v1) — typed SDK for new
-  frontends (HTTP + SSE + `V1SessionMirror`).
-- [`../../crates/hya-client`](../../crates/hya-client) — lean typed
-  `reqwest` client (tooling, e2e harness).
+  frontends (HTTP + SSE + `V1SessionMirror`), plus typed tooling and process-harness calls.
 - gRPC through `V1Grpc` — same contract over tonic, on the server's HTTP
   port (h2c); `HYA_GRPC_BIND` adds an optional extra listener.
 
@@ -151,3 +148,15 @@ removed.
   conformance over a real tonic listener.
 - `crates/hya-e2e` (Track P) — the process matrix drives real backends
   entirely through the v1 client.
+
+The SDK also exports `Client` and `ClientError` for process harnesses and tooling.
+For example, `Client::new(url).list_projects().await?` returns
+`hya_api::v1::ListProjectsResponse`. `Client::with_http_client(url, http)`
+accepts a configured `reqwest::Client`, including bridge authentication headers.
+These calls use the same `/v1` request and response schemas documented in the
+[API reference](../protocol/api-reference.md).
+
+Provider OAuth runs through the launcher auth command. The former
+`Auth.StartOauth`, `Auth.CompleteOauth`, `Process.DisposeProcess`, and
+`Process.UpgradeProcess` RPCs and HTTP routes are removed; they only returned
+`unavailable`. MCP auth RPCs remain available in the contract.

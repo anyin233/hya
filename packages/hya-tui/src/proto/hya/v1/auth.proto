@@ -27,15 +27,6 @@ service Auth {
   // hya.http: DELETE /v1/auth/{provider_id}
   rpc RemoveProviderAuth(RemoveProviderAuthRequest) returns (RemoveProviderAuthResponse);
 
-  // Begin a provider OAuth flow; returns the authorization URL to open.
-  //
-  // hya.http: POST /v1/auth/{provider_id}/oauth/start
-  rpc StartOauth(StartOauthRequest) returns (StartOauthResponse);
-
-  // Complete a provider OAuth flow with the callback code.
-  //
-  // hya.http: POST /v1/auth/{provider_id}/oauth/callback
-  rpc CompleteOauth(CompleteOauthRequest) returns (CompleteOauthResponse);
 }
 
 message ListProviderAuthRequest {}
@@ -90,34 +81,4 @@ message RemoveProviderAuthResponse {
   // The provider after the live rebuild; unset when the id is not a
   // configured provider.
   ProviderInfo provider = 1;
-}
-
-message StartOauthRequest {
-  // Directory context for auth resolution.
-  string directory = 1;
-  // Provider identifier to authenticate.
-  string provider_id = 2;
-}
-
-message StartOauthResponse {
-  // Authorization URL the client must open in a browser.
-  string authorization_url = 1;
-  // State value to echo back in `CompleteOauth`.
-  string state = 2;
-}
-
-message CompleteOauthRequest {
-  // Directory context for auth resolution.
-  string directory = 1;
-  // Provider identifier completing the flow.
-  string provider_id = 2;
-  // Authorization code returned by the provider callback.
-  string code = 3;
-  // State value from `StartOauth` when the provider requires it.
-  string state = 4;
-}
-
-message CompleteOauthResponse {
-  // Resulting auth status for the provider.
-  AuthStatus status = 1;
 }

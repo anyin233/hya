@@ -17,6 +17,9 @@
 //! field (a query parameter on GET/DELETE, a body field otherwise); the
 //! server refuses the removed `x-hya-directory` header.
 
+mod client;
+pub use client::{Client, ClientError};
+
 use std::collections::BTreeMap;
 use std::time::Duration;
 
