@@ -1702,11 +1702,11 @@ async fn begin_work_commits_one_prompt_and_its_work_boundary() {
     store
         .append_event(
             root,
-            &Event::AgentActivityChanged {
+            &Event::ResidentWorkFinished {
                 session: root,
                 handle: "main/worker".into(),
-                status: RosterStatus::Idle,
-                current_task: None,
+                epoch: claim.epoch,
+                inbox_through: 2,
             },
         )
         .await
@@ -1930,4 +1930,58 @@ async fn begin_work_reuses_registered_prompt_and_rolls_back_its_mail_append() {
     assert!(
         matches!(&projection.session.messages[0].parts[0], PartProjection::Text { text, .. } if text == "registered directive\n\nfirst\n\nsecond")
     );
+}
+
+#[tokio::test]
+async fn user_cancelled_work_recovers_its_prompt_even_after_mail_was_acknowledged() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let (root, claim) = work_fixture(&store).await;
+    let (prompt, _) = store
+        .begin_work(
+            Some(&claim),
+            root,
+            "main/worker",
+            2,
+            hya_store::ResidentWorkPrompt::Text("already admitted".into()),
+            "working".into(),
+        )
+        .await
+        .unwrap();
+    for event in [
+        Event::MailConsumed {
+            session: root,
+            handle: "main/worker".into(),
+            through: 2,
+        },
+        Event::AgentActivityChanged {
+            session: root,
+            handle: "main/worker".into(),
+            status: RosterStatus::Idle,
+            current_task: None,
+        },
+    ] {
+        store.append_event(root, &event).await.unwrap();
+    }
+    let projection = store.read_projection(root).await.unwrap();
+    assert_eq!(projection.team.roster["main/worker"].resident_cursor, 2);
+    assert!(
+        projection.team.roster["main/worker"]
+            .resident_work
+            .is_some()
+    );
+    let recovered = store
+        .recover_claim(claim.actor_id, OwnerRunId::new())
+        .await
+        .unwrap();
+    let result = store
+        .recover_resident_actor(&recovered, root, "main/worker")
+        .await
+        .unwrap();
+    assert_eq!(
+        result.work,
+        hya_store::RecoveredResidentWork::Queued { inbox_cursor: 2 }
+    );
+    let actor = store.read_projection(claim.actor_id).await.unwrap();
+    assert_eq!(actor.session.messages.len(), 1);
+    assert_eq!(actor.session.messages[0].id, prompt);
 }

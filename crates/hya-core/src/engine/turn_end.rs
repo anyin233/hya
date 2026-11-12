@@ -182,6 +182,11 @@ impl SessionEngine {
         cancelled
     }
 
+    /// Distinguish an external cancellation from one about to be caused by loss.
+    pub(crate) fn turn_cancel_cause(&self, session: SessionId) -> Option<FinishCause> {
+        self.turn_gate.cancel_cause(session)
+    }
+
     /// Whether a [`cancel_user_turn`](Self::cancel_user_turn) stop holds
     /// `session`: nothing but the user may start its next turn.
     #[must_use]

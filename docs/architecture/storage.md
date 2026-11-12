@@ -341,13 +341,12 @@ This is a full replay log, not a rendered transcript cache. Persisted events can
 include prompts, tool-call inputs, tool outputs, reasoning deltas, command
 metadata, context file paths, absolute workdir paths, and token usage data.
 
-`ResidentWorkStarted` is the only added resident recovery marker. It records
-the stable actor session, epoch, handle, and inbox boundary, but no tool output
-or external-effect payload. The shared reducer clears it and advances the
-durable inbox cursor when the resident reaches an idle/terminal activity state.
-
-`replay(session)` loads all rows for one session ordered by `seq` and deserializes
-each payload into an `Envelope`.
+`ResidentWorkStarted` records the stable actor session, epoch, handle, and
+inbox boundary, without tool output or external-effect payloads. This work
+remains pending across a user-cancelled Idle state. `ResidentWorkFinished`
+settles the matching epoch and advances the inbox cursor; standalone
+`MailConsumed` acknowledges mail without settling the prompt. See
+[user cancellation and owed work](subagent-orchestration.md#user-cancellation-and-owed-work).
 
 ## Session list and delete
 

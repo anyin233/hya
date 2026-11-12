@@ -543,7 +543,7 @@ pub struct RosterEntry {
     /// A short human-facing description of what the member is currently doing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_task: Option<String>,
-    /// Number of inbox messages durably consumed by terminal resident turns.
+    /// Number of inbox entries acknowledged within this episode.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub resident_cursor: u64,
     /// Latest harness-observed activity time (Unix-epoch ms), folded from
@@ -556,12 +556,12 @@ pub struct RosterEntry {
     pub resident_work: Option<ResidentWorkProjection>,
 }
 
-/// In-flight resident turn boundary folded from `ResidentWorkStarted`.
+/// Outstanding resident wake, retained across a user-cancelled Idle state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResidentWorkProjection {
     /// Actor epoch that started this work.
     pub epoch: ActorEpoch,
-    /// Inbox length covered by the coalesced turn (cursor advances on terminal/idle).
+    /// Inbox length delivered to this wake; settling it acknowledges this boundary.
     pub inbox_through: u64,
 }
 
@@ -662,7 +662,7 @@ pub fn session_archive_event(
 /// different projection, or when `Projection` (or anything it contains)
 /// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
 /// the bump is recorded.
-pub const PROJECTION_REDUCER_VERSION: u32 = 2;
+pub const PROJECTION_REDUCER_VERSION: u32 = 3;
 
 /// Durable snapshot encoding: the wire projection plus replay-only reducer
 /// state the wire form deliberately omits.
@@ -1435,11 +1435,6 @@ impl Projection {
                     if current_task.is_some() {
                         entry.current_task = current_task.clone();
                     }
-                    if *status != RosterStatus::Busy
-                        && let Some(work) = entry.resident_work.take()
-                    {
-                        entry.resident_cursor = entry.resident_cursor.max(work.inbox_through);
-                    }
                 }
             }
             Event::ResidentWorkStarted {
@@ -1453,6 +1448,7 @@ impl Projection {
                     && entry.session == *actor_session
                     && entry.mode.is_resident()
                 {
+                    entry.status = RosterStatus::Busy;
                     entry.resident_work = Some(ResidentWorkProjection {
                         epoch: *epoch,
                         inbox_through: *inbox_through,
@@ -1546,9 +1542,15 @@ impl Projection {
                     }
                 }
             }
-            Event::MailConsumed { handle, through, .. } => {
-                let handle = handle.clone();
-                if let Some(entry) = self.team.roster.get_mut(&handle) {
+            Event::MailConsumed { handle, through, .. }
+            | Event::ResidentWorkFinished { handle, inbox_through: through, .. } => {
+                if let Some(entry) = self.team.roster.get_mut(handle) {
+                    if let Event::ResidentWorkFinished { epoch, .. } = e {
+                        if entry.resident_work.is_none_or(|work| work.epoch != *epoch) {
+                            return;
+                        }
+                        entry.resident_work = None;
+                    }
                     entry.resident_cursor = entry.resident_cursor.max(*through);
                 }
             }
