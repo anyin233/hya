@@ -609,3 +609,22 @@ after the turn is gone, so they cannot wait for a pooled connection retained by
 the suspended turn. Sidecar stop errors or timeouts append `sidecar did not
 stop: ...` to the ending note. The episode is removed before archive envelopes
 are published and before completion is resolved. No tool or wire schema changes.
+
+Loss only fails an episode when it interrupted a turn that ended cancelled.
+`run_one_turn` distinguishes `NotStarted`, `Finished`, and `Cancelled`; a sidecar
+lost after a completed Stop/Length turn or during an empty wake is discarded
+without replacing an accepted report or archiving the member. For example,
+`report({"result":"done"})` followed by loss after its completed turn still
+reports Done. Loss during that tool round instead cancels it and reports Failed.
+The loss token cancels the owned turn first; after draining the turn and stopping
+the handle, the task chooses its ending. An archive, teardown, kill or shutdown
+requested during those waits wins over the provisional sidecar failure.
+
+The five-second straggler boundary closes main's assistant message without a
+claim, and member messages under their claim, before dropping either future.
+`SidecarHandle::is_healthy() -> bool` defaults to false when its optional
+`loss_token() -> Option<CancellationToken>` has fired. Cached handles follow
+that same rule before another turn, including before the idle-loss branch runs.
+Terminal report mail holds the team against retirement until the bus listener
+routes it (or recovers its durable inbox after lag); archive envelopes still
+publish after the episode is removed and before its completion is resolved.

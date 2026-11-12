@@ -50,9 +50,10 @@ pub trait SidecarHandle: Send {
     /// Gracefully shut down the sidecar.
     async fn shutdown(&mut self) -> Result<(), CoreError>;
 
-    /// Whether the sidecar is still healthy.
+    /// Whether the sidecar is still healthy. A fired loss token is unhealthy,
+    /// including between turns before the idle-loss branch has observed it.
     fn is_healthy(&self) -> bool {
-        true
+        self.loss_token().is_none_or(|token| !token.is_cancelled())
     }
 
     /// Optional token cancelled when the sidecar is lost.
