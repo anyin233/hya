@@ -178,8 +178,7 @@ impl SidecarHandle for BundleSidecarHandle {
         }
 
         let cleanup_error = self.cleanup_activation_dir();
-        let result = terminate_error.or(cleanup_error).map_or(Ok(()), Err);
-        result
+        terminate_error.or(cleanup_error).map_or(Ok(()), Err)
     }
 
     fn tool_bindings(&self) -> Arc<[ResolvedTool]> {
