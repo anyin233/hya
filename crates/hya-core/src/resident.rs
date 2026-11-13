@@ -2608,6 +2608,8 @@ pub struct ResidentSupervisor {
     #[cfg(test)]
     registration_pause: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
     #[cfg(test)]
+    ending_pause: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
+    #[cfg(test)]
     activation_lock_pause: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
     #[cfg(test)]
     revive_ready_pause: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
@@ -3236,6 +3238,8 @@ impl ResidentSupervisor {
             #[cfg(test)]
             registration_pause: Mutex::new(None),
             #[cfg(test)]
+            ending_pause: Mutex::new(None),
+            #[cfg(test)]
             activation_lock_pause: Mutex::new(None),
             #[cfg(test)]
             revive_ready_pause: Mutex::new(None),
@@ -3765,51 +3769,113 @@ impl ResidentSupervisor {
     /// this wait never cancels the episode task.
     pub async fn end_member(&self, root: SessionId, handle: &str) -> Result<(), CoreError> {
         let prefix = format!("{handle}{}", scope::PATH_SEPARATOR);
-        // Capture live identities before any await: root deletion must still
-        // join the episode's ending rather than re-resolve its deleted roster.
-        let (live, mut descendants) = {
+        // Capture completion handles before any await: deletion may remove both
+        // the roster and the episodes while we discover durable descendants.
+        let (live, mut captured) = {
             let episodes = self
                 .episodes
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut live = None;
-            let mut descendants = Vec::new();
+            let mut captured = HashMap::new();
             for (session, team) in episodes.iter().filter(|(_, team)| team.root == root) {
-                let state = team.lock();
-                if let Some(slot) = state.residents.get(session) {
+                let mut state = team.lock();
+                if let Some(slot) = state.residents.get_mut(session)
+                    && (slot.handle == handle || slot.handle.starts_with(&prefix))
+                {
+                    // Suppress later wakes without letting the parent archive
+                    // before its descendants. Its claim fences in-flight spawns.
+                    slot.user_stopped = true;
+                    self.engine.cancel_turn(*session, FinishCause::UserCancel);
                     if slot.handle == handle {
                         live = Some(*session);
-                    } else if slot.handle.starts_with(&prefix) {
-                        descendants.push((slot.handle.clone(), *session));
                     }
+                    captured.insert(slot.handle.clone(), (*session, slot.done.subscribe()));
                 }
             }
-            (live, descendants)
+            (live, captured)
         };
+        #[cfg(test)]
+        {
+            let pause = self
+                .ending_pause
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some((entered, release)) = pause {
+                entered.notify_one();
+                release.notified().await;
+            }
+        }
+        let projection = self.engine.read_projection(root).await?;
+        let child = live.or_else(|| {
+            projection
+                .team
+                .roster
+                .get(handle)
+                .map(|entry| entry.session)
+        });
+        let mut descendants: BTreeMap<_, _> = projection
+            .team
+            .roster
+            .iter()
+            .filter(|(path, _)| path.starts_with(&prefix))
+            .map(|(path, entry)| (path.clone(), entry.session))
+            .collect();
+        descendants.extend(
+            captured
+                .iter()
+                .filter(|(path, _)| path.starts_with(&prefix))
+                .map(|(path, (session, _))| (path.clone(), *session)),
+        );
+        let mut descendants: Vec<_> = descendants.into_iter().collect();
         descendants.sort_by_key(|(path, _)| {
             std::cmp::Reverse(path.matches(scope::PATH_SEPARATOR).count())
         });
-        for (path, child) in descendants {
-            self.stop_and_archive_live(root, &path, child, "Workflow run cancelled")
-                .await?;
-        }
-        if let Some(child) = live {
-            self.stop_and_archive_live(root, handle, child, "Workflow run cancelled")
-                .await?;
-            return Ok(());
-        }
-        let projection = self.engine.read_projection(root).await?;
-        if projection.team.archived.contains_key(handle) {
-            return Ok(());
-        }
-        let child = projection
-            .team
-            .roster
-            .get(handle)
-            .ok_or_else(|| CoreError::Invalid(format!("unknown resident `{handle}`")))?
-            .session;
-        self.stop_and_archive_live(root, handle, child, "Workflow run cancelled")
+        for (path, session) in descendants {
+            self.stop_and_archive_live(
+                root,
+                &path,
+                session,
+                "Workflow run cancelled",
+                captured.remove(&path).map(|(_, done)| done),
+            )
             .await?;
+        }
+        if let Some(child) = child {
+            self.stop_and_archive_live(
+                root,
+                handle,
+                child,
+                "Workflow run cancelled",
+                captured.remove(handle).map(|(_, done)| done),
+            )
+            .await?;
+        } else if !projection.team.archived.contains_key(handle) {
+            return Err(CoreError::Invalid(format!("unknown resident `{handle}`")));
+        }
+        // Parent claim release fences new direct children. Sweep anything that
+        // committed before release, including descendants of those late children.
+        loop {
+            let projection = self.engine.read_projection(root).await?;
+            let mut descendants: Vec<_> = projection
+                .team
+                .roster
+                .iter()
+                .filter(|(path, _)| path.starts_with(&prefix))
+                .map(|(path, entry)| (path.clone(), entry.session))
+                .collect();
+            if descendants.is_empty() {
+                break;
+            }
+            descendants.sort_by_key(|(path, _)| {
+                std::cmp::Reverse(path.matches(scope::PATH_SEPARATOR).count())
+            });
+            for (path, session) in descendants {
+                self.stop_and_archive_live(root, &path, session, "Workflow run cancelled", None)
+                    .await?;
+            }
+        }
         Ok(())
     }
 
@@ -3946,11 +4012,11 @@ impl ResidentSupervisor {
             std::cmp::Reverse(path.matches(scope::PATH_SEPARATOR).count())
         });
         for (handle, session) in &descendants {
-            self.stop_and_archive_live(root, handle, *session, &note)
+            self.stop_and_archive_live(root, handle, *session, &note, None)
                 .await?;
         }
         let cancelled_turn = self
-            .stop_and_archive_live(root, &resolved.handle, resolved.session, &note)
+            .stop_and_archive_live(root, &resolved.handle, resolved.session, &note, None)
             .await?;
         Ok(ArchiveReceipt {
             handle: resolved.handle,
@@ -3968,6 +4034,7 @@ impl ResidentSupervisor {
         handle: &str,
         child: SessionId,
         note: &str,
+        captured: Option<EpisodeDone>,
     ) -> Result<bool, CoreError> {
         if child == root || handle == scope::ROOT_HANDLE {
             return Err(CoreError::Invalid("the team lead is never archived".into()));
@@ -3986,6 +4053,10 @@ impl ResidentSupervisor {
         if let Some((done, cancelled)) = requested {
             drop(write);
             return await_episode(done).await.map(|()| cancelled);
+        }
+        if let Some(done) = captured {
+            drop(write);
+            return await_episode(done).await.map(|()| false);
         }
         let handoff = self.engine.degraded_terminal_handoff(child).await;
         let (_, envelopes) = self
