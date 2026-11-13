@@ -569,3 +569,6 @@ wakes. A consumed inbox and ended children leave no idle team tasks behind.
 
 Turn-release callbacks hold only a weak observer while queued. The turn gate
 tracks and joins them during drain, and draining lease releases enqueue no wakes.
+
+Recovered registration queues root inbox recovery while holding its team
+registration, including when restore tools already ended the staged claim.
