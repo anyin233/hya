@@ -54,7 +54,11 @@ result
 ```
 
 The lower-level `spawn_team_supervisor(...) -> RuntimeTaskOwner` also requires
-retaining its returned owner and awaiting `owner.shutdown()`. Core service
+retaining its returned owner and awaiting `owner.shutdown()`. Its sidecar
+environment carries the owner's connection I/O tracker, including initialization
+that never publishes. Shutdown stops intake and joins registrations, drains
+residents, stops runtime sources, then joins tracked connection I/O. Drop only
+signals this cleanup; await shutdown before releasing resources. Core service
 contracts are `run_mailbox_service(engine, receiver, stop)` and
 `run_lifecycle_service(engine, supervisor, receiver, stop)`, with
 `stop: CancellationToken`. Cancellation stops intake, cancels pending handlers,

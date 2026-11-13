@@ -164,6 +164,30 @@ impl Provider for CountingProvider {
 }
 
 #[tokio::test]
+async fn standalone_supervisor_shutdown_joins_connection_io() {
+    let fixture = admission_fixture(1).await;
+    let io = fixture._tasks.io_tasks.clone();
+    let (release, waiting) = tokio::sync::oneshot::channel();
+    let reader = io.spawn(async move { waiting.await.unwrap() });
+    let mut shutdown = Box::pin(fixture._tasks.shutdown());
+    tokio::select! {
+        biased;
+        () = &mut shutdown => panic!("shutdown returned before connection I/O completed"),
+        () = async {
+            while !io.is_closed() { tokio::task::yield_now().await; }
+        } => {}
+    }
+    assert!(!reader.is_finished());
+    release.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(1), shutdown)
+        .await
+        .unwrap();
+    assert!(reader.is_finished());
+    assert!(io.is_empty());
+    fixture._tasks.shutdown().await;
+}
+
+#[tokio::test]
 async fn explicit_unknown_inline_target_creates_no_child() {
     let fixture = admission_fixture(1).await;
     let operation = operation();

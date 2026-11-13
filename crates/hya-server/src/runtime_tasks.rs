@@ -14,7 +14,9 @@ pub struct RuntimeTaskOwner {
     pub stop: CancellationToken,
     /// Services and admitted children that shutdown must join.
     pub tasks: TaskTracker,
-    /// Plugin and MCP connection I/O; joined after residents and connections stop.
+    /// Plugin and MCP connection I/O. BuiltSessionEngine::drain and the standalone
+    /// spawn_team_supervisor owner join it after stopping residents and sources;
+    /// AppState owns no connection I/O.
     pub io_tasks: TaskTracker,
 }
 

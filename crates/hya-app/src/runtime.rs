@@ -1652,15 +1652,35 @@ pub fn spawn_team_supervisor(
     categories: Arc<CategoryRegistry>,
     resident_supervisor: Arc<ResidentSupervisor>,
 ) -> RuntimeTaskOwner {
-    spawn_team_supervisor_with_environment(
+    let owner = RuntimeTaskOwner::new();
+    let sidecar_environment = Arc::new(BundleSidecarEnvironment {
+        io_tasks: Some(owner.io_tasks.clone()),
+        ..BundleSidecarEnvironment::production()
+    });
+    let lifecycle = spawn_team_supervisor_with_environment(
         rx,
-        engine,
+        engine.clone(),
         base,
         categories,
-        resident_supervisor,
-        Arc::new(BundleSidecarEnvironment::production()),
+        resident_supervisor.clone(),
+        sidecar_environment,
         RuntimeTaskOwner::new(),
-    )
+    );
+    // The standalone owner must perform the same ordered teardown as a built engine.
+    let stop = owner.stop.clone();
+    let io_tasks = owner.io_tasks.clone();
+    owner.tasks.spawn(async move {
+        stop.cancelled().await;
+        engine.begin_drain(FinishCause::Shutdown);
+        lifecycle.shutdown().await;
+        resident_supervisor
+            .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
+            .await;
+        engine.runtime_registry().shutdown_sources().await;
+        io_tasks.close();
+        io_tasks.wait().await;
+    });
+    owner
 }
 
 /// Receive Workflow requests without waiting for another Session's run.
