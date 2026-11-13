@@ -143,6 +143,13 @@ permission asks and questions of its session tree, as it would in process.
   command (Ctrl-C) does not stop the run on the server. Errors read `<code>:
   <message>` from the `/v1` error model.
 
+Outbound HTTPS requests made through reqwest trust the system root certificates.
+For a private CA, install it in the OS trust store or set `SSL_CERT_FILE` to
+a PEM certificate file before starting `hya`, for example
+`SSL_CERT_FILE=/path/to/roots.pem hya exec "summarize this repo"`.
+This changes certificate trust only; the CLI and HTTP request/response schemas
+are unchanged.
+
 Daemon clients bypass environment proxies and allow 5 seconds to connect.
 Ordinary requests (session creation/read/update, turn admission/cancellation,
 event replay, interactions, and Workflow selection/run admission/state) have
