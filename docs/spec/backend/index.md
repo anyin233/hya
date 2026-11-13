@@ -6,9 +6,9 @@
 
 ## Overview
 
-This directory combines current backend contracts with a small number of
-explicit placeholders. Guides that still need project-specific content remain
-marked `To fill`; populated guides describe checked-in behavior.
+These guidelines capture executable backend invariants across storage, error
+handling, quality gates, subagent spawning, and Workflow control. For the crate
+and directory map, see [Project Structure](../../project-structure.md).
 
 ---
 
@@ -16,13 +16,12 @@ marked `To fill`; populated guides describe checked-in behavior.
 
 | Guide | Description | Status |
 |-------|-------------|--------|
-| [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
+| [Project Structure](../../project-structure.md) | Workspace crate layout, 28 builtin tools, 12 first-party bundles, and dependency DAG | Current |
 | [Database Guidelines](./database-guidelines.md) | SQLite, event-log, admission, and migration contracts | Current |
 | [Error Handling](./error-handling.md) | Typed store/core/tool errors and fail-closed patterns | Current |
 | [Quality Guidelines](./quality-guidelines.md) | Executable backend quality and release contracts | Current |
-| [Task Tool](./task-tool.md) | Single/batch validation plus bounded background spawn admission and typed overload | Documented |
-| [Workflow Control](./workflow-control.md) | Event-sourced Workflow state, atomic admission, recovery ownership, surfaces, and SDK contracts | Documented |
-| [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
+| [Task Tool](./task-tool.md) | Single/batch validation plus bounded background spawn admission and typed overload | Current |
+| [Workflow Control](./workflow-control.md) | Event-sourced Workflow state, atomic admission, recovery ownership, surfaces, and SDK contracts | Current |
 
 ---
 
