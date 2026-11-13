@@ -938,13 +938,10 @@ impl SessionEngine {
         &self,
         root: SessionId,
         prefix: &str,
-    ) -> crate::handle_naming::HandleReservation {
-        let taken = self
-            .read_projection_shared(root)
-            .await
-            .map(|projection| crate::handle_naming::team_leaves(&projection))
-            .unwrap_or_default();
-        self.handle_namer.reserve(root, prefix, taken)
+    ) -> Result<crate::handle_naming::HandleReservation, CoreError> {
+        let projection = self.read_projection_shared(root).await?;
+        let taken = crate::handle_naming::team_leaves(&projection);
+        Ok(self.handle_namer.reserve(root, prefix, taken))
     }
 
     #[cfg(test)]

@@ -560,3 +560,6 @@ The shared `RuntimeTaskOwner` remains available from `hya_app` and is defined
 in `hya_server`; `stop: CancellationToken` and `tasks: TaskTracker` track service
 cancellation and completion. Explicit shutdown joins; drop only cancels.
 Resident bus listeners and plugin/MCP connection I/O have separate owners.
+
+Member handle allocation propagates projection/store errors before reserving a name;
+a failed read cannot be interpreted as an empty team.
