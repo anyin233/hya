@@ -8,8 +8,8 @@
 //!
 //! A leaf is never reused within a team: every candidate is checked against
 //! the leaf of every handle the team ever registered (live roster, archived
-//! rows, inboxes, and channel memberships — all durable) plus the leaves this
-//! process minted for the team. On collision the draw is retried; after
+//! rows, inboxes, and channel memberships — all durable) plus this process's
+//! uncommitted name reservations. On collision the draw is retried; after
 //! [`SINGLE_NAME_ATTEMPTS`] failures (or once the single names are exhausted)
 //! the leaf falls back to two distinct operator names
 //! (`scout-suzuran-amiya`).
@@ -22,7 +22,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::hash::{BuildHasher, Hasher};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use hya_proto::{Projection, SessionId, scope};
 
@@ -179,12 +179,29 @@ pub fn team_leaves(projection: &Projection) -> BTreeSet<String> {
     leaves
 }
 
-/// Process-wide minting state: the injectable RNG plus the leaves this
-/// process already minted per team root (so two concurrent spawns that read
-/// the same projection can never pick the same leaf).
+/// Process-wide RNG and uncommitted reservations. Durable team history owns
+/// uniqueness after registration; aborted preparations release their names too.
 pub(crate) struct HandleNamer {
     rng: Mutex<Box<dyn HandleRng>>,
     minted: Mutex<HashMap<SessionId, BTreeSet<String>>>,
+}
+
+pub(crate) struct HandleReservation {
+    pub(crate) leaf: String,
+    root: SessionId,
+    namer: Arc<HandleNamer>,
+}
+
+impl Drop for HandleReservation {
+    fn drop(&mut self) {
+        let mut minted = lock(&self.namer.minted);
+        if let Some(names) = minted.get_mut(&self.root) {
+            names.remove(&self.leaf);
+            if names.is_empty() {
+                minted.remove(&self.root);
+            }
+        }
+    }
 }
 
 impl HandleNamer {
@@ -195,8 +212,26 @@ impl HandleNamer {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn reserved_count(&self, root: SessionId) -> usize {
+        lock(&self.minted).get(&root).map_or(0, BTreeSet::len)
+    }
+
     pub(crate) fn set_rng(&self, rng: Box<dyn HandleRng>) {
         *lock(&self.rng) = rng;
+    }
+
+    pub(crate) fn reserve(
+        self: &Arc<Self>,
+        root: SessionId,
+        prefix: &str,
+        taken: BTreeSet<String>,
+    ) -> HandleReservation {
+        HandleReservation {
+            leaf: self.mint(root, prefix, taken),
+            root,
+            namer: self.clone(),
+        }
     }
 
     /// Mint and reserve a leaf for `prefix` in `root`'s team; `taken` holds
