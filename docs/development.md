@@ -48,10 +48,8 @@ or control clone does not keep those services running after shutdown. Dropping t
 cancellation without waiting; explicit shutdown is the completion boundary.
 
 ```rust,ignore
-let mut built = hya_app::build_session_engine(store, router, &agent, mcp, plugins, tools).await?;
-let result = use_engine(built.engine()).await;
-built.shutdown().await?;
-result
+let built = hya_app::build_session_engine(store, router, &agent, mcp, plugins, tools).await?;
+hya_app::with_built_session_engine(built, |built| use_engine(built.engine())).await
 ```
 
 For a server embedder, construction stages fenced recovered actors without
@@ -69,8 +67,17 @@ The Rust startup contracts are
 and `ResidentSupervisor::start_recovered(&self) -> Result<usize, CoreError>`
 (both async). The first admits root restores then invokes the second; the count
 is the number of staged episodes installed. Claims ended or replaced by restore
-tools before installation stay fenced and are skipped. A lower-level embedder explicitly
-calls the second after admitting its own restores. The revival seam is
+tools before installation stay fenced and are skipped.
+`with_built_session_engine` starts recovery before invoking its body and shuts
+it down on either success or error. Server embedders admit restores first as above.
+A lower-level embedder explicitly calls `start_recovered` after its own restores.
+For headless execution, call
+`ResidentSupervisor::start_recovered_headless(&self, session: SessionId) -> Result<Vec<RootDriverActivity>, CoreError>`
+(async) and hold the returned guards through runtime drain. It reserves external
+root ownership for the selected session and every staged root before starting any
+recovered episode. `hya exec --db events.db ...` and direct database Workflow
+commands share this startup path; only `run_lead` drives headless root continuations.
+The revival seam is
 `SessionEngine::set_reviver(Weak<ResidentSupervisor>) -> ()`.
 
 For server restores,
