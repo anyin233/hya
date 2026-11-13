@@ -4,9 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use hya_workflow::{
-    StageEvidence, StageEvidenceStatus, WorkflowRenderError, WorkflowSource, compile,
-};
+use hya_workflow::{StageEvidence, WorkflowRenderError, WorkflowSource, compile};
 
 const JOIN_WORKFLOW: &str = r#"---
 kind: Workflow
@@ -72,20 +70,17 @@ fn declared_inputs_are_required_and_unknown_inputs_are_rejected() {
 }
 
 /// A join receives only direct predecessors, in compiled incoming-edge order,
-/// with typed status and each output independently clamped on a UTF-8 boundary.
+/// with successful status and each output independently clamped on a UTF-8 boundary.
 #[test]
-fn join_evidence_is_automatic_ordered_typed_and_bounded() {
+fn join_evidence_is_automatic_ordered_and_bounded() {
     let compiled = compile(WorkflowSource::new("join.hya.md", JOIN_WORKFLOW)).unwrap();
     let plan = compiled.plan();
     let review_index = plan.stage_index("review").unwrap();
     let long = "界".repeat(1_334);
     let evidence = vec![
-        Some(StageEvidence::new(
-            StageEvidenceStatus::Done,
-            "secret ancestor",
-        )),
-        Some(StageEvidence::new(StageEvidenceStatus::Done, "A output")),
-        Some(StageEvidence::new(StageEvidenceStatus::Failed, &long)),
+        Some(StageEvidence::new("secret ancestor")),
+        Some(StageEvidence::new("A output")),
+        Some(StageEvidence::new(&long)),
         None,
     ];
     let inputs = BTreeMap::from([("request".to_string(), "ignored here".to_string())]);
@@ -99,7 +94,7 @@ fn join_evidence_is_automatic_ordered_typed_and_bounded() {
         rendered.directive(),
         format!(
             "Review direct evidence.\n\n<workflow-upstream>\n\
-             <stage id=\"impl_b\" agent=\"implementer\" status=\"failed\">\n\
+             <stage id=\"impl_b\" agent=\"implementer\" status=\"done\">\n\
              {expected_bounded}\n</stage>\n\
              <stage id=\"impl_a\" agent=\"implementer\" status=\"done\">\n\
              A output\n</stage>\n\

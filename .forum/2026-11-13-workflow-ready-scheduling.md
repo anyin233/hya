@@ -38,3 +38,12 @@ parked actor then consumes the final claim. The second registration must return
 typed overload, release the first sibling's claim without activating it, and
 retain the unrelated claim. An `agent_spawn` hook only blocks initialization;
 it cannot enforce this registration boundary for parked actors.
+
+# When does a never-started Stage become skipped?
+
+The scheduler writes `WorkflowStageFinished(Skipped)` when it skips a blocked
+Stage. Independent branches can remain Running while that skip is visible.
+Remaining unstarted Stages are Skipped on cancellation too, matching the
+projection; only activated cancelled Stages are Cancelled. Evidence rendering
+accepts successful direct predecessor outputs only, so it no longer carries
+an enum for unreachable failed/cancelled/skipped evidence.

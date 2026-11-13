@@ -17,8 +17,8 @@ use hya_proto::{
 use hya_provider::ReasoningEffort;
 use hya_tool::AgentDef;
 use hya_workflow::{
-    CompiledWorkflow, FailurePolicy, MAX_PREDECESSOR_OUTPUT_BYTES, StageEvidence,
-    StageEvidenceStatus, StageMode, VerifySpec, WorkflowModelAssignment, WorkflowStage,
+    CompiledWorkflow, FailurePolicy, MAX_PREDECESSOR_OUTPUT_BYTES, StageEvidence, StageMode,
+    VerifySpec, WorkflowModelAssignment, WorkflowStage,
 };
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
@@ -70,9 +70,9 @@ pub enum StageStatus {
     Done,
     /// The Stage finished with an execution failure.
     Failed,
-    /// The Stage or run was cancelled.
+    /// The activated Stage was cancelled.
     Cancelled,
-    /// Failure policy or an unsuccessful predecessor prevented activation.
+    /// The Stage never activated (failure policy, predecessor, or cancellation).
     Skipped,
 }
 
@@ -131,7 +131,7 @@ impl std::fmt::Display for WorkflowStatus {
 pub struct WorkflowRunReport {
     /// Overall terminal state.
     pub status: WorkflowStatus,
-    /// Reports for stages that ran; absent stages did not start.
+    /// One row per compiled Stage; unstarted Stages are skipped.
     pub stages: Vec<StageReport>,
 }
 
@@ -614,6 +614,20 @@ impl PreparedWorkflowRun {
                             .any(|&predecessor| reports[predecessor].status != StageStatus::Done)
                         {
                             reports[index].status = StageStatus::Skipped;
+                            if let Some(run) = durable_run {
+                                engine
+                                    .record_workflow_event_for_actor(
+                                        actor_claim.as_ref(),
+                                        lead,
+                                        Event::WorkflowStageFinished {
+                                            session: lead,
+                                            run,
+                                            stage: stage.id().to_string(),
+                                            status: WorkflowStageStatus::Skipped,
+                                        },
+                                    )
+                                    .await?;
+                            }
                             for &successor in &successors[index] {
                                 remaining[successor] -= 1;
                                 if remaining[successor] == 0 {
@@ -839,15 +853,31 @@ impl PreparedWorkflowRun {
                     }
                 }
             }
+            for report in &mut reports {
+                if report.status == StageStatus::Pending {
+                    report.status = StageStatus::Skipped;
+                    if let Some(run) = durable_run {
+                        engine
+                            .record_workflow_event_for_actor(
+                                actor_claim.as_ref(),
+                                lead,
+                                Event::WorkflowStageFinished {
+                                    session: lead,
+                                    run,
+                                    stage: report.stage.clone(),
+                                    status: WorkflowStageStatus::Skipped,
+                                },
+                            )
+                            .await?;
+                    }
+                }
+            }
             if run_cancel.is_cancelled() {
-                mark_pending(&mut reports, StageStatus::Cancelled);
                 return Ok(WorkflowRunReport {
                     status: WorkflowStatus::Cancelled,
                     stages: reports,
                 });
             }
-            mark_pending(&mut reports, StageStatus::Skipped);
-
             let status = if reports
                 .iter()
                 .any(|report| report.status == StageStatus::Failed)
@@ -1004,22 +1034,7 @@ fn pending_report(stage: &WorkflowStage) -> StageReport {
 }
 
 fn report_evidence(report: &StageReport) -> Option<StageEvidence<'_>> {
-    let status = match report.status {
-        StageStatus::Pending => return None,
-        StageStatus::Done => StageEvidenceStatus::Done,
-        StageStatus::Failed => StageEvidenceStatus::Failed,
-        StageStatus::Cancelled => StageEvidenceStatus::Cancelled,
-        StageStatus::Skipped => StageEvidenceStatus::Skipped,
-    };
-    Some(StageEvidence::new(status, &report.output))
-}
-
-fn mark_pending(reports: &mut [StageReport], status: StageStatus) {
-    for report in reports {
-        if report.status == StageStatus::Pending {
-            report.status = status;
-        }
-    }
+    (report.status == StageStatus::Done).then_some(StageEvidence::new(&report.output))
 }
 
 /// The controller accepts both at-rest settlement and a terminal report.

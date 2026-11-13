@@ -2833,3 +2833,35 @@ async fn review_s1_stage_ends_before_its_successor_including_loop_wrap_up() {
         assert_eq!(engine.store().live_member_count(lead).await.unwrap(), 0);
     }
 }
+
+#[tokio::test]
+async fn review_s3_unstarted_stages_are_skipped_on_cancellation() {
+    let run = setup("unstarted-cancellation").await;
+    let workflow = compile_workflow("cancel.hya.md", TWO_STAGE_WORKFLOW);
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let report = run_workflow(
+        run.engine.clone(),
+        run.lead,
+        &workflow,
+        hya_core::WorkflowRunContext {
+            binding: run.binding,
+            caller: "hya-main".into(),
+            base_agent: base_spec(),
+            inputs: BTreeMap::from([("target".into(), "cancel".into())]),
+            resident_supervisor: Some(hya_core::ResidentSupervisor::start(run.engine.clone())),
+            routing: None,
+        },
+        cancel,
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.status, WorkflowStatus::Cancelled);
+    assert!(
+        report
+            .stages
+            .iter()
+            .all(|stage| stage.status == hya_core::StageStatus::Skipped && stage.session.is_none())
+    );
+    assert!(run.provider.prompts().is_empty());
+}

@@ -259,7 +259,7 @@ actor: planner
 ```
 
 An actor key routes sequential Stages to one resident Session. Named actors
-retain today's resident lifetime after successful Stages and runs; anonymous
+retain their resident lifetime after successful Stages and runs; anonymous
 workers end when their Stage finishes, after loop verification and wrap-up.
 Their claims and descendants are released before successors activate. Repeating an
 Agent id without `actor` still creates distinct one-shot Stage Sessions. Any
@@ -411,3 +411,12 @@ the tracked run owner writes the terminal Event without the caller's claim, whic
 may already be released during cancellation cleanup. A cancelled run remains
 `cancelled` if execution or ending fails; its bounded error is persisted and the
 caller still receives the typed error. No tool parameters or wire fields change.
+
+Never-started Stages are `skipped` in both the core run report and durable
+projection, including cancellation; activated Stages cancelled by the run are
+`cancelled`. The scheduler emits `WorkflowStageFinished { status: Skipped }`
+when it skips a Stage, so `/workflow state` and live updates show that decision
+while independent branches continue. Join evidence contains successful direct
+predecessors only (`status="done"`). Rust `StageEvidence::new(output: &str)`
+therefore carries only output; the unreachable evidence-status enum is removed.
+Existing wire status values and generated APIs are unchanged.
