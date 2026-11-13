@@ -478,8 +478,10 @@ because SQLx exposes no statement-trace registration API.
 
 `--check crates/xtask/lifecycle-baseline.json` compares events and append
 transactions exactly;
-timings are informational and never gate shared CI. SQL statement tolerance is ±2
-per phase: a projection-tail read can cross the asynchronous phase boundary.
+timings are informational and never gate shared CI. SQL statement tolerance is
+±(2 + N/16) per phase, using integer division: N=1 → 2, N=16 → 3, N=64 → 6.
+Projection-tail reads can cross the asynchronous phase boundary, with more
+variation at larger fan-out.
 Payload byte tolerance is the empirical allowance ±`3*(n+1)`. Persisted tool
 durations vary in decimal width. Concurrent handle assignment also changes the
 root task's truncated output: clipping different text changes JSON escaping and
