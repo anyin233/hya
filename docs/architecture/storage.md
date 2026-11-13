@@ -729,3 +729,17 @@ creating the database. `hya sessions --db sessions.db` then reads it without
 owning it; the same listing on a missing path reports an error and creates no
 database. `connect_read_only(path: &str) -> Result<SessionStore, StoreError>`
 opens SQLite in read-only mode without changing its journal mode or schema.
+
+### Reasoning-only interrupted resident wakes
+
+Recovery closes an unanswered wake before admitting its next directive, including
+a crash after only reasoning streamed. Providers may omit reasoning-only
+assistant messages, so reasoning does not establish an answer. No configuration
+change is required: for example, restarting after a thinking-only interruption
+produces a visible cancelled assistant answer between the old and new user
+prompts. Non-empty Text and Tool parts retain their existing answer semantics.
+
+`SessionStore::recover_resident_actor(recovered: &RecoveredActorClaim,
+root: SessionId, handle: &str) -> Result<RecoveredResidentOutcome, StoreError>`
+commits this closing Text message, terminal effects and work classification in
+the same fenced recovery transaction. No schema or wire contract changes.

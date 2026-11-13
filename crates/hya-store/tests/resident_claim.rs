@@ -2275,3 +2275,89 @@ async fn aborted_first_wake_closes_unanswered_prompt_before_the_next_wake() {
         assert_eq!(messages.last().unwrap().role, Role::User);
     }
 }
+
+#[tokio::test]
+async fn review_b1_reasoning_only_crash_closes_the_unanswered_wake() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let (root, claim) = work_fixture(&store).await;
+    store
+        .begin_work(
+            Some(&claim),
+            root,
+            "main/worker",
+            1,
+            hya_store::ResidentWorkPrompt::Text("aborted instruction".into()),
+            "working".into(),
+        )
+        .await
+        .unwrap();
+    let message = MessageId::new();
+    let part = PartId::new();
+    for event in [
+        Event::MessageStarted {
+            session: claim.actor_id,
+            message,
+            role: Role::Assistant,
+            agent: None,
+            model: None,
+        },
+        Event::ReasoningStart {
+            session: claim.actor_id,
+            message,
+            part,
+            reason: None,
+        },
+        Event::ReasoningDelta {
+            session: claim.actor_id,
+            message,
+            part,
+            delta: "unpublished thought".into(),
+        },
+        Event::ReasoningEnd {
+            session: claim.actor_id,
+            message,
+            part,
+            provider_data: None,
+        },
+    ] {
+        store.append_event(claim.actor_id, &event).await.unwrap();
+    }
+    let recovered = store
+        .recover_claim(claim.actor_id, OwnerRunId::new())
+        .await
+        .unwrap();
+    store
+        .recover_resident_actor(&recovered, root, "main/worker")
+        .await
+        .unwrap();
+    store
+        .begin_work(
+            Some(&recovered.claim),
+            root,
+            "main/worker",
+            2,
+            hya_store::ResidentWorkPrompt::Text("next instruction".into()),
+            "working".into(),
+        )
+        .await
+        .unwrap();
+    let projection = store.read_projection(claim.actor_id).await.unwrap();
+    let visible_roles = projection
+        .session
+        .messages
+        .iter()
+        .filter(|m| {
+            m.role != Role::Assistant
+                || m.parts.iter().any(|p| {
+                    matches!(p, PartProjection::Text { text, .. } if !text.is_empty())
+                        || matches!(p, PartProjection::Tool { .. })
+                })
+        })
+        .map(|m| m.role)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        visible_roles,
+        [Role::User, Role::Assistant, Role::User],
+        "reasoning-only messages can be omitted by providers"
+    );
+}

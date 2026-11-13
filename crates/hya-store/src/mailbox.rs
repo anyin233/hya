@@ -257,8 +257,8 @@ impl SessionStore {
                 let mut events = resident_effect_terminal_events(actor_id, &actor, recovery_reason);
                 let tail = actor.session.messages.iter().rev().find(|message| {
                     message.parts.iter().any(|part| match part {
-                        PartProjection::Text { text, .. }
-                        | PartProjection::Reasoning { text, .. } => !text.is_empty(),
+                        PartProjection::Text { text, .. } => !text.is_empty(),
+                        PartProjection::Reasoning { .. } => false,
                         PartProjection::Tool { .. } => true,
                     })
                 });
