@@ -12,10 +12,10 @@ pub const MAX_WORKFLOW_REASONING_CHARS: usize = 64;
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum FailurePolicy {
-    /// Stop after every activation in the admitted level settles.
+    /// Stop new activations after failure; finish those already activated.
     #[default]
     FailFast,
-    /// Continue eligible Stages, while retaining failed predecessor evidence.
+    /// Continue independent eligible branches; skip failed-stage successors.
     CollectAll,
 }
 
@@ -225,7 +225,7 @@ impl WorkflowStage {
         &self.predecessor_indices
     }
 
-    /// Zero-based topological execution level.
+    /// Zero-based topological display level.
     #[must_use]
     pub const fn level(&self) -> usize {
         self.level
@@ -255,7 +255,7 @@ impl WorkflowStage {
     }
 }
 
-/// One parallel topological level of a compiled Workflow.
+/// One topological display level of a compiled Workflow.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkflowLevel {
     pub(crate) stage_indices: Vec<usize>,
@@ -283,7 +283,7 @@ impl WorkflowPlan {
         &self.stages
     }
 
-    /// Parallel topological levels in execution order.
+    /// Topological levels for display; execution follows predecessor readiness.
     #[must_use]
     pub fn levels(&self) -> &[WorkflowLevel] {
         &self.levels

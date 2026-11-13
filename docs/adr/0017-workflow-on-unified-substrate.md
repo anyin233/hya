@@ -38,7 +38,8 @@ substrate**:
   parked verifier, activated through the same waiter and ended after its result.
 - Verifier cancellation waits for its episode's ending, including cancellation
   during initialization. Root driver activity covers the whole run and cleanup.
-  Scheduling remains level-by-level.
+  Scheduling uses predecessor counts: ready successors and per-Stage verifiers
+  proceed without a level barrier (ADR-0013).
 - The TUI presents workflow agents in the same tree and channels as ordinary
   subagents; there is no parallel workflow presentation surface.
 - Workflow retry cost and context behavior follow the handoff model: a retried

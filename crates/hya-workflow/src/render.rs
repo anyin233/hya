@@ -19,7 +19,7 @@ pub enum StageEvidenceStatus {
     Failed,
     /// The predecessor stopped because the run was cancelled.
     Cancelled,
-    /// The predecessor did not start because fail-fast stopped the graph.
+    /// Failure policy or an unsuccessful ancestor prevented activation.
     Skipped,
 }
 

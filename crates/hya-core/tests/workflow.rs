@@ -1,9 +1,8 @@
 //! Integration tests for `hya-core`: user-assembled workflow DAGs.
 //!
 //! Workflows compose existing team primitives into user-authored stage graphs:
-//! fan-out via `needs` levels executed as one governed team batch per level,
-//! fan-in via template placeholders carrying upstream bounded outputs into the
-//! consuming stage's directive.
+//! ready stages activate independently, and fan-in carries bounded upstream
+//! evidence in compiled predecessor order.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -610,14 +609,14 @@ flowchart TD
     );
 }
 
-/// `on_member_failure: collect_all` keeps the DAG running: the failed stage is
-/// reported FAILED in the joined directive instead of aborting the workflow.
+/// `collect_all` keeps independent branches running, but never activates a
+/// Stage whose predecessor failed.
 #[tokio::test]
-async fn collect_all_policy_reports_failures_into_the_join() {
+async fn collect_all_policy_skips_the_failed_join() {
     let source = r#"---
 kind: Workflow
 name: tolerant-flow
-description: One implementation may fail; review still aggregates.
+description: Failed joins are skipped while independent work continues.
 on_failure: collect_all
 nodes:
   good:
@@ -670,30 +669,33 @@ flowchart TD
     let bad = report.stages.iter().find(|s| s.stage == "bad").unwrap();
     assert_eq!(bad.status.to_string(), "failed");
 
-    let prompts = provider.prompts();
-    let (_, review_prompt) = prompts
-        .iter()
-        .find(|(_, text)| directive_of(text).starts_with("REVIEW all"))
-        .expect("review still ran");
-    assert!(
-        review_prompt.contains("id=\"good\"") && review_prompt.contains("WORKER_DONE"),
-        "healthy upstream flows through"
+    assert_eq!(
+        report
+            .stages
+            .iter()
+            .find(|s| s.stage == "review")
+            .unwrap()
+            .status
+            .to_string(),
+        "skipped"
     );
     assert!(
-        review_prompt.contains("id=\"bad\"") && review_prompt.contains("status=\"failed\""),
-        "failed upstream is declared to the joining stage: {review_prompt:?}"
+        !provider
+            .prompts()
+            .iter()
+            .any(|(_, text)| directive_of(text).starts_with("REVIEW all"))
     );
 }
 
 /// A failure after a loop stage's first round is still a stage outcome. Under
-/// `collect_all`, its downstream join runs and receives explicit FAILED
-/// evidence instead of the executor returning early with a workflow error.
+/// `collect_all`, its downstream join is skipped instead of the executor
+/// returning early with a workflow error.
 #[tokio::test]
 async fn collect_all_applies_to_resumed_loop_worker_failures() {
     let source = r#"---
 kind: Workflow
 name: tolerant-loop
-description: A later loop round may fail; review still aggregates.
+description: A later loop failure blocks its review.
 on_failure: collect_all
 nodes:
   build:
@@ -737,7 +739,7 @@ flowchart TD
         CancellationToken::new(),
     )
     .await
-    .expect("collect_all must turn the loop error into failed evidence");
+    .expect("collect_all must retain the failed loop as a Stage outcome");
 
     assert_eq!(report.status, WorkflowStatus::Failed);
     let build = report
@@ -750,14 +752,14 @@ flowchart TD
         .stages
         .iter()
         .find(|stage| stage.stage == "review")
-        .expect("downstream review still runs");
-    assert_eq!(review.status.to_string(), "done");
-    let prompts = provider.prompts();
-    let (_, review_prompt) = prompts
-        .iter()
-        .find(|(_, text)| directive_of(text).starts_with("REVIEW loop"))
-        .expect("review receives loop evidence");
-    assert!(review_prompt.contains("id=\"build\"") && review_prompt.contains("status=\"failed\""));
+        .expect("downstream review has a terminal result");
+    assert_eq!(review.status.to_string(), "skipped");
+    assert!(
+        !provider
+            .prompts()
+            .iter()
+            .any(|(_, text)| directive_of(text).starts_with("REVIEW loop"))
+    );
 }
 
 fn base_spec() -> hya_core::AgentSpec {
@@ -2296,7 +2298,7 @@ async fn w1_partial_registration_overload_releases_every_workflow_claim() {
                 r#"---
 kind: Workflow
 name: partial
-description: Compete with a task before the next level registers.
+description: Compete with a task before the successor registers.
 nodes:
   first:
     agent: builder

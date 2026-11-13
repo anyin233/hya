@@ -1,0 +1,30 @@
+# Why retain Workflow levels after removing their execution barrier?
+
+API info and durable plan/state responses expose each Stage's zero-based
+`level`, and rendered Stage guidance includes it. Keep this topological metadata
+for display. Execution counts unfinished direct predecessors instead. Each Stage
+owns its worker and verifier future, so `a --> c` can complete `c` while an
+independent `b` runs, and a verifier does not wait for unrelated workers.
+
+# How are evidence and shared actors ordered?
+
+Reports occupy compiled Stage indices. Rendering already visits each Stage's
+compiled predecessor indices, so completion order cannot reorder join evidence.
+Ready Stage indices are ordered; a busy actor key remains reserved until its
+whole Stage finishes. Other ready keys proceed. Same-level actor reuse is now
+valid: the old compiler rejection depended on an execution barrier that no
+longer exists. Only simultaneously ready uses are ordered; unready uses cannot
+block a predecessor through an implicit actor dependency.
+
+# What happens to failure and cancellation with ready scheduling?
+
+`fail_fast` stops new activations after the scheduler observes a failed Stage,
+then drains those already activated. `collect_all` runs independent eligible
+branches. Both skip successors of failed/skipped Stages, as explicitly required
+by M4-14 (this replaces earlier failed-evidence join behavior). Cancellation stops
+new activation. An execution error cancels and drains active Stage futures before
+cleanup; dropping a verifier future during registration or an ending await would
+lose ownership. Every committed registration receipt is retained immediately,
+and unsuccessful runs await all run-owned actors and descendants under the
+existing root-driver activity guard. Mail targets, claim semantics and capacity
+preflight are unchanged.

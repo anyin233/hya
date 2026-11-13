@@ -42,7 +42,7 @@ flowchart TD
 async fn p17_user_authored_workflow_runs_fan_out_fan_in_via_tool() {
     // Shared queue consumed in order; the two fan-out members run in parallel
     // but answer the SAME scripted text, so arrival order cannot skew results.
-    // Level barriers guarantee no later stage can steal an earlier step.
+    // Predecessor dependencies keep exploration and the join in script order.
     let env = E2eEnvBuilder::new()
         .yolo(true)
         .project_file(
