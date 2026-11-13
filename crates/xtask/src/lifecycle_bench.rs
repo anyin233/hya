@@ -382,7 +382,7 @@ fn merge_spawn_statements(rows: &mut [Row]) {
                 .counts
                 .insert("statements".into(), 0)
                 .unwrap_or(0);
-            *rows[i].counts.get_mut("statements").expect("statements") += spawn;
+            *rows[i].counts.entry("statements".into()).or_default() += spawn;
         }
     }
 }
