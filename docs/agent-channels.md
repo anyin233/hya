@@ -167,7 +167,8 @@ successful tool result. The notice is rebuilt from the durable inbox past the
 durable cursor whenever team mail was sent (or the live event bus overflowed),
 with the agent's channel view refreshed — so no mail is dropped, mail on a
 channel created after the turn began (a new subagent's DM) is included, and
-mail a `wait` already returned is not repeated. See
+mail a `wait` already returned is not repeated. If archive removes the reader's
+group membership before delivery, steering filters that group's queued mail. See
 [Agent tool surface](architecture/agent-tool-surface.md#coordination-tools-allocated-at-startup)
 for the full allocation table and `deny` rules. Without the channel family, `wait` does
 not wake on mail; mail still arrives in the `[NEW MAIL]` notice after the next
