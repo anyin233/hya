@@ -178,10 +178,54 @@ pub struct DatabasePaths {
 }
 
 /// Resolve a plain database filename and all sidecars using one identity.
-/// Memory databases and SQLite URIs have no filesystem ownership files.
+/// Memory databases have no ownership files. File-backed URIs are rejected:
+/// runtime writers must use a plain path with a canonical lock identity.
 pub fn database_paths(db: &str) -> std::io::Result<Option<DatabasePaths>> {
-    if db.is_empty() || db == ":memory:" || db.starts_with("file:") || db.starts_with("sqlite:") {
+    if db.is_empty() || db == ":memory:" {
         return Ok(None);
+    }
+    if db.starts_with("file:") || db.starts_with("sqlite:") {
+        let memory_modes = |query: &str| {
+            query
+                .split('&')
+                .filter_map(|pair| pair.split_once('='))
+                .filter(|(key, _)| {
+                    percent_encoding::percent_decode_str(key).eq(b"mode".iter().copied())
+                })
+                .map(|(_, value)| {
+                    percent_encoding::percent_decode_str(value).eq(b"memory".iter().copied())
+                })
+                .collect::<Vec<_>>()
+        };
+        let (name, query) = db.split_once('?').unwrap_or((db, ""));
+        let name = name
+            .trim_start_matches("sqlite://")
+            .trim_start_matches("sqlite:");
+        let filename = percent_encoding::percent_decode_str(name)
+            .decode_utf8()
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+        let outer_memory = memory_modes(query).contains(&true);
+        // SQLx decodes the filename before SQLite interprets a native file: URI.
+        let memory = if let Some(native) = filename.strip_prefix("file:") {
+            let native = native.split_once('#').map_or(native, |(name, _)| name);
+            let (name, query) = native.split_once('?').unwrap_or((native, ""));
+            if query.is_empty() {
+                percent_encoding::percent_decode_str(name).eq(b":memory:".iter().copied())
+                    || outer_memory
+            } else {
+                let modes = memory_modes(query);
+                !modes.is_empty() && modes.iter().all(|memory| *memory)
+            }
+        } else {
+            filename == ":memory:" || outer_memory
+        };
+        if memory {
+            return Ok(None);
+        }
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "only in-memory database URIs are supported; use a plain filesystem path for a file-backed database",
+        ));
     }
     let database = resolve_database_path(Path::new(db), &mut 40)?;
     let with = |suffix: &str| {

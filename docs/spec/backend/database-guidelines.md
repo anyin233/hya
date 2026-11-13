@@ -19,8 +19,8 @@
   builtins are not rows, and it is not a session projection.
 - One server per session database (ADR-0022, ADR-0023): `hya serve` (in the
   foreground, or as the backend daemon `hya serve start` / bare `hya` / the
-  TUI start) takes `<db>.lock` (`flock`, `crates/hya-backend/src/db_lock.rs`)
-  before `open_store` and publish `<db>.server.json` once listening. Frontends
+  TUI start) takes `<db>.runtime-owner.lock` in `hya-store` before SQLite
+  initialization and publishes `<db>.server.json` once listening. Frontends
   attach to that server; they never open a served database themselves. Every
   writer of a session database claims the same lock through
   `crates/hya-backend/src/db_writer.rs`: headless commands (`exec`/`run`,
@@ -44,6 +44,10 @@
   occurs only after commit.
 - Root turns do not reset live capacity; startup fences active claims without
   releasing them. No connection or transaction spans a hook/model await.
+- Runtime file databases require plain paths so relative, absolute and symlink
+  spellings use one canonical runtime-owner lock before SQLite opens.
+  `database_paths` rejects persistent URI spellings; explicit in-memory URIs
+  remain unlocked. See the [CLI ownership contract](../../cli.md#database-lock-and-the-backend-daemon).
 
 ---
 
