@@ -211,6 +211,6 @@ the whole-crate run is the CI gate.
 ## Related
 
 - Scenario inventory: [agent-matrix.md](agent-matrix.md)
-- CI wiring sketch: [ci-agent-e2e-snippet.yml](ci-agent-e2e-snippet.yml)
+- CI workflow gate: [`../../.github/workflows/ci.yml`](../../.github/workflows/ci.yml)
 - In-process authority for nested spawn: `crates/hya-app/tests/nested_spawn_tree.rs`
 - Bundle CLI unit coverage: `crates/hya-backend/tests/bundle_cli.rs`
