@@ -2266,3 +2266,20 @@ async fn o2_interactive_turn_release_retires_the_finished_team() {
     assert!(retired.is_ok(), "root turn release retained its idle team");
     assert!(supervisor.teams().is_empty());
 }
+
+#[tokio::test]
+async fn o3_turn_release_during_shutdown_cannot_retain_the_engine() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let weak = Arc::downgrade(&engine);
+    let lease = engine.try_begin_turn(root).unwrap();
+    engine.begin_drain(FinishCause::Shutdown);
+    // A current-thread runtime keeps the release task queued until we yield.
+    drop(lease);
+    assert_eq!(Arc::strong_count(&supervisor), 1, "draining release queued a strong supervisor owner");
+    supervisor.drain(FinishCause::Shutdown, Duration::from_secs(5)).await;
+    drop(supervisor);
+    drop(engine);
+    assert!(weak.upgrade().is_none());
+}

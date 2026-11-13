@@ -566,3 +566,6 @@ a failed read cannot be interpreted as an empty team.
 
 Interactive root turn release rechecks team retirement after delivering deferred
 wakes. A consumed inbox and ended children leave no idle team tasks behind.
+
+Turn-release callbacks hold only a weak observer while queued. The turn gate
+tracks and joins them during drain, and draining lease releases enqueue no wakes.

@@ -96,6 +96,7 @@ pub(crate) struct TurnGate {
     next_id: AtomicU64,
     released: Notify,
     observer: RwLock<Option<Weak<dyn TurnBoundaryObserver>>>,
+    observer_tasks: tokio_util::task::TaskTracker,
 }
 
 impl TurnGate {
@@ -242,6 +243,7 @@ impl TurnGate {
         let (sessions, tokens) = {
             let mut state = self.state();
             state.draining.get_or_insert(cause);
+            self.observer_tasks.close();
             let mut sessions = Vec::with_capacity(state.active.len());
             let mut tokens = Vec::with_capacity(state.active.len());
             for (session, turn) in &mut state.active {
@@ -337,29 +339,46 @@ impl TurnGate {
         slot.as_ref().and_then(Weak::upgrade)
     }
 
+    pub(crate) async fn join_observers(&self) {
+        self.observer_tasks.wait().await;
+    }
+
     fn release(&self, session: SessionId, id: u64) {
-        let released = {
+        let observer = {
             let mut state = self.state();
-            if state.active.get(&session).is_some_and(|turn| turn.id == id) {
-                state.active.remove(&session);
-                true
+            if !state.active.get(&session).is_some_and(|turn| turn.id == id) {
+                return;
+            }
+            state.active.remove(&session);
+            let observer = if state.draining.is_none() {
+                self.observer
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
             } else {
-                false
+                None
+            };
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                if let Some(observer) = observer {
+                    // Register under the gate lock before drain closes the tracker.
+                    // A queued callback must not retain the supervisor or engine.
+                    self.observer_tasks.spawn_on(async move {
+                        if let Some(observer) = observer.upgrade() {
+                            observer.turn_released(session);
+                        }
+                    }, &runtime);
+                }
+                None
+            } else {
+                observer
             }
         };
-        if !released {
-            return;
-        }
         self.released.notify_waiters();
-        if let Some(observer) = self.observer() {
-            match tokio::runtime::Handle::try_current() {
-                Ok(runtime) => {
-                    runtime.spawn(async move { observer.turn_released(session) });
-                }
-                Err(_) => observer.turn_released(session),
-            }
+        if let Some(observer) = observer.and_then(|observer| observer.upgrade()) {
+            observer.turn_released(session);
         }
     }
+
 }
 
 /// Proof that the holder owns `session`'s one active turn. Dropping it ends

@@ -272,6 +272,7 @@ impl SessionEngine {
     /// deadline has its open messages closed here instead.
     pub async fn drain_turns(&self, cause: FinishCause, deadline: Duration) -> TurnDrainReport {
         let cancelled = self.turn_gate.begin_drain(cause);
+        self.turn_gate.join_observers().await;
         let until = tokio::time::Instant::now() + deadline;
         let mut report = TurnDrainReport {
             cancelled,
