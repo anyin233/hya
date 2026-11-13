@@ -310,7 +310,9 @@ impl SteerMailbox {
         let MailEndpoint::Channel(channel) = to else {
             return false;
         };
-        let topology = self.channel_roles[channel];
+        let Some(topology) = self.channel_roles.get(channel) else {
+            return false;
+        };
         match topology.0 {
             ChannelTemplateKind::Unit => snapshot_allows(policy, topology.1, true),
             ChannelTemplateKind::ParentDm => snapshot_allows(policy, topology.1, false),
