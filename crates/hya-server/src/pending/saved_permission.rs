@@ -182,16 +182,20 @@ mod tests {
         true
     }
 
-    fn bridge(store: &SessionStore) -> (PermissionPlane, PermissionRequests) {
+    fn bridge(
+        store: &SessionStore,
+    ) -> (PermissionPlane, PermissionRequests, crate::RuntimeTaskOwner) {
         let (plane, rx): (PermissionPlane, UnboundedReceiver<AskRequest>) =
             PermissionPlane::new(PermissionRules::default());
-        (plane, PermissionRequests::spawn(rx, store.clone()))
+        let owner = crate::RuntimeTaskOwner::new();
+        let requests = PermissionRequests::spawn(rx, store.clone(), &owner);
+        (plane, requests, owner)
     }
 
     #[tokio::test]
     async fn project_allow_always_persists_the_concrete_directory_under_the_project() {
         let store = SessionStore::connect_memory().await.unwrap();
-        let (plane, requests) = bridge(&store);
+        let (plane, requests, _owner) = bridge(&store);
         let session = SessionId::new();
         let scoped = plane
             .for_session(session)
@@ -209,7 +213,7 @@ mod tests {
     #[tokio::test]
     async fn session_scoped_allow_always_is_not_persisted() {
         let store = SessionStore::connect_memory().await.unwrap();
-        let (plane, requests) = bridge(&store);
+        let (plane, requests, _owner) = bridge(&store);
         let session = SessionId::new();
         let temporary = plane.for_session(session);
 
@@ -267,7 +271,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let (plane, requests) = bridge(&store);
+        let (plane, requests, _owner) = bridge(&store);
         assert_eq!(requests.restore_saved(&plane).await.unwrap(), 2);
 
         let a = SessionId::new();
