@@ -277,6 +277,10 @@ checks inside SQLite writer transactions. The active claims for a root are its
 live capacity leases, indexed by `(root_session_id, state)`. Terminal archive
 releases a lease with its canonical events. Startup advances active claims'
 epochs without changing their roots or capacity; root turns do not reset it.
+`recover_claim(actor_id: SessionId, owner_run_id: OwnerRunId)` requires the
+matching runtime owner inside its writer transaction. An ordinary `connect`
+opens/migrates the store without claiming runtime ownership and cannot take
+over an actor; orphan archive takeover enforces the same ownership boundary.
 
 `register_episodes` commits the whole batch's child creation, member/roster/channel
 events, claims and optional first-DM directive mail together, including main

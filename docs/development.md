@@ -590,8 +590,8 @@ process exit closes the descriptor and also ends its turns. All database
 URI spellings (including in-memory URIs) are rejected at this boundary (see the [CLI ownership contract](cli.md#database-lock-and-the-backend-daemon)).
 
 There is no timer or liveness guarantee for a silent stream whose claim is
-superseded through an unowned store pool or a caller that releases ownership
-without first quiescing writes. That two-live-owner case bypasses the runtime
+superseded through raw SQL fault injection or a caller that releases ownership
+without first quiescing writes. Unowned store connections cannot recover claims. That two-live-owner case bypasses the runtime
 ownership contract and cannot occur through normal runtime startup. Low-level
 `recover_claim` tests still exercise the stronger durability guarantee: no event
 under the superseded claim can commit, even if its buffered stream later reaches

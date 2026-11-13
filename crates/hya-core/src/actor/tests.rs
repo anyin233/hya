@@ -1375,6 +1375,10 @@ async fn recovered_episode_does_not_queue_an_outgoing_dm_copy() {
         .try_claim_new(root, child, OwnerRunId::new())
         .await
         .unwrap();
+    engine
+        .store()
+        .claim_runtime_owner(supervisor.owner_run_id)
+        .unwrap();
     let recovered = engine
         .store()
         .recover_claim(child, supervisor.owner_run_id)

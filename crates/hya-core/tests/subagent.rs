@@ -2314,9 +2314,13 @@ async fn explicit_stop_fails_closed_instead_of_taking_over_a_newer_resident_clai
         .await
         .unwrap();
 
+    engine
+        .store()
+        .claim_runtime_owner(engine.runtime_owner())
+        .unwrap();
     let newer = engine
         .store()
-        .recover_claim(child, hya_proto::OwnerRunId::new())
+        .recover_claim(child, engine.runtime_owner())
         .await
         .unwrap();
     let result = supervisor.end_member(root, &handle).await;

@@ -458,9 +458,13 @@ async fn registered_initial_task_survives_claim_takeover_before_first_turn() {
     );
     // Fence the old episode while real turn leases keep its directive queued.
     // Cancelling first is a graceful ending, not a process-loss simulation.
+    engine
+        .store()
+        .claim_runtime_owner(engine.runtime_owner())
+        .unwrap();
     let recovered = engine
         .store()
-        .recover_claim(child, hya_proto::OwnerRunId::new())
+        .recover_claim(child, engine.runtime_owner())
         .await
         .unwrap();
     let disposition = engine
