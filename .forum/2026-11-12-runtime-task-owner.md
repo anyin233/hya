@@ -65,3 +65,14 @@ existing hya-app path. Routers retain the owner in an extension; service tasks
 hold only token/tracker handles, avoiding an owner/task cycle. The resident bus
 listener remains outside this guarantee; plugin/MCP connection I/O is joined
 through the owner's `io_tasks` tracker.
+
+## Who joins I/O for the standalone spawn supervisor?
+
+`spawn_team_supervisor` explicitly puts its returned owner's I/O tracker in
+the sidecar environment. Its owner tracks an ordered cleanup task: cancel/join
+the inner intake owner, drain residents, stop runtime sources, then close and
+join I/O. The shared `RuntimeTaskOwner::shutdown` still joins only its service
+tasks: making every owner join I/O there would deadlock BuiltSessionEngine,
+which stops sources after joining composition handlers. AppState has no
+connection I/O. The standalone regression keeps a connection task pending and
+checks shutdown cannot complete before that task exits.
