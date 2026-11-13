@@ -101,14 +101,19 @@ pub enum GateOutcome {
 /// Independent stop authority for iterative runs (goal or loop).
 ///
 /// **Contract:** Called after each executor iteration with the rendered
-/// transcript. Must not mutate session state. Errors abort the whole run.
+/// transcript. Must honor cancellation and finish any owned cleanup before
+/// returning. Errors abort the whole run.
 #[async_trait]
 pub trait IterationGate: Send + Sync {
     /// Judge whether to stop or continue.
     ///
     /// # Errors
     /// Return [`CoreError`] to fail the run.
-    async fn judge(&self, transcript: &str) -> Result<GateOutcome, CoreError>;
+    async fn judge(
+        &self,
+        transcript: &str,
+        cancel: &CancellationToken,
+    ) -> Result<GateOutcome, CoreError>;
 }
 
 /// Runs one agent iteration given a directive string.
@@ -189,13 +194,28 @@ impl IterationDriver {
                 // Budget exhaustion is not completion: run exactly one
                 // wrap-up pass that demands a handoff summary, then report
                 // `BudgetLimited` instead of forging an `Achieved`.
-                let _ = executor
+                match executor
                     .run_iteration(&wrap_up_directive(which), &cancel)
-                    .await;
+                    .await
+                {
+                    Err(CoreError::Cancelled) => return Ok(RunOutcome::Cancelled),
+                    result => {
+                        result?;
+                    }
+                }
+                if cancel.is_cancelled() {
+                    return Ok(RunOutcome::Cancelled);
+                }
                 return Ok(RunOutcome::BudgetLimited { iterations, which });
             }
             iterations += 1;
-            let transcript = executor.run_iteration(&directive, &cancel).await?;
+            let transcript = match executor.run_iteration(&directive, &cancel).await {
+                Err(CoreError::Cancelled) => return Ok(RunOutcome::Cancelled),
+                result => result?,
+            };
+            if cancel.is_cancelled() {
+                return Ok(RunOutcome::Cancelled);
+            }
             // Stall guard (behavioral tripwire): fingerprint this iteration's
             // own activity — the transcript suffix appended over the previous
             // one. Two identical consecutive contributions mean the run is
@@ -213,11 +233,13 @@ impl IterationDriver {
             }
             previous_activity = Some(activity_fp);
             previous_transcript = Some(transcript.clone());
-            let judgment = tokio::select! {
-                biased;
-                () = cancel.cancelled() => return Ok(RunOutcome::Cancelled),
-                judgment = gate.judge(&transcript) => judgment?,
+            let judgment = match gate.judge(&transcript, &cancel).await {
+                Err(CoreError::Cancelled) => return Ok(RunOutcome::Cancelled),
+                result => result?,
             };
+            if cancel.is_cancelled() {
+                return Ok(RunOutcome::Cancelled);
+            }
             match judgment {
                 GateOutcome::Stop { reason } => {
                     return Ok(RunOutcome::Achieved { iterations, reason });
@@ -345,8 +367,16 @@ pub struct GoalGate {
 
 #[async_trait]
 impl IterationGate for GoalGate {
-    async fn judge(&self, transcript: &str) -> Result<GateOutcome, CoreError> {
-        let verdict = self.evaluator.evaluate(&self.condition, transcript).await?;
+    async fn judge(
+        &self,
+        transcript: &str,
+        cancel: &CancellationToken,
+    ) -> Result<GateOutcome, CoreError> {
+        let verdict = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(CoreError::Cancelled),
+            verdict = self.evaluator.evaluate(&self.condition, transcript) => verdict?,
+        };
         if verdict.met {
             Ok(GateOutcome::Stop {
                 reason: verdict.reason,

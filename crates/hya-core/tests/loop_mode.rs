@@ -414,7 +414,11 @@ async fn should_stop_hook_stops_before_verifier_satisfied_check() {
         calls: AtomicUsize::new(0),
     });
     let gate = gate_with_hook(verifier.clone(), Some(hook.clone()));
-    match gate.judge(&transcript("work")).await.unwrap() {
+    match gate
+        .judge(&transcript("work"), &CancellationToken::new())
+        .await
+        .unwrap()
+    {
         GateOutcome::Stop { reason } => {
             assert_eq!(
                 reason, "loop.should_stop: worker says done",
@@ -445,7 +449,11 @@ async fn should_stop_hook_none_falls_through_to_verifier() {
         calls: AtomicUsize::new(0),
     });
     let gate = gate_with_hook(verifier.clone(), Some(hook));
-    match gate.judge(&transcript("work")).await.unwrap() {
+    match gate
+        .judge(&transcript("work"), &CancellationToken::new())
+        .await
+        .unwrap()
+    {
         GateOutcome::Stop { reason } => {
             assert_eq!(reason, "satisfied: score 100");
         }
@@ -459,7 +467,11 @@ async fn should_stop_hook_none_falls_through_to_verifier() {
 async fn gate_without_hook_stops_on_satisfied_verifier() {
     let verifier = counting_verifier(true);
     let gate = gate_with_hook(verifier.clone(), None);
-    match gate.judge(&transcript("work")).await.unwrap() {
+    match gate
+        .judge(&transcript("work"), &CancellationToken::new())
+        .await
+        .unwrap()
+    {
         GateOutcome::Stop { reason } => {
             assert_eq!(reason, "satisfied: score 100");
         }
@@ -496,7 +508,11 @@ async fn broken_predicate_wins_over_should_stop_hook() {
         ),
         Some(hook),
     );
-    match gate.judge(&transcript("work")).await.unwrap() {
+    match gate
+        .judge(&transcript("work"), &CancellationToken::new())
+        .await
+        .unwrap()
+    {
         GateOutcome::InvalidCondition { reason } => {
             assert!(
                 reason.starts_with("broken condition"),

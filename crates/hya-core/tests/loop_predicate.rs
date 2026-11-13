@@ -80,7 +80,11 @@ fn gate(command: &str, mode: PredicateMode, verifier_satisfied: bool) -> LoopGat
 #[tokio::test]
 async fn until_exit_zero_stops_even_when_verifier_agrees() {
     let gate = gate("true", PredicateMode::Until, true);
-    match gate.judge("transcript").await.unwrap() {
+    match gate
+        .judge("transcript", &tokio_util::sync::CancellationToken::new())
+        .await
+        .unwrap()
+    {
         GateOutcome::Stop { reason } => {
             assert!(reason.contains("until"), "reason: {reason}");
         }
@@ -93,7 +97,11 @@ async fn until_exit_one_continues_despite_satisfied_verifier() {
     // The predicate outranks the model verdict: `until` with exit 1 keeps the
     // loop going even when the verifier would declare success.
     let gate = gate("false", PredicateMode::Until, true);
-    match gate.judge("transcript").await.unwrap() {
+    match gate
+        .judge("transcript", &tokio_util::sync::CancellationToken::new())
+        .await
+        .unwrap()
+    {
         GateOutcome::Continue { .. } => {}
         _other => panic!("expected continue"),
     }
@@ -102,7 +110,11 @@ async fn until_exit_one_continues_despite_satisfied_verifier() {
 #[tokio::test]
 async fn while_exit_one_stops() {
     let gate = gate("false", PredicateMode::While, true);
-    match gate.judge("transcript").await.unwrap() {
+    match gate
+        .judge("transcript", &tokio_util::sync::CancellationToken::new())
+        .await
+        .unwrap()
+    {
         GateOutcome::Stop { reason } => {
             assert!(reason.contains("while"), "reason: {reason}");
         }
@@ -113,7 +125,11 @@ async fn while_exit_one_stops() {
 #[tokio::test]
 async fn broken_condition_stops_without_success() {
     let gate = gate("exit 127", PredicateMode::Until, false);
-    match gate.judge("transcript").await.unwrap() {
+    match gate
+        .judge("transcript", &tokio_util::sync::CancellationToken::new())
+        .await
+        .unwrap()
+    {
         GateOutcome::InvalidCondition { reason } => {
             assert!(reason.contains("broken condition"), "reason: {reason}");
         }
@@ -137,7 +153,11 @@ async fn condition_timeout_is_broken_not_continue() {
             ..LoopConfig::default()
         },
     );
-    match gate.judge("transcript").await.unwrap() {
+    match gate
+        .judge("transcript", &tokio_util::sync::CancellationToken::new())
+        .await
+        .unwrap()
+    {
         GateOutcome::InvalidCondition { reason } => {
             assert!(reason.contains("broken condition"), "reason: {reason}");
         }
