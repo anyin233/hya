@@ -179,7 +179,9 @@ preflight and then be refused if a concurrent `task` occupies one slot.
 On an error, cancellation, or failed run, the controller waits for the normal
 ending of every actor it registered, including parked actors awaiting
 activation. Claims belonging to concurrent tasks are untouched. Successful
-runs retain their parked actors for subsequent activation.
+runs retain only named `actor:` residents for subsequent activation. Anonymous
+workers are ended on every Stage result path, after verification and wrap-up,
+before Stage completion and successor admission.
 
 Loop continuations reactivate the same worker through `activate` / its
 `ActivationWaiter`. Settlement retains its identity, runtime and capacity claim;
