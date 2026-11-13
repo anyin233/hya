@@ -1615,3 +1615,7 @@ claim-write boundary, before activation mail or initialization can emit later
 frames on those logs. Only child-log envelopes wait for session-start hooks.
 Parked registration still returns the committed identity before those hooks
 finish, so cancellation can end a blocked initializer.
+
+Workflow revival validates live episode presence against the roster read under
+claim-write serialization. A live durable orphan is rejected before appending
+activation mail; its missing episode must first be reconciled by an ending.
