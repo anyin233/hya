@@ -208,10 +208,10 @@ async fn the_subagent_type_names_the_handle() {
     assert_eq!(
         projection
             .team
-            .resolve_in_scope("main", scope::leaf(&handle))
+            .resolve_dm("main", scope::leaf(&handle))
             .unwrap(),
-        handle,
-        "the bare leaf resolves to the canonical handle"
+        projection.team.resolve_dm("main", &handle).unwrap(),
+        "the bare leaf resolves to the same DM as the canonical handle"
     );
 }
 
@@ -341,13 +341,8 @@ async fn old_counter_handles_keep_resolving_next_to_new_names() {
     assert!(replayed.team.roster.contains_key(&new_handle));
     assert_eq!(replayed.team.roster["main/scout-1"].session, old);
     let projection = team.engine.read_projection(team.root).await.unwrap();
-    assert_eq!(
-        projection.team.resolve_in_scope("main", "scout-1").unwrap(),
-        "main/scout-1"
-    );
-    // The bare old leaf still resolves to its canonical handle for mail (this
-    // registration has no live resident in this process, so delivery is
-    // refused — naming the resolved handle).
+    assert_eq!(projection.team.resolve_dm("main", "scout-1"), None);
+    // A synthetic roster row without a DM does not grant a mail address.
     let error = team
         .engine
         .mail_send(
@@ -358,5 +353,5 @@ async fn old_counter_handles_keep_resolving_next_to_new_names() {
         )
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("`main/scout-1`"), "{error}");
+    assert!(error.to_string().contains("no DM channel"), "{error}");
 }

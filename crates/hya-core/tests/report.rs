@@ -1831,7 +1831,7 @@ async fn steer_notice_truncation_survives_multibyte_bodies() {
         .await;
     let notice = steer.drain(&engine).await.unwrap().expect("notice");
     assert!(
-        notice.contains("[mail from main/peer-1]") && notice.contains("配置很长"),
+        notice.contains("[mail from main/peer-1 @DM-12345678]") && notice.contains("配置很长"),
         "notice carries the truncated body: {notice}"
     );
 }
@@ -1840,7 +1840,7 @@ async fn steer_notice_truncation_survives_multibyte_bodies() {
 /// can `read channel://<id>` directly instead of guessing id spellings
 /// (`##DM-x`, `#dm-x`) — the exact failure observed in a real multi-agent run.
 #[tokio::test]
-async fn steer_notice_carries_the_channel_id_for_handle_mail() {
+async fn steer_notice_carries_the_channel_id_for_handle_alias() {
     let engine = engine().await;
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
@@ -2306,10 +2306,24 @@ async fn mail_main_from_peer(engine: &SessionEngine, root: SessionId, body: &str
         .store()
         .append_event(
             root,
+            &Event::ChannelCreated {
+                session: root,
+                channel: "DM-12345678".into(),
+                kind: hya_proto::ChannelKind::Dm,
+                unit: None,
+                members: vec!["main/peer-1".to_string(), "main".to_string()],
+            },
+        )
+        .await
+        .unwrap();
+    engine
+        .store()
+        .append_event(
+            root,
             &Event::MailSent {
                 session: root,
                 from: "main/peer-1".to_string(),
-                to: MailEndpoint::Handle("main".to_string()),
+                to: MailEndpoint::Channel("DM-12345678".into()),
                 kind: MailKind::Message,
                 body: body.to_string(),
             },
@@ -2661,4 +2675,32 @@ async fn submit_and_wait(
     })
     .await
     .map_err(|_| hya_core::CoreError::Invalid("report did not archive".into()))?
+}
+
+#[tokio::test]
+async fn harness_notice_has_no_channel_even_with_a_parent_dm() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let _lead = engine.try_begin_turn(root).unwrap();
+    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "hya-scout").await;
+    engine
+        .store()
+        .append_harness_mail(root, &handle, "notice from harness".into())
+        .await
+        .unwrap();
+    let mut steer = engine.steer_mailbox_snapshot_with_policy(child, None).await;
+    let notice = steer.drain(&engine).await.unwrap().unwrap();
+    supervisor
+        .drain(hya_proto::FinishCause::Shutdown, Duration::from_secs(2))
+        .await;
+    assert!(
+        notice.contains("[mail from harness] notice from harness"),
+        "{notice}"
+    );
+    assert!(
+        !notice.contains("@DM-"),
+        "a harness notice must not borrow the recipient's DM: {notice}"
+    );
 }

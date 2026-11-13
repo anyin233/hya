@@ -936,7 +936,7 @@ mod tests {
             handle: "main/explorer-1".to_owned(),
             session: child,
             agent_type: hya_proto::AgentName::new("explore"),
-            mode: hya_proto::SubagentMode::Transient,
+            mode: hya_proto::SubagentMode::Resident,
             status: hya_proto::RosterStatus::Busy,
             current_task: None,
             resident_cursor: 0,

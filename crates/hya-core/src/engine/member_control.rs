@@ -19,7 +19,7 @@ pub const USER_STEER_PREFIX: &str = "[user] ";
 impl SessionEngine {
     /// Archive the subagent running in `child`, as its team lead would with
     /// the `archive` tool: its in-flight turn is cancelled, live descendants
-    /// archive first, and mail to its handle wakes it again later.
+    /// archive first, and mail on its parent DM wakes it again later.
     ///
     /// # Errors
     /// [`CoreError::Invalid`] when `child` is not a subagent, is already
@@ -71,6 +71,8 @@ impl SessionEngine {
                     ))
                 })?
         };
+        // The shared send boundary resolves this handle to the persistent DM,
+        // including when the child is archived. The receipt always names it.
         let receipt = self
             .mail_send_checked(
                 parent_session,

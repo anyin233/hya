@@ -93,10 +93,23 @@ async fn stop_fixture(path: &str) -> StopFixture {
     store
         .append_event(
             root,
+            &Event::ChannelCreated {
+                session: root,
+                channel: "DM-12345678".into(),
+                kind: hya_proto::ChannelKind::Dm,
+                unit: None,
+                members: vec!["main".into(), format!("main/{handle}")],
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .append_event(
+            root,
             &Event::MailSent {
                 session: root,
                 from: "main".to_string(),
-                to: MailEndpoint::Handle(path.clone()),
+                to: MailEndpoint::Channel("DM-12345678".into()),
                 kind: MailKind::Message,
                 body: "accepted before stop".to_string(),
             },
@@ -713,10 +726,23 @@ async fn resident_stop_finalization_commits_mail_and_claim_release_together() {
     store
         .append_event(
             root,
+            &Event::ChannelCreated {
+                session: root,
+                channel: "DM-12345678".into(),
+                kind: hya_proto::ChannelKind::Dm,
+                unit: None,
+                members: vec!["main".into(), format!("main/{handle}")],
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .append_event(
+            root,
             &Event::MailSent {
                 session: root,
                 from: "main".to_string(),
-                to: MailEndpoint::Handle(path.to_string()),
+                to: MailEndpoint::Channel("DM-12345678".into()),
                 kind: MailKind::Message,
                 body: "accepted before stop".to_string(),
             },
@@ -930,16 +956,29 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
         )
         .await
         .unwrap();
+    store
+        .append_event(
+            root,
+            &Event::ChannelCreated {
+                session: root,
+                channel: "DM-12345678".into(),
+                kind: hya_proto::ChannelKind::Dm,
+                unit: None,
+                members: vec!["main".into(), format!("main/{handle}")],
+            },
+        )
+        .await
+        .unwrap();
 
     let old_claim = store
         .try_claim_new(root, actor, OwnerRunId::new())
         .await
         .unwrap();
     let mail = store
-        .append_direct_mail(
+        .append_channel_mail(
             root,
             "main".to_string(),
-            handle.to_string(),
+            "DM-12345678".into(),
             MailKind::Message,
             "epoch independent".to_string(),
             None,
@@ -948,16 +987,16 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
         .await
         .unwrap();
     assert!(matches!(
-        &mail.event,
+        &mail.0.event,
         Event::MailSent {
             session,
             from,
-            to: MailEndpoint::Handle(recipient),
+            to: MailEndpoint::Channel(recipient),
             kind: MailKind::Message,
             body,
         } if *session == root
             && from == "main"
-            && recipient == path
+            && recipient == "DM-12345678"
             && body == "epoch independent"
     ));
 
@@ -1206,10 +1245,10 @@ async fn resident_stop_finalizer_rolls_back_at_each_write_boundary_and_is_exactl
 
         let postcommit = fixture
             .store
-            .append_direct_mail(
+            .append_channel_mail(
                 fixture.root,
                 "main".to_string(),
-                fixture.handle.clone(),
+                "DM-12345678".into(),
                 MailKind::Message,
                 "after stop".to_string(),
                 None,
@@ -1219,7 +1258,7 @@ async fn resident_stop_finalizer_rolls_back_at_each_write_boundary_and_is_exactl
         assert!(
             matches!(postcommit, Err(StoreError::MailRevivalRequired {
                 ref sender, ref channel, ref target,
-            }) if sender == "main" && channel == &format!("direct:{}", fixture.handle)
+            }) if sender == "main" && channel == "DM-12345678"
                 && target == &fixture.handle),
             "{postcommit:?}"
         );
@@ -1483,6 +1522,19 @@ async fn work_fixture(store: &SessionStore) -> (SessionId, ActorClaim) {
         )
         .await
         .unwrap();
+    store
+        .append_event(
+            root,
+            &Event::ChannelCreated {
+                session: root,
+                channel: "DM-12345678".into(),
+                kind: hya_proto::ChannelKind::Dm,
+                unit: None,
+                members: vec!["main".into(), "main/worker".into()],
+            },
+        )
+        .await
+        .unwrap();
     for body in ["first", "second"] {
         store
             .append_event(
@@ -1490,7 +1542,7 @@ async fn work_fixture(store: &SessionStore) -> (SessionId, ActorClaim) {
                 &Event::MailSent {
                     session: root,
                     from: "main".into(),
-                    to: MailEndpoint::Handle("main/worker".into()),
+                    to: MailEndpoint::Channel("DM-12345678".into()),
                     kind: MailKind::Message,
                     body: body.into(),
                 },
@@ -1868,7 +1920,7 @@ async fn revive_mail(
     store: &SessionStore,
     root: SessionId,
     actor: SessionId,
-    to: MailEndpoint,
+    channel: String,
     body: &str,
 ) -> Result<(Option<(ActorClaim, u64)>, Vec<Envelope>), StoreError> {
     store
@@ -1879,7 +1931,7 @@ async fn revive_mail(
             None,
             actor,
             "main".into(),
-            to,
+            channel,
             MailKind::Message,
             body.into(),
             "HYA_COMPACTED_CONTEXT",
@@ -1889,71 +1941,67 @@ async fn revive_mail(
 }
 
 #[tokio::test]
-async fn revive_episode_preserves_channels_and_skips_all_prior_mail_for_both_addresses() {
-    for endpoint in [
-        MailEndpoint::Handle("worker".into()),
-        MailEndpoint::Channel("DM-12345678".into()),
-    ] {
-        let store = SessionStore::connect_memory().await.unwrap();
-        let (root, old) = revival_fixture(&store).await;
-        let channels = store.read_projection(root).await.unwrap().team.channels;
-        let (claim, envelopes) = revive_mail(&store, root, old.actor_id, endpoint, "new work")
+async fn revive_episode_preserves_channels_and_skips_all_prior_mail() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let (root, old) = revival_fixture(&store).await;
+    let channels = store.read_projection(root).await.unwrap().team.channels;
+    let (claim, envelopes) =
+        revive_mail(&store, root, old.actor_id, "DM-12345678".into(), "new work")
             .await
             .unwrap();
-        assert_eq!(claim.unwrap().0.epoch.get(), old.epoch.get() + 1);
-        assert_eq!(envelopes.len(), 8);
-        let projection = store.read_projection(root).await.unwrap();
-        assert_eq!(
-            projection.team.channels.keys().collect::<Vec<_>>(),
-            channels.keys().collect::<Vec<_>>()
-        );
-        assert_eq!(
-            projection.team.channels["DM-12345678"].members,
-            channels["DM-12345678"].members
-        );
-        assert!(
-            !channels["announce-12345678"]
-                .members
-                .contains("main/worker")
-        );
-        assert!(
-            projection.team.channels["announce-12345678"]
-                .members
-                .contains("main/worker")
-        );
-        assert!(!projection.team.archived.contains_key("main/worker"));
-        assert_eq!(projection.team.roster["main/worker"].resident_cursor, 2);
-        let inbox = &projection.team.inboxes["main/worker"];
-        assert_eq!(inbox.len(), 3);
-        assert_eq!(inbox[2].body, "new work");
-        assert_eq!(inbox[2].to, MailEndpoint::Channel("DM-12345678".into()));
-        let actor = store.read_projection(old.actor_id).await.unwrap();
-        assert_eq!(actor.session.messages.last().unwrap().role, Role::System);
-        let (second_claim, _) = revive_mail(
-            &store,
-            root,
-            old.actor_id,
-            MailEndpoint::Handle("worker".into()),
-            "concurrent work",
-        )
-        .await
-        .unwrap();
-        assert!(second_claim.is_none());
-        assert_eq!(
-            store.read_projection(root).await.unwrap().team.inboxes["main/worker"].len(),
-            4
-        );
-        assert_eq!(
-            store
-                .replay(root)
-                .await
-                .unwrap()
-                .iter()
-                .filter(|envelope| matches!(envelope.event, Event::AgentRestarted { .. }))
-                .count(),
-            1
-        );
-    }
+    assert_eq!(claim.unwrap().0.epoch.get(), old.epoch.get() + 1);
+    assert_eq!(envelopes.len(), 8);
+    let projection = store.read_projection(root).await.unwrap();
+    assert_eq!(
+        projection.team.channels.keys().collect::<Vec<_>>(),
+        channels.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        projection.team.channels["DM-12345678"].members,
+        channels["DM-12345678"].members
+    );
+    assert!(
+        !channels["announce-12345678"]
+            .members
+            .contains("main/worker")
+    );
+    assert!(
+        projection.team.channels["announce-12345678"]
+            .members
+            .contains("main/worker")
+    );
+    assert!(!projection.team.archived.contains_key("main/worker"));
+    assert_eq!(projection.team.roster["main/worker"].resident_cursor, 2);
+    let inbox = &projection.team.inboxes["main/worker"];
+    assert_eq!(inbox.len(), 3);
+    assert_eq!(inbox[2].body, "new work");
+    assert_eq!(inbox[2].to, MailEndpoint::Channel("DM-12345678".into()));
+    let actor = store.read_projection(old.actor_id).await.unwrap();
+    assert_eq!(actor.session.messages.last().unwrap().role, Role::System);
+    let (second_claim, _) = revive_mail(
+        &store,
+        root,
+        old.actor_id,
+        "DM-12345678".into(),
+        "concurrent work",
+    )
+    .await
+    .unwrap();
+    assert!(second_claim.is_none());
+    assert_eq!(
+        store.read_projection(root).await.unwrap().team.inboxes["main/worker"].len(),
+        4
+    );
+    assert_eq!(
+        store
+            .replay(root)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|envelope| matches!(envelope.event, Event::AgentRestarted { .. }))
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -1990,7 +2038,7 @@ async fn revive_episode_rolls_back_claim_boundary_registration_and_mail_at_every
                 &store,
                 root,
                 old.actor_id,
-                MailEndpoint::Handle("worker".into()),
+                "DM-12345678".into(),
                 "must not send"
             )
             .await
@@ -2017,15 +2065,9 @@ async fn revive_episode_rolls_back_claim_boundary_registration_and_mail_at_every
             .execute(&mut connection)
             .await
             .unwrap();
-        let (claim, _) = revive_mail(
-            &store,
-            root,
-            old.actor_id,
-            MailEndpoint::Handle("worker".into()),
-            "retry",
-        )
-        .await
-        .unwrap();
+        let (claim, _) = revive_mail(&store, root, old.actor_id, "DM-12345678".into(), "retry")
+            .await
+            .unwrap();
         assert_eq!(claim.unwrap().0.epoch.get(), old.epoch.get() + 1);
     }
 }
@@ -2043,7 +2085,7 @@ async fn revive_episode_rechecks_policy_and_parent_claim_without_any_writes() {
             None,
             old.actor_id,
             "main".into(),
-            MailEndpoint::Handle("worker".into()),
+            "DM-12345678".into(),
             MailKind::Message,
             "denied".into(),
             "HYA_COMPACTED_CONTEXT",
@@ -2065,7 +2107,7 @@ async fn revive_episode_rechecks_policy_and_parent_claim_without_any_writes() {
             Some(&old),
             old.actor_id,
             "main".into(),
-            MailEndpoint::Channel("DM-12345678".into()),
+            "DM-12345678".into(),
             MailKind::Message,
             "stale sender".into(),
             "HYA_COMPACTED_CONTEXT",
@@ -2359,5 +2401,87 @@ async fn review_b1_reasoning_only_crash_closes_the_unanswered_wake() {
         visible_roles,
         [Role::User, Role::Assistant, Role::User],
         "reasoning-only messages can be omitted by providers"
+    );
+}
+
+#[tokio::test]
+async fn recovery_does_not_queue_an_outgoing_dm_copy() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let (root, claim) = work_fixture(&store).await;
+    store
+        .append_event(
+            root,
+            &Event::MailConsumed {
+                session: root,
+                handle: "main/worker".into(),
+                through: 2,
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .append_channel_mail(
+            root,
+            "main/worker".into(),
+            "DM-12345678".into(),
+            MailKind::Message,
+            "outgoing status".into(),
+            Some(&claim),
+            None,
+        )
+        .await
+        .unwrap();
+    let recovered = store
+        .recover_claim(claim.actor_id, OwnerRunId::new())
+        .await
+        .unwrap();
+    let result = store
+        .recover_resident_actor(&recovered, root, "main/worker")
+        .await
+        .unwrap();
+    assert_eq!(result.work, hya_store::RecoveredResidentWork::Idle);
+}
+
+#[tokio::test]
+async fn recovery_does_not_queue_an_outgoing_dm_copy_after_interrupted_work() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let (root, claim) = work_fixture(&store).await;
+    store
+        .begin_work(
+            Some(&claim),
+            root,
+            "main/worker",
+            2,
+            hya_store::ResidentWorkPrompt::Text("incoming work".into()),
+            "working".into(),
+        )
+        .await
+        .unwrap();
+    store
+        .append_channel_mail(
+            root,
+            "main/worker".into(),
+            "DM-12345678".into(),
+            MailKind::Message,
+            "outgoing status".into(),
+            Some(&claim),
+            None,
+        )
+        .await
+        .unwrap();
+    let recovered = store
+        .recover_claim(claim.actor_id, OwnerRunId::new())
+        .await
+        .unwrap();
+    let result = store
+        .recover_resident_actor(&recovered, root, "main/worker")
+        .await
+        .unwrap();
+    assert_eq!(
+        result.work,
+        hya_store::RecoveredResidentWork::AbortedRunning {
+            inbox_cursor: 2,
+            queued_after: false,
+        }
     );
 }

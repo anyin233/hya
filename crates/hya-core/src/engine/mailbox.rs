@@ -212,48 +212,33 @@ impl SessionEngine {
     ) -> Result<MailReceipt, CoreError> {
         let root = self.team_root(from_session).await?;
         let from = self.resolve_handle(root, from_session).await?;
-        // ADR-0016 `dm` default: a subordinate omits `to` (or writes the
-        // parent sentinel) and the engine resolves its one upward peer.
-        // The sentinel prefers the DM channel minted at registration time:
-        // it exists regardless of whether the parent handle is in the roster
-        // yet (a lazily registered root) and carries the same scope
-        // guarantees; the handle fallback keeps older projections working.
-        let to = match to {
-            MailEndpoint::Handle(target)
-                if target.trim().is_empty()
-                    || target.trim() == "^parent"
-                    || target.trim() == "^" =>
-            {
-                let parent = hya_proto::scope::parent_path(&from)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| hya_proto::scope::ROOT_HANDLE.to_string());
-                let dm_channel = self
-                    .read_projection(root)
-                    .await
-                    .ok()
-                    .and_then(|projection| {
-                        dm_channel_between(&projection, &from, &parent).map(MailEndpoint::Channel)
-                    });
-                dm_channel.unwrap_or(MailEndpoint::Handle(parent))
-            }
-            other => other,
-        };
         let policy_projection = self.read_projection(root).await?;
+        let channel = match to {
+            MailEndpoint::Channel(channel) => channel.trim().to_string(),
+            MailEndpoint::Handle(handle) => policy_projection
+                .team
+                .resolve_dm(&from, &handle)
+                .ok_or_else(|| hya_store::StoreError::MailAuthorizationRejected {
+                    sender: from.clone(),
+                    channel: format!("direct:{handle}"),
+                    reason:
+                        "no DM channel with that target; run `list_channel` to see your channels"
+                            .into(),
+                })?,
+        };
+        let to = MailEndpoint::Channel(channel.clone());
         // A subagent the user stopped (`cancel_user_turn`) is not restarted
         // by mail from above it: the user decides when it continues.
         if !user_steer && let Some(reviver) = self.archive_reviver() {
-            let peer = match &to {
-                MailEndpoint::Handle(handle) => Some(handle.to_string()),
-                MailEndpoint::Channel(channel) => policy_projection
-                    .team
-                    .channels
-                    .get(channel)
-                    .filter(|state| {
-                        state.kind == hya_proto::ChannelKind::Dm && state.members.contains(&from)
-                    })
-                    .and_then(|state| state.members.iter().find(|member| **member != from))
-                    .cloned(),
-            };
+            let peer = policy_projection
+                .team
+                .channels
+                .get(&channel)
+                .filter(|state| {
+                    state.kind == hya_proto::ChannelKind::Dm && state.members.contains(&from)
+                })
+                .and_then(|state| state.members.iter().find(|member| **member != from))
+                .cloned();
             if let Some(peer) = peer
                 && peer
                     .strip_prefix(from.as_str())
@@ -266,72 +251,16 @@ impl SessionEngine {
             }
         }
         #[cfg(test)]
-        if matches!(&to, MailEndpoint::Handle(_))
-            && let Some(gate) = self.direct_mail_pre_append_gate.as_ref()
-        {
+        if let Some(gate) = self.mail_pre_append_gate.as_ref() {
             gate.entered.notify_one();
             gate.release.notified().await;
         }
-        if let MailEndpoint::Handle(handle) = &to {
-            let append = self
-                .store()
-                .append_direct_mail(
-                    root,
-                    from.clone(),
-                    handle.clone(),
-                    kind,
-                    body.clone(),
-                    actor_claim,
-                    channel_policy,
-                )
-                .await;
-            let envelope = match append {
-                Ok(envelope) => envelope,
-                Err(ref error @ hya_store::StoreError::MailRevivalRequired { ref target, .. }) => {
-                    let Some(supervisor) = self.resident_supervisor() else {
-                        return Err(error.clone().into());
-                    };
-                    supervisor
-                        .revive_episode(
-                            root,
-                            &from,
-                            target,
-                            to.clone(),
-                            kind,
-                            body,
-                            actor_claim,
-                            channel_policy,
-                        )
-                        .await?;
-                    return Ok(MailReceipt {
-                        from,
-                        to,
-                        recipients: 1,
-                    });
-                }
-                Err(error) => return Err(error.into()),
-            };
-            self.publish_envelope(envelope);
-            return Ok(MailReceipt {
-                from,
-                to,
-                recipients: 1,
-            });
-        }
-        let channel = match &to {
-            MailEndpoint::Channel(channel) => channel.clone(),
-            MailEndpoint::Handle(_) => {
-                return Err(CoreError::Invalid(
-                    "mail endpoint was not a channel after direct delivery".to_string(),
-                ));
-            }
-        };
         let append = self
             .store()
             .append_channel_mail(
                 root,
                 from.clone(),
-                channel,
+                channel.clone(),
                 kind,
                 body.clone(),
                 actor_claim,
@@ -349,7 +278,7 @@ impl SessionEngine {
                         root,
                         &from,
                         target,
-                        to.clone(),
+                        channel.clone(),
                         kind,
                         body,
                         actor_claim,
@@ -398,8 +327,7 @@ impl SessionEngine {
         let root = self.team_root(from_session).await?;
         let from = self.resolve_handle(root, from_session).await?;
         // ADR-0016: broadcast rides the unit's minted group channel
-        // (`announce-{8}`, leader-only posting). Fall back to the legacy
-        // reserved channel when no minted channel exists yet (pre-mint logs).
+        // (`announce-{8}`, leader-only posting).
         let projection = self.read_projection(root).await?;
         let Some(group) = projection
             .team
@@ -767,21 +695,9 @@ fn dm_with_handle<'a>(
     caller: &str,
     raw: &str,
 ) -> Option<(String, &'a hya_proto::ChannelProjection)> {
-    let mut candidates = vec![raw.to_string()];
-    if let Some(member) = projection.team.resolve_in_scope(caller, raw) {
-        candidates.push(member);
-    }
-    if !raw.contains(scope::PATH_SEPARATOR) {
-        candidates.push(scope::join_path(caller, raw));
-    }
-    candidates
-        .iter()
-        .filter(|peer| peer.as_str() != caller)
-        .find_map(|peer| dm_channel_between(projection, caller, peer))
-        .and_then(|id| {
-            let state = projection.team.channels.get(&id)?;
-            Some((id, state))
-        })
+    let id = projection.team.resolve_dm(caller, raw)?;
+    let state = &projection.team.channels[&id];
+    Some((id, state))
 }
 
 /// "Unknown channel" for a `channel://` read, naming the caller's own
@@ -821,7 +737,7 @@ fn unknown_channel(projection: &hya_proto::Projection, caller: &str, raw: &str) 
 /// The DM channel registration minted between `from` and `parent`, if any.
 ///
 /// Channel ids are their own keys (`DM-<8>`), members carry canonical paths,
-/// and the first minted pair wins — the same rule steer's `dm_by_peer` uses.
+/// and membership identifies the pair.
 pub(crate) fn dm_channel_between(
     projection: &hya_proto::Projection,
     from: &str,
@@ -854,7 +770,7 @@ mod tests {
     use super::*;
     use crate::AgentSpec;
     use crate::bus::EventBus;
-    use crate::engine::{CreateSession, DirectMailPreAppendGate, SessionEngine};
+    use crate::engine::{CreateSession, MailPreAppendGate, SessionEngine};
     use crate::resident::ResidentSupervisor;
 
     fn local_test_runtime() -> Arc<crate::RuntimeRegistry> {
@@ -1181,7 +1097,13 @@ mod tests {
                 )
                 .await,
             &org.worker_1.path,
-            "direct:lead-1",
+            &engine
+                .read_projection(org.root)
+                .await
+                .unwrap()
+                .team
+                .resolve_dm(&org.worker_1.path, "lead-1")
+                .unwrap(),
         );
         assert_eq!(engine.replay(org.root).await.unwrap().len(), before);
     }
@@ -1273,7 +1195,7 @@ mod tests {
                 )
                 .await,
             "main",
-            &format!("direct:{}", org.lead_2.path),
+            &channel,
         );
     }
 
@@ -1446,7 +1368,7 @@ mod tests {
     #[tokio::test]
     async fn mail_auth_handle_revival_requires_an_authorized_own_archived_child() {
         let engine = Arc::new(engine().await);
-        let (root, supervisor, handle, _, lead_turn) = archived_child(&engine).await;
+        let (root, supervisor, handle, channel, lead_turn) = archived_child(&engine).await;
         let allowed = engine.session_channel_policy(root).unwrap();
         let outsider = register_child(&engine, root, root, "main", "outsider-1").await;
         let before = engine.replay(root).await.unwrap().len();
@@ -1479,7 +1401,7 @@ mod tests {
                 )
                 .await,
             "main",
-            &format!("direct:{handle}"),
+            &channel,
         );
         assert_eq!(engine.replay(root).await.unwrap().len(), before);
         assert!(
@@ -1573,7 +1495,7 @@ mod tests {
                 .drain(hya_proto::FinishCause::Shutdown, Duration::from_secs(2))
                 .await;
             let receipt = result.expect("the live episode accepts concurrent mail");
-            assert_eq!(handle_result.unwrap().recipients, 1);
+            assert_eq!(handle_result.unwrap().recipients, 2);
             assert_eq!(receipt.to, MailEndpoint::Channel(channel));
             assert_eq!(receipt.recipients, 2);
             assert_eq!(
@@ -1660,55 +1582,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn direct_mail_to_transient_member_is_rejected_before_append() {
-        let engine = engine().await;
-        let root = root_team(&engine).await;
-        engine.ensure_root_registered(root).await.unwrap();
-        let child = engine
-            .create(CreateSession {
-                parent: Some(root),
-                agent: AgentName::new("reviewer"),
-                model: ModelRef::new("fake"),
-                workdir: ".".to_string(),
-                project: None,
-                kind: hya_proto::SessionKind::Project,
-            })
-            .await
-            .unwrap();
-        engine
-            .emit_for_actor(
-                None,
-                root,
-                Event::AgentRegistered {
-                    session: root,
-                    agent_session: child,
-                    handle: "transient-1".to_string(),
-                    parent: Some("main".to_string()),
-                    agent_type: AgentName::new("reviewer"),
-                    mode: SubagentMode::Transient,
-                },
-            )
-            .await
-            .unwrap();
-
-        let before_len = engine.replay(root).await.unwrap().len();
-        let result = engine
-            .mail_send(
-                root,
-                MailEndpoint::Handle("transient-1".to_string()),
-                MailKind::Message,
-                "hi".to_string(),
-            )
-            .await;
-        assert_mail_rejected(result, "main", "direct:transient-1");
-
-        let after_len = engine.replay(root).await.unwrap().len();
-        assert_eq!(after_len, before_len);
-        let projection = engine.read_projection(root).await.unwrap();
-        assert!(!projection.team.inboxes.contains_key("transient-1"));
-    }
-
-    #[tokio::test]
     async fn direct_mail_to_unknown_handle_is_rejected_before_append() {
         let engine = engine().await;
         let root = root_team(&engine).await;
@@ -1732,7 +1605,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resident_stop_commits_before_stale_direct_send_rechecks_and_rejects() {
+    async fn resident_stop_commits_before_stale_alias_send_rechecks_the_dm() {
         let db_path =
             std::env::temp_dir().join(format!("hya-core-mailbox-stop-{}.db", SessionId::new()));
         let db_path = db_path.to_string_lossy().into_owned();
@@ -1777,10 +1650,7 @@ mod tests {
                 SessionStore::connect(&db_path).await.unwrap(),
                 EventBus::default(),
             )
-            .with_direct_mail_pre_append_gate(DirectMailPreAppendGate::new(
-                entered.clone(),
-                release.clone(),
-            )),
+            .with_mail_pre_append_gate(MailPreAppendGate::new(entered.clone(), release.clone())),
         );
         let sender_binding = sender.bind_runtime(std::path::Path::new(".")).unwrap();
         sender
@@ -1818,7 +1688,7 @@ mod tests {
         assert!(matches!(send_result,
             Err(CoreError::Store(hya_store::StoreError::MailRevivalRequired {
                 sender, channel, target,
-            })) if sender == "main" && channel == format!("direct:{handle}") && target == handle));
+            })) if sender == "main" && channel.starts_with("DM-") && target == handle));
 
         let replay = primary.replay(root).await.unwrap();
         assert!(
@@ -1884,10 +1754,12 @@ mod tests {
                     .emit_for_actor(
                         None,
                         root,
-                        Event::ChannelJoined {
+                        Event::ChannelCreated {
                             session: root,
                             channel: group,
-                            member: child_path.clone(),
+                            kind: hya_proto::ChannelKind::Group,
+                            unit: Some(parent_path.into()),
+                            members: vec![child_path.clone()],
                         },
                     )
                     .await
@@ -1927,6 +1799,7 @@ mod tests {
             )
             .await
             .unwrap();
+        mint_dm(engine, root, parent_path, &child_path).await;
         let claim = engine
             .store()
             .try_claim_new(session, session, OwnerRunId::new())
@@ -2042,6 +1915,15 @@ mod tests {
     /// Mint the DM channel the resident supervisor creates at registration
     /// time: one direct line between `parent_path` and `child_path`.
     async fn mint_dm(engine: &SessionEngine, root: SessionId, parent_path: &str, child_path: &str) {
+        if dm_channel_between(
+            &engine.read_projection(root).await.unwrap(),
+            parent_path,
+            child_path,
+        )
+        .is_some()
+        {
+            return;
+        }
         let channel = hya_proto::mint_channel_id(hya_proto::ChannelKind::Dm);
         engine
             .emit_for_actor(
@@ -2216,9 +2098,9 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(receipt.recipients, 1);
+        assert_eq!(receipt.recipients, 2);
         assert!(
-            matches!(receipt.to, MailEndpoint::Handle(ref h) if h == &org.lead_1.path),
+            matches!(receipt.to, MailEndpoint::Channel(ref id) if id.starts_with("DM-")),
             "a subordinate's default channel is its parent DM: {receipt:?}"
         );
         assert_eq!(
@@ -2237,25 +2119,27 @@ mod tests {
         let engine = engine().await;
         let org = org(&engine).await;
 
-        // Address the root's minted group channel explicitly with the 1:1
-        // kind hint; the engine must still deliver as an announcement.
+        let group = engine
+            .read_projection(org.root)
+            .await
+            .unwrap()
+            .team
+            .channels
+            .into_iter()
+            .find(|(_, state)| {
+                state.kind == hya_proto::ChannelKind::Group && state.unit.as_deref() == Some("main")
+            })
+            .unwrap()
+            .0;
         let receipt = engine
             .mail_send(
                 org.root,
-                MailEndpoint::Channel("announce".to_string()),
+                MailEndpoint::Channel(group),
                 MailKind::Message,
-                "typed as channel".to_string(),
+                "typed as channel".into(),
             )
-            .await;
-        // The reserved `announce` name is normalized engine-side; the
-        // receipt tells us where it landed.
-        let receipt = match receipt {
-            Ok(receipt) => receipt,
-            Err(_) => engine
-                .mail_announce(org.root, "typed as channel".to_string())
-                .await
-                .unwrap(),
-        };
+            .await
+            .unwrap();
         assert!(receipt.recipients >= 1);
         assert!(
             matches!(receipt.to, MailEndpoint::Channel(_)),
