@@ -68,7 +68,9 @@ uses `MailEndpoint::Channel(id)` (JSON `{ "kind": "channel", "id": "DM-12345678"
 for notices authored by `from: "harness"`; the store rejects all other
 handle-targeted event appends. A send receipt names the resolved channel and
 counts its eligible members for ordinary live sends, including the sender's
-history copy; a revival receipt reports the one revived recipient. That copy
+history copy; a revival receipt reports one only when that call revived the
+recipient. A competing send that finds the episode already live reports the
+ordinary fan-out count. That copy
 does not count as unread mail or wake the sender, including after recovery.
 Recovery retains raw cursor positions and resumes an admitted cancelled prompt
 once; an outgoing history copy by itself never creates work.

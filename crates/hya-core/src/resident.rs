@@ -4140,7 +4140,7 @@ impl ResidentSupervisor {
         body: String,
         parent_claim: Option<&ActorClaim>,
         policy: Option<hya_proto::mail::ChannelPolicySnapshot>,
-    ) -> Result<(), CoreError> {
+    ) -> Result<usize, CoreError> {
         self.revive_episode_with_activation(
             root,
             parent,
@@ -4167,7 +4167,7 @@ impl ResidentSupervisor {
         parent_claim: Option<&ActorClaim>,
         policy: Option<hya_proto::mail::ChannelPolicySnapshot>,
         activation: Option<WorkflowActivation>,
-    ) -> Result<(), CoreError> {
+    ) -> Result<usize, CoreError> {
         let projection = self.engine.read_projection(root).await?;
         // A concurrent sender may already have installed the new episode.
         let child = projection
@@ -4276,7 +4276,7 @@ impl ResidentSupervisor {
                 ));
             }
         }
-        let (claim, envelopes) = self
+        let (claim, envelopes, recipients) = self
             .engine
             .store()
             .revive_episode(
@@ -4317,7 +4317,7 @@ impl ResidentSupervisor {
             for envelope in envelopes {
                 self.engine.publish_envelope(envelope);
             }
-            return Ok(());
+            return Ok(recipients);
         };
         let activated = activation.is_some();
         let (guidance, route, completion) = match activation {
@@ -4387,7 +4387,7 @@ impl ResidentSupervisor {
         drop(write);
         drop(activation_lease);
         if activated {
-            return Ok(());
+            return Ok(recipients);
         }
         initialized
             .await
@@ -4404,7 +4404,7 @@ impl ResidentSupervisor {
                 release.notified().await;
             }
         }
-        Ok(())
+        Ok(recipients)
     }
 
     /// Register the team root as the main actor so child mail (and quiescence) wake

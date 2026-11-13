@@ -300,7 +300,7 @@ async fn concurrent_mail_revives_install_one_episode_without_waiting_for_the_win
     release.notify_one();
     let first = tokio::time::timeout(Duration::from_secs(2), first).await;
     assert!(second.is_ok(), "{second:?}");
-    first
+    let first = first
         .expect("concurrent sender must not await the winning episode")
         .unwrap()
         .unwrap();
@@ -324,6 +324,15 @@ async fn concurrent_mail_revives_install_one_episode_without_waiting_for_the_win
     supervisor
         .drain(FinishCause::Shutdown, Duration::from_secs(2))
         .await;
+    assert_eq!(
+        second.unwrap().recipients,
+        1,
+        "the winner revived one recipient"
+    );
+    assert_eq!(
+        first.recipients, 2,
+        "the loser appended to both live DM members"
+    );
 }
 
 #[tokio::test]

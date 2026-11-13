@@ -273,7 +273,7 @@ impl SessionEngine {
                 let Some(supervisor) = self.resident_supervisor() else {
                     return Err(error.clone().into());
                 };
-                supervisor
+                let recipients = supervisor
                     .revive_episode(
                         root,
                         &from,
@@ -288,7 +288,7 @@ impl SessionEngine {
                 return Ok(MailReceipt {
                     from,
                     to,
-                    recipients: 1,
+                    recipients,
                 });
             }
             Err(error) => return Err(error.into()),

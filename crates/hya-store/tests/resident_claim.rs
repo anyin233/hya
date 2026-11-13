@@ -1922,7 +1922,7 @@ async fn revive_mail(
     actor: SessionId,
     channel: String,
     body: &str,
-) -> Result<(Option<(ActorClaim, u64)>, Vec<Envelope>), StoreError> {
+) -> Result<(Option<(ActorClaim, u64)>, Vec<Envelope>, usize), StoreError> {
     store
         .revive_episode(
             root,
@@ -2079,12 +2079,13 @@ async fn revive_episode_preserves_channels_and_skips_all_prior_mail() {
     let store = SessionStore::connect_memory().await.unwrap();
     let (root, old) = revival_fixture(&store).await;
     let channels = store.read_projection(root).await.unwrap().team.channels;
-    let (claim, envelopes) =
+    let (claim, envelopes, recipients) =
         revive_mail(&store, root, old.actor_id, "DM-12345678".into(), "new work")
             .await
             .unwrap();
     assert_eq!(claim.unwrap().0.epoch.get(), old.epoch.get() + 1);
     assert_eq!(envelopes.len(), 8);
+    assert_eq!(recipients, 1);
     let projection = store.read_projection(root).await.unwrap();
     assert_eq!(
         projection.team.channels.keys().collect::<Vec<_>>(),
@@ -2112,7 +2113,7 @@ async fn revive_episode_preserves_channels_and_skips_all_prior_mail() {
     assert_eq!(inbox[2].to, MailEndpoint::Channel("DM-12345678".into()));
     let actor = store.read_projection(old.actor_id).await.unwrap();
     assert_eq!(actor.session.messages.last().unwrap().role, Role::System);
-    let (second_claim, _) = revive_mail(
+    let (second_claim, _, recipients) = revive_mail(
         &store,
         root,
         old.actor_id,
@@ -2122,6 +2123,7 @@ async fn revive_episode_preserves_channels_and_skips_all_prior_mail() {
     .await
     .unwrap();
     assert!(second_claim.is_none());
+    assert_eq!(recipients, 2);
     assert_eq!(
         store.read_projection(root).await.unwrap().team.inboxes["main/worker"].len(),
         4
@@ -2199,7 +2201,7 @@ async fn revive_episode_rolls_back_claim_boundary_registration_and_mail_at_every
             .execute(&mut connection)
             .await
             .unwrap();
-        let (claim, _) = revive_mail(&store, root, old.actor_id, "DM-12345678".into(), "retry")
+        let (claim, _, _) = revive_mail(&store, root, old.actor_id, "DM-12345678".into(), "retry")
             .await
             .unwrap();
         assert_eq!(claim.unwrap().0.epoch.get(), old.epoch.get() + 1);
