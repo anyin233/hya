@@ -30,3 +30,13 @@ in durable roster/archive/inbox/channel identity facts, not a daemon-lifetime se
 Recording holds the episode index while inserting the stall. Ending removes the
 index entry before clearing stalls, so insertion either precedes cleanup or sees
 that the episode is gone. Caller deletion clears its rows after store deletion.
+
+
+# Why must Drop request endings before cancelling live teams?
+
+Once the last supervisor Arc drops, a team's Weak cannot upgrade. Merely
+cancelling its token leaves its task repeatedly asking the vanished supervisor
+to kill it, without acquiring an ending or yielding. Drop now invokes the same
+synchronous team ending transition used by explicit kill, before cancellation.
+The takeover-before-first-turn test exposed the spin; a dedicated live-team Drop
+test asserts the ending is installed synchronously and every task then exits.

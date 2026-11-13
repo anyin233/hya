@@ -2181,3 +2181,28 @@ async fn m412_late_stall_record_cannot_retain_ended_episode() {
         "a wait snapshot recorded an already ended episode"
     );
 }
+
+#[tokio::test]
+async fn m412_drop_supervisor_requests_live_episode_endings_before_cancellation() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let (child, _) = parked(&supervisor, root).await;
+    let team = supervisor.team_with_resident(child).unwrap();
+    let done = team.lock().residents[&child].done.subscribe();
+    let weak = Arc::downgrade(&supervisor);
+    drop(supervisor);
+    assert!(weak.upgrade().is_none());
+    assert!(
+        team.lock().phase.killed(),
+        "Drop left a cancelled team without its ending owner"
+    );
+    assert!(team.lock().residents[&child].ending.is_some());
+    tokio::time::timeout(Duration::from_secs(5), await_episode(done))
+        .await
+        .unwrap()
+        .unwrap();
+    team.tasks.close();
+    team.tasks.wait().await;
+    assert!(team.lock().residents.is_empty());
+}
