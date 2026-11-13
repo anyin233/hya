@@ -20,6 +20,7 @@ mod db_lock;
 mod db_writer;
 mod exec_stream;
 mod frontend;
+mod lead_wrapup;
 mod models_cmd;
 mod prompt;
 mod provider_cmd;
@@ -224,15 +225,7 @@ async fn cmd_exec(
             let (turn, stop) = run_until_stopped(
                 built,
                 &cancel,
-                engine.run_turn_with_external_dirs_and_guidance(
-                    session,
-                    agent,
-                    cancel.clone(),
-                    &[],
-                    None,
-                    None,
-                    Some(prompt),
-                ),
+                lead_wrapup::run_lead(&engine, session, agent, cancel.clone(), prompt),
             )
             .await?;
             // End of the run: nothing may keep streaming after `exec` returns. Every

@@ -347,6 +347,78 @@ title = "relay over TLS to the proxy (rcgen certificate, --relay-ca on serve and
 track = "P"
 path = "crates/hya-e2e/tests/p38_relay.rs"
 
+[[scenario]]
+id = "T2.38"
+title = "headless exec: a lead turn that ends while its worker is still running gets a HEADLESS RUN notice turn instead of ending the run; the lead waits, the worker reports (it is not stopped), and the lead's final answer is the run's last turn"
+track = "P"
+path = "crates/hya-e2e/tests/p39_exec_live_subagents.rs"
+
+[[scenario]]
+id = "T2.39"
+title = "headless exec: two notice turns in a row that neither wait nor archive end the run with the worker still running"
+track = "P"
+path = "crates/hya-e2e/tests/p39_exec_live_subagents.rs"
+
+[[scenario]]
+id = "T2.40"
+title = "headless exec: a lead turn that ends with pending/in-progress todos gets a HEADLESS RUN notice listing them; the run ends once every item is completed or blocked"
+track = "P"
+path = "crates/hya-e2e/tests/p40_exec_headless_continuation.rs"
+
+[[scenario]]
+id = "T2.41"
+title = "headless exec: a last message announcing a next step (\"Now verify the file format:\") continues the run with the announcement quoted"
+track = "P"
+path = "crates/hya-e2e/tests/p40_exec_headless_continuation.rs"
+
+[[scenario]]
+id = "T2.42"
+title = "headless exec: a plain summary after tool work ends the run with no notice"
+track = "P"
+path = "crates/hya-e2e/tests/p40_exec_headless_continuation.rs"
+
+[[scenario]]
+id = "T2.43"
+title = "headless exec: two ignored announcement notices in a row end the run"
+track = "P"
+path = "crates/hya-e2e/tests/p40_exec_headless_continuation.rs"
+
+[[scenario]]
+id = "T2.44"
+title = "headless exec --time-budget: the opening names the budget and the first tool result in the final window carries the FINAL notice once"
+track = "P"
+path = "crates/hya-e2e/tests/p40_exec_headless_continuation.rs"
+
+[[scenario]]
+id = "T2.45"
+title = "headless exec --time-budget: a bash timeout is shortened to the time left minus the grace"
+track = "P"
+path = "crates/hya-e2e/tests/p40_exec_headless_continuation.rs"
+
+[[scenario]]
+id = "T2.46"
+title = "headless exec --time-budget: no continuation turn starts within the grace"
+track = "P"
+path = "crates/hya-e2e/tests/p40_exec_headless_continuation.rs"
+
+[[scenario]]
+id = "T2.47"
+title = "headless exec corrects a spurious internal summary and resumes work"
+track = "P"
+path = "crates/hya-e2e/tests/p40_exec_headless_continuation.rs"
+
+[[scenario]]
+id = "T2.48"
+title = "headless exec recovers a raw DSML tool-call leak through the structured tool interface"
+track = "P"
+path = "crates/hya-e2e/tests/p40_exec_headless_continuation.rs"
+
+[[scenario]]
+id = "T2.49"
+title = "idle residents produce stalled waits until archived; a quiescent server team wakes its lead with a User synthesis prompt"
+track = "P"
+path = "crates/hya-e2e/tests/p39_exec_live_subagents.rs"
+
 # Index-only deep engine coverage (not duplicated in Track P).
 [[scenario]]
 id = "I.nested"
