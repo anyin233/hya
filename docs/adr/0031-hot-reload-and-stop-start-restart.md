@@ -3,8 +3,9 @@
 Date: 2026-11-12
 Status: Accepted
 
-Supersedes [ADR-0028](0028-inherited-listener-handoff.md) entirely and the
-restart/handover parts of [ADR-0023](0023-persistent-backend-daemon.md).
+Supersedes the earlier supervisor-owned listener FD handoff (`ADR-0028`, removed)
+entirely and the restart/handover parts of
+[ADR-0023](0023-persistent-backend-daemon.md).
 
 ## Context
 

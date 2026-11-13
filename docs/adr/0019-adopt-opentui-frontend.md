@@ -1,6 +1,6 @@
 # Adopt the Bun/OpenTUI frontend as the interactive TUI
 
-ADR-0005 and ADR-0010 removed the legacy TUIs and left hya with no interactive
+Earlier iterations removed the legacy Rust and Compat-era TUIs and left hya with no interactive
 frontend until a replacement was decided. A Bun/OpenTUI frontend
 (`packages/hya-tui`) was built on a contributor fork over the `hya.v1`
 HTTP/JSON+SSE contract. It covers sessions, the transcript, turns, pending

@@ -60,7 +60,7 @@ cargo test -p hya-e2e -- --test-threads=1
 | T2.9 | Swarm `channels` | `tests/p16_swarm_mailbox.rs` | Result reports `members:["hya-task-<operator>"]` and `messages:1` the caller never supplied |
 | T2.10 | Swarm `join` | `tests/p16_swarm_mailbox.rs` | Post-join message reaches the joiner; pre-join post never does |
 | T2.11 | Swarm `leave` | `tests/p16_swarm_mailbox.rs` | Negative: departed member never sees the post, bounded by a still-subscribed member **and** a later direct ping it did see |
-| T2.12 | Cross-unit `send` refused | `tests/p16_swarm_mailbox.rs` | Two units, two levels deep: sender's follow-up carries the scope refusal AND the payload never reaches the other unit ([ADR-0011](../adr/0011-hierarchy-scoped-mailbox.md)) |
+| T2.12 | Cross-unit `send` refused | `tests/p16_swarm_mailbox.rs` | Two units, two levels deep: sender's follow-up carries the scope refusal AND the payload never reaches the other unit ([ADR-0016](../adr/0016-channel-communication-plane.md)) |
 | T2.13 | User-authored Workflow fan-out/fan-in | `tests/p17_workflow_composition.rs` | One discovered Workflow spawns four distinct stage Sessions, joins both parallel implementations into review, and returns the final report to the lead |
 | T2.14 | Workflow Stage model routing and replay | `tests/p19_workflow_model_routing.rs` | Preferred 503 responses advance to the declared fallback with per-candidate effort; worker, verifier, and final route outcomes survive backend close/reopen without another provider request |
 | T2.15 | model catalog discovery and offline fallback | `tests/p20_model_catalog_discovery.rs` | Explicit lists stay network-free and unwritten; empty lists rediscover anonymously each run without mutating config or a foreign OpenCode file; 401 and credentialed-forbidden catalogs surface `hya/offline` (exec prints the configuration explanation); mixed provider failure keeps the valid rows identical across CLI, `/v1/models`, `/v1/providers`, and `GET /v1/bootstrap` |
@@ -113,53 +113,13 @@ prompts). The recipient's own next model request is therefore the only honest
 delivery oracle — see the module docs of `tests/p16_swarm_mailbox.rs` for the
 ordering rules that keep those scenarios deterministic.
 
-## Track T scenarios (retired)
+## Track T scenarios (moved to `packages/hya-tui-web`)
 
-Track T has no live scenarios. The whole T3 series is retired in
-`matrix.toml` (T3.1 permission reply, T3.2 multi-agent task presentation,
-T3.3 agent roster, T3.4 PTY smoke): the real-backend trio verified the deleted
-Compat HTTP surface, and the legacy TypeScript TUI package was then removed
-from the repository entirely. Frontend-on-`hya-sdk-v1` scenarios return to the
-matrix only when a future TUI is built; register them under the T3 series then,
-following the ID allocation rule below.
-
-### PTY policy and recorded timeout
-
-The old PTY suites (`pty-smoke.test.ts`, `workflow-pty.test.ts`) ran in the
-non-gating Bun step and were removed with the old TUI's backend integration.
-
-The retained historical observation is run `31053432077` on commit `fee38938`:
-the stable test `Linux PTY renders home, opens a session, and restores the
-terminal` timed out at its root-draft presentation oracle. Byte-identical code
-passed the same step in two other CI runs and passed 3/3 locally. No root cause
-was established. Read a new red PTY-smoke result as a regression only after
-checking whether it is the same presentation timeout.
-
-### Historical intermittent-failure observations (2026-08-06)
-
-The following table records the observations known on 2026-08-06. It is not a
-claim that these tests still fail at the same rate on current HEAD. Stable test
-symbols replace volatile source-line anchors.
-
-| Test | Recorded symptom | Historical evidence |
-| --- | --- | --- |
-| `transient_sidecar_loss_interrupts_running_member_before_provider_release` (`crates/hya-core/tests/subagent.rs`) | assertion failure | **1 CI observation** (run `31061204771`, on `573924f4`); 3 later CI runs on `main` green |
-| `foreign_promotion_is_wake_only` (`crates/hya-app/src/runtime.rs`) | `Elapsed(())` on a store-state poll | 4/30 runs, **only under artificial 24× CPU saturation**; never observed on CI |
-| `captures_code_and_state_from_callback` (`crates/hya-app/src/oauth/callback.rs`) | `ConnectionRefused` | 3/60 runs under the same artificial load; never observed on CI |
-
-At the time of the record:
-
-- The first was the only failure with CI evidence. It fired on the commit
-  preceding the hardening round and did not recur in three subsequent runs.
-  Nothing in that round touched `hya-core`'s subagent tests, so the later green
-  runs did not prove a fix.
-- The second busy-spun on `tokio::task::yield_now()` while polling the store,
-  starving the promotion task under 24× oversubscription. That probe behavior
-  was not evidence of a CI-relevant defect.
-- The third had a rebind race by inspection: the test bound a port, dropped the
-  listener, spawned a thread to re-bind, and slept before connecting. The
-  durable fix would pass an already-bound `TcpListener` into
-  `wait_for_callback`, not add a longer sleep or retry.
+The legacy `T3.*` rows in `matrix.toml` (T3.1–T3.4) are marked retired because
+they targeted the deleted legacy TypeScript TUI. Interactive TUI and WebUI E2E
+coverage now lives in [`packages/hya-tui-web/e2e/`](../../packages/hya-tui-web/e2e)
+and runs via `tui-exp` (Bun PTY + `@xterm/headless`) and Playwright in the
+`tui` CI job; see [Browser-rendered TUI](../tui-web.md).
 
 ## Track I (index-only)
 
