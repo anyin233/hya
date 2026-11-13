@@ -1094,7 +1094,7 @@ async fn review_a3_pending_case(live_revive: bool) {
     let team = supervisor.team_with_resident(child).unwrap();
     let synthesis = {
         let mut state = team.lock();
-        state.main_autonomous = true;
+        state.root_driver.autonomous.store(true, Ordering::Release);
         // A new unit of unrelated completed work makes synthesis eligible.
         state.work_seq = state.work_seq.saturating_add(1);
         team.maybe_fire_quiescence(&mut state);
@@ -1894,7 +1894,7 @@ async fn review_r4_task_registration_preserves_headless_root_ownership() {
         .await
         .unwrap();
     let team = supervisor.teams().get(&root).unwrap().clone();
-    let autonomous = team.lock().main_autonomous;
+    let autonomous = team.lock().root_driver.autonomous.load(Ordering::Acquire);
     drop(driver);
     supervisor
         .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
@@ -1902,5 +1902,35 @@ async fn review_r4_task_registration_preserves_headless_root_ownership() {
     assert!(
         !autonomous,
         "task registration transferred headless continuation ownership to the supervisor"
+    );
+}
+
+#[tokio::test]
+async fn review_r4_replacement_preserves_headless_policy_during_a_lead_turn() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let driver = supervisor.root_driver_activity(root).await.unwrap();
+    // run_lead acquires its root-driver guard before starting the lead's turn.
+    let lease = engine.try_begin_turn(root).unwrap();
+    let previous = supervisor.teams().get(&root).unwrap().clone();
+    for done in previous.kill(Ending::Killed("team budget".into())).await {
+        await_episode(done).await.unwrap();
+    }
+    let replacement = supervisor.team_for(root).await.unwrap();
+    drop(driver);
+    let autonomous = replacement
+        .lock()
+        .root_driver
+        .autonomous
+        .load(Ordering::Acquire);
+    drop(lease);
+    drop(replacement);
+    supervisor
+        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
+        .await;
+    assert!(
+        !autonomous,
+        "a live headless lead turn was mistaken for autonomous continuation ownership"
     );
 }
