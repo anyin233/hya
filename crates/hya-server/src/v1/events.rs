@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use axum::Router;
 use axum::extract::{Path as AxumPath, Query, State};
@@ -137,37 +138,179 @@ pub(crate) struct SharedFrame {
 }
 
 impl SharedFrame {
-    fn new(frame: pb::StreamFrame) -> std::sync::Arc<Self> {
+    fn new(frame: pb::StreamFrame) -> Arc<Self> {
         let sse = SseEvent::default()
             .json_data(&frame)
             .unwrap_or_else(|error| SseEvent::default().event("error").data(error.to_string()));
-        std::sync::Arc::new(Self { frame, sse })
+        Arc::new(Self { frame, sse })
     }
 }
 
 #[derive(Clone)]
 pub(crate) struct FrameHub {
-    frames: tokio::sync::broadcast::Sender<std::sync::Arc<PublishedFrame>>,
+    frames: tokio::sync::broadcast::Sender<Arc<PublishedFrame>>,
+    notices: tokio::sync::broadcast::Sender<Arc<PublishedFrame>>,
+    sources: Arc<OnceLock<Weak<Sources>>>,
+    subscribers: Arc<Mutex<Vec<Weak<Subscriber>>>>,
 }
 
 impl FrameHub {
     pub(crate) fn new(capacity: usize) -> Self {
         Self {
             frames: tokio::sync::broadcast::channel(capacity).0,
+            notices: tokio::sync::broadcast::channel(256).0,
+            sources: Default::default(),
+            subscribers: Default::default(),
+        }
+    }
+
+    fn wants_engine(
+        &self,
+        index: u64,
+        session: Option<SessionId>,
+        seq: u64,
+        list: ListEvent,
+    ) -> bool {
+        let mut wanted = false;
+        self.subscribers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|weak| {
+                let Some(subscriber) = weak.upgrade() else {
+                    return false;
+                };
+                wanted |= index > subscriber.tails[0]
+                    && (seq == 0 || seq > subscriber.since_seq)
+                    && subscriber
+                        .scope
+                        .session_id()
+                        .is_none_or(|wanted| Some(wanted) == session)
+                    && (!subscriber.interactions_only
+                        || (seq > 0 && !matches!(list, ListEvent::Never)));
+                true
+            });
+        wanted
+    }
+}
+
+struct Subscriber {
+    tails: [u64; 6],
+    scope: StreamScope,
+    since_seq: u64,
+    interactions_only: bool,
+}
+
+/// The source cursor and receive are advanced under the same lock as a
+/// subscriber's tail snapshot. Wake receivers carry no event data into fan-out.
+struct Source<T: Clone> {
+    cursor: Mutex<SourceCursor<T>>,
+}
+
+struct SourceCursor<T> {
+    receiver: tokio::sync::broadcast::Receiver<T>,
+    consumed: u64,
+}
+
+impl<T: Clone> Source<T> {
+    fn new(
+        receiver: tokio::sync::broadcast::Receiver<T>,
+    ) -> (Self, tokio::sync::broadcast::Receiver<T>) {
+        let wake = receiver.resubscribe();
+        (
+            Self {
+                cursor: Mutex::new(SourceCursor {
+                    receiver,
+                    consumed: 0,
+                }),
+            },
+            wake,
+        )
+    }
+
+    fn tail(&self) -> u64 {
+        let cursor = self
+            .cursor
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cursor.consumed + cursor.receiver.len() as u64
+    }
+
+    fn try_recv(&self) -> Option<(u64, Result<T, tokio::sync::broadcast::error::RecvError>)> {
+        use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+        let mut cursor = self
+            .cursor
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let result = cursor.receiver.try_recv();
+        let value = match result {
+            Ok(value) => {
+                cursor.consumed += 1;
+                Ok(value)
+            }
+            Err(TryRecvError::Lagged(skipped)) => {
+                cursor.consumed += skipped;
+                Err(RecvError::Lagged(skipped))
+            }
+            Err(TryRecvError::Closed) => Err(RecvError::Closed),
+            Err(TryRecvError::Empty) => return None,
+        };
+        Some((cursor.consumed, value))
+    }
+
+    async fn recv(
+        &self,
+        wake: &mut tokio::sync::broadcast::Receiver<T>,
+    ) -> (u64, Result<T, tokio::sync::broadcast::error::RecvError>) {
+        loop {
+            if let Some(value) = self.try_recv() {
+                return value;
+            }
+            let _ = wake.recv().await;
         }
     }
 }
 
+struct Sources {
+    bus: Source<hya_proto::Envelope>,
+    permissions: Source<Value>,
+    questions: Source<Value>,
+    catalogs: Source<Value>,
+    projects: Source<()>,
+    sessions: Source<crate::session_list::SessionListNotice>,
+}
+
+impl Sources {
+    fn tails(&self) -> [u64; 6] {
+        [
+            self.bus.tail(),
+            self.permissions.tail(),
+            self.questions.tail(),
+            self.catalogs.tail(),
+            self.projects.tail(),
+            self.sessions.tail(),
+        ]
+    }
+}
+
 struct PublishedFrame {
+    source: usize,
+    index: u64,
     audience: Audience,
-    encoded: std::sync::Arc<SharedFrame>,
+    encoded: Arc<SharedFrame>,
+}
+
+#[derive(Clone, Copy)]
+enum ListEvent {
+    Always,
+    Never,
+    Root(SessionId),
 }
 
 enum Audience {
     Engine {
         session: Option<SessionId>,
         seq: u64,
-        list: bool,
+        list: ListEvent,
     },
     Interaction,
     All,
@@ -178,77 +321,95 @@ enum Audience {
 }
 
 /// Subscribe to the source channels synchronously, before returning the router.
-/// Conversion and JSON encoding happen here, before the shared broadcast.
+/// Conversion and JSON encoding happen here, before the shared broadcasts.
 pub(crate) fn spawn_frame_hub(st: &ServerState) {
     use tokio::sync::broadcast::error::RecvError;
-    let mut bus = st.engine.bus().subscribe();
-    let mut permissions = st.permission_requests.subscribe();
-    let mut questions = st.question_requests.subscribe();
-    let mut catalogs = st.catalog_updates.subscribe();
-    let mut projects = st.projects_updates.subscribe();
-    let mut sessions = st.session_list.subscribe();
+    let (bus, mut bus_wake) = Source::new(st.engine.bus().subscribe());
+    let (permissions, mut permission_wake) = Source::new(st.permission_requests.subscribe());
+    let (questions, mut question_wake) = Source::new(st.question_requests.subscribe());
+    let (catalogs, mut catalog_wake) = Source::new(st.catalog_updates.subscribe());
+    let (projects, mut project_wake) = Source::new(st.projects_updates.subscribe());
+    let (sessions, mut session_wake) = Source::new(st.session_list.subscribe());
+    let sources = Arc::new(Sources {
+        bus,
+        permissions,
+        questions,
+        catalogs,
+        projects,
+        sessions,
+    });
+    assert!(
+        st.frames.sources.set(Arc::downgrade(&sources)).is_ok(),
+        "frame hub started twice"
+    );
     let st = st.clone();
     let spawning = st.clone();
     spawning.spawn_background(async move {
         loop {
-            let (audience, frame) = tokio::select! {
+            let (source, index, audience, frame) = tokio::select! {
                 _ = st.streams.closed() => break,
-                received = bus.recv() => match received {
+                (index, received) = sources.bus.recv(&mut bus_wake) => match received {
                     Ok(envelope) => {
-                        if st.frames.frames.receiver_count() == 0 { continue; }
+                        let list = session_list_event(&envelope.event);
+                        if !st.frames.wants_engine(index, envelope.event.session(), envelope.seq.0, list) { continue; }
                         let Some(event) = counted_stream_event(&st, &envelope) else { continue };
-                        let list = is_session_list_event(&st, &envelope.event).await;
-                        (Audience::Engine { session: envelope.event.session(), seq: envelope.seq.0, list },
+                        (0, index, Audience::Engine { session: envelope.event.session(), seq: envelope.seq.0, list },
                             pb::StreamFrame { frame: Some(pb::stream_frame::Frame::Event(event)) })
                     }
-                    Err(RecvError::Lagged(_)) => (Audience::Resync { global_only: false }, resync_frame(0)),
+                    Err(RecvError::Lagged(_)) => (0, index, Audience::Resync { global_only: false }, resync_frame(0)),
                     Err(RecvError::Closed) => break,
                 },
-                received = permissions.recv() => {
+                (index, received) = sources.permissions.recv(&mut permission_wake) => {
                     let Ok(value) = received else { continue };
                     let Some(frame) = interaction_frame(&value) else { continue };
-                    (Audience::Interaction, pb::StreamFrame { frame: Some(frame) })
+                    (1, index, Audience::Interaction, pb::StreamFrame { frame: Some(frame) })
                 },
-                received = questions.recv() => {
+                (index, received) = sources.questions.recv(&mut question_wake) => {
                     let Ok(value) = received else { continue };
                     let Some(frame) = interaction_frame(&value) else { continue };
-                    (Audience::Interaction, pb::StreamFrame { frame: Some(frame) })
+                    (2, index, Audience::Interaction, pb::StreamFrame { frame: Some(frame) })
                 },
-                received = catalogs.recv() => {
+                (index, received) = sources.catalogs.recv(&mut catalog_wake) => {
                     let Ok(notice) = received else { continue };
-                    (Audience::All, catalog_updated_frame(&notice))
+                    (3, index, Audience::All, catalog_updated_frame(&notice))
                 },
-                received = projects.recv() => {
+                (index, received) = sources.projects.recv(&mut project_wake) => {
                     let Ok(()) = received else { continue };
-                    (Audience::Global, projects_updated_frame())
+                    (4, index, Audience::Global, projects_updated_frame())
                 },
-                received = sessions.recv() => match received {
-                    Ok(notice) => (Audience::Global, session_list_frame(notice)),
-                    Err(RecvError::Lagged(_)) => (Audience::Resync { global_only: true }, resync_frame(0)),
+                (index, received) = sources.sessions.recv(&mut session_wake) => match received {
+                    Ok(notice) => (5, index, Audience::Global, session_list_frame(notice)),
+                    Err(RecvError::Lagged(_)) => (5, index, Audience::Resync { global_only: true }, resync_frame(0)),
                     Err(RecvError::Closed) => break,
                 },
             };
-            let _ = st.frames.frames.send(std::sync::Arc::new(PublishedFrame {
-                audience,
-                encoded: SharedFrame::new(frame),
+            let channel = if source == 0 { &st.frames.frames } else { &st.frames.notices };
+            let _ = channel.send(Arc::new(PublishedFrame {
+                source, index, audience, encoded: SharedFrame::new(frame),
             }));
         }
     });
 }
 
-async fn is_session_list_event(st: &ServerState, event: &hya_proto::Event) -> bool {
+fn session_list_event(event: &hya_proto::Event) -> ListEvent {
     match event {
-        hya_proto::Event::SessionCreated { parent, .. } => parent.is_none(),
-        hya_proto::Event::AgentArchived { .. } | hya_proto::Event::AgentRestarted { .. } => true,
+        hya_proto::Event::SessionCreated { parent, .. } => {
+            if parent.is_none() {
+                ListEvent::Always
+            } else {
+                ListEvent::Never
+            }
+        }
+        hya_proto::Event::AgentArchived { .. } | hya_proto::Event::AgentRestarted { .. } => {
+            ListEvent::Always
+        }
         hya_proto::Event::SessionTitled { session, .. }
         | hya_proto::Event::AgentSwitched { session, .. }
         | hya_proto::Event::ModelSwitched { session, .. }
         | hya_proto::Event::SessionPermissionModeSet { session, .. }
         | hya_proto::Event::SessionArchived { session, .. }
-        | hya_proto::Event::SessionUnarchived { session, .. } => {
-            crate::session_list::is_root(st, *session).await
-        }
-        _ => false,
+        | hya_proto::Event::SessionUnarchived { session, .. } => ListEvent::Root(*session),
+        _ => ListEvent::Never,
     }
 }
 
@@ -272,24 +433,60 @@ pub(crate) fn frame_stream(
     scope: StreamScope,
     since_seq: u64,
     interactions_only: bool,
-) -> impl Stream<Item = std::sync::Arc<SharedFrame>> {
+) -> impl Stream<Item = Arc<SharedFrame>> {
     let closed = st.streams.closed();
     let watching = scope.session_id().map(|session| st.watchers.watch(session));
     let shutdown = st.streams.clone();
-    let frames = BroadcastStream::new(st.frames.frames.subscribe()).filter_map(move |result| {
+    // Register under the same lock used to decide whether conversion has a
+    // recipient, so an event after the snapshot cannot miss this subscriber.
+    let subscriber = {
+        let mut subscribers = st
+            .frames
+            .subscribers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let engine = BroadcastStream::new(st.frames.frames.subscribe());
+        let notices = BroadcastStream::new(st.frames.notices.subscribe());
+        let sources = st.frames.sources.get().and_then(Weak::upgrade);
+        // A finished hub has no further source events; only serverStopping remains.
+        let tails = sources.map_or([u64::MAX; 6], |sources| sources.tails());
+        let subscriber = Arc::new(Subscriber {
+            tails,
+            scope,
+            since_seq,
+            interactions_only,
+        });
+        subscribers.retain(|weak| weak.strong_count() > 0);
+        subscribers.push(Arc::downgrade(&subscriber));
+        (subscriber, engine, notices)
+    };
+    let (subscriber, engine, notices) = subscriber;
+    let tails = subscriber.tails;
+    let frames = futures::stream::select(engine, notices).filter_map(move |result| {
         let st = st.clone();
         async move {
             let published = match result {
                 Ok(frame) => frame,
                 Err(_) => return Some(SharedFrame::new(resync_frame(since_seq))),
             };
+            if published.index <= tails[published.source] {
+                return None;
+            }
             let visible = match published.audience {
                 Audience::Engine { session, seq, list } => {
                     (seq == 0 || seq > since_seq)
                         && scope
                             .session_id()
                             .is_none_or(|wanted| Some(wanted) == session)
-                        && (!interactions_only || (seq > 0 && list))
+                        && (!interactions_only
+                            || (seq > 0
+                                && match list {
+                                    ListEvent::Always => true,
+                                    ListEvent::Never => false,
+                                    ListEvent::Root(session) => {
+                                        crate::session_list::is_root(&st, session).await
+                                    }
+                                }))
                 }
                 Audience::Interaction => {
                     interaction_in_scope(&st.engine, &published.encoded.frame, scope).await
@@ -312,6 +509,7 @@ pub(crate) fn frame_stream(
     .filter_map(futures::future::ready);
     frames.take_until(closed).chain(stopping).map(move |frame| {
         let _watching = &watching;
+        let _subscriber = &subscriber;
         frame
     })
 }
@@ -639,7 +837,7 @@ mod fanout_tests {
             Arc::new(ProviderRouter::new()),
             Arc::new(runtime),
             permission,
-            EventBus::default(),
+            EventBus::new(16),
         );
         crate::AppState::new(
             Arc::new(engine),
@@ -669,11 +867,20 @@ mod fanout_tests {
                     title: "shared".into(),
                 },
             });
+            let mut shared = None;
             for stream in &mut streams {
-                tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+                let frame = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
                     .await
                     .unwrap()
                     .unwrap();
+                if let Some(first) = &shared {
+                    assert!(
+                        Arc::ptr_eq(first, &frame),
+                        "subscriber rebuilt the frame or SSE encoding"
+                    );
+                } else {
+                    shared = Some(frame);
+                }
             }
             assert_eq!(
                 st.stream_conversions.load(Ordering::Relaxed),
@@ -683,6 +890,167 @@ mod fanout_tests {
             app.shutdown().await;
         }
     }
+    #[tokio::test]
+    async fn subscriber_excludes_events_queued_before_http_subscription() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        // The current-thread runtime cannot poll the hub between publication
+        // and this ready HTTP handler. Both events stay queued until body polling.
+        for since_seq in [0, 99] {
+            let app = state().await;
+            let router = crate::router(app.clone());
+            let st = app.server_state();
+            let _existing = Box::pin(frame_stream(st.clone(), StreamScope::Global, 0, false));
+            let publish = |title: &str| {
+                st.engine.bus().publish(hya_proto::Envelope {
+                    seq: hya_proto::EventSeq(0),
+                    ts_millis: 0,
+                    event: Event::SessionTitled {
+                        session: SessionId::new(),
+                        title: title.into(),
+                    },
+                })
+            };
+            publish("before-subscribe");
+            let response = router
+                .oneshot(
+                    Request::get(format!("/v1/events/stream?sinceSeq={since_seq}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                st.stream_conversions.load(Ordering::Relaxed),
+                0,
+                "hub ran before HTTP subscription"
+            );
+            publish("after-subscribe");
+            let mut body = response.into_body().into_data_stream();
+            let first = tokio::time::timeout(std::time::Duration::from_secs(5), body.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let text = std::str::from_utf8(&first).unwrap();
+            assert!(
+                text.contains("after-subscribe"),
+                "pre-subscription event leaked: {text}"
+            );
+            app.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn subscriber_excludes_notices_queued_before_grpc_subscription() {
+        use hya_api::v1::events_server::Events;
+        let app = state().await;
+        let grpc = crate::V1Grpc::new(app.clone());
+        let st = app.server_state();
+        st.catalog_updates
+            .send(serde_json::json!({"properties":{"projectId":"before-subscribe"}}))
+            .unwrap();
+        let mut stream = grpc
+            .stream_global_events(tonic::Request::new(pb::StreamGlobalEventsRequest::default()))
+            .await
+            .unwrap()
+            .into_inner();
+        st.catalog_updates
+            .send(serde_json::json!({"properties":{"projectId":"after-subscribe"}}))
+            .unwrap();
+        let first = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let Some(pb::stream_frame::Frame::Event(event)) = first.frame else {
+            panic!("missing event")
+        };
+        let Some(pb::stream_event::Payload::CatalogUpdated(notice)) = event.payload else {
+            panic!("missing catalog notice")
+        };
+        assert_eq!(notice.project_id, "after-subscribe");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn deltas_do_not_evict_catalog_notices_for_a_slow_subscriber() {
+        let app = state().await;
+        let st = app.server_state();
+        let mut slow = Box::pin(frame_stream(st.clone(), StreamScope::Global, 0, false));
+        let mut fast = Box::pin(frame_stream(st.clone(), StreamScope::Global, 0, false));
+        st.catalog_updates
+            .send(serde_json::json!({"properties":{"projectId":"keep-notice"}}))
+            .unwrap();
+        fast.next().await.unwrap();
+        // The fixture's engine ring has 16 slots. Keep its input current while
+        // overflowing only the slow subscriber's converted-frame ring.
+        for _ in 0..33 {
+            st.engine.bus().publish(hya_proto::Envelope {
+                seq: hya_proto::EventSeq(0),
+                ts_millis: 0,
+                event: Event::TextDelta {
+                    session: SessionId::new(),
+                    message: hya_proto::MessageId::new(),
+                    part: hya_proto::PartId::new(),
+                    delta: "burst".into(),
+                },
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(5), fast.next())
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let frame = slow.next().await.unwrap();
+                if let Some(pb::stream_frame::Frame::Event(pb::StreamEvent {
+                    payload: Some(pb::stream_event::Payload::CatalogUpdated(notice)),
+                    ..
+                })) = &frame.frame.frame
+                {
+                    assert_eq!(notice.project_id, "keep-notice");
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn interaction_only_subscribers_do_not_convert_text_deltas() {
+        let app = state().await;
+        let st = app.server_state();
+        let _stream = Box::pin(frame_stream(st.clone(), StreamScope::Global, 0, true));
+        st.engine.bus().publish(hya_proto::Envelope {
+            seq: hya_proto::EventSeq(0),
+            ts_millis: 0,
+            event: Event::TextDelta {
+                session: SessionId::new(),
+                message: hya_proto::MessageId::new(),
+                part: hya_proto::PartId::new(),
+                delta: "unobserved".into(),
+            },
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let sources = st.frames.sources.get().unwrap().upgrade().unwrap();
+            loop {
+                if sources.bus.cursor.lock().unwrap().consumed >= 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(st.stream_conversions.load(Ordering::Relaxed), 0);
+        app.shutdown().await;
+    }
+
     #[tokio::test]
     async fn shutdown_joins_server_services_and_reaper_children() {
         let app = state().await;
