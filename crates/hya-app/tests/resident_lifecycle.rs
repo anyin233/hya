@@ -1531,17 +1531,68 @@ async fn i22_restore_prompt_precedes_queued_recovered_main_work() {
         .with_auto_title(false)
         .with_pure_guidance(true);
     let mut observed = h.provider.requests.subscribe();
-    state.resume_interrupted_turns().await;
-    let already_called = h
-        .provider
-        .captured
+    let restore_gate = Arc::new(Gate::default());
+    h.provider
+        .unscripted
         .lock()
         .unwrap()
-        .iter()
-        .any(|r| r.session == h.root && !r.completion.tools.is_empty());
-    if !already_called {
-        request_for(&mut observed, h.root).await;
-    }
+        .push_back(Round::text("RESTORE_ANSWER").gated(restore_gate.clone()));
+
+    assert_eq!(
+        h.built.resident_supervisor().episode_count(),
+        0,
+        "construction started recovered episodes before daemon restore admission"
+    );
+    h.built.resume_interrupted(&state).await.unwrap();
+    restore_gate.arrived().await;
+    assert!(
+        h.engine.turn_active(h.root),
+        "restore admission did not reserve its root"
+    );
+    assert_eq!(h.built.resident_supervisor().episode_count(), 2);
+    assert_eq!(
+        h.provider
+            .captured
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.session == h.root && !r.completion.tools.is_empty())
+            .count(),
+        1,
+        "recovered main ran while restore was still answering"
+    );
+    restore_gate.release();
+    let mail_request = tokio::time::timeout(support::lifecycle::BOUND, async {
+        loop {
+            let request = request_for(&mut observed, h.root).await;
+            let latest = request
+                .messages
+                .iter()
+                .rev()
+                .find(|message| matches!(message, hya_proto::Message::User { .. }));
+            if latest.is_some_and(|message| {
+                serde_json::to_string(message)
+                    .unwrap()
+                    .contains("QUEUED_BEFORE_RESTORE")
+            }) {
+                break request;
+            }
+        }
+    })
+    .await
+    .expect("persisted root mail was never driven after restore");
+    assert!(
+        !serde_json::to_string(
+            mail_request
+                .messages
+                .iter()
+                .rev()
+                .find(|message| matches!(message, hya_proto::Message::User { .. }))
+                .unwrap()
+        )
+        .unwrap()
+        .contains("Your previous turn was interrupted by a restart.")
+    );
     h.until(h.root, |p| {
         p.session
             .messages
@@ -3262,6 +3313,12 @@ async fn m46_s2_restart_requeues_cancelled_directive_mail_work() {
         std::future::pending::<()>().await;
     }
     let mut h = support::lifecycle::crashed_team(test).await;
+    let mut observed = h.provider.requests.subscribe();
+    h.built
+        .resident_supervisor()
+        .start_recovered()
+        .await
+        .unwrap();
     let root = h.engine.read_projection(h.root).await.unwrap();
     let (handle, child) = root
         .team
@@ -3271,22 +3328,15 @@ async fn m46_s2_restart_requeues_cancelled_directive_mail_work() {
         .map(|(path, entry)| (path.clone(), entry.session))
         .unwrap();
     let request = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        let request = request_for(&mut observed, child).await;
         h.until(h.root, |p| p.team.roster[&handle].resident_work.is_none())
             .await;
+        request
     })
     .await;
-    let captured = h
-        .provider
-        .captured
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|r| r.session == child && !r.completion.tools.is_empty())
-        .cloned();
     h.shutdown().await;
-    request.expect("startup parked unfinished directive mail");
     assert_resumed_request(
-        &captured.unwrap().completion,
+        &request.expect("startup parked unfinished directive mail"),
         "initial answer before process crash",
         None,
     );
@@ -4393,4 +4443,35 @@ async fn review_s3_skipped_stage_is_durable_while_independent_branch_runs() {
         "scheduler left skipped Stage pending while another branch ran"
     );
     assert_eq!(replay.iter().filter(|e| matches!(&e.event, Event::WorkflowStageFinished { stage, status: hya_proto::WorkflowStageStatus::Skipped, .. } if stage == "skipped")).count(), 1);
+}
+
+#[tokio::test]
+async fn m412_start_recovered_preserves_an_actor_ended_during_restore() {
+    let test = "m412_start_recovered_preserves_an_actor_ended_during_restore";
+    support::lifecycle::crash_seed_if_requested(test, false).await;
+    let mut h = support::lifecycle::crashed_team(test).await;
+    let supervisor = h.built.resident_supervisor();
+    let root = h.engine.read_projection(h.root).await.unwrap();
+    let (handle, ended) = root
+        .team
+        .roster
+        .iter()
+        .find(|(handle, _)| handle.as_str() != "main")
+        .map(|(handle, entry)| (handle.clone(), entry.session))
+        .unwrap();
+    // Restore turns may end an orphan before all roots finish admission.
+    supervisor.end_member(h.root, &handle).await.unwrap();
+    let started = supervisor.start_recovered().await;
+    let episodes = supervisor.episode_count();
+    let projection = h.engine.read_projection(h.root).await.unwrap();
+    let active = h.engine.store().active_actor_ids().await.unwrap();
+    h.shutdown().await;
+    assert_eq!(
+        started.unwrap(),
+        1,
+        "ended staged actor prevented startup of its peer"
+    );
+    assert_eq!(episodes, 1);
+    assert!(projection.team.archived.contains_key(&handle));
+    assert!(!active.contains(&ended));
 }

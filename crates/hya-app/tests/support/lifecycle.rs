@@ -130,6 +130,7 @@ pub struct ScriptedProvider {
     script_sessions: Mutex<BTreeMap<String, SessionId>>,
     pub requests: broadcast::Sender<Request>,
     pub handoffs: Mutex<VecDeque<Round>>,
+    pub unscripted: Mutex<VecDeque<Round>>,
     pub captured: Mutex<Vec<Request>>,
 }
 
@@ -140,6 +141,7 @@ impl Default for ScriptedProvider {
             script_sessions: Mutex::default(),
             requests: broadcast::channel(256).0,
             handoffs: Mutex::default(),
+            unscripted: Mutex::default(),
             captured: Mutex::default(),
         }
     }
@@ -213,7 +215,13 @@ impl Provider for ScriptedProvider {
                             rounds.pop_front().unwrap_or_else(|| Round::text("settled"))
                         })
                 })
-                .unwrap_or_else(|| Round::text("main settled"))
+                .unwrap_or_else(|| {
+                    self.unscripted
+                        .lock()
+                        .unwrap()
+                        .pop_front()
+                        .unwrap_or_else(|| Round::text("main settled"))
+                })
         };
         let captured = Request {
             session,
