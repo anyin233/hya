@@ -59,11 +59,14 @@ impl QuestionRequests {
 
     #[must_use]
     #[allow(dead_code)]
-    pub(crate) fn spawn(mut rx: mpsc::UnboundedReceiver<QuestionRequest>) -> Self {
+    pub(crate) fn spawn(
+        mut rx: mpsc::UnboundedReceiver<QuestionRequest>,
+        tasks: &crate::RuntimeTaskOwner,
+    ) -> Self {
         let requests = Self::new();
         let inner = requests.inner.clone();
         let events = requests.events.clone();
-        std::mem::drop(tokio::spawn(async move {
+        crate::runtime_tasks::spawn_cancellable(&tasks.tasks, &tasks.stop, async move {
             while let Some(req) = rx.recv().await {
                 let entry = PendingQuestion {
                     session: req.session,
@@ -77,7 +80,7 @@ impl QuestionRequests {
                     let _published = events.send(asked);
                 }
             }
-        }));
+        });
         requests
     }
 

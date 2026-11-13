@@ -34,10 +34,10 @@ subtree has exited. Follow-up must connect these owners before claiming the
 stronger transitive guarantee; neither sleeping nor an empty tracker proves
 unregistered tasks have stopped.
 
-`HyaRuntime::start` additionally constructs the server router. Its server-owned
-catalog notice relay, Project busy watcher, session-list tracker, and ephemeral
-reaper are started by `AppState::server_state` and do not expose join handles
-to `BuiltSessionEngine`. Wrapper-level shutdown needs that owner as well.
+`HyaRuntime::start` additionally constructs the server router. Server services
+have their own owner (see below), separate from `BuiltSessionEngine`. Await
+`HyaRuntime::shutdown()` to join both; shutting down only a built engine does
+not stop a separately constructed server state.
 
 ## Which review hypotheses reproduced?
 
@@ -50,3 +50,14 @@ F4's stated execute-token race was absent (token already precedes cancellation
 check), but public `list` and `decorate` lacked that gate; post-shutdown listing
 failed the added regression before the fix. F1 cancellation is runtime-shutdown
 only; live reconciliation callers use fresh uncancelled tokens, so no change.
+
+## Who joins server services?
+
+`AppState::shutdown().await` cancels and joins the server's frame/catalog relays,
+Project busy watcher, session-list tracker, ephemeral startup sweep, delayed
+reaper children, and permission/question bridges. `stop_for_restart` includes
+this join, and `HyaRuntime::shutdown()` joins it before built-engine shutdown.
+`RuntimeTaskOwner` is now defined in hya-server and re-exported through the
+existing hya-app path. Routers retain the owner in an extension; service tasks
+hold only token/tracker handles, avoiding an owner/task cycle. The resident bus
+listener and plugin/MCP I/O remain outside this server guarantee.

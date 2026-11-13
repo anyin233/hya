@@ -188,7 +188,8 @@ pub(crate) fn spawn_frame_hub(st: &ServerState) {
     let mut projects = st.projects_updates.subscribe();
     let mut sessions = st.session_list.subscribe();
     let st = st.clone();
-    tokio::spawn(async move {
+    let spawning = st.clone();
+    spawning.spawn_background(async move {
         loop {
             let (audience, frame) = tokio::select! {
                 _ = st.streams.closed() => break,
@@ -679,6 +680,58 @@ mod fanout_tests {
                 1,
                 "conversion count with {subscribers} subscribers"
             );
+            app.shutdown().await;
         }
+    }
+    #[tokio::test]
+    async fn shutdown_joins_server_services_and_reaper_children() {
+        let app = state().await;
+        let engine = std::sync::Arc::downgrade(&app.engine);
+        let (permission, asks) = PermissionPlane::new(PermissionRules::default());
+        let (questions, receiver) = hya_tool::InteractionPlane::new();
+        let app = app
+            .with_permission_requests(asks)
+            .with_question_requests(receiver);
+        let router = crate::router(app.clone());
+        let st = app.server_state();
+        // Seven long-lived services plus at most one startup sweep. Reaching
+        // nine tracked tasks proves at least one delayed reaper child exists.
+        for _ in 0..3 {
+            st.watchers
+                .schedule(SessionId::new(), crate::ephemeral::Wait::Startup);
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while st.tasks.len() < 9 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        app.shutdown().await;
+        assert!(st.stop.is_cancelled());
+        assert!(st.tasks.is_empty(), "server tasks survived shutdown");
+        // Keep the request senders and router alive through the join: channel
+        // closure must not be what stopped either interaction bridge.
+        drop((permission, questions, router, st, app));
+        assert!(
+            engine.upgrade().is_none(),
+            "a detached server task retained the engine"
+        );
+    }
+
+    #[tokio::test]
+    async fn router_retains_owner_and_last_drop_cancels_services() {
+        let app = state().await;
+        let router = crate::router(app.clone());
+        let st = app.server_state();
+        drop(app);
+        assert!(!st.stop.is_cancelled(), "live router lost its task owner");
+        drop(router);
+        assert!(st.stop.is_cancelled());
+        st.tasks.close();
+        tokio::time::timeout(std::time::Duration::from_secs(5), st.tasks.wait())
+            .await
+            .unwrap();
+        assert!(st.tasks.is_empty());
     }
 }

@@ -27,6 +27,7 @@ use crate::{pending, runs};
 /// router and gRPC binding built from one `AppState` shares them.
 #[derive(Clone)]
 pub struct AppState {
+    pub(crate) tasks: Arc<crate::RuntimeTaskOwner>,
     /// Shared session engine for all routes.
     pub engine: Arc<SessionEngine>,
     /// Process-level agent base used by native turns.
@@ -72,12 +73,21 @@ impl AppState {
         deadline: std::time::Duration,
     ) -> Result<hya_core::TurnDrainReport, hya_core::CoreError> {
         let until = tokio::time::Instant::now() + deadline;
-        self.runs.begin_drain();
+        self.streams.close(crate::ShutdownReason::Restart);
+        self.shutdown().await;
         let report = self.engine.stop_for_restart(deadline).await?;
         if !self.runs.wait_idle(until).await {
             tracing::warn!("server runs did not settle before the drain deadline");
         }
         Ok(report)
+    }
+
+    /// End live streams and cancel/join server services, including reaper children
+    /// and interaction bridges. Engine/composition shutdown follows separately.
+    pub async fn shutdown(&self) {
+        self.streams.close(crate::ShutdownReason::Stop);
+        self.runs.begin_drain();
+        self.tasks.shutdown().await;
     }
 
     /// Pause a reserved run before its turn task spawns (nothing admitted
@@ -100,6 +110,7 @@ impl AppState {
         let (catalog_updates, _) = broadcast::channel(16);
         let (projects_updates, _) = broadcast::channel(16);
         Self {
+            tasks: Arc::new(crate::RuntimeTaskOwner::new()),
             engine,
             agent,
             permission_requests,
@@ -253,7 +264,7 @@ impl AppState {
     #[must_use]
     pub fn with_permission_requests(mut self, rx: mpsc::UnboundedReceiver<AskRequest>) -> Self {
         self.permission_requests =
-            pending::PermissionRequests::spawn(rx, self.engine.store().clone());
+            pending::PermissionRequests::spawn(rx, self.engine.store().clone(), &self.tasks);
         self.reconfigured()
     }
 
@@ -278,7 +289,7 @@ impl AppState {
     /// Attach the user-question receiver and start the pending-question bridge.
     #[must_use]
     pub fn with_question_requests(mut self, rx: mpsc::UnboundedReceiver<QuestionRequest>) -> Self {
-        self.question_requests = pending::QuestionRequests::spawn(rx);
+        self.question_requests = pending::QuestionRequests::spawn(rx, &self.tasks);
         self.reconfigured()
     }
 
@@ -350,6 +361,8 @@ impl AppState {
 
 #[derive(Clone)]
 pub(crate) struct ServerState {
+    pub(crate) tasks: tokio_util::task::TaskTracker,
+    pub(crate) stop: tokio_util::sync::CancellationToken,
     #[cfg(test)]
     pub(crate) stream_conversions: Arc<std::sync::atomic::AtomicUsize>,
     pub(crate) frames: crate::v1::events::FrameHub,
@@ -384,6 +397,8 @@ impl ServerState {
     pub(crate) fn new(app: AppState) -> Self {
         let global = support::global_state::GlobalState::new(app.engine.lsp().is_configured());
         Self {
+            tasks: app.tasks.tasks.clone(),
+            stop: app.tasks.stop.clone(),
             #[cfg(test)]
             stream_conversions: Arc::default(),
             frames: crate::v1::events::FrameHub::new(app.engine.bus().capacity()),
@@ -413,6 +428,13 @@ impl ServerState {
             ephemeral_grace: app.ephemeral_grace,
             watchers: app.watchers,
         }
+    }
+
+    pub(crate) fn spawn_background(
+        &self,
+        future: impl std::future::Future<Output = ()> + Send + 'static,
+    ) {
+        crate::runtime_tasks::spawn_cancellable(&self.tasks, &self.stop, future);
     }
 
     /// Publish a Project-list change as a live `projectsUpdated` frame.

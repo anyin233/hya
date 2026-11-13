@@ -241,11 +241,13 @@ pub(crate) fn spawn_reaper(state: ServerState) {
         return;
     };
     let sweeping = state.clone();
-    tokio::spawn(async move { sweep(&sweeping).await });
-    tokio::spawn(async move {
+    state.spawn_background(async move { sweep(&sweeping).await });
+    let spawning = state.clone();
+    spawning.spawn_background(async move {
         while let Some(check) = checks.recv().await {
             let state = state.clone();
-            tokio::spawn(async move {
+            let spawning = state.clone();
+            spawning.spawn_background(async move {
                 tokio::time::sleep(state.ephemeral_grace.of(check.wait)).await;
                 reap(&state, check).await;
             });

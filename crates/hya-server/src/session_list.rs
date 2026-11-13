@@ -94,7 +94,8 @@ pub(crate) fn spawn_busy_tracker(state: ServerState) {
     }
     let mut runs = state.runs.subscribe_changes();
     let mut bus = state.engine.bus().subscribe();
-    tokio::spawn(async move {
+    let spawning = state.clone();
+    spawning.spawn_background(async move {
         let mut busy: HashSet<SessionId> = HashSet::new();
         let mut sweep = tokio::time::interval(Duration::from_secs(1));
         sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);

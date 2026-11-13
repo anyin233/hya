@@ -1441,38 +1441,7 @@ fn validate_unsupported_inline_agent_fields(member: &SpawnMember) -> Result<(), 
     Ok(())
 }
 
-/// Owns composition services and admitted handlers until explicit shutdown.
-#[must_use]
-pub struct RuntimeTaskOwner {
-    pub(crate) stop: tokio_util::sync::CancellationToken,
-    pub(crate) tasks: tokio_util::task::TaskTracker,
-}
-
-impl RuntimeTaskOwner {
-    fn new() -> Self {
-        Self {
-            stop: tokio_util::sync::CancellationToken::new(),
-            tasks: tokio_util::task::TaskTracker::new(),
-        }
-    }
-
-    /// Cancel intake and wait for every tracked service and handler to exit.
-    pub fn shutdown(&self) -> impl std::future::Future<Output = ()> + Send + 'static + use<> {
-        let stop = self.stop.clone();
-        let tasks = self.tasks.clone();
-        async move {
-            stop.cancel();
-            tasks.close();
-            tasks.wait().await;
-        }
-    }
-}
-
-impl Drop for RuntimeTaskOwner {
-    fn drop(&mut self) {
-        self.stop.cancel();
-    }
-}
+pub use hya_server::RuntimeTaskOwner;
 
 /// Public aggregate returned by [`build_session_engine`].
 ///
@@ -2603,6 +2572,12 @@ impl HyaRuntime {
             app_state,
             _built: built,
         })
+    }
+
+    /// Stop server services, then join composition intake and drain residents.
+    pub async fn shutdown(&mut self) -> Result<(), CoreError> {
+        self.app_state.shutdown().await;
+        self._built.shutdown().await
     }
 
     /// Axum router with native and Compat routes (from [`hya_server::router`]).

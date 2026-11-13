@@ -28,6 +28,7 @@ mod pending;
 mod provider_control;
 pub mod relay_host;
 mod runs;
+mod runtime_tasks;
 mod sanitize;
 mod server;
 mod session_list;
@@ -62,6 +63,7 @@ pub use provider_control::{
     ProviderSettings, ProviderUpsert, valid_provider_id,
 };
 pub use relay_host::{RelayHost, RelayHostConfig, RelaySettings};
+pub use runtime_tasks::RuntimeTaskOwner;
 pub use sanitize::display_text;
 pub use server::{Server, build};
 pub use state::AppState;
@@ -92,10 +94,12 @@ pub use workflow_control::{
 /// state, whose background drivers start once. To serve HTTP and gRPC on
 /// one listener use [`build`].
 pub fn router(state: AppState) -> Router {
+    let tasks = state.tasks.clone();
     let hosts = std::sync::Arc::new(state.allowed_hosts());
     let state = state.server_state();
     v1::router()
         .with_state(state)
+        .layer(axum::Extension(tasks))
         .layer(axum::middleware::from_fn(v1::directory_header_guard))
         .layer(cors())
         .layer(axum::middleware::from_fn(move |request, next| {
@@ -125,7 +129,7 @@ fn spawn_catalog_scope_notices(state: &ServerState) {
     use tokio::sync::broadcast::error::RecvError;
     let mut invalidations = state.engine.subscribe_catalog_scope_invalidations();
     let notices = state.catalog_updates.clone();
-    tokio::spawn(async move {
+    state.spawn_background(async move {
         loop {
             let project = match invalidations.recv().await {
                 Ok(hya_core::ScopeKey::Project(project)) => Some(project),
@@ -150,7 +154,8 @@ fn spawn_project_busy_watcher(state: ServerState) {
     use std::collections::{BTreeSet, HashMap};
 
     let mut rx = state.engine.bus().subscribe();
-    tokio::spawn(async move {
+    let spawning = state.clone();
+    spawning.spawn_background(async move {
         let mut tracked: HashMap<hya_proto::SessionId, Option<hya_proto::ProjectId>> =
             HashMap::new();
         let mut busy_projects: BTreeSet<hya_proto::ProjectId> = BTreeSet::new();

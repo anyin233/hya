@@ -97,11 +97,15 @@ impl PermissionRequests {
 
     #[must_use]
     #[allow(dead_code)]
-    pub(crate) fn spawn(mut rx: mpsc::UnboundedReceiver<AskRequest>, store: SessionStore) -> Self {
+    pub(crate) fn spawn(
+        mut rx: mpsc::UnboundedReceiver<AskRequest>,
+        store: SessionStore,
+        tasks: &crate::RuntimeTaskOwner,
+    ) -> Self {
         let requests = Self::new(store.clone());
         let inner = requests.inner.clone();
         let events = requests.events.clone();
-        std::mem::drop(tokio::spawn(async move {
+        crate::runtime_tasks::spawn_cancellable(&tasks.tasks, &tasks.stop, async move {
             while let Some(req) = rx.recv().await {
                 let (message_id, call_id) = tool_correlation(&store, &req).await;
                 let tool = match (req.session, call_id) {
@@ -135,7 +139,7 @@ impl PermissionRequests {
                 drop(pending);
                 let _published = events.send(asked);
             }
-        }));
+        });
         requests
     }
 
