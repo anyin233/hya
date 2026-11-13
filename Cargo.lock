@@ -1410,6 +1410,7 @@ dependencies = [
  "hya-proto",
  "libc",
  "libsqlite3-sys",
+ "percent-encoding",
  "semver",
  "serde_json",
  "sqlx",

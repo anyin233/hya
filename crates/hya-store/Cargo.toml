@@ -16,6 +16,7 @@ lifecycle-bench = ["dep:libsqlite3-sys", "hya-proto/lifecycle-bench"]
 [dependencies]
 libsqlite3-sys = { version = "=0.30.1", optional = true }
 futures = { workspace = true }
+percent-encoding = "2"
 semver = "1"
 hya-bundle = { workspace = true }
 hya-proto = { workspace = true }

@@ -144,3 +144,93 @@ async fn read_only_connect_neither_migrates_nor_writes_projection_snapshots() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn runtime_spellings_cannot_take_over_a_live_file_owner() {
+    let relative_dir = PathBuf::from(format!("hya-owner-spellings-{}", SessionId::new()));
+    std::fs::create_dir(&relative_dir).unwrap();
+    let scratch = Scratch(relative_dir.canonicalize().unwrap());
+    let relative = relative_dir.join("sessions.db");
+    let first = SessionStore::connect_runtime(&scratch.db()).await.unwrap();
+    first.claim_runtime_owner(OwnerRunId::new()).unwrap();
+    let mut spellings = vec![
+        scratch.db(),
+        relative.to_str().unwrap().to_owned(),
+        format!("sqlite:{}", scratch.db()),
+        format!("sqlite://{}", scratch.db()),
+        format!("file:{}", scratch.db()),
+        format!("file://{}", scratch.db()),
+        format!("sqlite:{}", relative.display()),
+        format!("file:{}", relative.display()),
+    ];
+    #[cfg(unix)]
+    {
+        let alias = scratch.0.join("alias.db");
+        std::os::unix::fs::symlink("sessions.db", &alias).unwrap();
+        spellings.extend([
+            alias.to_str().unwrap().to_owned(),
+            format!("sqlite:{}", alias.display()),
+            format!("file:{}", alias.display()),
+        ]);
+    }
+    for spelling in spellings {
+        match SessionStore::connect_runtime(&spelling).await {
+            Ok(second) => assert!(
+                second.claim_runtime_owner(OwnerRunId::new()).is_err(),
+                "two runtime owners for {} via {spelling}",
+                scratch.db()
+            ),
+            Err(hya_store::StoreError::RuntimeOwnerBusy) => {}
+            Err(hya_store::StoreError::RuntimeOwnerLock { source, .. }) => {
+                assert_eq!(source.kind(), std::io::ErrorKind::InvalidInput);
+            }
+            Err(error) => panic!("unexpected error for {spelling}: {error}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn persistent_uri_is_rejected_before_sqlite_initialization() {
+    let scratch = Scratch::new();
+    for uri in [
+        format!("sqlite:{}", scratch.db()),
+        format!("file:{}", scratch.db()),
+        format!("file:{}%3Fmode=rw?mode=memory", scratch.db()),
+        format!("file:{}%3Fmode=memory&mode=rw", scratch.db()),
+    ] {
+        let error = match SessionStore::connect_runtime(&uri).await {
+            Ok(_) => panic!("persistent URI accepted: {uri}"),
+            Err(error) => error,
+        };
+        assert!(matches!(error,
+            hya_store::StoreError::RuntimeOwnerLock { source, .. }
+                if source.kind() == std::io::ErrorKind::InvalidInput
+                    && source.to_string().contains("plain filesystem path")));
+        assert!(!PathBuf::from(scratch.db()).exists());
+        assert!(
+            !database_paths(&scratch.db())
+                .unwrap()
+                .unwrap()
+                .lock
+                .exists()
+        );
+    }
+}
+
+#[tokio::test]
+async fn explicit_memory_uri_spellings_remain_unlocked() {
+    for uri in [
+        "sqlite::memory:",
+        "sqlite://:memory:",
+        "file::memory:",
+        "sqlite:%3Amemory%3A",
+        "file:%253Amemory%253A",
+        "file:named?mode=memory&cache=shared",
+        "sqlite:named?m%6fde=mem%6fry&cache=shared",
+        "file:named%3Fmode=memory",
+    ] {
+        assert!(database_paths(uri).unwrap().is_none(), "{uri}");
+        let store = SessionStore::connect_runtime(uri).await.unwrap();
+        store.claim_runtime_owner(OwnerRunId::new()).unwrap();
+    }
+}
