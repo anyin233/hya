@@ -3770,15 +3770,28 @@ impl ResidentSupervisor {
     /// Request an archive and wait for the episode's own ending. Dropping
     /// this wait never cancels the episode task.
     pub async fn end_member(&self, root: SessionId, handle: &str) -> Result<(), CoreError> {
-        let projection = self.engine.read_projection(root).await?;
         let prefix = format!("{handle}{}", scope::PATH_SEPARATOR);
-        let mut descendants = projection
-            .team
-            .roster
-            .iter()
-            .filter(|(path, _)| path.starts_with(&prefix))
-            .map(|(path, entry)| (path.clone(), entry.session))
-            .collect::<Vec<_>>();
+        // Capture live identities before any await: root deletion must still
+        // join the episode's ending rather than re-resolve its deleted roster.
+        let (live, mut descendants) = {
+            let episodes = self
+                .episodes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut live = None;
+            let mut descendants = Vec::new();
+            for (session, team) in episodes.iter().filter(|(_, team)| team.root == root) {
+                let state = team.lock();
+                if let Some(slot) = state.residents.get(session) {
+                    if slot.handle == handle {
+                        live = Some(*session);
+                    } else if slot.handle.starts_with(&prefix) {
+                        descendants.push((slot.handle.clone(), *session));
+                    }
+                }
+            }
+            (live, descendants)
+        };
         descendants.sort_by_key(|(path, _)| {
             std::cmp::Reverse(path.matches(scope::PATH_SEPARATOR).count())
         });
@@ -3786,20 +3799,6 @@ impl ResidentSupervisor {
             self.stop_and_archive_live(root, &path, child, "Workflow run cancelled")
                 .await?;
         }
-        let live = self
-            .episodes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter()
-            .find_map(|(session, team)| {
-                (team.root == root
-                    && team
-                        .lock()
-                        .residents
-                        .get(session)
-                        .is_some_and(|slot| slot.handle == handle))
-                .then_some(*session)
-            });
         if let Some(child) = live {
             self.stop_and_archive_live(root, handle, child, "Workflow run cancelled")
                 .await?;
