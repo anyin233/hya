@@ -1119,7 +1119,6 @@ impl WorkflowControl {
                 let execution = control.finish_prepared_run(
                     session,
                     run,
-                    operation,
                     prepared,
                     background_binding,
                     cancel.clone(),
@@ -1153,7 +1152,7 @@ impl WorkflowControl {
         // Finished delivery waits for execution, but admission no longer occupies
         // a request slot once the durable run owns its execution resources.
         drop(slot.take());
-        self.finish_prepared_run(session, run, operation, prepared, finish_binding, cancel)
+        self.finish_prepared_run(session, run, prepared, finish_binding, cancel)
             .await
     }
 
@@ -1162,7 +1161,6 @@ impl WorkflowControl {
         &self,
         session: SessionId,
         run: WorkflowRunId,
-        operation: Option<ToolOperation>,
         prepared: hya_core::PreparedWorkflowRun,
         binding: TurnBinding,
         cancel: CancellationToken,
@@ -1171,19 +1169,24 @@ impl WorkflowControl {
             .resident_supervisor
             .root_driver_activity(session)
             .await?;
-        let actor_claim = operation.and_then(ToolOperation::actor_claim);
-        let report = match prepared.execute(cancel).await {
+        // Admission transfers terminal persistence to the tracked run owner.
+        // The calling resident may release its claim while this task cleans up.
+        let report = match prepared.execute(cancel.clone()).await {
             Ok(report) => report,
             Err(error) => {
                 let detail = bounded_error(&error.to_string());
                 self.engine
                     .record_workflow_event_for_actor(
-                        actor_claim.as_ref(),
+                        None,
                         session,
                         Event::WorkflowRunFinished {
                             session,
                             run,
-                            status: WorkflowRunStatus::Failed,
+                            status: if cancel.is_cancelled() {
+                                WorkflowRunStatus::Cancelled
+                            } else {
+                                WorkflowRunStatus::Failed
+                            },
                             error: Some(detail.clone()),
                         },
                     )
@@ -1198,7 +1201,7 @@ impl WorkflowControl {
         };
         self.engine
             .record_workflow_event_for_actor(
-                actor_claim.as_ref(),
+                None,
                 session,
                 Event::WorkflowRunFinished {
                     session,

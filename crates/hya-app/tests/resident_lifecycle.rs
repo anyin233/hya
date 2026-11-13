@@ -4204,3 +4204,142 @@ async fn review_w3_stage_failure_output_is_the_report_text() {
     assert_eq!(report.stages[0].output, "exact worker failure");
     h.shutdown().await;
 }
+
+#[tokio::test]
+async fn review_s2_terminal_record_outlives_callers_actor_claim() {
+    use sqlx::Row;
+    let mut h = Harness::new().await;
+    let (caller, handle) = h.spawn(vec![Round::text("ready")]).await;
+    h.idle(caller, &handle).await;
+    let mut tx = h.engine.store().begin_transaction().await.unwrap();
+    let row = sqlx::query("SELECT epoch, owner_run_id FROM resident_actor_claim WHERE actor_id = ? AND state = 'active'")
+        .bind(caller.storage_key()).fetch_one(&mut *tx).await.unwrap();
+    let epoch: i64 = row.get("epoch");
+    let owner: Vec<u8> = row.get("owner_run_id");
+    let claim = hya_proto::ActorClaim {
+        actor_id: caller,
+        epoch: hya_proto::ActorEpoch::from_storage(epoch as u64),
+        owner_run_id: hya_proto::OwnerRunId::from_storage(
+            sqlx::types::Uuid::from_slice(&owner).unwrap(),
+        ),
+    };
+    // Force the claim-release/terminal-write ordering without a timing race.
+    // Resident cancellation can release this claim after dropping the tool wait,
+    // while the independently tracked run still owns its terminal persistence.
+    let key = caller
+        .storage_key()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    sqlx::query(&format!("CREATE TRIGGER release_workflow_caller AFTER INSERT ON event_log WHEN json_extract(NEW.payload, '$.type') = 'workflow_stage_finished' BEGIN UPDATE resident_actor_claim SET state = 'released' WHERE actor_id = X'{key}'; END"))
+        .execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let marker = h.provider.script(vec![Round::text("done")]);
+    m414_source(
+        &h,
+        &format!(
+            "  work:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {marker}\n"
+        ),
+        "  work",
+        "collect_all",
+    );
+    let result = h
+        .built
+        .workflow_control()
+        .execute(
+            caller,
+            hya_app::WorkflowInvocation {
+                operation: Some(
+                    hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new())
+                        .with_actor_claim(Some(claim)),
+                ),
+                ..Default::default()
+            },
+            hya_proto::WorkflowCommand::Run {
+                name: Some("ready".into()),
+                expected_revision: None,
+                inputs: Default::default(),
+                run: None,
+            },
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+    let projection = h.engine.read_projection(caller).await.unwrap();
+    // Restore the injected release so the real episode can end normally.
+    let mut tx = h.engine.store().begin_transaction().await.unwrap();
+    sqlx::query("DROP TRIGGER release_workflow_caller")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE resident_actor_claim SET state = 'active' WHERE actor_id = ?")
+        .bind(caller.storage_key())
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    h.shutdown().await;
+    assert!(
+        result.is_ok(),
+        "admitted run lost terminal persistence: {result:?}"
+    );
+    assert_eq!(
+        projection.session.workflow.unwrap().run.unwrap().status,
+        hya_proto::WorkflowRunStatus::Completed
+    );
+}
+
+#[tokio::test]
+async fn review_s2_cancelled_run_keeps_status_after_execution_error() {
+    let mut h = Harness::new().await;
+    let held = Arc::new(Gate::default());
+    let marker = h
+        .provider
+        .script(vec![Round::text("partial").stream_gated(held.clone())]);
+    m414_source(
+        &h,
+        &format!(
+            "  work:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {marker}\n"
+        ),
+        "  work",
+        "collect_all",
+    );
+    let control = h.built.workflow_control();
+    let root = h.root;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let run_cancel = cancel.clone();
+    let run = tokio::spawn(async move {
+        control
+            .execute(
+                root,
+                Default::default(),
+                hya_proto::WorkflowCommand::Run {
+                    name: Some("ready".into()),
+                    expected_revision: None,
+                    inputs: Default::default(),
+                    run: None,
+                },
+                run_cancel,
+            )
+            .await
+    });
+    held.arrived().await;
+    let mut tx = h.engine.store().begin_transaction().await.unwrap();
+    sqlx::query("CREATE TRIGGER reject_stage_finish BEFORE INSERT ON event_log WHEN json_extract(NEW.payload, '$.type') = 'workflow_stage_finished' BEGIN SELECT RAISE(ABORT, 'S2 cancellation persistence failure'); END").execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    cancel.cancel();
+    let result = tokio::time::timeout(support::lifecycle::BOUND, run)
+        .await
+        .unwrap()
+        .unwrap();
+    let projection = h.engine.read_projection(root).await.unwrap();
+    held.release();
+    h.shutdown().await;
+    assert!(result.is_err(), "store failure must stay visible");
+    let run = projection.session.workflow.unwrap().run.unwrap();
+    assert_eq!(run.status, hya_proto::WorkflowRunStatus::Cancelled);
+    assert!(
+        run.error
+            .unwrap()
+            .contains("S2 cancellation persistence failure")
+    );
+}
