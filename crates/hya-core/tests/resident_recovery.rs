@@ -588,10 +588,37 @@ async fn repeated_startup_recovery_produces_identical_projection_and_no_duplicat
     assert_eq!(terminal_events, 1);
 }
 
-/// Bypass runtime ownership only to force a stale buffered-text write. The
-/// transaction fence must reject it; this does not require silent-stream revocation.
+#[derive(Clone, Copy)]
+enum SupersededBoundary {
+    Text,
+    Reasoning,
+    Usage,
+    Tool,
+}
+
 #[tokio::test]
 async fn superseded_stream_cannot_commit_buffered_text() {
+    superseded_stream_boundary(SupersededBoundary::Text).await;
+}
+
+#[tokio::test]
+async fn superseded_stream_cannot_commit_buffered_reasoning() {
+    superseded_stream_boundary(SupersededBoundary::Reasoning).await;
+}
+
+#[tokio::test]
+async fn superseded_stream_cannot_record_round_usage() {
+    superseded_stream_boundary(SupersededBoundary::Usage).await;
+}
+
+#[tokio::test]
+async fn superseded_stream_cannot_dispatch_a_requested_tool() {
+    superseded_stream_boundary(SupersededBoundary::Tool).await;
+}
+
+/// The old core-only engine deliberately has no runtime-owner claim: the second
+/// store owns takeover so each durable boundary is tested despite no cancellation.
+async fn superseded_stream_boundary(boundary: SupersededBoundary) {
     use async_trait::async_trait;
     use hya_core::{AgentSpec, CreateSession, ResidentSupervisor};
     use hya_proto::{FinishCause, ModelRef};
@@ -599,6 +626,7 @@ async fn superseded_stream_cannot_commit_buffered_text() {
         Capabilities, CompletionRequest, DevProvider, EventStream, Provider, ProviderError,
     };
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use tokio::sync::{Notify, mpsc};
 
@@ -629,6 +657,39 @@ async fn superseded_stream_cannot_commit_buffered_text() {
         }
     }
 
+    struct CountedTool(Arc<AtomicUsize>);
+    #[async_trait]
+    impl hya_tool::Tool for CountedTool {
+        fn name(&self) -> &str {
+            "bash"
+        }
+        fn schema(&self) -> hya_proto::ToolSchema {
+            hya_proto::ToolSchema {
+                name: "bash".into(),
+                description: "count dispatches".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+                output_schema: None,
+            }
+        }
+        async fn execute(
+            &self,
+            _: &hya_tool::ToolCtx,
+            _: serde_json::Value,
+        ) -> Result<serde_json::Value, hya_tool::ToolError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(serde_json::json!({}))
+        }
+    }
+    let dispatches = Arc::new(AtomicUsize::new(0));
+    let tools = ToolRegistry::builtins();
+    tools.remove("bash");
+    tools
+        .register_with_permission(
+            Arc::new(CountedTool(dispatches.clone())),
+            hya_tool::ToolPermission::ReadOnly,
+        )
+        .unwrap();
+
     let dir = support::TestDir::new("superseded-stream");
     let path = dir.path().join("sessions.db");
     let store = SessionStore::connect(path.to_str().unwrap()).await.unwrap();
@@ -643,7 +704,7 @@ async fn superseded_stream_cannot_commit_buffered_text() {
     let engine = Arc::new(SessionEngine::new(
         store.clone(),
         router,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(tools)),
         permission,
         EventBus::default(),
     ));
@@ -696,22 +757,61 @@ async fn superseded_stream_cannot_commit_buffered_text() {
         .unwrap()
         .id;
     let part = PartId::new();
-    send.send(Ok(Event::TextStart {
-        session: child,
-        message,
-        part,
+    let reasoning = matches!(boundary, SupersededBoundary::Reasoning);
+    send.send(Ok(if reasoning {
+        Event::ReasoningStart {
+            session: child,
+            message,
+            part,
+            reason: None,
+        }
+    } else {
+        Event::TextStart {
+            session: child,
+            message,
+            part,
+        }
     }))
     .unwrap();
-    send.send(Ok(Event::TextDelta {
-        session: child,
-        message,
-        part,
-        delta: "buffered".into(),
+    send.send(Ok(if reasoning {
+        Event::ReasoningDelta {
+            session: child,
+            message,
+            part,
+            delta: "buffered".into(),
+        }
+    } else {
+        Event::TextDelta {
+            session: child,
+            message,
+            part,
+            delta: "buffered".into(),
+        }
     }))
     .unwrap();
+    let complete_before_takeover = matches!(
+        boundary,
+        SupersededBoundary::Usage | SupersededBoundary::Tool
+    );
+    if complete_before_takeover {
+        send.send(Ok(Event::TextEnd {
+            session: child,
+            message,
+            part,
+        }))
+        .unwrap();
+    }
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if matches!(live.recv().await.unwrap().event, Event::TextDelta { session, delta, .. } if session == child && delta == "buffered") { break; }
+            let event = live.recv().await.unwrap().event;
+            let ready = if complete_before_takeover {
+                matches!(event, Event::TextEnd { session, .. } if session == child)
+            } else if reasoning {
+                matches!(event, Event::ReasoningDelta { session, delta, .. } if session == child && delta == "buffered")
+            } else {
+                matches!(event, Event::TextDelta { session, delta, .. } if session == child && delta == "buffered")
+            };
+            if ready { break; }
         }
     }).await.unwrap();
     let recovery_owner = OwnerRunId::new();
@@ -719,15 +819,43 @@ async fn superseded_stream_cannot_commit_buffered_text() {
     other.recover_claim(child, recovery_owner).await.unwrap();
     let before_child = store.replay(child).await.unwrap();
     let before_root = store.replay(root).await.unwrap();
-    // The stale claim is tested at the durable boundary, without any timer.
-    send.send(Ok(Event::TextEnd {
-        session: child,
-        message,
-        part,
+    // No polling monitor or timer is needed: each case reaches a durable fence.
+    send.send(Ok(match boundary {
+        SupersededBoundary::Text => Event::TextEnd {
+            session: child,
+            message,
+            part,
+        },
+        SupersededBoundary::Reasoning => Event::ReasoningEnd {
+            session: child,
+            message,
+            part,
+            provider_data: Some(serde_json::json!({"opaque": true})),
+        },
+        SupersededBoundary::Usage => Event::MessageFinished {
+            session: child,
+            message,
+            role: hya_proto::Role::Assistant,
+            finish: hya_proto::FinishReason::Stop,
+            cause: None,
+            tokens: Some(hya_proto::TokenUsage {
+                input: 11,
+                output: 7,
+                ..Default::default()
+            }),
+        },
+        SupersededBoundary::Tool => Event::ToolCallRequested {
+            session: child,
+            message,
+            part,
+            call: ToolCallId::new(),
+            name: "bash".into(),
+            input: serde_json::json!({"command": "count"}),
+        },
     }))
     .unwrap();
+    drop(send);
     let ended = tokio::time::timeout(Duration::from_secs(1), async {
-        send.closed().await;
         while engine.turn_active(child) || supervisor.episode_count() != 0 {
             tokio::task::yield_now().await;
         }
@@ -743,6 +871,11 @@ async fn superseded_stream_cannot_commit_buffered_text() {
     assert!(
         ended.is_ok(),
         "stale write boundary did not finish the turn"
+    );
+    assert_eq!(
+        dispatches.load(Ordering::SeqCst),
+        0,
+        "stale actor dispatched a tool"
     );
     assert_eq!(after_child, before_child, "stale actor wrote its log");
     assert_eq!(after_root, before_root, "stale actor wrote its team log");
