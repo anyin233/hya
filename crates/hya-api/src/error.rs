@@ -35,6 +35,8 @@ pub enum Code {
     WorkflowStaleRevision,
     /// Workflow runtime is unavailable.
     WorkflowRuntimeUnavailable,
+    /// Workflow live capacity is currently exhausted.
+    WorkflowOverloaded,
     /// Requested resource does not exist.
     NotFound,
     /// Session id does not exist (or was deleted).
@@ -85,6 +87,7 @@ impl Code {
             Self::WorkflowOperationConflict => "WORKFLOW_OPERATION_CONFLICT",
             Self::WorkflowStaleRevision => "WORKFLOW_STALE_REVISION",
             Self::WorkflowRuntimeUnavailable => "WORKFLOW_RUNTIME_UNAVAILABLE",
+            Self::WorkflowOverloaded => "WORKFLOW_OVERLOADED",
 
             Self::NotFound => "not_found",
             Self::SessionNotFound => "session_not_found",
@@ -116,6 +119,7 @@ impl Code {
             "WORKFLOW_OPERATION_CONFLICT" => Some(Self::WorkflowOperationConflict),
             "WORKFLOW_STALE_REVISION" => Some(Self::WorkflowStaleRevision),
             "WORKFLOW_RUNTIME_UNAVAILABLE" => Some(Self::WorkflowRuntimeUnavailable),
+            "WORKFLOW_OVERLOADED" => Some(Self::WorkflowOverloaded),
             "not_found" => Some(Self::NotFound),
             "session_not_found" => Some(Self::SessionNotFound),
             "permission_denied" => Some(Self::PermissionDenied),
@@ -143,7 +147,7 @@ impl Code {
             Self::WorkflowBusy | Self::WorkflowOperationConflict | Self::WorkflowStaleRevision => {
                 409
             }
-            Self::WorkflowRuntimeUnavailable => 503,
+            Self::WorkflowRuntimeUnavailable | Self::WorkflowOverloaded => 503,
 
             Self::InvalidArgument | Self::BundleApiBadRequest => 400,
             Self::NotFound | Self::SessionNotFound | Self::BundleApiNotFound => 404,
@@ -169,6 +173,7 @@ impl Code {
                 tonic::Code::FailedPrecondition
             }
             Self::WorkflowRuntimeUnavailable => tonic::Code::Unavailable,
+            Self::WorkflowOverloaded => tonic::Code::ResourceExhausted,
 
             Self::InvalidArgument | Self::BundleApiBadRequest => tonic::Code::InvalidArgument,
             Self::NotFound | Self::SessionNotFound | Self::BundleApiNotFound => {
@@ -261,6 +266,7 @@ mod workflow_codes {
             (Code::WorkflowOperationConflict, 409),
             (Code::WorkflowStaleRevision, 409),
             (Code::WorkflowRuntimeUnavailable, 503),
+            (Code::WorkflowOverloaded, 503),
         ] {
             assert_eq!(code.http_status(), status);
             assert_ne!(code.grpc_code(), tonic::Code::Internal);

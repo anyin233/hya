@@ -574,56 +574,131 @@ impl PreparedWorkflowRun {
         let route_recorder = route_persistence
             .as_ref()
             .and_then(RoutePersistence::recorder);
-        for level in plan.levels() {
-            if cancel.is_cancelled() {
-                mark_pending(&mut reports, StageStatus::Cancelled);
-                return Ok(WorkflowRunReport {
-                    status: WorkflowStatus::Cancelled,
-                    stages: reports,
-                });
-            }
-
-            let stage_evidence = reports.iter().map(report_evidence).collect::<Vec<_>>();
-            let mut activations = Vec::with_capacity(level.stage_indices().len());
-            for &index in level.stage_indices() {
-                let rendered = workflow.render_stage(index, &context.inputs, &stage_evidence)?;
-                activations.push(PreparedActivation {
-                    index,
-                    directive: rendered.directive().to_string(),
-                    system_context: Arc::from(rendered.system_context().to_string()),
-                });
-            }
-            if let Some(run) = durable_run {
-                for &index in level.stage_indices() {
-                    let stage = &plan.stages()[index];
-                    engine
-                        .record_workflow_event_for_actor(
-                            actor_claim.as_ref(),
-                            lead,
-                            Event::WorkflowStageStarted {
-                                session: lead,
-                                run,
-                                stage: stage.id().to_string(),
-                            },
-                        )
-                        .await?;
+        let mut registered = Vec::new();
+        let result = async {
+            for level in plan.levels() {
+                if cancel.is_cancelled() {
+                    mark_pending(&mut reports, StageStatus::Cancelled);
+                    return Ok(WorkflowRunReport {
+                        status: WorkflowStatus::Cancelled,
+                        stages: reports,
+                    });
                 }
-            }
 
-            let mut resident_activations: Vec<ResidentActivation> = Vec::new();
-            for activation in activations {
-                let stage = &plan.stages()[activation.index];
-                let resolved_stage = resolved[activation.index].clone();
-                if let Some(actor_key) = stage.actor() {
-                    let Some(supervisor) = context.resident_supervisor.as_ref() else {
-                        return Err(WorkflowError::Invalid {
-                            workflow: name.to_string(),
-                            detail: "resident supervisor disappeared after preflight".to_string(),
+                let stage_evidence = reports.iter().map(report_evidence).collect::<Vec<_>>();
+                let mut activations = Vec::with_capacity(level.stage_indices().len());
+                for &index in level.stage_indices() {
+                    let rendered =
+                        workflow.render_stage(index, &context.inputs, &stage_evidence)?;
+                    activations.push(PreparedActivation {
+                        index,
+                        directive: rendered.directive().to_string(),
+                        system_context: Arc::from(rendered.system_context().to_string()),
+                    });
+                }
+                if let Some(run) = durable_run {
+                    for &index in level.stage_indices() {
+                        let stage = &plan.stages()[index];
+                        engine
+                            .record_workflow_event_for_actor(
+                                actor_claim.as_ref(),
+                                lead,
+                                Event::WorkflowStageStarted {
+                                    session: lead,
+                                    run,
+                                    stage: stage.id().to_string(),
+                                },
+                            )
+                            .await?;
+                    }
+                }
+
+                let mut resident_activations: Vec<ResidentActivation> = Vec::new();
+                for activation in activations {
+                    let stage = &plan.stages()[activation.index];
+                    let resolved_stage = resolved[activation.index].clone();
+                    if let Some(actor_key) = stage.actor() {
+                        let Some(supervisor) = context.resident_supervisor.as_ref() else {
+                            return Err(WorkflowError::Invalid {
+                                workflow: name.to_string(),
+                                detail: "resident supervisor disappeared after preflight"
+                                    .to_string(),
+                            });
+                        };
+                        let actor = if let Some(existing) = actors.get(actor_key).cloned() {
+                            existing
+                        } else {
+                            let spawn_result = supervisor
+                                .spawn_resident_parked(
+                                    lead,
+                                    resolved_stage.spec.clone(),
+                                    (
+                                        context.binding.clone(),
+                                        resolved_stage.agents.clone(),
+                                        resolved_stage.resources.clone(),
+                                        resolved_stage.sidecar_factory.clone(),
+                                    ),
+                                    format!("Workflow {name} resident actor `{actor_key}`"),
+                                    actor_claim.as_ref(),
+                                    Some(activation.system_context.clone()),
+                                )
+                                .await;
+                            let (session, handle, member) = spawn_result?;
+                            registered.push((session, handle.clone()));
+                            let actor = ResidentActor {
+                                session,
+                                handle,
+                                member,
+                            };
+                            actors.insert(actor_key.to_string(), actor.clone());
+                            actor
+                        };
+                        if let Some(run) = durable_run {
+                            engine
+                                .record_workflow_event_for_actor(
+                                    actor_claim.as_ref(),
+                                    lead,
+                                    Event::WorkflowStageMemberLinked {
+                                        session: lead,
+                                        run,
+                                        stage: stage.id().to_string(),
+                                        member: actor.member,
+                                        role: WorkflowMemberRole::Worker,
+                                        iteration: 0,
+                                    },
+                                )
+                                .await?;
+                        }
+                        let route = resolved_stage.route.map(|route| {
+                            WorkflowTurnRoute::new(WorkflowTurnRouteSpec {
+                                route,
+                                session: lead,
+                                run: durable_run,
+                                stage: stage.id().to_string(),
+                                member: actor.member,
+                                role: WorkflowMemberRole::Worker,
+                                iteration: 0,
+                                recorder: route_recorder.clone(),
+                            })
                         });
-                    };
-                    let actor = if let Some(existing) = actors.get(actor_key).cloned() {
-                        existing
+                        resident_activations.push(ResidentActivation {
+                            actor,
+                            prepared: activation,
+                            cancel: cancel.child_token(),
+                            actor_claim,
+                            route,
+                        });
                     } else {
+                        // ADR-0017: stages without a declared actor also run on
+                        // the unified resident substrate — one parked actor per
+                        // activation, driven exactly like a declared actor.
+                        let Some(supervisor) = context.resident_supervisor.as_ref() else {
+                            return Err(WorkflowError::Invalid {
+                                workflow: name.to_string(),
+                                detail: "resident supervisor disappeared after preflight"
+                                    .to_string(),
+                            });
+                        };
                         let spawn_result = supervisor
                             .spawn_resident_parked(
                                 lead,
@@ -634,249 +709,213 @@ impl PreparedWorkflowRun {
                                     resolved_stage.resources.clone(),
                                     resolved_stage.sidecar_factory.clone(),
                                 ),
-                                format!("Workflow {name} resident actor `{actor_key}`"),
+                                format!("Workflow {name} / stage {}", stage.id()),
                                 actor_claim.as_ref(),
                                 Some(activation.system_context.clone()),
                             )
                             .await;
                         let (session, handle, member) = spawn_result?;
+                        registered.push((session, handle.clone()));
                         let actor = ResidentActor {
                             session,
                             handle,
                             member,
                         };
-                        actors.insert(actor_key.to_string(), actor.clone());
-                        actor
-                    };
-                    if let Some(run) = durable_run {
-                        engine
-                            .record_workflow_event_for_actor(
-                                actor_claim.as_ref(),
-                                lead,
-                                Event::WorkflowStageMemberLinked {
-                                    session: lead,
-                                    run,
-                                    stage: stage.id().to_string(),
-                                    member: actor.member,
-                                    role: WorkflowMemberRole::Worker,
-                                    iteration: 0,
-                                },
-                            )
-                            .await?;
-                    }
-                    let route = resolved_stage.route.map(|route| {
-                        WorkflowTurnRoute::new(WorkflowTurnRouteSpec {
-                            route,
-                            session: lead,
-                            run: durable_run,
-                            stage: stage.id().to_string(),
-                            member: actor.member,
-                            role: WorkflowMemberRole::Worker,
-                            iteration: 0,
-                            recorder: route_recorder.clone(),
-                        })
-                    });
-                    resident_activations.push(ResidentActivation {
-                        actor,
-                        prepared: activation,
-                        cancel: cancel.child_token(),
-                        actor_claim,
-                        route,
-                    });
-                } else {
-                    // ADR-0017: stages without a declared actor also run on
-                    // the unified resident substrate — one parked actor per
-                    // activation, driven exactly like a declared actor.
-                    let Some(supervisor) = context.resident_supervisor.as_ref() else {
-                        return Err(WorkflowError::Invalid {
-                            workflow: name.to_string(),
-                            detail: "resident supervisor disappeared after preflight".to_string(),
-                        });
-                    };
-                    let spawn_result = supervisor
-                        .spawn_resident_parked(
-                            lead,
-                            resolved_stage.spec.clone(),
-                            (
-                                context.binding.clone(),
-                                resolved_stage.agents.clone(),
-                                resolved_stage.resources.clone(),
-                                resolved_stage.sidecar_factory.clone(),
-                            ),
-                            format!("Workflow {name} / stage {}", stage.id()),
-                            actor_claim.as_ref(),
-                            Some(activation.system_context.clone()),
-                        )
-                        .await;
-                    let (session, handle, member) = spawn_result?;
-                    let actor = ResidentActor {
-                        session,
-                        handle,
-                        member,
-                    };
-                    if let Some(run) = durable_run {
-                        engine
-                            .record_workflow_event_for_actor(
-                                actor_claim.as_ref(),
-                                lead,
-                                Event::WorkflowStageMemberLinked {
-                                    session: lead,
-                                    run,
-                                    stage: stage.id().to_string(),
-                                    member: actor.member,
-                                    role: WorkflowMemberRole::Worker,
-                                    iteration: 0,
-                                },
-                            )
-                            .await?;
-                    }
-                    let route = resolved_stage.route.map(|route| {
-                        WorkflowTurnRoute::new(WorkflowTurnRouteSpec {
-                            route,
-                            session: lead,
-                            run: durable_run,
-                            stage: stage.id().to_string(),
-                            member: actor.member,
-                            role: WorkflowMemberRole::Worker,
-                            iteration: 0,
-                            recorder: route_recorder.clone(),
-                        })
-                    });
-                    resident_activations.push(ResidentActivation {
-                        actor,
-                        prepared: activation,
-                        cancel: cancel.child_token(),
-                        actor_claim,
-                        route,
-                    });
-                }
-            }
-            let resident_run =
-                futures::future::join_all(resident_activations.into_iter().map(|activation| {
-                    let engine = engine.clone();
-                    let supervisor = context.resident_supervisor.as_ref().cloned();
-                    let stage = plan.stages()[activation.prepared.index].clone();
-                    async move {
-                        let Some(supervisor) = supervisor else {
-                            return Err(WorkflowError::Invalid {
-                                workflow: name.to_string(),
-                                detail: "resident supervisor disappeared after spawn".to_string(),
-                            });
-                        };
-                        let index = activation.prepared.index;
-                        let report =
-                            activate_resident_stage(engine, lead, supervisor, &stage, activation)
+                        if let Some(run) = durable_run {
+                            engine
+                                .record_workflow_event_for_actor(
+                                    actor_claim.as_ref(),
+                                    lead,
+                                    Event::WorkflowStageMemberLinked {
+                                        session: lead,
+                                        run,
+                                        stage: stage.id().to_string(),
+                                        member: actor.member,
+                                        role: WorkflowMemberRole::Worker,
+                                        iteration: 0,
+                                    },
+                                )
                                 .await?;
-                        Ok::<_, WorkflowError>((index, report))
-                    }
-                }));
-            let resident_results = resident_run.await;
-            for result in resident_results {
-                let (index, report) = result?;
-                reports[index] = report;
-            }
-
-            for &index in level.stage_indices() {
-                let stage = &plan.stages()[index];
-                let Some(verify) = stage.verify() else {
-                    continue;
-                };
-                if reports[index].status != StageStatus::Done {
-                    continue;
-                }
-                let Some(verifier) = verifiers[index].clone() else {
-                    continue;
-                };
-                let stage_evidence = reports.iter().map(report_evidence).collect::<Vec<_>>();
-                let rendered = workflow.render_stage(index, &context.inputs, &stage_evidence)?;
-                let verification_condition = rendered
-                    .verification_condition()
-                    .unwrap_or_else(|| verify.until());
-                let mut report = reports[index].clone();
-                match drive_loop_stage(
-                    engine.clone(),
-                    lead,
-                    name,
-                    &context,
-                    stage,
-                    verify,
-                    rendered.directive(),
-                    rendered.system_context(),
-                    verification_condition,
-                    &resolved[index],
-                    verifier.clone(),
-                    report.clone(),
-                    cancel.clone(),
-                    actor_claim,
-                    durable_run,
-                    route_recorder.clone(),
-                )
-                .await
-                {
-                    Ok(completed) => reports[index] = completed,
-                    Err(error) => {
-                        report.status = if cancel.is_cancelled() {
-                            StageStatus::Cancelled
-                        } else {
-                            StageStatus::Failed
-                        };
-                        report.output = clamp(format!("loop Stage failed: {error}"));
-                        reports[index] = report;
-                    }
-                }
-            }
-            if let Some(run) = durable_run {
-                for &index in level.stage_indices() {
-                    let report = &reports[index];
-                    engine
-                        .record_workflow_event_for_actor(
-                            actor_claim.as_ref(),
-                            lead,
-                            Event::WorkflowStageFinished {
+                        }
+                        let route = resolved_stage.route.map(|route| {
+                            WorkflowTurnRoute::new(WorkflowTurnRouteSpec {
+                                route,
                                 session: lead,
-                                run,
-                                stage: report.stage.clone(),
-                                status: protocol_stage_status(report.status),
-                            },
-                        )
-                        .await?;
+                                run: durable_run,
+                                stage: stage.id().to_string(),
+                                member: actor.member,
+                                role: WorkflowMemberRole::Worker,
+                                iteration: 0,
+                                recorder: route_recorder.clone(),
+                            })
+                        });
+                        resident_activations.push(ResidentActivation {
+                            actor,
+                            prepared: activation,
+                            cancel: cancel.child_token(),
+                            actor_claim,
+                            route,
+                        });
+                    }
+                }
+                let resident_run =
+                    futures::future::join_all(resident_activations.into_iter().map(|activation| {
+                        let engine = engine.clone();
+                        let supervisor = context.resident_supervisor.as_ref().cloned();
+                        let stage = plan.stages()[activation.prepared.index].clone();
+                        async move {
+                            let Some(supervisor) = supervisor else {
+                                return Err(WorkflowError::Invalid {
+                                    workflow: name.to_string(),
+                                    detail: "resident supervisor disappeared after spawn"
+                                        .to_string(),
+                                });
+                            };
+                            let index = activation.prepared.index;
+                            let report = activate_resident_stage(
+                                engine, lead, supervisor, &stage, activation,
+                            )
+                            .await?;
+                            Ok::<_, WorkflowError>((index, report))
+                        }
+                    }));
+                let resident_results = resident_run.await;
+                for result in resident_results {
+                    let (index, report) = result?;
+                    reports[index] = report;
+                }
+
+                for &index in level.stage_indices() {
+                    let stage = &plan.stages()[index];
+                    let Some(verify) = stage.verify() else {
+                        continue;
+                    };
+                    if reports[index].status != StageStatus::Done {
+                        continue;
+                    }
+                    let Some(verifier) = verifiers[index].clone() else {
+                        continue;
+                    };
+                    let stage_evidence = reports.iter().map(report_evidence).collect::<Vec<_>>();
+                    let rendered =
+                        workflow.render_stage(index, &context.inputs, &stage_evidence)?;
+                    let verification_condition = rendered
+                        .verification_condition()
+                        .unwrap_or_else(|| verify.until());
+                    let mut report = reports[index].clone();
+                    // Until M4-10 moves continuations onto episodes, relinquish
+                    // the first episode before the transient executor reuses it.
+                    if let Some(position) = registered.iter().position(|(session, _)| {
+                        report.session.as_deref() == Some(session.to_string().as_str())
+                    }) {
+                        let (session, handle) = &registered[position];
+                        let (root, _) = engine.session_lineage(*session).await?;
+                        if let Some(supervisor) = context.resident_supervisor.as_ref() {
+                            supervisor.end_member(root, handle).await?;
+                        }
+                        registered.remove(position);
+                    }
+                    match drive_loop_stage(
+                        engine.clone(),
+                        lead,
+                        name,
+                        &context,
+                        stage,
+                        verify,
+                        rendered.directive(),
+                        rendered.system_context(),
+                        verification_condition,
+                        &resolved[index],
+                        verifier.clone(),
+                        report.clone(),
+                        cancel.clone(),
+                        actor_claim,
+                        durable_run,
+                        route_recorder.clone(),
+                    )
+                    .await
+                    {
+                        Ok(completed) => reports[index] = completed,
+                        Err(error) => {
+                            report.status = if cancel.is_cancelled() {
+                                StageStatus::Cancelled
+                            } else {
+                                StageStatus::Failed
+                            };
+                            report.output = clamp(format!("loop Stage failed: {error}"));
+                            reports[index] = report;
+                        }
+                    }
+                }
+                if let Some(run) = durable_run {
+                    for &index in level.stage_indices() {
+                        let report = &reports[index];
+                        engine
+                            .record_workflow_event_for_actor(
+                                actor_claim.as_ref(),
+                                lead,
+                                Event::WorkflowStageFinished {
+                                    session: lead,
+                                    run,
+                                    stage: report.stage.clone(),
+                                    status: protocol_stage_status(report.status),
+                                },
+                            )
+                            .await?;
+                    }
+                }
+
+                if cancel.is_cancelled() {
+                    mark_pending(&mut reports, StageStatus::Cancelled);
+                    return Ok(WorkflowRunReport {
+                        status: WorkflowStatus::Cancelled,
+                        stages: reports,
+                    });
+                }
+                if workflow.definition().on_failure() == FailurePolicy::FailFast
+                    && level_failed(&reports, level.stage_indices())
+                {
+                    mark_pending(&mut reports, StageStatus::Skipped);
+                    return Ok(WorkflowRunReport {
+                        status: WorkflowStatus::Failed,
+                        stages: reports,
+                    });
                 }
             }
 
-            if cancel.is_cancelled() {
-                mark_pending(&mut reports, StageStatus::Cancelled);
-                return Ok(WorkflowRunReport {
-                    status: WorkflowStatus::Cancelled,
-                    stages: reports,
-                });
-            }
-            if workflow.definition().on_failure() == FailurePolicy::FailFast
-                && level_failed(&reports, level.stage_indices())
+            let status = if reports
+                .iter()
+                .any(|report| report.status == StageStatus::Failed)
             {
-                mark_pending(&mut reports, StageStatus::Skipped);
-                return Ok(WorkflowRunReport {
-                    status: WorkflowStatus::Failed,
-                    stages: reports,
-                });
+                WorkflowStatus::Failed
+            } else {
+                WorkflowStatus::Completed
+            };
+            drop(route_recorder);
+            if let Some(persistence) = route_persistence {
+                persistence.finish().await?;
+            }
+            Ok(WorkflowRunReport {
+                status,
+                stages: reports,
+            })
+        }
+        .await;
+        if !matches!(&result, Ok(report) if report.status == WorkflowStatus::Completed)
+            && let Some(supervisor) = context.resident_supervisor.as_ref()
+        {
+            let (root, _) = engine.session_lineage(lead).await?;
+            let endings = futures::future::join_all(
+                registered
+                    .iter()
+                    .map(|(_, handle)| supervisor.end_member(root, handle)),
+            )
+            .await;
+            for ending in endings {
+                ending?;
             }
         }
-
-        let status = if reports
-            .iter()
-            .any(|report| report.status == StageStatus::Failed)
-        {
-            WorkflowStatus::Failed
-        } else {
-            WorkflowStatus::Completed
-        };
-        drop(route_recorder);
-        if let Some(persistence) = route_persistence {
-            persistence.finish().await?;
-        }
-        Ok(WorkflowRunReport {
-            status,
-            stages: reports,
-        })
+        result
     }
 }
 
@@ -918,20 +957,28 @@ async fn preflight_workflow_capacity(
             crate::subagent::TeamAdmissionError::MaxDepth,
         ));
     }
-    let remaining = governor.limits().per_run_budget.saturating_sub(
-        engine
-            .store()
-            .live_member_count(root)
-            .await
-            .map_err(CoreError::from)?,
-    );
-    if wanted > remaining {
+    let limit = governor.limits().per_run_budget;
+    if wanted > limit {
         return Err(WorkflowError::Invalid {
             workflow: workflow.to_string(),
             detail: format!(
-                "worst-case {wanted} Stage activations exceed the per-run budget (remaining {remaining})"
+                "worst-case {wanted} Stage activations exceed the per-run budget ({limit})"
             ),
         });
+    }
+    let live = engine
+        .store()
+        .live_member_count(root)
+        .await
+        .map_err(CoreError::from)?;
+    if wanted > limit.saturating_sub(live) {
+        return Err(CoreError::from(hya_store::StoreError::CapacityExceeded {
+            root,
+            live,
+            requested: wanted,
+            limit,
+        })
+        .into());
     }
     Ok(())
 }

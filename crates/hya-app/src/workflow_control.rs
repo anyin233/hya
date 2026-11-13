@@ -560,6 +560,9 @@ impl WorkflowControlError {
             Self::Busy { .. } => "WORKFLOW_BUSY",
             Self::RuntimeUnavailable => "WORKFLOW_RUNTIME_UNAVAILABLE",
             Self::OperationConflict { .. } => "WORKFLOW_OPERATION_CONFLICT",
+            Self::Core(hya_core::CoreError::Store(hya_store::StoreError::CapacityExceeded {
+                ..
+            })) => "WORKFLOW_OVERLOADED",
             Self::Execution(_) | Self::Core(_) => "WORKFLOW_INTERNAL",
         }
     }
@@ -1618,6 +1621,26 @@ mod tests {
             WorkflowControlError::InvalidSource(detail)
                 if detail.contains("resident Agent requires a resident lifecycle")
         ));
+    }
+
+    #[test]
+    fn w1_capacity_refusals_keep_overload_code_before_and_after_admission() {
+        for preflight in [false, true] {
+            let error = WorkflowError::Engine(hya_core::CoreError::Store(
+                hya_store::StoreError::CapacityExceeded {
+                    root: hya_proto::SessionId::new(),
+                    live: 1,
+                    requested: 2,
+                    limit: 2,
+                },
+            ));
+            let error = if preflight {
+                map_workflow_preflight_error(error)
+            } else {
+                super::map_workflow_error_with_detail(error, "full".into())
+            };
+            assert_eq!(error.code(), "WORKFLOW_OVERLOADED");
+        }
     }
 
     /// Idempotent historical run reconstruction must retain route outcomes.
