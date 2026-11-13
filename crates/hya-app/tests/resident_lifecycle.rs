@@ -498,27 +498,25 @@ async fn i5_post_kill_task_uses_fresh_team_without_waiting_for_other_endings() {
         .await
         .is_ok();
     let fresh = h.engine.read_projection(h.root).await.unwrap();
-    let guidance = if fast {
-        tokio::time::timeout(support::lifecycle::BOUND, async {
-            loop {
-                let request = requests.recv().await.unwrap();
-                if request.session == h.root
-                    && request.completion.messages.last().is_some_and(|m| {
-                        matches!(m, hya_proto::Message::User { .. })
-                            && serde_json::to_string(m).unwrap().contains("TEAM QUIESCED")
-                    })
-                {
-                    break request
-                        .completion
-                        .system
-                        .is_some_and(|system| system.contains("NEW_TEAM_GUIDANCE_M4"));
+    let guidance_result = if fast {
+        Some(
+            tokio::time::timeout(support::lifecycle::BOUND, async {
+                loop {
+                    let request = requests.recv().await.unwrap();
+                    if request.session == h.root
+                        && request.completion.messages.last().is_some_and(|m| {
+                            matches!(m, hya_proto::Message::User { .. })
+                                && serde_json::to_string(m).unwrap().contains("TEAM QUIESCED")
+                        })
+                    {
+                        break request.completion.system;
+                    }
                 }
-            }
-        })
-        .await
-        .unwrap_or(false)
+            })
+            .await,
+        )
     } else {
-        false
+        None
     };
     // New work was checked while the old member was still ending. Revival
     // targets its archived identity, after that member's own bounded ending.
@@ -585,9 +583,13 @@ async fn i5_post_kill_task_uses_fresh_team_without_waiting_for_other_endings() {
                 && m.status == hya_proto::MemberRunStatus::Running),
         "post-kill task reused old capacity counters"
     );
+    let guidance = guidance_result
+        .expect("the fresh lead turn must have finished")
+        .expect("the fresh team did not request a quiescence synthesis")
+        .expect("the synthesis request has no system prompt");
     assert!(
-        guidance,
-        "new main reused the killed team's activation context"
+        guidance.contains("NEW_TEAM_GUIDANCE_M4"),
+        "new main reused the killed team's activation context: {guidance}"
     );
     assert!(
         revived_within_bound,

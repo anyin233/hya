@@ -2289,8 +2289,9 @@ impl SessionEngine {
                     Event::ToolResult { output, .. } if todo_tool => Some(output.clone()),
                     _ => None,
                 };
-                let acknowledgement = steer.take_acknowledgement();
-                let consumed_mail = acknowledgement.is_some();
+                let (acknowledgement, consumed_incoming) = steer
+                    .take_acknowledgement()
+                    .map_or((None, false), |(event, incoming)| (Some(event), incoming));
                 let envelopes = self
                     .store
                     .commit_tool_result_with_mail(actor_claim, session, event, acknowledgement)
@@ -2298,7 +2299,7 @@ impl SessionEngine {
                 for envelope in envelopes {
                     self.publish_envelope(envelope);
                 }
-                if consumed_mail {
+                if consumed_incoming {
                     self.notify_mail_consumed(session, mail_mark);
                 }
                 // A todo tool's result carries the whole list; record the

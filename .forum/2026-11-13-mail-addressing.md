@@ -40,13 +40,20 @@ owns a wake even with no new incoming mail, preserving resume-once behaviour.
 This changes mail accounting only; startup ordering and team ownership are not
 changed by M4-11.
 
-# What still blocks clean acceptance of M4-11?
+# Why did I5 time out after channel-only handle sends?
 
-The final eleven-package suite passes 2,443 tests but fails
-`i5_post_kill_task_uses_fresh_team_without_waiting_for_other_endings` at
-"new main reused the killed team's activation context". Its `guidance` boolean
-also becomes false on a ten-second timeout, so that assertion does not establish
-actual context reuse. The unchanged base passes the focused test and the full
-lifecycle binary; this failure is not classified as pre-existing. M4-11 leaves
-team/context ownership and listener/startup ordering to M4-12. Investigate the
-missing-versus-wrong-guidance distinction before choosing a fix.
+A handle send now leaves an outgoing copy in main's DM history. I5 sends mail
+between main turns; the next steering snapshot therefore starts with that raw
+cursor backlog. After its fresh task registers, steering cleans up the outgoing
+copies and commits MailConsumed. The tool-result collector treated any cursor
+acknowledgement as consumed work and called notify_mail_consumed. That advanced
+last_synth_work_seq to the fresh registration's work_seq, suppressing its owed
+TEAM QUIESCED synthesis. The fresh requests already carried NEW_TEAM_GUIDANCE_M4;
+the assertion's timeout branch, rather than a wrong-guidance request, failed.
+
+A minimal variation that retained cursor commits but withheld the work-consumed
+notification for an empty notice made I5 pass. The final fix carries whether the
+acknowledgement covers incoming mail, including policy-filtered incoming mail,
+and notifies the supervisor only in that case. Outgoing-only cursor cleanup
+cannot settle unrelated work. No ownership, routing, or startup redesign is
+needed; I5 now distinguishes a missing synthesis from wrong guidance directly.

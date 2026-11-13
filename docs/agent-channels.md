@@ -125,6 +125,12 @@ For example, spawn reviewers, call `wait` to collect their reports, and use
 `read channel://DM-…?last=10` for longer report text before writing the final
 review. Those consumed results do not require a second final answer.
 
+Cursor cleanup for outgoing DM history does not acknowledge completed team work.
+Only an acknowledgement covering incoming mail advances the supervisor's consumed-work
+mark; otherwise an unrelated new task could lose its owed quiescence synthesis.
+The cursor and tool result still commit together, including when only outgoing
+copies or policy-filtered messages are being consumed.
+
 The delivery contract remains the durable event
 `MailConsumed { session: SessionId, handle: string, through: u64 }`, where
 `session` identifies the team root and `through` is the exclusive inbox cursor.

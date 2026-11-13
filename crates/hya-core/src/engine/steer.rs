@@ -36,7 +36,8 @@ pub struct SteeredMail {
 
 /// Per-turn steer state: the backlog plus the live bus tail.
 pub struct SteerMailbox {
-    pending_ack: Option<Event>,
+    /// Cursor acknowledgement and whether it consumes incoming mail.
+    pending_ack: Option<(Event, bool)>,
     root: SessionId,
     handle: String,
     queue: Vec<SteeredMail>,
@@ -218,7 +219,7 @@ impl SteerMailbox {
         self.policy = Some(policy);
     }
 
-    pub(crate) fn take_acknowledgement(&mut self) -> Option<Event> {
+    pub(crate) fn take_acknowledgement(&mut self) -> Option<(Event, bool)> {
         self.pending_ack.take()
     }
 
@@ -255,7 +256,7 @@ impl SteerMailbox {
     /// durable cursor (which another delivery — a `wait` returning the mail —
     /// may have advanced) and past what this mailbox committed, with the
     /// channel view refreshed so channels minted mid-turn resolve.
-    async fn resync_from_log(&mut self, engine: &SessionEngine) -> Result<(), CoreError> {
+    async fn resync_from_log(&mut self, engine: &SessionEngine) -> Result<bool, CoreError> {
         // Cached fold: this must cost the root's new events, not its whole log.
         let projection = engine.read_projection_shared(self.root).await?;
         (self.channels, self.channel_roles) = topology(&projection, &self.handle);
@@ -268,8 +269,13 @@ impl SteerMailbox {
         let Some(inbox) = projection.team.inboxes.get(&self.handle) else {
             self.queue.clear();
             self.through = self.committed_through;
-            return Ok(());
+            return Ok(false);
         };
+        let consumed_incoming = projection
+            .team
+            .unread_incoming_mail(&self.handle, self.committed_through)
+            .next()
+            .is_some();
         let pending = projection
             .team
             .unread_incoming_mail(&self.handle, self.committed_through)
@@ -282,7 +288,7 @@ impl SteerMailbox {
             .collect();
         self.queue = pending;
         self.through = self.committed_through.max(inbox.len() as u64);
-        Ok(())
+        Ok(consumed_incoming)
     }
 
     fn reaches(&self, to: &MailEndpoint) -> bool {
@@ -326,7 +332,7 @@ impl SteerMailbox {
             return Ok(None);
         }
         self.dirty = false;
-        self.resync_from_log(engine).await?;
+        let consumed_incoming = self.resync_from_log(engine).await?;
         let shown: Vec<SteeredMail> = std::mem::take(&mut self.queue);
         if shown.is_empty() && self.through == self.committed_through {
             return Ok(None);
@@ -334,11 +340,14 @@ impl SteerMailbox {
         let root = self.root;
         let handle = self.handle.clone();
         let through = self.through;
-        self.pending_ack = Some(Event::MailConsumed {
-            session: root,
-            handle,
-            through,
-        });
+        self.pending_ack = Some((
+            Event::MailConsumed {
+                session: root,
+                handle,
+                through,
+            },
+            consumed_incoming,
+        ));
         self.committed_through = through;
         if shown.is_empty() {
             return Ok(None);
