@@ -1243,6 +1243,7 @@ name = "hya-plugin"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "hya-bundle",
  "hya-core",
  "hya-mcp",
  "hya-proto",

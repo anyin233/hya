@@ -83,3 +83,13 @@ engine construction, then reconstructs and stages the exact recorded agents
 after composition; it never starts their episodes. Restore admission and
 `start_recovered` retain their separate ordering boundary. The standalone
 `spawn_team_supervisor` still serves `xtask lifecycle-bench`, besides app tests.
+
+## Which layer owns activation processes?
+
+`hya_plugin::activation::start_activation_sidecar` owns activation directories,
+connection/initialize, declaration-rejection termination, transport health and
+stop/drop cleanup. The adapter also materializes captured bundle resources and
+validates/binds tool and hook declarations. App supplies config-path/environment
+composition and reuses its existing shared Skill declaration seam; core still
+knows only SidecarEnvironment, BoundSidecarFactory and SidecarHandle. No MCP
+collector was removed in 5.8: both startup modes already used reconcile_plan.
