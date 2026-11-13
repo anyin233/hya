@@ -3496,10 +3496,19 @@ impl ResidentSupervisor {
 
     fn route_envelope(&self, envelope: hya_proto::Envelope) {
         match envelope.event {
-            Event::MailSent { session: root, from, to, .. } => {
+            Event::MailSent {
+                session: root,
+                from,
+                to,
+                ..
+            } => {
                 // Select and enqueue under the map lock, excluding retirement.
                 if let Some(team) = self.teams().get(&root) {
-                    team.enqueue(TeamEvent::Mail { seq: envelope.seq, from, to });
+                    team.enqueue(TeamEvent::Mail {
+                        seq: envelope.seq,
+                        from,
+                        to,
+                    });
                 }
             }
             Event::AgentHeartbeat { .. } => {}
@@ -3924,7 +3933,11 @@ impl ResidentSupervisor {
     }
 
     pub(crate) fn member_claim(&self, member: SessionId) -> Option<ActorClaim> {
-        self.team_with_resident(member)?.lock().residents.get(&member)?.claim
+        self.team_with_resident(member)?
+            .lock()
+            .residents
+            .get(&member)?
+            .claim
     }
 
     /// Whether this episode's stopped turn has already been reported to the caller.
@@ -3953,7 +3966,10 @@ impl ResidentSupervisor {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if episodes.get(&claim.actor_id).is_some_and(|team| {
-            team.lock().residents.get(&claim.actor_id).is_some_and(|slot| slot.claim == Some(claim))
+            team.lock()
+                .residents
+                .get(&claim.actor_id)
+                .is_some_and(|slot| slot.claim == Some(claim))
         }) {
             self.wait_stalls
                 .lock()
@@ -5306,6 +5322,28 @@ impl ResidentSupervisor {
                 claim,
                 disposition,
             });
+    }
+
+    /// Start a headless runtime's recovered actors under external root ownership.
+    /// Keep these guards until the headless command has drained its runtime.
+    pub async fn start_recovered_headless(
+        &self,
+        session: SessionId,
+    ) -> Result<Vec<RootDriverActivity>, CoreError> {
+        let mut roots = self
+            .recovered
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|member| member.root)
+            .collect::<HashSet<_>>();
+        roots.insert(self.engine.session_lineage(session).await?.0);
+        let mut drivers = Vec::with_capacity(roots.len());
+        for root in roots {
+            drivers.push(self.root_driver_activity(root).await?);
+        }
+        self.start_recovered().await?;
+        Ok(drivers)
     }
 
     /// Install recovered episodes after the server has admitted restore prompts.
