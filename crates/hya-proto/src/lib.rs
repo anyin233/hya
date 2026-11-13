@@ -4,6 +4,10 @@
 //! a newtype per id. This crate is dependency-light (serde / uuid only) so the
 //! TUI can share types without pulling sqlx/tokio into its build graph.
 
+/// Opt-in lifecycle copy counters; absent from product builds.
+#[cfg(feature = "lifecycle-bench")]
+pub mod bench;
+
 /// Canonical streaming `Event` enum and ordered `Envelope` unit for the log and bus.
 pub mod event;
 /// Strong id newtypes (`SessionId`, message/part/tool ids, claim epochs, etc.).

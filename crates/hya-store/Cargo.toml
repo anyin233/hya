@@ -11,7 +11,7 @@ version-reference = "backend"
 workspace = true
 
 [features]
-lifecycle-bench = ["dep:libsqlite3-sys"]
+lifecycle-bench = ["dep:libsqlite3-sys", "hya-proto/lifecycle-bench"]
 
 [dependencies]
 libsqlite3-sys = { version = "=0.30.1", optional = true }
