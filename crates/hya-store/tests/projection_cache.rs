@@ -328,3 +328,51 @@ async fn real_database_cached_reads_equal_full_replay() {
         totals[3]
     );
 }
+
+/// Unique cached values advance in place; retained shared snapshots stay immutable.
+#[tokio::test]
+async fn shared_snapshots_are_isolated_while_unique_cache_advances_in_place() {
+    use std::sync::Arc;
+    let store = SessionStore::connect_memory().await.unwrap();
+    let session = SessionId::new();
+    store
+        .append_event(
+            session,
+            &Event::SessionTitled {
+                session,
+                title: "one".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let first = store.read_projection_shared(session).await.unwrap();
+    let address = Arc::as_ptr(&first);
+    drop(first);
+    store
+        .append_event(
+            session,
+            &Event::SessionTitled {
+                session,
+                title: "two".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let earlier = store.read_projection_shared(session).await.unwrap();
+    assert_eq!(Arc::as_ptr(&earlier), address);
+    store
+        .append_event(
+            session,
+            &Event::SessionTitled {
+                session,
+                title: "three".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let later = store.read_projection_shared(session).await.unwrap();
+    assert!(!Arc::ptr_eq(&earlier, &later));
+    assert_eq!(earlier.session.title.as_deref(), Some("two"));
+    assert_eq!(later.session.title.as_deref(), Some("three"));
+    assert_eq!(*later, full_replay(&store, session).await);
+}
