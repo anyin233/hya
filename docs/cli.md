@@ -321,7 +321,7 @@ path or project directory), the action (`install`, `replace from=<version>`),
 its Agents, and any bundle it removes through a namespace takeover:
 
 ```text
-Install hya/docs-example 1.0.0 (AgentBundle) into user scope
+Install hya/docs-example 1.0.0 (Bundle) into user scope
   target: /home/me/.local/share/hya/bundles/registry.sqlite3
   action: install
   agents: docs-example
@@ -392,7 +392,7 @@ flags would succeed, or exits 1 with the same error `install` would report:
 ```text
 verified <BUNDLE_ID> <VERSION>
 format=public-v1
-kind=<Plugin|AgentBundle|AgentSetBundle|WorkflowBundle>
+kind=Bundle
 source_digest=<sha256 hex>
 prepared_digest=<hex>
 scope=<user|project>
@@ -483,11 +483,11 @@ filesystem watcher or per-tool-call registry query.
 `info -f` strictly inspects a package without mutating the registry or runtime
 publication. Package paths require the exact lowercase `.hyabundle` suffix;
 the bytes magic is still authoritative for public/private format detection.
-Public packages are a closed `Plugin | AgentBundle | AgentSetBundle | WorkflowBundle`
-payload. A Plugin carries resources without an Agent or Workflow. An AgentBundle
-carries one Agent; an AgentSetBundle carries Agents and/or declarative channel
-policies without a Workflow. A WorkflowBundle carries one compiled Workflow and
-its exact reachable Agent closure. All kinds may remain process-free.
+Public packages carry one complete `Bundle` payload (prepared format 4).
+The source uses `kind: Bundle`, an `agents` list (empty for resource-only
+bundles), optional channel policies, and an optional compiled Workflow with its
+reachable Agent closure. All bundles may remain process-free. Plugin, AgentBundle,
+AgentSetBundle, and WorkflowBundle describe roles, not accepted manifest kinds.
 
 Use `extensions.process` for a native/Bun/Claude provider, `resources.mcp` for
 managed MCP servers, and `extensions.files` for explicit support-file closure.
@@ -841,7 +841,7 @@ back to `hya-main`. `hya -p` goal mode, `hya loop`, and
 the same way.
 
 **Stopping and end of run.** Nothing keeps streaming after `exec` returns.
-When the lead's turn ends, `exec` drains every other in-flight turn — team
+When the run ends, `exec` drains every other in-flight turn — team
 members and subagents — before it flushes the trajectory, so the log (and
 `--json` stdout)
 ends on terminal events: each open assistant message gets `message_finished

@@ -679,7 +679,7 @@ Deterministically narrows and renames the candidate set for one agent.
 ### Reference grammar
 
 Each `allow` / `deny` entry resolves to a stable id. Accepted forms
-([`resolve_global_reference`](../crates/hya-core/src/runtime_registry.rs)):
+([`resolve_global_reference`](../crates/hya-core/src/runtime_registry/mod.rs)):
 
 | Form | Example |
 | --- | --- |

@@ -8,4 +8,4 @@
 - The accepted labels are exactly the provider `kind` labels (including `openai-compatible` and `openai-completion`); an unknown label fails config load with `provider <id> model <model> has unknown kind <label> (expected one of …)`. String-form entries cannot override `kind` — use the mapping form.
 - A config entry's override also applies when the model is in the model cache: unset config fields keep falling back to the cached metadata, and the fallback effort menu follows the entry's effective protocol, not the provider's.
 - The Provider View's model-entry writer (`PUT /v1/providers/{id}/models`) preserves a hand-written `kind` key, like every key it does not manage.
-- `HttpProvider::kind()` exposes a route's protocol for diagnostics. See [Configuration](docs/configuration.md).
+- `HttpProvider::kind()` exposes a route's protocol for diagnostics. See [Configuration](../configuration.md).

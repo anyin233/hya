@@ -24,8 +24,8 @@ configured, `hya` starts offline against its built-in echo provider
 
 ## Status
 
-`hya` is under active development (backend version `0.45.10`, frontend version
-`0.44.23-dev.6`, minimum compatible backend `0.45.10`, licensed under
+`hya` is under active development (backend version `0.46.0`, frontend version
+`0.44.23-dev.7`, minimum compatible backend `0.46.0`, licensed under
 `MIT OR Apache-2.0`). Backend and frontend releases iterate independently via
 `backend/<version>` and `frontend/<version>` tags.
 

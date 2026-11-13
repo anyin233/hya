@@ -267,7 +267,7 @@ gets the "never call `report`" line instead of the subagent's "finish with
 `report`" line. Implementation:
 [`crates/hya-core/src/coordination.rs`](../../crates/hya-core/src/coordination.rs)
 and `select_candidates_globally` in
-[`runtime_registry.rs`](../../crates/hya-core/src/runtime_registry.rs).
+[`runtime_registry.rs`](../../crates/hya-core/src/runtime_registry/mod.rs).
 
 ### Communication tools (ADR-0016 channel plane)
 
@@ -276,8 +276,7 @@ team when the mailbox plane is disconnected. The per-request team quick
 reference mirrors this contract and is guarded by a registry-alignment test
 (every tool-named token it teaches must resolve in the builtin registry).
 
-**`send`**: required `body`; optional `channel` (the legacy `to` spelling
-still parses). One tool, channel-decided delivery:
+**`send`**: required `body`; optional `channel`. One tool, channel-decided delivery:
 
 - `#channel` (or a bare `DM-…`/`announce-…` id from `list_channel`) posts on
   that channel. Group channels are the unit leader's broadcast pipe — a
@@ -307,8 +306,8 @@ mail and the exact read call, for example:
 report rejected: `main/hya-scout-suzuran` has 2 unread mail message(s) on #DM-rgli51cb (2); answer them first. Read it with `read channel://DM-rgli51cb?last=2` (`list_channel` lists every channel with unread counts), reply with `send` if the sender needs an answer, then call `report` again — or call `wait` to block until more mail arrives.
 ```
 
-Handle-addressed mail is attributed to the DM channel shared with its sender;
-harness notices with no channel are counted as `N harness notice(s)` and
+Handle aliases resolve to the sender's existing DM before mail is persisted;
+agent-authored mail always has a channel endpoint. Harness notices with no channel are counted as `N harness notice(s)` and
 arrive with the next tool result as `[NEW MAIL]`. Reading any channel marks
 the whole inbox seen.
 
@@ -371,8 +370,9 @@ member is archived: degraded handoff, member row `cancelled` with the reason,
 claim released, `AgentArchived { reason: archived_by_parent }`. No report mail
 comes back. The result is `{title, output, metadata: {handle, session,
 cancelled_turn, descendants}}`. An archived subagent stays readable (its
-session log, channel history, handoff) and is woken by mail to its handle or
-its DM channel — same handle, same session, resumed from the handoff.
+session log, channel history, handoff) and is woken by mail on its parent DM
+(a handle is a request alias for that existing channel) — same handle, same
+session, resumed from the handoff.
 
 Errors (`ToolError::Input`, actionable text):
 
@@ -1080,8 +1080,8 @@ single `BundleCatalog` authority lives on `RuntimeSnapshot` / `TurnBinding`;
 application wiring does not replace an agent catalog authority.
 ([`ToolCtx`](../../crates/hya-tool/src/tool.rs),
 [`AgentDef`](../../crates/hya-tool/src/agents.rs),
-[`RuntimeSnapshot`](../../crates/hya-core/src/runtime_registry.rs),
-[`TurnBinding::bundle_catalog`](../../crates/hya-core/src/runtime_registry.rs),
+[`RuntimeSnapshot`](../../crates/hya-core/src/runtime_registry/mod.rs),
+[`TurnBinding::bundle_catalog`](../../crates/hya-core/src/runtime_registry/mod.rs),
 [`build_session_engine`](../../crates/hya-app/src/runtime.rs))
 
 A bare `SessionEngine` starts with a disconnected mailbox and default
