@@ -1,4 +1,4 @@
-//! T2.38 / T2.39 — a headless `hya exec` run does not end while the lead
+//! T2.38 / T2.39 / T2.49 — a headless `hya exec` run does not end while the lead
 //! still has live subagents. When the lead's turn ends on its own with a
 //! worker still running, the run gives it another turn with a `HEADLESS RUN`
 //! notice; it ends when a lead turn ends with no live subagent, or after two
@@ -254,7 +254,7 @@ async fn t2_39_exec_ends_after_two_ignored_notices() {
 /// Ending a resident episode with text leaves it idle, with no report to
 /// collect. The lead must explicitly archive it before completing the run.
 #[tokio::test]
-async fn t2_38_exec_wait_reports_an_idle_worker_as_stalled() {
+async fn t2_49_exec_wait_reports_an_idle_worker_as_stalled() {
     let env = E2eEnvBuilder::new()
         .route(WORKER, vec![text_step("WORKER_IDLE"), text_step("WORKER_EXTRA")])
         .route(ROOT, vec![
@@ -285,7 +285,7 @@ async fn t2_38_exec_wait_reports_an_idle_worker_as_stalled() {
 /// Server-driven resident wakes remain distinct from exec's system notices:
 /// an idle team wakes its lead with an admitted User synthesis prompt.
 #[tokio::test]
-async fn t2_38_idle_team_wakes_lead_with_user_synthesis_prompt() {
+async fn t2_49_idle_team_wakes_lead_with_user_synthesis_prompt() {
     let env = E2eEnvBuilder::new()
         .route(
             WORKER,

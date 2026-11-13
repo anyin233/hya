@@ -132,6 +132,7 @@ mod tests {
             time_created: None,
             time_updated: None,
             config_generation: None,
+            last_step_start: None,
             finish: None,
             tokens: None,
             usage: None,

@@ -385,7 +385,7 @@ path = "crates/hya-e2e/tests/p40_exec_headless_continuation.rs"
 
 [[scenario]]
 id = "T2.44"
-title = "headless exec --time-budget: the opening names the budget and the first tool result in the final window carries the FINAL notice once"
+title = "headless exec --time-budget: the opening names the budget and the FINAL header appears once across tool results and continuation notices"
 track = "P"
 path = "crates/hya-e2e/tests/p40_exec_headless_continuation.rs"
 
