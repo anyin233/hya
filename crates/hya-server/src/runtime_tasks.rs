@@ -14,6 +14,8 @@ pub struct RuntimeTaskOwner {
     pub stop: CancellationToken,
     /// Services and admitted children that shutdown must join.
     pub tasks: TaskTracker,
+    /// Plugin and MCP connection I/O; joined after residents and connections stop.
+    pub io_tasks: TaskTracker,
 }
 
 impl RuntimeTaskOwner {

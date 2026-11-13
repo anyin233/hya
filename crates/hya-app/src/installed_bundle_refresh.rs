@@ -342,6 +342,7 @@ pub(crate) async fn compose(
 /// the first-party bundles. Project bundles are per registered Project and
 /// compose on top of it in [`crate::ProjectScopeRefresh`].
 pub struct InstalledBundleRefresh {
+    io_tasks: Option<tokio_util::task::TaskTracker>,
     registry_path: PathBuf,
     registry: OnceCell<BundleRegistry>,
     applied_generation: Mutex<u64>,
@@ -362,6 +363,7 @@ impl InstalledBundleRefresh {
     pub fn new(registry_path: PathBuf) -> Self {
         Self {
             registry_path,
+            io_tasks: None,
             registry: OnceCell::new(),
             applied_generation: Mutex::new(0),
             config_file: crate::config::active_config_path(),
@@ -377,6 +379,15 @@ impl InstalledBundleRefresh {
             })),
             host_reads: None,
         }
+    }
+
+    pub(crate) fn with_io_tasks(mut self, tasks: tokio_util::task::TaskTracker) -> Self {
+        self.io_tasks = Some(tasks);
+        self
+    }
+
+    pub(crate) fn io_tasks(&self) -> Option<tokio_util::task::TaskTracker> {
+        self.io_tasks.clone()
     }
 
     /// Back bundle process capabilities (`session.usage`, for tool calls and
@@ -430,6 +441,18 @@ impl InstalledBundleRefresh {
     }
 
     async fn refresh(
+        &self,
+        runtime: &RuntimeRegistry,
+        inspect_configs: bool,
+    ) -> Result<bool, CoreError> {
+        hya_mcp::io_tasks::scope(
+            self.io_tasks(),
+            self.refresh_scoped(runtime, inspect_configs),
+        )
+        .await
+    }
+
+    async fn refresh_scoped(
         &self,
         runtime: &RuntimeRegistry,
         inspect_configs: bool,

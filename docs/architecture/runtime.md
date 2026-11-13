@@ -726,6 +726,15 @@ when declarations are unchanged.
 Unchanged sources reuse their process owners; retained bindings keep those
 owners and staged files alive across replacement and uninstall.
 
+At explicit runtime shutdown, intake and registrations are joined before
+residents are drained; connection owners then stop and join plugin stdout,
+reverse host-capability requests, event delivery, and MCP stdio/classic SSE
+readers. The registry remembers weak references to connection owners across
+publications, including retired generations retained by a binding. This adds no
+second process owner and does not keep an unused connection alive. Retained
+bindings cannot respawn connections after that boundary. Await the owning
+`BuiltSessionEngine::shutdown()`; dropping a handle only signals cancellation.
+
 Full-plane agents see agentless Plugin exports. Agent-bearing bundles retain
 private tool/MCP resource selection and scoped `hook_refs`. Hooks and permission
 interceptors follow captured bindings; they do not consult a second live catalog.

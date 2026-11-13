@@ -182,10 +182,13 @@ impl ProjectScopeRefresh {
         let retained_plugins = runtime
             .scope_overlay(&key)
             .map_or_else(Vec::new, |overlay| overlay.plugin_sources.clone());
-        let (plugin_sources, plugin_errors, plugins_changed) = state
-            .plugins
-            .refresh(roots, &self.plugins, &retained_plugins, explicit)
-            .await;
+        let (plugin_sources, plugin_errors, plugins_changed) = hya_mcp::io_tasks::scope(
+            self.installed.io_tasks(),
+            state
+                .plugins
+                .refresh(roots, &self.plugins, &retained_plugins, explicit),
+        )
+        .await;
         let mut errors = plugin_errors
             .into_iter()
             .map(|error| (key.to_string(), error))
@@ -416,14 +419,17 @@ impl ProjectScopeRefresh {
             self.installed.config_file().to_path_buf(),
             BTreeMap::from([(id, dir.to_path_buf())]),
         );
-        let composition = compose(
-            &[&published.catalog],
-            &[],
-            &[],
-            &BTreeSet::new(),
-            &resolver,
-            self.installed.source_cache(),
-            self.installed.host_reads(),
+        let composition = hya_mcp::io_tasks::scope(
+            self.installed.io_tasks(),
+            compose(
+                &[&published.catalog],
+                &[],
+                &[],
+                &BTreeSet::new(),
+                &resolver,
+                self.installed.source_cache(),
+                self.installed.host_reads(),
+            ),
         )
         .await?;
         published.sources = composition.sources;

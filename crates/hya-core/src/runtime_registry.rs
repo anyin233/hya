@@ -91,6 +91,7 @@ pub struct RuntimeRegistry {
     /// `--pure`: bind_turn keeps the embedded builtin skills only and never
     /// reads external skill directories.
     pure_skills: bool,
+    source_owners: Mutex<Vec<Weak<dyn RuntimeSourceOwner>>>,
 }
 
 /// One published scope overlay and its composed snapshot.
@@ -133,13 +134,16 @@ pub struct RuntimeSourceId {
     configured_id: String,
 }
 
-/// Marker for process-owned source handles retained by the registry.
-///
-/// **Contract:** Implementors keep clients/processes alive while the
-/// [`RuntimeSource`] is published. No methods — ownership is the contract.
-pub trait RuntimeSourceOwner: Send + Sync {}
+/// Connection owner retained by a published runtime source.
+/// Shutdown stops and joins connection tasks even while bindings retain the source.
+pub trait RuntimeSourceOwner: Send + Sync {
+    /// Static sources have no connection work to stop.
+    fn shutdown(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
+    }
+}
 
-impl<T: Send + Sync> RuntimeSourceOwner for T {}
+impl RuntimeSourceOwner for () {}
 
 /// One tool export from a runtime source (canonical name + aliases).
 #[derive(Clone)]
@@ -466,6 +470,36 @@ impl RuntimeRegistry {
             )),
             agent_effort_configuration: watch::Sender::new(Arc::new(BTreeMap::new())),
             pure_skills: false,
+            source_owners: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn remember_source_owners<'a>(&self, sources: impl Iterator<Item = &'a RuntimeSource>) {
+        let mut owners = self
+            .source_owners
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        owners.retain(|owner| owner.strong_count() > 0);
+        for source in sources {
+            let owner = Arc::downgrade(&source.owner);
+            if !owners.iter().any(|known| known.ptr_eq(&owner)) {
+                owners.push(owner);
+            }
+        }
+    }
+
+    /// Stop and join current and retired source connections retained by bindings.
+    /// Call after composition intake and resident activations have stopped.
+    pub async fn shutdown_sources(&self) {
+        let owners = self
+            .source_owners
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect::<Vec<_>>();
+        for owner in owners {
+            owner.shutdown().await;
         }
     }
 
@@ -622,6 +656,7 @@ impl RuntimeRegistry {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let base = self.active();
         let snapshot = compose_scope(&mut last_generation, &base, &overlay, &key)?;
+        self.remember_source_owners(snapshot.sources.values());
         let generation = snapshot.generation;
         let entry = ScopeEntry {
             project_bundle_dirs: Arc::new(overlay.project_bundle_dirs.clone()),
@@ -949,6 +984,7 @@ impl RuntimeRegistry {
             allocate_generation(last_generation)?,
             current.basic_tools.clone(),
         ));
+        self.remember_source_owners(published.sources.values());
         *self
             .active
             .write()

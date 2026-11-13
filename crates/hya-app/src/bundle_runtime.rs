@@ -105,6 +105,21 @@ struct BundleOwner {
     _root: Option<MaterializedRoot>,
 }
 
+impl hya_core::RuntimeSourceOwner for BundleOwner {
+    fn shutdown(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            if let Some(host) = &self._host
+                && let Err(error) = host.terminate().await
+            {
+                tracing::warn!(%error, "stop bundle process");
+            }
+            for server in &self._mcp {
+                server.shutdown().await;
+            }
+        })
+    }
+}
+
 fn materialize(bundle: &Bundle) -> Result<MaterializedRoot, CoreError> {
     let root = std::env::temp_dir().join(format!(
         "hya-bundle-runtime-{}",

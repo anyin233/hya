@@ -38,8 +38,12 @@ composition tasks. Keep it alive while using its engine, then call
 admitted Workflow work and waits for the spawn/Workflow workers,
 mailbox/lifecycle services and their request handlers, deferred MCP preparation,
 and catalog scope sweeper. It then drains turns and residents, after every
-admitted registration has settled. Retaining an engine or control clone does not keep
-those services running after shutdown. Dropping the built value signals
+admitted registration has settled, and stops and joins plugin/MCP connection
+I/O. Runtime teardown terminates processes after resident drain; explicit
+`PluginHost::shutdown` and `PreparedPlugin::shutdown` keep the graceful shutdown
+RPC. Source owners remain reachable for shutdown through weak references even
+when only an older turn binding retains their generation. Retaining an engine
+or control clone does not keep those services running after shutdown. Dropping the built value signals
 cancellation without waiting; explicit shutdown is the completion boundary.
 
 ```rust,ignore
@@ -57,6 +61,28 @@ contracts are `run_mailbox_service(engine, receiver, stop)` and
 and joins them before returning. Workflow control rejects commands after
 shutdown with the existing `WORKFLOW_RUNTIME_UNAVAILABLE` code. No CLI flags
 or wire schemas change.
+
+Connection owners expose explicit completion boundaries too:
+`PluginClient::shutdown(&self) -> ()`, `PreparedPlugin::shutdown(&self) ->
+Result<(), PluginError>`, `McpClient::shutdown(&self) -> ()`,
+`PreparedMcpServer::shutdown(&self) -> ()`, and `McpManager::shutdown(&self) -> ()`
+are async methods. Plugin stdout, reverse capability handlers, event delivery,
+and MCP stdio/classic SSE readers are joined by those owners. Streamable HTTP
+requests run in the caller's future. For example, an embedder that calls
+`hya_mcp::prepare(name, config).await?` must later await `server.shutdown()`
+before dropping its resources. Runtime sources implement
+`RuntimeSourceOwner::shutdown(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>`;
+static owners do no work. A custom registry embedder calls
+`registry.shutdown_sources().await` after stopping preparation and draining its
+activations. Retained tool views stay closed after owner shutdown.
+
+The existing runtime task owner also tracks I/O completion during initialization,
+before a source can be published. `hya_mcp::io_tasks::scope(tracker, future)` carries
+`Option<tokio_util::task::TaskTracker>` through preparation; `current()` captures
+it for connection restarts/cleanup, and `spawn(future)` / `spawn_in(tracker, future)`
+return the owned `JoinHandle<F::Output>`. These helpers track completion without
+owning cancellation. The runtime waits for this barrier after stopping source
+owners, including cleanup from canceled deferred initialization.
 
 ## Build and Quality Gate
 

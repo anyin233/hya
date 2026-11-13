@@ -81,6 +81,7 @@ struct ReconcileState {
 }
 
 pub(crate) struct RuntimeReconciler {
+    io_tasks: Option<tokio_util::task::TaskTracker>,
     registry: Arc<RuntimeRegistry>,
     state: Mutex<ReconcileState>,
 }
@@ -654,7 +655,10 @@ pub(crate) fn prepared_plugin_source(
             PreparedExport::tool(local_name, Vec::new(), exposed, ToolPermission::Tool)
         })
         .collect();
-    Ok(PreparedSource::new(id, declaration_digest, Arc::new(plugin), exports).with_skills(skills))
+    Ok(
+        PreparedSource::new(id, declaration_digest, plugin.runtime_owner(), exports)
+            .with_skills(skills),
+    )
 }
 
 /// The host is retained only by its published source, alongside its tools.
@@ -699,7 +703,13 @@ impl RuntimeReconciler {
         Self {
             registry,
             state: Mutex::new(ReconcileState::default()),
+            io_tasks: None,
         }
+    }
+
+    pub(crate) fn with_io_tasks(mut self, tasks: tokio_util::task::TaskTracker) -> Self {
+        self.io_tasks = Some(tasks);
+        self
     }
 
     pub(crate) fn replace_desired(
@@ -1032,7 +1042,10 @@ impl RuntimeMcpControl {
         let mut tasks = BTreeMap::new();
         for source in plan.sources().iter().cloned() {
             let id = source.id().clone();
-            let handle = set.spawn(async move { prepare_desired_source(source).await });
+            let handle = set.spawn(hya_mcp::io_tasks::scope(
+                self.reconciler.io_tasks.clone(),
+                async move { prepare_desired_source(source).await },
+            ));
             tasks.insert(handle.id(), id);
         }
         let mut first_error = None;
@@ -1258,10 +1271,17 @@ pub(crate) async fn prepare_desired_source(source: DesiredSource) -> PreparedRes
     }
 }
 
+struct McpSourceOwner(PreparedMcpServer);
+impl RuntimeSourceOwner for McpSourceOwner {
+    fn shutdown(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(self.0.shutdown())
+    }
+}
+
 fn prepared_mcp_source(id: SourceId, server: PreparedMcpServer) -> PreparedSource {
-    let owner = Arc::new(server);
-    let tools = owner.tools();
-    let resources = owner.resources();
+    let tools = server.tools();
+    let resources = server.resources();
+    let owner = Arc::new(McpSourceOwner(server));
     let declaration_digest = digest_mcp_declaration(&tools, &resources);
     let exports = tools
         .into_iter()
@@ -2153,6 +2173,7 @@ for line in sys.stdin:
     }
 
     struct CloseCounter(Arc<AtomicUsize>);
+    impl hya_core::RuntimeSourceOwner for CloseCounter {}
 
     impl Drop for CloseCounter {
         fn drop(&mut self) {
