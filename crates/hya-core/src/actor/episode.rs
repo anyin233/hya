@@ -730,6 +730,7 @@ impl TeamActor {
                 inbox
                     .iter()
                     .skip(cursor)
+                    .map(|index| &projection.team.mail[*index])
                     .filter(|message| {
                         if message.from == handle {
                             return false;

@@ -522,9 +522,9 @@ async fn report_archives_the_agent_end_to_end() {
     // The parent received the report as mail.
     let inbox = projection.team.inboxes.get("main").unwrap();
     assert!(
-        inbox
-            .iter()
-            .any(|message| message.body.contains("found three call sites")),
+        inbox.iter().any(|index| projection.team.mail[*index]
+            .body
+            .contains("found three call sites")),
         "report mail must reach the parent inbox"
     );
 
@@ -931,11 +931,9 @@ async fn archive_stops_an_idle_member_and_mail_wakes_it_under_the_same_session()
     assert_eq!(archived.session, child);
     // The parent chose to archive: no synthesized report mail comes back to it.
     assert!(
-        projection
-            .team
-            .inboxes
-            .get("main")
-            .is_none_or(|inbox| inbox.iter().all(|mail| !mail.body.contains("done for now"))),
+        projection.team.inboxes.get("main").is_none_or(|inbox| inbox
+            .iter()
+            .all(|index| !projection.team.mail[*index].body.contains("done for now"))),
         "archive must not mail the archiver"
     );
     // Archived members stay readable: transcript and degraded handoff.

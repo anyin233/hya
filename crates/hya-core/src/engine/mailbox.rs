@@ -521,7 +521,10 @@ impl SessionEngine {
             .iter()
             .rev()
             .take(last_n)
-            .map(|message| (message.from.clone(), message.body.clone()))
+            .map(|index| {
+                let message = &projection.team.mail[*index];
+                (message.from.clone(), message.body.clone())
+            })
             .collect();
         let inbox = projection.team.inboxes.get(&handle);
         let inbox_len = inbox.map_or(0, |inbox| inbox.len() as u64);
@@ -1154,7 +1157,11 @@ mod tests {
             .team
             .inboxes
             .values()
-            .filter(|inbox| inbox.iter().any(|mail| mail.body == "all hands"))
+            .filter(|inbox| {
+                inbox
+                    .iter()
+                    .any(|index| replay.team.mail[*index].body == "all hands")
+            })
             .count();
         assert_eq!(receipt.recipients, delivered);
         assert_eq!(receipt.recipients, 3);
@@ -1224,7 +1231,11 @@ mod tests {
                 .team
                 .inboxes
                 .values()
-                .filter(|inbox| { inbox.iter().any(|mail| mail.body == "healthy recipients") })
+                .filter(|inbox| {
+                    inbox
+                        .iter()
+                        .any(|index| replay.team.mail[*index].body == "healthy recipients")
+                })
                 .count()
         );
         assert_eq!(receipt.recipients, 2);
@@ -1870,14 +1881,17 @@ mod tests {
 
     /// Bodies delivered to `path`'s inbox, in order.
     async fn inbox(engine: &SessionEngine, root: SessionId, path: &str) -> Vec<String> {
-        engine
-            .read_projection(root)
-            .await
-            .unwrap()
+        let projection = engine.read_projection(root).await.unwrap();
+        projection
             .team
             .inboxes
             .get(path)
-            .map(|inbox| inbox.iter().map(|m| m.body.clone()).collect())
+            .map(|inbox| {
+                inbox
+                    .iter()
+                    .map(|index| projection.team.mail[*index].body.clone())
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
