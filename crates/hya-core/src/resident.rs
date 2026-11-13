@@ -3835,18 +3835,6 @@ impl ResidentSupervisor {
             }
             (live, captured)
         };
-        #[cfg(test)]
-        {
-            let pause = self
-                .ending_pause
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take();
-            if let Some((entered, release)) = pause {
-                entered.notify_one();
-                release.notified().await;
-            }
-        }
         let projection = self.engine.read_projection(root).await?;
         let child = live.or_else(|| {
             projection
@@ -3872,6 +3860,18 @@ impl ResidentSupervisor {
         descendants.sort_by_key(|(path, _)| {
             std::cmp::Reverse(path.matches(scope::PATH_SEPARATOR).count())
         });
+        #[cfg(test)]
+        {
+            let pause = self
+                .ending_pause
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some((entered, release)) = pause {
+                entered.notify_one();
+                release.notified().await;
+            }
+        }
         for (path, session) in descendants {
             self.stop_and_archive_live(
                 root,
