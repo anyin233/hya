@@ -2,10 +2,10 @@
 
 `hya-extra/*` are optional bundles shipped alongside hya, under
 `bundles/extra/`. They are not installed by default and are not part of the
-`eleven trusted [first-party bundles](bundle-runtime.md#first-party-bundles);
+twelve trusted [first-party bundles](bundle-runtime.md#first-party-bundles);
 each one is an ordinary public `.hyabundle` package that you build and
 install like any other bundle described in
-[AgentBundle Authoring](agent-bundle-authoring.md). They exist for two
+[Bundle Authoring](agent-bundle-authoring.md). They exist for two
 reasons at once: they are useful optional capabilities, and each one is a
 coverage fixture exercised by `crates/hya-bundle/tests/extra_bundles.rs` and
 the `crates/hya-e2e` process suite (`T2.26`–`T2.28` and `T2.30` in the
@@ -13,9 +13,9 @@ the `crates/hya-e2e` process suite (`T2.26`–`T2.28` and `T2.30` in the
 
 Every `hya-extra/*` bundle follows the same identity rule as the first-party
 bundles: `identity.id` starts with `hya-extra/`, `identity.publisher` is
-`hya-extra`, and `identity.version` equals hya's own
-`[workspace.package].version` (currently `0.41.0`). They are bumped together
-with a release, the same way first-party bundles are.
+`hya-extra`, and source manifests use `version: 0.0.0` with
+`version_ref: backend`, which preparation resolves to `[backend].version` in
+`versions.toml`.
 
 ## `hya-extra/zvec-grep`
 
@@ -66,7 +66,7 @@ See [Bundle configuration files](configuration.md#bundle-configuration-files).
 
 ### Introduction
 
-An `AgentSetBundle` defining one subagent, `scout`: a cheap
+An `Bundle` defining one subagent, `scout`: a cheap
 retrieval agent for orchestrators to spawn with "where/what/how is X"
 questions about the local workspace. It answers with file:line evidence
 gathered through its own `zvec-grep` MCP server (bundle agents cannot see a
@@ -92,7 +92,7 @@ hya bundle install scout.hyabundle
 
 Once installed, any built-in agent (e.g. `hya-main`) can spawn it with the
 `task` tool using `subagent_type: "scout"` — no `can_spawn` edit is needed,
-because installing an `AgentSetBundle` makes its agents immediately
+because installing an `Bundle` makes its agents immediately
 spawnable from the ordinary built-in roster.
 
 By default `scout` runs on the `quick` model category. Map that category in
@@ -221,8 +221,8 @@ cd bundles/extra/jev-model-router && bun test
 
 | Contract | Value |
 | --- | --- |
-| Bundle | `kind: Plugin`, `extensions.process: {kind: bun, command: [bun, run, '${BUNDLE_ROOT}/router.ts']}`. Only `router.ts` is packaged. |
-| Plugin id / hook | `jev-model-router`; one hook, `chat.params` (posture `open`). No tools or Skills. |
+| Bundle | `kind: Bundle`, `extensions.process: {kind: bun, command: [bun, run, '${BUNDLE_ROOT}/router.ts']}`. Only `router.ts` is packaged. |
+| Plugin id / hook | `jev-model-router`; one hook, `chat.params`. No tools or Skills. |
 | Hook input used | `request.model` (the `from` filter), `root_session` / `session` (stickiness key), `agent`, `request.messages` (newest `role: user` message), `request.system`, and `request.tools` (count only). |
 | Hook output | `{"outcome": "continue", "request": <the same request with only model changed>}` |
 | Jev request | `POST <jev.endpoint>` with `Authorization: Bearer <key>` and body `{"model": <jev.model>, "state": {"agent", "latest_user_message" (first 4000 chars), "system_prompt_head" (first 1000 chars), "tool_count", "message_count"}, "questions": {"difficulty": {"type": "choice", "instructions": ..., "criteria": {<tier name>: <tier criteria>}}}}` |
@@ -339,8 +339,8 @@ cd bundles/extra/model-fallback && bun test
 
 | Contract | Value |
 | --- | --- |
-| Bundle | `kind: Plugin`, `extensions.process: {kind: bun, command: [bun, run, '${BUNDLE_ROOT}/fallback.ts']}`. Only `fallback.ts` is packaged (`fallback.test.ts` is undeclared and stays out). |
-| Plugin id / hook | `model-fallback`; one hook, `model.fallback` (posture `open`, fail-open by protocol default: an error, timeout, or malformed reply always reads as give-up). No tools or Skills. |
+| Bundle | `kind: Bundle`, `extensions.process: {kind: bun, command: [bun, run, '${BUNDLE_ROOT}/fallback.ts']}`. Only `fallback.ts` is packaged (`fallback.test.ts` is undeclared and stays out). |
+| Plugin id / hook | `model-fallback`; one hook, `model.fallback` (fail-open: an error, timeout, or malformed reply always reads as give-up). No tools or Skills. |
 | Hook input used | `error.class`, `attempt`, `tried` (chain-walk key is `tried[0]`, the ORIGINAL failing model of the round — not the model that just failed, so `A -> B -> C` always walks `A`'s chain). `session`, `root_session`, `agent`, `message`, and `model` are accepted but not otherwise used. |
 | Hook output | `{"outcome": "retry", "model": "<provider/model>"}` or `{"outcome": "give_up"}` |
 
@@ -461,7 +461,7 @@ renders as `—`) plus one line per subagent session.
 
 | Contract | Value |
 | --- | --- |
-| Bundle | `kind: Plugin`, `extensions.process: {kind: bun, command: [bun, run, '${BUNDLE_ROOT}/summary.ts']}`. `summary.ts` and `schemas/usage.json` are packaged (`summary.test.ts` is undeclared and stays out). |
+| Bundle | `kind: Bundle`, `extensions.process: {kind: bun, command: [bun, run, '${BUNDLE_ROOT}/summary.ts']}`. `summary.ts` and `schemas/usage.json` are packaged (`summary.test.ts` is undeclared and stays out). |
 | API endpoint | `apis: [{ id: usage, method: GET, scope: session, path: /usage, description: "Per-model token usage of the session tree", response_schema: schemas/usage.json }]` — `GET /v1/sessions/{session}/bundles/hya-extra%2Ftoken-summary/usage`. `hya bundle info hya-extra/token-summary` prints `api=GET session /usage id=usage response_schema=schemas/usage.json description=…`. |
 | Tool name (full-plane agent, e.g. `hya-main`) | `token-summary__token_summary` |
 | Config | None. |

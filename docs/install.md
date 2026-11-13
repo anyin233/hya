@@ -32,7 +32,7 @@ Without options this installs the latest backend and the latest frontend into
 `--tui-only`; pass flags through `sh -s --`:
 
 ```sh
-# Headless server: hya serve, hya exec, hya run, … without TUI/WebUI.
+# Headless server: hya serve, hya exec, hya loop, … without TUI/WebUI.
 curl -fsSL https://hya.ed-aisys.com/install.sh | sh -s -- --backend-only
 # Add the frontend beside an installed backend.
 curl -fsSL https://hya.ed-aisys.com/install.sh | sh -s -- --tui-only
@@ -106,9 +106,8 @@ hya update --prefix /opt/hya       # a prefix other than the running hya's
 `--backend-only`, `--tui-only`, `--version`, `--force`, and `--prefix` with the
 same meaning. Without `--prefix` the prefix is the real `<prefix>` of the
 running `<prefix>/bin/hya` beside `<prefix>/lib/hya`; a build-tree `hya` is
-refused. The signed updater commands (`status`, `apply`, `authorize`, and so
-on) remain separate and cannot be combined with these options; see
-[self-update.md](self-update.md).
+refused. `hya update version` prints the updater version without running the
+installer; see [`hya update` in CLI Reference](cli.md#hya-update).
 
 ## Release package
 
