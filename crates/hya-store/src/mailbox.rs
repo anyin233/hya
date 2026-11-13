@@ -730,6 +730,9 @@ pub(crate) async fn append_resolved_channel_mail(
         channel: key.clone(),
         reason: reason.into(),
     };
+    if from != scope::ROOT_HANDLE && !projection.team.roster.contains_key(&from) {
+        return Err(reject("sender is not on the live roster"));
+    }
     let state = projection
         .team
         .channels
