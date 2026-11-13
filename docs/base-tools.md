@@ -120,6 +120,37 @@ The loader enters each bundle's Tokio runtime for native future polls while
 the host runtime remains available to session planes. Bundled filesystem,
 process, timer, and HTTP operations use the bundle's reactor.
 
+### Bash process completion
+
+`bash` captures stdout and stderr through pipes by default; `pty: true` attaches
+both streams to a real terminal. A daemon that calls `setsid()` can retain those
+output descriptors after the command exits. Both capture modes bound the final
+drain so such a daemon cannot hang the tool or turn a successful command into a
+timeout.
+
+For example, `{"command":"(sleep 0.3; printf 'bg-ok') &","timeout":30}` waits
+for the background child in the shell's process group and captures `bg-ok`.
+Use `"pty":true` in the same input when the command needs a terminal.
+The input fields remain `command: string` (required), `env: object<string,
+string>`, `timeout: number` (seconds; zero disables the deadline), `cwd: string`,
+and `pty: boolean` (default false).
+
+On Unix, once the shell has exited and its process group is absent
+(`kill(-pgid, 0)` reports `ESRCH`), pipes receive a 200 ms final drain; the PTY
+receives 200 ms of idle drain, renewed by arriving output. The tool then returns
+the shell's real exit code even if a foreign-session daemon retains an output
+fd. Children still in the original process group continue to be waited for.
+Timeout or cancellation kills the original group and allows at most 100 ms of
+final drain before closing capture, regardless of foreign-session fd holders.
+Those detached processes are outside the killed group and remain the caller's
+responsibility.
+
+The result remains `{title, output, metadata}`: `metadata.exit` is the shell's
+integer exit code (or null for a signal/timeout), `metadata.timedOut` is a boolean,
+and `metadata.durationMs` records elapsed milliseconds. Timeout returns a
+structured result with `timedOut: true`; explicit cancellation returns
+`ToolError::Cancelled`.
+
 ### Path boundary
 
 The file tools (`read`, `write`, `edit`, `ls`, `glob`, `find`, `grep`,
