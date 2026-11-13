@@ -1405,7 +1405,11 @@ flowchart TD
     );
 
     let root = engine.read_projection(lead).await.unwrap();
-    assert_eq!(root.team.inboxes.values().map(Vec::len).sum::<usize>(), 2);
+    assert_eq!(
+        root.team.inboxes.values().map(Vec::len).sum::<usize>(),
+        4,
+        "each directive appears in both peers' DM history"
+    );
     let resident = root
         .team
         .roster

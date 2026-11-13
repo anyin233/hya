@@ -969,6 +969,8 @@ impl TeamActor {
         let eligible = |slot: &Episode| {
             slot.claim.as_ref() == claim
                 && slot.status == SlotStatus::Idle
+                && !slot.has_work()
+                && !slot.user_stopped
                 && slot.ending.is_none()
                 && slot.report.is_none()
                 && slot
@@ -997,11 +999,30 @@ impl TeamActor {
                     .collect::<String>()
             })
             .unwrap_or_default();
+        let root = self.engine.read_projection(self.root).await?;
         let mut state = self.lock();
         if let Some(slot) = state
             .residents
             .get_mut(&session)
             .filter(|slot| eligible(slot))
+            .filter(|slot| {
+                root.team.roster.get(&slot.handle).is_some_and(|entry| {
+                    entry.resident_work.is_none()
+                        && slot.activation.as_ref().is_some_and(|activation| {
+                            entry.resident_cursor >= activation.boundary as u64
+                        })
+                        && root
+                            .team
+                            .unread_incoming_mail(&slot.handle, entry.resident_cursor)
+                            .next()
+                            .is_none()
+                        && !root
+                            .team
+                            .roster
+                            .keys()
+                            .any(|path| scope::parent_path(path) == Some(slot.handle.as_str()))
+                })
+            })
         {
             slot.route = None;
             if let Some(activation) = slot.activation.take() {
@@ -1730,8 +1751,21 @@ impl TeamActor {
             self.maybe_fire_quiescence(&mut state);
             slot
         };
+        self.wake_activated_parent(&done.handle);
         self.forget_episode(session, claim);
         Some(done)
+    }
+
+    fn wake_activated_parent(&self, child: &str) {
+        if let Some(parent) = scope::parent_path(child)
+            && let Some(slot) = self
+                .lock()
+                .residents
+                .values()
+                .find(|slot| slot.handle == parent && slot.activation.is_some())
+        {
+            slot.notify.notify_one();
+        }
     }
 
     fn complete_episode(
@@ -1843,6 +1877,9 @@ impl TeamActor {
                 && slot.claim == claim
             {
                 slot.cursor = slot.cursor.max(through);
+                if slot.activation.is_some() {
+                    slot.notify.notify_one();
+                }
             }
         }
     }
@@ -1919,6 +1956,9 @@ impl TeamActor {
                     .find(|slot| slot.handle == handle && slot.claim == claim)
             {
                 slot.cursor = slot.cursor.max(through);
+                if slot.activation.is_some() {
+                    slot.notify.notify_one();
+                }
             }
         }
         if let Some(supervisor) = self.supervisor.upgrade() {
@@ -2443,22 +2483,6 @@ async fn episode_task(
                                     .record_activity(None, handle, RosterStatus::Idle, None)
                                     .await;
                             }
-                            if let Err(error) =
-                                team.settle_activation(session, task_claim.as_ref()).await
-                            {
-                                let Some(claim) = claim.as_ref() else {
-                                    return;
-                                };
-                                finish_episode(
-                                    &team,
-                                    claim,
-                                    Ending::Failed(format!("activation completion error: {error}")),
-                                    &mut sidecar_handle,
-                                    None,
-                                )
-                                .await;
-                                return;
-                            }
                         }
                         Ok(TurnOutcome::Cancelled { .. }) | Err(CoreError::Cancelled) => {
                             // A user-stopped episode stays live and durably idle;
@@ -2541,6 +2565,20 @@ async fn episode_task(
                             .record_activity(claim.as_ref(), handle, RosterStatus::Idle, None)
                             .await;
                     }
+                    if let Err(error) = team.settle_activation(session, task_claim.as_ref()).await {
+                        let Some(claim) = claim.as_ref() else {
+                            return;
+                        };
+                        finish_episode(
+                            &team,
+                            claim,
+                            Ending::Failed(format!("activation completion error: {error}")),
+                            &mut sidecar_handle,
+                            None,
+                        )
+                        .await;
+                        return;
+                    }
                     break;
                 }
             }
@@ -2565,6 +2603,8 @@ pub struct ResidentSupervisor {
     claim_writes: tokio::sync::Mutex<()>,
     #[cfg(test)]
     registration_pause: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
+    #[cfg(test)]
+    activation_lock_pause: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
     #[cfg(test)]
     revive_ready_pause: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
     self_ref: Weak<ResidentSupervisor>,
@@ -3202,6 +3242,8 @@ impl ResidentSupervisor {
             #[cfg(test)]
             registration_pause: Mutex::new(None),
             #[cfg(test)]
+            activation_lock_pause: Mutex::new(None),
+            #[cfg(test)]
             revive_ready_pause: Mutex::new(None),
             self_ref: self_ref.clone(),
             listener_stop: CancellationToken::new(),
@@ -3728,6 +3770,22 @@ impl ResidentSupervisor {
     /// Request an archive and wait for the episode's own ending. Dropping
     /// this wait never cancels the episode task.
     pub async fn end_member(&self, root: SessionId, handle: &str) -> Result<(), CoreError> {
+        let projection = self.engine.read_projection(root).await?;
+        let prefix = format!("{handle}{}", scope::PATH_SEPARATOR);
+        let mut descendants = projection
+            .team
+            .roster
+            .iter()
+            .filter(|(path, _)| path.starts_with(&prefix))
+            .map(|(path, entry)| (path.clone(), entry.session))
+            .collect::<Vec<_>>();
+        descendants.sort_by_key(|(path, _)| {
+            std::cmp::Reverse(path.matches(scope::PATH_SEPARATOR).count())
+        });
+        for (path, child) in descendants {
+            self.stop_and_archive_live(root, &path, child, "Workflow run cancelled")
+                .await?;
+        }
         let live = self
             .episodes
             .lock()
@@ -3959,6 +4017,9 @@ impl ResidentSupervisor {
             )
             .await?;
         self.engine.publish_resident_finalization(envelopes);
+        if let Some(team) = self.teams().get(&root).cloned() {
+            team.wake_activated_parent(handle);
+        }
         Ok(false)
     }
 
@@ -4144,6 +4205,7 @@ impl ResidentSupervisor {
                     boundary,
                     done: activation.done,
                 });
+                slot.pending = true;
             }
             for envelope in envelopes {
                 self.engine.publish_envelope(envelope);
@@ -4517,8 +4579,26 @@ impl ResidentSupervisor {
         route: Option<WorkflowTurnRoute>,
         parent_claim: Option<&ActorClaim>,
     ) -> Result<ActivationWaiter, CoreError> {
+        if directive.trim().is_empty() {
+            return Err(CoreError::Invalid(
+                "Workflow activation directive must not be blank".into(),
+            ));
+        }
         let (root, _) = self.engine.session_lineage(parent).await?;
         let from = self.engine.resolve_handle(root, parent).await?;
+        #[cfg(test)]
+        {
+            let pause = self
+                .activation_lock_pause
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some((entered, release)) = pause {
+                entered.notify_one();
+                release.notified().await;
+            }
+        }
+        let write = self.claim_writes.lock().await;
         let projection = self.engine.read_projection(root).await?;
         let target = projection
             .team
@@ -4535,9 +4615,10 @@ impl ResidentSupervisor {
                     .map(|entry| entry.handle.clone())
             })
             .ok_or_else(|| CoreError::Invalid("resident member is not registered".into()))?;
+        let dm = crate::engine::dm_channel_between(&projection, &from, &target)
+            .ok_or_else(|| CoreError::Invalid("resident member has no parent DM channel".into()))?;
         let (done, receiver) = oneshot::channel();
         if projection.team.roster.contains_key(&target) {
-            let write = self.claim_writes.lock().await;
             let lease = self.engine.try_begin_turn(member)?;
             let team = self
                 .team_with_resident(member)
@@ -4560,16 +4641,17 @@ impl ResidentSupervisor {
             let envelope = self
                 .engine
                 .store()
-                .append_direct_mail(
+                .append_channel_mail(
                     root,
                     from,
-                    target.clone(),
+                    dm.clone(),
                     hya_proto::MailKind::Message,
                     directive,
                     parent_claim,
                     None,
                 )
-                .await?;
+                .await?
+                .0;
             let boundary = self.engine.read_projection(root).await?.team.inboxes[&target].len();
             {
                 let mut state = team.lock();
@@ -4579,17 +4661,19 @@ impl ResidentSupervisor {
                 slot.guidance = Some(guidance);
                 slot.route = route;
                 slot.activation = Some(ActivationCompletion { boundary, done });
+                slot.pending = true;
             }
             self.engine.publish_envelope(envelope);
             drop(write);
             drop(lease);
             return Ok(ActivationWaiter { done: receiver });
         }
+        drop(write);
         self.revive_episode_with_activation(
             root,
             &from,
             &target,
-            MailEndpoint::Handle(target.clone()),
+            MailEndpoint::Channel(dm),
             hya_proto::MailKind::Message,
             directive,
             parent_claim,
