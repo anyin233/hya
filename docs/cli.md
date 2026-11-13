@@ -1016,8 +1016,8 @@ and says so (use `hya serve relay connect`).
 `hya serve restart` is how a running backend replaces its own code: build the
 new `hya`, then restart from it. The new build must prove itself before the
 running daemon is touched, and a build that proves itself but still fails to
-start is rolled back instead of taking the backend down
-([ADR-0028](adr/0028-inherited-listener-handoff.md#amendment-2026-09-28-self-proof-and-rollback)).
+start is rolled back instead of taking the backend down (note: superseded on
+upcoming releases by [ADR-0031](adr/0031-hot-reload-and-stop-start-restart.md)).
 
 1. **Self-check.** The restart runs `<new hya> serve check --db <db> --json`:
    the whole runtime composes against a snapshot of the live database, so
@@ -1407,15 +1407,10 @@ headless commands without the frontend, while bare `hya` tells the user to run
 `hya update --tui-only` when the frontend is missing. See
 [Install and update](install.md).
 
-The subcommands below are the self-update TCB. They verify signed release
-metadata, stage immutable generations,
-optionally smoke them, and activate only with explicit owner authorization.
-It replaces the former standalone `hya-updater` binary. The commands are
-implemented in the independent `hya-updater` library crate, and `hya`
-dispatches them before composing any runtime: no config bootstrap, bundles,
-providers, plugins, MCP, or session store are loaded. Global flags such as
-`--model` or `--db` are accepted but ignored. See
-[Secure self-update](self-update.md).
+The subcommands below are implemented in the independent `hya-updater` library
+crate, and `hya` dispatches them before composing any runtime: no config
+bootstrap, bundles, providers, plugins, MCP, or session store are loaded. Global
+flags such as `--model` or `--db` are accepted but ignored.
 
 | Command | Purpose |
 | --- | --- |
@@ -1448,8 +1443,7 @@ hya update init-roots \
 Network download is outside the TCB. Pass a local package directory or
 `file://` path. `install.sh` remains break-glass recovery. `init-roots`
 requires `--path` and at least one `--root KEY_ID=HEX32` (repeatable).
-`apply --trust-roots` overrides `<root>/trust_roots.json`. The complete
-flag list is in [Secure self-update](self-update.md).
+`apply --trust-roots` overrides `<root>/trust_roots.json`.
 
 ## `hya proxy`
 
