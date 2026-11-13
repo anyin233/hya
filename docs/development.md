@@ -439,3 +439,29 @@ these bounds fail; event and transaction differences always fail. After an
 intentional lifecycle change, repeat five runs, investigate any count variation, then replace the baseline
 with reviewed `--json` output. Compare timing min/median/max on the same machine;
 relative spread is `(max-min)/median`, not a performance regression threshold.
+
+### Server task shutdown
+
+`hya_server::AppState` owns the live frame relay, catalog notice relay, Project
+busy watcher, session-list tracker, ephemeral reaper (including startup sweep
+and delayed checks), and permission/question bridges. Routers retain the owner;
+background tasks retain only its cancellation and tracking handles, so dropping
+the final owner can cancel them without an ownership cycle.
+
+Embedders call `state.shutdown().await` before shutting down their built engine.
+`AppState::shutdown(&self) -> impl Future<Output = ()>` ends live streams,
+fences server admission, cancels those services, and joins every tracked child.
+`AppState::stop_for_restart` includes this step. `HyaRuntime::shutdown(&mut self)
+-> Result<(), hya_core::CoreError>` joins server services before the existing
+composition-intake and resident drain sequence:
+
+```rust,ignore
+let mut runtime = hya_app::HyaRuntime::start(options).await?;
+serve(runtime.router().clone()).await;
+runtime.shutdown().await?;
+```
+
+The shared `RuntimeTaskOwner` remains available from `hya_app` and is defined
+in `hya_server`; `stop: CancellationToken` and `tasks: TaskTracker` track service
+cancellation and completion. Explicit shutdown joins; drop only cancels.
+Resident bus listeners and plugin/MCP connection I/O have separate owners.
