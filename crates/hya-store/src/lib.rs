@@ -373,6 +373,8 @@ pub struct ProjectActivityFile {
 impl SessionStore {
     /// Open a plain filesystem path (initialize the schema and enable WAL), or
     /// `""` / `":memory:"` with the keeper-backed in-memory mode.
+    /// This does not make the caller a runtime owner; runtime writers use
+    /// [`Self::connect_runtime`] and [`Self::claim_runtime_owner`].
     /// Existing databases without the current baseline return [`StoreError::UnsupportedDatabase`].
     pub async fn connect(path: &str) -> Result<Self, StoreError> {
         let paths = database_paths(path)
@@ -491,7 +493,8 @@ impl SessionStore {
     /// Claim this store as the runtime owner for startup recovery and Workflow control.
     ///
     /// File-backed stores hold an exclusive lock next to the canonical SQLite file
-    /// until every clone sharing this store is dropped. In-memory stores retain the
+    /// until explicitly released after drain or every clone of this store is dropped.
+    /// In-memory stores retain the
     /// owner identity in the store instance. Repeating the claim with the same owner
     /// is idempotent; a different owner is rejected while the claim is held.
     pub fn claim_runtime_owner(&self, owner: OwnerRunId) -> Result<(), StoreError> {

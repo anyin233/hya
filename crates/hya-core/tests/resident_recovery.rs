@@ -31,6 +31,8 @@ async fn engine(store: SessionStore) -> SessionEngine {
 #[tokio::test]
 async fn stale_tool_or_child_completion_cannot_append_or_advance_projection() {
     let store = SessionStore::connect_memory().await.unwrap();
+    let recovery_owner = OwnerRunId::new();
+    store.claim_runtime_owner(recovery_owner).unwrap();
     let engine = engine(store.clone()).await;
     let root = SessionId::new();
     let old_binding = engine.runtime_registry().bind_turn(Path::new(".")).unwrap();
@@ -38,7 +40,7 @@ async fn stale_tool_or_child_completion_cannot_append_or_advance_projection() {
         .try_claim_new(root, root, OwnerRunId::new())
         .await
         .unwrap();
-    let recovered = store.recover_claim(root, OwnerRunId::new()).await.unwrap();
+    let recovered = store.recover_claim(root, recovery_owner).await.unwrap();
     let before = store.read_projection(root).await.unwrap();
 
     let result = engine
@@ -106,6 +108,8 @@ async fn stale_tool_or_child_completion_cannot_append_or_advance_projection() {
 #[tokio::test]
 async fn queued_resident_message_resumes_but_running_message_aborts() {
     let store = SessionStore::connect_memory().await.unwrap();
+    let recovery_owner = OwnerRunId::new();
+    store.claim_runtime_owner(recovery_owner).unwrap();
     let engine = engine(store.clone()).await;
 
     let queued_root = SessionId::new();
@@ -155,7 +159,7 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
         .await
         .unwrap();
     let queued_recovered = store
-        .recover_claim(queued_actor, OwnerRunId::new())
+        .recover_claim(queued_actor, recovery_owner)
         .await
         .unwrap();
 
@@ -303,7 +307,7 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
         .await
         .unwrap();
     let running_recovered = store
-        .recover_claim(running_actor, OwnerRunId::new())
+        .recover_claim(running_actor, recovery_owner)
         .await
         .unwrap();
 
@@ -345,6 +349,8 @@ async fn resident_recovery_rolls_back_actor_and_root_failure_atomically() {
     let db_path = db_dir.path().join("sessions.db");
     let db_path = db_path.to_string_lossy().into_owned();
     let store = SessionStore::connect(&db_path).await.unwrap();
+    let recovery_owner = OwnerRunId::new();
+    store.claim_runtime_owner(recovery_owner).unwrap();
     let engine = engine(store.clone()).await;
     let root = SessionId::new();
     let actor = SessionId::new();
@@ -430,7 +436,7 @@ async fn resident_recovery_rolls_back_actor_and_root_failure_atomically() {
         .await
         .unwrap();
 
-    let recovered = store.recover_claim(actor, OwnerRunId::new()).await.unwrap();
+    let recovered = store.recover_claim(actor, recovery_owner).await.unwrap();
     let root_before = store.replay(root).await.unwrap();
     let actor_before = store.replay(actor).await.unwrap();
 
@@ -464,6 +470,8 @@ async fn resident_recovery_rolls_back_actor_and_root_failure_atomically() {
 async fn repeated_startup_recovery_produces_identical_projection_and_no_duplicate_terminal_events()
 {
     let store = SessionStore::connect_memory().await.unwrap();
+    let recovery_owner = OwnerRunId::new();
+    store.claim_runtime_owner(recovery_owner).unwrap();
     let engine = engine(store.clone()).await;
     let root = SessionId::new();
     let actor = SessionId::new();
@@ -537,8 +545,8 @@ async fn repeated_startup_recovery_produces_identical_projection_and_no_duplicat
         .await
         .unwrap();
 
-    let _first_claim = store.recover_claim(actor, OwnerRunId::new()).await.unwrap();
-    let second_claim = store.recover_claim(actor, OwnerRunId::new()).await.unwrap();
+    let _first_claim = store.recover_claim(actor, recovery_owner).await.unwrap();
+    let second_claim = store.recover_claim(actor, recovery_owner).await.unwrap();
     let first = engine
         .recover_resident_actor(&second_claim, root, "main/repeat-1")
         .await
@@ -552,7 +560,7 @@ async fn repeated_startup_recovery_produces_identical_projection_and_no_duplicat
     );
     let projection_after_first = store.read_projection(root).await.unwrap();
 
-    let third_claim = store.recover_claim(actor, OwnerRunId::new()).await.unwrap();
+    let third_claim = store.recover_claim(actor, recovery_owner).await.unwrap();
     let second = engine
         .recover_resident_actor(&third_claim, root, "main/repeat-1")
         .await
@@ -706,7 +714,9 @@ async fn superseded_stream_cannot_commit_buffered_text() {
             if matches!(live.recv().await.unwrap().event, Event::TextDelta { session, delta, .. } if session == child && delta == "buffered") { break; }
         }
     }).await.unwrap();
-    other.recover_claim(child, OwnerRunId::new()).await.unwrap();
+    let recovery_owner = OwnerRunId::new();
+    other.claim_runtime_owner(recovery_owner).unwrap();
+    other.recover_claim(child, recovery_owner).await.unwrap();
     let before_child = store.replay(child).await.unwrap();
     let before_root = store.replay(root).await.unwrap();
     // The stale claim is tested at the durable boundary, without any timer.
