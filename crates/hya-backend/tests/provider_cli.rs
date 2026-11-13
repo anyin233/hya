@@ -417,24 +417,26 @@ fn refresh_updates_the_running_backend() -> TestResult {
         );
 
         server.set_models(&["alpha", "beta", "gamma"]);
-        let fetched = server.fetches();
         let listed = hya(&root)
             .args(["provider", "list", "--refresh", "--db", db])
             .output()?;
         assert!(listed.status.success(), "{}", text(&listed));
         assert!(text(&listed).contains("fake/gamma"), "{}", text(&listed));
-        assert_eq!(server.fetches(), fetched + 1, "one fetch per refresh");
+        assert_eq!(
+            server.fetches(),
+            3,
+            "add, startup discovery, and list refresh"
+        );
         let after = backend_models(&url)?;
         assert!(after.contains("fake/gamma"), "{after}");
 
         server.set_models(&["alpha", "beta", "gamma", "delta"]);
-        let fetched = server.fetches();
         let models = hya(&root)
             .args(["models", "fake", "--refresh", "--db", db])
             .output()?;
         assert!(models.status.success(), "{}", text(&models));
         assert!(text(&models).contains("delta"), "{}", text(&models));
-        assert_eq!(server.fetches(), fetched + 1, "one fetch per refresh");
+        assert_eq!(server.fetches(), 4, "one more fetch for models refresh");
         let after = backend_models(&url)?;
         assert!(after.contains("fake/delta"), "{after}");
         Ok(())
