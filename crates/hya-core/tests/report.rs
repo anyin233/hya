@@ -1579,7 +1579,7 @@ async fn channel_read_returns_history_and_marks_inbox_seen() {
     let child: SessionId = projection.team.roster.get(&handle).unwrap().session;
 
     let latest = engine
-        .read_channel_history(child, &group, None)
+        .read_channel_history(None, child, &group, None)
         .await
         .unwrap();
     assert_eq!(latest.messages.len(), 1, "no `last` reads exactly one");
@@ -1589,7 +1589,7 @@ async fn channel_read_returns_history_and_marks_inbox_seen() {
     );
 
     let history = engine
-        .read_channel_history(child, &group, Some(10))
+        .read_channel_history(None, child, &group, Some(10))
         .await
         .unwrap();
     assert_eq!(history.messages.len(), 2);
@@ -1649,7 +1649,7 @@ async fn channel_read_normalizes_channel_id_spellings_with_warning() {
     let child: SessionId = projection.team.roster.get(&handle).unwrap().session;
 
     let doubled = engine
-        .read_channel_history(child, &format!("##{group}"), None)
+        .read_channel_history(None, child, &format!("##{group}"), None)
         .await
         .unwrap();
     assert_eq!(doubled.channel, group, "lookup uses the stripped id");
@@ -1661,7 +1661,7 @@ async fn channel_read_normalizes_channel_id_spellings_with_warning() {
     );
 
     let padded = engine
-        .read_channel_history(child, &format!("  {group}  "), None)
+        .read_channel_history(None, child, &format!("  {group}  "), None)
         .await
         .unwrap();
     assert_eq!(padded.channel, group, "padded read still finds the channel");
@@ -1673,12 +1673,12 @@ async fn channel_read_normalizes_channel_id_spellings_with_warning() {
 
     // A clean id stays silent; an unknown id is still an error.
     let clean = engine
-        .read_channel_history(child, &group, None)
+        .read_channel_history(None, child, &group, None)
         .await
         .unwrap();
     assert_eq!(clean.warning, None, "no warning when nothing was stripped");
     let unknown = engine
-        .read_channel_history(child, "no-such-channel", None)
+        .read_channel_history(None, child, "no-such-channel", None)
         .await;
     assert!(unknown.is_err(), "an unknown channel id must still error");
 }
@@ -1711,7 +1711,7 @@ async fn channel_read_by_member_handle_opens_the_callers_dm_with_it() {
     let leaf = hya_proto::scope::leaf(&handle).to_string();
     for spelling in [format!("#{handle}"), handle.clone(), leaf] {
         let read = engine
-            .read_channel_history(root, &spelling, None)
+            .read_channel_history(None, root, &spelling, None)
             .await
             .unwrap_or_else(|error| panic!("`{spelling}`: {error}"));
         assert_eq!(read.channel, dm, "`{spelling}` reads the caller's DM");
@@ -1721,12 +1721,15 @@ async fn channel_read_by_member_handle_opens_the_callers_dm_with_it() {
             "`{spelling}`: {warning}"
         );
     }
-    let direct = engine.read_channel_history(root, &dm, None).await.unwrap();
+    let direct = engine
+        .read_channel_history(None, root, &dm, None)
+        .await
+        .unwrap();
     assert_eq!(direct.channel, dm);
     assert_eq!(direct.warning, None, "a real channel id reads silently");
 
     let error = engine
-        .read_channel_history(root, "#main/nobody-here", None)
+        .read_channel_history(None, root, "#main/nobody-here", None)
         .await
         .unwrap_err()
         .to_string();

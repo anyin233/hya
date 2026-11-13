@@ -2146,7 +2146,7 @@ impl SessionEngine {
                                             .with_channel_policy(channel_policy),
                                         lifecycle: self
                                             .lifecycle
-                                            .for_session(session)
+                                            .for_session_with_actor(session, actor_claim.copied())
                                             .with_channel_policy(channel_policy)
                                             .with_report_latch(report_latch.clone()),
                                         project_activity: self

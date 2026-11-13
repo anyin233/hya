@@ -11,7 +11,8 @@
 //! mail; this module itself only persists and publishes.
 
 use hya_proto::{
-    AgentName, Event, MailEndpoint, MailKind, RosterStatus, SessionId, SubagentMode, scope,
+    ActorClaim, AgentName, Event, MailEndpoint, MailKind, RosterStatus, SessionId, SubagentMode,
+    scope,
 };
 use hya_tool::MailReceipt;
 
@@ -477,6 +478,7 @@ impl SessionEngine {
     /// `list_channel`.
     pub async fn read_channel_history(
         &self,
+        actor_claim: Option<&ActorClaim>,
         session: SessionId,
         channel: &str,
         last: Option<usize>,
@@ -552,7 +554,7 @@ impl SessionEngine {
         drop(projection);
         if cursor < inbox_len {
             self.emit_for_actor(
-                None,
+                actor_claim,
                 root,
                 Event::MailConsumed {
                     session: root,
@@ -2224,6 +2226,57 @@ mod tests {
         fn turn_released(&self, _: SessionId) {}
     }
 
+    #[tokio::test]
+    async fn superseded_channel_reader_cannot_advance_the_inbox_cursor() {
+        let engine = Arc::new(engine().await);
+        let org = org(&engine).await;
+        let caller = org.lead_1.session;
+        let owner = hya_proto::OwnerRunId::new();
+        engine.store().claim_runtime_owner(owner).unwrap();
+        let old = engine
+            .store()
+            .recover_claim(caller, owner)
+            .await
+            .unwrap()
+            .claim;
+        engine
+            .mail_send(
+                org.root,
+                MailEndpoint::Handle(org.lead_1.path.clone()),
+                MailKind::Message,
+                "owed to replacement".into(),
+            )
+            .await
+            .unwrap();
+        let channel = dm_channel_between(
+            &engine.read_projection(org.root).await.unwrap(),
+            "main",
+            &org.lead_1.path,
+        )
+        .unwrap();
+        engine.store().recover_claim(caller, owner).await.unwrap();
+        let before = engine.replay(org.root).await.unwrap();
+        let (plane, requests) = hya_tool::MailboxPlane::new();
+        let stop = tokio_util::sync::CancellationToken::new();
+        let service = tokio::spawn(crate::run_mailbox_service(
+            engine.clone(),
+            requests,
+            stop.clone(),
+        ));
+        let result = plane
+            .for_session_with_actor(caller, Some(old))
+            .read_channel(channel, Some(10))
+            .await;
+        stop.cancel();
+        service.await.unwrap();
+        assert!(result.is_err(), "a superseded read consumed mail");
+        assert_eq!(
+            engine.replay(org.root).await.unwrap(),
+            before,
+            "the superseded read changed the replacement's inbox cursor"
+        );
+    }
+
     async fn cursor_cleanup_marks_only_incoming_work(read: bool) {
         let engine = Arc::new(engine().await);
         let org = org(&engine).await;
@@ -2252,11 +2305,12 @@ mod tests {
                 )
                 .unwrap();
                 engine
-                    .read_channel_history(org.root, &channel, Some(10))
+                    .read_channel_history(None, org.root, &channel, Some(10))
                     .await
                     .unwrap();
             } else {
                 crate::member_wait::wait_for_members(
+                    None,
                     &engine,
                     &supervisor,
                     org.root,

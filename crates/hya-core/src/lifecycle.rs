@@ -61,6 +61,7 @@ pub async fn run_lifecycle_service(
                 }
                 LifecycleRequest::Wait {
                     session,
+                    actor_claim,
                     spec,
                     mut reply,
                 } => {
@@ -69,6 +70,7 @@ pub async fn run_lifecycle_service(
                     let result = tokio::select! {
                         () = reply.closed() => return,
                         result = crate::member_wait::wait_for_members(
+                            actor_claim.as_ref(),
                             &engine,
                             &supervisor,
                             session,

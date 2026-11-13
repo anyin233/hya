@@ -1288,7 +1288,10 @@ async fn review_a1_consumed_trailing_wake_settles_without_another_model_turn() {
     let team = supervisor.team_with_resident(child).unwrap();
     team.on_mail("main", &MailEndpoint::Channel(dm.clone()))
         .await;
-    engine.read_channel_history(child, &dm, None).await.unwrap();
+    engine
+        .read_channel_history(None, child, &dm, None)
+        .await
+        .unwrap();
     release.notify_one();
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(3), waiter.wait())
@@ -2262,6 +2265,7 @@ async fn o2_interactive_turn_release_retires_the_finished_team() {
     team.enqueue(TeamEvent::Flush(done));
     flushed.await.unwrap();
     crate::member_wait::wait_for_members(
+        None,
         &engine,
         &supervisor,
         root,

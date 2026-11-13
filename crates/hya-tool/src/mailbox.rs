@@ -102,6 +102,8 @@ pub enum MailboxRequest {
     ReadChannel {
         /// Acting session.
         session: SessionId,
+        /// Claim captured by the calling turn; roots use `None`.
+        actor_claim: Option<ActorClaim>,
         /// Channel id; leading `#`s and padding are normalized engine-side.
         channel: String,
         /// Message count (newest-last); `None` reads the latest one.
@@ -221,7 +223,7 @@ impl MailboxPlane {
         self.for_session_with_actor(session, None)
     }
 
-    /// Bind session and optional actor claim used for fenced sends.
+    /// Bind session and optional actor claim used for fenced mailbox writes.
     #[must_use]
     pub fn for_session_with_actor(
         &self,
@@ -318,6 +320,7 @@ impl MailboxPlane {
         let session = self.session.ok_or(MailboxError::Unavailable)?;
         self.request(|reply| MailboxRequest::ReadChannel {
             session,
+            actor_claim: self.actor_claim,
             channel,
             last,
             reply,

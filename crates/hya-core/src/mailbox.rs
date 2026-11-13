@@ -53,12 +53,13 @@ pub async fn run_mailbox_service(
                 }
                 MailboxRequest::ReadChannel {
                     session,
+                    actor_claim,
                     channel,
                     last,
                     reply,
                 } => {
                     let result = engine
-                        .read_channel_history(session, &channel, last)
+                        .read_channel_history(actor_claim.as_ref(), session, &channel, last)
                         .await
                         .map(|read| {
                             (

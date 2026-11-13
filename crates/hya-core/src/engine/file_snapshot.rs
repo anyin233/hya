@@ -467,6 +467,7 @@ impl SessionEngine {
             });
         }
         let hash = content_hash(bytes);
+        // Content-addressed blobs remain unreferenced unless the fenced FilesChanged event commits.
         self.store.put_file_blob(session, &hash, bytes).await?;
         budget.used = budget.used.saturating_add(size);
         Ok(FileState::Stored { hash, size })

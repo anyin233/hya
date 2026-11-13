@@ -37,11 +37,15 @@ impl SessionEngine {
             .begin_turn(session, &tokio_util::sync::CancellationToken::new())
             .await?
             .ok_or(crate::CoreError::Cancelled)?;
-        Ok(self.terminal_handoff_claimed(session).await)
+        Ok(self.terminal_handoff_claimed(session, None).await)
     }
 
     /// The caller holds the turn lease through handoff publication.
-    pub(crate) async fn terminal_handoff_claimed(&self, session: SessionId) -> TerminalHandoff {
+    pub(crate) async fn terminal_handoff_claimed(
+        &self,
+        session: SessionId,
+        actor_claim: Option<&hya_proto::ActorClaim>,
+    ) -> TerminalHandoff {
         let Ok(projection) = self.read_projection_shared(session).await else {
             return TerminalHandoff {
                 generation: 1,
@@ -74,7 +78,7 @@ impl SessionEngine {
             };
             let written = summarizer.summarize(&messages, options).await;
             // The terminal handoff is a summarizer call billed to this session.
-            self.record_side_call_usage(None, session, UsagePurpose::Compaction, &usage)
+            self.record_side_call_usage(actor_claim, session, UsagePurpose::Compaction, &usage)
                 .await;
             if let Ok(doc) = written {
                 return TerminalHandoff {

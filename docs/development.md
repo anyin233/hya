@@ -579,6 +579,21 @@ Resident bus listeners and plugin/MCP connection I/O have separate owners.
 Actor-owned streaming deltas execute no claim-check SQL. Durable text/reasoning
 boundaries, tool results, work completion and endings retain their transactional
 claim fences. Tool dispatch keeps its checks after permission and hook awaits.
+Channel reads and waits carry the admitted turn's `Option<ActorClaim>` through
+`MailboxRequest::ReadChannel` and `LifecycleRequest::Wait`; their `MailConsumed`
+write fences that capability in its own writer transaction. Root callers use
+`None`. `MailboxPlane::for_session_with_actor` and
+`LifecyclePlane::for_session_with_actor(session: SessionId, actor_claim:
+Option<ActorClaim>)` bind that capability when the engine creates the tool context.
+The engine read API is
+`SessionEngine::read_channel_history(actor_claim: Option<&ActorClaim>, session:
+SessionId, channel: &str, last: Option<usize>) -> Result<ChannelHistoryRead,
+CoreError>`. Terminal handoff summarizer usage uses the ending episode's claim too.
+A stale resident's `read channel://DM-…` or channel `wait` cannot consume mail owed to its
+replacement. Content-addressed file blobs are auxiliary: only a committed,
+fenced `FilesChanged` event references them. No tool input, plugin protocol, RPC,
+or event payload changes.
+
 Local archive, kill, root deletion and shutdown cancel the turn directly through
 its engine/episode cancellation tokens before releasing its claim.
 
@@ -591,8 +606,8 @@ URI spellings (including in-memory URIs) are rejected at this boundary (see the 
 
 There is no timer or liveness guarantee for a silent stream whose claim is
 superseded through raw SQL fault injection or a caller that releases ownership
-without first quiescing writes. Unowned store connections cannot recover claims. That two-live-owner case bypasses the runtime
-ownership contract and cannot occur through normal runtime startup. Low-level
+without first quiescing writes. Unowned store connections cannot recover claims.
+That two-live-owner case bypasses the runtime ownership contract and cannot occur through normal runtime startup. Low-level
 `recover_claim` tests still exercise the stronger durability guarantee: no event
 under the superseded claim can commit, even if its buffered stream later reaches
 a durable boundary.

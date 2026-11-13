@@ -98,6 +98,7 @@ struct Standing {
 /// caller's live subagents), the team lead, or not one of the caller's
 /// subagents; store failures propagate.
 pub(crate) async fn wait_for_members(
+    actor_claim: Option<&ActorClaim>,
     engine: &Arc<SessionEngine>,
     supervisor: &ResidentSupervisor,
     caller: SessionId,
@@ -197,7 +198,7 @@ pub(crate) async fn wait_for_members(
             if inbox.through > cursor {
                 engine
                     .emit_for_actor(
-                        None,
+                        actor_claim,
                         root,
                         Event::MailConsumed {
                             session: root,
