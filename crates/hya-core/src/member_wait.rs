@@ -491,7 +491,8 @@ fn scan_inbox(
     let mut mail = Vec::new();
     let mut through = cursor.min(inbox.len());
     let mut contiguous = true;
-    for (index, message) in inbox.iter().enumerate().skip(cursor) {
+    for (index, mail_index) in inbox.iter().enumerate().skip(cursor) {
+        let message = &projection.team.mail[*mail_index];
         let own = message.from == caller_path;
         let finish_report = standing
             .reports
@@ -532,6 +533,7 @@ fn scan_inbox(
         .iter()
         .take(through)
         .skip(cursor)
+        .map(|index| &projection.team.mail[*index])
         .any(|message| message.from != caller_path);
     InboxScan {
         mail,
