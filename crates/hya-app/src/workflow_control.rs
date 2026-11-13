@@ -967,6 +967,14 @@ impl WorkflowControl {
             .as_ref()
             .and_then(|state| state.selection.as_ref())
             .cloned();
+        let active_run = projection
+            .session
+            .workflow
+            .as_ref()
+            .and_then(|state| state.run.as_ref())
+            .filter(|run| run.status == WorkflowRunStatus::Running)
+            .map(|run| run.id);
+        drop(projection);
         let workflow_name = workflow
             .as_deref()
             .or_else(|| selected.as_ref().map(|selection| selection.name.as_str()))
@@ -1031,16 +1039,10 @@ impl WorkflowControl {
                 replayed: true,
             });
         }
-        if let Some(active) = projection
-            .session
-            .workflow
-            .as_ref()
-            .and_then(|state| state.run.as_ref())
-            && active.status == WorkflowRunStatus::Running
-        {
+        if let Some(active) = active_run {
             return Err(WorkflowControlError::Busy {
                 session,
-                run: active.id,
+                run: active,
             });
         }
 

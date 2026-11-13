@@ -239,23 +239,26 @@ impl SessionEngine {
             lease.set_message(message, true);
             let projection = self.store.read_projection_shared(session).await?;
             let workdir = session_workdir(agent, &projection);
-            let binding = tokio::select! {
-                biased;
-                () = cancel.cancelled() => return Ok((message, FinishReason::Cancelled)),
-                binding = self.bind_session_runtime(session, &workdir) => binding?,
-            };
             let stable_id = projection
                 .session
                 .agent
                 .as_ref()
                 .unwrap_or(&agent.name)
-                .as_str();
+                .as_str()
+                .to_string();
+            drop(projection);
+            let binding = tokio::select! {
+                biased;
+                () = cancel.cancelled() => return Ok((message, FinishReason::Cancelled)),
+                binding = self.bind_session_runtime(session, &workdir) => binding?,
+            };
             // Shell turns do not attach project/reference guidance.
-            let (agent, resources) = effective_agent_for_binding(agent, stable_id, &binding, None)?;
+            let (agent, resources) =
+                effective_agent_for_binding(agent, &stable_id, &binding, None)?;
 
-            self.capture_session_bundle_hooks(session, &binding, stable_id)
+            self.capture_session_bundle_hooks(session, &binding, &stable_id)
                 .await;
-            let bound_hooks = binding.bundle_hooks_for_agent(stable_id);
+            let bound_hooks = binding.bundle_hooks_for_agent(&stable_id);
             let operation = async {
                 let message_guard = self.turn_gate.message_guard(session).await;
                 if cancel.is_cancelled() {
@@ -421,6 +424,7 @@ impl SessionEngine {
         .await?;
 
         let projection = self.store.read_projection_shared(session).await?;
+        let parent_session = projection.session.parent;
         let input_for_after = active_hooks.as_ref().map(|_| input.clone());
         let started = std::time::Instant::now();
         // Prior content of the files the command may change (revert).
@@ -431,6 +435,7 @@ impl SessionEngine {
                     let workspace = self
                         .session_workspace(session, &projection, binding.workdir())
                         .await;
+                    drop(projection);
                     let mut permission = self
                         .mode_permission_plane(binding, session, Some(&agent.name))
                         .await?
@@ -476,7 +481,7 @@ impl SessionEngine {
                                     .for_session(session)
                                     .with_channel_policy(channel_policy),
                                 session: Some(session),
-                                parent_session: projection.session.parent,
+                                parent_session,
                                 todo: self.todo.clone(),
                                 skills: resources.skill_plane(),
                                 artifacts: self.artifacts.clone(),
