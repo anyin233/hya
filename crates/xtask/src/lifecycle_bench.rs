@@ -107,7 +107,7 @@ impl Provider for Script {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Row {
     scenario: String,
     n: usize,
@@ -345,7 +345,10 @@ pub fn run(args: Vec<String>) -> anyhow::Result<()> {
     if let Some(path) = baseline {
         let expected: Vec<Row> = serde_json::from_slice(&std::fs::read(path)?)?;
         anyhow::ensure!(expected.len() == rows.len(), "baseline row count differs");
-        for (a, b) in rows.iter().zip(expected.iter()) {
+        let (mut actual_rows, mut expected_rows) = (rows.clone(), expected);
+        merge_spawn_statements(&mut actual_rows);
+        merge_spawn_statements(&mut expected_rows);
+        for (a, b) in actual_rows.iter().zip(expected_rows.iter()) {
             check_row(a, b)?;
         }
     }
@@ -368,6 +371,20 @@ pub fn run(args: Vec<String>) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// A spawned member's first wake starts before `spawn_batch` returns, so its reads fall on either
+/// side of the spawn/work boundary. Only the sum is stable: it is checked on the work row.
+fn merge_spawn_statements(rows: &mut [Row]) {
+    for i in 1..rows.len() {
+        if rows[i - 1].phase == "spawn" && rows[i].phase == "work" {
+            let spawn = rows[i - 1]
+                .counts
+                .insert("statements".into(), 0)
+                .unwrap_or(0);
+            *rows[i].counts.get_mut("statements").expect("statements") += spawn;
+        }
+    }
 }
 
 fn check_row(actual: &Row, expected: &Row) -> anyhow::Result<()> {
