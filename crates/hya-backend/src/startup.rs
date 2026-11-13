@@ -198,15 +198,7 @@ impl HeadlessSession {
 }
 
 async fn shutdown(built: &mut BuiltSessionEngine) -> anyhow::Result<()> {
-    built
-        .shutdown()
-        .await
-        .context("shutdown headless runtime")?;
-    let engine = built.engine();
-    engine
-        .store()
-        .release_runtime_owner(engine.runtime_owner())?;
-    Ok(())
+    built.shutdown().await.context("shutdown headless runtime")
 }
 
 #[cfg(test)]

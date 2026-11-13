@@ -6,7 +6,7 @@
 
 // allow: SIZE_OK — reviewed Phase 1 keeps backend bootstrap glue in this public API module.
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use anyhow::Context as _;
 use hya_bundle::BundleCatalog;
@@ -86,11 +86,6 @@ pub fn offline_router(model_override: Option<String>) -> (ProviderRouter, String
         router,
         model_override.unwrap_or_else(|| "hya/offline".to_string()),
     )
-}
-
-pub(crate) fn process_owner_run_id() -> OwnerRunId {
-    static OWNER_RUN_ID: OnceLock<OwnerRunId> = OnceLock::new();
-    *OWNER_RUN_ID.get_or_init(OwnerRunId::new)
 }
 
 /// Canonical Harness agent base string (no Environment / AGENTS).
@@ -623,6 +618,7 @@ pub struct BuiltSessionEngine {
     questions: Option<tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>>,
     mcp_control: Arc<dyn hya_server::McpControl>,
     lifecycle: RuntimeTaskOwner,
+    runtime_owner: Option<OwnerRunId>,
 }
 
 impl BuiltSessionEngine {
@@ -733,6 +729,14 @@ impl BuiltSessionEngine {
     /// residents so no late registration can escape the drain. Safe to call repeatedly.
     pub async fn shutdown(&mut self) -> Result<(), CoreError> {
         self.drain(FinishCause::Shutdown).await;
+        self.release_runtime_owner()
+    }
+
+    fn release_runtime_owner(&mut self) -> Result<(), CoreError> {
+        if let Some(owner) = self.runtime_owner {
+            self.engine.store().release_runtime_owner(owner)?;
+            self.runtime_owner = None;
+        }
         Ok(())
     }
 }
@@ -1145,7 +1149,7 @@ async fn build_session_engine_with_mcp_defer(
     options: EngineBuildOptions,
 ) -> anyhow::Result<BuiltSessionEngine> {
     let lifecycle = RuntimeTaskOwner::new();
-    let owner_run_id = process_owner_run_id();
+    let owner_run_id = OwnerRunId::new();
     store
         .claim_runtime_owner(owner_run_id)
         .context("claim runtime owner before startup recovery")?;
@@ -1398,6 +1402,7 @@ async fn build_session_engine_with_mcp_defer(
         mcp_control,
         lifecycle,
         agent_model_control,
+        runtime_owner: Some(owner_run_id),
     })
 }
 
@@ -1526,9 +1531,9 @@ impl HyaRuntime {
     /// Fence server admission, drain composition and residents, then join server services.
     pub async fn shutdown(&mut self) -> Result<(), CoreError> {
         self.app_state.begin_shutdown();
-        let result = self._built.shutdown().await;
+        self._built.drain(FinishCause::Shutdown).await;
         self.app_state.shutdown().await;
-        result
+        self._built.release_runtime_owner()
     }
 
     /// Axum router with native and Compat routes (from [`hya_server::router`]).
