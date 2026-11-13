@@ -1,12 +1,14 @@
 # Event-sourced mailbox and channels
 
-> **Superseded in part by [ADR-0011](0011-hierarchy-scoped-mailbox.md).** The
+> **Superseded in part by [ADR-0016](0016-channel-communication-plane.md).** The
 > event-sourced single-log design below still holds in full. What changed is
-> *who may address whom*: mail is no longer team-wide. An agent may address only
-> its parent, its same-parent siblings, and its direct reports; handles are
-> canonical paths (`main/lead-1/worker-2`); and channels are keyed by owning unit
-> (`main/lead-1#build`). The Delivery rules below gain a scope gate that runs
-> **before** the eligibility checks — see the note at the end of each section.
+> *who may address whom* and how channels are minted: addressing is strictly
+> vertical (parent and direct reports, no sibling access); handles are canonical
+> paths (`main/hya-plan-amiya/hya-task-texas`); and channels are event-minted
+> unit broadcast (`#announce-{8}`) and pair DM (`#DM-{8}`) channels. See
+> [ADR-0016](0016-channel-communication-plane.md) and
+> [Subagent Orchestration](../architecture/subagent-orchestration.md) for the
+> current channel contract.
 
 Inter-agent communication (direct mail by handle, named `#channels`, broadcast) is implemented as
 first-class `Event`s (`MailSent`, `ChannelJoined`, `ChannelLeft`, `AgentRegistered`) appended to
