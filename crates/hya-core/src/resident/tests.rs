@@ -2283,3 +2283,38 @@ async fn o3_turn_release_during_shutdown_cannot_retain_the_engine() {
     drop(engine);
     assert!(weak.upgrade().is_none());
 }
+
+#[tokio::test]
+async fn o4_ended_staged_claim_still_recovers_its_roots_unread_mail() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let previous = ResidentSupervisor::start(engine.clone());
+    let driver = previous.root_driver_activity(root).await.unwrap();
+    let (child, handle) = parked(&previous, root).await;
+    let claim = previous.team_with_resident(child).unwrap().lock().residents[&child].claim.unwrap();
+    previous.end_member(root, &handle).await.unwrap();
+    drop(driver);
+    previous.listener_stop.cancel();
+    previous.listener.lock().unwrap().take().unwrap().await.unwrap();
+    previous.tasks.close();
+    previous.tasks.wait().await;
+    drop(previous);
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let (agent, runtime) = activation_runtime(&engine);
+    supervisor.defer_recovered_resident(root, handle, agent, runtime,
+        hya_store::RecoveredActorClaim { claim, previous_epoch: claim.epoch }, ResidentRecovery::Idle);
+    // Persisted before startup; no live bus envelope can recover it for us.
+    engine.store().append_event(root, &Event::MailSent {
+        session: root, from: scope::HARNESS_HANDLE.into(),
+        to: MailEndpoint::Handle("main".into()), kind: MailKind::Message,
+        body: "unread root mail".into(),
+    }).await.unwrap();
+    assert_eq!(supervisor.start_recovered().await.unwrap(), 0);
+    supervisor.tasks.close();
+    tokio::time::timeout(Duration::from_secs(5), supervisor.tasks.wait()).await.unwrap();
+    let replay = engine.replay(root).await.unwrap();
+    let recovered = replay.iter().any(|envelope| matches!(&envelope.event,
+        Event::TextDelta { delta, .. } if delta.contains("unread root mail")));
+    supervisor.drain(FinishCause::Shutdown, Duration::from_secs(5)).await;
+    assert!(recovered, "the stale claim retired its root before inbox recovery");
+}

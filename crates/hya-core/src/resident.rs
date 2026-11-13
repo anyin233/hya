@@ -5302,10 +5302,6 @@ impl ResidentSupervisor {
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         );
         let mut count = 0;
-        let roots = recovered
-            .iter()
-            .map(|member| member.root)
-            .collect::<HashSet<_>>();
         for member in recovered {
             match self
                 .register_recovered_resident(
@@ -5324,11 +5320,6 @@ impl ResidentSupervisor {
                 Err(error) => return Err(error),
             }
         }
-        for root in roots {
-            if let Some(team) = self.teams().get(&root) {
-                team.enqueue(TeamEvent::Recover);
-            }
-        }
         Ok(count)
     }
 
@@ -5344,6 +5335,8 @@ impl ResidentSupervisor {
     ) -> Result<(), CoreError> {
         let (binding, agents, resources, sidecar_factory) = resolved;
         let team = self.team_for(root).await?;
+        // Transfer liveness to recovery before a stale claim can drop registration.
+        team.enqueue(TeamEvent::Recover);
         let _write = self.claim_writes.lock().await;
         self.engine
             .store()
