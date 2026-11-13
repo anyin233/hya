@@ -231,17 +231,15 @@ fn live_subagents(projection: &Projection) -> Vec<&RosterEntry> {
 
 /// Mail that the supervisor would otherwise deliver in its next root turn.
 fn unread_root_mail(projection: &Projection) -> u64 {
-    let inbox_len = projection
-        .team
-        .inboxes
-        .get(scope::ROOT_HANDLE)
-        .map_or(0, |inbox| inbox.len() as u64);
     let cursor = projection
         .team
         .roster
         .get(scope::ROOT_HANDLE)
         .map_or(0, |entry| entry.resident_cursor);
-    inbox_len.saturating_sub(cursor)
+    projection
+        .team
+        .unread_incoming_mail(scope::ROOT_HANDLE, cursor)
+        .count() as u64
 }
 
 /// The lead's own todos still to do. `Blocked` is the way out for an item
@@ -621,6 +619,148 @@ mod tests {
             .unwrap()
             .resident_cursor = 1;
         assert!(Pending::of(&projection, FinishReason::Stop).is_empty());
+    }
+
+    #[tokio::test]
+    async fn outgoing_directive_does_not_extend_headless_run_after_archive() {
+        use hya_provider::{DevProvider, Provider, ProviderRouter};
+        use std::sync::{Arc, OnceLock, Weak};
+        struct SpawnAndArchive {
+            context: OnceLock<(
+                Weak<SessionEngine>,
+                Weak<ResidentSupervisor>,
+                SessionId,
+                AgentSpec,
+            )>,
+            spawned: std::sync::atomic::AtomicBool,
+        }
+        #[async_trait::async_trait]
+        impl Provider for SpawnAndArchive {
+            fn id(&self) -> &str {
+                "hya"
+            }
+            fn capabilities(
+                &self,
+                model: &hya_proto::ModelRef,
+            ) -> Option<hya_provider::Capabilities> {
+                DevProvider::new().capabilities(model)
+            }
+            async fn stream(
+                &self,
+                req: hya_provider::CompletionRequest,
+                session: SessionId,
+                message: MessageId,
+            ) -> Result<hya_provider::EventStream, hya_provider::ProviderError> {
+                let (engine, supervisor, root, agent) = self.context.get().unwrap();
+                if session == *root && !self.spawned.swap(true, std::sync::atomic::Ordering::SeqCst)
+                {
+                    let engine = engine.upgrade().unwrap();
+                    let supervisor = supervisor.upgrade().unwrap();
+                    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+                    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
+                    let (_, handle) = supervisor
+                        .spawn_resident(
+                            *root,
+                            agent.clone(),
+                            (binding, Arc::from([]), resources, None),
+                            "task directive".into(),
+                            None,
+                            None,
+                        )
+                        .await
+                        .unwrap();
+                    supervisor
+                        .archive_member(*root, &handle, "no longer needed")
+                        .await
+                        .unwrap();
+                }
+                DevProvider::new().stream(req, session, message).await
+            }
+        }
+        let provider = Arc::new(SpawnAndArchive {
+            context: OnceLock::new(),
+            spawned: false.into(),
+        });
+        let catalog = Arc::new(
+            hya_core::AgentCatalog::new(Arc::new(
+                hya_bundle::BundleCatalog::from_prepared(&[]).unwrap(),
+            ))
+            .unwrap(),
+        );
+        let runtime = Arc::new(hya_core::RuntimeRegistry::new(
+            hya_tool::ToolRegistry::builtins(),
+            catalog,
+        ));
+        let (permission, _) = hya_tool::PermissionPlane::new(hya_tool::PermissionRules::default());
+        let engine = Arc::new(SessionEngine::new(
+            hya_store::SessionStore::connect_memory().await.unwrap(),
+            Arc::new(ProviderRouter::new().with(provider.clone())),
+            runtime,
+            permission,
+            hya_core::EventBus::default(),
+        ));
+        let agent = AgentSpec {
+            name: hya_proto::AgentName::new("hya-task"),
+            model: hya_proto::ModelRef::new("hya/offline"),
+            workdir: "/tmp".into(),
+            system_prompt: String::new(),
+            reasoning: None,
+        };
+        let root = engine
+            .create(hya_core::CreateSession {
+                parent: None,
+                agent: agent.name.clone(),
+                model: agent.model.clone(),
+                workdir: "/tmp".into(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
+            })
+            .await
+            .unwrap();
+        let supervisor = ResidentSupervisor::start(engine.clone());
+        assert!(
+            provider
+                .context
+                .set((
+                    Arc::downgrade(&engine),
+                    Arc::downgrade(&supervisor),
+                    root,
+                    agent.clone()
+                ))
+                .is_ok()
+        );
+        let prompt = engine
+            .admit_user_prompt(root, "finish the task".into())
+            .await
+            .unwrap();
+        run_lead(
+            &engine,
+            &supervisor,
+            root,
+            &agent,
+            CancellationToken::new(),
+            prompt,
+        )
+        .await
+        .unwrap();
+        let projection = engine.read_projection(root).await.unwrap();
+        assert!(!projection.team.archived.is_empty());
+        assert_eq!(
+            projection
+                .session
+                .messages
+                .iter()
+                .filter(|message| message.role == Role::Assistant)
+                .count(),
+            1,
+            "own directive must not cause headless continuation notices"
+        );
+        supervisor
+            .drain(
+                hya_proto::FinishCause::Shutdown,
+                std::time::Duration::from_secs(2),
+            )
+            .await;
     }
 
     #[test]

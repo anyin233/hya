@@ -172,12 +172,7 @@ impl SessionEngine {
         };
         projection
             .team
-            .inboxes
-            .get(&entry.handle)
-            .into_iter()
-            .flatten()
-            .skip(usize::try_from(entry.resident_cursor).unwrap_or(usize::MAX))
-            .filter(|mail| mail.from != entry.handle)
+            .unread_incoming_mail(&entry.handle, entry.resident_cursor)
             .map(|mail| format!("[mail from {}] {}", mail.from, mail.body))
             .collect()
     }

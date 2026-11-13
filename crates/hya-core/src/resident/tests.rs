@@ -379,3 +379,78 @@ async fn mail_revival_fast_archive_cannot_be_erased_by_a_late_restart() {
     .await
     .expect("fast archive must finish before the sender returns");
 }
+
+#[tokio::test]
+async fn list_channels_ignores_the_senders_directive_copy() {
+    outgoing_directive_reader(false).await;
+}
+
+#[tokio::test]
+async fn steer_ignores_the_senders_directive_copy() {
+    outgoing_directive_reader(true).await;
+}
+
+async fn outgoing_directive_reader(steer: bool) {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let lead = engine.try_begin_turn(root).unwrap();
+    let (_, handle) = parked(&supervisor, root).await;
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::Channel(
+                engine
+                    .read_projection(root)
+                    .await
+                    .unwrap()
+                    .team
+                    .channels
+                    .iter()
+                    .find(|(_, channel)| {
+                        channel.kind == ChannelKind::Dm && channel.members.contains(&handle)
+                    })
+                    .unwrap()
+                    .0
+                    .clone(),
+            ),
+            MailKind::Message,
+            "outgoing directive".into(),
+        )
+        .await
+        .unwrap();
+    if steer {
+        let mut steer = engine
+            .steer_mailbox_snapshot_with_policy(
+                root,
+                Some(
+                    ChannelPolicy::from_binding(
+                        &engine.bind_runtime(std::path::Path::new(".")).unwrap(),
+                    )
+                    .unwrap()
+                    .snapshot_for("hya-main"),
+                ),
+            )
+            .await;
+        assert!(
+            steer.drain(&engine).await.unwrap().is_none(),
+            "outgoing copy must not steer its author"
+        );
+    } else {
+        let (mailbox, rx) = hya_tool::MailboxPlane::new();
+        let stop = CancellationToken::new();
+        let service = tokio::spawn(crate::run_mailbox_service(engine.clone(), rx, stop.clone()));
+        let rows = mailbox.for_session(root).list_channels().await.unwrap();
+        stop.cancel();
+        service.await.unwrap();
+        assert!(!rows.is_empty());
+        assert!(
+            rows.iter().all(|row| row.unread == 0),
+            "outgoing directive must not show unread: {rows:?}"
+        );
+    }
+    drop(lead);
+    supervisor
+        .drain(FinishCause::Shutdown, Duration::from_secs(2))
+        .await;
+}

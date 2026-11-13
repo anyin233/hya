@@ -501,15 +501,15 @@ impl SessionEngine {
         let root = self.team_root(session).await?;
         let handle = self.resolve_handle(root, session).await?;
         let projection = self.read_projection(root).await?;
-        let inbox_len = projection
+        let cursor = projection
             .team
-            .inboxes
+            .roster
             .get(&handle)
-            .map_or(0, |inbox| inbox.len());
-        let cursor = projection.team.roster.get(&handle).map_or(0, |entry| {
-            usize::try_from(entry.resident_cursor).unwrap_or(0)
-        });
-        let unread_self = inbox_len.saturating_sub(cursor);
+            .map_or(0, |entry| entry.resident_cursor);
+        let unread_self = projection
+            .team
+            .unread_incoming_mail(&handle, cursor)
+            .count();
         let mut rows = Vec::new();
         for (id, channel) in &projection.team.channels {
             let member = channel.members.contains(&handle);
@@ -616,16 +616,15 @@ impl SessionEngine {
             .map_or(0, |entry| entry.resident_cursor);
         // Whether this read showed every unread message: only then has the
         // caller seen what the cursor commit below consumes.
-        let showed_all_unread = inbox.is_none_or(|inbox| {
-            inbox
-                .iter()
-                .skip(usize::try_from(cursor).unwrap_or(usize::MAX))
+        let showed_all_unread =
+            projection
+                .team
+                .unread_incoming_mail(&handle, cursor)
                 .all(|unread| {
                     messages
                         .iter()
                         .any(|(from, body)| *from == unread.from && *body == unread.body)
-                })
-        });
+                });
         if cursor < inbox_len {
             self.emit_for_actor(
                 None,

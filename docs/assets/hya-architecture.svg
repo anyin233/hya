@@ -125,5 +125,5 @@
   <rect x="780" y="668" width="336" height="72" rx="8" fill="#0f172a" stroke="#34d399" stroke-width="1.2"/>
   <text x="794" y="689" fill="#f1f5f9" font-size="12.5" font-weight="600">SQLite WAL Store &amp; Projection (hya-store · proto)</text>
   <text x="794" y="707" fill="#94a3b8" font-size="10.8">event_log · Projection reducer · projection_snapshot</text>
-  <text x="794" y="723" fill="#64748b" font-size="10.5">project_root · admission_journal · actor_claim · pending_resume</text>
+  <text x="794" y="723" fill="#64748b" font-size="10.5">project_root · resident_actor_claim · pending_resume</text>
 </svg>

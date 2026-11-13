@@ -392,6 +392,21 @@ impl std::fmt::Display for ChannelResolveError {
 }
 
 impl TeamProjection {
+    /// Incoming mail past a raw inbox cursor. Channel history includes the
+    /// sender's own copy, which never counts as unread work for that handle.
+    pub fn unread_incoming_mail<'a>(
+        &'a self,
+        handle: &'a str,
+        through: u64,
+    ) -> impl Iterator<Item = &'a MailMessage> {
+        self.inboxes
+            .get(handle)
+            .into_iter()
+            .flatten()
+            .skip(usize::try_from(through).unwrap_or(usize::MAX))
+            .filter(move |mail| mail.from != handle)
+    }
+
     /// Whether a channel subscriber receives mail in the shared replay model.
     pub fn mail_recipient_is_live(&self, handle: &str) -> bool {
         self.roster

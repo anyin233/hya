@@ -46,7 +46,7 @@ counts. The existing `(state, actor_id)` index supports startup recovery.
   registrations: Vec<EpisodeRegistration>) -> Vec<(ActorClaim, Vec<Envelope>)>`:
   one `BEGIN IMMEDIATE` transaction fences the parent, checks
   `live + registrations.len() <= capacity`, registers main if absent, and writes
-  each claim plus canonical session/member/roster/channel/prompt events.
+  each claim plus canonical session/member/roster/channel events and optional directive `MailSent`.
   `EpisodeRegistration { actor: SessionId, events: Vec<Event> }` is prepared by
   the supervisor; results retain input order, with lazy-main registration in
   the first member's envelope group. Group-channel lookup-or-create runs
