@@ -70,6 +70,30 @@ pub(crate) struct Base {
     pub(crate) unpersisted: u64,
 }
 
+/// Database read completed; applying the decoded tail requires no await.
+pub(crate) struct PreparedFold {
+    pub(crate) projection: Arc<Projection>,
+    tail: Vec<Envelope>,
+    applied: u64,
+    rebuilt: bool,
+}
+
+impl PreparedFold {
+    pub(crate) fn finish(mut self) -> Folded {
+        if !self.tail.is_empty() {
+            let projection = Arc::make_mut(&mut self.projection);
+            for envelope in self.tail {
+                projection.apply(&envelope);
+            }
+        }
+        Folded {
+            projection: self.projection,
+            applied: self.applied,
+            rebuilt: self.rebuilt,
+        }
+    }
+}
+
 /// Result of folding a session log onto a base.
 pub(crate) struct Folded {
     pub(crate) projection: Arc<Projection>,
@@ -128,8 +152,24 @@ impl ProjectionCache {
         persisted_seq: u64,
         unpersisted: u64,
     ) {
+        self.insert(
+            &mut self.entries(),
+            session,
+            projection,
+            persisted_seq,
+            unpersisted,
+        );
+    }
+
+    fn insert(
+        &self,
+        entries: &mut HashMap<SessionId, Entry>,
+        session: SessionId,
+        projection: Arc<Projection>,
+        persisted_seq: u64,
+        unpersisted: u64,
+    ) {
         let now = self.tick();
-        let mut entries = self.entries();
         if let Some(existing) = entries.get(&session)
             && existing.projection.last_seq > projection.last_seq
         {
@@ -155,8 +195,40 @@ impl ProjectionCache {
         );
     }
 
-    pub(crate) fn remove(&self, session: SessionId) {
-        self.entries().remove(&session);
+    /// Transfer cache ownership, apply the tail and publish without an await or cache gap.
+    pub(crate) fn advance(
+        &self,
+        session: SessionId,
+        prepared: PreparedFold,
+        mut persisted_seq: u64,
+        mut unpersisted: u64,
+    ) -> (Folded, u64, u64) {
+        let mut entries = self.entries();
+        if entries
+            .get(&session)
+            .is_some_and(|entry| Arc::ptr_eq(&entry.projection, &prepared.projection))
+        {
+            entries.remove(&session);
+        }
+        let folded = prepared.finish();
+        if folded.rebuilt {
+            persisted_seq = 0;
+            unpersisted = folded.applied;
+        } else {
+            unpersisted = unpersisted.saturating_add(folded.applied);
+        }
+        if folded.projection.last_seq == 0 {
+            entries.remove(&session);
+        } else {
+            self.insert(
+                &mut entries,
+                session,
+                Arc::clone(&folded.projection),
+                persisted_seq,
+                unpersisted,
+            );
+        }
+        (folded, persisted_seq, unpersisted)
     }
 
     /// Drop every entry for `sessions` (e.g. a deleted session and its
@@ -226,12 +298,12 @@ pub(crate) async fn fold(
     conn: &mut SqliteConnection,
     session: SessionId,
     base: Option<Arc<Projection>>,
-) -> Result<Folded, StoreError> {
+) -> Result<PreparedFold, StoreError> {
     let key = session.storage_key();
     if let Some(base) = base.filter(|base| base.last_seq > 0) {
         let from = base.last_seq;
         let mut anchored = false;
-        let mut next: Option<Projection> = None;
+        let mut tail = Vec::new();
         let mut applied = 0_u64;
         {
             let mut rows = sqlx::query(
@@ -250,14 +322,14 @@ pub(crate) async fn fold(
                     continue;
                 }
                 let envelope = decode_row(&row, session)?;
-                next.get_or_insert_with(|| Projection::clone(&base))
-                    .apply(&envelope);
+                tail.push(envelope);
                 applied += 1;
             }
         }
         if anchored {
-            return Ok(Folded {
-                projection: next.map_or(base, Arc::new),
+            return Ok(PreparedFold {
+                projection: base,
+                tail,
                 applied,
                 rebuilt: false,
             });
@@ -275,8 +347,9 @@ pub(crate) async fn fold(
             applied += 1;
         }
     }
-    Ok(Folded {
+    Ok(PreparedFold {
         projection: Arc::new(projection),
+        tail: Vec::new(),
         applied,
         rebuilt: true,
     })

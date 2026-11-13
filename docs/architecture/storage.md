@@ -444,6 +444,14 @@ so it does not retain an old projection through provider and tool execution.
 A read of an unchanged session costs one
 indexed query that returns only the anchor row.
 
+Cache advancement decodes the anchored tail while the old cached snapshot remains
+available. It then releases the cache's matching Arc, applies that tail with
+`Arc::make_mut`, and republishes synchronously under the cache mutex. No lock spans an await
+and no concurrent reader can observe a missing cache entry during that transfer. A unique projection advances in place. An earlier
+snapshot retained by a reader stays immutable; only that case needs a copy.
+Cold replay still streams directly into the reducer. Writer transactions retain
+the cache's Arc and never publish their uncommitted view.
+
 **Invariants** (why cached base + tail equals a full replay):
 
 - `event_log` is append-only per session; the only removal is
