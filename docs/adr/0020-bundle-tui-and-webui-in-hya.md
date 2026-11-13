@@ -56,8 +56,8 @@ spawns and supervises them, and the host still runs only the fixed command it
 is given. Both frontends reach the server over the public `hya.v1` contract on
 loopback, like any other client, so the in-process server needs no special
 path for them. Rendering in Rust (a ratatui TUI, or a PTY host inside
-`hya serve`) would bring back the second frontend that ADR-0005, ADR-0010, and
-ADR-0019 removed.
+`hya serve`) would bring back a second frontend contrary to
+[ADR-0019](0019-adopt-opentui-frontend.md).
 
 ## Consequences
 
