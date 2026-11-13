@@ -374,6 +374,8 @@ impl AppState {
 
 #[derive(Clone)]
 pub(crate) struct ServerState {
+    #[cfg(test)]
+    pub(crate) admission_reply_hook: Option<Arc<dyn Fn() + Send + Sync>>,
     pub(crate) tasks: tokio_util::task::TaskTracker,
     pub(crate) stop: tokio_util::sync::CancellationToken,
     #[cfg(test)]
@@ -410,6 +412,8 @@ impl ServerState {
     pub(crate) fn new(app: AppState) -> Self {
         let global = support::global_state::GlobalState::new(app.engine.lsp().is_configured());
         Self {
+            #[cfg(test)]
+            admission_reply_hook: None,
             tasks: app.tasks.tasks.clone(),
             stop: app.tasks.stop.clone(),
             #[cfg(test)]
