@@ -306,11 +306,14 @@ impl PartProjection {
 /// to the whole team tree, not one session's transcript.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct TeamProjection {
+    /// Mail records in fold order, stored once regardless of recipient count.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mail: Vec<MailMessage>,
     /// Per-agent inbox keyed by **canonical path**, in delivery (seq) order. A
     /// direct message lands in the recipient's inbox; a channel message lands in
-    /// every current subscriber's inbox.
+    /// every current subscriber's inbox. Entries index `mail`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub inboxes: BTreeMap<String, Vec<MailMessage>>,
+    pub inboxes: BTreeMap<String, Vec<usize>>,
     /// Channels keyed by their minted id (`announce-{8}` / `DM-{8}`):
     /// membership set and full message log.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -360,6 +363,7 @@ impl TeamProjection {
             .into_iter()
             .flatten()
             .skip(usize::try_from(through).unwrap_or(usize::MAX))
+            .map(|index| &self.mail[*index])
             .filter(move |mail| mail.from != handle)
     }
 
@@ -408,9 +412,9 @@ pub struct ChannelProjection {
     /// Current subscriber handles (no leading `#`).
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub members: BTreeSet<String>,
-    /// Full ordered log of posts to this channel.
+    /// Indices into `TeamProjection::mail`, in channel delivery order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub log: Vec<MailMessage>,
+    pub log: Vec<usize>,
 }
 
 #[cfg(feature = "lifecycle-bench")]
@@ -590,7 +594,7 @@ pub fn session_archive_event(
 /// different projection, or when `Projection` (or anything it contains)
 /// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
 /// the bump is recorded.
-pub const PROJECTION_REDUCER_VERSION: u32 = 7;
+pub const PROJECTION_REDUCER_VERSION: u32 = 8;
 
 /// Durable snapshot encoding: the wire projection plus replay-only reducer
 /// state the wire form deliberately omits.
@@ -665,7 +669,8 @@ fn changed_message(event: &Event) -> Option<MessageId> {
 }
 
 fn team_is_empty(team: &TeamProjection) -> bool {
-    team.inboxes.is_empty()
+    team.mail.is_empty()
+        && team.inboxes.is_empty()
         && team.channels.is_empty()
         && team.roster.is_empty()
         && team.archived.is_empty()
@@ -1522,6 +1527,8 @@ impl Projection {
                     kind: *kind,
                     body: body.clone(),
                 };
+                let index = self.team.mail.len();
+                self.team.mail.push(message);
                 match to {
                     // The store admits handle targets only for harness notices.
                     MailEndpoint::Handle(handle) => {
@@ -1529,11 +1536,11 @@ impl Projection {
                             .inboxes
                             .entry(handle.clone())
                             .or_default()
-                            .push(message);
+                            .push(index);
                     }
                     MailEndpoint::Channel(channel) => {
                         let channel_state = self.team.channels.entry(channel.clone()).or_default();
-                        channel_state.log.push(message.clone());
+                        channel_state.log.push(index);
                         // Fan out to every CURRENT subscriber. Snapshot the member
                         // set first so the inbox borrow does not alias the channel.
                         let members: Vec<String> = channel_state.members.iter().cloned().collect();
@@ -1545,7 +1552,7 @@ impl Projection {
                                 .inboxes
                                 .entry(member)
                                 .or_default()
-                                .push(message.clone());
+                                .push(index);
                         }
                     }
                 }
@@ -1874,7 +1881,11 @@ mod team_tests {
             p.team
                 .inboxes
                 .get(handle)
-                .map(|msgs| msgs.iter().map(|m| m.body.clone()).collect())
+                .map(|msgs| {
+                    msgs.iter()
+                        .map(|index| p.team.mail[*index].body.clone())
+                        .collect()
+                })
                 .unwrap_or_default()
         };
         assert_eq!(
@@ -1896,7 +1907,10 @@ mod team_tests {
             .expect("channel exists under its unit-qualified key");
         assert_eq!(channel.members.len(), 2);
         assert_eq!(channel.log.len(), 1);
-        assert_eq!(channel.log[0].body, "ship it");
+        assert_eq!(live.team.mail[channel.log[0]].body, "ship it");
+        assert_eq!(live.team.mail.len(), 2);
+        let snapshot = String::from_utf8(live.encode_snapshot().unwrap()).unwrap();
+        assert_eq!(snapshot.matches("\"body\":\"ship it\"").count(), 1);
         // Roster bound the root plus both members, keyed by canonical path.
         assert_eq!(live.team.roster.len(), 3);
         assert!(live.team.roster.contains_key("main"));
@@ -2005,7 +2019,7 @@ mod team_tests {
             .expect("lead-2 owns a SEPARATE #build");
 
         assert_eq!(left.log.len(), 1, "the post landed in lead-1's channel");
-        assert_eq!(left.log[0].body, "unit one only");
+        assert_eq!(projection.team.mail[left.log[0]].body, "unit one only");
         assert!(right.log.is_empty(), "lead-2's #build must be untouched");
 
         // Only the posting unit's member received it.
@@ -2014,7 +2028,11 @@ mod team_tests {
                 .team
                 .inboxes
                 .get(handle)
-                .map(|msgs| msgs.iter().map(|m| m.body.clone()).collect())
+                .map(|msgs| {
+                    msgs.iter()
+                        .map(|index| projection.team.mail[*index].body.clone())
+                        .collect()
+                })
                 .unwrap_or_default()
         };
         assert_eq!(

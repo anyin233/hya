@@ -761,3 +761,22 @@ prompts. Non-empty Text and Tool parts retain their existing answer semantics.
 root: SessionId, handle: &str) -> Result<RecoveredResidentOutcome, StoreError>`
 commits this closing Text message, terminal effects and work classification in
 the same fenced recovery transaction. No schema or wire contract changes.
+
+### Shared mail records
+
+The team projection stores each mail body once so a channel post does not multiply
+its retained body by subscriber count. Replay appends a `MailMessage` to
+`team.mail: Vec<MailMessage>` in fold order. `team.inboxes` maps handles to
+`Vec<usize>` indices into that table; `team.channels[id].log` stores the same
+indices in channel order. `MailMessage` retains `from: String`, `to: MailEndpoint`,
+`kind: MailKind`, and `body: String`. These indices are projection-local positions,
+not event sequence numbers, and work for live events with sequence zero too.
+
+Use `team.unread_incoming_mail(handle, through)` to iterate incoming records after
+an inbox cursor, or resolve a channel index as `&team.mail[index]`. For example,
+a post stored at `team.mail[0]` can appear as index `0` in several inboxes and its
+channel log. Cursors still count raw inbox positions, including a sender's own
+posts, while unread counts exclude those self-posts. Consuming mail advances the
+cursor and keeps the single record for channel history and replay. Reducer version
+8 invalidates earlier serialized projection snapshots; the event and hya.v1
+contracts do not change and no database migration is needed.

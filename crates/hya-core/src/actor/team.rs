@@ -774,21 +774,30 @@ impl TeamActor {
                     });
                     let cursor = slot.cursor.max(durable);
                     let allowed = ChannelPolicy::from_binding(&slot.binding).is_ok_and(|policy| {
-                        inbox.iter().skip(cursor).any(|mail| {
-                            if mail.from == slot.handle {
-                                return false;
-                            }
-                            if mail.from == scope::HARNESS_HANDLE {
-                                return true;
-                            }
-                            let (kind, role) = recipient_channel_role(
-                                &projection,
-                                &mail.to,
-                                &slot.handle,
-                                &mail.from,
-                            );
-                            resident_delivery_allowed(&policy, slot.agent.name.as_str(), kind, role)
-                        })
+                        inbox
+                            .iter()
+                            .skip(cursor)
+                            .map(|index| &projection.team.mail[*index])
+                            .any(|mail| {
+                                if mail.from == slot.handle {
+                                    return false;
+                                }
+                                if mail.from == scope::HARNESS_HANDLE {
+                                    return true;
+                                }
+                                let (kind, role) = recipient_channel_role(
+                                    &projection,
+                                    &mail.to,
+                                    &slot.handle,
+                                    &mail.from,
+                                );
+                                resident_delivery_allowed(
+                                    &policy,
+                                    slot.agent.name.as_str(),
+                                    kind,
+                                    role,
+                                )
+                            })
                     });
                     if !allowed {
                         if !slot.pending && inbox_len > cursor {
@@ -855,23 +864,27 @@ impl TeamActor {
                     continue;
                 }
                 let policy = ChannelPolicy::from_binding(&slot.binding).ok();
-                let has_deliverable = inbox.iter().skip(slot.cursor).any(|message| {
-                    if message.from == slot.handle {
-                        return false;
-                    }
-                    if message.from == scope::HARNESS_HANDLE {
-                        return true;
-                    }
-                    let (kind, role) = recipient_channel_role(
-                        &projection,
-                        &message.to,
-                        &slot.handle,
-                        &message.from,
-                    );
-                    policy.as_ref().is_some_and(|policy| {
-                        resident_delivery_allowed(policy, slot.agent.name.as_str(), kind, role)
-                    })
-                });
+                let has_deliverable = inbox
+                    .iter()
+                    .skip(slot.cursor)
+                    .map(|index| &projection.team.mail[*index])
+                    .any(|message| {
+                        if message.from == slot.handle {
+                            return false;
+                        }
+                        if message.from == scope::HARNESS_HANDLE {
+                            return true;
+                        }
+                        let (kind, role) = recipient_channel_role(
+                            &projection,
+                            &message.to,
+                            &slot.handle,
+                            &message.from,
+                        );
+                        policy.as_ref().is_some_and(|policy| {
+                            resident_delivery_allowed(policy, slot.agent.name.as_str(), kind, role)
+                        })
+                    });
                 if has_deliverable {
                     slot.pending = true;
                     slot.notify.notify_one();

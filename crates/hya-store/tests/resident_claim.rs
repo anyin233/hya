@@ -2109,8 +2109,11 @@ async fn revive_episode_preserves_channels_and_skips_all_prior_mail() {
     assert_eq!(projection.team.roster["main/worker"].resident_cursor, 2);
     let inbox = &projection.team.inboxes["main/worker"];
     assert_eq!(inbox.len(), 3);
-    assert_eq!(inbox[2].body, "new work");
-    assert_eq!(inbox[2].to, MailEndpoint::Channel("DM-12345678".into()));
+    assert_eq!(projection.team.mail[inbox[2]].body, "new work");
+    assert_eq!(
+        projection.team.mail[inbox[2]].to,
+        MailEndpoint::Channel("DM-12345678".into())
+    );
     let actor = store.read_projection(old.actor_id).await.unwrap();
     assert_eq!(actor.session.messages.last().unwrap().role, Role::System);
     let (second_claim, _, recipients) = revive_mail(

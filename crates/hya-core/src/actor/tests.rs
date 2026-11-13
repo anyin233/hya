@@ -1023,6 +1023,7 @@ async fn review_a2_activation_directives_are_in_the_parent_dm_history() {
     let bodies = projection.team.channels[&dm]
         .log
         .iter()
+        .map(|index| &projection.team.mail[*index])
         .filter(|m| m.body.starts_with("REVIEW_DM_"))
         .map(|m| m.body.clone())
         .collect::<Vec<_>>();

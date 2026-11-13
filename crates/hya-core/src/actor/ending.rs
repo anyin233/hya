@@ -340,12 +340,12 @@ async fn report_gate_projection(
     let read_through = entry.resident_work.map_or(entry.resident_cursor, |work| {
         entry.resident_cursor.max(work.inbox_through)
     });
-    if projection.team.inboxes.get(canonical).is_some_and(|inbox| {
-        inbox
-            .iter()
-            .skip(usize::try_from(read_through).unwrap_or(usize::MAX))
-            .any(|mail| mail.from != canonical)
-    }) {
+    if projection
+        .team
+        .unread_incoming_mail(canonical, read_through)
+        .next()
+        .is_some()
+    {
         return Err(CoreError::Invalid(unread_mail_rejection(
             &projection,
             canonical,
@@ -374,18 +374,10 @@ fn unread_mail_rejection(
     canonical: &str,
     read_through: u64,
 ) -> String {
-    let unread = projection
+    let unread: Vec<_> = projection
         .team
-        .inboxes
-        .get(canonical)
-        .map(|inbox| {
-            inbox
-                .iter()
-                .skip(usize::try_from(read_through).unwrap_or(usize::MAX))
-                .filter(|mail| mail.from != canonical)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+        .unread_incoming_mail(canonical, read_through)
+        .collect();
     let mut per_channel: BTreeMap<String, usize> = BTreeMap::new();
     let mut notices = 0usize;
     for message in &unread {

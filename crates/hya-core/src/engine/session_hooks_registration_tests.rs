@@ -679,7 +679,7 @@ async fn concurrent_siblings_share_one_group_and_all_receive_announce() {
                 .get(&handle)
                 .unwrap()
                 .iter()
-                .any(|mail| mail.body == "one announcement"),
+                .any(|index| projection.team.mail[*index].body == "one announcement"),
             "{handle} missed unit announcement"
         );
     }

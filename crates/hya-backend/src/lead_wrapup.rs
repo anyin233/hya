@@ -600,15 +600,16 @@ mod tests {
         let mut projection = Projection::default();
         let root = roster(scope::ROOT_HANDLE, RosterStatus::Idle);
         projection.team.roster.insert(root.handle.clone(), root);
-        projection.team.inboxes.insert(
-            scope::ROOT_HANDLE.into(),
-            vec![hya_proto::MailMessage {
-                from: "main/worker".into(),
-                to: hya_proto::MailEndpoint::Handle(scope::ROOT_HANDLE.into()),
-                kind: hya_proto::MailKind::Message,
-                body: "result".into(),
-            }],
-        );
+        projection.team.mail.push(hya_proto::MailMessage {
+            from: "main/worker".into(),
+            to: hya_proto::MailEndpoint::Handle(scope::ROOT_HANDLE.into()),
+            kind: hya_proto::MailKind::Message,
+            body: "result".into(),
+        });
+        projection
+            .team
+            .inboxes
+            .insert(scope::ROOT_HANDLE.into(), vec![0]);
         let pending = Pending::of(&projection, FinishReason::Stop);
         assert!(!pending.is_empty());
         assert!(pending.notice(None, false).contains("1 unread message"));

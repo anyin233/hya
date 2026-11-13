@@ -964,6 +964,7 @@ async fn harness_mail_to(engine: &SessionEngine, root: SessionId, leaf: &str) ->
         .map(|inbox| {
             inbox
                 .iter()
+                .map(|index| &team.mail[*index])
                 .filter(|mail| mail.from == hya_proto::HARNESS_HANDLE)
                 .map(|mail| mail.body.clone())
                 .collect()

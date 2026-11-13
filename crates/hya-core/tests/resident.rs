@@ -558,7 +558,7 @@ async fn spawn_directive_and_followup_are_parent_dm_mail_even_under_restrictive_
         .await
         .unwrap();
     let projection = engine.read_projection(root).await.unwrap();
-    let mail = &projection.team.inboxes["main/worker"][0];
+    let mail = &projection.team.mail[projection.team.inboxes["main/worker"][0]];
     assert_eq!(mail.from, "main");
     assert_eq!(mail.body, "inspect parser");
     let MailEndpoint::Channel(dm) = &mail.to else {

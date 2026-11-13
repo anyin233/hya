@@ -328,7 +328,9 @@ async fn a_narrow_bundle_member_reads_its_dm_and_reports_after_its_lead_mails_it
     assert!(
         projection.team.inboxes["main"]
             .iter()
-            .any(|mail| mail.body.contains("SCOUT_FINAL_REPORT")),
+            .any(|index| projection.team.mail[*index]
+                .body
+                .contains("SCOUT_FINAL_REPORT")),
         "the final report must reach the lead"
     );
 
