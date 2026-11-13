@@ -73,49 +73,6 @@ pub enum ResidentArchiveOutcome {
 }
 
 impl SessionStore {
-    /// Authoritatively validate and append one direct-handle mail event under the
-    /// SQLite writer lock. The caller publishes the returned envelope after this
-    /// transaction commits.
-    ///
-    /// `from` is the sender's canonical path; `address` is the recipient exactly
-    /// as the model wrote it — a relative leaf (`worker-1`) or a full path.
-    ///
-    /// **Gate order matters.** The scope check runs *before* the liveness checks,
-    /// and an out-of-scope address fails identically to an unknown one. If
-    /// liveness ran first, an agent could probe whether an out-of-scope teammate
-    /// existed or was still running by reading which rejection came back.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn append_direct_mail(
-        &self,
-        root: SessionId,
-        from: String,
-        address: String,
-        kind: MailKind,
-        body: String,
-        actor_claim: Option<&ActorClaim>,
-        policy: Option<hya_proto::mail::ChannelPolicySnapshot>,
-    ) -> Result<Envelope, StoreError> {
-        let mut tx = self.begin_transaction().await?;
-        if let Some(claim) = actor_claim {
-            fence_actor_claim(&mut tx, claim).await?;
-        }
-
-        let projection = replay_projection(&self.projections, &mut tx, root).await?;
-        let envelope = append_direct_mail_in_transaction(
-            &projection,
-            &mut tx,
-            root,
-            from,
-            address,
-            kind,
-            body,
-            policy,
-        )
-        .await?;
-        tx.commit().await?;
-        Ok(envelope)
-    }
-
     /// Append one harness-authored direct mail (`from` = [`scope::HARNESS_HANDLE`])
     /// to a live resident member under the writer lock.
     ///
@@ -165,11 +122,7 @@ impl SessionStore {
     /// Append one channel-targeted mail under the writer lock; returns the
     /// envelope and recipient count.
     ///
-    /// `channel` is the name as the model wrote it, without the leading `#`:
-    /// `build` for the sender's own unit, `^build` for its home unit when it
-    /// leads one. It is resolved to a unit-qualified key inside the transaction,
-    /// which is what prevents a post from reaching another unit's channel of the
-    /// same name.
+    /// `channel` is an existing channel id, resolved at the engine boundary.
     #[allow(clippy::too_many_arguments)]
     pub async fn append_channel_mail(
         &self,
@@ -187,17 +140,17 @@ impl SessionStore {
         }
 
         let projection = replay_projection(&self.projections, &mut tx, root).await?;
-        let key = projection
-            .team
-            .resolve_channel(&from, &channel)
-            .map_err(|error| StoreError::MailAuthorizationRejected {
-                sender: from.clone(),
-                channel: channel.clone(),
-                reason: error.to_string(),
-            })?;
-        let (envelope, recipients) =
-            append_resolved_channel_mail(&mut tx, root, from, key, kind, body, &projection, policy)
-                .await?;
+        let (envelope, recipients) = append_resolved_channel_mail(
+            &mut tx,
+            root,
+            from,
+            channel,
+            kind,
+            body,
+            &projection,
+            policy,
+        )
+        .await?;
         tx.commit().await?;
         Ok((envelope, recipients))
     }
@@ -234,11 +187,6 @@ impl SessionStore {
         }
 
         let recovery_reason = "aborted by resident recovery";
-        let inbox_len = projection
-            .team
-            .inboxes
-            .get(handle)
-            .map_or(0, |inbox| inbox.len() as u64);
         let mut envelopes = Vec::new();
         let work = if let Some(resident_work) = entry.resident_work {
             if resident_work.epoch > recovered.previous_epoch {
@@ -330,10 +278,19 @@ impl SessionStore {
                 );
                 RecoveredResidentWork::AbortedRunning {
                     inbox_cursor: resident_work.inbox_through,
-                    queued_after: inbox_len > resident_work.inbox_through,
+                    queued_after: projection
+                        .team
+                        .unread_incoming_mail(handle, resident_work.inbox_through)
+                        .next()
+                        .is_some(),
                 }
             }
-        } else if inbox_len > entry.resident_cursor {
+        } else if projection
+            .team
+            .unread_incoming_mail(handle, entry.resident_cursor)
+            .next()
+            .is_some()
+        {
             RecoveredResidentWork::Queued {
                 inbox_cursor: entry.resident_cursor,
             }
@@ -621,10 +578,12 @@ impl SessionStore {
                             && channel.members.contains(handle)
                             && channel.members.contains(parent_path)
                     })
-                    .map_or_else(
-                        || MailEndpoint::Handle(parent_path.into()),
-                        |(key, _)| MailEndpoint::Channel(key.clone()),
-                    );
+                    .map(|(key, _)| MailEndpoint::Channel(key.clone()))
+                    .ok_or_else(|| {
+                        StoreError::ActorClaimData(
+                            "reporting member has no parent DM channel".into(),
+                        )
+                    })?;
                 envelopes.push(
                     append_event_in_transaction(
                         &mut tx,
@@ -888,88 +847,4 @@ async fn resident_member_is_eligible(
         return Ok(false);
     }
     has_active_claim(tx, entry.session).await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn append_direct_mail_in_transaction(
-    projection: &Projection,
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    root: SessionId,
-    from: String,
-    address: String,
-    kind: MailKind,
-    body: String,
-    policy: Option<hya_proto::mail::ChannelPolicySnapshot>,
-) -> Result<Envelope, StoreError> {
-    let reject = |reason: String| StoreError::MailAuthorizationRejected {
-        sender: from.clone(),
-        channel: format!("direct:{address}"),
-        reason,
-    };
-    if from != scope::ROOT_HANDLE && !projection.team.roster.contains_key(&from) {
-        return Err(reject("sender is not a live team member".into()));
-    }
-    let handle = projection
-        .team
-        .resolve_in_scope(&from, &address)
-        .or_else(|| {
-            let canonical = if address.contains(scope::PATH_SEPARATOR) {
-                address.clone()
-            } else {
-                scope::join_path(&from, &address)
-            };
-            projection
-                .team
-                .archived
-                .get_key_value(&canonical)
-                .and_then(|(handle, _)| {
-                    (!projection.team.roster.contains_key(handle)
-                        && scope::parent_path(handle) == Some(from.as_str()))
-                    .then(|| handle.clone())
-                })
-        })
-        .ok_or_else(|| {
-            reject(format!(
-                "`{address}` is not a teammate you can message; you may message \
-                 your parent and the agents you lead — run `list_channel` to see them"
-            ))
-        })?;
-    if policy.is_some_and(|policy| {
-        let bits = if scope::parent_path(&from) == Some(handle.as_str()) {
-            policy.dm_child
-        } else {
-            policy.dm_parent
-        };
-        bits & 1 == 0
-    }) {
-        return Err(reject("direction denied by policy".into()));
-    }
-    let Some(entry) = projection.team.roster.get(&handle) else {
-        return Err(StoreError::MailRevivalRequired {
-            sender: from,
-            channel: format!("direct:{address}"),
-            target: handle,
-        });
-    };
-    if entry.session != root && entry.mode == SubagentMode::Transient {
-        return Err(reject(format!("mail target `{handle}` is transient")));
-    }
-    if entry.session != root
-        && entry.mode == SubagentMode::Resident
-        && !resident_member_is_eligible(tx, entry).await?
-    {
-        return Err(reject(format!(
-            "mail target `{handle}` is stopped or terminal"
-        )));
-    }
-
-    let event = Event::MailSent {
-        session: root,
-        from,
-        to: MailEndpoint::Handle(handle.to_string()),
-        kind,
-        body,
-    };
-    let envelope = append_event_in_transaction(tx, root, event).await?;
-    Ok(envelope)
 }

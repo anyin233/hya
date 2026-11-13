@@ -1422,7 +1422,12 @@ impl TeamActor {
             .inboxes
             .get(&handle)
             .map_or(0, |inbox| inbox.len());
-        let mail_owed = resumed_prompt.is_some() || inbox_len > durable_cursor;
+        let mail_owed = resumed_prompt.is_some()
+            || projection
+                .team
+                .unread_incoming_mail(&handle, durable_cursor as u64)
+                .next()
+                .is_some();
         let channel_policy = ChannelPolicy::from_binding(&binding)?;
         let new_mail: Vec<(String, String)> = projection
             .team
@@ -1651,8 +1656,11 @@ impl TeamActor {
             let root = self.engine.read_projection(self.root).await?;
             let mail_owed = root.team.roster.get(&handle).is_some_and(|entry| {
                 entry.resident_work.is_some()
-                    || root.team.inboxes.get(&handle).map_or(0, Vec::len) as u64
-                        > entry.resident_cursor
+                    || root
+                        .team
+                        .unread_incoming_mail(&handle, entry.resident_cursor)
+                        .next()
+                        .is_some()
             });
             TurnOutcome::Cancelled {
                 mail_owed,
@@ -1682,14 +1690,8 @@ impl TeamActor {
             return Vec::new();
         };
         let handles: Vec<String> = match to {
-            MailEndpoint::Handle(handle) => {
-                let handle = handle.to_string();
-                if handle == from {
-                    Vec::new() // a self-addressed direct mail never self-wakes
-                } else {
-                    vec![handle]
-                }
-            }
+            // Handle targets are harness notices, never agent-to-agent mail.
+            MailEndpoint::Handle(handle) => vec![handle.clone()],
             MailEndpoint::Channel(channel) => projection
                 .team
                 .channels
@@ -1994,7 +1996,7 @@ fn recipient_channel_role(
         None
     };
     let own_dm = match to {
-        MailEndpoint::Handle(handle) => handle == recipient,
+        MailEndpoint::Handle(_) => false,
         MailEndpoint::Channel(channel) => {
             projection.team.channels.get(channel).is_some_and(|state| {
                 state.kind == ChannelKind::Dm
@@ -3018,17 +3020,7 @@ fn unread_mail_rejection(
     for message in &unread {
         let channel = match &message.to {
             MailEndpoint::Channel(channel) => Some(channel.clone()),
-            // Handle mail travels over the DM pair shared with its sender.
-            MailEndpoint::Handle(_) => projection
-                .team
-                .channels
-                .iter()
-                .find(|(_, channel)| {
-                    channel.kind == ChannelKind::Dm
-                        && channel.members.iter().any(|member| member == canonical)
-                        && channel.members.iter().any(|member| member == &message.from)
-                })
-                .map(|(id, _)| id.clone()),
+            MailEndpoint::Handle(_) => None,
         };
         match channel {
             Some(channel) => *per_channel.entry(channel).or_default() += 1,
@@ -4028,7 +4020,7 @@ impl ResidentSupervisor {
         root: SessionId,
         parent: &str,
         target: &str,
-        to: MailEndpoint,
+        channel: String,
         kind: hya_proto::MailKind,
         body: String,
         parent_claim: Option<&ActorClaim>,
@@ -4038,7 +4030,7 @@ impl ResidentSupervisor {
             root,
             parent,
             target,
-            to,
+            channel,
             kind,
             body,
             parent_claim,
@@ -4054,7 +4046,7 @@ impl ResidentSupervisor {
         root: SessionId,
         parent: &str,
         target: &str,
-        to: MailEndpoint,
+        channel: String,
         kind: hya_proto::MailKind,
         body: String,
         parent_claim: Option<&ActorClaim>,
@@ -4176,7 +4168,7 @@ impl ResidentSupervisor {
                 parent_claim,
                 child,
                 parent.into(),
-                to,
+                channel,
                 kind,
                 body,
                 hya_provider::COMPACT_CONTEXT_MARKER,
@@ -4671,7 +4663,7 @@ impl ResidentSupervisor {
             root,
             &from,
             &target,
-            MailEndpoint::Channel(dm),
+            dm,
             hya_proto::MailKind::Message,
             directive,
             parent_claim,
@@ -4996,9 +4988,9 @@ impl ResidentSupervisor {
                 }
         ) || projection
             .team
-            .inboxes
-            .get(&handle)
-            .is_some_and(|inbox| u64::try_from(inbox.len()).unwrap_or(u64::MAX) > cursor);
+            .unread_incoming_mail(&handle, cursor)
+            .next()
+            .is_some();
         if team
             .lock()
             .residents

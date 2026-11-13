@@ -50,13 +50,13 @@ pub use message::{
 };
 pub use model::{AgentName, ModelRef, ToolName, ToolSchema};
 pub use projection::{
-    ArchivedEntry, ChannelProjection, ChannelResolveError, ContextStatusProjection,
-    HandoffProjection, MailMessage, MemberProjection, MessageError, MessageProjection,
-    PROJECTION_REDUCER_VERSION, PartProjection, Projection, ResidentWorkProjection, RosterEntry,
-    SessionArchiveError, SessionProjection, TeamProjection, session_archive_event,
+    ArchivedEntry, ChannelProjection, ContextStatusProjection, HandoffProjection, MailMessage,
+    MemberProjection, MessageError, MessageProjection, PROJECTION_REDUCER_VERSION, PartProjection,
+    Projection, ResidentWorkProjection, RosterEntry, SessionArchiveError, SessionProjection,
+    TeamProjection, session_archive_event,
 };
 pub use revert::{FileChange, FileChangeRecord, FileRestore, FileState, RevertProjection};
-pub use scope::{ANNOUNCE_CHANNEL, HARNESS_HANDLE, ROOT_HANDLE};
+pub use scope::{HARNESS_HANDLE, ROOT_HANDLE};
 pub use todo::{TodoItem, TodoStatus};
 pub use usage::{MessageUsage, OutputSplit, SessionUsage, UNATTRIBUTED_MODEL, UsageTotals};
 pub use workflow::{

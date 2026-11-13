@@ -971,6 +971,19 @@ pub async fn append_event_in_transaction(
     session: SessionId,
     event: Event,
 ) -> Result<Envelope, StoreError> {
+    if let Event::MailSent {
+        from,
+        to: hya_proto::MailEndpoint::Handle(handle),
+        ..
+    } = &event
+        && from != hya_proto::scope::HARNESS_HANDLE
+    {
+        return Err(StoreError::MailAuthorizationRejected {
+            sender: from.clone(),
+            channel: format!("direct:{handle}"),
+            reason: "agent mail must target a channel".into(),
+        });
+    }
     let ts_millis = now_millis();
     let payload = serde_json::to_string(&event)?;
     let row = sqlx::query(

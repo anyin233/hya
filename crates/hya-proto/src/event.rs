@@ -685,15 +685,14 @@ pub enum Event {
         /// the max, so stale values never regress liveness.
         heartbeat_ms: u64,
     },
-    /// A message from one handle to another handle or a `#channel`. Channel sends
-    /// fan out to every current eligible subscriber in the deterministic reducer, so no
-    /// recipient set is baked into the event.
+    /// Agent mail to a channel, or a harness notice to a handle. Channel sends
+    /// fan out to eligible subscribers in the deterministic reducer.
     MailSent {
         /// Team-root log session.
         session: SessionId,
         /// Sender handle.
         from: String,
-        /// Direct handle or channel endpoint.
+        /// Channel endpoint; only `from == "harness"` may persist a handle.
         to: MailEndpoint,
         /// Message intent (default chatter vs announcement).
         #[serde(default)]
@@ -701,7 +700,7 @@ pub enum Event {
         /// Message body text.
         body: String,
     },
-    /// A handle subscribed to a channel; subsequent channel mail reaches it.
+    /// Retained wire variant; membership is folded only from `ChannelCreated`.
     ChannelJoined {
         /// Team-root log session.
         session: SessionId,
@@ -1306,7 +1305,7 @@ mod tests {
             },
             Event::MailSent {
                 session: root,
-                from: "reviewer-1".to_string(),
+                from: "harness".to_string(),
                 to: MailEndpoint::Handle("reviewer-2".to_string()),
                 kind: MailKind::Message,
                 body: "hi".to_string(),

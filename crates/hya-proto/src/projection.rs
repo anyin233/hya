@@ -299,7 +299,7 @@ impl PartProjection {
 /// Team-scoped mailbox/channel state (ADR-0001), folded from the team-root log.
 ///
 /// A replay of the root session's event log reconstructs this exactly: handles
-/// are baked into `AgentRegistered`, channel membership into `ChannelJoined`/
+/// are baked into `AgentRegistered`, channel membership into `ChannelCreated`,
 /// and every `MailSent` is appended (in seq order) to the
 /// recipient inboxes / channel log the reducer resolves at fold time. Kept on the
 /// top-level [`Projection`] rather than [`SessionProjection`] because it belongs
@@ -311,10 +311,8 @@ pub struct TeamProjection {
     /// every current subscriber's inbox.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub inboxes: BTreeMap<String, Vec<MailMessage>>,
-    /// Channels keyed by **unit-qualified key** (`main/lead-1#build`, no leading
-    /// `#`) or by their own minted id (`announce-{8}` / `DM-{8}`, ADR-0016):
-    /// membership set + full message log. Two units may each own a channel
-    /// of the same name; the qualifier is what keeps them separate.
+    /// Channels keyed by their minted id (`announce-{8}` / `DM-{8}`):
+    /// membership set and full message log.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub channels: BTreeMap<String, ChannelProjection>,
     /// Live team roster keyed by **canonical path**.
@@ -349,48 +347,6 @@ pub struct ArchivedEntry {
     pub reason: ArchiveReason,
 }
 
-/// Why a `#channel` address could not be resolved to a unit-qualified key.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ChannelResolveError {
-    /// The name is empty or carries a structural separator.
-    InvalidName(String),
-    /// `#announce` is reserved for the one-way announce path.
-    Reserved,
-    /// `#^name` was used by an agent that leads no unit, where it is meaningless
-    /// because plain `#name` already addresses its home unit.
-    CaretWithoutReports,
-    /// The team root used `#^name`; it has no parent unit.
-    NoHomeUnit,
-}
-
-impl std::fmt::Display for ChannelResolveError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ChannelResolveError::InvalidName(name) => write!(
-                f,
-                "`{name}` is not a usable channel name (it must be non-empty and \
-                 free of `/`, `#`, and surrounding spaces)"
-            ),
-            ChannelResolveError::Reserved => write!(
-                f,
-                "`#{}` is reserved for one-way announcements; use the `announce` \
-                 tool to post to your reports",
-                scope::ANNOUNCE_CHANNEL
-            ),
-            ChannelResolveError::CaretWithoutReports => write!(
-                f,
-                "`#^name` addresses your parent's unit and is only meaningful for \
-                 an agent that leads a unit of its own; use `#name`"
-            ),
-            ChannelResolveError::NoHomeUnit => write!(
-                f,
-                "the team root has no parent unit, so `#^name` has nothing to \
-                 address"
-            ),
-        }
-    }
-}
-
 impl TeamProjection {
     /// Incoming mail past a raw inbox cursor. Channel history includes the
     /// sender's own copy, which never counts as unread work for that handle.
@@ -414,86 +370,28 @@ impl TeamProjection {
             .is_none_or(RosterEntry::accepts_mail)
     }
 
-    /// Whether `path` leads a unit — that is, whether any roster entry is its
-    /// direct child.
+    /// Resolve an input handle (canonical path, leaf, or parent sentinel) to
+    /// the caller's existing DM. Membership is the addressability boundary;
+    /// archived peers and a lazily registered parent retain their DM.
     #[must_use]
-    pub fn leads_a_unit(&self, path: &str) -> bool {
-        self.roster
-            .keys()
-            .any(|key| scope::parent_path(key) == Some(path))
-    }
-
-    /// Resolve a mail address as a model wrote it — a relative leaf
-    /// (`worker-1`) or a full canonical path (`main/lead-1/worker-1`) — to the
-    /// canonical path of an agent `from` is allowed to address.
-    ///
-    /// `None` means the address is unusable from `from`: unknown, out of scope,
-    /// or (defensively) ambiguous. All three collapse to one answer on purpose,
-    /// so a sender cannot probe whether an out-of-scope agent exists.
-    ///
-    /// Ambiguity cannot arise while registration enforces leaf uniqueness within
-    /// a unit, but refusing it here means a log that predates or violates that
-    /// rule fails closed instead of silently picking a recipient.
-    #[must_use]
-    pub fn resolve_in_scope(&self, from: &str, raw: &str) -> Option<String> {
-        // ADR-0016: addressing is vertical only — the parent and the direct
-        // reports. Siblings are visible in no surface and addressable by none.
-        let vertical = |key: &str| {
-            key == from
-                || scope::parent_path(key) == Some(from)
-                || key == scope::parent_path(from).unwrap_or("")
-        };
+    pub fn resolve_dm(&self, from: &str, raw: &str) -> Option<String> {
         let raw = raw.trim();
-        let mut matches = self
-            .roster
-            .keys()
-            .filter(|key| vertical(key))
-            .filter(|key| key.as_str() == raw || scope::leaf(key) == raw);
+        let peer = match raw {
+            "" | "^" | "^parent" => scope::parent_path(from)?,
+            other => other,
+        };
+        let mut matches = self.channels.iter().filter(|(_, channel)| {
+            channel.kind == ChannelKind::Dm
+                && channel.members.contains(from)
+                && channel
+                    .members
+                    .iter()
+                    .any(|member| member != from && (member == peer || scope::leaf(member) == peer))
+        });
         match (matches.next(), matches.next()) {
-            (Some(only), None) => Some(only.clone()),
+            (Some((id, _)), None) => Some(id.clone()),
             _ => None,
         }
-    }
-
-    /// Resolve a channel address as a model wrote it (without the leading `#`)
-    /// to a unit-qualified key.
-    ///
-    /// | Sender | `build` | `^build` |
-    /// | --- | --- | --- |
-    /// | leads a unit | that unit's `#build` | its home unit's `#build` |
-    /// | leads nothing | its home unit's `#build` | error |
-    ///
-    /// A leader defaults to the unit it leads because that is the team it
-    /// coordinates; `^` reaches sideways to its fellow leaders.
-    pub fn resolve_channel(&self, from: &str, raw: &str) -> Result<String, ChannelResolveError> {
-        let raw = raw.trim();
-        // Minted channel ids (ADR-0016) are their own canonical keys: a group
-        // or DM id addresses that channel directly, with no unit derivation.
-        if crate::mail::is_minted_channel_id(raw) {
-            return Ok(raw.to_string());
-        }
-        let (name, want_home) = match raw.strip_prefix('^') {
-            Some(name) => (name.trim(), true),
-            None => (raw, false),
-        };
-        if !scope::is_valid_channel_name(name) {
-            return Err(ChannelResolveError::InvalidName(name.to_string()));
-        }
-        if name == scope::ANNOUNCE_CHANNEL {
-            return Err(ChannelResolveError::Reserved);
-        }
-        let leads = self.leads_a_unit(from);
-        let unit = if want_home {
-            if !leads {
-                return Err(ChannelResolveError::CaretWithoutReports);
-            }
-            scope::home_unit(from).ok_or(ChannelResolveError::NoHomeUnit)?
-        } else if leads {
-            scope::led_unit(from)
-        } else {
-            scope::home_unit(from).ok_or(ChannelResolveError::NoHomeUnit)?
-        };
-        Ok(scope::qualify_channel(unit, name))
     }
 }
 
@@ -501,12 +399,10 @@ impl TeamProjection {
 /// to it (independent of who was subscribed when).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChannelProjection {
-    /// Group broadcast vs DM pair (ADR-0016). Named channels joined without a
-    /// minting event are group channels.
+    /// Group broadcast vs DM pair (ADR-0016).
     #[serde(default)]
     pub kind: ChannelKind,
-    /// Owning unit path for group channels; `None` for DM pairs and named
-    /// channels (derive those from the unit-qualified key).
+    /// Owning unit path for group channels; `None` for DM pairs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unit: Option<String>,
     /// Current subscriber handles (no leading `#`).
@@ -522,7 +418,7 @@ pub struct ChannelProjection {
 pub struct MailMessage {
     /// Sender handle.
     pub from: String,
-    /// Original address (handle or channel).
+    /// Persisted channel target, or a handle for a harness notice.
     pub to: MailEndpoint,
     /// Chatter vs announcement.
     #[serde(default)]
@@ -680,7 +576,7 @@ pub fn session_archive_event(
 /// different projection, or when `Projection` (or anything it contains)
 /// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
 /// the bump is recorded.
-pub const PROJECTION_REDUCER_VERSION: u32 = 6;
+pub const PROJECTION_REDUCER_VERSION: u32 = 7;
 
 /// Durable snapshot encoding: the wire projection plus replay-only reducer
 /// state the wire form deliberately omits.
@@ -1504,16 +1400,7 @@ impl Projection {
                     entry.heartbeat_ms = entry.heartbeat_ms.max(*heartbeat_ms);
                 }
             }
-            Event::ChannelJoined {
-                channel, member, ..
-            } => {
-                self.team
-                    .channels
-                    .entry(channel.clone())
-                    .or_default()
-                    .members
-                    .insert(member.clone());
-            }
+            Event::ChannelJoined { .. } => {}
             Event::ChannelCreated {
                 channel,
                 kind,
@@ -1609,6 +1496,7 @@ impl Projection {
                     body: body.clone(),
                 };
                 match to {
+                    // The store admits handle targets only for harness notices.
                     MailEndpoint::Handle(handle) => {
                         self.team
                             .inboxes
@@ -1902,18 +1790,22 @@ mod team_tests {
             ),
             env(
                 4,
-                Event::ChannelJoined {
+                Event::ChannelCreated {
                     session: root,
                     channel: "main#build".to_string(),
-                    member: "main/reviewer-1".to_string(),
+                    kind: ChannelKind::Group,
+                    unit: Some("main".into()),
+                    members: vec!["main/reviewer-1".to_string()],
                 },
             ),
             env(
                 5,
-                Event::ChannelJoined {
+                Event::ChannelCreated {
                     session: root,
                     channel: "main#build".to_string(),
-                    member: "main/reviewer-2".to_string(),
+                    kind: ChannelKind::Group,
+                    unit: Some("main".into()),
+                    members: vec!["main/reviewer-2".to_string()],
                 },
             ),
             env(
@@ -1930,7 +1822,7 @@ mod team_tests {
                 7,
                 Event::MailSent {
                     session: root,
-                    from: "main/reviewer-1".to_string(),
+                    from: scope::HARNESS_HANDLE.to_string(),
                     to: MailEndpoint::Handle("main/reviewer-2".to_string()),
                     kind: MailKind::Message,
                     body: "psst".to_string(),
@@ -2047,10 +1939,12 @@ mod team_tests {
             ("main/lead-2", "main/lead-2/worker-7"),
         ] {
             push(
-                Event::ChannelJoined {
+                Event::ChannelCreated {
                     session: root,
                     channel: format!("{unit}#build"),
-                    member: member.to_string(),
+                    kind: ChannelKind::Group,
+                    unit: Some("main".into()),
+                    members: vec![member.to_string()],
                 },
                 &mut seq,
             );
@@ -2107,108 +2001,41 @@ mod team_tests {
         );
     }
 
-    /// Build the standard two-unit org used by the resolution tests:
-    ///
-    /// ```text
-    /// main
-    /// ├── lead-1 ── worker-1, worker-2
-    /// └── lead-2 ── worker-1        <- SAME leaf as lead-1's, different unit
-    /// ```
-    fn two_unit_team() -> TeamProjection {
-        let root = SessionId::new();
-        let mut seq = 0;
-        let mut log = Vec::new();
-        let mut push = |leaf: &str, parent: Option<&str>, seq: &mut u64| {
-            *seq += 1;
-            let agent_session = if parent.is_none() {
-                root
-            } else {
-                SessionId::new()
-            };
-            log.push(env(
-                *seq,
-                Event::AgentRegistered {
-                    session: root,
-                    agent_session,
-                    handle: leaf.to_string(),
-                    parent: parent.map(str::to_string),
-                    agent_type: AgentName::new("worker"),
-                    mode: SubagentMode::Resident,
+    #[test]
+    fn handle_resolution_uses_only_the_callers_existing_dm() {
+        let mut team = TeamProjection::default();
+        for (id, parent, child) in [
+            ("DM-11111111", "main", "main/lead"),
+            ("DM-22222222", "main/lead", "main/lead/worker"),
+            ("DM-33333333", "main/other", "main/other/worker"),
+        ] {
+            team.channels.insert(
+                id.into(),
+                ChannelProjection {
+                    kind: ChannelKind::Dm,
+                    members: [parent.into(), child.into()].into(),
+                    ..Default::default()
                 },
-            ));
-        };
-        push("main", None, &mut seq);
-        push("lead-1", Some("main"), &mut seq);
-        push("lead-2", Some("main"), &mut seq);
-        push("worker-1", Some("main/lead-1"), &mut seq);
-        push("worker-2", Some("main/lead-1"), &mut seq);
-        push("worker-1", Some("main/lead-2"), &mut seq);
-        Projection::from_events(&log).team
-    }
-
-    /// A relative leaf and the full path name the same agent, and both are
-    /// refused for anyone outside the sender's unit (AC1, AC2).    /// The two units each hold a `worker-1`. A relative leaf must resolve to the
-    /// sender's OWN unit, never leak across, and never resolve to itself.    /// `#name` vs `#^name`, for a leader and for a leaf agent (AC5).
-    #[test]
-    fn channel_resolution_follows_leadership() {
-        let team = two_unit_team();
-
-        // A leader: bare name is its OWN unit, `^` reaches its home unit.
-        assert_eq!(
-            team.resolve_channel("main/lead-1", "build"),
-            Ok("main/lead-1#build".to_string())
-        );
-        assert_eq!(
-            team.resolve_channel("main/lead-1", "^build"),
-            Ok("main#build".to_string())
-        );
-
-        // A leaf agent: bare name is its home unit; `^` is meaningless.
-        assert_eq!(
-            team.resolve_channel("main/lead-1/worker-1", "build"),
-            Ok("main/lead-1#build".to_string())
-        );
-        assert_eq!(
-            team.resolve_channel("main/lead-1/worker-1", "^build"),
-            Err(ChannelResolveError::CaretWithoutReports)
-        );
-
-        // The root leads a unit but has no home unit above it.
-        assert_eq!(
-            team.resolve_channel("main", "build"),
-            Ok("main#build".to_string())
-        );
-        assert_eq!(
-            team.resolve_channel("main", "^build"),
-            Err(ChannelResolveError::NoHomeUnit)
-        );
-    }
-
-    #[test]
-    fn announce_channel_cannot_be_addressed_as_an_ordinary_channel() {
-        let team = two_unit_team();
-        assert_eq!(
-            team.resolve_channel("main/lead-1", "announce"),
-            Err(ChannelResolveError::Reserved)
-        );
-        assert_eq!(
-            team.resolve_channel("main/lead-1", "^announce"),
-            Err(ChannelResolveError::Reserved)
-        );
-    }
-
-    #[test]
-    fn channel_names_carrying_separators_are_refused() {
-        let team = two_unit_team();
-        for bad in ["", "a/b", "a#b"] {
-            assert!(
-                matches!(
-                    team.resolve_channel("main/lead-1", bad),
-                    Err(ChannelResolveError::InvalidName(_))
-                ),
-                "`{bad}` must be refused"
             );
         }
+        for alias in ["worker", "main/lead/worker"] {
+            assert_eq!(
+                team.resolve_dm("main/lead", alias).as_deref(),
+                Some("DM-22222222")
+            );
+        }
+        for alias in ["^", "^parent", "", "lead", "main/lead"] {
+            assert_eq!(
+                team.resolve_dm("main/lead/worker", alias).as_deref(),
+                Some("DM-22222222")
+            );
+        }
+        for alias in ["main/other/worker", "missing", "main/lead"] {
+            assert_eq!(team.resolve_dm("main/lead", alias), None);
+        }
+        // Roster rows alone cannot create an address or grant membership.
+        assert_eq!(team.resolve_dm("main", "worker"), None);
+        assert_eq!(team.resolve_dm("main/lead/worker", "main"), None);
     }
 
     /// The reducer builds a real tree from `parent`, and the resulting paths obey
@@ -2736,10 +2563,12 @@ mod orchestration_tests {
             env(1, register_lead(root, lead)),
             env(
                 2,
-                Event::ChannelJoined {
+                Event::ChannelCreated {
                     session: root,
                     channel: "main#build".to_string(),
-                    member: "main/lead-1".to_string(),
+                    kind: ChannelKind::Group,
+                    unit: Some("main".into()),
+                    members: vec!["main/lead-1".to_string()],
                 },
             ),
             env(
@@ -2821,7 +2650,6 @@ mod orchestration_tests {
     }
 
     /// `ChannelCreated` is the minting fact: kind and initial members fold.
-    /// Named channels joined without a minting event default to group kind.
     #[test]
     fn channel_created_folds_kind_and_members() {
         let root = SessionId::new();
@@ -2838,10 +2666,12 @@ mod orchestration_tests {
             ),
             env(
                 2,
-                Event::ChannelJoined {
+                Event::ChannelCreated {
                     session: root,
                     channel: "main#build".to_string(),
-                    member: "main".to_string(),
+                    kind: ChannelKind::Group,
+                    unit: Some("main".into()),
+                    members: vec!["main".to_string()],
                 },
             ),
         ]);
@@ -2913,7 +2743,7 @@ mod orchestration_tests {
                     2,
                     Event::MailSent {
                         session: root,
-                        from: "main".into(),
+                        from: scope::HARNESS_HANDLE.into(),
                         to: MailEndpoint::Handle("main/worker".into()),
                         kind: MailKind::Message,
                         body: "unread".into(),
@@ -2957,7 +2787,7 @@ mod orchestration_tests {
                 2,
                 Event::MailSent {
                     session: root,
-                    from: scope::ROOT_HANDLE.to_string(),
+                    from: scope::HARNESS_HANDLE.to_string(),
                     to: MailEndpoint::Handle("main/lead-1".to_string()),
                     kind: MailKind::Message,
                     body: "urgent".to_string(),

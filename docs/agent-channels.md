@@ -41,6 +41,36 @@ bundles such as `hya/agent-channels`. Agent references are local ids from the
 same manifest; topology roles let channel-only bundles remain independent of a
 specific roster.
 
+### Handle aliases and durable mail
+
+`send` takes `{ "channel"?: string, "body": string }`. A channel id such as
+`#DM-12345678` names that existing channel; a member's leaf or canonical handle
+names the sender's existing DM with that member. For example,
+`send {"channel":"main/reviewer","body":"Review this patch"}` persists the
+same channel target as `send {"channel":"#DM-12345678","body":"Review this patch"}`
+when that is their DM. An unknown handle, a sibling, or a member without a DM
+is rejected without creating a channel or sending mail.
+
+`^parent` and `^` select the direct parent's DM, including before the parent
+has a roster row. Omitting `channel` selects the caller's led unit group channel,
+otherwise its parent DM. Group posts remain leader-only. Channel names and
+`#^name` addressing have no special resolution; use ids from `list_channel`.
+A DM to an archived direct child revives it through the same transactional
+channel authorization as an explicit DM-id send. User steering and Workflow
+arming also persist parent-DM mail.
+
+The event contract is `MailSent { session: SessionId, from: string,
+to: MailEndpoint, kind: MailKind, body: string }`. Agent-authored mail always
+uses `MailEndpoint::Channel(id)` (JSON `{ "kind": "channel", "id": "DM-12345678" }`).
+`MailEndpoint::Handle(path)` (JSON `{ "kind": "handle", "id": "main/reviewer" }`) is reserved
+for notices authored by `from: "harness"`; the store rejects all other
+handle-targeted event appends. A send receipt names the resolved channel and
+counts its eligible members for ordinary live sends, including the sender's
+history copy; a revival receipt reports the one revived recipient. That copy
+does not count as unread mail or wake the sender, including after recovery.
+Recovery retains raw cursor positions and resumes an admitted cancelled prompt
+once; an outgoing history copy by itself never creates work.
+
 ### Channel-aware `wait`
 
 The channel tool family (`hya/channel-tools`: `send`, `list_channel`,

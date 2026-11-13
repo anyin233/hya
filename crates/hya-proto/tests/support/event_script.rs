@@ -306,7 +306,7 @@ impl Script {
                 };
                 Event::MailSent {
                     session,
-                    from: "main".to_string(),
+                    from: "harness".to_string(),
                     to: MailEndpoint::Handle(to),
                     kind: MailKind::Message,
                     body: format!("mail {}", self.rng.below(100)),

@@ -2445,7 +2445,7 @@ async fn resident_direct_send_committed_before_stop_remains_unread() {
         .await
         .expect("sender must signal its committed mail")
         .expect("direct mail must commit");
-    assert_eq!(receipt.recipients, 1);
+    assert_eq!(receipt.recipients, 2);
 
     let stop_result = supervisor.end_member(root, &handle).await;
     sender_task.await.unwrap();
@@ -2477,11 +2477,11 @@ async fn resident_direct_send_committed_before_stop_remains_unread() {
         &mail_events[0].event,
         Event::MailSent {
             from,
-            to: MailEndpoint::Handle(recipient),
+            to: MailEndpoint::Channel(recipient),
             kind: MailKind::Message,
             body,
             ..
-        } if from == "main" && recipient == &handle && body == "mail accepted before stop"
+        } if from == "main" && recipient.starts_with("DM-") && body == "mail accepted before stop"
     ));
 
     let projection = primary.read_projection(root).await.unwrap();

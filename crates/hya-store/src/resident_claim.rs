@@ -44,13 +44,13 @@ impl SessionStore {
         parent_claim: Option<&ActorClaim>,
         actor: SessionId,
         from: String,
-        to: hya_proto::MailEndpoint,
+        channel: String,
         kind: hya_proto::MailKind,
         body: String,
         context_marker: &str,
         policy: Option<hya_proto::mail::ChannelPolicySnapshot>,
     ) -> Result<(Option<(ActorClaim, u64)>, Vec<Envelope>), StoreError> {
-        use hya_proto::{MailEndpoint, SubagentMode, scope};
+        use hya_proto::{SubagentMode, scope};
         let mut tx = self.begin_transaction().await?;
         if let Some(claim) = parent_claim {
             fence_actor_claim(&mut tx, claim).await?;
@@ -58,43 +58,18 @@ impl SessionStore {
         let mut projection = crate::replay_projection(&self.projections, &mut tx, root).await?;
         // Use the ordinary append's exact authorization and liveness rules.
         // MailRevivalRequired is returned before any append.
-        let append = match &to {
-            MailEndpoint::Handle(address) => {
-                crate::mailbox::append_direct_mail_in_transaction(
-                    &projection,
-                    &mut tx,
-                    root,
-                    from.clone(),
-                    address.clone(),
-                    kind,
-                    body.clone(),
-                    policy,
-                )
-                .await
-            }
-            MailEndpoint::Channel(channel) => {
-                let key = projection
-                    .team
-                    .resolve_channel(&from, channel)
-                    .map_err(|error| StoreError::MailAuthorizationRejected {
-                        sender: from.clone(),
-                        channel: channel.clone(),
-                        reason: error.to_string(),
-                    })?;
-                crate::mailbox::append_resolved_channel_mail(
-                    &mut tx,
-                    root,
-                    from.clone(),
-                    key,
-                    kind,
-                    body.clone(),
-                    &projection,
-                    policy,
-                )
-                .await
-                .map(|(envelope, _)| envelope)
-            }
-        };
+        let append = crate::mailbox::append_resolved_channel_mail(
+            &mut tx,
+            root,
+            from.clone(),
+            channel.clone(),
+            kind,
+            body.clone(),
+            &projection,
+            policy,
+        )
+        .await
+        .map(|(envelope, _)| envelope);
         let target = match append {
             Ok(envelope) => {
                 tx.commit().await?;
@@ -110,21 +85,6 @@ impl SessionStore {
             ));
         }
         let agent_type = archived.agent_type.clone();
-        let channel = projection
-            .team
-            .channels
-            .iter()
-            .find(|(_, state)| {
-                state.kind == hya_proto::ChannelKind::Dm
-                    && state.members.contains(&from)
-                    && state.members.contains(&target)
-            })
-            .map(|(key, _)| key.clone())
-            .ok_or_else(|| StoreError::MailAuthorizationRejected {
-                sender: from.clone(),
-                channel: target.clone(),
-                reason: "archived member has no parent DM channel".into(),
-            })?;
         let actor_projection = crate::replay_projection(&self.projections, &mut tx, actor).await?;
         let handoff =
             actor_projection.session.handoff.as_ref().ok_or_else(|| {

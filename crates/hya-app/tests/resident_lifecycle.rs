@@ -1419,7 +1419,6 @@ async fn i10_rejected_restart_rolls_back_the_whole_revive() {
 }
 
 #[tokio::test]
-#[ignore = "M4-11: I21"]
 async fn i21_handle_send_persists_only_dm_channel_targets() {
     let mut h = Harness::new().await;
     let (child, handle) = h.spawn(vec![Round::text("idle")]).await;
@@ -1428,9 +1427,16 @@ async fn i21_handle_send_persists_only_dm_channel_targets() {
         &h.tool("send", json!({"channel": handle, "body": "alias mail"}))
             .await,
     );
+    h.engine
+        .store()
+        .append_harness_mail(h.root, &handle, "I21 notice".into())
+        .await
+        .unwrap();
     let events = h.engine.replay(h.root).await.unwrap();
     h.shutdown().await;
-    assert!(events.iter().any(|e| matches!(&e.event, Event::MailSent { to: hya_proto::MailEndpoint::Channel(_), body, .. } if body == "alias mail")), "handle alias persisted without DM resolution");
+    assert!(events.iter().any(|e| matches!(&e.event, Event::MailSent { to: hya_proto::MailEndpoint::Channel(channel), body, .. } if body == "alias mail" && channel.starts_with("DM-"))), "handle alias persisted without DM resolution");
+    assert!(events.iter().any(|e| matches!(&e.event, Event::MailSent { from, to: hya_proto::MailEndpoint::Handle(target), body, .. } if from == "harness" && target == &handle && body == "I21 notice")));
+    assert!(events.iter().all(|e| !matches!(&e.event, Event::MailSent { from, to: hya_proto::MailEndpoint::Handle(_), .. } if from != "harness")));
 }
 
 #[tokio::test]

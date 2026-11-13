@@ -143,13 +143,13 @@ pub struct AgentSpec {
 }
 
 #[cfg(test)]
-pub(crate) struct DirectMailPreAppendGate {
+pub(crate) struct MailPreAppendGate {
     entered: Arc<Notify>,
     release: Arc<Notify>,
 }
 
 #[cfg(test)]
-impl DirectMailPreAppendGate {
+impl MailPreAppendGate {
     pub(crate) fn new(entered: Arc<Notify>, release: Arc<Notify>) -> Self {
         Self { entered, release }
     }
@@ -413,7 +413,7 @@ pub struct SessionEngine {
     /// clones (see [`crate::compaction::apply_sticky_evictions`]).
     pub(crate) sticky_evictions: Arc<Mutex<HashMap<SessionId, crate::compaction::StickyEvictions>>>,
     #[cfg(test)]
-    direct_mail_pre_append_gate: Option<Arc<DirectMailPreAppendGate>>,
+    mail_pre_append_gate: Option<Arc<MailPreAppendGate>>,
 }
 
 impl Clone for SessionEngine {
@@ -471,7 +471,7 @@ impl Clone for SessionEngine {
             turn_gate: Arc::clone(&self.turn_gate),
             sticky_evictions: Arc::clone(&self.sticky_evictions),
             #[cfg(test)]
-            direct_mail_pre_append_gate: self.direct_mail_pre_append_gate.clone(),
+            mail_pre_append_gate: self.mail_pre_append_gate.clone(),
         }
     }
 }
@@ -634,7 +634,7 @@ impl SessionEngine {
             turn_gate: Arc::new(turn_gate::TurnGate::default()),
             sticky_evictions: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(test)]
-            direct_mail_pre_append_gate: None,
+            mail_pre_append_gate: None,
         };
         let store_for_activity = engine.store.clone();
         let gate_for_activity = Arc::clone(&engine.turn_gate);
@@ -663,11 +663,8 @@ impl SessionEngine {
 
     #[cfg(test)]
     #[must_use]
-    pub(crate) fn with_direct_mail_pre_append_gate(
-        mut self,
-        gate: DirectMailPreAppendGate,
-    ) -> Self {
-        self.direct_mail_pre_append_gate = Some(Arc::new(gate));
+    pub(crate) fn with_mail_pre_append_gate(mut self, gate: MailPreAppendGate) -> Self {
+        self.mail_pre_append_gate = Some(Arc::new(gate));
         self
     }
 
