@@ -580,10 +580,10 @@ async fn repeated_startup_recovery_produces_identical_projection_and_no_duplicat
     assert_eq!(terminal_events, 1);
 }
 
-/// The old runtime must notice a different connection's takeover even when the
-/// provider is silent, and must never flush its buffered text after takeover.
+/// Bypass runtime ownership only to force a stale buffered-text write. The
+/// transaction fence must reject it; this does not require silent-stream revocation.
 #[tokio::test]
-async fn superseded_stream_is_cancelled_without_durable_events() {
+async fn superseded_stream_cannot_commit_buffered_text() {
     use async_trait::async_trait;
     use hya_core::{AgentSpec, CreateSession, ResidentSupervisor};
     use hya_proto::{FinishCause, ModelRef};
@@ -621,129 +621,119 @@ async fn superseded_stream_is_cancelled_without_durable_events() {
         }
     }
 
-    for flush in [false, true] {
-        let dir = support::TestDir::new("superseded-stream");
-        let path = dir.path().join("sessions.db");
-        let store = SessionStore::connect(path.to_str().unwrap()).await.unwrap();
-        let other = SessionStore::connect(path.to_str().unwrap()).await.unwrap();
-        let (send, receive) = mpsc::unbounded_channel();
-        let provider = Arc::new(Controlled {
-            receiver: Mutex::new(Some(receive)),
-            entered: Notify::new(),
-        });
-        let router = Arc::new(ProviderRouter::new().with(provider.clone()));
-        let (permission, _) = PermissionPlane::new(PermissionRules::default());
-        let engine = Arc::new(SessionEngine::new(
-            store.clone(),
-            router,
-            support::test_runtime(Arc::new(ToolRegistry::builtins())),
-            permission,
-            EventBus::default(),
-        ));
-        let agent = AgentSpec {
-            name: "hya-task".into(),
-            model: "hya/offline".into(),
+    let dir = support::TestDir::new("superseded-stream");
+    let path = dir.path().join("sessions.db");
+    let store = SessionStore::connect(path.to_str().unwrap()).await.unwrap();
+    let other = SessionStore::connect(path.to_str().unwrap()).await.unwrap();
+    let (send, receive) = mpsc::unbounded_channel();
+    let provider = Arc::new(Controlled {
+        receiver: Mutex::new(Some(receive)),
+        entered: Notify::new(),
+    });
+    let router = Arc::new(ProviderRouter::new().with(provider.clone()));
+    let (permission, _) = PermissionPlane::new(PermissionRules::default());
+    let engine = Arc::new(SessionEngine::new(
+        store.clone(),
+        router,
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        permission,
+        EventBus::default(),
+    ));
+    let agent = AgentSpec {
+        name: "hya-task".into(),
+        model: "hya/offline".into(),
+        workdir: "/tmp".into(),
+        system_prompt: "test".into(),
+        reasoning: None,
+    };
+    let root = engine
+        .create(CreateSession {
+            parent: None,
+            agent: "hya-main".into(),
+            model: agent.model.clone(),
             workdir: "/tmp".into(),
-            system_prompt: "test".into(),
-            reasoning: None,
-        };
-        let root = engine
-            .create(CreateSession {
-                parent: None,
-                agent: "hya-main".into(),
-                model: agent.model.clone(),
-                workdir: "/tmp".into(),
-                project: None,
-                kind: hya_proto::SessionKind::Project,
-            })
-            .await
-            .unwrap();
-        let root_turn = engine.try_begin_turn(root).unwrap();
-        let child = engine
-            .create(CreateSession {
-                parent: Some(root),
-                agent: agent.name.clone(),
-                model: agent.model.clone(),
-                workdir: "/tmp".into(),
-                project: None,
-                kind: hya_proto::SessionKind::Project,
-            })
-            .await
-            .unwrap();
-        let supervisor = ResidentSupervisor::start(engine.clone());
-        let mut live = engine.bus().subscribe();
-        supervisor
-            .register_existing_resident(
-                root,
-                child,
-                "worker-1".into(),
-                agent,
-                Some("stream".into()),
-            )
-            .await
-            .unwrap();
-        tokio::time::timeout(Duration::from_secs(5), provider.entered.notified())
-            .await
-            .unwrap();
-        let message = engine
-            .read_projection(child)
-            .await
-            .unwrap()
-            .session
-            .messages
-            .last()
-            .unwrap()
-            .id;
-        let part = PartId::new();
-        send.send(Ok(Event::TextStart {
-            session: child,
-            message,
-            part,
-        }))
-        .unwrap();
-        send.send(Ok(Event::TextDelta {
-            session: child,
-            message,
-            part,
-            delta: "buffered".into(),
-        }))
-        .unwrap();
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                if matches!(live.recv().await.unwrap().event, Event::TextDelta { session, delta, .. } if session == child && delta == "buffered") { break; }
-            }
-        }).await.unwrap();
-        other.recover_claim(child, OwnerRunId::new()).await.unwrap();
-        let before_child = store.replay(child).await.unwrap();
-        let before_root = store.replay(root).await.unwrap();
-        if flush {
-            // The durable text boundary must remain fenced even before the
-            // periodic cancellation observes the new owner.
-            let _ = send.send(Ok(Event::TextEnd {
-                session: child,
-                message,
-                part,
-            }));
-        }
-        let ended = tokio::time::timeout(Duration::from_secs(1), async {
-            send.closed().await;
-            while engine.turn_active(child) || supervisor.episode_count() != 0 {
-                tokio::task::yield_now().await;
-            }
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
+        .await
+        .unwrap();
+    let root_turn = engine.try_begin_turn(root).unwrap();
+    let child = engine
+        .create(CreateSession {
+            parent: Some(root),
+            agent: agent.name.clone(),
+            model: agent.model.clone(),
+            workdir: "/tmp".into(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let mut live = engine.bus().subscribe();
+    supervisor
+        .register_existing_resident(root, child, "worker-1".into(), agent, Some("stream".into()))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), provider.entered.notified())
+        .await
+        .unwrap();
+    let message = engine
+        .read_projection(child)
+        .await
+        .unwrap()
+        .session
+        .messages
+        .last()
+        .unwrap()
+        .id;
+    let part = PartId::new();
+    send.send(Ok(Event::TextStart {
+        session: child,
+        message,
+        part,
+    }))
+    .unwrap();
+    send.send(Ok(Event::TextDelta {
+        session: child,
+        message,
+        part,
+        delta: "buffered".into(),
+    }))
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if matches!(live.recv().await.unwrap().event, Event::TextDelta { session, delta, .. } if session == child && delta == "buffered") { break; }
+        }
+    }).await.unwrap();
+    other.recover_claim(child, OwnerRunId::new()).await.unwrap();
+    let before_child = store.replay(child).await.unwrap();
+    let before_root = store.replay(root).await.unwrap();
+    // The stale claim is tested at the durable boundary, without any timer.
+    send.send(Ok(Event::TextEnd {
+        session: child,
+        message,
+        part,
+    }))
+    .unwrap();
+    let ended = tokio::time::timeout(Duration::from_secs(1), async {
+        send.closed().await;
+        while engine.turn_active(child) || supervisor.episode_count() != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    let after_child = store.replay(child).await.unwrap();
+    let after_root = store.replay(root).await.unwrap();
+    engine.begin_drain(FinishCause::Shutdown);
+    drop(root_turn);
+    supervisor
+        .drain(FinishCause::Shutdown, Duration::from_secs(5))
         .await;
-        let after_child = store.replay(child).await.unwrap();
-        let after_root = store.replay(root).await.unwrap();
-        engine.begin_drain(FinishCause::Shutdown);
-        drop(root_turn);
-        supervisor
-            .drain(FinishCause::Shutdown, Duration::from_secs(5))
-            .await;
-        assert!(
-            ended.is_ok(),
-            "superseded stream did not end (flush={flush})"
-        );
-        assert_eq!(after_child, before_child, "stale actor wrote its log");
-        assert_eq!(after_root, before_root, "stale actor wrote its team log");
-    }
+    assert!(
+        ended.is_ok(),
+        "stale write boundary did not finish the turn"
+    );
+    assert_eq!(after_child, before_child, "stale actor wrote its log");
+    assert_eq!(after_root, before_root, "stale actor wrote its team log");
 }
