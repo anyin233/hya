@@ -56,7 +56,9 @@ has a roster row. Omitting `channel` selects the caller's led unit group channel
 otherwise its parent DM. Group posts remain leader-only. Channel names and
 `#^name` addressing have no special resolution; use ids from `list_channel`.
 A DM to an archived direct child revives it through the same transactional
-channel authorization as an explicit DM-id send. User steering and Workflow
+channel authorization as an explicit DM-id send. The writer transaction rejects
+a non-root sender missing from the live roster, even when its retained DM still
+contains that sender; this check also precedes any child revival. User steering and Workflow
 arming also persist parent-DM mail.
 
 The event contract is `MailSent { session: SessionId, from: string,

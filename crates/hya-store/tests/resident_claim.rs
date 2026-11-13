@@ -1941,6 +1941,140 @@ async fn revive_mail(
 }
 
 #[tokio::test]
+async fn archived_sender_cannot_append_to_its_retained_dm() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let (root, claim) = work_fixture(&store).await;
+    // Resolve first, then commit the archive before the send's writer transaction.
+    let channel = store
+        .read_projection(root)
+        .await
+        .unwrap()
+        .team
+        .resolve_dm("main/worker", "main")
+        .unwrap();
+    finalize_resident(
+        &store,
+        &claim,
+        root,
+        "main/worker",
+        MemberRunStatus::Cancelled,
+        "archived",
+    )
+    .await
+    .unwrap();
+    let before = store.replay(root).await.unwrap();
+    let result = store
+        .append_channel_mail(
+            root,
+            "main/worker".into(),
+            channel,
+            MailKind::Message,
+            "stale sender".into(),
+            None,
+            None,
+        )
+        .await;
+    assert!(
+        matches!(result, Err(StoreError::MailAuthorizationRejected { .. })),
+        "{result:?}"
+    );
+    assert_eq!(store.replay(root).await.unwrap(), before);
+}
+
+#[tokio::test]
+async fn archived_parent_cannot_revive_a_child_through_its_retained_dm() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let (root, parent) = work_fixture(&store).await;
+    let child = SessionId::new();
+    for event in [
+        Event::SessionCreated {
+            session: child,
+            parent: Some(parent.actor_id),
+            agent: AgentName::new("resident"),
+            model: hya_proto::ModelRef::new("fake"),
+            workdir: "/tmp".into(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        },
+        Event::AgentRegistered {
+            session: root,
+            agent_session: child,
+            handle: "child".into(),
+            parent: Some("main/worker".into()),
+            agent_type: AgentName::new("resident"),
+            mode: SubagentMode::Resident,
+        },
+        Event::ChannelCreated {
+            session: root,
+            channel: "DM-87654321".into(),
+            kind: hya_proto::ChannelKind::Dm,
+            unit: None,
+            members: vec!["main/worker".into(), "main/worker/child".into()],
+        },
+    ] {
+        store
+            .append_event(event.session().unwrap(), &event)
+            .await
+            .unwrap();
+    }
+    let claim = store
+        .try_claim_new(root, child, OwnerRunId::new())
+        .await
+        .unwrap();
+    finalize_resident(
+        &store,
+        &claim,
+        root,
+        "main/worker/child",
+        MemberRunStatus::Cancelled,
+        "archived",
+    )
+    .await
+    .unwrap();
+    let channel = store
+        .read_projection(root)
+        .await
+        .unwrap()
+        .team
+        .resolve_dm("main/worker", "child")
+        .unwrap();
+    finalize_resident(
+        &store,
+        &parent,
+        root,
+        "main/worker",
+        MemberRunStatus::Cancelled,
+        "archived",
+    )
+    .await
+    .unwrap();
+    let before_root = store.replay(root).await.unwrap();
+    let before_child = store.replay(child).await.unwrap();
+    let result = store
+        .revive_episode(
+            root,
+            OwnerRunId::new(),
+            u64::MAX,
+            None,
+            child,
+            "main/worker".into(),
+            channel,
+            MailKind::Message,
+            "stale steer".into(),
+            "HYA_COMPACTED_CONTEXT",
+            None,
+        )
+        .await;
+    assert!(
+        matches!(result, Err(StoreError::MailAuthorizationRejected { .. })),
+        "{result:?}"
+    );
+    assert_eq!(store.replay(root).await.unwrap(), before_root);
+    assert_eq!(store.replay(child).await.unwrap(), before_child);
+    assert!(store.active_actor_ids().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn revive_episode_preserves_channels_and_skips_all_prior_mail() {
     let store = SessionStore::connect_memory().await.unwrap();
     let (root, old) = revival_fixture(&store).await;
