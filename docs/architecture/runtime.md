@@ -1619,3 +1619,9 @@ finish, so cancellation can end a blocked initializer.
 Workflow revival validates live episode presence against the roster read under
 claim-write serialization. A live durable orphan is rejected before appending
 activation mail; its missing episode must first be reconciled by an ending.
+
+Ending a Workflow member first cancels its current turn and pauses further
+wakes, then archives descendants deepest-first from both installed episodes and
+the durable roster. Releasing the parent's claim fences racing task spawns; a
+final descendant sweep ends children committed before that release. Captured
+episode completions remain joinable if root deletion removes the roster.
