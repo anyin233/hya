@@ -61,6 +61,52 @@ fn update_commands_run_without_composing_the_runtime() -> Result<(), Box<dyn std
 }
 
 #[test]
+fn exec_time_budget_announces_the_budget_and_preserves_prompt_admission()
+-> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("hya-exec-time-budget")?;
+    let output = hya_command(&env)
+        .args([
+            "exec",
+            "--json",
+            "--time-budget",
+            "30",
+            "budgeted offline prompt",
+        ])
+        .output()?;
+    assert_success("exec --time-budget", &output);
+    let lines = String::from_utf8(output.stdout)?;
+    let events = lines
+        .lines()
+        .map(serde_json::from_str::<Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event
+                .to_string()
+                .contains("HEADLESS RUN — time budget: 30s"))
+            .count(),
+        1
+    );
+    assert!(lines.contains("budgeted offline prompt"));
+    assert!(
+        events
+            .iter()
+            .any(|event| event.pointer("/event/type").and_then(Value::as_str)
+                == Some("message_finished")
+                && event.pointer("/event/role").and_then(Value::as_str) == Some("assistant")),
+        "{lines}"
+    );
+    for budget in ["0", "-1", "1.5"] {
+        let output = hya_command(&env)
+            .args(["exec", "--time-budget", budget, "invalid"])
+            .output()?;
+        assert_eq!(output.status.code(), Some(2));
+    }
+    Ok(())
+}
+
+#[test]
 fn rendered_exec_db_persists_and_tail_replays_hysec_session()
 -> Result<(), Box<dyn std::error::Error>> {
     let env = IsolatedEnv::new("hya-rendered-exec-db")?;

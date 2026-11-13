@@ -136,7 +136,10 @@ pub(crate) async fn wait_for_members(
     let cursor = usize::try_from(cursor).unwrap_or(usize::MAX);
     // The lead has no parent: without subagents there is nobody to hear from.
     let mail_only = targets.is_empty() && spec.wake_on_mail && caller != root;
-    let deadline = tokio::time::Instant::now() + spec.timeout;
+    // Leave the run's final-notice grace free of blocking tools.
+    let timeout = hya_tool::deadline::current()
+        .map_or(spec.timeout, |deadline| deadline.cap(Some(spec.timeout)).0);
+    let deadline = tokio::time::Instant::now() + timeout;
     loop {
         // Taken before the snapshot below: work counted later stays owed.
         let mark = engine.mail_mark(caller);

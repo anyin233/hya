@@ -19,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
 use crate::shell_output::{MAX_CODING_OUTPUT_PATH_BYTES, json_char_len, serialized_string_len};
+use hya_tool::deadline::RunDeadline;
 use hya_tool::{Action, Resource};
 use hya_tool::{Tool, ToolCtx, ToolError, ToolResultPolicy};
 
@@ -60,6 +61,28 @@ struct TimeoutSettings {
     seconds: f64,
     duration: Option<Duration>,
     clamped: bool,
+    /// Whole seconds the run had left when its deadline shortened the timeout.
+    deadline_left: Option<u64>,
+}
+
+impl TimeoutSettings {
+    /// Shorten the timeout to what a budgeted run has left (see
+    /// [`RunDeadline::cap`]); no timeout is capped too.
+    fn capped_by(self, deadline: Option<&RunDeadline>) -> Self {
+        let Some(deadline) = deadline else {
+            return self;
+        };
+        let (duration, capped) = deadline.cap(self.duration);
+        if !capped {
+            return self;
+        }
+        Self {
+            seconds: duration.as_secs_f64().round(),
+            duration: Some(duration),
+            clamped: false,
+            deadline_left: Some(deadline.remaining().as_secs()),
+        }
+    }
 }
 
 /// Completion state retained for a structured Bash result.
@@ -346,7 +369,7 @@ impl Tool for ShellTool {
             pty,
         } = serde_json::from_value(input)
             .map_err(|error| ToolError::Input(format!("invalid Bash input: {error}")))?;
-        let timeout = timeout_settings(timeout)?;
+        let timeout = timeout_settings(timeout)?.capped_by(hya_tool::deadline::current());
         if ctx.cancel.is_cancelled() {
             return Err(ToolError::Cancelled);
         }
@@ -416,6 +439,7 @@ fn timeout_settings(requested: Option<f64>) -> Result<TimeoutSettings, ToolError
             seconds: DEFAULT_TIMEOUT_SECONDS,
             duration: Some(Duration::from_secs(300)),
             clamped: false,
+            deadline_left: None,
         });
     };
     if !requested.is_finite() || requested < 0.0 {
@@ -428,6 +452,7 @@ fn timeout_settings(requested: Option<f64>) -> Result<TimeoutSettings, ToolError
             seconds: 0.0,
             duration: None,
             clamped: false,
+            deadline_left: None,
         });
     }
     let seconds = requested.clamp(MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS);
@@ -435,6 +460,7 @@ fn timeout_settings(requested: Option<f64>) -> Result<TimeoutSettings, ToolError
         seconds,
         duration: Some(Duration::from_secs_f64(seconds)),
         clamped: seconds != requested,
+        deadline_left: None,
     })
 }
 
@@ -1143,6 +1169,9 @@ fn shape_result(
     metadata.insert("timeoutSeconds".to_string(), json!(timeout.seconds));
     metadata.insert("pty".to_string(), json!(pty));
     metadata.insert("cwd".to_string(), json!(display_path(&cwd)));
+    if timeout.deadline_left.is_some() {
+        metadata.insert("deadlineCapped".to_string(), json!(true));
+    }
     if timeout.clamped {
         metadata.insert("timeoutClamped".to_string(), json!(true));
     }
@@ -1195,6 +1224,12 @@ fn shell_notice_prefix(
     signaled: bool,
 ) -> String {
     let mut prefix = String::new();
+    if let Some(left) = timeout.deadline_left {
+        prefix.push_str(&format!(
+            "<shell_metadata>\nTimeout shortened to {:.0} seconds: the run ends in {left} seconds.\n</shell_metadata>\n\n",
+            timeout.seconds
+        ));
+    }
     if timeout.clamped {
         prefix.push_str(&format!(
             "<shell_metadata>\nRequested timeout was clamped to {:.0} seconds.\n</shell_metadata>\n\n",
@@ -1369,6 +1404,21 @@ mod tests {
             "output did not retain tail: {output:?}"
         );
         assert!(output.contains("omitted"));
+    }
+
+    #[test]
+    fn deadline_capped_timeout_is_explained() {
+        let timeout = TimeoutSettings {
+            seconds: 155.0,
+            duration: Some(Duration::from_secs(155)),
+            clamped: false,
+            deadline_left: Some(200),
+        };
+        let prefix = shell_notice_prefix(timeout, None, true, None, false);
+        assert!(prefix.starts_with(
+            "<shell_metadata>\nTimeout shortened to 155 seconds: the run ends in 200 seconds."
+        ));
+        assert!(prefix.contains("terminated the command after 155 seconds"));
     }
 
     #[test]
