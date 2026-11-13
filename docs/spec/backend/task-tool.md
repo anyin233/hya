@@ -126,7 +126,7 @@ returns one claim and committed envelope group per member, in input order. A
 supplied parent claim is fenced inside the same transaction. Publication uses
 only those committed envelopes, once per episode, after its session-start hooks.
 
-`registered_initial_task_survives_supervisor_loss` covers recovery after
+`registered_initial_task_survives_claim_takeover_before_first_turn` covers recovery after
 registration and before the first worker turn. This does not promise replay of
 work that already crossed `ResidentWorkStarted`. The
 `engine::session_hooks::registration_tests` regressions cover stale-parent and
