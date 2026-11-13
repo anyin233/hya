@@ -146,7 +146,7 @@ async fn preferences_validate_identity_bounds_before_mutation() {
             .upsert_agent_model_preference(owner, &candidate)
             .await
             .expect_err("invalid preference identity must fail closed");
-        assert!(matches!(error, StoreError::AdmissionData(_)));
+        assert!(matches!(error, StoreError::InvalidPreferenceData { .. }));
     }
 
     assert_eq!(

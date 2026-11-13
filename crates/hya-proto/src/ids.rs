@@ -335,17 +335,10 @@ impl OperationId {
         ))
     }
 
-    /// Underlying UUID written to the admission journal.
+    /// Underlying UUID used to derive durable Workflow identity.
     #[must_use]
     pub fn as_uuid(&self) -> Uuid {
         self.0
-    }
-
-    /// Rehydrate an operation identity previously written by
-    /// [`Self::from_tool_call`] to durable storage.
-    #[must_use]
-    pub fn from_storage_uuid(value: Uuid) -> Self {
-        Self(value)
     }
 }
 

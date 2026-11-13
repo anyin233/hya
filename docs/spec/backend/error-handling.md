@@ -16,14 +16,13 @@
 
 ## Error Types
 
-- `StoreError::OperationIdConflict` is the durable immutable-request conflict
-  and displays the stable code `OPERATION_ID_CONFLICT`.
-- `StoreError::AdmissionTransitionConflict` rejects terminal rewrites.
+- `StoreError::CapacityExceeded` refuses a batch or revival under the writer
+  reservation; task maps it to typed overload without registration effects.
 - `StoreError::ActorAlreadyClaimed` distinguishes an ordinary competing claim;
   `StoreError::StaleActorClaim` rejects any old epoch/owner capability at the
   canonical mutation boundary.
-- `SpawnError` distinguishes queue/admission overload, unavailable transport,
-  operation conflict, and already-handled idempotent replay.
+- `SpawnError` distinguishes queue/live-capacity overload, unavailable transport,
+  cancellation and resolution/authorization failures.
 - `TaskTool` maps these into matching `ToolError` variants; engine tool-error
   payloads retain distinct machine-readable types.
 
@@ -119,7 +118,7 @@
   `reconcile_cancelled_after_commit`, records the payload guard and actual
   snapshot, then returns `ToolError::Cancelled`.
 - `ToolError` keeps `Input`, `Permission`, `Io`, `Json`, `Cancelled`,
-  `Overloaded`, `OperationIdConflict`, `OperationAlreadyHandled`,
+  `Overloaded`,
   `WorkflowControl`, `UnknownAgentId`, `AgentSpawnNotAllowed`,
   `UnsupportedInlineAgentField`, and `Other` distinct. The engine serializes a
   failure as `{ "error": { "type": string, "message": string } }` in the existing
@@ -216,7 +215,7 @@
 | Cancellation before commit | `ToolError::Cancelled`; no committed-state claim |
 | Cancellation after commit with successful reload | `ToolError::Cancelled`; final bytes and snapshot are still recorded |
 | Task blank nested description vs non-empty description | Blank becomes absent and proceeds; non-empty is typed unsupported-field rejection before admission |
-| Spawn overload/conflict/already handled | Preserve `Overloaded`, `OperationIdConflict`, or `OperationAlreadyHandled`; never retry by minting a new operation |
+| Spawn overload | Preserve typed `Overloaded`; do not create a partial batch |
 | Bash zero/finite invalid timeout, nonzero exit, timeout, cancel, PTY unavailable | Zero disables; finite values clamp to `1..=3600`; nonzero/timeout are completed structured results; cancel is `Cancelled`; PTY unavailability is explicit |
 | Oversized result or metadata | Bounded truncation/artifact with explicit marker; never unbounded memory or secret-bearing diagnostics |
 | Malformed replayed ToolPart or syntax parser failure | Client fallback/plain text; no second request and no historical Event rewrite |

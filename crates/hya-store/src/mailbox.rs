@@ -1,16 +1,12 @@
 use hya_proto::{
     ActorClaim, ActorEpoch, ArchiveReason, Envelope, Event, FinishCause, FinishReason,
     MailEndpoint, MailKind, MemberId, MemberRunStatus, MessageId, PartId, Projection,
-    ReportOutcome, Role, RosterEntry, RosterStatus, SessionId, SubagentMode, now_millis, scope,
+    ReportOutcome, Role, RosterEntry, RosterStatus, SessionId, SubagentMode, scope,
 };
 
 use crate::{
-    AdmissionRecord, RecoveredActorClaim, SessionStore, StoreError,
-    admission::{abort_recovered_actor_admissions_in_transaction, decode_record},
-    append_event_in_transaction,
-    projection_cache::ProjectionCache,
-    replay_projection,
-    resident_claim::fence_actor_claim,
+    RecoveredActorClaim, SessionStore, StoreError, append_event_in_transaction,
+    projection_cache::ProjectionCache, replay_projection, resident_claim::fence_actor_claim,
 };
 
 #[doc(hidden)]
@@ -30,7 +26,6 @@ pub enum RecoveredResidentWork {
 pub struct RecoveredResidentOutcome {
     pub work: RecoveredResidentWork,
     pub envelopes: Vec<Envelope>,
-    pub admissions: Vec<AdmissionRecord>,
 }
 
 /// Prepared terminal effects; generation fences the handoff episode.
@@ -209,7 +204,7 @@ impl SessionStore {
 
     /// Atomically recover one resident actor after its claim has been fenced.
     ///
-    /// The writer transaction covers admission aborts, actor terminal effects,
+    /// The writer transaction covers actor terminal effects,
     /// root activity, and work classification. The recovered claim remains
     /// active for the caller's subsequent continuation.
     #[doc(hidden)]
@@ -238,11 +233,7 @@ impl SessionStore {
             ));
         }
 
-        let admission_reason = "resident actor takeover";
         let recovery_reason = "aborted by resident recovery";
-        let admissions =
-            abort_recovered_actor_admissions_in_transaction(&mut tx, recovered, admission_reason)
-                .await?;
         let inbox_len = projection
             .team
             .inboxes
@@ -321,15 +312,11 @@ impl SessionStore {
         };
 
         tx.commit().await?;
-        Ok(RecoveredResidentOutcome {
-            work,
-            envelopes,
-            admissions,
-        })
+        Ok(RecoveredResidentOutcome { work, envelopes })
     }
 
     /// Commit terminal effects, or only a refusal notice for a voluntary report.
-    /// Publish returned envelopes and refund admissions only after success.
+    /// Publish returned envelopes only after success.
     pub async fn finalize_resident_archive(
         &self,
         owner: ResidentArchiveOwner<'_>,
@@ -337,7 +324,7 @@ impl SessionStore {
         handle: &str,
         archive: ResidentArchive,
         cause: FinishCause,
-    ) -> Result<(ResidentArchiveOutcome, Vec<Envelope>, Vec<AdmissionRecord>), StoreError> {
+    ) -> Result<(ResidentArchiveOutcome, Vec<Envelope>), StoreError> {
         let actor_id = archive.actor;
         let reason = archive.note.as_str();
         let member_status = archive.member_status;
@@ -387,7 +374,7 @@ impl SessionStore {
                             .is_some_and(|entry| entry.session == actor_id)
                         {
                             tx.commit().await?;
-                            return Ok((ResidentArchiveOutcome::Committed, Vec::new(), Vec::new()));
+                            return Ok((ResidentArchiveOutcome::Committed, Vec::new()));
                         }
                     }
                     return Err(StoreError::ActorClaimUnavailable { actor_id });
@@ -411,7 +398,7 @@ impl SessionStore {
                     .await?
             {
                 tx.commit().await?;
-                return Ok((ResidentArchiveOutcome::Committed, Vec::new(), Vec::new()));
+                return Ok((ResidentArchiveOutcome::Committed, Vec::new()));
             }
             return Err(error);
         }
@@ -499,7 +486,7 @@ impl SessionStore {
             )
             .await?;
             tx.commit().await?;
-            return Ok((ResidentArchiveOutcome::Refused, vec![notice], Vec::new()));
+            return Ok((ResidentArchiveOutcome::Refused, vec![notice]));
         }
 
         let mut envelopes = append_resident_effects_in_transaction(
@@ -526,27 +513,6 @@ impl SessionStore {
         let epoch = i64::try_from(claim.epoch.get()).map_err(|_| {
             StoreError::ActorClaimData("actor epoch exceeds SQLite INTEGER range".to_string())
         })?;
-        let rows = sqlx::query(
-            "UPDATE admission_journal \
-             SET state = 'aborted', \
-                 logical_released = CASE WHEN state = 'started' THEN 1 ELSE logical_released END, \
-                 terminal_reason = ?, updated_at = ? \
-             WHERE actor_id = ? AND actor_epoch <= ? AND state IN ('accepted', 'started') \
-             RETURNING operation_id, source_tool_call_id, root_session_id, request_fingerprint, \
-                       state, admission_units, logical_released, \
-                       terminal_reason, created_at, updated_at, actor_id, actor_epoch",
-        )
-        .bind(reason)
-        .bind(now_millis())
-        .bind(claim.actor_id.storage_key())
-        .bind(epoch)
-        .fetch_all(&mut *tx)
-        .await?;
-        let admissions = rows
-            .into_iter()
-            .map(decode_record)
-            .collect::<Result<Vec<_>, _>>()?;
-
         let root_envelope = append_event_in_transaction(
             &mut tx,
             root,
@@ -663,7 +629,7 @@ impl SessionStore {
             );
         }
         tx.commit().await?;
-        Ok((ResidentArchiveOutcome::Committed, envelopes, admissions))
+        Ok((ResidentArchiveOutcome::Committed, envelopes))
     }
 }
 

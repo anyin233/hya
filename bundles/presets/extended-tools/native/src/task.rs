@@ -297,8 +297,6 @@ impl Tool for TaskTool {
                 SpawnError::Overloaded => ToolError::Overloaded(error.to_string()),
                 SpawnError::Unavailable => ToolError::Other(error.to_string()),
                 SpawnError::Cancelled => ToolError::Other(error.to_string()),
-                SpawnError::OperationIdConflict => ToolError::OperationIdConflict,
-                SpawnError::OperationAlreadyHandled => ToolError::OperationAlreadyHandled,
                 SpawnError::UnknownAgentId { agent_id } => ToolError::UnknownAgentId { agent_id },
                 SpawnError::AgentSpawnNotAllowed { caller, agent_id } => {
                     ToolError::AgentSpawnNotAllowed { caller, agent_id }

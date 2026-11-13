@@ -1,19 +1,18 @@
 use hya_proto::{
     ActorClaim, ActorEpoch, Envelope, Event, FinishReason, MessageId, OwnerRunId, PartId,
-    PartProjection, Role, RosterStatus, SessionId, now_millis,
+    PartProjection, Role, RosterStatus, SessionId,
 };
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::admission::decode_record;
-use crate::{AdmissionRecord, SessionStore, StoreError, decode_session_key};
+use crate::{SessionStore, StoreError, decode_session_key};
 
 /// Result of recovering (taking over) a resident actor claim after restart.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RecoveredActorClaim {
     /// New active claim after bumping the epoch for this owner run.
     pub claim: ActorClaim,
-    /// Epoch that was active before takeover (for aborting prior admissions).
+    /// Epoch that was active before takeover (for classifying interrupted work).
     pub previous_epoch: ActorEpoch,
 }
 
@@ -41,6 +40,7 @@ impl SessionStore {
         &self,
         root: SessionId,
         owner: OwnerRunId,
+        capacity: u64,
         parent_claim: Option<&ActorClaim>,
         actor: SessionId,
         from: String,
@@ -139,7 +139,8 @@ impl SessionStore {
             .inboxes
             .get(&target)
             .map_or(0, |inbox| inbox.len() as u64);
-        let claim = Self::try_claim_new_in_transaction(&mut tx, actor, owner).await?;
+        check_capacity(&mut tx, root, 1, capacity).await?;
+        let claim = Self::try_claim_new_in_transaction(&mut tx, root, actor, owner).await?;
         let message = MessageId::new();
         let part = PartId::new();
         let events = [
@@ -408,11 +409,13 @@ impl SessionStore {
     /// overwritten, so simultaneous ordinary claims have exactly one winner.
     pub async fn try_claim_new(
         &self,
+        root: SessionId,
         actor_id: SessionId,
         owner_run_id: OwnerRunId,
     ) -> Result<ActorClaim, StoreError> {
         let mut tx = self.begin_transaction().await?;
-        let claim = Self::try_claim_new_in_transaction(&mut tx, actor_id, owner_run_id).await?;
+        let claim =
+            Self::try_claim_new_in_transaction(&mut tx, root, actor_id, owner_run_id).await?;
         tx.commit().await?;
         Ok(claim)
     }
@@ -420,14 +423,16 @@ impl SessionStore {
     /// Claim an actor as part of the caller's registration transaction.
     pub async fn try_claim_new_in_transaction(
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        root: SessionId,
         actor_id: SessionId,
         owner_run_id: OwnerRunId,
     ) -> Result<ActorClaim, StoreError> {
         let row = sqlx::query(
-            "INSERT INTO resident_actor_claim (actor_id, epoch, owner_run_id, state) \
-             VALUES (?, 1, ?, 'active') \
+            "INSERT INTO resident_actor_claim (actor_id, root_session_id, epoch, owner_run_id, state) \
+             VALUES (?, ?, 1, ?, 'active') \
              ON CONFLICT(actor_id) DO UPDATE SET \
                  epoch = resident_actor_claim.epoch + 1, \
+                 root_session_id = excluded.root_session_id, \
                  owner_run_id = excluded.owner_run_id, \
                  state = 'active' \
              WHERE resident_actor_claim.state = 'released' \
@@ -435,6 +440,7 @@ impl SessionStore {
              RETURNING actor_id, epoch, owner_run_id",
         )
         .bind(actor_id.storage_key())
+        .bind(root.storage_key())
         .bind(owner_run_id.as_uuid().as_bytes().as_slice())
         .fetch_optional(&mut **tx)
         .await?;
@@ -445,45 +451,79 @@ impl SessionStore {
         }
     }
 
-    /// Commit registration events across child, parent and root with the claim.
-    /// Returned envelopes must be published only after this method succeeds.
-    pub async fn commit_resident_registration(
+    /// Register a complete batch and lazily register its root in one writer
+    /// transaction. A failed fence, capacity check or write leaves no member.
+    /// Returned envelopes are published only after commit.
+    pub async fn register_episodes(
         &self,
-        actor_id: SessionId,
-        owner_run_id: OwnerRunId,
+        root: SessionId,
+        owner: OwnerRunId,
         parent_claim: Option<&ActorClaim>,
-        events: Vec<Event>,
-    ) -> Result<(ActorClaim, Vec<Envelope>), StoreError> {
+        capacity: u64,
+        registrations: Vec<EpisodeRegistration>,
+    ) -> Result<Vec<(ActorClaim, Vec<Envelope>)>, StoreError> {
         let mut tx = self.begin_transaction().await?;
-        if let Some(parent_claim) = parent_claim {
-            fence_actor_claim(&mut tx, parent_claim).await?;
+        if let Some(claim) = parent_claim {
+            fence_actor_claim(&mut tx, claim).await?;
         }
-        let claim = Self::try_claim_new_in_transaction(&mut tx, actor_id, owner_run_id).await?;
-        let mut envelopes = Vec::with_capacity(events.len());
-        for mut event in events {
-            if let Event::ChannelCreated {
-                session,
-                channel,
-                kind: hya_proto::ChannelKind::Group,
-                unit,
-                ..
-            } = &mut event
-            {
-                let projection =
-                    crate::replay_projection(&self.projections, &mut tx, *session).await?;
-                if let Some((existing, _)) = projection.team.channels.iter().find(|(_, entry)| {
-                    entry.kind == hya_proto::ChannelKind::Group && entry.unit == *unit
-                }) {
+        check_capacity(&mut tx, root, registrations.len() as u64, capacity).await?;
+        let mut projection = crate::replay_projection(&self.projections, &mut tx, root).await?;
+        let mut envelopes = Vec::new();
+        if !projection.team.roster.contains_key(hya_proto::ROOT_HANDLE) {
+            let event = Event::AgentRegistered {
+                session: root,
+                agent_session: root,
+                handle: hya_proto::ROOT_HANDLE.into(),
+                parent: None,
+                agent_type: projection.session.agent.clone().ok_or_else(|| {
+                    StoreError::ActorClaimData("registration root has no agent".into())
+                })?,
+                mode: hya_proto::SubagentMode::Transient,
+            };
+            let envelope = crate::append_event_in_transaction(&mut tx, root, event).await?;
+            projection.apply(&envelope);
+            envelopes.push(envelope);
+        }
+        let mut registered = Vec::with_capacity(registrations.len());
+        for registration in registrations {
+            let claim =
+                Self::try_claim_new_in_transaction(&mut tx, root, registration.actor, owner)
+                    .await?;
+            for mut event in registration.events {
+                if let Event::ChannelCreated {
+                    channel,
+                    kind: hya_proto::ChannelKind::Group,
+                    unit,
+                    ..
+                } = &mut event
+                    && let Some((existing, _)) =
+                        projection.team.channels.iter().find(|(_, entry)| {
+                            entry.kind == hya_proto::ChannelKind::Group && entry.unit == *unit
+                        })
+                {
                     channel.clone_from(existing);
                 }
+                let session = event.session().ok_or_else(|| {
+                    StoreError::ActorClaimData("registration event has no session".into())
+                })?;
+                let envelope = crate::append_event_in_transaction(&mut tx, session, event).await?;
+                if session == root {
+                    projection.apply(&envelope);
+                }
+                envelopes.push(envelope);
             }
-            let session = event.session().ok_or_else(|| {
-                StoreError::ActorClaimData("registration event has no session".into())
-            })?;
-            envelopes.push(crate::append_event_in_transaction(&mut tx, session, event).await?);
+            registered.push((claim, std::mem::take(&mut envelopes)));
         }
         tx.commit().await?;
-        Ok((claim, envelopes))
+        Ok(registered)
+    }
+
+    /// Current capacity leases, including idle and recovered members.
+    pub async fn live_member_count(&self, root: SessionId) -> Result<u64, StoreError> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM resident_actor_claim WHERE root_session_id = ? AND state = 'active'",
+        ).bind(root.storage_key()).fetch_one(&self.pool).await?;
+        Ok(count as u64)
     }
 
     /// Take over one active actor before runtime readiness.
@@ -539,18 +579,13 @@ impl SessionStore {
         }
     }
 
-    /// Release only the exact current capability. Any operation still bound to
-    /// this incarnation is terminalized in the same writer transaction, so a
-    /// released claim cannot strand nonterminal work. Repeating a matching
-    /// release is idempotent; a newer owner/epoch remains fenced.
-    pub async fn release_claim(
-        &self,
-        claim: &ActorClaim,
-    ) -> Result<Vec<AdmissionRecord>, StoreError> {
+    /// Release only the exact current capability and its capacity lease.
+    /// Repeating a matching release is idempotent; a newer owner remains fenced.
+    pub async fn release_claim(&self, claim: &ActorClaim) -> Result<(), StoreError> {
         let epoch = i64::try_from(claim.epoch.get()).map_err(|_| {
             StoreError::ActorClaimData("actor epoch exceeds SQLite INTEGER range".to_string())
         })?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_transaction().await?;
         let current = sqlx::query(
             "UPDATE resident_actor_claim SET state = state \
              WHERE actor_id = ? AND epoch = ? AND owner_run_id = ? AND state = 'active'",
@@ -572,7 +607,7 @@ impl SessionStore {
             .await?;
             if state.as_deref() == Some("released") {
                 tx.commit().await?;
-                return Ok(Vec::new());
+                return Ok(());
             }
             tx.rollback().await?;
             return Err(StoreError::StaleActorClaim {
@@ -580,25 +615,6 @@ impl SessionStore {
             });
         }
 
-        let rows = sqlx::query(
-            "UPDATE admission_journal \
-             SET state = 'aborted', \
-                 logical_released = CASE WHEN state = 'started' THEN 1 ELSE logical_released END, \
-                 terminal_reason = 'resident actor released', updated_at = ? \
-             WHERE actor_id = ? AND actor_epoch = ? AND state IN ('accepted', 'started') \
-             RETURNING operation_id, source_tool_call_id, root_session_id, request_fingerprint, \
-                       state, admission_units, logical_released, \
-                       terminal_reason, created_at, updated_at, actor_id, actor_epoch",
-        )
-        .bind(now_millis())
-        .bind(claim.actor_id.storage_key())
-        .bind(epoch)
-        .fetch_all(&mut *tx)
-        .await?;
-        let records = rows
-            .into_iter()
-            .map(decode_record)
-            .collect::<Result<Vec<_>, _>>()?;
         sqlx::query(
             "UPDATE resident_actor_claim SET state = 'released' \
              WHERE actor_id = ? AND epoch = ? AND owner_run_id = ? AND state = 'active'",
@@ -609,7 +625,7 @@ impl SessionStore {
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(records)
+        Ok(())
     }
 
     /// Atomically fence and append one resident-owned canonical mutation.
@@ -630,7 +646,7 @@ impl SessionStore {
             ));
         }
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_transaction().await?;
         fence_actor_claim(&mut tx, claim).await?;
 
         let mut envelopes = Vec::with_capacity(events.len());
@@ -685,4 +701,36 @@ fn decode_claim(row: sqlx::sqlite::SqliteRow) -> Result<ActorClaim, StoreError> 
         epoch,
         owner_run_id,
     })
+}
+
+/// Prepared canonical events for one new episode in a registration batch.
+pub struct EpisodeRegistration {
+    /// Member session whose active claim is the capacity lease.
+    pub actor: SessionId,
+    /// Session, member, roster, channel and initial prompt events.
+    pub events: Vec<Event>,
+}
+
+async fn check_capacity(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    root: SessionId,
+    requested: u64,
+    limit: u64,
+) -> Result<(), StoreError> {
+    let live: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM resident_actor_claim WHERE root_session_id = ? AND state = 'active'",
+    )
+    .bind(root.storage_key())
+    .fetch_one(&mut **tx)
+    .await?;
+    let live = live as u64;
+    if requested > limit.saturating_sub(live) {
+        return Err(StoreError::CapacityExceeded {
+            root,
+            live,
+            requested,
+            limit,
+        });
+    }
+    Ok(())
 }

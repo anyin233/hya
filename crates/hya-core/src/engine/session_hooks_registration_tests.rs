@@ -231,13 +231,49 @@ async fn spawn(
 }
 
 #[tokio::test]
+async fn existing_registration_capacity_failure_does_not_register_main() {
+    let (engine, supervisor, agent, root) = fixture(
+        SubagentLimits {
+            per_run_budget: 0,
+            ..SubagentLimits::default()
+        },
+        None,
+    )
+    .await;
+    let root_turn = engine.try_begin_turn(root).unwrap();
+    let child = create(&engine, Some(root)).await;
+    let before = engine.replay(root).await.unwrap();
+    let result = supervisor
+        .register_existing_resident(root, child, "worker".into(), agent, None)
+        .await;
+    assert!(
+        matches!(
+            result,
+            Err(crate::CoreError::Store(
+                hya_store::StoreError::CapacityExceeded { .. }
+            ))
+        ),
+        "{result:?}"
+    );
+    assert_eq!(
+        engine.replay(root).await.unwrap(),
+        before,
+        "failed registration must roll back lazy main too"
+    );
+    drop(root_turn);
+    supervisor
+        .drain(hya_proto::FinishCause::Shutdown, Duration::from_secs(2))
+        .await;
+}
+
+#[tokio::test]
 async fn stale_parent_registration_has_no_child_hooks_or_memory() {
     let hooks = Arc::new(Hooks::default());
     let (engine, supervisor, agent, root) =
         fixture(SubagentLimits::default(), Some(hooks.clone())).await;
     let claim = engine
         .store()
-        .try_claim_new(root, OwnerRunId::new())
+        .try_claim_new(root, root, OwnerRunId::new())
         .await
         .unwrap();
     engine
@@ -612,8 +648,6 @@ async fn revived_resident_ignores_stale_initialization(at_start: bool) {
 #[tokio::test]
 async fn concurrent_siblings_share_one_group_and_all_receive_announce() {
     let (engine, supervisor, agent, root) = fixture(SubagentLimits::default(), None).await;
-    // Root lazy registration is intentionally outside this change's scope.
-    engine.resolve_handle(root, root).await.unwrap();
     let children =
         futures::future::join_all((0..8).map(|_| spawn(&supervisor, &engine, &agent, root, None)))
             .await;

@@ -101,7 +101,6 @@ async fn authorize_tool_call(
         .map_err(ToolError::from)
 }
 
-pub use admission::SpawnAdmissionOutcome;
 pub use file_snapshot::{MAX_DIRTY_BYTES, MAX_DIRTY_FILES, MAX_FILE_BYTES, MAX_SESSION_BLOB_BYTES};
 pub use fork::{ForkAt, ForkError, fork_cut};
 pub use revert::{RevertError, RevertOutcome, RevertTarget};
@@ -1479,7 +1478,7 @@ impl SessionEngine {
     }
 
     /// Resolve the exact recorded resident identity and all its capabilities
-    /// from one binding. Recovery and revival never perform spawn admission.
+    /// from one binding. Recovery and revival keep the recorded member identity.
     pub fn resolve_resident_runtime(
         &self,
         binding: TurnBinding,

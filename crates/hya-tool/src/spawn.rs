@@ -126,12 +126,6 @@ pub enum SpawnError {
     /// Admission queue is full.
     #[error("spawn admission overloaded")]
     Overloaded,
-    /// Operation id conflicts with an in-flight claim.
-    #[error("OPERATION_ID_CONFLICT")]
-    OperationIdConflict,
-    /// Operation id was already completed.
-    #[error("operation already handled")]
-    OperationAlreadyHandled,
     /// Cancelled before the child activated.
     #[error("spawn cancelled before activation")]
     Cancelled,

@@ -25,7 +25,7 @@ use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
     ProviderRouter,
 };
-use hya_store::{AdmissionState, SessionStore};
+use hya_store::SessionStore;
 use hya_tool::{
     Action, AgentDef, Mode, PermissionPlane, PermissionRules, Rule, SpawnError, SpawnMember,
     SpawnerPlane, ToolOperation, ToolRegistry,
@@ -164,16 +164,6 @@ impl Provider for CountingProvider {
 }
 
 #[tokio::test]
-async fn background_transient_overload_prevents_child_creation() {
-    background_overload_prevents_child_creation(false).await;
-}
-
-#[tokio::test]
-async fn background_resident_overload_prevents_child_creation() {
-    background_overload_prevents_child_creation(true).await;
-}
-
-#[tokio::test]
 async fn explicit_unknown_inline_target_creates_no_child() {
     let fixture = admission_fixture(1).await;
     let operation = operation();
@@ -204,16 +194,6 @@ async fn explicit_unknown_inline_target_creates_no_child() {
         fixture.engine.store().list_sessions().await.unwrap().len(),
         1
     );
-    assert!(
-        fixture
-            .engine
-            .store()
-            .admission(operation.operation_id())
-            .await
-            .unwrap()
-            .is_none(),
-        "authorization failure must precede durable admission"
-    );
 }
 
 #[tokio::test]
@@ -228,17 +208,6 @@ async fn inline_description_is_unsupported_before_admission_without_side_effects
             .read_projection(fixture.parent)
             .await
             .unwrap();
-        let admissions_before = fixture
-            .engine
-            .store()
-            .nonterminal_admissions_for_root(fixture.parent)
-            .await
-            .unwrap();
-        let remaining_budget_before = fixture
-            .engine
-            .governor()
-            .unwrap()
-            .remaining_budget(fixture.parent);
         let active_actors_before = fixture.engine.store().active_actor_ids().await.unwrap();
         let binding_before = fixture.engine.bind_runtime(&std::env::temp_dir()).unwrap();
         let quick_before = binding_before
@@ -295,17 +264,6 @@ async fn inline_description_is_unsupported_before_admission_without_side_effects
             .read_projection(fixture.parent)
             .await
             .unwrap();
-        let admissions_after = fixture
-            .engine
-            .store()
-            .nonterminal_admissions_for_root(fixture.parent)
-            .await
-            .unwrap();
-        let remaining_budget_after = fixture
-            .engine
-            .governor()
-            .unwrap()
-            .remaining_budget(fixture.parent);
         let active_actors_after = fixture.engine.store().active_actor_ids().await.unwrap();
         let binding_after = fixture.engine.bind_runtime(&std::env::temp_dir()).unwrap();
         let quick_after = binding_after
@@ -325,26 +283,8 @@ async fn inline_description_is_unsupported_before_admission_without_side_effects
             "unsupported inline description must not change the parent projection"
         );
         assert_eq!(
-            admissions_after, admissions_before,
-            "unsupported inline description must not change durable admissions"
-        );
-        assert_eq!(
-            remaining_budget_after, remaining_budget_before,
-            "unsupported inline description must not debit the governor"
-        );
-        assert_eq!(
             active_actors_after, active_actors_before,
             "unsupported inline description must not claim an actor"
-        );
-        assert!(
-            fixture
-                .engine
-                .store()
-                .admission(operation.operation_id())
-                .await
-                .unwrap()
-                .is_none(),
-            "unsupported inline description must precede durable admission"
         );
         assert_eq!(
             fixture.provider_calls.load(Ordering::SeqCst),
@@ -529,83 +469,6 @@ async fn inline_child_spawns_through_its_authorized_base_roster() {
         "inline child did not retain quick's authorized plan target: {agents:?}"
     );
 }
-/// Regression for the release window between member-journal finalize and the
-/// owner's governor release.
-///
-/// A member task can publish `Completed + logical_released` before the owner
-/// reaches its idempotent in-memory governor refund. A same-root spawn that
-/// enters during that window must reconcile whole terminal operations and
-/// retry its exact reservation instead of returning a false `Overloaded`.
-///
-/// The query deliberately requires every declared batch member to be terminal;
-/// releasing after one member would return the operation's full cardinality
-/// while siblings still run.
-#[tokio::test]
-async fn released_capacity_is_visible_to_a_concurrent_spawn_on_the_same_root() {
-    const RUNS: usize = 20;
-    for run in 0..RUNS {
-        let fixture = admission_fixture(1).await;
-        let first_operation = operation();
-        tokio::time::timeout(
-            Duration::from_secs(5),
-            fixture.scoped_spawner().spawn(
-                first_operation,
-                vec![SpawnMember {
-                    description: "single reservation".to_string(),
-                    prompt: "finish once".to_string(),
-                    subagent_type: "quick".to_string(),
-                    ..SpawnMember::default()
-                }],
-                Default::default(),
-            ),
-        )
-        .await
-        .expect("spawn timed out")
-        .expect("first spawn should be admitted");
-
-        // Wait for the member task to make the release durably visible, then spawn
-        // again immediately -- the journal is the contract a caller can observe.
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let record = fixture
-                    .engine
-                    .store()
-                    .admission(first_operation.operation_id())
-                    .await
-                    .unwrap()
-                    .unwrap();
-                if record.state == AdmissionState::Completed && record.logical_released {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("journal did not finalize");
-
-        let second = tokio::time::timeout(
-            Duration::from_secs(5),
-            fixture.scoped_spawner().spawn(
-                operation(),
-                vec![SpawnMember {
-                    description: "concurrent".to_string(),
-                    prompt: "second".to_string(),
-                    subagent_type: "quick".to_string(),
-                    ..SpawnMember::default()
-                }],
-                Default::default(),
-            ),
-        )
-        .await
-        .expect("second spawn timed out");
-        assert!(
-            second.is_ok(),
-            "run {run}: capacity the journal reports as logically released must be \
-             admissible on the same root, got {second:?}"
-        );
-    }
-}
-
 #[tokio::test]
 async fn admitted_background_resident_uses_the_common_pre_create_path() {
     let fixture = admission_fixture(1).await;
@@ -694,29 +557,9 @@ async fn resident_root_registration_failure_aborts_without_child_side_effects() 
             }],
             Default::default(),
         )
-        .await
-        .expect("resident spawn should return an outcome");
+        .await;
 
-    assert_eq!(result.len(), 1, "{result:?}");
-    assert_eq!(result[0].status, "failed", "{result:?}");
-
-    let record = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let record = fixture
-                .engine
-                .store()
-                .admission(operation.operation_id())
-                .await
-                .unwrap()
-                .expect("admission record");
-            if record.state.is_terminal() {
-                break record;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("admission did not finalize");
+    assert!(matches!(result, Err(SpawnError::Unavailable)), "{result:?}");
 
     let root_events = fixture.engine.replay(fixture.parent).await.unwrap();
     assert!(
@@ -748,50 +591,10 @@ async fn resident_root_registration_failure_aborts_without_child_side_effects() 
             .is_empty(),
         "root registration failure must release any resident actor claim"
     );
-    assert_eq!(record.state, hya_store::AdmissionState::Aborted);
-    assert!(record.logical_released);
 }
 
 #[tokio::test]
-async fn foreground_completion_uses_one_debit_and_one_finalize() {
-    let fixture = admission_fixture(1).await;
-    let operation = operation();
-
-    let outcome = fixture
-        .scoped_spawner()
-        .spawn(
-            operation,
-            vec![SpawnMember {
-                description: "foreground admission".to_string(),
-                prompt: "finish".to_string(),
-                subagent_type: "quick".to_string(),
-                ..SpawnMember::default()
-            }],
-            Default::default(),
-        )
-        .await
-        .expect("foreground spawn");
-
-    assert_eq!(outcome.len(), 1);
-    let record = fixture
-        .engine
-        .store()
-        .admission(operation.operation_id())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(record.state, hya_store::AdmissionState::Completed);
-    assert!(record.logical_released);
-    assert_eq!(
-        fixture
-            .engine
-            .governor()
-            .unwrap()
-            .remaining_budget(fixture.parent),
-        1
-    );
-}
-async fn background_overload_prevents_child_creation(_resident_member: bool) {
+async fn overload_prevents_child_creation() {
     let fixture = admission_fixture(0).await;
     let operation = operation();
     let sessions_before = fixture.engine.store().list_sessions().await.unwrap();
@@ -849,164 +652,6 @@ async fn background_overload_prevents_child_creation(_resident_member: bool) {
         "admission denial must not start a provider turn"
     );
     assert!(matches!(result, Err(SpawnError::Overloaded)));
-    let record = fixture
-        .engine
-        .store()
-        .admission(operation.operation_id())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(record.state, hya_store::AdmissionState::Aborted);
-    assert!(
-        !record.logical_released,
-        "an accepted-but-never-debited overload must not release capacity"
-    );
-}
-
-#[tokio::test]
-async fn duplicate_operation_never_dispatches_or_creates_a_second_child() {
-    let fixture = admission_fixture(2).await;
-    let operation = operation();
-    let member = SpawnMember {
-        description: "idempotent dispatch".to_string(),
-        prompt: "run only once".to_string(),
-        subagent_type: "quick".to_string(),
-        ..SpawnMember::default()
-    };
-
-    fixture
-        .scoped_spawner()
-        .spawn(operation, vec![member.clone()], Default::default())
-        .await
-        .expect("first dispatch");
-    let mut sessions_after_first: Vec<SessionId> = fixture
-        .engine
-        .store()
-        .list_sessions()
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|info| info.session)
-        .collect();
-    sessions_after_first.sort();
-
-    let duplicate = fixture
-        .scoped_spawner()
-        .spawn(operation, vec![member], Default::default())
-        .await;
-    let mut sessions_after_duplicate: Vec<SessionId> = fixture
-        .engine
-        .store()
-        .list_sessions()
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|info| info.session)
-        .collect();
-    sessions_after_duplicate.sort();
-
-    assert!(matches!(
-        duplicate,
-        Err(SpawnError::OperationAlreadyHandled)
-    ));
-    assert_eq!(sessions_after_duplicate, sessions_after_first);
-}
-
-#[tokio::test]
-async fn reused_operation_with_different_request_fails_closed() {
-    let fixture = admission_fixture(2).await;
-    let operation = operation();
-    fixture
-        .scoped_spawner()
-        .spawn(
-            operation,
-            vec![SpawnMember {
-                description: "original".to_string(),
-                prompt: "first immutable request".to_string(),
-                subagent_type: "quick".to_string(),
-                ..SpawnMember::default()
-            }],
-            Default::default(),
-        )
-        .await
-        .expect("first request");
-    let mut sessions_before_conflict: Vec<SessionId> = fixture
-        .engine
-        .store()
-        .list_sessions()
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|info| info.session)
-        .collect();
-    sessions_before_conflict.sort();
-
-    let conflict = fixture
-        .scoped_spawner()
-        .spawn(
-            operation,
-            vec![SpawnMember {
-                description: "changed".to_string(),
-                prompt: "different immutable request".to_string(),
-                subagent_type: "quick".to_string(),
-                ..SpawnMember::default()
-            }],
-            Default::default(),
-        )
-        .await;
-    let mut sessions_after_conflict: Vec<SessionId> = fixture
-        .engine
-        .store()
-        .list_sessions()
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|info| info.session)
-        .collect();
-    sessions_after_conflict.sort();
-
-    assert!(matches!(conflict, Err(SpawnError::OperationIdConflict)));
-    assert_eq!(sessions_after_conflict, sessions_before_conflict);
-}
-
-#[tokio::test]
-async fn concurrent_retry_debits_and_dispatches_only_once() {
-    let fixture = admission_fixture(2).await;
-    let operation = operation();
-    let member = SpawnMember {
-        description: "concurrent retry".to_string(),
-        prompt: "dispatch once".to_string(),
-        subagent_type: "quick".to_string(),
-        ..SpawnMember::default()
-    };
-    let left_plane = fixture.scoped_spawner();
-    let right_plane = fixture.scoped_spawner();
-
-    let (left, right) = tokio::join!(
-        left_plane.spawn(operation, vec![member.clone()], Default::default()),
-        right_plane.spawn(operation, vec![member], Default::default())
-    );
-
-    assert_eq!(
-        [left.as_ref(), right.as_ref()]
-            .into_iter()
-            .filter(|result| result.is_ok())
-            .count(),
-        1
-    );
-    assert_eq!(
-        [left.as_ref(), right.as_ref()]
-            .into_iter()
-            .filter(|result| matches!(result, Err(SpawnError::OperationAlreadyHandled)))
-            .count(),
-        1,
-        "left={left:?}, right={right:?}"
-    );
-    assert_eq!(
-        fixture.engine.store().list_sessions().await.unwrap().len(),
-        2,
-        "one parent and one child only"
-    );
 }
 
 async fn admission_fixture(per_run_budget: u64) -> AdmissionFixture {
@@ -1817,16 +1462,6 @@ async fn batch_invalid_member_with_guidance_has_zero_durable_side_effects() {
         sessions_before,
         "invalid batch member must create zero child sessions even with guidance"
     );
-    assert!(
-        fixture
-            .engine
-            .store()
-            .admission(operation.operation_id())
-            .await
-            .unwrap()
-            .is_none(),
-        "authorization failure must precede durable admission when guidance is present"
-    );
     let events_after = fixture.engine.replay(fixture.parent).await.unwrap();
     assert_eq!(
         events_after, events_before,
@@ -2499,15 +2134,6 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
         sessions_before,
         "no child session on missing-root fail-closed"
     );
-    assert!(
-        engine
-            .store()
-            .admission(operation.operation_id())
-            .await
-            .unwrap()
-            .is_none(),
-        "missing root must precede durable admission"
-    );
     assert_eq!(
         engine.replay(root).await.unwrap(),
         root_events_before,
@@ -2663,4 +2289,150 @@ async fn spawn_uses_provider_published_after_supervisor_startup() {
         .await
         .unwrap();
     assert_eq!(child.session.model, Some(ModelRef::new("hya/offline")));
+}
+
+#[tokio::test]
+async fn batch_registration_failure_rolls_back_every_member_and_lazy_main() {
+    let database = AdmissionTempDb::new();
+    let store = SessionStore::connect(database.path()).await.unwrap();
+    let fixture = admission_fixture_with_store(2, store).await;
+    let before = fixture.engine.replay(fixture.parent).await.unwrap();
+    let mut connection = SqliteConnection::connect(&format!("sqlite://{}", database.path()))
+        .await
+        .unwrap();
+    sqlx::query("CREATE TRIGGER reject_second_prompt BEFORE INSERT ON event_log WHEN json_extract(NEW.payload, '$.type') = 'text_delta' AND json_extract(NEW.payload, '$.delta') = 'reject second member' BEGIN SELECT RAISE(ABORT, 'second registration failed'); END")
+        .execute(&mut connection).await.unwrap();
+    let result = fixture
+        .scoped_spawner()
+        .spawn(
+            operation(),
+            ["first member", "reject second member"]
+                .into_iter()
+                .map(|prompt| SpawnMember {
+                    description: prompt.into(),
+                    prompt: prompt.into(),
+                    subagent_type: "quick".into(),
+                    ..SpawnMember::default()
+                })
+                .collect(),
+            Default::default(),
+        )
+        .await;
+    assert!(matches!(result, Err(SpawnError::Unavailable)), "{result:?}");
+    assert_eq!(fixture.engine.replay(fixture.parent).await.unwrap(), before);
+    assert_eq!(
+        fixture.engine.store().list_sessions().await.unwrap().len(),
+        1
+    );
+    assert_eq!(
+        fixture
+            .engine
+            .store()
+            .live_member_count(fixture.parent)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(fixture.provider_calls.load(Ordering::SeqCst), 0);
+    assert!(fixture.resident.team_cancel(fixture.parent).is_none());
+    fixture._tasks.shutdown().await;
+    fixture
+        .resident
+        .drain(hya_proto::FinishCause::Shutdown, hya_core::DRAIN_DEADLINE)
+        .await;
+}
+
+#[tokio::test]
+async fn live_capacity_rejects_whole_batches_and_archive_releases_one_lease() {
+    let fixture = admission_fixture(2).await;
+    let _root_turn = fixture.engine.try_begin_turn(fixture.parent).unwrap();
+    let member = || SpawnMember {
+        description: "capacity".into(),
+        prompt: "finish".into(),
+        subagent_type: "quick".into(),
+        ..SpawnMember::default()
+    };
+    let first = fixture
+        .scoped_spawner()
+        .spawn(operation(), vec![member()], Default::default())
+        .await
+        .unwrap();
+    wait_member_turn_done(&fixture.engine, &first[0].session).await;
+    let members_before = fixture
+        .engine
+        .read_projection(fixture.parent)
+        .await
+        .unwrap()
+        .session
+        .members
+        .into_iter()
+        .map(|member| (member.member, member.child))
+        .collect::<Vec<_>>();
+    let refused = fixture
+        .scoped_spawner()
+        .spawn(operation(), vec![member(), member()], Default::default())
+        .await;
+    assert!(
+        matches!(refused, Err(SpawnError::Overloaded)),
+        "{refused:?}"
+    );
+    let members_after = fixture
+        .engine
+        .read_projection(fixture.parent)
+        .await
+        .unwrap()
+        .session
+        .members
+        .into_iter()
+        .map(|member| (member.member, member.child))
+        .collect::<Vec<_>>();
+    assert_eq!(members_after, members_before);
+    assert_eq!(
+        fixture.engine.store().list_sessions().await.unwrap().len(),
+        2
+    );
+    assert_eq!(
+        fixture
+            .engine
+            .store()
+            .live_member_count(fixture.parent)
+            .await
+            .unwrap(),
+        1
+    );
+    fixture
+        .resident
+        .archive_member(fixture.parent, &first[0].member, "free capacity")
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .engine
+            .store()
+            .live_member_count(fixture.parent)
+            .await
+            .unwrap(),
+        0
+    );
+    let accepted = fixture
+        .scoped_spawner()
+        .spawn(operation(), vec![member(), member()], Default::default())
+        .await
+        .unwrap();
+    assert_eq!(accepted.len(), 2);
+    assert_eq!(
+        fixture
+            .engine
+            .store()
+            .live_member_count(fixture.parent)
+            .await
+            .unwrap(),
+        2
+    );
+    fixture._tasks.shutdown().await;
+    drop(_root_turn);
+    fixture
+        .resident
+        .drain(hya_proto::FinishCause::Shutdown, hya_core::DRAIN_DEADLINE)
+        .await;
 }

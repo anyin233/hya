@@ -147,6 +147,9 @@ impl SessionEngine {
         let Some(parent) = projection.session.parent else {
             return fallback;
         };
+        if parent == root {
+            return fallback;
+        }
         self.resolve_handle(root, parent).await.unwrap_or(fallback)
     }
 
@@ -1348,13 +1351,6 @@ mod tests {
     impl crate::hooks::HookDispatcher for RevivalHook {
         fn dispatch_event(&self, _: &hya_proto::Envelope) {}
 
-        async fn agent_spawn(&self, _: crate::hooks::AgentSpawnInput) {
-            if self.block.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                self.entered.notify_one();
-                self.release.notified().await;
-            }
-        }
-
         async fn command_execute_before(
             &self,
             input: crate::hooks::CommandExecuteBeforeInput,
@@ -1373,6 +1369,11 @@ mod tests {
             &self,
             input: crate::hooks::MessageUserBeforeInput,
         ) -> crate::hooks::MessageUserBeforeOutcome {
+            // Hold the first revived mail wake; creation hooks do not run again.
+            if self.block.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
             crate::hooks::MessageUserBeforeOutcome::Continue { text: input.text }
         }
 
@@ -1941,7 +1942,7 @@ mod tests {
             .unwrap();
         let claim = engine
             .store()
-            .try_claim_new(session, OwnerRunId::new())
+            .try_claim_new(session, session, OwnerRunId::new())
             .await
             .unwrap();
         Agent {

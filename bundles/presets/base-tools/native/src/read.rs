@@ -1293,6 +1293,7 @@ fn map_mailbox_error(error: hya_tool::MailboxError) -> ToolError {
         hya_tool::MailboxError::Unavailable => ToolError::Other(
             "channel:// reads are only available inside a running team".to_string(),
         ),
+        hya_tool::MailboxError::Overloaded(message) => ToolError::Overloaded(message),
         hya_tool::MailboxError::Rejected(message) => ToolError::Input(message),
     }
 }

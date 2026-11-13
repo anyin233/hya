@@ -30,11 +30,11 @@ spawn (non-blocking; returns handle + DM channel)
        └─ report(result)       gate: inbox drained ∧ all direct children archived
             ├─ handoff(n)      aux model call, state-only, anchors on handoff(n-1)
             └─ ARCHIVE txn     SubagentReported + HandoffCommitted + AgentArchived
-                               + claim release + budget refund + roster removal
+                               + claim/capacity release + roster removal
                                + group-channel membership removal
                                + report mail on the DM channel → wakes parent
 revive (downward DM to archived child)
-  └─ AgentRestarted + AgentRegistered upsert, epoch bump, budget re-debit,
+  └─ AgentRestarted + AgentRegistered upsert, epoch bump, capacity check,
      arm episode n+1 with context = system prompt + handoff(n) + DM body
 ```
 
@@ -74,48 +74,25 @@ absent; policy-denied mail alone never starts a turn.
 
 ## 2. Unified spawn admission
 
-One path replaces both the durable-owner (transient) and legacy (resident)
-routes. The admission journal covers **spawn idempotency and budget**, the
-actor claim covers the **lifetime**; the journal finalizes when the actor is
-registered, not when its work ends.
+Every `task` batch resolves all members, then registers them in one transaction.
+The active actor claim is also its capacity lease; there is no admission journal
+or in-memory spawn ledger. See [capacity and store interfaces](admission-and-governor.md).
 
-```
-task(members[])                       tool layer: parse/normalize, no execution decisions
-→ SpawnerPlane try_send               bounded queue; full ⇒ typed overload
-→ supervisor (single loop)
-   1 authorize per member             binding.resolve_agent + can_spawn roster
-                                      ⇒ unknown_agent_id / agent_spawn_not_allowed
-   2 depth check                      depth+1 > MAX_SUBAGENT_DEPTH (2) ⇒ typed reject
-   3 SpawnIntentV1 encode + journal batch claim     (queued/accepted …, FIFO promotion)
-   4 governor reserve                 per-run budget debit
-   5 create session; actor claim (epoch 1)
-   6 registration txn                 AgentRegistered{Resident} + MemberSpawned
-                                      + group-channel join + DM-channel create
-   7 arm episode                      initial directive = episode 1 context
-   8 reply handles + DM channel ids   journal → Completed
+```text
+task(members[]) → bounded SpawnerPlane (full → overloaded)
+→ resolve all agents, models, resources, sidecar factories and root context
+→ check depth and cancellation
+→ register_episodes (one transaction): parent fence + live-capacity check
+   + lazy main registration + all child/member/roster/channel/prompt events + claims
+→ install every committed episode under claim-write serialization
+→ initialize episodes concurrently; publish registration before each ending
+→ reply with running handles
 ```
 
-**All subagents are resident (0.41.0).** Agent definitions carry no spawn
-lifecycle: `spawn_lifecycle` is a removed manifest key, rejected by name with
-`RemovedManifestKey` in `AgentBundle`, `AgentSetBundle`, and `WorkflowBundle`
-agents (prepared catalogs written by earlier releases still decode; the value is
-ignored). Every `task` spawn takes this path and registers `mode: resident`,
-whatever the target definition is. The only one-shot member runner left is
-the Workflow Stage without an `actor` key (§10), selected by the Workflow
-shape, not by the Agent.
-
-Steps 3–4 reuse the existing journal/governor seam
-([admission-and-governor.md](admission-and-governor.md)) with two changes:
-
-- `SpawnAdmissionOutcome` loses nothing; the foreground whole-batch and
-  background-on-register reply modes are deleted — every reply is the
-  handle-immediately mode.
-- `finalize_spawn_admission` fires at registration (step 6 commit), so the
-  journal's terminal state no longer tracks task completion.
-
-`per_run_budget` becomes a lease ledger: **refund on archive, debit on spawn
-and on revive**. The refund rides the same `logical_released` exactly-once
-mechanism; the archive transaction is the sole refund trigger.
+Registration failure leaves no member. `per_run_budget` limits live members per
+root across turns and restart. Idle and parked residents consume a lease;
+archive releases it, and revival checks one additional lease inside its
+transaction. Workflow preflight checks remaining capacity without reserving it.
 
 Depth is a constant `MAX_SUBAGENT_DEPTH = 2` in `hya-core`
 (`crates/hya-core/src/lib.rs` re-export). The `subagent.max_depth` config key
@@ -383,7 +360,7 @@ through installation, including archive and orphan-takeover decisions.
 5. append the reviving `MailSent { session: root, from: parent_handle,
    to: Channel(existing_dm_id), kind, body }`.
 
-Inputs are root/actor `SessionId`, owner `OwnerRunId`, optional parent `ActorClaim`,
+Inputs are root/actor `SessionId`, owner `OwnerRunId`, capacity `u64`, optional parent `ActorClaim`,
 sender `String`, original `MailEndpoint`, `MailKind`, body `String`, context-marker
 `&str`, and optional `ChannelPolicySnapshot`. It returns
 `(Option<(ActorClaim, u64)>, Vec<Envelope>)` (claim and inbox cursor);
@@ -633,20 +610,20 @@ decisions are unchanged.
 
 ## 12. Invariants checklist
 
-1. Archive is the only exit; it is atomic with claim release, budget refund,
+1. Archive is the only exit; it is atomic with claim release, capacity release,
    roster removal, and group-membership removal.
 2. The report gate (inbox drained ∧ children archived) is checked at call time
    and re-checked in the archive transaction.
 3. A live agent's parent is live (upward DM never hits an archive).
 4. Revival is only via downward DM from the direct parent; it bumps the claim
-   epoch, re-debits budget, and never replays transcripts into model context.
+   epoch, consumes live capacity, and never replays transcripts into model context.
 5. Every terminal path produces a handoff (model-written or degraded). Reports
    and turn/start failures commit a parent report and mail; parent archives
    close the parent member row without sending report mail. The lead has no terminal path:
    it is never reported, handed off, or archived (§3.3).
-6. Journal claim precedes governor debit; refund is exactly-once via
-   `logical_released`; archive is the only refund trigger for a completed
-   lease.
+6. Active claims are capacity leases; batch registration and revival check the
+   root count under the SQLite writer reservation. Root turns and startup never
+   reset it. Archive releases capacity with the terminal events.
 7. Orchestration tools are unadvertised at depth 2 and rejected at admission;
    the constant is not configurable.
 8. Channel authorization = membership + direction, evaluated inside the store
@@ -683,12 +660,12 @@ workspace suite.
   on episode semantics (arm/report/archive/revive cycles, gate rejections,
   degraded handoffs).
 - `crates/hya-app/tests/spawn_admission.rs`, `nested_spawn_tree.rs`: unified
-  path only; journal-finalizes-at-registration.
+  path only; atomic batch registration and active-claim capacity.
 - `crates/hya-proto`: projection fold tests for the new events; legacy
   flat-mailbox fixture retired (breaking mandate).
 - `crates/hya-e2e` p08/p09: rewritten for non-blocking task + report-driven
   completion; new cases: revive-via-DM, depth-2 tool absence, kill, budget
-  refund ledger.
+  capacity leases.
 - Client-side team/channel presentation tests return with the future
   `hya-sdk-v1` frontend (the legacy `hya-sdk` mirror conformance suite and the
   removed TUI's presentation tests retired with those components).
@@ -705,7 +682,7 @@ kind: Message, body: <reason and instruction to report again> }` and returns
 archive unchanged. The published mail wakes the still-live episode.
 Cancellation cleanup, parent member effects, handoff, optional report/mail,
 terminal activity, archive and claim release commit together. The engine calls
-`publish_resident_finalization` once with the returned envelopes and admissions.
+`publish_resident_finalization` once with the returned envelopes.
 Budget kills and sidecar startup failures enter this same transition, so their
 members enter the archive and can be revived. The caller supplies the handoff,
 archive reason and terminal member status. Forced endings use the same numbered,
@@ -715,10 +692,9 @@ logged with the member session id; shutdown performs no fallback writes.
 
 The finalizer takes `ResidentArchiveOwner::Claim(&ActorClaim)` for an owned
 episode, or `Takeover` for an orphan with no in-memory episode. Takeover bumps
-the active claim's epoch and replaces its owner, fences old writes, aborts the
-old epoch's admissions, and archives/releases in one transaction. Failure rolls
-back the takeover and terminal effects together. `Committed` returns envelopes
-and admission refunds; `Refused` returns only the notice. See the exact
+the active claim's epoch and replaces its owner, fences old writes, and
+archives/releases in one transaction. Failure rolls
+back the takeover and terminal effects together. `Committed` returns terminal envelopes; `Refused` returns only the notice. See the exact
 [store and tool contracts](../spec/backend/task-tool.md#atomic-resident-termination).
 Terminal activity preserves unread mail regardless of its textual note;
 delivery and explicit consumption alone advance the inbox cursor.

@@ -172,22 +172,9 @@ struct ResidentActivation {
     route: Option<WorkflowTurnRoute>,
 }
 
-struct WorkflowBudgetReservation {
-    governor: crate::orchestrator::SubagentGovernor,
-    root: SessionId,
-    units: u64,
-}
-
-impl Drop for WorkflowBudgetReservation {
-    fn drop(&mut self) {
-        self.governor.refund_reserved(self.root, self.units);
-    }
-}
-
-/// Fully preflighted and budget-reserved Workflow execution.
+/// Fully preflighted Workflow execution.
 ///
-/// Dropping this value before [`Self::execute`] refunds the scoped reservation
-/// without creating a child Session or sending mail.
+/// Preflight creates no child Session or mail and reserves no live capacity.
 pub struct PreparedWorkflowRun {
     engine: Arc<SessionEngine>,
     lead: SessionId,
@@ -195,7 +182,6 @@ pub struct PreparedWorkflowRun {
     context: WorkflowRunContext,
     resolved: Vec<ResolvedAgent>,
     verifiers: Vec<Option<ResolvedAgent>>,
-    _budget: Option<WorkflowBudgetReservation>,
     durable_run: Option<WorkflowRunId>,
     actor_claim: Option<ActorClaim>,
 }
@@ -429,7 +415,7 @@ pub async fn prepare_workflow_run_for_actor(
         );
     }
     validate_resolved_semantics(name, plan.stages(), &resolved, &context)?;
-    let budget = reserve_workflow_budget(&engine, lead, name, wanted).await?;
+    preflight_workflow_capacity(&engine, lead, name, wanted).await?;
     Ok(PreparedWorkflowRun {
         engine,
         lead,
@@ -437,7 +423,6 @@ pub async fn prepare_workflow_run_for_actor(
         context,
         resolved,
         verifiers,
-        _budget: budget,
         durable_run,
         actor_claim,
     })
@@ -521,7 +506,7 @@ async fn persist_route_records(
     Ok(())
 }
 
-/// Execute the already-validated graph and consume its budget reservation.
+/// Execute the already-validated graph; registrations consume live capacity.
 ///
 /// # Errors
 /// Returns rendering or governed Stage execution failures.
@@ -553,7 +538,7 @@ impl PreparedWorkflowRun {
                 .flatten()
                 .any(|resolved| resolved.route.is_some())
     }
-    /// Execute the already-validated graph and consume its budget reservation.
+    /// Execute the already-validated graph; registrations consume live capacity.
     ///
     /// # Errors
     /// Returns rendering or governed Stage execution failures.
@@ -568,7 +553,6 @@ impl PreparedWorkflowRun {
             context,
             resolved,
             verifiers,
-            _budget,
             durable_run,
             actor_claim,
         } = self;
@@ -917,16 +901,16 @@ fn worst_case_admission_units(stages: &[WorkflowStage]) -> u64 {
     })
 }
 
-/// Reserve the compiled worst-case activation count before the first child or
-/// mail effect; the returned guard refunds the scoped reservation on every exit.
-async fn reserve_workflow_budget(
+/// Check the compiled worst-case activation count before child or mail effects.
+/// Registration and revival still enforce capacity in their own transactions.
+async fn preflight_workflow_capacity(
     engine: &SessionEngine,
     lead: SessionId,
     workflow: &str,
     wanted: u64,
-) -> Result<Option<WorkflowBudgetReservation>, WorkflowError> {
+) -> Result<(), WorkflowError> {
     let Some(governor) = engine.governor().cloned() else {
-        return Ok(None);
+        return Ok(());
     };
     let (root, depth) = engine.session_lineage(lead).await?;
     if depth.saturating_add(1) > governor.max_depth() {
@@ -934,7 +918,13 @@ async fn reserve_workflow_budget(
             crate::subagent::TeamAdmissionError::MaxDepth,
         ));
     }
-    let remaining = governor.remaining_budget(root);
+    let remaining = governor.limits().per_run_budget.saturating_sub(
+        engine
+            .store()
+            .live_member_count(root)
+            .await
+            .map_err(CoreError::from)?,
+    );
     if wanted > remaining {
         return Err(WorkflowError::Invalid {
             workflow: workflow.to_string(),
@@ -943,16 +933,7 @@ async fn reserve_workflow_budget(
             ),
         });
     }
-    if !governor.try_reserve_exact(root, wanted) {
-        return Err(WorkflowError::Admission(
-            crate::subagent::TeamAdmissionError::BudgetExhausted,
-        ));
-    }
-    Ok(Some(WorkflowBudgetReservation {
-        governor,
-        root,
-        units: wanted,
-    }))
+    Ok(())
 }
 
 fn validate_resolved_semantics(
