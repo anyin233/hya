@@ -2221,3 +2221,48 @@ async fn o8_name_allocation_does_not_reserve_after_a_store_failure() {
     assert_eq!(engine.pending_member_names(root), 0);
     assert!(matches!(reservation, Err(CoreError::Store(_))));
 }
+
+#[tokio::test]
+async fn o2_interactive_turn_release_retires_the_finished_team() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let turn = engine.try_begin_turn(root).unwrap();
+    let (child, handle) = parked(&supervisor, root).await;
+    let team = supervisor.team_with_resident(child).unwrap();
+    supervisor.end_member(root, &handle).await.unwrap();
+    engine.emit_for_actor(None, root, Event::MailSent {
+        session: root,
+        from: scope::HARNESS_HANDLE.into(),
+        to: MailEndpoint::Handle(scope::ROOT_HANDLE.into()),
+        kind: MailKind::Message,
+        body: "child ended".into(),
+    }).await.unwrap();
+    // Seal bus intake so a late terminal envelope cannot retire the team
+    // on behalf of the turn boundary under test.
+    supervisor.listener_stop.cancel();
+    supervisor.listener.lock().unwrap().take().unwrap().await.unwrap();
+    let (done, flushed) = oneshot::channel();
+    team.enqueue(TeamEvent::Flush(done));
+    flushed.await.unwrap();
+    crate::member_wait::wait_for_members(
+        &engine,
+        &supervisor,
+        root,
+        hya_tool::WaitSpec::parse(&serde_json::json!({"timeout_secs": 0}), true).unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(supervisor.teams().contains_key(&root));
+    drop(turn);
+    let retired = tokio::time::timeout(Duration::from_secs(1), team.cancel.cancelled()).await;
+    if retired.is_ok() {
+        supervisor.tasks.close();
+        supervisor.tasks.wait().await;
+        assert!(supervisor.tasks.is_empty());
+        assert!(team.lock().residents.is_empty());
+    }
+    supervisor.drain(FinishCause::Shutdown, Duration::from_secs(5)).await;
+    assert!(retired.is_ok(), "root turn release retained its idle team");
+    assert!(supervisor.teams().is_empty());
+}
