@@ -137,7 +137,7 @@ impl HeadlessSession {
             let _ = built.take_questions();
             let responder = RejectResponder(hya_app::permission::spawn_reject_responder(asks));
             let session = if let Some(session) = session {
-                let projection = engine.read_projection(session).await?;
+                let projection = engine.read_projection_shared(session).await?;
                 anyhow::ensure!(
                     projection.session.id.is_some(),
                     "workflow Session `{session}` was not found"

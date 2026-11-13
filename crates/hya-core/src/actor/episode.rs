@@ -656,7 +656,7 @@ impl TeamActor {
         // `wait` returned it) — sync so the wake never re-injects delivered
         // messages as user prompts. The plan's cursor was captured before
         // this sync, so it advances here too.
-        let projection = self.engine.read_projection(self.root).await?;
+        let projection = self.engine.read_projection_shared(self.root).await?;
         if !self.owns_slot(session, claim.as_ref()) {
             return Ok(TurnOutcome::NotStarted);
         }
@@ -687,7 +687,7 @@ impl TeamActor {
             cursor = cursor.max(usize::try_from(work.inbox_through).unwrap_or(usize::MAX));
             // The old prompt has already been hooked. Only new mail or a
             // continuation needs hooks; begin_work owns the transcript decision.
-            let actor = self.engine.read_projection(session).await?;
+            let actor = self.engine.read_projection_shared(session).await?;
             resumed_prompt = Some(
                 actor
                     .session
@@ -945,8 +945,8 @@ impl TeamActor {
         self.heartbeat_turn_finish(session, claim.as_ref(), &handle)
             .await;
         Ok(if finish == FinishReason::Cancelled {
-            let projection = self.engine.read_projection(session).await?;
-            let root = self.engine.read_projection(self.root).await?;
+            let projection = self.engine.read_projection_shared(session).await?;
+            let root = self.engine.read_projection_shared(self.root).await?;
             let mail_owed = root.team.roster.get(&handle).is_some_and(|entry| {
                 entry.resident_work.is_some()
                     || root
@@ -992,7 +992,7 @@ impl TeamActor {
         if !self.lock().residents.get(&session).is_some_and(eligible) {
             return Ok(());
         }
-        let projection = self.engine.read_projection(session).await?;
+        let projection = self.engine.read_projection_shared(session).await?;
         let final_text = projection
             .session
             .messages
@@ -1010,7 +1010,7 @@ impl TeamActor {
                     .collect::<String>()
             })
             .unwrap_or_default();
-        let root = self.engine.read_projection(self.root).await?;
+        let root = self.engine.read_projection_shared(self.root).await?;
         let mut state = self.lock();
         if let Some(slot) = state
             .residents

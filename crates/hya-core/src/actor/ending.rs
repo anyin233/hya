@@ -15,7 +15,7 @@ pub(super) async fn commit_episode_ending(
             .ok_or_else(|| CoreError::Invalid("episode ownership changed".into()))?;
         (slot.handle.clone(), claim.actor_id, slot.cancel.clone())
     };
-    let projection = team.engine.read_projection(team.root).await?;
+    let projection = team.engine.read_projection_shared(team.root).await?;
     let expected_work = projection
         .team
         .roster
@@ -331,8 +331,8 @@ async fn report_gate_projection(
     engine: &Arc<SessionEngine>,
     root: SessionId,
     canonical: &str,
-) -> Result<hya_proto::Projection, CoreError> {
-    let projection = engine.read_projection(root).await?;
+) -> Result<Arc<hya_proto::Projection>, CoreError> {
+    let projection = engine.read_projection_shared(root).await?;
     let entry = projection.team.roster.get(canonical).ok_or_else(|| {
         CoreError::Invalid(format!("resident `{canonical}` is not on the roster"))
     })?;
@@ -523,7 +523,7 @@ impl ResidentSupervisor {
         root: SessionId,
         ending: Ending,
     ) -> Result<(), CoreError> {
-        let projection = self.engine.read_projection(root).await?;
+        let projection = self.engine.read_projection_shared(root).await?;
         let mut members = projection
             .team
             .roster
@@ -608,7 +608,7 @@ impl ResidentSupervisor {
             }
             (live, captured)
         };
-        let projection = self.engine.read_projection(root).await?;
+        let projection = self.engine.read_projection_shared(root).await?;
         let child = live.or_else(|| {
             projection
                 .team
@@ -670,7 +670,7 @@ impl ResidentSupervisor {
         // Parent claim release fences new direct children. Sweep anything that
         // committed before release, including descendants of those late children.
         loop {
-            let projection = self.engine.read_projection(root).await?;
+            let projection = self.engine.read_projection_shared(root).await?;
             let mut descendants: Vec<_> = projection
                 .team
                 .roster
@@ -710,7 +710,7 @@ impl ResidentSupervisor {
         &self,
         root: SessionId,
         canonical: &str,
-    ) -> Result<hya_proto::Projection, CoreError> {
+    ) -> Result<Arc<hya_proto::Projection>, CoreError> {
         report_gate_projection(&self.engine, root, canonical).await
     }
 
@@ -762,7 +762,7 @@ impl ResidentSupervisor {
     ) -> Result<ArchiveReceipt, CoreError> {
         let (root, _) = self.engine.session_lineage(caller).await?;
         let caller_path = self.engine.resolve_handle(root, caller).await?;
-        let projection = self.engine.read_projection(root).await?;
+        let projection = self.engine.read_projection_shared(root).await?;
         let resolved = resolve_member_target(&projection, root, &caller_path, target)?;
         if resolved.session == root || resolved.handle == scope::ROOT_HANDLE {
             return Err(CoreError::Invalid(

@@ -237,7 +237,7 @@ impl SessionEngine {
             self.admit_shell_user_message(session).await?;
             // From here the turn owns the note it admitted.
             lease.set_message(message, true);
-            let projection = self.store.read_projection(session).await?;
+            let projection = self.store.read_projection_shared(session).await?;
             let workdir = session_workdir(agent, &projection);
             let binding = tokio::select! {
                 biased;
@@ -420,7 +420,7 @@ impl SessionEngine {
         )
         .await?;
 
-        let projection = self.store.read_projection(session).await?;
+        let projection = self.store.read_projection_shared(session).await?;
         let input_for_after = active_hooks.as_ref().map(|_| input.clone());
         let started = std::time::Instant::now();
         // Prior content of the files the command may change (revert).

@@ -1051,10 +1051,10 @@ pub(crate) async fn replay_projection(
     cache: &ProjectionCache,
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     session: SessionId,
-) -> Result<Projection, StoreError> {
+) -> Result<Arc<Projection>, StoreError> {
     let base = projection_cache::transaction_base(cache, tx, session).await?;
     let folded = projection_cache::fold(tx, session, base).await?;
-    Ok(Arc::unwrap_or_clone(folded.projection))
+    Ok(folded.projection)
 }
 
 /// Decode `list_sessions`-shaped rows (`session_id`, `started`, `updated`,

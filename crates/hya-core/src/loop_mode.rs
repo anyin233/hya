@@ -491,7 +491,7 @@ impl IterationExecutor for WorkerSessionExecutor {
                 None,
             )
             .await?;
-        let projection = self.engine.read_projection(child).await?;
+        let projection = self.engine.read_projection_shared(child).await?;
         Ok(render_transcript(&projection))
     }
 }

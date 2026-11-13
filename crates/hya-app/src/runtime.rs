@@ -1156,7 +1156,7 @@ async fn resolve_main_activation_context(
         .await
         .map_err(|_| SpawnError::Unavailable)?;
     let root_projection = engine
-        .read_projection(root)
+        .read_projection_shared(root)
         .await
         .map_err(|_| SpawnError::Unavailable)?;
     let root_agent_name = root_projection
@@ -1787,7 +1787,7 @@ fn spawn_team_supervisor_with_environment(
                 },
             };
             let (binding, req) = bound_request.into_parts();
-            let parent = match engine.read_projection(req.parent).await {
+            let parent = match engine.read_projection_shared(req.parent).await {
                 Ok(parent) => parent,
                 Err(error) => {
                     eprintln!("hya: failed to resolve spawn parent ({error})");
@@ -2268,7 +2268,7 @@ async fn build_session_engine_with_mcp_defer(
             .await
             .context("resolve recovered resident root")?;
         let root_projection = engine
-            .read_projection(root)
+            .read_projection_shared(root)
             .await
             .context("replay recovered resident roster")?;
         let entry = root_projection
@@ -2283,12 +2283,13 @@ async fn build_session_engine_with_mcp_defer(
             .await
             .context("terminalize recovered resident work")?;
         let actor_projection = engine
-            .read_projection(actor_id)
+            .read_projection_shared(actor_id)
             .await
             .context("replay recovered resident session")?;
         let workdir = actor_projection
             .session
             .workdir
+            .as_ref()
             .map(PathBuf::from)
             .context("recovered resident session has no workdir")?;
         // Resume is not a new spawn: exact catalog lookup only (no can_spawn,

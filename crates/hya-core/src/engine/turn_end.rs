@@ -353,7 +353,7 @@ impl SessionEngine {
     ) -> Result<(), CoreError> {
         let _message_guard = self.turn_gate.message_guard(session).await;
         let answers_prompt = self.turn_gate.answers_prompt(session, message);
-        let projection = self.store.read_projection(session).await?;
+        let projection = self.store.read_projection_shared(session).await?;
         let error_event = error.map(|error| Event::Error {
             session: Some(session),
             code: error_code(error).to_string(),
@@ -466,7 +466,7 @@ impl SessionEngine {
     /// live members, send nothing. Best effort: a member that went terminal
     /// meanwhile is skipped.
     pub(crate) async fn broadcast_leader_failed(&self, session: SessionId, error: &CoreError) {
-        let Ok(projection) = self.store.read_projection(session).await else {
+        let Ok(projection) = self.store.read_projection_shared(session).await else {
             return;
         };
         if projection.session.parent.is_some() {

@@ -177,7 +177,8 @@ impl SessionStore {
             let Some(run) = projection
                 .session
                 .workflow
-                .and_then(|workflow| workflow.run)
+                .as_ref()
+                .and_then(|workflow| workflow.run.as_ref())
             else {
                 continue;
             };

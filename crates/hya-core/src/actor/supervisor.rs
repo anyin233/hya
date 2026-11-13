@@ -460,7 +460,7 @@ impl ResidentSupervisor {
         &self,
         root: SessionId,
     ) -> Result<MainActivation, CoreError> {
-        let mut projection = self.engine.read_projection(root).await?;
+        let mut projection = self.engine.read_projection_shared(root).await?;
         let session = &projection.session;
         let invalid =
             || CoreError::Invalid(format!("root session {root} lacks activation context"));
@@ -480,7 +480,7 @@ impl ResidentSupervisor {
             .fall_back_from_missing_agent(root, &projection, &binding)
             .await?
         {
-            projection = self.engine.read_projection(root).await?;
+            projection = self.engine.read_projection_shared(root).await?;
             base.name = projection.session.agent.clone().ok_or_else(invalid)?;
         }
         let agent = self
@@ -765,7 +765,7 @@ impl ResidentSupervisor {
         policy: Option<hya_proto::mail::ChannelPolicySnapshot>,
         activation: Option<WorkflowActivation>,
     ) -> Result<usize, CoreError> {
-        let projection = self.engine.read_projection(root).await?;
+        let projection = self.engine.read_projection_shared(root).await?;
         // A concurrent sender may already have installed the new episode.
         let child = projection
             .team
@@ -784,7 +784,7 @@ impl ResidentSupervisor {
             if let Some(activation) = &activation {
                 activation.resolved.clone()
             } else {
-                let child_projection = self.engine.read_projection(child).await?;
+                let child_projection = self.engine.read_projection_shared(child).await?;
                 let stable =
                     child_projection.session.agent.as_ref().ok_or_else(|| {
                         CoreError::Invalid("resident has no recorded agent".into())
@@ -827,7 +827,7 @@ impl ResidentSupervisor {
         }
         let mut write = self.claim_writes.lock().await;
         let current = loop {
-            let current = self.engine.read_projection(root).await?;
+            let current = self.engine.read_projection_shared(root).await?;
             // A live roster wins: never wait for a concurrent revival's episode.
             if current.team.roster.contains_key(target) {
                 break current;
@@ -891,7 +891,7 @@ impl ResidentSupervisor {
             )
             .await?;
         let activation = if let Some(activation) = activation {
-            let projection = self.engine.read_projection(root).await?;
+            let projection = self.engine.read_projection_shared(root).await?;
             let boundary = projection.team.inboxes[target].len();
             Some((activation, boundary))
         } else {
@@ -1219,7 +1219,7 @@ impl ResidentSupervisor {
         let (binding, agents, resources, sidecar_factory) = resolved;
         let (root, parent_depth) = self.engine.session_lineage(parent).await?;
         let session = SessionId::new();
-        let parent_projection = self.engine.read_projection(parent).await?;
+        let parent_projection = self.engine.read_projection_shared(parent).await?;
         let mut events = vec![Event::SessionCreated {
             session,
             parent: Some(parent),
@@ -1321,7 +1321,7 @@ impl ResidentSupervisor {
             }
         }
         let write = self.claim_writes.lock().await;
-        let projection = self.engine.read_projection(root).await?;
+        let projection = self.engine.read_projection_shared(root).await?;
         let target = projection
             .team
             .roster
@@ -1374,7 +1374,8 @@ impl ResidentSupervisor {
                 )
                 .await?
                 .0;
-            let boundary = self.engine.read_projection(root).await?.team.inboxes[&target].len();
+            let boundary =
+                self.engine.read_projection_shared(root).await?.team.inboxes[&target].len();
             {
                 let mut state = team.lock();
                 let slot = state.residents.get_mut(&member).ok_or_else(|| {
@@ -1489,7 +1490,7 @@ impl ResidentSupervisor {
         members: Vec<PreparedResident>,
         main: Option<MainActivation>,
     ) -> Result<Vec<oneshot::Receiver<Result<(), CoreError>>>, CoreError> {
-        let projection = self.engine.read_projection(root).await?;
+        let projection = self.engine.read_projection_shared(root).await?;
         let parent_claim = members
             .first()
             .and_then(|member| member.activation.parent_claim);
@@ -1810,7 +1811,7 @@ impl ResidentSupervisor {
             .store()
             .validate_actor_claim(&recovered.claim)
             .await?;
-        let projection = self.engine.read_projection(root).await?;
+        let projection = self.engine.read_projection_shared(root).await?;
         let cursor = projection
             .team
             .roster

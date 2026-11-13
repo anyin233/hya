@@ -668,7 +668,7 @@ impl TeamActor {
         from: &str,
         to: &MailEndpoint,
     ) -> Vec<(SessionId, Option<ActorClaim>)> {
-        let Ok(projection) = self.engine.read_projection(self.root).await else {
+        let Ok(projection) = self.engine.read_projection_shared(self.root).await else {
             return Vec::new();
         };
         let handles: Vec<String> = match to {
@@ -751,7 +751,7 @@ impl TeamActor {
             st.work_seq = st.work_seq.saturating_add(1);
         }
         let recipients = self.recipients(from, to).await;
-        let Ok(projection) = self.engine.read_projection(self.root).await else {
+        let Ok(projection) = self.engine.read_projection_shared(self.root).await else {
             return;
         };
         let mut consumed = Vec::new();
@@ -835,7 +835,7 @@ impl TeamActor {
     /// re-arm (set `pending` + notify) any slot with genuinely unconsumed mail — so
     /// no wake is lost, and quiescent slots with nothing new are left parked.
     pub(super) async fn recover(&self) {
-        let Ok(projection) = self.engine.read_projection(self.root).await else {
+        let Ok(projection) = self.engine.read_projection_shared(self.root).await else {
             return;
         };
         let mut consumed = Vec::new();

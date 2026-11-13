@@ -26,7 +26,7 @@ impl SessionEngine {
         session: SessionId,
         fallback_model: &ModelRef,
     ) -> Result<bool, CoreError> {
-        let projection = self.store.read_projection(session).await?;
+        let projection = self.store.read_projection_shared(session).await?;
         if projection.session.id.is_none() || projection.session.parent.is_some() {
             return Ok(false);
         }

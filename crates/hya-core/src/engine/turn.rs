@@ -908,7 +908,7 @@ impl SessionEngine {
             admitted_prompt: _,
         } = request;
         self.validate_actor_claim(actor_claim).await?;
-        let mut projection = self.store.read_projection(session).await?;
+        let mut projection = self.store.read_projection_shared(session).await?;
         let workdir = session_workdir(agent, &projection);
         // Uncomposed base spec, captured before the prepared agent shadows it
         // below; round-boundary rebinds re-materialize from this.
@@ -925,7 +925,7 @@ impl SessionEngine {
                         .fall_back_from_missing_agent(session, &projection, &binding)
                         .await?
                     {
-                        projection = self.store.read_projection(session).await?;
+                        projection = self.store.read_projection_shared(session).await?;
                     }
                     let stable_id = projection
                         .session
@@ -1047,6 +1047,7 @@ impl SessionEngine {
                 &projection,
                 &agent,
             );
+            drop(projection);
             let message_guard = self.turn_gate.message_guard(session).await;
             if cancel.is_cancelled() {
                 return Ok(FinishReason::Cancelled);
@@ -1165,12 +1166,12 @@ impl SessionEngine {
         session: SessionId,
         agent: &AgentSpec,
         model: &ModelRef,
-    ) -> Result<(hya_proto::Projection, Vec<Message>, usize), CoreError> {
-        let projection = self.store.read_projection(session).await?;
+    ) -> Result<(Vec<Message>, usize), CoreError> {
+        let projection = self.store.read_projection_shared(session).await?;
         let attachments = self.attachment_data(session, &projection).await?;
         let messages = projection_to_messages(agent, &projection, model, &attachments);
         let tokens = self.token_accounting.estimate(&messages);
-        Ok((projection, messages, tokens))
+        Ok((messages, tokens))
     }
 
     /// Load the prompt images the next request sends (see
@@ -1204,7 +1205,7 @@ impl SessionEngine {
         session: SessionId,
         agent: &AgentSpec,
     ) -> Result<ModelRef, CoreError> {
-        let projection = self.store.read_projection(session).await?;
+        let projection = self.store.read_projection_shared(session).await?;
         let workdir = session_workdir(agent, &projection);
         let binding = self.bind_session_runtime(session, &workdir).await?;
         let stable_id = projection
@@ -1350,7 +1351,7 @@ impl SessionEngine {
             if cancel.is_cancelled() {
                 return Ok(FinishReason::Cancelled);
             }
-            let mut projection = self.store.read_projection(session).await?;
+            let projection = self.store.read_projection_shared(session).await?;
             let stable_id = projection
                 .session
                 .agent
@@ -1510,6 +1511,8 @@ impl SessionEngine {
             // the sequence, sending the request out still over the window it
             // was trying to fit.
             let spill = ArtifactEvictionSink::new(&session_workdir(&live_agent, &projection));
+            let parent_session = projection.session.parent;
+            drop(projection);
             // Resolved on first use, so a turn that an earlier rung rescued
             // never requires the fixed Compaction agent to exist.
             let mut compaction_agent: Option<AgentDefinition<'_>> = None;
@@ -1635,7 +1638,7 @@ impl SessionEngine {
                             threshold,
                         )
                         .await?;
-                        (projection, messages, tokens) = self
+                        (messages, tokens) = self
                             .reload_after_compaction(session, &live_agent, &model)
                             .await?;
                         tokens = tokens.saturating_add(request_overhead);
@@ -1671,7 +1674,7 @@ impl SessionEngine {
                             threshold,
                         )
                         .await?;
-                        (projection, messages, tokens) = self
+                        (messages, tokens) = self
                             .reload_after_compaction(session, &live_agent, &model)
                             .await?;
                         tokens = tokens.saturating_add(request_overhead);
@@ -1728,7 +1731,7 @@ impl SessionEngine {
                             threshold,
                         )
                         .await?;
-                        (projection, messages, tokens) = self
+                        (messages, tokens) = self
                             .reload_after_compaction(session, &live_agent, &model)
                             .await?;
                         tokens = tokens.saturating_add(request_overhead);
@@ -1789,7 +1792,7 @@ impl SessionEngine {
                             threshold,
                         )
                         .await?;
-                        (projection, messages, tokens) = self
+                        (messages, tokens) = self
                             .reload_after_compaction(session, &live_agent, &model)
                             .await?;
                         tokens = tokens.saturating_add(request_overhead);
@@ -2146,7 +2149,7 @@ impl SessionEngine {
                                             .project_activity
                                             .for_session(session),
                                         session: Some(session),
-                                        parent_session: projection.session.parent,
+                                        parent_session,
                                         todo: self.todo.clone(),
                                         skills: resources.skill_plane(),
                                         artifacts: self.artifacts.clone(),
@@ -2275,7 +2278,7 @@ impl SessionEngine {
                             {
                                 let policy = crate::ChannelPolicy::from_binding(binding)?
                                     .snapshot_for(live_agent.name.as_str());
-                                let can_report = projection.session.parent.is_some()
+                                let can_report = parent_session.is_some()
                                     && self.lifecycle.is_connected()
                                     && crate::lifecycle::report_allowed(policy)
                                     && request

@@ -645,7 +645,7 @@ async fn compact_session(
     let session = parse_session(&id)?;
     match st.engine.summarize_session(session).await {
         Ok(_) => {
-            let projection = st.engine.read_projection(session).await?;
+            let projection = st.engine.read_projection_shared(session).await?;
             Ok(Json(pb::CompactSessionResponse {
                 compacted_until_seq: projection.last_seq,
                 // `summarize_session` records a local-summarizer fold.

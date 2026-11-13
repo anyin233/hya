@@ -42,7 +42,7 @@ impl SessionEngine {
 
     /// The caller holds the turn lease through handoff publication.
     pub(crate) async fn terminal_handoff_claimed(&self, session: SessionId) -> TerminalHandoff {
-        let Ok(projection) = self.read_projection(session).await else {
+        let Ok(projection) = self.read_projection_shared(session).await else {
             return TerminalHandoff {
                 generation: 1,
                 doc: degraded_handoff_doc(None, &[]),
@@ -159,7 +159,7 @@ impl SessionEngine {
         let Ok(root) = self.team_root(session).await else {
             return Vec::new();
         };
-        let Ok(projection) = self.read_projection(root).await else {
+        let Ok(projection) = self.read_projection_shared(root).await else {
             return Vec::new();
         };
         let Some(entry) = projection
@@ -180,7 +180,7 @@ impl SessionEngine {
     /// Deterministic degraded handoff, bypassing the summarizer entirely
     /// (`archive`, drain, and budget-kill paths must never wait on a model call).
     pub async fn degraded_terminal_handoff(&self, session: SessionId) -> TerminalHandoff {
-        match self.read_projection(session).await {
+        match self.read_projection_shared(session).await {
             Ok(projection) => {
                 let generation = projection
                     .session

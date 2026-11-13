@@ -1271,12 +1271,12 @@ impl SessionEngine {
         agent: AgentName,
         model: Option<ModelRef>,
     ) -> Result<(), CoreError> {
-        let projection = self.read_projection(session).await?;
+        let projection = self.read_projection_shared(session).await?;
         if projection.session.id != Some(session) {
             return Err(CoreError::Invalid(format!("session not found: {session}")));
         }
         let (root, _) = self.session_lineage(session).await?;
-        let root_projection = self.read_projection(root).await?;
+        let root_projection = self.read_projection_shared(root).await?;
         if root_projection.session.id != Some(root) {
             return Err(CoreError::Invalid(format!(
                 "session root not found: {root}"

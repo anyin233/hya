@@ -108,7 +108,7 @@ async fn set_archived(db: &str, id: &str, archived: bool) -> anyhow::Result<()> 
         }
         Writer::Direct(store) => {
             store.claim_runtime_owner(hya_store::OwnerRunId::new())?;
-            let projection = store.read_projection(session).await?;
+            let projection = store.read_projection_shared(session).await?;
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |elapsed| {

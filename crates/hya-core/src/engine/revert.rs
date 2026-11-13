@@ -86,7 +86,7 @@ impl SessionEngine {
     ) -> Result<RevertOutcome, RevertError> {
         self.ensure_external_turn_allowed(session).await?;
         let _lease = self.revert_lease(session)?;
-        let projection = self.store.read_projection(session).await?;
+        let projection = self.store.read_projection_shared(session).await?;
         if projection.session.id.is_none() {
             return Err(RevertError::SessionNotFound);
         }
@@ -161,13 +161,14 @@ impl SessionEngine {
     ) -> Result<Vec<FileRestore>, RevertError> {
         self.ensure_external_turn_allowed(session).await?;
         let _lease = self.revert_lease(session)?;
-        let projection = self.store.read_projection(session).await?;
+        let projection = self.store.read_projection_shared(session).await?;
         if projection.session.id.is_none() {
             return Err(RevertError::SessionNotFound);
         }
         let revert = projection
             .session
             .revert
+            .clone()
             .ok_or(RevertError::NoRevertPending)?;
         let mut files = Vec::with_capacity(revert.files.len());
         for file in revert.files {

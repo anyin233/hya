@@ -431,7 +431,17 @@ A read (`read_projection`, `read_projection_shared`, `with_projection`):
 `read_projection_shared` returns the cached `Arc<Projection>` and
 `with_projection(session, |p| ...)` borrows it, so hot readers (the `wait`
 tool, the steer mailbox, the `session.usage` capability, lineage walks) pay
-neither a replay nor a deep clone. A read of an unchanged session costs one
+neither a replay nor a deep clone. Read-only engine, actor scheduling, HTTP,
+CLI and Workflow control paths use shared snapshots too. For example, use
+`let projection = store.read_projection_shared(session).await?` to inspect a
+transcript, then release it before appending when no old view is needed.
+The owned `read_projection(session) -> Result<Projection, StoreError>` remains
+available for callers that deliberately need a mutable copy. Transaction-local
+replay returns `Arc<Projection>`; registration and revival use `Arc::make_mut`
+only when they apply their own uncommitted events. Turn preparation copies its
+small parent/agent metadata and releases the shared transcript after conversion,
+so it does not retain an old projection through provider and tool execution.
+A read of an unchanged session costs one
 indexed query that returns only the anchor row.
 
 **Invariants** (why cached base + tail equals a full replay):

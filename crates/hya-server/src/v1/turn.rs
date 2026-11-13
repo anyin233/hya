@@ -554,7 +554,7 @@ async fn get_turn(
 ) -> Result<Json<pb::TurnInfo>, V1Error> {
     let session = parse_session(&id)?;
     ensure_session(&st, session).await?;
-    let projection = st.engine.read_projection(session).await?;
+    let projection = st.engine.read_projection_shared(session).await?;
     Ok(Json(turn_info(&st, session, &turn, &projection)))
 }
 
@@ -578,7 +578,7 @@ async fn wait_turn(
     // turn state, or on idle sustained across consecutive samples.
     let mut idle_samples = 0u8;
     loop {
-        let projection = st.engine.read_projection(session).await?;
+        let projection = st.engine.read_projection_shared(session).await?;
         let info = turn_info(&st, session, &request.turn, &projection);
         if is_terminal(info.state) {
             return Ok(Json(info));
@@ -607,7 +607,7 @@ async fn cancel_turn(
     let session = parse_session(&id)?;
     ensure_session(&st, session).await?;
     let cancelled = st.cancel_run(session);
-    let projection = st.engine.read_projection(session).await?;
+    let projection = st.engine.read_projection_shared(session).await?;
     let mut info = turn_info(&st, session, &turn, &projection);
     if cancelled {
         info.state = pb::TurnState::Cancelled as i32;

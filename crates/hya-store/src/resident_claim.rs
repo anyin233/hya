@@ -157,7 +157,7 @@ impl SessionStore {
                 .ok_or_else(|| StoreError::ActorClaimData("revive event has no session".into()))?;
             let envelope = crate::append_event_in_transaction(&mut tx, session, event).await?;
             if session == root {
-                projection.apply(&envelope);
+                std::sync::Arc::make_mut(&mut projection).apply(&envelope);
             }
             envelopes.push(envelope);
         }
@@ -441,7 +441,7 @@ impl SessionStore {
                 mode: hya_proto::SubagentMode::Transient,
             };
             let envelope = crate::append_event_in_transaction(&mut tx, root, event).await?;
-            projection.apply(&envelope);
+            std::sync::Arc::make_mut(&mut projection).apply(&envelope);
             envelopes.push(envelope);
         }
         let mut registered = Vec::with_capacity(registrations.len());
@@ -468,7 +468,7 @@ impl SessionStore {
                 })?;
                 let envelope = crate::append_event_in_transaction(&mut tx, session, event).await?;
                 if session == root {
-                    projection.apply(&envelope);
+                    std::sync::Arc::make_mut(&mut projection).apply(&envelope);
                 }
                 envelopes.push(envelope);
             }
