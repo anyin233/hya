@@ -404,3 +404,10 @@ Runtime shutdown cancels and waits for admitted Workflow execution. Finished
 delivery also uses a tracked task: disconnecting or dropping its waiting caller
 cancels the run, and cleanup and the terminal Event finish before ownership is
 released. Started delivery continues after its admission response.
+
+An admitted run owns its terminal `WorkflowRunFinished` append independently of
+its calling actor's lifetime. Admission and execution effects remain actor-fenced;
+the tracked run owner writes the terminal Event without the caller's claim, which
+may already be released during cancellation cleanup. A cancelled run remains
+`cancelled` if execution or ending fails; its bounded error is persisted and the
+caller still receives the typed error. No tool parameters or wire fields change.
