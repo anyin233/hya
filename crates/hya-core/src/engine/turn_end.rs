@@ -73,6 +73,7 @@ pub(crate) fn error_code(error: &CoreError) -> &'static str {
         CoreError::Bundle(_) => "bundle_error",
         CoreError::RuntimeRefresh(_) => "runtime_refresh_error",
         CoreError::Cancelled => "cancelled",
+        CoreError::WorkflowActivationFailed(_) => "workflow_activation_failed",
         CoreError::AgentDefinitionMissing { .. } => "agent_definition_missing",
         CoreError::Invalid(_) | CoreError::BundleRefresh(_) => "invalid",
         CoreError::TurnAlreadyActive { .. } => "turn_already_active",
