@@ -254,20 +254,31 @@ key alone selects a persistent actor Session. An actor key bound to different
 Agent ids, an actor key combined with `mode: loop`, or same-level reuse of one
 actor key fails before execution.
 
-The first and later actor directives are durable mail. A Stage completes only
-after the team Projection shows that its captured inbox boundary is consumed,
-resident work is absent, and the actor is idle or failed.
+The first and later actor directives are durable parent mail. The episode
+completes an activation after its inbox boundary is consumed and its work
+finishes durably, returning the final assistant text. A terminal report also
+completes the Stage with its declared outcome and text; a forced ending fails
+the Stage (or cancels it when the run requested cancellation). A settled actor
+remains live and can accept a later Stage. An archived actor is revived under
+the same capacity and parent-claim checks as ordinary parent mail.
+
+For example, `plan --> refine` with `actor: planner` on both nodes runs two
+mail activations on one Session. The second activation installs its own
+Workflow guidance and model route before work can start. Stage completion
+uses an episode-owned waiter; it adds no event-bus subscription or per-envelope
+Projection polling.
 
 ## Governance
 
 The executor resolves every worker and verifier through the caller's immutable
 runtime binding. Each target keeps its own roster, resource policy, and
 sidecar. Before any child or mail effect, the executor checks the complete
-worst-case activation count against the root's remaining live capacity. This
-reserves nothing: concurrent tasks can consume slots, so later registration or
-revival can fail with overload. Same-level one-shot Stages (no `actor`) run as one
-governed Team batch. Loop and resident work continue to use the existing iteration and
-resident supervisors.
+worst-case activation count against the configured budget and the root's
+remaining live capacity. Preflight reserves nothing. An oversized graph is
+invalid source; current occupancy or a later registration/revival capacity
+refusal returns `WORKFLOW_OVERLOADED`. Same-level one-shot Stages (no `actor`)
+register parked residents and activate them concurrently. Loop continuations
+and verifiers still use the transient executor and shared iteration driver.
 
 Cancellation stops new admissions, cancels one-shot Stage work, stops active
 run-owned resident work, waits for admitted boundaries, and returns a truthful

@@ -175,18 +175,6 @@ impl SessionEngine {
             .await
     }
 
-    pub(crate) async fn mail_send_for_actor(
-        &self,
-        from_session: SessionId,
-        to: MailEndpoint,
-        kind: MailKind,
-        body: String,
-        actor_claim: Option<&hya_store::ActorClaim>,
-    ) -> Result<MailReceipt, CoreError> {
-        self.mail_send_for_actor_with_policy(from_session, to, kind, body, actor_claim, None)
-            .await
-    }
-
     pub(crate) async fn mail_send_for_actor_with_policy(
         &self,
         from_session: SessionId,

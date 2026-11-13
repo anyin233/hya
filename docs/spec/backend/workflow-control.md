@@ -184,3 +184,33 @@ runs retain their parked actors for subsequent activation.
 Loop continuations still use the transient executor. The controller ends their
 first resident episode before that executor reuses the child Session; M4-10
 will replace this handoff with repeated episode activations.
+
+### Episode activation contract (core-internal)
+
+`ResidentSupervisor::activate(parent: SessionId, member: SessionId,
+directive: String, guidance: Arc<str>, route: Option<WorkflowTurnRoute>,
+parent_claim: Option<&ActorClaim>) -> Result<ActivationWaiter, CoreError>`
+configures one idle member and sends durable parent mail, or revives an archived
+member in the fenced capacity-checked transaction. The existing turn lease
+prevents any mail wake from starting before guidance, route and the post-mail
+inbox boundary have been installed. A busy, stopped, ending, or already armed
+member is refused without arming mail. No SQL connection spans a non-store
+await.
+
+`ActivationWaiter::wait(&mut self) -> Result<ActivationResult, CoreError>` is
+cancel-safe: dropping a pending wait does not end the episode. Its result is
+one of `Settled { final_text: String }`,
+`Reported { outcome: ReportOutcome, text: String }`, or
+`Ended { reason: ArchiveReason, status: MemberRunStatus, note: String }`.
+The episode sends `Settled` only after the durable work-finished/idle commit
+covers the boundary and no accepted report or requested ending owns completion.
+Its own ending sends `Reported`/`Ended` after terminal publication and claim
+release. A terminal-write failure is returned as `CoreError`.
+
+For `plan --> refine` sharing one actor, the controller awaits each activation
+and supplies the next directive and rendered guidance. The Stage controller
+accepts both `Settled` and `Reported(Done)` as success; other reports/endings
+fail it, while requested run cancellation returns Cancelled. The episode drops
+request-local route recorders before resolving settlement and on ending, so a
+parked actor cannot retain a completed run's route sender. These types remain
+crate-visible; no wire or plugin schema is added by the activation API.
