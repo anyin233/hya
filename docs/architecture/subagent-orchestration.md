@@ -915,3 +915,20 @@ claim recovery occurs. An idle sidecar loss discards only the handle; the next
 wake starts a fresh sidecar within the same episode, without a failure report.
 Startup recovery after process restart remains unchanged. These rules add no
 public tool parameters or events.
+
+### Runtime ownership and ordered routing
+
+The built runtime holds the supervisor strongly; the engine's resident seam
+and turn observer hold it weakly. The listener also holds only a weak supervisor
+reference between deliveries. Explicit runtime shutdown cancels and joins the
+listener and tracks every episode, main loop and team queue worker until their
+futures exit, including tasks from killed team generations. Episode completion
+alone is not a task join. Drop signals cancellation; callers await shutdown
+before releasing runtime resources.
+
+The listener never awaits a team. It routes envelopes through the existing
+session-to-episode-team index and current-root-team map into each team's FIFO.
+Lag recovery is queued behind prior deliveries for that team. Retirement waits
+for queued events as well as member endings, lead idleness, registrations and
+terminal mail publication. Root-driver count and continuation ownership stay
+shared across replacement teams.

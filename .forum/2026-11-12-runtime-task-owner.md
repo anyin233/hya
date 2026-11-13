@@ -24,15 +24,12 @@ service before the returned engine can use it.
 
 ## Does this prove every task reachable from construction is gone?
 
-No. At this cleanup step's base (`95cbfa50357119960497f99e07904ac7cf205fae`),
-`ResidentSupervisor` exposes `drain` but no bus-listener/task join seam;
-`resident.rs` is reserved for the concurrent resident lifecycle executor.
-`hya-plugin/src/client.rs` and `hya-mcp/src/{client,http}.rs` also detach
-connection I/O tasks and expose no complete transitive join seam to the built
-runtime. Composition tracker emptiness proves only the tracked composition
-subtree has exited. Follow-up must connect these owners before claiming the
-stronger transitive guarantee; neither sleeping nor an empty tracker proves
-unregistered tasks have stopped.
+Yes after explicit shutdown: the supervisor now joins its listener and tracks
+every main, episode and team queue task, including killed generations. Its
+engine seam is weak and the listener holds only a weak supervisor between
+deliveries. Episode completion is not itself a task join. Plugin/MCP connection
+I/O joins through the existing io_tasks tracker after sources stop. Dropping
+the runtime signals cancellation; callers still await shutdown for completion.
 
 `HyaRuntime::start` additionally constructs the server router. Server services
 have their own owner (see below), separate from `BuiltSessionEngine`. Await
@@ -62,9 +59,8 @@ these services, so a turn waiting on a permission or question is cancelled by th
 stop instead of seeing an unavailable bridge.
 `RuntimeTaskOwner` is now defined in hya-server and re-exported through the
 existing hya-app path. Routers retain the owner in an extension; service tasks
-hold only token/tracker handles, avoiding an owner/task cycle. The resident bus
-listener remains outside this guarantee; plugin/MCP connection I/O is joined
-through the owner's `io_tasks` tracker.
+hold only token/tracker handles, avoiding an owner/task cycle. The resident listener and team tasks join during resident drain; plugin/MCP
+connection I/O joins through the owner's `io_tasks` tracker after sources stop.
 
 ## Who joins I/O for the standalone spawn supervisor?
 

@@ -51,6 +51,7 @@ use hya_proto::{
 use hya_tool::{AgentDef, ArchiveReceipt, ResolvedTool};
 use tokio::sync::{Notify, oneshot, watch};
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::engine::{
     AgentSpec, ArchiveReviver, DRAIN_DEADLINE, SessionEngine, TurnBoundaryObserver,
@@ -353,6 +354,7 @@ struct TeamState {
     registrations: usize,
     // Terminal mail keeps main alive between episode removal and bus routing.
     routing_mail: HashSet<u64>,
+    queued_events: usize,
     /// Active Workflow/headless root drivers suppress autonomous root turns.
     root_driver: Arc<RootDriverState>,
     phase: TeamPhase,
@@ -534,6 +536,15 @@ struct TeamActor {
     cancel: CancellationToken,
     state: Mutex<TeamState>,
     supervisor: Weak<ResidentSupervisor>,
+    tasks: TaskTracker,
+    events: tokio::sync::mpsc::UnboundedSender<TeamEvent>,
+}
+
+enum TeamEvent {
+    #[cfg(test)]
+    Flush(oneshot::Sender<()>),
+    Envelope(hya_proto::Envelope),
+    Recover,
 }
 
 /// Keeps a selected team alive across claim writes and initialization.
@@ -603,17 +614,22 @@ impl TeamActor {
         engine: Arc<SessionEngine>,
         supervisor: Weak<ResidentSupervisor>,
         root_driver: Arc<RootDriverState>,
+        tasks: TaskTracker,
+        events: tokio::sync::mpsc::UnboundedSender<TeamEvent>,
     ) -> Self {
         Self {
             root,
             engine,
             cancel: CancellationToken::new(),
+            tasks,
+            events,
             supervisor,
             state: Mutex::new(TeamState {
                 residents: HashMap::new(),
                 busy: 0,
                 registrations: 0,
                 routing_mail: HashSet::new(),
+                queued_events: 0,
                 root_driver,
                 phase: TeamPhase::Live,
                 turns_used: 0,
@@ -665,7 +681,7 @@ impl TeamActor {
                 },
             );
         }
-        tokio::spawn(episode_task(
+        self.tasks.spawn(episode_task(
             self.clone(),
             self.root,
             None,
@@ -704,7 +720,7 @@ impl TeamActor {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .insert(session, self.clone());
         }
-        tokio::spawn(episode_task(
+        self.tasks.spawn(episode_task(
             self.clone(),
             session,
             claim,
@@ -714,6 +730,49 @@ impl TeamActor {
         ));
         if pending {
             notify.notify_one();
+        }
+    }
+
+    fn enqueue(&self, event: TeamEvent) {
+        let mut state = self.lock();
+        if self.cancel.is_cancelled() {
+            return;
+        }
+        state.queued_events += 1;
+        let _ = self.events.send(event);
+    }
+
+    async fn run_events(
+        self: Arc<Self>,
+        mut events: tokio::sync::mpsc::UnboundedReceiver<TeamEvent>,
+    ) {
+        loop {
+            let event = tokio::select! {
+                biased;
+                () = self.cancel.cancelled() => break,
+                event = events.recv() => event,
+            };
+            let Some(event) = event else { break };
+            match event {
+                TeamEvent::Envelope(envelope) => {
+                    if let Event::MailSent { from, to, .. } = &envelope.event {
+                        self.on_mail(from, to).await;
+                        self.lock().routing_mail.remove(&envelope.seq.0);
+                    }
+                    if let Some(actor) = envelope.event.session() {
+                        self.note_activity(actor).await;
+                    }
+                }
+                TeamEvent::Recover => self.recover().await,
+                #[cfg(test)]
+                TeamEvent::Flush(done) => {
+                    let _ = done.send(());
+                }
+            }
+            self.lock().queued_events -= 1;
+            if let Some(supervisor) = self.supervisor.upgrade() {
+                supervisor.retire_team(&self);
+            }
         }
     }
 
@@ -1802,6 +1861,24 @@ impl TeamActor {
     /// Handle one `MailSent` for this team: charge the message budget, count the
     /// work, and deliver a wake to every resident recipient (never the sender).
     async fn on_mail(&self, from: &str, to: &MailEndpoint) {
+        #[cfg(test)]
+        {
+            let pause = self.supervisor.upgrade().and_then(|supervisor| {
+                let mut pause = supervisor.mail_pause.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                if pause
+                    .as_ref()
+                    .is_some_and(|(root, _, _)| *root == self.root)
+                {
+                    pause.take()
+                } else {
+                    None
+                }
+            });
+            if let Some((_, entered, release)) = pause {
+                entered.notify_one();
+                release.notified().await;
+            }
+        }
         let exceeded = {
             let mut state = self.lock();
             if state.phase.killed() {
@@ -2633,13 +2710,38 @@ pub struct ResidentSupervisor {
     activation_lock_pause: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
     #[cfg(test)]
     revive_ready_pause: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
+    #[cfg(test)]
+    mail_pause: Mutex<Option<(SessionId, Arc<Notify>, Arc<Notify>)>>,
     self_ref: Weak<ResidentSupervisor>,
+    tasks: TaskTracker,
     listener_stop: CancellationToken,
     listener: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// `wait` stall notices already given: (waiting session, member session)
     /// → the member's last assistant message when it was reported stopped.
     /// In-memory only: after a restart a stopped member is reported once more.
     wait_stalls: Mutex<HashMap<(SessionId, SessionId), Option<hya_proto::MessageId>>>,
+}
+
+impl Drop for ResidentSupervisor {
+    fn drop(&mut self) {
+        self.listener_stop.cancel();
+        for team in self
+            .teams
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+        {
+            team.cancel.cancel();
+        }
+        for team in self
+            .episodes
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+        {
+            team.cancel.cancel();
+        }
+    }
 }
 
 type EpisodeFinalization = Vec<hya_proto::Envelope>;
@@ -3264,26 +3366,30 @@ impl ResidentSupervisor {
             activation_lock_pause: Mutex::new(None),
             #[cfg(test)]
             revive_ready_pause: Mutex::new(None),
+            #[cfg(test)]
+            mail_pause: Mutex::new(None),
             self_ref: self_ref.clone(),
+            tasks: TaskTracker::new(),
             listener_stop: CancellationToken::new(),
             listener: Mutex::new(None),
             wait_stalls: Mutex::new(HashMap::new()),
         });
         // The supervisor is the engine's revive seam (ADR-0015): wire it before
         // the listener task starts so no mail send can race the installation.
-        supervisor.engine.set_reviver(supervisor.clone());
+        supervisor.engine.set_reviver(Arc::downgrade(&supervisor));
         // Turn boundaries deliver wakes deferred by the single-active-turn
         // invariant (mail/quiescence owed to a session whose turn was running).
         let observer: Arc<dyn TurnBoundaryObserver> = supervisor.clone();
         supervisor
             .engine
             .set_turn_observer(Arc::downgrade(&observer));
-        let listener = supervisor.clone();
+        let listener = Arc::downgrade(&supervisor);
+        let stop = supervisor.listener_stop.clone();
         *supervisor
             .listener
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            Some(tokio::spawn(async move { listener.run_bus(rx).await }));
+            Some(tokio::spawn(Self::run_bus(listener, stop, rx)));
         supervisor
     }
 
@@ -3294,55 +3400,27 @@ impl ResidentSupervisor {
         }
     }
 
-    /// The single, zero-cost wake loop: park on the bus, route each `MailSent` to
-    /// its team. On a broadcast lag, re-arm every team's residents so no wake
-    /// is lost (the cursor makes re-arming safe — a spurious wake with no new mail
-    /// simply idles again).
-    ///
-    /// Every non-heartbeat envelope also feeds harness liveness (ADR-0002): an
-    /// event whose owning session is a registered actor slot proves that slot
-    /// is making real progress, and a busy slot emits a throttled
-    /// `AgentHeartbeat` for the parent to observe. Heartbeat envelopes
-    /// themselves are excluded — liveness derives from agent work only, never
-    /// from the harness's own observations (which would also feed a busy main
-    /// actor its children's heartbeats as activity).
+    /// The bus listener only routes; each team processes its FIFO independently.
+    /// Lag recovery enters those same queues, behind already routed envelopes.
     async fn run_bus(
-        self: Arc<Self>,
+        supervisor: Weak<Self>,
+        stop: CancellationToken,
         mut rx: tokio::sync::broadcast::Receiver<hya_proto::Envelope>,
     ) {
         loop {
             let received = tokio::select! {
                 biased;
-                () = self.listener_stop.cancelled() => break,
+                () = stop.cancelled() => break,
                 received = rx.recv() => received,
             };
+            let Some(supervisor) = supervisor.upgrade() else {
+                break;
+            };
             match received {
-                Ok(envelope) => {
-                    if let Event::MailSent {
-                        session: root,
-                        from,
-                        to,
-                        ..
-                    } = &envelope.event
-                    {
-                        let team = self.teams().get(root).cloned();
-                        if let Some(team) = team {
-                            team.on_mail(from, to).await;
-                            team.lock().routing_mail.remove(&envelope.seq.0);
-                            self.retire_team(&team);
-                        }
-                    }
-                    if !matches!(envelope.event, Event::AgentHeartbeat { .. })
-                        && let Some(actor) = envelope.event.session()
-                        && let Some(team) = self.team_with_resident(actor)
-                    {
-                        team.note_activity(actor).await;
-                    }
-                }
+                Ok(envelope) => supervisor.route_envelope(envelope),
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    let teams: Vec<Arc<TeamActor>> = self.teams().values().cloned().collect();
-                    for team in teams {
-                        team.recover().await;
+                    for team in supervisor.teams().values() {
+                        team.enqueue(TeamEvent::Recover);
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -3350,10 +3428,22 @@ impl ResidentSupervisor {
         }
     }
 
-    /// The team tracking `session` as a resident slot, if any. Scans tracked
-    /// teams, taking each team lock only long enough for a key lookup; the
-    /// supervisor lock is held throughout, matching the supervisor→team lock
-    /// order every other path obeys.
+    fn route_envelope(&self, envelope: hya_proto::Envelope) {
+        if let Event::MailSent { session: root, .. } = &envelope.event {
+            // Select and enqueue under the map lock, excluding retirement.
+            if let Some(team) = self.teams().get(root) {
+                team.enqueue(TeamEvent::Envelope(envelope));
+            }
+        } else if !matches!(envelope.event, Event::AgentHeartbeat { .. })
+            && let Some(actor) = envelope.event.session()
+            && let Some(team) = self.team_with_resident(actor)
+        {
+            team.enqueue(TeamEvent::Envelope(envelope));
+        }
+    }
+
+    /// Look up a member by episode identity (including killed generations),
+    /// or a lead by its current team's root. Neither lookup scans teams.
     fn team_with_resident(&self, session: SessionId) -> Option<Arc<TeamActor>> {
         self.episodes
             .lock()
@@ -3413,12 +3503,16 @@ impl ResidentSupervisor {
                 active
             }
         };
+        let (events, receiver) = tokio::sync::mpsc::unbounded_channel();
         let team = Arc::new(TeamActor::new(
             root,
             self.engine.clone(),
             self.self_ref.clone(),
             root_driver,
+            self.tasks.clone(),
+            events,
         ));
+        self.tasks.spawn(team.clone().run_events(receiver));
         team.install_main(main);
         team
     }
@@ -3475,6 +3569,7 @@ impl ResidentSupervisor {
             || state.busy != 0
             || state.registrations != 0
             || !state.routing_mail.is_empty()
+            || state.queued_events != 0
             || self.engine.turn_active(team.root)
             || state
                 .residents
@@ -3699,6 +3794,8 @@ impl ResidentSupervisor {
         {
             tracing::error!(%error, "resident bus listener failed");
         }
+        self.tasks.close();
+        self.tasks.wait().await;
         report
     }
 

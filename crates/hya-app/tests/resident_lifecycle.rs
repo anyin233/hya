@@ -1442,7 +1442,6 @@ async fn i21_handle_send_persists_only_dm_channel_targets() {
 }
 
 #[tokio::test]
-#[ignore = "M4-12: I19"]
 async fn i19_shutdown_drop_releases_engine_ownership() {
     let mut h = Harness::new().await;
     let weak = Arc::downgrade(&h.engine);
