@@ -110,7 +110,10 @@ Database arguments accept plain filesystem paths, for example
 are rejected at runtime and read-only entry points before SQLite opens or a lock
 is taken. Characters such as `?`, `#`, and `%` in a plain path are literal.
 Relative paths, absolute paths and symlink aliases resolve to one
-`<resolved-db>.runtime-owner.lock`. Read-only connections do not acquire runtime
+`<resolved-db>.runtime-owner.lock`. Existing path components are canonicalized,
+including case where the platform canonicalizer resolves it. Hard links and bind
+mount aliases of a database are unsupported; use one canonical database path.
+Read-only connections do not acquire runtime
 ownership and remain available while a daemon owns the database.
 
 In-memory stores remain unlocked (`--db ""` is the default of `exec`/`serve`).

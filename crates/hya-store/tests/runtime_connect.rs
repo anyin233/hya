@@ -50,6 +50,31 @@ fn symlink_identity_is_stable_when_the_target_and_its_parent_are_created() {
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn symlinked_parent_contends_on_the_canonical_directory_lock() {
+    let scratch = Scratch::new();
+    let directory = scratch.0.join("database");
+    std::fs::create_dir(&directory).unwrap();
+    let alias = scratch.0.join("alias");
+    std::os::unix::fs::symlink(&directory, &alias).unwrap();
+    let db = directory.join("sessions.db");
+    let spelling = alias.join("sessions.db");
+    let paths = database_paths(spelling.to_str().unwrap()).unwrap().unwrap();
+    assert_eq!(
+        paths.database.parent().unwrap(),
+        directory.canonicalize().unwrap()
+    );
+    let first = SessionStore::connect_runtime(db.to_str().unwrap())
+        .await
+        .unwrap();
+    first.claim_runtime_owner(OwnerRunId::new()).unwrap();
+    assert!(matches!(
+        SessionStore::connect_runtime(spelling.to_str().unwrap()).await,
+        Err(hya_store::StoreError::RuntimeOwnerBusy)
+    ));
+}
+
 #[tokio::test]
 async fn a_transient_discovery_probe_does_not_reject_a_starter() {
     let scratch = Scratch::new();
