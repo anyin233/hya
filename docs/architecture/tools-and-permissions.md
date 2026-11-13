@@ -684,3 +684,9 @@ call uses the existing `ToolResult` path. Selected hook request/reply calls and
 one-way event notifications remain activation-bound to the same captured
 binding. Generic superset declarations reject. Bundle-declared MCP remains
 unsupported, and a Bundle adds no permission plane or permission expansion.
+
+Deadline notices ask a child to call `report` only when its current request
+offers the tool, a lifecycle service is connected, and its captured parent-DM
+child policy permits reporting. Otherwise the notice asks it to finish the turn.
+`LifecyclePlane::is_connected(&self) -> bool` exposes service availability; the
+notice and lifecycle report handler use the same channel-policy predicate.

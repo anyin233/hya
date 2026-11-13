@@ -2248,7 +2248,11 @@ impl SessionEngine {
                             if let Some(deadline) = hya_tool::deadline::current()
                                 && let Some(stage) = deadline.take_notice(session)
                             {
+                                let policy = crate::ChannelPolicy::from_binding(binding)?
+                                    .snapshot_for(live_agent.name.as_str());
                                 let can_report = projection.session.parent.is_some()
+                                    && self.lifecycle.is_connected()
+                                    && crate::lifecycle::report_allowed(policy)
                                     && request
                                         .tools
                                         .iter()

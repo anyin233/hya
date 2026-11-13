@@ -647,6 +647,12 @@ impl LifecyclePlane {
         }
     }
 
+    /// Whether a lifecycle service is connected and can receive requests.
+    #[must_use]
+    pub fn is_connected(&self) -> bool {
+        self.tx.as_ref().is_some_and(|tx| !tx.is_closed())
+    }
+
     /// Scope requests to the acting session.
     #[must_use]
     pub fn for_session(&self, session: SessionId) -> Self {
