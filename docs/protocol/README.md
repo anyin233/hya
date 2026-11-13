@@ -707,11 +707,23 @@ never renames a fork; rename one with `PATCH /v1/sessions/{id}`
 
 ## Live and durable frames
 
-Live delivery converts each source event to one `StreamFrame` and encodes its
-SSE JSON once before broadcasting it to subscribers. Session/global filters and
-watermarks select shared frames; gRPC uses the same converted frame. Open
-`GET /v1/events/stream` (or `/v1/sessions/{id}/events/stream`) as before;
+Live delivery converts each eligible source event to one `StreamFrame` and
+encodes its SSE JSON once before broadcasting it to subscribers. Session/global
+filters and watermarks select shared frames; gRPC uses the same converted frame.
+Text deltas are skipped when only interaction/list subscribers are attached.
+Open `GET /v1/events/stream` (or `/v1/sessions/{id}/events/stream`) as before;
 `hya.v1` frame schemas, lag `resync` signals, and shutdown frames are unchanged.
+
+Live streams include only source events published after that stream subscribed;
+queued hub work does not replay earlier events or live deltas. This boundary is
+independent of `sinceSeq`: durable events must also have a larger sequence,
+while live (`seq = 0`) events published after subscription pass the watermark.
+SSE and gRPC apply the same rules and scopes.
+
+Process, interaction, and live session-list notices use a separate bounded
+fan-out ring, so a text-delta burst cannot evict `catalogUpdated` or
+`projectsUpdated`. Root-session filtering for list-only subscribers runs in
+those streams, without blocking unrelated streams on a database read.
 
 Stream events come in two kinds:
 
@@ -803,10 +815,11 @@ A client that renders streaming text folds frames **by id**:
 { "event": { "seq": "41", "session": "hysec_...", "timeRecorded": "...", "partReplaced": { "message": "msg_...", "part": "part_...", "text": "Hello!" } } }
 ```
 
-**Lag and reconnect.** The engine bus buffers 8192 envelopes (configurable)
-per subscriber. A subscriber that falls further behind receives one
-`resync` frame per lag and loses the frames in the gap, live deltas
-included; nothing is dropped from the durable log. `resync.lastSeq` is the
+**Lag and reconnect.** The engine bus and shared engine-frame ring each buffer
+8192 events (configurable); the independent notice ring buffers 256 frames.
+A subscriber that falls behind either frame ring receives a `resync` frame;
+source bus lag also yields `resync`. Frames in the gap, including live deltas,
+are lost; nothing is dropped from the durable log. `resync.lastSeq` is the
 `sinceSeq` the stream was opened with. After a `resync` or a reconnect,
 re-read the projection (`ListMessages`) — or replay
 `ListEvents(sinceSeq = <last durable seq you applied>)` — and continue
