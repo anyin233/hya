@@ -206,7 +206,7 @@ pub(crate) async fn wait_for_members(
                         },
                     )
                     .await?;
-                engine.notify_mail_consumed(caller, mark);
+                engine.notify_mail_consumed(caller, mark, inbox.consumed_incoming);
             }
             for (member, last) in &standing.stalled {
                 supervisor.record_wait_stall(caller, *member, *last);
@@ -465,6 +465,8 @@ struct InboxScan {
     /// cursor): everything for the channel-aware wait; for the member-only
     /// wait just the leading run of own posts and finished targets' reports.
     through: usize,
+    /// Whether that raw cursor range contains incoming work.
+    consumed_incoming: bool,
 }
 
 /// Split the caller's unread inbox into new mail, the report mail of
@@ -524,7 +526,16 @@ fn scan_inbox(
     if wake_on_mail {
         through = through.max(inbox.len());
     }
-    InboxScan { mail, through }
+    let consumed_incoming = inbox
+        .iter()
+        .take(through)
+        .skip(cursor)
+        .any(|message| message.from != caller_path);
+    InboxScan {
+        mail,
+        through,
+        consumed_incoming,
+    }
 }
 
 /// Team-lifecycle events on the team root or the caller's own log.

@@ -2303,9 +2303,7 @@ impl SessionEngine {
                 for envelope in envelopes {
                     self.publish_envelope(envelope);
                 }
-                if consumed_incoming {
-                    self.notify_mail_consumed(session, mail_mark);
-                }
+                self.notify_mail_consumed(session, mail_mark, consumed_incoming);
                 // A todo tool's result carries the whole list; record the
                 // change so the projection (and `todoUpdated`) follow it.
                 if let Some(output) = todo_output

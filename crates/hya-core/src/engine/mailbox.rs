@@ -532,15 +532,16 @@ impl SessionEngine {
             .map_or(0, |entry| entry.resident_cursor);
         // Whether this read showed every unread message: only then has the
         // caller seen what the cursor commit below consumes.
-        let showed_all_unread =
-            projection
-                .team
-                .unread_incoming_mail(&handle, cursor)
-                .all(|unread| {
-                    messages
-                        .iter()
-                        .any(|(from, body)| *from == unread.from && *body == unread.body)
-                });
+        let mut unread = projection
+            .team
+            .unread_incoming_mail(&handle, cursor)
+            .peekable();
+        let incoming = unread.peek().is_some();
+        let showed_all_unread = unread.all(|unread| {
+            messages
+                .iter()
+                .any(|(from, body)| *from == unread.from && *body == unread.body)
+        });
         if cursor < inbox_len {
             self.emit_for_actor(
                 None,
@@ -558,7 +559,7 @@ impl SessionEngine {
             // but only when the read showed all of it: unread mail on other
             // channels (or past `last`) keeps its wake and synthesis.
             if showed_all_unread {
-                self.notify_mail_consumed(session, mark);
+                self.notify_mail_consumed(session, mark, incoming);
             }
         }
         Ok(ChannelHistoryRead {
@@ -2189,6 +2190,95 @@ mod tests {
             vec!["relayed payload".to_string()],
             "the message crossed units, one in-scope hop at a time"
         );
+    }
+
+    #[derive(Default)]
+    struct MailObserver(std::sync::Mutex<Vec<(SessionId, u64)>>);
+
+    impl crate::engine::TurnBoundaryObserver for MailObserver {
+        fn mail_mark(&self, _: SessionId) -> Option<u64> {
+            Some(7)
+        }
+        fn mail_consumed(&self, session: SessionId, mark: u64) {
+            self.0.lock().unwrap().push((session, mark));
+        }
+        fn turn_released(&self, _: SessionId) {}
+    }
+
+    async fn cursor_cleanup_marks_only_incoming_work(read: bool) {
+        let engine = Arc::new(engine().await);
+        let org = org(&engine).await;
+        let supervisor = ResidentSupervisor::start(engine.clone());
+        let observer = Arc::new(MailObserver::default());
+        let erased: Arc<dyn crate::engine::TurnBoundaryObserver> = observer.clone();
+        engine.set_turn_observer(Arc::downgrade(&erased));
+        for (sender, target, incoming) in [
+            (org.root, org.lead_1.path.clone(), false),
+            (org.lead_1.session, "main".into(), true),
+        ] {
+            engine
+                .mail_send(
+                    sender,
+                    MailEndpoint::Handle(target),
+                    MailKind::Message,
+                    "work".into(),
+                )
+                .await
+                .unwrap();
+            if read {
+                let channel = dm_channel_between(
+                    &engine.read_projection(org.root).await.unwrap(),
+                    "main",
+                    &org.lead_1.path,
+                )
+                .unwrap();
+                engine
+                    .read_channel_history(org.root, &channel, Some(10))
+                    .await
+                    .unwrap();
+            } else {
+                crate::member_wait::wait_for_members(
+                    &engine,
+                    &supervisor,
+                    org.root,
+                    hya_tool::WaitSpec::parse(&serde_json::json!({"timeout_secs": 0}), true)
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            }
+            let projection = engine.read_projection(org.root).await.unwrap();
+            assert_eq!(
+                projection.team.roster["main"].resident_cursor,
+                projection.team.inboxes["main"].len() as u64,
+                "raw cursor must advance"
+            );
+            assert_eq!(
+                *observer.0.lock().unwrap(),
+                if incoming {
+                    vec![(org.root, 7)]
+                } else {
+                    vec![]
+                },
+                "outgoing history must not acknowledge unrelated team work"
+            );
+        }
+        supervisor
+            .drain(
+                hya_proto::FinishCause::Shutdown,
+                std::time::Duration::from_secs(2),
+            )
+            .await;
+    }
+
+    #[tokio::test]
+    async fn wait_cursor_cleanup_marks_only_incoming_work() {
+        cursor_cleanup_marks_only_incoming_work(false).await;
+    }
+
+    #[tokio::test]
+    async fn read_cursor_cleanup_marks_only_incoming_work() {
+        cursor_cleanup_marks_only_incoming_work(true).await;
     }
 
     #[tokio::test]
