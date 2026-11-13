@@ -711,7 +711,7 @@ hya exec --json "summarize this repo"
 hya exec --time-budget 900 "implement the requested change"
 ```
 
-Runs one headless turn and prints the rendered transcript. The session works
+Runs a headless task and prints the rendered transcript. The session works
 in the current directory: its workdir is the caller's cwd as an absolute path.
 When `exec` runs in process (not routed through a server that already holds
 `--db`), it ensures a Project for that cwd before binding the run's Agent
@@ -727,6 +727,27 @@ prints the canonical event stream as JSONL. A file `--db` is locked for the
 run; when a server (the backend daemon) already holds it, `exec` runs the turn
 through that server instead, still with the caller's cwd as the workdir (see
 [Database lock and the backend daemon](#database-lock-and-the-backend-daemon)).
+
+For an in-process run, a lead turn ending with live direct subagents,
+pending/in-progress todos, an announced next step, or length-truncated output
+receives a `HEADLESS RUN —` system notice and another turn. Raw DSML tool
+markup, unexecuted XML tool-call suffixes outside closed Markdown code fences,
+and an internal `<analysis>`/`<summary>` response also trigger correction:
+the agent must issue a structured tool call or deliver its normal final answer.
+A trailing separator paragraph is ignored when checking an announcement.
+Completed/blocked todos do not hold the run open. Use `wait` to collect workers
+or `archive` workers whose results are no longer needed.
+
+For example, if `hya exec "implement and verify the change"` stops after
+“Now let me run the checks:”, the notice asks it to take that step. A normal
+completion report with no pending work ends the run. Two notice turns in a row
+without any tool call end it too; without a budget there are at most 12 notices.
+In the Final window one ignored notice ends the run, and no continuation starts
+inside the Over guard. The first turn consumes the admitted user prompt;
+continuations add system notices without admitting another user prompt.
+These guards add no CLI flags, RPC routes, or wire types; `--json` includes the
+notices and continuation events in the same session's canonical JSONL stream.
+Routed runs retain the server's single-prompt-turn behavior.
 
 `--time-budget <SECS>` accepts a positive integer (`u64`, at least 1). It
 announces the whole run's wall-clock budget with a system message after session
@@ -748,8 +769,8 @@ left caps a 300-second Bash call to about 155 seconds, reserving 45 seconds.
 The flag is for an in-process run. When a running daemon owns `--db`, it exits
 75 through the normal unroutable-command diagnostic before creating a session;
 stop that daemon or select another database. The budget supplies guidance and
-tool timeout caps; it does not itself kill the process or create continuation
-turns. An outside harness owns the final wall-clock limit. Without the flag,
+tool timeout caps; it also bounds continuation turns and does not itself kill
+the process. An outside harness owns the final wall-clock limit. Without the flag,
 no deadline is installed and existing timeouts apply.
 
 `--json` streams live: envelopes print as the engine broadcasts them (the
