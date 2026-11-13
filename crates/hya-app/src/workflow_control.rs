@@ -715,9 +715,41 @@ impl WorkflowControl {
         invocation: WorkflowInvocation,
         command: WorkflowCommand,
         cancel: CancellationToken,
-        mut slot: Option<tokio::sync::OwnedSemaphorePermit>,
+        slot: Option<tokio::sync::OwnedSemaphorePermit>,
     ) -> Result<WorkflowCommandResult, WorkflowControlError> {
         let _request = self.request_token()?;
+        if matches!(&command, WorkflowCommand::Run { .. }) {
+            let cancel = cancel.child_token();
+            let caller = cancel.clone().drop_guard();
+            let control = self.clone();
+            let result = self
+                .tasks
+                .spawn(async move {
+                    control
+                        .execute_command(session, invocation, command, cancel, slot)
+                        .await
+                })
+                .await
+                .map_err(|error| {
+                    WorkflowControlError::Execution(format!(
+                        "Workflow execution task failed: {error}"
+                    ))
+                })?;
+            caller.disarm();
+            return result;
+        }
+        self.execute_command(session, invocation, command, cancel, slot)
+            .await
+    }
+
+    async fn execute_command(
+        &self,
+        session: SessionId,
+        invocation: WorkflowInvocation,
+        command: WorkflowCommand,
+        cancel: CancellationToken,
+        mut slot: Option<tokio::sync::OwnedSemaphorePermit>,
+    ) -> Result<WorkflowCommandResult, WorkflowControlError> {
         let execution = async {
             match command {
                 WorkflowCommand::List => {
@@ -1135,6 +1167,10 @@ impl WorkflowControl {
         binding: TurnBinding,
         cancel: CancellationToken,
     ) -> Result<WorkflowRunResult, WorkflowControlError> {
+        let _activity = self
+            .resident_supervisor
+            .root_driver_activity(session)
+            .await?;
         let actor_claim = operation.and_then(ToolOperation::actor_claim);
         let report = match prepared.execute(cancel).await {
             Ok(report) => report,
