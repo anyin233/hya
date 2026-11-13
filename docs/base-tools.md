@@ -128,20 +128,27 @@ output descriptors after the command exits. Both capture modes bound the final
 drain so such a daemon cannot hang the tool or turn a successful command into a
 timeout.
 
-For example, `{"command":"(sleep 0.3; printf 'bg-ok') &","timeout":30}` waits
-for the background child in the shell's process group and captures `bg-ok`.
+For example,
+`{"command":"trap '' HUP; (sleep 0.3; printf 'bg-ok') &","timeout":30}`
+waits for the background child in the shell's process group and captures `bg-ok`.
+Ignoring SIGHUP lets the child survive the PTY shell's exit.
 Use `"pty":true` in the same input when the command needs a terminal.
 The input fields remain `command: string` (required), `env: object<string,
 string>`, `timeout: number` (seconds; zero disables the deadline), `cwd: string`,
 and `pty: boolean` (default false).
 
 On Unix, once the shell has exited and its process group is absent
-(`kill(-pgid, 0)` reports `ESRCH`), pipes receive a 200 ms final drain; the PTY
-receives 200 ms of idle drain, renewed by arriving output. The tool then returns
-the shell's real exit code even if a foreign-session daemon retains an output
-fd. Children still in the original process group continue to be waited for.
-Timeout or cancellation kills the original group and allows at most 100 ms of
-final drain before closing capture, regardless of foreign-session fd holders.
+(`kill(-pgid, 0)` reports `ESRCH`), both modes receive one fixed 200 ms drain
+window from the first observation of the empty group. Arriving output does not
+extend it. At the cutoff, capture reads immediately buffered bytes without
+waiting, stopping at EOF, no readable bytes, or 1 MiB per stream (one combined
+stream for a PTY), so a flooding foreign writer cannot hold the tool open.
+The tool then returns the shell's real exit code even if a foreign-session daemon
+retains an output fd. Children still in the original process group continue to
+be waited for.
+Timeout or cancellation kills the original group and allows a 100 ms drain
+window, followed by the same bounded non-blocking drain before closing
+capture, regardless of foreign-session fd holders.
 Those detached processes are outside the killed group and remain the caller's
 responsibility.
 
