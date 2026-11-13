@@ -23,7 +23,7 @@ async fn root(engine: &SessionEngine) -> SessionId {
         .create(CreateSession {
             parent: None,
             agent: AgentName::new("hya-main"),
-            model: ModelRef::new("hya/echo"),
+            model: ModelRef::new("hya/offline"),
             workdir: ".".into(),
             project: None,
             kind: SessionKind::Project,
@@ -35,7 +35,7 @@ async fn root(engine: &SessionEngine) -> SessionId {
 async fn parked(supervisor: &ResidentSupervisor, root: SessionId) -> (SessionId, String) {
     let agent = AgentSpec {
         name: AgentName::new("hya-scout"),
-        model: ModelRef::new("hya/echo"),
+        model: ModelRef::new("hya/offline"),
         workdir: ".".into(),
         system_prompt: String::new(),
         reasoning: None,
@@ -538,5 +538,301 @@ async fn parked_workflow_actor_has_no_pending_directive() {
     drop(lead);
     supervisor
         .drain(FinishCause::Shutdown, Duration::from_secs(2))
+        .await;
+}
+
+struct PausedParams {
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+#[async_trait::async_trait]
+impl crate::hooks::HookDispatcher for PausedParams {
+    fn dispatch_event(&self, _: &hya_proto::Envelope) {}
+    async fn command_execute_before(
+        &self,
+        i: crate::hooks::CommandExecuteBeforeInput,
+    ) -> crate::hooks::CommandExecuteBeforeOutcome {
+        crate::hooks::NoopHookHost.command_execute_before(i).await
+    }
+    async fn text_complete(
+        &self,
+        i: crate::hooks::TextCompleteInput,
+    ) -> crate::hooks::TextCompleteOutcome {
+        crate::hooks::NoopHookHost.text_complete(i).await
+    }
+    async fn message_user_before(
+        &self,
+        i: crate::hooks::MessageUserBeforeInput,
+    ) -> crate::hooks::MessageUserBeforeOutcome {
+        crate::hooks::NoopHookHost.message_user_before(i).await
+    }
+    async fn tool_execute_before(
+        &self,
+        i: crate::hooks::ToolExecuteBeforeInput,
+    ) -> crate::hooks::ToolExecuteBeforeOutcome {
+        crate::hooks::NoopHookHost.tool_execute_before(i).await
+    }
+    async fn tool_execute_after(
+        &self,
+        i: crate::hooks::ToolExecuteAfterInput,
+    ) -> crate::hooks::ToolExecuteAfterOutcome {
+        crate::hooks::NoopHookHost.tool_execute_after(i).await
+    }
+    async fn chat_params(
+        &self,
+        input: crate::hooks::ChatParamsInput,
+    ) -> crate::hooks::ChatParamsOutcome {
+        self.entered.notify_one();
+        self.release.notified().await;
+        crate::hooks::NoopHookHost.chat_params(input).await
+    }
+}
+
+#[tokio::test]
+async fn i20_stage_activation_keeps_one_supervisor_subscription() {
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let engine = engine().await;
+    let engine = Arc::new((*engine).clone().with_hooks(Arc::new(PausedParams {
+        entered: entered.clone(),
+        release: release.clone(),
+    })));
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let subscribers = engine.bus().subscriber_count();
+    let binding = engine.bind_runtime(std::path::Path::new(".")).unwrap();
+    let base = AgentSpec {
+        name: AgentName::new("hya-main"),
+        model: ModelRef::new("hya/offline"),
+        workdir: ".".into(),
+        system_prompt: String::new(),
+        reasoning: None,
+    };
+    let workflow = hya_workflow::compile(hya_workflow::WorkflowSource::new(
+        "stage.hya.md",
+        r#"---
+kind: Workflow
+name: stage
+description: Stage completion uses the episode rather than subscribing.
+nodes:
+  run:
+    agent: hya-task
+    directive: Answer with hello.
+---
+flowchart TD
+  run
+"#,
+    ))
+    .unwrap();
+    let task = tokio::spawn({
+        let engine = engine.clone();
+        let supervisor = supervisor.clone();
+        async move {
+            crate::run_workflow(
+                engine,
+                root,
+                &workflow,
+                crate::WorkflowRunContext {
+                    binding,
+                    caller: "hya-main".into(),
+                    base_agent: base,
+                    inputs: BTreeMap::new(),
+                    resident_supervisor: Some(supervisor),
+                    routing: None,
+                },
+                CancellationToken::new(),
+            )
+            .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(3), entered.notified())
+        .await
+        .unwrap();
+    let during = engine.bus().subscriber_count();
+    release.notify_one();
+    let report = tokio::time::timeout(Duration::from_secs(3), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    supervisor
+        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
+        .await;
+    assert_eq!(
+        report.status,
+        crate::WorkflowStatus::Completed,
+        "{report:?}"
+    );
+    assert_eq!(
+        during,
+        subscribers + 1,
+        "only the normal in-turn mail steering subscription may be added"
+    );
+}
+
+#[tokio::test]
+async fn activation_waiter_settles_reports_revives_and_ends_on_the_episode() {
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let engine = engine().await;
+    let engine = Arc::new((*engine).clone().with_hooks(Arc::new(PausedParams {
+        entered: entered.clone(),
+        release: release.clone(),
+    })));
+    let root = root(&engine).await;
+    let root_turn = engine.try_begin_turn(root).unwrap();
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let (child, handle) = parked(&supervisor, root).await;
+    let mut first = supervisor
+        .activate(
+            root,
+            child,
+            "FIRST_ACTIVATION".into(),
+            Arc::from("first guidance"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), entered.notified())
+        .await
+        .unwrap();
+    assert!(matches!(
+        first.done.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    {
+        let mut pending = Box::pin(first.wait());
+        assert!(futures::poll!(pending.as_mut()).is_pending());
+    }
+    let refused = supervisor
+        .activate(
+            root,
+            child,
+            "must not be mailed".into(),
+            Arc::from("bad guidance"),
+            None,
+            None,
+        )
+        .await;
+    assert!(matches!(refused, Err(CoreError::TurnAlreadyActive { .. })));
+    assert_eq!(
+        engine.read_projection(root).await.unwrap().team.inboxes[&handle].len(),
+        1
+    );
+    release.notify_one();
+    let first = tokio::time::timeout(Duration::from_secs(3), first.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(first, ActivationResult::Settled { final_text } if final_text.contains("FIRST_ACTIVATION"))
+    );
+    let projection = engine.read_projection(root).await.unwrap();
+    assert_eq!(projection.team.roster[&handle].resident_cursor, 1);
+    assert!(projection.team.roster[&handle].resident_work.is_none());
+    assert_eq!(
+        engine.store().active_actor_ids().await.unwrap(),
+        vec![child]
+    );
+
+    let mut second = supervisor
+        .activate(
+            root,
+            child,
+            "SECOND_ACTIVATION".into(),
+            Arc::from("second guidance"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), entered.notified())
+        .await
+        .unwrap();
+    supervisor
+        .submit_report(
+            root,
+            &handle,
+            ReportOutcome::Done,
+            "terminal evidence".into(),
+        )
+        .await
+        .unwrap();
+    release.notify_one();
+    let second = tokio::time::timeout(Duration::from_secs(3), second.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        second,
+        ActivationResult::Reported {
+            outcome: ReportOutcome::Done,
+            text: "terminal evidence".into()
+        }
+    );
+    assert!(engine.store().active_actor_ids().await.unwrap().is_empty());
+    assert_eq!(
+        engine.read_projection(root).await.unwrap().team.archived[&handle].session,
+        child
+    );
+
+    let mut third = supervisor
+        .activate(
+            root,
+            child,
+            "THIRD_ACTIVATION".into(),
+            Arc::from("revived guidance"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), entered.notified())
+        .await
+        .unwrap();
+    let team = supervisor.team_with_resident(child).unwrap();
+    let cancel = team.lock().residents[&child].cancel.clone();
+    let ending = tokio::spawn({
+        let supervisor = supervisor.clone();
+        let handle = handle.clone();
+        async move { supervisor.end_member(root, &handle).await }
+    });
+    tokio::time::timeout(Duration::from_secs(3), cancel.cancelled())
+        .await
+        .unwrap();
+    release.notify_one();
+    tokio::time::timeout(Duration::from_secs(3), ending)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let third = tokio::time::timeout(Duration::from_secs(3), third.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        third,
+        ActivationResult::Ended {
+            reason: ArchiveReason::ArchivedByParent,
+            status: MemberRunStatus::Cancelled,
+            ..
+        }
+    ));
+    assert!(engine.store().active_actor_ids().await.unwrap().is_empty());
+    assert_eq!(
+        engine
+            .replay(root)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e.event, Event::AgentRestarted { .. }))
+            .count(),
+        1
+    );
+    drop(root_turn);
+    supervisor
+        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
         .await;
 }

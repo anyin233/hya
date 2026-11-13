@@ -40,6 +40,11 @@ impl EventBus {
         let _ = self.tx.send(envelope);
     }
 
+    #[cfg(test)]
+    pub(crate) fn subscriber_count(&self) -> usize {
+        self.tx.receiver_count()
+    }
+
     /// Subscribe for subsequent envelopes (does not replay history).
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<Envelope> {

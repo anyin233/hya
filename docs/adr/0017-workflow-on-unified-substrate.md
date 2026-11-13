@@ -15,13 +15,11 @@ substrate**:
   (ADR-0013/0014) are unchanged.
 - A stage spawn rides the single admission path as an ordinary resident
   subagent: parked activation, stage directive as the arming mail, workflow
-  route/guidance attached to the resident slot (the mechanism
-  `spawn_resident_parked` + `set_resident_workflow_activation` already
-  provides).
-- A stage finishes by `report`. `WorkflowControl` consumes `SubagentReported`
-  (from the event bus or a store tail) to advance the DAG, mapping report
-  outcome and reason to the existing failure classes (retry / abort /
-  fallback edges).
+  route/guidance and completion attached by `ResidentSupervisor::activate`.
+- The episode resolves its activation waiter after durable idle settlement,
+  terminal report, or forced ending. The controller explicitly accepts both
+  settlement (final assistant text) and reports (outcome/text) as Stage
+  completion. It adds no per-Stage event listener or Projection polling.
 - **Retry is the revival primitive**: a retry edge DM-revives the archived
   stage agent with the retry prompt, inheriting ADR-0015's handoff-carrying
   context and budget re-debit. Workflow retry and subagent follow-up are the
@@ -35,8 +33,9 @@ substrate**:
 
 ## Consequences
 
-- One execution substrate for `task` and Workflow. The transient workflow team
-  path and its admission variants are deleted.
+- First Stage activations share the `task` episode substrate. Loop
+  continuations and verifiers still use the transient executor; their move
+  onto episodes and deletion of that executor remain the next packet.
 - The TUI presents workflow agents in the same tree and channels as ordinary
   subagents; there is no parallel workflow presentation surface.
 - Workflow retry cost and context behavior follow the handoff model: a retried
