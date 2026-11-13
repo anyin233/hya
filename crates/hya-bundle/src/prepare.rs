@@ -134,7 +134,7 @@ impl PreparedCatalog {
                 detail: error.to_string(),
             })?;
         let document = catalog_from_bundle(bundle, bytes.to_vec(), expected_digest.to_string());
-        for bundle in &document.bundles {
+        for bundle in document.bundles() {
             if !prepared_bundle_is_canonical(bundle) {
                 return Err(BundleError::NonCanonicalPreparedCatalog);
             }
@@ -145,17 +145,17 @@ impl PreparedCatalog {
                 });
             }
         }
-        validate_prepared_references(&document.bundles)?;
-        validate_prepared_schema_rows(&document.bundles, &document.schemas)?;
-        validate_prepared_process_rows(&document.bundles, &document.process_extensions)?;
-        validate_native_binary_bindings(&document.bundles, &document.process_extensions)?;
+        validate_prepared_references(document.bundles())?;
+        validate_prepared_schema_rows(document.bundles(), &document.schemas)?;
+        validate_prepared_process_rows(document.bundles(), &document.process_extensions)?;
+        validate_native_binary_bindings(document.bundles(), &document.process_extensions)?;
         validate_prepared_api_rows(
-            &document.bundles,
+            document.bundles(),
             &document.process_extensions,
             &document.apis,
         )?;
         validate_prepared_permission_mode_rows(
-            &document.bundles,
+            document.bundles(),
             &document.process_extensions,
             &document.permission_modes,
         )?;
@@ -198,10 +198,9 @@ fn catalog_from_bundle(bundle: Bundle, bytes: Vec<u8>, digest: String) -> Prepar
             modes: bundle.permission_modes.clone(),
         }]
     };
-    let bundles = vec![bundle];
-    let index = build_index(&bundles);
+    let index = build_index(std::slice::from_ref(&bundle));
     PreparedCatalog {
-        bundles,
+        bundle: std::sync::Arc::new(bundle),
         index,
         schemas,
         process_extensions,

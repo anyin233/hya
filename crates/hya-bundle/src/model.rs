@@ -556,7 +556,7 @@ pub struct PreparedBundleIndex {
 /// One decoded Bundle with derived runtime lookups and its canonical stored bytes.
 #[derive(Debug)]
 pub struct PreparedCatalog {
-    pub(crate) bundles: Vec<Bundle>,
+    pub(crate) bundle: std::sync::Arc<Bundle>,
     pub(crate) index: Vec<PreparedBundleIndex>,
     pub(crate) schemas: Vec<PreparedBundleSchemas>,
     pub(crate) process_extensions: Vec<PreparedBundleProcess>,
@@ -570,7 +570,7 @@ impl PreparedCatalog {
     /// Prepared installable payloads in catalog order.
     #[must_use]
     pub fn bundles(&self) -> &[Bundle] {
-        &self.bundles
+        std::slice::from_ref(self.bundle.as_ref())
     }
 
     /// Compact index reconstructed from the prepared Bundle on load.

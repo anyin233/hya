@@ -704,6 +704,12 @@ never renames a fork; rename one with `PATCH /v1/sessions/{id}`
 
 ## Live and durable frames
 
+Live delivery converts each source event to one `StreamFrame` and encodes its
+SSE JSON once before broadcasting it to subscribers. Session/global filters and
+watermarks select shared frames; gRPC uses the same converted frame. Open
+`GET /v1/events/stream` (or `/v1/sessions/{id}/events/stream`) as before;
+`hya.v1` frame schemas, lag `resync` signals, and shutdown frames are unchanged.
+
 Stream events come in two kinds:
 
 - **Durable** events carry their log `seq` (a string, `"12"`). They are in
