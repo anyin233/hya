@@ -49,6 +49,7 @@ impl SessionEngine {
             usage: Some(usage.clone()),
             ..options
         };
+        drop(projection);
         let summarizer = self
             .summarizer
             .as_ref()

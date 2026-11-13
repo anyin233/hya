@@ -580,6 +580,7 @@ async fn wait_turn(
     loop {
         let projection = st.engine.read_projection_shared(session).await?;
         let info = turn_info(&st, session, &request.turn, &projection);
+        drop(projection);
         if is_terminal(info.state) {
             return Ok(Json(info));
         }

@@ -41,6 +41,7 @@ impl SessionEngine {
         let workdir = projection_workdir(&projection).ok_or_else(|| {
             CoreError::Invalid("session workdir required for title generation".to_string())
         })?;
+        drop(projection);
         // Bind once from the persisted session workdir; exact-lookup only.
         let binding = self.bind_session_runtime(session, &workdir).await?;
         let definition = fixed_system_agent(&binding, FixedSystemAgent::Title)?;

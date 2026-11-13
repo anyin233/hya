@@ -54,8 +54,14 @@ impl SessionEngine {
             .as_ref()
             .map_or(1, |handoff| handoff.generation.saturating_add(1));
         let previous_doc = previous.map(|handoff| handoff.doc);
-        if let Some(summarizer) = self.summarizer.clone()
-            && let Ok(messages) = summary_messages(&projection)
+        let degraded_doc = prepare_degraded_handoff_doc(Some(&projection));
+        let summarizer = self.summarizer.clone();
+        let messages = summarizer
+            .as_ref()
+            .and_then(|_| summary_messages(&projection).ok());
+        drop(projection);
+        if let Some(summarizer) = summarizer
+            && let Some(messages) = messages
         {
             let usage = UsageCollector::default();
             let options = SummarizeOptions {
@@ -80,7 +86,7 @@ impl SessionEngine {
         }
         TerminalHandoff {
             generation,
-            doc: degraded_handoff_doc(Some(&projection), &self.unread_handoff_mail(session).await),
+            doc: degraded_doc(&self.unread_handoff_mail(session).await),
             degraded: true,
         }
     }
@@ -89,6 +95,13 @@ impl SessionEngine {
 /// The ended episode contributes goal/state/pending; only durable files and
 /// decisions carry forward from the previous generation.
 fn degraded_handoff_doc(projection: Option<&Projection>, unread: &[String]) -> String {
+    prepare_degraded_handoff_doc(projection)(unread)
+}
+
+// Keep only fallback text while the model runs; unread mail is still read afterwards.
+fn prepare_degraded_handoff_doc(
+    projection: Option<&Projection>,
+) -> impl FnOnce(&[String]) -> String + use<> {
     use hya_proto::{PartProjection, Role};
     let messages = projection.map(episode_messages).unwrap_or_default();
     let texts: Vec<_> = messages
@@ -106,27 +119,6 @@ fn degraded_handoff_doc(projection: Option<&Projection>, unread: &[String]) -> S
         })
         .filter(|(_, text)| !text.trim().is_empty())
         .collect();
-    let goal = texts
-        .iter()
-        .find(|(role, _)| *role == Role::User)
-        .map(|(_, text)| text.as_str())
-        .or_else(|| unread.first().map(String::as_str))
-        .unwrap_or("no work requested in this episode");
-    let current = texts
-        .iter()
-        .rev()
-        .find(|(role, _)| *role == Role::Assistant)
-        .map(|(_, text)| text.as_str())
-        .unwrap_or("no work done in this episode");
-    let pending = if unread.is_empty() {
-        texts
-            .iter()
-            .rev()
-            .find(|(role, _)| *role == Role::User)
-            .map_or_else(|| "none".into(), |(_, text)| text.clone())
-    } else {
-        unread.join("\n")
-    };
     let carry = |number: u8| {
         let Some(previous) = projection.and_then(|projection| projection.session.handoff.as_ref())
         else {
@@ -147,11 +139,40 @@ fn degraded_handoff_doc(projection: Option<&Projection>, unread: &[String]) -> S
             .trim();
         format!("(from generation {}) {content}", previous.generation)
     };
-    format!(
-        "1. Goal - {goal}\n2. Current state - {current}\n3. Files and code - {}\n4. Decisions - {}\n5. Pending tasks - {pending}\n6. Next step - none\n",
-        carry(3),
-        carry(4)
-    )
+    let files = carry(3);
+    let decisions = carry(4);
+    let goal = texts
+        .iter()
+        .find(|(role, _)| *role == Role::User)
+        .map(|(_, text)| text.clone());
+    let current = texts
+        .iter()
+        .rev()
+        .find(|(role, _)| *role == Role::Assistant)
+        .map_or_else(
+            || "no work done in this episode".into(),
+            |(_, text)| text.clone(),
+        );
+    let pending = texts
+        .iter()
+        .rev()
+        .find(|(role, _)| *role == Role::User)
+        .map_or_else(|| "none".into(), |(_, text)| text.clone());
+    move |unread| {
+        let goal = goal
+            .as_deref()
+            .or_else(|| unread.first().map(String::as_str))
+            .unwrap_or("no work requested in this episode");
+        let pending = if unread.is_empty() {
+            pending
+        } else {
+            unread.join("\n")
+        };
+        format!(
+            "1. Goal - {goal}\n2. Current state - {current}\n3. Files and code - {}\n4. Decisions - {}\n5. Pending tasks - {pending}\n6. Next step - none\n",
+            files, decisions
+        )
+    }
 }
 
 impl SessionEngine {
