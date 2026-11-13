@@ -20,7 +20,7 @@ use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-async fn fixture(mode: SubagentMode) -> (AppState, SessionId, SessionId) {
+async fn fixture() -> (AppState, SessionId, SessionId) {
     let (permission, _) = PermissionPlane::new(PermissionRules::default());
     let engine = Arc::new(SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
@@ -58,7 +58,12 @@ async fn fixture(mode: SubagentMode) -> (AppState, SessionId, SessionId) {
         .unwrap();
     for (session, handle, parent, mode) in [
         (root, "main", None, SubagentMode::Transient),
-        (child, "worker-1", Some("main".to_string()), mode),
+        (
+            child,
+            "worker-1",
+            Some("main".to_string()),
+            SubagentMode::Resident,
+        ),
     ] {
         engine
             .store()
@@ -76,45 +81,56 @@ async fn fixture(mode: SubagentMode) -> (AppState, SessionId, SessionId) {
             .await
             .unwrap();
     }
+    engine
+        .store()
+        .append_event(
+            root,
+            &Event::ChannelCreated {
+                session: root,
+                channel: "DM-12345678".into(),
+                kind: hya_proto::ChannelKind::Dm,
+                unit: None,
+                members: vec!["main".into(), "main/worker-1".into()],
+            },
+        )
+        .await
+        .unwrap();
     (AppState::new(engine, agent), root, child)
 }
 
 #[tokio::test]
 async fn steer_mail_rejections_are_permission_denied_in_http_and_grpc() {
-    for mode in [SubagentMode::Transient, SubagentMode::Resident] {
-        let (state, root, child) = fixture(mode).await;
-        let before = state.engine.replay(root).await.unwrap().len();
-        let response = router(state.clone())
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/v1/sessions/{child}/steer"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(json!({"text": "please continue"}).to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let status = response.status();
-        let body: Value =
-            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
-                .unwrap();
-        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-        assert_eq!(body["error"]["code"], "permission_denied");
-        let message = body["error"]["message"].as_str().unwrap();
-        assert!(message.contains("sender `main`"), "{message}");
-        assert!(message.contains("direct:main/worker-1"), "{message}");
-        let grpc = pb::session_server::Session::steer_subagent(
-            &V1Grpc::new(state.clone()),
-            tonic::Request::new(pb::SteerSubagentRequest {
-                session: child.to_string(),
-                text: "please continue".into(),
-            }),
+    let (state, root, child) = fixture().await;
+    let before = state.engine.replay(root).await.unwrap().len();
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/sessions/{child}/steer"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"text": "please continue"}).to_string()))
+                .unwrap(),
         )
         .await
-        .unwrap_err();
-        assert_eq!(grpc.code(), tonic::Code::PermissionDenied);
-        assert_eq!(grpc.message(), message);
-        assert_eq!(state.engine.replay(root).await.unwrap().len(), before);
-    }
+        .unwrap();
+    let status = response.status();
+    let body: Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"]["code"], "permission_denied");
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.contains("sender `main`"), "{message}");
+    assert!(message.contains("DM-12345678"), "{message}");
+    let grpc = pb::session_server::Session::steer_subagent(
+        &V1Grpc::new(state.clone()),
+        tonic::Request::new(pb::SteerSubagentRequest {
+            session: child.to_string(),
+            text: "please continue".into(),
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(grpc.code(), tonic::Code::PermissionDenied);
+    assert_eq!(grpc.message(), message);
+    assert_eq!(state.engine.replay(root).await.unwrap().len(), before);
 }

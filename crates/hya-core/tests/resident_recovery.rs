@@ -131,10 +131,23 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
     store
         .append_event(
             queued_root,
+            &Event::ChannelCreated {
+                session: queued_root,
+                channel: "DM-12345678".into(),
+                kind: hya_proto::ChannelKind::Dm,
+                unit: None,
+                members: vec!["main".to_string(), "main/queued-1".to_string()],
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .append_event(
+            queued_root,
             &Event::MailSent {
                 session: queued_root,
                 from: "main".to_string(),
-                to: MailEndpoint::Handle("main/queued-1".to_string()),
+                to: MailEndpoint::Channel("DM-12345678".into()),
                 kind: MailKind::Message,
                 body: "queued".to_string(),
             },
@@ -218,10 +231,23 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
     store
         .append_event(
             running_root,
+            &Event::ChannelCreated {
+                session: running_root,
+                channel: "DM-12345678".into(),
+                kind: hya_proto::ChannelKind::Dm,
+                unit: None,
+                members: vec!["main".to_string(), "main/running-1".to_string()],
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .append_event(
+            running_root,
             &Event::MailSent {
                 session: running_root,
                 from: "main".to_string(),
-                to: MailEndpoint::Handle("main/running-1".to_string()),
+                to: MailEndpoint::Channel("DM-12345678".into()),
                 kind: MailKind::Message,
                 body: "running".to_string(),
             },
@@ -253,10 +279,23 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
     store
         .append_event(
             running_root,
+            &Event::ChannelCreated {
+                session: running_root,
+                channel: "DM-12345678".into(),
+                kind: hya_proto::ChannelKind::Dm,
+                unit: None,
+                members: vec!["main".to_string(), "main/running-1".to_string()],
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .append_event(
+            running_root,
             &Event::MailSent {
                 session: running_root,
                 from: "main".to_string(),
-                to: MailEndpoint::Handle("main/running-1".to_string()),
+                to: MailEndpoint::Channel("DM-12345678".into()),
                 kind: MailKind::Message,
                 body: "queued after running".to_string(),
             },
@@ -332,10 +371,23 @@ async fn resident_recovery_rolls_back_actor_and_root_failure_atomically() {
     store
         .append_event(
             root,
+            &Event::ChannelCreated {
+                session: root,
+                channel: "DM-12345678".into(),
+                kind: hya_proto::ChannelKind::Dm,
+                unit: None,
+                members: vec!["main".to_string(), handle.to_string()],
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .append_event(
+            root,
             &Event::MailSent {
                 session: root,
                 from: "main".to_string(),
-                to: MailEndpoint::Handle(handle.to_string()),
+                to: MailEndpoint::Channel("DM-12345678".into()),
                 kind: MailKind::Message,
                 body: "recovery".to_string(),
             },

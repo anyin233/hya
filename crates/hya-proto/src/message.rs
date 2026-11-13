@@ -83,17 +83,12 @@ pub enum MemberRunStatus {
 
 /// How a spawned subagent is scheduled (ADR-0002).
 ///
-/// - `Transient` (default): the historical blocking join model — spawn, run one
-///   turn, summarize, and die while the parent waits. Unchanged behavior.
-/// - `Resident`: a long-lived, addressable event-driven actor. Idle at zero token
-///   cost; woken by inbound mail to run exactly one turn, then back to idle.
-///
-/// `Default` is `Transient` and the field is `#[serde(default)]` everywhere it is
-/// carried, so older logs (which never wrote a mode) replay as transient.
+/// `Transient` identifies the team lead, which has no resident episode.
+/// `Resident` identifies mail-woken member episodes.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SubagentMode {
-    /// Blocking one-shot subagent (default for older logs).
+    /// Team lead, without a resident episode.
     #[default]
     Transient,
     /// Long-lived mail-woken actor.
@@ -101,17 +96,6 @@ pub enum SubagentMode {
 }
 
 impl SubagentMode {
-    /// Parse a model-/frontmatter-supplied mode. Truthy resident markers map to
-    /// [`SubagentMode::Resident`]; everything else (including empty) is transient,
-    /// so a missing mode is never an error and defaults safely.
-    #[must_use]
-    pub fn parse(value: &str) -> Self {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "resident" | "true" | "yes" | "1" => SubagentMode::Resident,
-            _ => SubagentMode::Transient,
-        }
-    }
-
     /// Whether this is the resident (long-lived actor) mode.
     #[must_use]
     pub fn is_resident(self) -> bool {

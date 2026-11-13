@@ -10,8 +10,8 @@
 > [Subagent Orchestration](../architecture/subagent-orchestration.md) for the
 > current channel contract.
 
-Inter-agent communication (direct mail by handle, named `#channels`, broadcast) is implemented as
-first-class `Event`s (`MailSent`, `ChannelJoined`, `ChannelLeft`, `AgentRegistered`) appended to
+Inter-agent communication (DM and unit broadcast) is implemented as
+first-class `Event`s (`MailSent`, `ChannelCreated`, `AgentRegistered`) appended to
 the **team-root** session's log and folded by the shared `hya-proto::Projection` into per-agent
 inboxes, channel logs, and a roster. We chose this over the pre-existing in-memory
 `TeamControlPlane` (a `HashMap` state machine that was dead code) because the codebase mandates a
@@ -23,84 +23,44 @@ dead `TeamControlPlane` was deleted.
 
 ## Consequences
 
-- The frontend renders from a *separate* projection (`hya-sdk::MessageStore`), so it had to grow a
-  faithful `TeamProjection` mirror that folds the same events arriving over the `hya.envelope`
-  global stream. That mirror must stay a pure read-model — no divergent logic.
+- Frontends consume the shared server projection; they do not maintain a competing mail reducer.
 - Address is a single type-safe `MailEndpoint` (`Handle | Channel`), not separate `to`/`channel`
   fields, so a message can never be ambiguously addressed to both.
 - Channel fan-out reaches every current **eligible** subscriber, not literally every subscriber.
   When the reducer folds a `MailSent` addressed to a channel, it still appends the message to the
   channel log, then walks the current member set and **skips** any subscriber whose
   `RosterEntry.mode` is `resident` **and** whose `RosterStatus` is `Done` or `Failed`. A stopped
-  actor's inbox therefore stops growing. Transient members and non-terminal residents still receive
+  actor's inbox therefore stops growing. The lead and non-terminal residents still receive
   the fan-out. (Writer-side eligibility for *new* mail is stricter — see Delivery rules.)
 
 ## Delivery rules
 
-Mail is written under the SQLite writer lock in `hya-store` (`append_direct_mail` /
-`append_channel_mail`). Callers publish the returned `Envelope` only **after** commit.
+Handles are request aliases for existing sender–peer DM channels. The engine
+resolves canonical paths, relative leaves and `^parent`/`^` at its boundary;
+a missing DM rejects the send. There is no named/`^name` channel resolution.
+For example, `send {"channel":"main/worker","body":"Continue"}` persists the
+same target as an explicit `#DM-…` send. See [Agent channels](../agent-channels.md#handle-aliases-and-durable-mail)
+for request, receipt and event schemas.
 
-### `append_direct_mail`
+Mail is written under the SQLite writer lock by `append_channel_mail`:
 
-1. `BEGIN IMMEDIATE`
-2. Optional `ActorClaim` fence when the sender is a resident
-3. Replay the team-root projection inside the transaction
-4. **Resolve the address in scope** (ADR-0011) — a relative leaf or a full path,
-   matched only against agents the sender may address. This runs **before** every
-   check below, so an out-of-scope address fails exactly like an unknown one and
-   cannot be used to probe whether a teammate exists or is alive.
-5. **Reject** with `StoreError::MailboxRejected` when:
-   - the address is **not addressable from the sender** (out of scope, unknown,
-     or ambiguous)
-   - the target handle is **unknown** (not in the roster)
-   - the target is a **transient non-root** member (`session != root` and `mode == Transient`)
-   - the target is a **non-root** resident that fails eligibility
-     (`session != root` and `mode == Resident` and not
-     `resident_member_is_eligible` — stopped/terminal or no active claim)
-6. Append `Event::MailSent { to: Handle(...) }` — carrying the **resolved
-   canonical path**, not the string the sender typed
-7. Commit and return the envelope
+1. `BEGIN IMMEDIATE`, optional sender `ActorClaim` fence, replay the root projection.
+2. Require an existing channel, sender membership and direction allowed by the
+   captured send policy. Groups require the unit leader.
+3. Count subscribers with the shared replay eligibility predicate and query their
+   resident claims in one batch. A live recipient without an active claim rejects
+   the append. An archived direct-child DM returns `MailRevivalRequired` to the
+   engine instead of appending. Revival rechecks this same gate in its transaction.
+4. Append `MailSent { to: Channel(id), ... }`, commit, return its envelope and count.
+   Callers publish only after commit. Outgoing copies never count as unread work.
 
-**Root-session handle:** when the roster entry's `session == root`, neither the
-transient reject nor the resident eligibility check runs. Mail to the team-root
-handle is accepted regardless of that entry's `RosterStatus` or claim row.
+`RosterEntry::accepts_mail` supplies the shared status rule: terminal residents
+are ineligible, while the lead and non-terminal members receive channel copies.
+Claims fence live-member admission. Archived members retain their parent DM;
+only the parent can revive them, and unit broadcasts do not revive them.
 
-### `append_channel_mail`
-
-Same writer-lock discipline and optional claim fence, then:
-
-1. Replay the root projection
-1. **Resolve the channel to a unit-qualified key** (ADR-0011): `#name` addresses
-   the unit the sender leads if it leads one, otherwise its home unit; `#^name`
-   addresses its home unit and is an error for an agent that leads nobody.
-   `#announce` is reserved and refused here — see ADR-0011's announce path.
-2. Require that the channel exists, the sender is a member, and the direction
-   is allowed by the captured send policy. Groups additionally require the unit
-   leader. Failures carry channel and sender context in a typed store error.
-3. Count subscribers with the shared replay eligibility predicate. Query their
-   resident claims in one batch; a live recipient without an active claim rejects
-   the entire append. An archived direct-child DM returns an authorized revival
-   request to the engine instead of appending.
-4. Append `Event::MailSent { to: Channel(...) }`
-5. Commit and return `(envelope, recipient_count)` where the count is the eligible set at
-   send time
-
-### Eligibility (`resident_member_is_eligible`)
-
-Used for **non-root** resident direct-mail rejection. Channel counting uses the
-shared replay predicate, with the claim check serving as an all-recipient append gate:
-
-| Member | Counts as eligible? |
-| --- | --- |
-| Not on the roster / not resident | Yes for channel counting (non-resident always counts); direct mail still requires a roster entry |
-| Resident with `RosterStatus::Done` or `Failed` | **No** (when this check is applied) |
-| Resident otherwise | **Yes only if** `resident_actor_claim` has an **`active`** row for that actor session — the durable liveness check behind mail rejection |
-
-Direct mail applies this only when `entry.session != root` and
-`mode == Resident`. A roster entry whose session **is** the team root is never
-passed through `resident_member_is_eligible` on the direct path.
-
-`RosterEntry::accepts_mail` supplies the shared status rule. The reducer's
-channel fan-out and store recipient count both use it. Claims fence admission:
-a missing live-recipient claim rejects the whole write, so an accepted channel
-receipt always counts the inboxes replay actually updates.
+Harness notices bypass agent send policy and use `MailSent { from: "harness",
+to: Handle(path), ... }`. The common store event append rejects every other
+handle-targeted event. `append_harness_mail` additionally requires a live
+non-root resident recipient. `Handle` remains on the wire for this purpose;
+`ChannelJoined` remains a wire variant but has no producer or reducer fold.

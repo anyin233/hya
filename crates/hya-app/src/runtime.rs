@@ -4086,10 +4086,23 @@ You are the runtime-installed agent.
         store
             .append_event(
                 queued_root,
+                &Event::ChannelCreated {
+                    session: queued_root,
+                    channel: "DM-12345678".into(),
+                    kind: hya_proto::ChannelKind::Dm,
+                    unit: None,
+                    members: vec!["main".to_string(), "main/queued-1".to_string()],
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .append_event(
+                queued_root,
                 &Event::MailSent {
                     session: queued_root,
                     from: "main".to_string(),
-                    to: MailEndpoint::Handle("main/queued-1".to_string()),
+                    to: MailEndpoint::Channel("DM-12345678".into()),
                     kind: MailKind::Message,
                     body: "resume me".to_string(),
                 },
@@ -4310,10 +4323,23 @@ You are the installed resident agent.
         store
             .append_event(
                 root,
+                &Event::ChannelCreated {
+                    session: root,
+                    channel: "DM-12345678".into(),
+                    kind: hya_proto::ChannelKind::Dm,
+                    unit: None,
+                    members: vec!["main".to_string(), "main/installed-resident-1".to_string()],
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .append_event(
+                root,
                 &Event::MailSent {
                     session: root,
                     from: "main".to_string(),
-                    to: MailEndpoint::Handle("main/installed-resident-1".to_string()),
+                    to: MailEndpoint::Channel("DM-12345678".into()),
                     kind: MailKind::Message,
                     body: "startup recovery executable mail".to_string(),
                 },

@@ -78,9 +78,15 @@ async fn t2_25_installed_channel_policy_denies_child_send_and_uninstall_restores
     std::fs::remove_file(package).unwrap();
     let first = env.create_session().await.unwrap();
     env.prompt(first, "spawn the first worker").await.unwrap();
-    env.wait_route_contains(CHILD, "channel policy", Duration::from_secs(20))
+    env.wait_route_contains(CHILD, "direction denied by policy", Duration::from_secs(20))
         .await
-        .unwrap_or_else(|error| panic!("send was not refused: {error}; {}", env.diagnostics()));
+        .unwrap_or_else(|error| {
+            panic!(
+                "send was not refused: {error}; {}; child requests: {:?}",
+                env.diagnostics(),
+                env.route_dump(CHILD)
+            )
+        });
     assert!(
         !env.route_dump(ROOT)
             .unwrap_or_default()

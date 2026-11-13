@@ -37,7 +37,10 @@ transaction that already validates liveness.
 - **Broadcast never reaches archived members** (membership ends at archive);
   only a DM can wake one. Every new channel message wakes its recipients
   through the existing bus → wake path (sender excluded).
-- All delivery rides `MailEndpoint::Channel`; a DM is simply a two-member
+- Agent delivery persists `MailEndpoint::Channel`; handles (including `^parent`)
+  are input aliases for existing DMs. A missing DM rejects the send. Harness
+  notices alone may persist `MailEndpoint::Handle`, enforced by the store.
+  A DM is simply a two-member
   channel. `roster`, `channels`, `join`, and `leave` are deleted; their
   information folds into `list_channel`. Named user-created channels do not
   exist.

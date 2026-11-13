@@ -107,8 +107,7 @@ Depth is a constant `MAX_SUBAGENT_DEPTH = 2` in `hya-core`
 is removed; `SubagentLimits` keeps concurrency/budget fields only.
 
 Mandatory parent mail bypasses bundle wake restrictions only when its sender is
-the recipient's direct parent and its endpoint is their own two-member DM (or
-the recipient's handle). Siblings, grandparents and unrelated or unknown DMs
+the recipient's direct parent and its endpoint is their own two-member DM. Siblings, grandparents and unrelated or unknown DMs
 cannot use this bypass during delivery or replay.
 
 An episode installed with nonblank directive mail is pending immediately, before
@@ -387,7 +386,7 @@ through installation, including archive and orphan-takeover decisions.
    to: Channel(existing_dm_id), kind, body }`.
 
 Inputs are root/actor `SessionId`, owner `OwnerRunId`, capacity `u64`, optional parent `ActorClaim`,
-sender `String`, original `MailEndpoint`, `MailKind`, body `String`, context-marker
+sender `String`, resolved channel id `String`, `MailKind`, body `String`, context-marker
 `&str`, and optional `ChannelPolicySnapshot`. It returns
 `(Option<(ActorClaim, u64)>, Vec<Envelope>)` (claim and inbox cursor);
 callers publish after commit and install only when a new claim is returned.
@@ -409,7 +408,7 @@ the episode, the same transaction authorizes and appends ordinary mail, returnin
 `None` for the claim. It neither waits for nor replaces that live episode.
 
 For example, after `archive {"target":"main/worker"}`, a parent can invoke
-`send {"to":"#DM-…","body":"Review the updated patch"}` (or use the child's
+`send {"channel":"#DM-…","body":"Review the updated patch"}` (or use the child's
 handle). The new episode sees its handoff and that mail; old handled mail stays
 in history, and old unread mail is represented by Pending in the handoff.
 
@@ -445,9 +444,13 @@ report(result):
   gate §3.1 ⇒ handoff §3.2 ⇒ archive txn §3.3 ⇒ report mail on the DM channel
 ```
 
-`MailEndpoint::Handle` is deleted; all delivery is `MailEndpoint::Channel`.
-Old logs containing handle-addressed mail or named channels are not guaranteed
-to fold — accepted breakage.
+Handles are input aliases resolved to existing sender–peer DMs at the engine
+boundary. Agent mail persists only `MailEndpoint::Channel`; a missing DM rejects
+the send. `^parent` and `^` select the direct parent's DM. Channel ids address
+existing channels directly; named/`^name` channel resolution is removed.
+`MailEndpoint::Handle` remains for harness notices only (`from == "harness"`),
+enforced at the store event-append boundary. See [Agent channels](../agent-channels.md#handle-aliases-and-durable-mail)
+for request, event and receipt contracts. Old databases/logs need not remain readable.
 
 ### 5.3 Wake delivery
 
@@ -583,9 +586,9 @@ updated, not relaxed).
 | new | `HandoffCommitted { session, handle, generation, doc, degraded }` | on the child session log |
 | new | `AgentArchived { session, root, handle, child, reason }` | sole archive marker; projection removes roster row. `reason`: `reported`, `root_teardown`, `archived_by_parent` (`archive` tool), `shutdown` (graceful drain), legacy `killed` |
 | new | `AgentRestarted { session, root, handle, child, epoch }` | revive marker; distinguishes from fresh spawn |
-| changed | `AgentRegistered` | `mode` minted as Resident only; `SubagentMode::Transient` deleted |
-| changed | `MailSent` | `MailEndpoint::Channel` only (`Handle` variant deleted) |
-| changed | `ChannelJoined` | emitted for group-channel membership only |
+| changed | `AgentRegistered` | members use `Resident`; only the episode-less lead uses `Transient` |
+| changed | `MailSent` | agents persist `Channel`; harness notices may persist `Handle` |
+| retained wire type | `ChannelJoined` | no producer or reducer fold; membership comes from `ChannelCreated` |
 | removed | — | `TeamEvidenceEnvelope` projection, evidence system messages, transient `MemberFinished`-on-join semantics |
 
 `MemberFinished` is retained only as the engine-synthesized terminal marker
@@ -632,10 +635,10 @@ The transient executor, member evidence envelopes and their exports are deleted.
   `ForegroundTransientAdmissionOwner` foreground/background reply modes (the
   preparation/intent rigor is merged into §2).
 - `roster`, `channels`, `join`, `leave` tools; named user channels.
-- `MailEndpoint::Handle`; path-arithmetic `in_scope` (replaced by membership
-  + direction gates).
-- `SubagentMode::Transient`; `task_id` resume; `resident`/`background` task
-  fields.
+- Agent handle-targeted persistence and path-arithmetic `in_scope` (replaced by
+  existing DM membership and direction gates); harness notices retain `Handle`.
+- Transient member execution and mode parsing; `task_id` resume and
+  `resident`/`background` task fields. The lead retains the `Transient` wire value.
 - `subagent.max_depth` config key.
 - Transient workflow execution path (§10).
 - ADR-0002's idle-forever stance and ADR-0011's sibling scope (superseded).
@@ -755,19 +758,19 @@ checks existence, sender membership and posting direction under `BEGIN IMMEDIATE
 A group accepts posts only from its unit leader and records them as announcements.
 The admitted `ChannelPolicySnapshot` send bits (`unit_leader`, `unit_member`,
 `dm_parent`, `dm_child`: `u8`) are checked by the store, using the channel's actual
-kind and sender role. `append_direct_mail` checks its resolved hierarchy endpoint
-and the corresponding DM send bit in that same transaction: a depth-2 child
-addressing its parent by relative leaf uses `dm_child`, just as the full path does.
+kind and sender role. Handle aliases resolve to DMs before this gate, so a
+depth-2 child addressing its parent by relative leaf uses the same `dm_child`
+send bit as an explicit DM id.
 Harness-authored mail
 bypasses agent send policy and still requires a live resident recipient.
 
 For example, a parent can send to its child's `DM-…` channel; an unrelated agent
 sending to that id receives `StoreError::MailAuthorizationRejected { channel,
 sender, reason }` and appends no event. An authorized DM to an archived direct
-child returns `MailRevivalRequired { channel, sender, target }`; both channel and
-canonical-handle appends decide this under the writer lock. The engine invokes
-revival from that typed result after the transaction, preserving `engine.mail_send`
-as the entry point. Relative-leaf handle revival remains unsupported.
+child returns `MailRevivalRequired { channel, sender, target }` under the writer
+lock. The engine invokes revival from that typed result after the transaction,
+preserving `engine.mail_send` as the entry point. Canonical and relative-leaf
+handle aliases resolve to the same persistent DM, including for revival.
 The live roster wins over the archive index: during revival, registration can be
 committed before `AgentRestarted`, and a DM to that live member delivers normally.
 

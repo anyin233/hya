@@ -1,14 +1,12 @@
 //! Event-sourced mailbox address + message-kind types (ADR-0001).
 //!
-//! These are the serializable, dependency-light successors to the in-memory
-//! `MailEndpoint`/`MailKind` that used to live in `hya-core::team`. Direct 1:1
-//! mail is addressed by a stable **handle**; a **channel** (`#name`) is a
-//! multi-subscriber endpoint. Broadcast is modelled as a well-known channel
-//! rather than a distinct variant, keeping one delivery primitive.
+//! Handles are request aliases for existing sender–peer DMs. Agent-authored
+//! events persist channel endpoints; handle endpoints are reserved for notices
+//! from the harness. Broadcast uses the unit's group channel.
 
 use serde::{Deserialize, Serialize};
 
-/// A mail address: either a single agent's stable handle or a named channel.
+/// A request alias or persisted mailbox target.
 ///
 /// Adjacently tagged so the wire form is unambiguous and self-describing:
 /// `{"kind":"handle","id":"reviewer-lappland"}` / `{"kind":"channel","id":"build"}`.
@@ -17,9 +15,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
 pub enum MailEndpoint {
-    /// A single agent, addressed by its team-scoped handle (e.g. `reviewer-lappland`).
+    /// A handle alias in requests; only harness notices persist this variant.
     Handle(String),
-    /// A named channel; every current subscriber receives the message.
+    /// A channel id; every eligible subscriber receives the message.
     Channel(String),
 }
 

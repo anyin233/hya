@@ -483,7 +483,7 @@ async fn mandatory_parent_delivery_requires_the_actual_parent_and_own_dm() {
         (
             "main/lead",
             MailEndpoint::Handle("main/lead/child".into()),
-            true,
+            false,
         ),
         (
             "main/lead/other",
@@ -1037,7 +1037,7 @@ async fn review_a3_pending_case(live_revive: bool) {
                 root,
                 "main",
                 &handle,
-                MailEndpoint::Channel(dm),
+                dm,
                 MailKind::Message,
                 "REVIEW_PENDING".into(),
                 None,
@@ -1283,5 +1283,97 @@ async fn review_a1_consumed_trailing_wake_settles_without_another_model_turn() {
     assert_eq!(
         starts, 1,
         "the retained wake was empty after explicit consumption"
+    );
+}
+
+#[tokio::test]
+async fn recovered_episode_does_not_queue_an_outgoing_dm_copy() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let _lead = engine.try_begin_turn(root).unwrap();
+    let child = engine
+        .create(CreateSession {
+            parent: Some(root),
+            agent: AgentName::new("hya-scout"),
+            model: ModelRef::new("hya/offline"),
+            workdir: ".".into(),
+            project: None,
+            kind: SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    engine
+        .store()
+        .append_events(
+            root,
+            vec![
+                Event::AgentRegistered {
+                    session: root,
+                    agent_session: child,
+                    handle: "scout".into(),
+                    parent: Some("main".into()),
+                    agent_type: AgentName::new("hya-scout"),
+                    mode: SubagentMode::Resident,
+                },
+                Event::ChannelCreated {
+                    session: root,
+                    channel: "DM-12345678".into(),
+                    kind: ChannelKind::Dm,
+                    unit: None,
+                    members: vec!["main".into(), "main/scout".into()],
+                },
+                Event::MailSent {
+                    session: root,
+                    from: "main/scout".into(),
+                    to: MailEndpoint::Channel("DM-12345678".into()),
+                    kind: MailKind::Message,
+                    body: "outgoing status".into(),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+    engine
+        .store()
+        .try_claim_new(root, child, OwnerRunId::new())
+        .await
+        .unwrap();
+    let recovered = engine
+        .store()
+        .recover_claim(child, supervisor.owner_run_id)
+        .await
+        .unwrap();
+    let _child_turn = engine.try_begin_turn(child).unwrap();
+    let agent = AgentSpec {
+        name: AgentName::new("hya-scout"),
+        model: ModelRef::new("hya/offline"),
+        workdir: ".".into(),
+        system_prompt: String::new(),
+        reasoning: None,
+    };
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
+    supervisor
+        .register_recovered_resident(
+            root,
+            "main/scout".into(),
+            agent,
+            (binding, Arc::from([]), resources, None),
+            recovered,
+            ResidentRecovery::Idle,
+        )
+        .await
+        .unwrap();
+    drop(_child_turn);
+    let busy = supervisor.member_busy(root, child);
+    drop(_lead);
+    supervisor
+        .drain(FinishCause::Shutdown, Duration::from_secs(2))
+        .await;
+    assert_eq!(
+        busy,
+        Some(false),
+        "outgoing history must not owe a recovery wake"
     );
 }
