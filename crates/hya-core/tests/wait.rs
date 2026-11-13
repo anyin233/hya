@@ -783,6 +783,9 @@ async fn mail_a_wait_returned_is_never_delivered_again() {
 #[tokio::test]
 async fn timeout_zero_returns_the_current_state_at_once() {
     let team = team().await;
+    // Model `wait` runs inside the lead's active turn; keep its mail queued
+    // instead of letting a resident wake deliver it before the snapshot.
+    let _lead_turn = hold_lead_turn(&team);
     let (child, handle) = spawn(&team, team.root, true).await;
     team.engine
         .mail_send(
