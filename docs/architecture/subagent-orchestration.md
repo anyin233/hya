@@ -921,8 +921,8 @@ and turn observer hold it weakly. The listener also holds only a weak supervisor
 reference between deliveries. Explicit runtime shutdown cancels and joins the
 listener and tracks every episode, main loop and team queue worker until their
 futures exit, including tasks from killed team generations. Episode completion
-alone is not a task join. Drop signals cancellation; callers await shutdown
-before releasing runtime resources.
+alone is not a task join. Drop requests each live team's ending before
+cancelling it; callers await shutdown before releasing runtime resources.
 
 The listener never awaits a team. It routes envelopes through the existing
 session-to-episode-team index and current-root-team map into each team's FIFO.
