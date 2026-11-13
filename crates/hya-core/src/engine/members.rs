@@ -27,26 +27,4 @@ impl SessionEngine {
         )
         .await
     }
-
-    /// Record a member's terminal outcome plus its bounded summary.
-    pub(crate) async fn record_member_finished(
-        &self,
-        parent: SessionId,
-        member: MemberId,
-        status: MemberRunStatus,
-        summary: String,
-        child: Option<SessionId>,
-    ) -> Result<(), CoreError> {
-        self.emit(
-            parent,
-            Event::MemberFinished {
-                session: parent,
-                member,
-                status,
-                summary,
-                child,
-            },
-        )
-        .await
-    }
 }

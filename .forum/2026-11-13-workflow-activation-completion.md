@@ -23,12 +23,9 @@ untouched. A graph larger than the configured budget is invalid source;
 current occupancy and transactional registration/revival capacity refusals
 map to `WORKFLOW_OVERLOADED` (tool Overloaded, HTTP 503, gRPC ResourceExhausted).
 
-# What must M4-10 remove after moving loop continuations onto episodes?
+# How was the temporary first-loop handoff removed?
 
-The first loop round currently runs on a resident, then the controller ends
-that episode before the transient executor reuses its Session. Otherwise the
-transient registration overwrites its roster mode and prevents the resident's
-normal ending from releasing its claim. Replace this temporary handoff with
-repeated activations when moving loop workers and verifiers onto episodes.
-W3's uncounted transient work and the transient deadline-notice selection
-remain for that packet; neither executor nor selection was changed here.
+M4-10 replaced transient continuations with repeated resident activations.
+The first settled episode remains live; a reported worker is revived under its
+original identity. Verifiers are fresh resident episodes and release their
+capacity after each judgment. See [the iteration Q&A](2026-11-13-workflow-resident-iterations.md).

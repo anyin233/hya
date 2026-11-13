@@ -17,14 +17,14 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::{StreamExt as _, stream};
 use hya_core::{
-    AgentSpec, BoundSidecarFactory, CoreError, CreateSession, EventBus, MemberSpec,
-    ResidentSupervisor, RuntimeCatalogRefresh, RuntimeRegistry, SessionEngine, SidecarEnvironment,
-    SidecarHandle, SidecarStart, SubagentGovernor, SubagentLimits, TurnBinding, run_team,
+    AgentSpec, BoundSidecarFactory, CoreError, CreateSession, EventBus, ResidentSupervisor,
+    RuntimeCatalogRefresh, RuntimeRegistry, SessionEngine, SidecarEnvironment, SidecarHandle,
+    SidecarStart, SubagentGovernor, SubagentLimits, TurnBinding,
 };
 use hya_proto::{
     AgentName, ArchiveReason, Envelope, Event, FinishCause, FinishReason, MailEndpoint, MailKind,
-    MemberId, MessageId, ModelRef, PartId, PartProjection, Role, RosterStatus, SessionId,
-    ToolCallId, ToolName, ToolPartState, ToolSchema,
+    MessageId, ModelRef, PartId, PartProjection, Role, RosterStatus, SessionId, ToolCallId,
+    ToolName, ToolPartState, ToolSchema,
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
@@ -2420,34 +2420,20 @@ impl SidecarHandle for LossSidecar {
 }
 
 #[tokio::test]
-async fn sidecar_loss_flushes_transient_text() {
-    for hooks in [false, true] {
-        sidecar_loss_flushes_turn(false, hooks, false).await;
-    }
-}
-
-#[tokio::test]
-async fn sidecar_loss_flushes_transient_tool_changes() {
-    for hooks in [false, true] {
-        sidecar_loss_flushes_turn(false, hooks, true).await;
-    }
-}
-
-#[tokio::test]
 async fn sidecar_loss_flushes_resident_text() {
     for hooks in [false, true] {
-        sidecar_loss_flushes_turn(true, hooks, false).await;
+        sidecar_loss_flushes_turn(hooks, false).await;
     }
 }
 
 #[tokio::test]
 async fn sidecar_loss_flushes_resident_tool_changes() {
     for hooks in [false, true] {
-        sidecar_loss_flushes_turn(true, hooks, true).await;
+        sidecar_loss_flushes_turn(hooks, true).await;
     }
 }
 
-async fn sidecar_loss_flushes_turn(resident: bool, hooks: bool, writing: bool) {
+async fn sidecar_loss_flushes_turn(hooks: bool, writing: bool) {
     let provider = Arc::new(ScriptProvider::default());
     let tools = Arc::new(ToolRegistry::builtins());
     tools.remove("write");
@@ -2466,7 +2452,7 @@ async fn sidecar_loss_flushes_turn(resident: bool, hooks: bool, writing: bool) {
     });
     let mut live = engine.bus().subscribe();
     let supervisor = ResidentSupervisor::start(engine.clone());
-    let (child, member_handle) = if resident {
+    let (child, member_handle) = {
         let binding = engine.bind_runtime(&agent.workdir).unwrap();
         let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
         let (child, handle, _) = supervisor
@@ -2480,20 +2466,7 @@ async fn sidecar_loss_flushes_turn(resident: bool, hooks: bool, writing: bool) {
             )
             .await
             .unwrap();
-        (child, Some(handle))
-    } else {
-        let child = engine
-            .create(CreateSession {
-                parent: Some(root),
-                agent: agent.name.clone(),
-                model: agent.model.clone(),
-                workdir: dir.path().to_string_lossy().into_owned(),
-                project: None,
-                kind: hya_proto::SessionKind::Project,
-            })
-            .await
-            .unwrap();
-        (child, None)
+        (child, handle)
     };
     provider.script(
         child,
@@ -2503,38 +2476,15 @@ async fn sidecar_loss_flushes_turn(resident: bool, hooks: bool, writing: bool) {
             Script::PartialText
         },
     );
-    let run = if let Some(handle) = member_handle.as_ref() {
-        engine
-            .mail_send(
-                root,
-                hya_proto::MailEndpoint::parse(handle),
-                hya_proto::MailKind::Message,
-                "work".into(),
-            )
-            .await
-            .unwrap();
-        None
-    } else {
-        let spec = MemberSpec {
-            id: MemberId::new(),
-            binding: engine.bind_runtime(&agent.workdir).unwrap(),
-            agent,
-            agents: Arc::from([]),
-            resources: None,
-            guidance: None,
-            directive: "work".into(),
-            description: String::new(),
-            session: Some(child),
-            sidecar_factory: Some(sidecar.clone()),
-            tool_call: None,
-        };
-        Some(tokio::spawn(run_team(
-            engine.clone(),
+    engine
+        .mail_send(
             root,
-            vec![spec],
-            CancellationToken::new(),
-        )))
-    };
+            hya_proto::MailEndpoint::parse(&member_handle),
+            hya_proto::MailKind::Message,
+            "work".into(),
+        )
+        .await
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         if writing {
             tool.written.notified().await;
@@ -2549,24 +2499,15 @@ async fn sidecar_loss_flushes_turn(resident: bool, hooks: bool, writing: bool) {
     tokio::time::timeout(Duration::from_secs(5), sidecar.terminated.notified())
         .await
         .unwrap();
-    if let Some(run) = run {
-        tokio::time::timeout(Duration::from_secs(5), run)
-            .await
-            .unwrap()
-            .unwrap();
-    }
     let events = engine.replay(child).await.unwrap();
-    // Stop the slot before assertions, including on the unfixed implementation.
-    if let Some(handle) = member_handle {
-        supervisor.end_member(root, &handle).await.ok();
-    }
+    supervisor.end_member(root, &member_handle).await.unwrap();
     assert_eq!(
         assistant_finishes(&events, child)
             .iter()
             .map(|(_, f)| f.iter().map(|(finish, _)| *finish).collect::<Vec<_>>())
             .collect::<Vec<_>>(),
         vec![vec![FinishReason::Cancelled]],
-        "resident={resident}, hooks={hooks}, writing={writing}"
+        "hooks={hooks}, writing={writing}"
     );
     if writing {
         assert!(

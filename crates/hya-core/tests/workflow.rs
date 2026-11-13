@@ -40,6 +40,8 @@ use tokio_util::sync::CancellationToken;
 /// answers `{"met": bool}` taken from `verdicts[N-1]` (missing entries count as
 /// met), which lets loop tests pin exactly when the stop decision happens.
 struct RecordingProvider {
+    capacity: Mutex<Option<(SessionStore, SessionId)>>,
+    live_counts: Mutex<Vec<(bool, u64)>>,
     systems: Mutex<Vec<(SessionId, Option<String>)>>,
     requests: Mutex<Vec<(SessionId, String)>>,
     models: Mutex<Vec<ModelRef>>,
@@ -51,6 +53,8 @@ struct RecordingProvider {
 impl RecordingProvider {
     fn new() -> Arc<Self> {
         Arc::new(Self {
+            capacity: Mutex::new(None),
+            live_counts: Mutex::new(Vec::new()),
             requests: Mutex::new(Vec::new()),
             models: Mutex::new(Vec::new()),
             verdicts: Mutex::new(Vec::new()),
@@ -138,6 +142,18 @@ impl Provider for RecordingProvider {
                     }
                 }
             }
+        }
+        assert!(
+            req.tools.iter().any(|tool| tool.name.as_str() == "report"),
+            "T2: every Workflow worker/verifier can report"
+        );
+        let capacity = self.capacity.lock().unwrap().clone();
+        if let Some((store, root)) = capacity {
+            let live = store.live_member_count(root).await.unwrap();
+            self.live_counts
+                .lock()
+                .unwrap()
+                .push((user_text.contains("independent verifier"), live));
         }
         let reply = if directive_of(&user_text).starts_with("EXPLORE") {
             "EXPLORER_REPORT"
@@ -531,10 +547,10 @@ flowchart TD
     );
 }
 
-/// Same-level transient Stages enter provider execution together through one
+/// Same-level anonymous Stages enter provider execution together through one
 /// governed batch; a sequential scheduler deadlocks at this barrier.
 #[tokio::test]
-async fn same_level_transient_stages_overlap_provider_execution() {
+async fn same_level_anonymous_stages_overlap_provider_execution() {
     let source = r#"---
 kind: Workflow
 name: overlap-flow
@@ -1146,6 +1162,7 @@ flowchart TD
     provider.script_verdict(true); // second judgment: met -> stop
     let engine = engine(provider.clone()).await;
     let lead = start_lead(&engine).await;
+    *provider.capacity.lock().unwrap() = Some((engine.store().clone(), lead));
     let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
     let base = engine
         .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
@@ -1210,6 +1227,19 @@ flowchart TD
         );
     }
     assert_ne!(verdicts[0].0, verdicts[1].0, "fresh session per judgment");
+    assert_eq!(
+        *provider.live_counts.lock().unwrap(),
+        vec![(false, 1), (true, 2), (false, 1), (true, 2)],
+        "W3: every worker continuation and verifier holds team capacity"
+    );
+    assert_eq!(
+        engine.store().live_member_count(lead).await.unwrap(),
+        1,
+        "settlement retains the worker claim; judgments release their claims"
+    );
+    let events = engine.replay(lead).await.unwrap();
+    assert_eq!(events.iter().filter(|e| matches!(e.event, Event::AgentRegistered { agent_session, .. } if agent_session == worker_rounds[0].0)).count(), 1,
+        "a settled worker continues its original episode");
 }
 
 /// Cancellation must reach the fresh verifier member. A provider call that
@@ -1505,21 +1535,21 @@ flowchart TD
     );
 }
 
-/// Agent ids are definitions, not identities: transient reuse creates distinct
+/// Agent ids are definitions, not identities: anonymous Stages create distinct
 /// Sessions, while two explicit actor keys create two resident Sessions.
 #[tokio::test]
 async fn actor_keys_not_agent_ids_control_session_reuse() {
     let source = r#"---
 kind: Workflow
 name: identity-flow
-description: Contrast transient and actor identity.
+description: Compare anonymous and named actor identity.
 nodes:
   first:
     agent: builder
-    directive: First transient.
+    directive: First anonymous Stage.
   second:
     agent: builder
-    directive: Second transient.
+    directive: Second anonymous Stage.
   actor_a:
     agent: resident-planner
     actor: alpha
@@ -2101,7 +2131,7 @@ impl hya_core::sidecar::SidecarHandle for MarkerSidecarHandle {
 }
 
 /// Loop stage whose worker carries its resolved sidecar factory into every
-/// MemberSpec and whose independent verifier resolves against ITS OWN target
+/// resident runtime and whose independent verifier resolves against ITS OWN target
 /// context — resolver order pins builder (worker) then reviewer (verifier).
 #[tokio::test]
 async fn loop_worker_and_verifier_reuse_target_execution_contexts() {
@@ -2266,7 +2296,7 @@ async fn w1_partial_registration_overload_releases_every_workflow_claim() {
                 r#"---
 kind: Workflow
 name: partial
-description: Compete with a task between registrations.
+description: Compete with a task before the next level registers.
 nodes:
   first:
     agent: builder
@@ -2276,8 +2306,7 @@ nodes:
 {}    directive: Second.
 ---
 flowchart TD
-  first
-  second
+  first --> second
 "#,
                 actors[0], actors[1]
             ),

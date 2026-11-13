@@ -278,7 +278,14 @@ remaining live capacity. Preflight reserves nothing. An oversized graph is
 invalid source; current occupancy or a later registration/revival capacity
 refusal returns `WORKFLOW_OVERLOADED`. Same-level one-shot Stages (no `actor`)
 register parked residents and activate them concurrently. Loop continuations
-and verifiers still use the transient executor and shared iteration driver.
+reactivate the same worker: settlement retains its claim and runtime, while a
+report releases capacity and a later activation revives it. Every verifier
+judgment uses a fresh resident and releases its claim after judgment. For
+example, a loop worker that settles and then receives a verifier's denial keeps
+one live slot across both iterations; each judgment temporarily uses a second
+slot. The shared iteration driver still owns stop decisions. Workers and
+verifiers can both call `report`; plain assistant text also completes an
+activation. There is no transient executor.
 
 Cancellation stops new admissions, cancels one-shot Stage work, stops active
 run-owned resident work, waits for admitted boundaries, and returns a truthful

@@ -9,7 +9,7 @@
 > defined below remain active invariants.
 
 Subagents originally had a **hybrid** lifecycle: `transient` (spawn, run one turn, return a
-bounded summary, parent blocks) stays unchanged, and a new opt-in `resident` mode makes a subagent
+bounded summary, parent blocks) and an opt-in `resident` mode that made a subagent
 a long-lived, event-driven **actor** that idles at zero token cost and wakes on inbound mail to run
 exactly one turn. The **main agent is also an actor**, woken by child mail, so a team runs
 hands-free to completion. We chose event-driven wake over a polling goal-loop because 100+ agents
@@ -32,8 +32,9 @@ that wakes the main agent to synthesize.
   results acknowledge the supervisor after committing `MailConsumed`, just as
   automatic steering does; advancing only the durable cursor leaves a stale
   quiescence wake in memory.
-- Resident spawns are **non-blocking** (parent gets the handle and continues), which diverges from
-  the transient `run_team` join model — the two spawn paths coexist.
+- Resident spawns are **non-blocking** (parent gets the handle and continues).
+  [ADR-0017](0017-workflow-on-unified-substrate.md) also moves Workflow actors
+  onto resident episodes and removes the former transient `run_team` executor.
 - User input never wakes a resident: residents wake *only* via mail. This lets the TUI bind
   all user prompt input exclusively to the main agent.
 
