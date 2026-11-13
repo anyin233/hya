@@ -3604,7 +3604,7 @@ included; for a bundle with a TUI extension it also sets the TUI's own
 blocked. `t` trusts or untrusts the bundle's TUI extension (the same as
 `/extensions trust|untrust`: trusted extensions run on the JIT, without the VM
 memory cap; see [Bundle-owned TUI extensions](tui-extensions.md) "Trust
-tiers"). `r` reloads; `/` filters by id, scope, state, or contents. After
+tiers"). `r` publishes disk edits with `RefreshBundles`, then reloads; `/` filters by id, scope, state, or contents. After
 every change the list and the TUI extension catalog reload, so panels appear
 and disappear at once. Esc cancels a running call, closes a pop-up, clears
 the filter, backs out of the details, then closes the view. The help overlay
@@ -3614,7 +3614,8 @@ the filter, backs out of the details, then closes the view. The help overlay
 
 | Action | Call |
 | --- | --- |
-| Open, `r` reload | `GET /v1/bundles?directory=<dir>` (`ListBundles`) |
+| Open | `GET /v1/bundles?directory=<dir>` (`ListBundles`) |
+| `r` refresh | `POST /v1/bundles:refresh` (`RefreshBundles`) with `{directory: string}`, then `ListBundles` and the extension catalog reload. Any `errors[]: {bundleId: string, message: string}[]` or transport failure appears in the view. |
 | `i` install | `POST /v1/bundles:install` `{directory, path, project}` |
 | `x` uninstall | `POST /v1/bundles:uninstall` `{directory, bundleId, project}` |
 | `e` enable/disable | `POST /v1/bundles:set-enabled` `{directory, bundleId, enabled}`, then `extensionEnabled` |

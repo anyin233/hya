@@ -900,6 +900,12 @@ export class HyaClient {
     return result.bundles ?? []
   }
 
+  /** `RefreshBundles`: publish disk edits before reloading catalogs. Shared by HTTP and gRPC. */
+  async refreshBundles(signal?: AbortSignal): Promise<void> {
+    const result = await this.request<{ errors?: Array<{ bundleId: string; message: string }> }>("POST", "/v1/bundles:refresh", { directory: this.directory }, signal)
+    if (result.errors?.length) throw new Error(result.errors.map((error) => `${error.bundleId}: ${error.message}`).join("; "))
+  }
+
   /** `InstallBundle`: a `.hyabundle` at an absolute path on the backend's machine; `project` installs into the scope directory's `.hya/bundles`. */
   async installBundle(path: string, project: boolean, signal?: AbortSignal): Promise<void> {
     await this.request("POST", "/v1/bundles:install", { directory: this.directory, path, project }, signal)

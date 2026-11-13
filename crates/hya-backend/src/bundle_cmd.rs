@@ -91,6 +91,8 @@ pub(crate) enum BundleCommand {
     Enable { name: String },
     /// Disable a bundle globally; disabled bundles publish no components.
     Disable { name: String },
+    /// Refresh edited bundles and config in the running backend.
+    Refresh,
     /// List bundles with their scope (builtin, user, project).
     List {
         #[command(flatten)]
@@ -177,6 +179,7 @@ pub(crate) async fn run(command: BundleCommand, db: String) -> anyhow::Result<()
         } => install_dispatch(package, claude, policy(overwrite), scope.target(), yes, &db).await,
         BundleCommand::Enable { name } => set_enabled(&name, true, &db).await,
         BundleCommand::Disable { name } => set_enabled(&name, false, &db).await,
+        BundleCommand::Refresh => refresh_daemon(&db, None).await,
         BundleCommand::List { scope } => list(scope.filter()).await,
         BundleCommand::Search { query, scope } => search(&query, scope.filter()).await,
         BundleCommand::Remove { name, scope, yes } => remove(&name, scope.target(), yes, &db).await,
@@ -212,11 +215,11 @@ async fn set_enabled(bundle_id: &str, enabled: bool, db: &str) -> anyhow::Result
         "{} {bundle_id}",
         if enabled { "enabled" } else { "disabled" }
     );
-    refresh_daemon(db, bundle_id).await
+    refresh_daemon(db, Some(bundle_id)).await
 }
 
 /// Ask the running backend to refresh the base and the current Project now.
-async fn refresh_daemon(db: &str, bundle_id: &str) -> anyhow::Result<()> {
+async fn refresh_daemon(db: &str, bundle_id: Option<&str>) -> anyhow::Result<()> {
     if let Some(found) = crate::daemon::running(db).await {
         let refreshed = reqwest::Client::new()
             .post(format!("{}/v1/bundles:refresh", found.url))
@@ -231,18 +234,23 @@ async fn refresh_daemon(db: &str, bundle_id: &str) -> anyhow::Result<()> {
             .await
             .context("read the backend bundle refresh response")?;
         report_refresh_errors(bundle_id, &refreshed.errors)?;
+        if bundle_id.is_none() {
+            println!("refreshed bundles: generation={}", refreshed.generation);
+        }
+    } else if bundle_id.is_none() {
+        println!("no backend runs for {db}; nothing to refresh");
     }
     Ok(())
 }
 
 fn report_refresh_errors(
-    id: &str,
+    id: Option<&str>,
     errors: &[hya_api::v1::BundleRefreshError],
 ) -> anyhow::Result<()> {
     let mut failures = Vec::new();
     for error in errors {
         let message = format!("{}: {}", error.bundle_id, error.message);
-        if error.bundle_id == id {
+        if id.is_none_or(|id| error.bundle_id == id) {
             failures.push(message);
         } else {
             eprintln!("warning: {message}");
@@ -445,7 +453,7 @@ async fn prove_activation(db: &str, scope: Scope, id: &str, digest: &str) -> any
         .json::<hya_api::v1::RefreshBundlesResponse>()
         .await
         .context("read the bundle refresh response")?;
-    report_refresh_errors(id, &body.errors)
+    report_refresh_errors(Some(id), &body.errors)
         .map_err(|error| anyhow::anyhow!("installed but not activated: {error}"))?;
     if disabled {
         println!("activation: installed, disabled");
@@ -1073,7 +1081,7 @@ async fn remove(bundle_id: &str, scope: Scope, yes: bool, db: &str) -> anyhow::R
             println!("removed {bundle_id} scope=project path={}", path.display());
         }
     }
-    refresh_daemon(db, bundle_id).await
+    refresh_daemon(db, Some(bundle_id)).await
 }
 
 /// Print the URI-scheme extensions one bundle declares, one
@@ -1283,6 +1291,38 @@ mod refresh_tests {
     #![allow(clippy::unwrap_used)]
 
     #[tokio::test]
+    async fn refresh_without_daemon_succeeds_without_starting_one() {
+        let root = std::env::temp_dir().join(format!(
+            "hya-cli-no-refresh-{}",
+            hya_proto::SessionId::new()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let db = root.join("hya.db");
+        super::run(super::BundleCommand::Refresh, db.to_str().unwrap().into())
+            .await
+            .unwrap();
+        assert!(crate::daemon::running(db.to_str().unwrap()).await.is_none());
+        assert!(!db.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explicit_refresh_reports_all_sources_but_targeted_changes_only_the_target() {
+        let errors = vec![hya_api::v1::BundleRefreshError {
+            bundle_id: "other".into(),
+            message: "invalid config".into(),
+        }];
+        assert!(super::report_refresh_errors(None, &[]).is_ok());
+        assert!(super::report_refresh_errors(Some("alpha"), &errors).is_ok());
+        assert!(
+            super::report_refresh_errors(None, &errors)
+                .unwrap_err()
+                .to_string()
+                .contains("other: invalid config")
+        );
+    }
+
+    #[tokio::test]
     async fn hot_reload_cli_reports_refresh_response_errors() {
         let root =
             std::env::temp_dir().join(format!("hya-cli-refresh-{}", hya_proto::SessionId::new()));
@@ -1301,23 +1341,29 @@ mod refresh_tests {
             )
             .route(
                 "/v1/bundles:refresh",
-                axum::routing::post(|| async {
-                    axum::Json(hya_api::v1::RefreshBundlesResponse {
-                        scope: "global".into(),
-                        generation: 1,
-                        bundles: Vec::new(),
-                        errors: vec![hya_api::v1::BundleRefreshError {
-                            bundle_id: "alpha".into(),
-                            message: "alpha failed to initialize".into(),
-                        }],
-                    })
-                }),
+                axum::routing::post(
+                    |axum::Json(request): axum::Json<serde_json::Value>| async move {
+                        assert_eq!(
+                            request["directory"],
+                            std::env::current_dir().unwrap().to_string_lossy().as_ref()
+                        );
+                        axum::Json(hya_api::v1::RefreshBundlesResponse {
+                            scope: "global".into(),
+                            generation: 1,
+                            bundles: Vec::new(),
+                            errors: vec![hya_api::v1::BundleRefreshError {
+                                bundle_id: "alpha".into(),
+                                message: "alpha failed to initialize".into(),
+                            }],
+                        })
+                    },
+                ),
             );
         let server = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
         std::fs::write(&paths.discovery, serde_json::to_vec(&serde_json::json!({"url":url,"pid":std::process::id(),"version":"test","startedAt":0})).unwrap()).unwrap();
-        let result = super::refresh_daemon(db.to_str().unwrap(), "alpha").await;
+        let result = super::run(super::BundleCommand::Refresh, db.to_str().unwrap().into()).await;
         server.abort();
         let _ = server.await;
         drop(owner);

@@ -24,6 +24,17 @@ async function selectFixture(term: Tui): Promise<void> {
 }
 
 test.describe("Bundles view", () => {
+  test("refreshes backend bundle catalogs with r", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend), { viewport: wideViewport, env: { XDG_CACHE_HOME: join(dirname(backend.dir), "cache") } })
+    await term.waitForText("Message, !shell, or @file")
+    await openBundles(term)
+    await term.press("r")
+    await term.waitForText("Bundles refreshed")
+    await term.waitForText("r refresh")
+    await term.press("Escape")
+    await term.waitForText("Message, !shell, or @file")
+  })
+
   test("installs, disables, enables, trusts, and uninstalls a bundle with a TUI extension", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: wideViewport, env: { XDG_CACHE_HOME: join(dirname(backend.dir), "cache") } })
     await term.waitForText("Message, !shell, or @file")
