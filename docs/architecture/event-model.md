@@ -238,7 +238,7 @@ snapshot (without provider data), preserving partial thinking for replay.
 | Wire `type` | Payload fields | ToolPartState | Reducer |
 | --- | --- | --- | --- |
 | `tool_input_start` | `session`, `message`, `part`, `call: ToolCallId`, `name: ToolName` | → `Pending { input: null }` | Fold: push tool part |
-| `tool_input_delta` | `session`, `message`, `part`, `call`, `name`, `delta: String` | (unchanged) | **no-op** (compat bridge may forward raw argument JSON) |
+| `tool_input_delta` | `session`, `message`, `part`, `call`, `name`, `delta: String` | (unchanged) | **live-only**, never persisted; `tool_call_requested` stores the complete input |
 | `tool_call_requested` | `session`, `message`, `part`, `call`, `name`, `input: Value` | → `Running { input }` | Fold: upsert running tool. Turn loop collects these into the round's `tool_calls` list. |
 | `tool_result` | `session`, `message`, `part`, `call`, `output: Value`, `time_ms: u64` | → `Completed { input, output, time_ms }` | Fold |
 | `tool_error` | `session`, `message`, `part`, `call`, `message_text: String`, `value: Option<Value>` | → `Error { input, message, value }` | Fold. Engine commonly sets `value` to `{ "error": { "type": "...", "message": "..." } }`. |

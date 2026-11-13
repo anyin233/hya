@@ -753,8 +753,10 @@ impl V1Sdk {
 /// - Parts are keyed by id: a `partStarted` for a known part id (the durable
 ///   record of a part first seen live) does not add a second part.
 /// - Live `partAppended` frames (`seq == 0`) grow a part only until the
-///   part is durable (seeded from a read, or a durable `partStarted` /
+///   text is durable (seeded from a read, or a durable text/reasoning `partStarted` /
 ///   `partReplaced` was applied); after that they are stale and ignored.
+/// - Tool argument deltas remain live after the durable tool `partStarted`;
+///   `toolStateChanged` supplies the full input and supersedes those deltas.
 /// - `partReplaced` sets the part's whole text, superseding live deltas.
 /// - `sessionReverted` (a revert or its undo) hides or restores whole
 ///   messages: [`apply`](Self::apply) returns `true` (re-seed).
@@ -837,7 +839,7 @@ impl V1SessionMirror {
                 }
             }
             Some(P::PartStarted(started)) => {
-                if durable {
+                if durable && started.kind != "tool_call" {
                     self.durable_parts.insert(started.part.clone());
                 }
                 if let Some(message) = self.messages.get_mut(&started.message)
@@ -881,6 +883,9 @@ impl V1SessionMirror {
                 }
             }
             Some(P::ToolStateChanged(changed)) => {
+                if durable && !changed.input_json.is_empty() {
+                    self.durable_parts.insert(changed.part.clone());
+                }
                 if let Some(tool) = self.tool_part_mut(&changed.message, &changed.part) {
                     fold_tool_state(tool, changed);
                 }
@@ -1317,6 +1322,51 @@ mod tests {
         assert_eq!(message.time_updated, at(12));
     }
 
+    #[test]
+    fn tool_full_input_replaces_missed_fragments_and_ignores_late_deltas() {
+        for missed_prefix in [false, true] {
+            let mut mirror = V1SessionMirror::default();
+            mirror.apply(&frame(
+                1,
+                P::MessageStarted(pb::MessageStarted {
+                    message: "m".into(),
+                    role: pb::Role::Assistant as i32,
+                    ..Default::default()
+                }),
+            ));
+            mirror.apply(&frame(
+                2,
+                P::PartStarted(pb::PartStarted {
+                    message: "m".into(),
+                    part: "t".into(),
+                    kind: "tool_call".into(),
+                    tool: "read".into(),
+                    call_id: "c".into(),
+                }),
+            ));
+            if !missed_prefix {
+                mirror.apply(&frame(0, appended("t", "{\"path\":")));
+            }
+            mirror.apply(&frame(0, appended("t", "\"file\"}")));
+            mirror.apply(&frame(
+                3,
+                P::ToolStateChanged(pb::ToolStateChanged {
+                    message: "m".into(),
+                    part: "t".into(),
+                    state: pb::ToolExecutionState::Running as i32,
+                    input_json: "{\"path\":\"file\"}".into(),
+                    ..Default::default()
+                }),
+            ));
+            mirror.apply(&frame(0, appended("t", "stale")));
+            let Some(pb::part_info::Kind::ToolCall(tool)) = &mirror.messages()[0].parts[0].kind
+            else {
+                panic!("tool part");
+            };
+            assert_eq!(tool.input_json, "{\"path\":\"file\"}");
+        }
+    }
+
     /// A tool call streams into one part: start (tool, call id), argument
     /// fragments, the parsed input, then output and duration; members fold
     /// by id with later frames carrying only what changed.
@@ -1342,7 +1392,7 @@ mod tests {
             }),
         ));
         mirror.apply(&frame(
-            3,
+            0,
             P::PartAppended(pb::PartAppended {
                 message: "m".into(),
                 part: "t".into(),
@@ -1350,7 +1400,7 @@ mod tests {
             }),
         ));
         mirror.apply(&frame(
-            4,
+            0,
             P::PartAppended(pb::PartAppended {
                 message: "m".into(),
                 part: "t".into(),

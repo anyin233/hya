@@ -720,7 +720,7 @@ Stream events come in two kinds:
   (`ListMessages`, `GetMessage`) folds them.
 - **Live-only** events carry no `seq` (it is `0`, which protojson omits).
   They are never persisted and `ListEvents` never returns them: the
-  assistant text of an in-flight provider round, the pending
+  assistant text, reasoning, and tool-input deltas of an in-flight provider round, the pending
   interaction frames (`permissionRequested`, `questionRequested`,
   `interactionResolved`; `GET /v1/interactions` is their listing), a root
   session's `sessionUpdated {busy}` and `sessionDeleted` on the global
@@ -777,8 +777,9 @@ same part once, with the **same** message and part ids: `partStarted`,
 `partReplaced` (`text` = the final full text), `partCompleted`. Reasoning
 deltas are live-only (`seq = 0`) and durable replay emits the same
 `partStarted` / `partReplaced` / `partCompleted` sequence; legacy durable
-reasoning deltas remain accepted. Tool-call arguments are durable
-`partStarted` / `partAppended` followed by `toolStateChanged` (see [Tool calls](#tool-calls)).
+reasoning deltas remain accepted. Tool calls have a durable `partStarted`,
+live-only `partAppended` argument fragments, and a durable `toolStateChanged`
+with the complete input (see [Tool calls](#tool-calls)).
 A prompt's image attachments arrive as one durable `partsAdded` (see
 [Prompt attachments](#prompt-attachments-images)).
 A `text_complete`
@@ -826,15 +827,23 @@ there is no separate result part. On a transcript read it carries:
 | `outputJson`, `durationMs` | `OK`: the stored output as JSON text (the same size-capped value the model saw) and the wall time; protojson omits a zero `durationMs` |
 | `errorCode`, `errorMessage` | `ERROR`: the structured `error.type` (`unknown` when absent; e.g. `input`, `permission`) and the error text |
 
-The stream carries the same data as durable events, in order:
+The stream carries live argument fragments alongside durable tool state, in order:
 
 1. `partStarted` with `kind: "tool_call"`, `tool`, and `callId`.
-2. `partAppended` per argument fragment; `textDelta` is raw JSON text to
-   append to `inputJson`.
+2. Live-only `partAppended` (`seq = 0`) per argument fragment; `textDelta`
+   is raw JSON text to append to `inputJson`, even after a durable start.
+   Render these fragments over a pending projection whose input is still unknown.
 3. `toolStateChanged` `RUNNING` with `callId`, `tool`, and the parsed
    `inputJson`, which replaces the appended fragments.
 4. `toolStateChanged` `OK` with `outputJson` and `durationMs`, or `ERROR`
    with `errorCode` and `errorMessage`.
+
+Argument fragments are never in `ListEvents` or the stored projection. On a
+mid-stream connection or reconnect, replay the durable start (or re-read the
+projection) and keep following the stream. `toolStateChanged` RUNNING replaces
+any partial or missed fragments with the complete `inputJson`; replay alone
+therefore recovers the same final tool input. After `resync`, discard incomplete
+fragments until that full input arrives.
 
 Fields a frame does not carry are empty; fold them into the part by
 `part` id without clearing what you already have. A direct part
@@ -843,7 +852,7 @@ with the full state and an empty `callId`.
 
 ```json
 { "event": { "seq": "14", "session": "hysec_...", "partStarted": { "message": "msg_...", "part": "part_...", "kind": "tool_call", "tool": "bash", "callId": "call_..." } } }
-{ "event": { "seq": "15", "session": "hysec_...", "partAppended": { "message": "msg_...", "part": "part_...", "textDelta": "{\"command\":\"ls\"}" } } }
+{ "event": { "session": "hysec_...", "partAppended": { "message": "msg_...", "part": "part_...", "textDelta": "{\"command\":\"ls\"}" } } }
 { "event": { "seq": "16", "session": "hysec_...", "toolStateChanged": { "message": "msg_...", "part": "part_...", "callId": "call_...", "state": "TOOL_EXECUTION_STATE_RUNNING", "inputJson": "{\"command\":\"ls\"}", "tool": "bash" } } }
 { "event": { "seq": "19", "session": "hysec_...", "toolStateChanged": { "message": "msg_...", "part": "part_...", "callId": "call_...", "state": "TOOL_EXECUTION_STATE_OK", "outputJson": "{...}", "durationMs": "42" } } }
 ```

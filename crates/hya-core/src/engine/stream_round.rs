@@ -235,6 +235,7 @@ impl SessionEngine {
                 continue;
             }
             match event {
+                Event::ToolInputDelta { .. } => self.publish_live(event),
                 Event::ReasoningStart { part, .. } => {
                     reasoning_parts.insert(part, String::new());
                     self.emit_for_actor(actor_claim, session, event).await?;

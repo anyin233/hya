@@ -469,7 +469,8 @@ pub enum Event {
         /// Canonical tool name.
         name: ToolName,
     },
-    /// Raw argument JSON stream; reducer no-op (compat may forward as pending raw).
+    /// Live-only raw argument JSON fragment (`seq == 0`), never persisted.
+    /// `ToolCallRequested` durably records the complete parsed input.
     ToolInputDelta {
         /// Session this event belongs to.
         session: SessionId,

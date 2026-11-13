@@ -263,6 +263,23 @@ async fn tool_parts_carry_arguments_output_and_errors_on_reads_and_the_stream() 
     let app = router(state.clone());
     let session = create_session(&app, &dir).await;
 
+    let address = grpc_endpoint(state.clone()).await;
+    let channel = tonic::transport::Channel::from_shared(format!("http://{address}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let mut events = pb::events_client::EventsClient::new(channel.clone());
+    let mut grpc_stream = events
+        .stream_session_events(pb::StreamSessionEventsRequest {
+            session: session.clone(),
+            since_seq: 0,
+            include_descendants: false,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
     let saw_tool = Arc::new(AtomicBool::new(false));
     let collector = tokio::spawn(sse_frames_until(
         app.clone(),
@@ -335,7 +352,7 @@ async fn tool_parts_carry_arguments_output_and_errors_on_reads_and_the_stream() 
     );
     assert!(err.get("outputJson").is_none(), "{err:#}");
 
-    // Stream: argument fragments and state changes, durable, before the finish.
+    // Stream: live argument fragments between durable start and full input.
     let frames = collector.await.unwrap();
     let stream = payloads(&frames);
     let position = |pred: &dyn Fn(&str, &Value) -> bool| {
@@ -390,7 +407,8 @@ async fn tool_parts_carry_arguments_output_and_errors_on_reads_and_the_stream() 
         "{frames:#?}"
     );
     assert!(failed < finished);
-    for index in [started, appended, running, done, failed] {
+    assert!(!stream[appended].2, "argument fragments are live-only");
+    for index in [started, running, done, failed] {
         assert!(
             stream[index].2,
             "tool frames are durable: {:?}",
@@ -398,13 +416,42 @@ async fn tool_parts_carry_arguments_output_and_errors_on_reads_and_the_stream() 
         );
     }
 
+    // gRPC receives the same live argument frames as SSE, before tool execution settles.
+    let grpc_frames = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut frames = Vec::new();
+        let mut saw_tool = false;
+        while let Some(frame) = grpc_stream.next().await {
+            let frame = serde_json::to_value(frame.unwrap()).unwrap();
+            saw_tool |= frame["event"]["toolStateChanged"].is_object();
+            let done = saw_tool && frame["event"]["messageFinished"].is_object();
+            frames.push(frame);
+            if done {
+                break;
+            }
+        }
+        frames
+    })
+    .await
+    .unwrap();
+    let grpc_payloads = payloads(&grpc_frames);
+    let arguments = |stream: &[(String, Value, bool)]| {
+        stream
+            .iter()
+            .filter(|(kind, value, _)| {
+                kind == "partAppended"
+                    && (value["part"] == json!(ok_part) || value["part"] == json!(err_part))
+            })
+            .map(|(_, value, durable)| {
+                assert!(!durable);
+                value.clone()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(arguments(&grpc_payloads), arguments(&stream));
+    assert_eq!(arguments(&grpc_payloads).len(), 2);
+    drop(grpc_stream);
+
     // gRPC parity: the transcript read and the replay are identical.
-    let address = grpc_endpoint(state).await;
-    let channel = tonic::transport::Channel::from_shared(format!("http://{address}"))
-        .unwrap()
-        .connect()
-        .await
-        .unwrap();
     let mut messages = pb::messages_client::MessagesClient::new(channel.clone());
     let grpc_listed = serde_json::to_value(
         messages
@@ -418,7 +465,6 @@ async fn tool_parts_carry_arguments_output_and_errors_on_reads_and_the_stream() 
     )
     .unwrap();
     assert_eq!(grpc_listed, listed);
-    let mut events = pb::events_client::EventsClient::new(channel);
     let grpc_events = serde_json::to_value(
         events
             .list_events(tonic::Request::new(pb::ListEventsRequest {
@@ -439,6 +485,15 @@ async fn tool_parts_carry_arguments_output_and_errors_on_reads_and_the_stream() 
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(grpc_events, http_events);
+    assert!(
+        !http_events["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["partAppended"]["part"] == json!(ok_part)
+                || event["partAppended"]["part"] == json!(err_part)),
+        "argument deltas must not be replayed"
+    );
     assert!(
         http_events["events"]
             .as_array()
