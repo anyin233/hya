@@ -6,9 +6,9 @@ It is shared by the engine, store, provider layer, and server, which fold
 this projection directly either: `hya-sdk-v1`'s `V1SessionMirror` folds the
 curated v1 `StreamFrame`/read shapes into an equivalent client-side view, and
 server-side reads (`ListMessages`, `GetSessionTodo`, …) are produced by folding
-this same projection before serialization. The legacy TypeScript TUI (now
-removed) consumed the deleted Compat SDK/SyncProvider surface; a replacement
-frontend built on `hya-sdk-v1` may be built later.
+this same projection before serialization. The interactive Bun/OpenTUI frontend
+(`packages/hya-tui`) and browser WebUI (`packages/hya-tui-web`) consume these
+same `hya.v1` server-folded reads and live `StreamFrame` notifications.
 
 ## Strong Ids
 
@@ -312,11 +312,11 @@ the root.
 
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
-| `agent_registered` | `session` (team root), `agent_session: SessionId`, `handle: String` (the agent's **leaf** name), `parent: Option<String>` (default absent = team root), `agent_type: AgentName` (default empty), `mode: SubagentMode` (default `transient`) | Fold: roster entry keyed by **canonical path** `{parent}/{handle}`; a new row starts its cursor at the current inbox length, and a revived row rejoins its parent unit broadcast channel; a root registration (`agent_session == session`) keys as `main`. See [ADR-0011](../adr/0011-hierarchy-scoped-mailbox.md) |
+| `agent_registered` | `session` (team root), `agent_session: SessionId`, `handle: String` (the agent's **leaf** name), `parent: Option<String>` (default absent = team root), `agent_type: AgentName` (default empty), `mode: SubagentMode` (default `transient`) | Fold: roster entry keyed by **canonical path** `{parent}/{handle}`; a new row starts its cursor at the current inbox length, and a revived row rejoins its parent unit broadcast channel; a root registration (`agent_session == session`) keys as `main`. See [ADR-0016](../adr/0016-channel-communication-plane.md) |
 | `agent_activity_changed` | `session`, `handle`, `status: RosterStatus`, `current_task: Option<String>` | Fold: roster activity; activity is display-only; cancellation may show Idle while work remains pending |
 | `resident_work_started` | `session`, `actor_session`, `handle`, `epoch: ActorEpoch`, `inbox_through: u64` | Fold: marks fenced resident work on roster before tool/child/provider dispatch |
 | `resident_work_finished` | `session`, `handle`, `epoch: ActorEpoch`, `inbox_through: u64` | Internal completion marker; matching work epoch clears pending work and acknowledges its inbox boundary. Unlike `mail_consumed`, it settles the admitted prompt. |
-| `mail_sent` | `session`, `from: String` (canonical path), `to: MailEndpoint` (a canonical path, or a unit-qualified channel key `{unit}#{name}`), `kind: MailKind` (default), `body: String` | Fold: direct → recipient inbox; channel → channel log + fan-out to current **eligible** subscribers (skips any member whose roster entry is `mode.is_resident()` **and** status is `Done` or `Failed`; see [ADR-0001](../adr/0001-event-sourced-mailbox-and-channels.md)). Addresses are resolved to canonical form at **send** time, not fold time; see [ADR-0011](../adr/0011-hierarchy-scoped-mailbox.md) |
+| `mail_sent` | `session`, `from: String` (canonical path), `to: MailEndpoint` (a canonical path, or a minted channel id), `kind: MailKind` (default), `body: String` | Fold: direct → recipient inbox; channel → channel log + fan-out to current **eligible** subscribers (skips any member whose roster entry is `mode.is_resident()` **and** status is `Done` or `Failed`; see [ADR-0001](../adr/0001-event-sourced-mailbox-and-channels.md)). Addresses are resolved to canonical form at **send** time, not fold time; see [ADR-0016](../adr/0016-channel-communication-plane.md) |
 | `channel_joined` | `session`, `channel: String`, `member: String` | Fold: add subscriber |
 
 `SubagentMode`: `transient` \| `resident`.  

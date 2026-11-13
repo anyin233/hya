@@ -21,7 +21,7 @@ canonical tools contribute schemas.
 
 ## Builtin inventory
 
-`ToolRegistry::builtins()` installs **27** canonical schema names before model
+`ToolRegistry::builtins()` installs **28** canonical schema names before model
 filtering. The inventory below is complete for that constructor. A schema marked
 **closed** rejects unknown keys; aliases resolve only at runtime and are never
 advertised.
@@ -625,44 +625,16 @@ request. File mutation on the model-facing path is the hashline `write`/`edit`
 pair, not the Codex-style `apply_patch` envelope.
 ([`hya_core::advertise_tool`](../../crates/hya-core/src/engine/turn/messages.rs))
 
-### Why WEBSEARCH was provider-filtered
+### Websearch provider independence
 
-The removed `compat` restriction was inherited product policy, not a
-model-protocol or tool-execution requirement.
-
-The upstream OpenCode history is explicit. Commit
-[`9c237f0`](https://github.com/anomalyco/opencode/commit/9c237f0bfb9335c8ce6c793c4eee0e17ef4d775e)
-"temporarily restrict[ed] codesearch and websearch to opencode zen users" while
-an enterprise opt-out was unresolved. Commit
-[`419983c`](https://github.com/anomalyco/opencode/commit/419983c0f1dcffc4fae28f844e7658326e2ee5aa)
-then restored an opt-in for non-Zen users through `OPENCODE_ENABLE_EXA`; its
-[pull request](https://github.com/anomalyco/opencode/pull/5132) describes this as
-an interim rollout rule. Current OpenCode keeps the same shape: web search is
-enabled for its `opencode` provider or when explicit Exa/Parallel flags are set.
-([current registry](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/tool/registry.ts),
-[Parallel rollout](https://github.com/anomalyco/opencode/pull/26227))
-
-hya commit `fd96760794056ce9eacaad9c6d72768863d890c6` copied the strict
-`provider == "opencode"` branch. Commit
-`07af114e9284ad3a79c62fa777cecb96a766e91f` later changed that provider string
-to `compat` as part of a broad external-compat debranding change. It did not add
-the upstream opt-in flags or establish `compat` as a web-search capability.
-
-That distinction matters because hya's provider IDs are user-defined config
-keys, and Compat config import preserves those IDs. A provider named `compat`
-is therefore neither required nor sufficient to identify OpenCode Zen.
-([crates/hya-app/src/config.rs](../../crates/hya-app/src/config.rs),
-[crates/hya-app/src/config.rs](../../crates/hya-app/src/config.rs))
-
-The execution path itself never examines the model provider. `tools.websearch`
+`websearch` execution is independent of the active model provider. `tools.websearch`
 selects Exa or Parallel, optionally overrides the endpoint and key, and can
 disable the built-in. Exa is the enabled, unauthenticated default. Exa keys are
 sent as `exaApiKey` query parameters; Parallel keys are sent as bearer tokens.
 ([crates/hya-tool/src/websearch.rs:22-72](../../crates/hya-tool/src/websearch.rs#L22-L72),
 [crates/hya-tool/src/websearch.rs:157-171](../../crates/hya-tool/src/websearch.rs#L157-L171))
 
-The stale compatibility condition was removed. Enabled websearch is now
-advertised independently of the model provider.
+Enabled `websearch` is advertised uniformly across all model providers.
 
 The OpenAI, Anthropic, and Google request encoders preserve the canonical
 `ToolSchema.name`; they translate only the surrounding provider JSON shape.

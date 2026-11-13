@@ -54,9 +54,9 @@ CLI session-store selection
 
 | Surface | Empty / default `--db` | Explicit `--db <PATH>` |
 | --- | --- | --- |
-| Goal mode (`-p` / `--prompt`), `rpc` | Always in-memory (`connect_memory`) | N/A (no file path used) |
-| `exec`, `run`, `serve` | In-memory via `open_store("")` | File-backed at that path |
-| `sessions`, `tail-session` | **Not** in-memory: `resolve_interactive_db` remaps empty to `$XDG_STATE_HOME/hya/sessions.db` (fallback `$HOME/.local/state/hya/sessions.db`, then `./.local/state/hya/sessions.db`) and creates the directory | File-backed at the given path |
+| Goal mode (`-p` / `--prompt`), `loop` | Always in-memory (`connect_memory`) | N/A (no file path used) |
+| `exec`, `serve` | In-memory via `open_store("")` | File-backed at that path |
+| bare `hya`, `serve start\|status\|stop\|restart`, `sessions`, `tail-session` | **Not** in-memory: `resolve_interactive_db` remaps empty to `$XDG_STATE_HOME/hya/sessions.db` (fallback `$HOME/.local/state/hya/sessions.db`, then `./.local/state/hya/sessions.db`) and creates the directory | File-backed at the given path |
 
 So the session-backed subcommands default to the durable XDG
 state database, not a fresh memory store.

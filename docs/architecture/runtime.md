@@ -72,7 +72,7 @@ The server's process-level `AgentSpec` (`hya_app::agent_base_with_model`) has
 an **empty** workdir: `hya serve` has no working directory (ADR-0024). Each
 turn's `AgentSpec` takes its workdir from the session's recorded workdir, and
 so do workflow members and recovered residents. The client-side direct
-commands (`hya exec`/`run`/`-p`/`loop`, `agent_with_model`) name the caller's
+commands (`hya exec`, `hya -p`, `hya loop`, `agent_with_model`) name the caller's
 cwd as an absolute workdir instead.
 
 ### No process working directory
@@ -1542,41 +1542,40 @@ Current guards include:
 - no-progress detection
 - repeated-directive detection unless the planner marks a strategy change
 
-The current CLI exposes goal mode directly; loop mode is available as core
-runtime API.
+The current CLI exposes both goal mode (`hya -p`) and loop mode (`hya loop --target …`) directly.
 
 ## Teams, Members, and Workspaces
 
 Team-related code is split across:
 
-- [`subagent.rs`](../../crates/hya-core/src/subagent.rs)
+- [`subagent.rs`](../../crates/hya-core/src/subagent.rs) and [`resident.rs`](../../crates/hya-core/src/resident.rs)
+- [`mailbox.rs`](../../crates/hya-core/src/mailbox.rs) and [`engine/mailbox.rs`](../../crates/hya-core/src/engine/mailbox.rs)
 - [`workspace.rs`](../../crates/hya-core/src/workspace.rs)
 - [`category.rs`](../../crates/hya-core/src/category.rs)
 
-There is no `team.rs` and no in-memory `TeamControlPlane`. Inter-agent mail and
-channels are event-sourced (`MailSent`, `ChannelJoined`, `ChannelLeft`) and
-folded by `hya-proto::Projection` (see
-[ADR 0001](../adr/0001-event-sourced-mailbox-and-channels.md)).
+There is no `team.rs` and no in-memory `TeamControlPlane`. Every spawned subagent
+is an episodic resident actor ([ADR-0015](../adr/0015-unified-resident-subagent-lifecycle.md)),
+and inter-agent mail and channels are event-sourced (`MailSent`, `ChannelJoined`,
+`ChannelLeft`) on the team-root log and folded by `hya-proto::Projection` (see
+[ADR-0001](../adr/0001-event-sourced-mailbox-and-channels.md)).
 
-Reach is **hierarchy-scoped**: an agent addresses only its parent, its
-same-parent siblings, and its direct reports. Handles are canonical paths
+Reach is **strictly vertical** ([ADR-0016](../adr/0016-channel-communication-plane.md)):
+an agent addresses only its parent and its direct reports over event-minted
+unit broadcast (`#announce-{8}`) and pair DM (`#DM-{8}`) channels; siblings are
+invisible to one another. Handles are canonical paths
 (`main/hya-plan-amiya/hya-task-texas`; leaves are `<subagent_type>-<operator>`, see
-[subagent-orchestration.md §2.1](subagent-orchestration.md#21-handles-agent-type--operator-name-0410))
-and channels belong to one unit (`main/hya-plan-amiya#build`). The rule itself is pure path arithmetic in
-`hya-proto::scope`, enforced at a write gate in `hya-store` and a read filter in
-`hya-core` (see
-[ADR 0011](../adr/0011-hierarchy-scoped-mailbox.md)).
-
-`run_team` runs member specs in child sessions and returns bounded evidence
-summaries. It intentionally does not project full child transcripts into the
-lead session.
+[subagent-orchestration.md §2.1](subagent-orchestration.md#21-handles-agent-type--operator-name-0410)).
+See [Subagent Orchestration](subagent-orchestration.md) for the complete episode,
+handoff, archive, and revival specification.
 
 `WorktreeManager` allocates git worktrees under `.hya/worktrees` and only cleans
 up paths it recorded as owned.
 
-These primitives are present in `hya-core`; the shipped CLI exposes
-single-turn, goal, server, replay, sessions, and catalog/auth surfaces (bare
-startup prints a guidance banner).
+On a terminal, bare `hya` finds or auto-starts the persistent backend daemon and
+launches the Bun/OpenTUI terminal frontend and browser WebUI host; headless
+subcommands cover `exec`, `-p` goal mode, `loop`, `serve`, `tail-session`,
+`sessions`, `workflow`, `bundle`, `agent`, `provider`/`login`/`oauth`/`models`,
+and the secure relay (`proxy`, `bridge`, `relay doctor`).
 
 ## Errors
 
