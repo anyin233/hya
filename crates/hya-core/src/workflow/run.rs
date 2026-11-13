@@ -29,7 +29,7 @@ use crate::completion::{
 };
 use crate::engine::{AgentSpec, SessionEngine};
 use crate::error::CoreError;
-use crate::resident::{ActivationResult, ResidentSupervisor};
+use crate::resident::{ActivationResult, ResidentSupervisor, ResolvedResidentRuntime};
 use crate::sidecar::BoundSidecarFactory;
 
 use super::{
@@ -156,6 +156,7 @@ struct ResidentActor {
 }
 
 struct ResidentActivation {
+    resolved: (AgentSpec, ResolvedResidentRuntime),
     actor: ResidentActor,
     directive: String,
     system_context: Arc<str>,
@@ -712,6 +713,15 @@ impl PreparedWorkflowRun {
                             })
                         });
                         let activation = ResidentActivation {
+                            resolved: (
+                                resolved[index].spec.clone(),
+                                (
+                                    context.binding.clone(),
+                                    resolved[index].agents.clone(),
+                                    resolved[index].resources.clone(),
+                                    resolved[index].sidecar_factory.clone(),
+                                ),
+                            ),
                             actor: actor.clone(),
                             directive: rendered.directive().to_string(),
                             system_context: Arc::from(rendered.system_context()),
@@ -1013,6 +1023,7 @@ async fn activate_resident_stage(
     activation: ResidentActivation,
 ) -> Result<StageReport, WorkflowError> {
     let ResidentActivation {
+        resolved,
         actor,
         directive,
         system_context,
@@ -1025,6 +1036,7 @@ async fn activate_resident_stage(
         &supervisor,
         lead,
         &actor,
+        resolved,
         directive,
         system_context,
         route,
@@ -1059,6 +1071,7 @@ async fn activate_actor(
     supervisor: &ResidentSupervisor,
     parent: SessionId,
     actor: &ResidentActor,
+    resolved: (AgentSpec, ResolvedResidentRuntime),
     directive: String,
     guidance: Arc<str>,
     route: Option<WorkflowTurnRoute>,
@@ -1072,6 +1085,7 @@ async fn activate_actor(
         .activate(
             parent,
             actor.session,
+            resolved,
             directive,
             guidance,
             route,
@@ -1146,6 +1160,15 @@ async fn drive_loop_stage(
                 CoreError::Invalid("Workflow requires a resident supervisor".into())
             })?,
             worker,
+            resolved: (
+                resolved_worker.spec.clone(),
+                (
+                    ctx.binding.clone(),
+                    resolved_worker.agents.clone(),
+                    resolved_worker.resources.clone(),
+                    resolved_worker.sidecar_factory.clone(),
+                ),
+            ),
             route: resolved_worker.route.clone(),
             cancel: cancel.clone(),
             first: tokio::sync::Mutex::new(Some(first_report.output.clone())),
@@ -1223,6 +1246,7 @@ async fn drive_loop_stage(
 
 /// Worker-side [`IterationExecutor`]-built gate wrapper; see [`VerifierGate`].
 struct LoopWorkerExecutor {
+    resolved: (AgentSpec, ResolvedResidentRuntime),
     engine: Arc<SessionEngine>,
     lead: SessionId,
     supervisor: Arc<ResidentSupervisor>,
@@ -1296,6 +1320,7 @@ impl IterationExecutor for LoopWorkerExecutor {
             &self.supervisor,
             self.lead,
             &self.worker,
+            self.resolved.clone(),
             directive.to_string(),
             self.guidance.clone(),
             route,
@@ -1405,6 +1430,15 @@ impl IterationGate for VerifierGate {
                 &self.supervisor,
                 self.lead,
                 &actor,
+                (
+                    self.verifier.spec.clone(),
+                    (
+                        self.ctx.binding.clone(),
+                        self.verifier.agents.clone(),
+                        self.verifier.resources.clone(),
+                        self.verifier.sidecar_factory.clone(),
+                    ),
+                ),
                 directive,
                 self.guidance.clone(),
                 route,
