@@ -17,52 +17,52 @@
   <rect width="1160" height="540" rx="14" fill="#0f172a"/>
   <rect x="12" y="12" width="1136" height="516" rx="10" fill="none" stroke="#1e293b" stroke-width="1.5"/>
 
-  <text x="36" y="46" fill="#f8fafc" font-size="19" font-weight="700">hya  Event-Sourced Turn Pipeline &amp; Dual-Track Streaming (seq = 0 vs seq &gt; 0)</text>
+  <text x="36" y="46" fill="#f8fafc" font-size="19" font-weight="700">hya  â€”  Event-Sourced Turn Pipeline &amp; Dual-Track Streaming (seq = 0 vs seq &gt; 0)</text>
   <text x="36" y="68" fill="#94a3b8" font-size="12">High-frequency text deltas stream live at seq=0; durable Event batches commit atomically in SQLite WAL and fold via hya_proto::Projection</text>
 
   <!-- Step boxes horizontal pipeline -->
   <rect x="36" y="96" width="200" height="106" rx="8" fill="#1e293b" stroke="#38bdf8" stroke-width="1.3"/>
-  <text x="50" y="119" fill="#38bdf8" font-size="11" font-weight="700">STEP 1 · ADMISSION</text>
+  <text x="50" y="119" fill="#38bdf8" font-size="11" font-weight="700">STEP 1 Â· ADMISSION</text>
   <text x="50" y="140" fill="#f1f5f9" font-size="13" font-weight="600">CreateTurn (/v1 | gRPC)</text>
   <text x="50" y="159" fill="#94a3b8" font-size="11">Bind Project CatalogScope</text>
-  <text x="50" y="176" fill="#64748b" font-size="10.5">’ Immutable TurnBinding</text>
-  <text x="50" y="191" fill="#64748b" font-size="10.5">’ User msg batch (seq &gt; 0)</text>
+  <text x="50" y="176" fill="#64748b" font-size="10.5">â†’ Immutable TurnBinding</text>
+  <text x="50" y="191" fill="#64748b" font-size="10.5">â†’ User msg batch (seq &gt; 0)</text>
 
   <line x1="236" y1="149" x2="268" y2="149" stroke="#38bdf8" stroke-width="1.6" marker-end="url(#arr-sky)"/>
 
   <rect x="270" y="96" width="205" height="106" rx="8" fill="#1e293b" stroke="#34d399" stroke-width="1.3"/>
-  <text x="284" y="119" fill="#34d399" font-size="11" font-weight="700">STEP 2 · CONTEXT &amp; COMPACT</text>
+  <text x="284" y="119" fill="#34d399" font-size="11" font-weight="700">STEP 2 Â· CONTEXT &amp; COMPACT</text>
   <text x="284" y="140" fill="#f1f5f9" font-size="13" font-weight="600">Projection + Compaction</text>
   <text x="284" y="159" fill="#94a3b8" font-size="11">Fold replay / snapshot</text>
-  <text x="284" y="176" fill="#64748b" font-size="10.5">’ 5-stage token reduction</text>
-  <text x="284" y="191" fill="#64748b" font-size="10.5">’ CompletionRequest</text>
+  <text x="284" y="176" fill="#64748b" font-size="10.5">â†’ 5-stage token reduction</text>
+  <text x="284" y="191" fill="#64748b" font-size="10.5">â†’ CompletionRequest</text>
 
   <line x1="475" y1="149" x2="507" y2="149" stroke="#34d399" stroke-width="1.6" marker-end="url(#arr-green)"/>
 
   <rect x="509" y="96" width="215" height="106" rx="8" fill="#1e293b" stroke="#f472b6" stroke-width="1.3"/>
-  <text x="523" y="119" fill="#f472b6" font-size="11" font-weight="700">STEP 3 · MODEL STREAM</text>
+  <text x="523" y="119" fill="#f472b6" font-size="11" font-weight="700">STEP 3 Â· MODEL STREAM</text>
   <text x="523" y="140" fill="#f1f5f9" font-size="13" font-weight="600">ProviderRouter SSE</text>
   <text x="523" y="159" fill="#94a3b8" font-size="11">Preflight + retry budget</text>
-  <text x="523" y="176" fill="#f472b6" font-size="10.5">" Live TextDelta ’ seq = 0</text>
-  <text x="523" y="191" fill="#34d399" font-size="10.5">" TextEnd / ToolCall ’ seq &gt; 0</text>
+  <text x="523" y="176" fill="#f472b6" font-size="10.5">" Live TextDelta â†’ seq = 0</text>
+  <text x="523" y="191" fill="#34d399" font-size="10.5">" TextEnd / ToolCall â†’ seq &gt; 0</text>
 
   <line x1="724" y1="149" x2="756" y2="149" stroke="#fbbf24" stroke-width="1.6" marker-end="url(#arr-amber)"/>
 
   <rect x="758" y="96" width="215" height="106" rx="8" fill="#1e293b" stroke="#fbbf24" stroke-width="1.3"/>
-  <text x="772" y="119" fill="#fbbf24" font-size="11" font-weight="700">STEP 4 · TOOL &amp; PERMISSION</text>
+  <text x="772" y="119" fill="#fbbf24" font-size="11" font-weight="700">STEP 4 Â· TOOL &amp; PERMISSION</text>
   <text x="772" y="140" fill="#f1f5f9" font-size="13" font-weight="600">ToolRegistry + Guard</text>
   <text x="772" y="159" fill="#94a3b8" font-size="11">ProjectScope root check</text>
-  <text x="772" y="176" fill="#64748b" font-size="10.5">’ Ask parks on /v1/interactions</text>
-  <text x="772" y="191" fill="#64748b" font-size="10.5">’ Capped ToolResult (seq &gt; 0)</text>
+  <text x="772" y="176" fill="#64748b" font-size="10.5">â†’ Ask parks on /v1/interactions</text>
+  <text x="772" y="191" fill="#64748b" font-size="10.5">â†’ Capped ToolResult (seq &gt; 0)</text>
 
   <line x1="973" y1="149" x2="1001" y2="149" stroke="#34d399" stroke-width="1.6" marker-end="url(#arr-green)"/>
 
   <rect x="1003" y="96" width="121" height="106" rx="8" fill="#1e293b" stroke="#38bdf8" stroke-width="1.3"/>
-  <text x="1015" y="119" fill="#38bdf8" font-size="11" font-weight="700">STEP 5 · FINISH</text>
+  <text x="1015" y="119" fill="#38bdf8" font-size="11" font-weight="700">STEP 5 Â· FINISH</text>
   <text x="1015" y="140" fill="#f1f5f9" font-size="12.5" font-weight="600">Round or End</text>
   <text x="1015" y="159" fill="#94a3b8" font-size="10.5">Tools called?</text>
-  <text x="1015" y="175" fill="#fbbf24" font-size="10.5">Yes ’ Step 2</text>
-  <text x="1015" y="191" fill="#34d399" font-size="10.5">No ’ Finished</text>
+  <text x="1015" y="175" fill="#fbbf24" font-size="10.5">Yes â†’ Step 2</text>
+  <text x="1015" y="191" fill="#34d399" font-size="10.5">No â†’ Finished</text>
 
   <!-- Loopback arc from Step 4/5 back to Step 2 -->
   <path d="M 865 202 L 865 228 L 372 228 L 372 204" fill="none" stroke="#fbbf24" stroke-width="1.3" stroke-dasharray="5,4" marker-end="url(#arr-amber)"/>
@@ -70,10 +70,10 @@
 
   <!-- Dual-Track Bus & SQLite Section -->
   <rect x="36" y="256" width="532" height="248" rx="10" fill="#1e293b" fill-opacity="0.6" stroke="#334155"/>
-  <text x="54" y="280" fill="#f472b6" font-size="12" font-weight="700">LIVE STREAM TRACK  publish_live (Envelope.seq == 0)</text>
+  <text x="54" y="280" fill="#f472b6" font-size="12" font-weight="700">LIVE STREAM TRACK  â€”  publish_live (Envelope.seq == 0)</text>
   <rect x="54" y="294" width="496" height="84" rx="7" fill="#0f172a" stroke="#475569"/>
-  <text x="70" y="317" fill="#f1f5f9" font-size="12.5" font-weight="600">Zero-Disk Real-Time Broadcast (EventBus ’ SSE / gRPC StreamFrame)</text>
-  <text x="70" y="337" fill="#94a3b8" font-size="11">" Carries TextStart / TextDelta / live TextReplace with final MessageId &amp; PartId</text>
+  <text x="70" y="317" fill="#f1f5f9" font-size="12.5" font-weight="600">Zero-Disk Real-Time Broadcast (EventBus â†’ SSE / gRPC StreamFrame)</text>
+  <text x="70" y="337" fill="#94a3b8" font-size="11">" Carries Text / reasoning / tool-input deltas with final MessageId &amp; PartId</text>
   <text x="70" y="355" fill="#94a3b8" font-size="11">" Applied in-memory without advancing Projection.last_seq; never written to SQLite</text>
   <text x="70" y="371" fill="#64748b" font-size="10.5">" Lagged subscriber (&gt; 8192 frames) receives resync frame and reloads server projection</text>
 
@@ -84,7 +84,7 @@
   <text x="70" y="471" fill="#64748b" font-size="10.5">" Subagent asks bubble up to the root session's active TUI / WebUI modal</text>
 
   <rect x="592" y="256" width="532" height="248" rx="10" fill="#1e293b" fill-opacity="0.6" stroke="#334155"/>
-  <text x="610" y="280" fill="#34d399" font-size="12" font-weight="700">DURABLE EVENT LOG TRACK  append_events (Envelope.seq &gt; 0)</text>
+  <text x="610" y="280" fill="#34d399" font-size="12" font-weight="700">DURABLE EVENT LOG TRACK  â€”  append_events (Envelope.seq &gt; 0)</text>
   <rect x="610" y="294" width="496" height="96" rx="7" fill="#0f172a" stroke="#34d399" stroke-width="1.1"/>
   <text x="626" y="317" fill="#f1f5f9" font-size="12.5" font-weight="600">Atomic SQLite WAL Batch Commits (hya-store::event_log)</text>
   <text x="626" y="337" fill="#94a3b8" font-size="11">" Globally monotonic AUTOINCREMENT seq; published on EventBus ONLY after commit</text>

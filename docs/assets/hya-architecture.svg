@@ -16,8 +16,8 @@
   <rect x="12" y="12" width="1136" height="756" rx="10" fill="none" stroke="#1e293b" stroke-width="1.5"/>
 
   <!-- Header -->
-  <text x="36" y="46" fill="#f8fafc" font-size="20" font-weight="700">hya  Event-Sourced Multi-Agent Coding Runtime Architecture</text>
-  <text x="36" y="68" fill="#94a3b8" font-size="12.5">Single canonical Event stream · Persistent backend daemon · Consolidated hya.v1 HTTP/SSE/WS &amp; gRPC · Episodic resident subagents</text>
+  <text x="36" y="46" fill="#f8fafc" font-size="20" font-weight="700">hya  â€”  Event-Sourced Multi-Agent Coding Runtime Architecture</text>
+  <text x="36" y="68" fill="#94a3b8" font-size="12.5">Single canonical Event stream Â· Persistent backend daemon Â· Consolidated hya.v1 HTTP/SSE/WS &amp; gRPC Â· Episodic resident subagents</text>
 
   <!-- LAYER 1: CLIENTS & FRONTENDS -->
   <rect x="28" y="88" width="1104" height="112" rx="10" fill="#1e293b" fill-opacity="0.55" stroke="#334155"/>
@@ -25,22 +25,22 @@
 
   <rect x="44" y="120" width="235" height="66" rx="8" fill="#0f172a" stroke="#38bdf8" stroke-width="1.2"/>
   <text x="58" y="141" fill="#f1f5f9" font-size="13" font-weight="600">Terminal TUI (packages/hya-tui)</text>
-  <text x="58" y="159" fill="#94a3b8" font-size="11">Bun + OpenTUI · Started by bare hya</text>
-  <text x="58" y="174" fill="#64748b" font-size="10.5">/project · /key · /subagents · @hya/tui-sdk</text>
+  <text x="58" y="159" fill="#94a3b8" font-size="11">Bun + OpenTUI Â· Started by bare hya</text>
+  <text x="58" y="174" fill="#64748b" font-size="10.5">/project Â· /key Â· /subagents Â· @hya/tui-sdk</text>
 
   <rect x="295" y="120" width="255" height="66" rx="8" fill="#0f172a" stroke="#38bdf8" stroke-width="1.2"/>
   <text x="309" y="141" fill="#f1f5f9" font-size="13" font-weight="600">Browser WebUI (packages/hya-tui-web)</text>
-  <text x="309" y="159" fill="#94a3b8" font-size="11">Real PTY + xterm.js (:3250) · tui-exp E2E</text>
-  <text x="309" y="174" fill="#64748b" font-size="10.5">PtyClientFrame/PtyServerFrame · OSC 0/9/777</text>
+  <text x="309" y="159" fill="#94a3b8" font-size="11">Real PTY + xterm.js (:3250) Â· tui-exp E2E</text>
+  <text x="309" y="174" fill="#64748b" font-size="10.5">PtyClientFrame/PtyServerFrame Â· OSC 0/9/777</text>
 
   <rect x="566" y="120" width="245" height="66" rx="8" fill="#0f172a" stroke="#475569" stroke-width="1.2"/>
   <text x="580" y="141" fill="#f1f5f9" font-size="13" font-weight="600">Headless CLI &amp; SDK Clients</text>
-  <text x="580" y="159" fill="#94a3b8" font-size="11">hya exec · hya -p · hya loop · workflow</text>
-  <text x="580" y="174" fill="#64748b" font-size="10.5">hya-sdk-v1 (V1SessionMirror) · gRPC stubs</text>
+  <text x="580" y="159" fill="#94a3b8" font-size="11">hya exec Â· hya -p Â· hya loop Â· workflow</text>
+  <text x="580" y="174" fill="#64748b" font-size="10.5">hya-sdk-v1 (V1SessionMirror) Â· gRPC stubs</text>
 
   <rect x="827" y="120" width="289" height="66" rx="8" fill="#0f172a" stroke="#a78bfa" stroke-width="1.2"/>
   <text x="841" y="141" fill="#f1f5f9" font-size="13" font-weight="600">Remote Client Bridge &amp; Relay</text>
-  <text x="841" y="159" fill="#c4b5fd" font-size="11">hya --connect / hya bridge Ä hya proxy</text>
+  <text x="841" y="159" fill="#c4b5fd" font-size="11">hya --connect / hya bridge â”€ hya proxy</text>
   <text x="841" y="174" fill="#64748b" font-size="10.5">Noise_NKpsk0 E2EE over gRPC / WS (t=auto)</text>
 
   <!-- Arrows Layer 1 -> Layer 2 -->
@@ -51,15 +51,15 @@
 
   <!-- LAYER 2: SERVER & PROTOCOL BOUNDARY -->
   <rect x="28" y="224" width="1104" height="96" rx="10" fill="#1e293b" fill-opacity="0.55" stroke="#334155"/>
-  <text x="44" y="244" fill="#34d399" font-size="11" font-weight="700" letter-spacing="0.08em">2. PERSISTENT BACKEND DAEMON &amp; CONSOLIDATED hya.v1 CONTRACT (hya-server · hya-api · hya-relay)</text>
+  <text x="44" y="244" fill="#34d399" font-size="11" font-weight="700" letter-spacing="0.08em">2. PERSISTENT BACKEND DAEMON &amp; CONSOLIDATED hya.v1 CONTRACT (hya-server Â· hya-api Â· hya-relay)</text>
 
   <rect x="44" y="254" width="750" height="52" rx="8" fill="#0f172a" stroke="#34d399" stroke-width="1.2"/>
-  <text x="60" y="275" fill="#f1f5f9" font-size="13" font-weight="600">Single-Port Dual Router: /v1 HTTP/JSON + SSE + WebSocket &amp; V1Grpc (18 Services · 107 RPCs)</text>
-  <text x="60" y="294" fill="#94a3b8" font-size="11">Detached daemon (&lt;db&gt;.runtime-owner.lock + .server.json) · Host allowlist guard · Ephemeral session reaper · No server cwd</text>
+  <text x="60" y="275" fill="#f1f5f9" font-size="13" font-weight="600">Single-Port Dual Router: /v1 HTTP/JSON + SSE + WebSocket &amp; V1Grpc (18 Services Â· 107 RPCs)</text>
+  <text x="60" y="294" fill="#94a3b8" font-size="11">Detached daemon (&lt;db&gt;.runtime-owner.lock + .server.json) Â· Host allowlist guard Â· Ephemeral session reaper Â· No server cwd</text>
 
   <rect x="810" y="254" width="306" height="52" rx="8" fill="#0f172a" stroke="#a78bfa" stroke-width="1.2"/>
   <text x="826" y="275" fill="#f1f5f9" font-size="13" font-weight="600">Relay Host Connector (relay_host)</text>
-  <text x="826" y="294" fill="#94a3b8" font-size="11">Ed25519 Room auth · Noise responder · Origin::Relay</text>
+  <text x="826" y="294" fill="#94a3b8" font-size="11">Ed25519 Room auth Â· Noise responder Â· Origin::Relay</text>
 
   <!-- Arrows Layer 2 -> Layer 3 -->
   <line x1="340" y1="320" x2="340" y2="350" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
@@ -67,19 +67,19 @@
 
   <!-- LAYER 3: COMPOSITION & WORKFLOW CONTROL -->
   <rect x="28" y="352" width="1104" height="98" rx="10" fill="#1e293b" fill-opacity="0.55" stroke="#334155"/>
-  <text x="44" y="372" fill="#fbbf24" font-size="11" font-weight="700" letter-spacing="0.08em">3. COMPOSITION, CATALOG SCOPES &amp; WORKFLOW CONTROL (hya-app · hya-bundle · hya-workflow)</text>
+  <text x="44" y="372" fill="#fbbf24" font-size="11" font-weight="700" letter-spacing="0.08em">3. COMPOSITION, CATALOG SCOPES &amp; WORKFLOW CONTROL (hya-app Â· hya-bundle Â· hya-workflow)</text>
 
   <rect x="44" y="382" width="348" height="54" rx="8" fill="#0f172a" stroke="#475569" stroke-width="1.2"/>
   <text x="58" y="403" fill="#f1f5f9" font-size="12.5" font-weight="600">Config, Auth &amp; Model Catalog</text>
-  <text x="58" y="421" fill="#94a3b8" font-size="10.8">config.yaml · OAuth · model_cache.db merge · Categories</text>
+  <text x="58" y="421" fill="#94a3b8" font-size="10.8">config.yaml Â· OAuth Â· model_cache.db merge Â· Categories</text>
 
   <rect x="406" y="382" width="356" height="54" rx="8" fill="#0f172a" stroke="#475569" stroke-width="1.2"/>
   <text x="420" y="403" fill="#f1f5f9" font-size="12.5" font-weight="600">Bundles &amp; Per-Project CatalogScope</text>
-  <text x="420" y="421" fill="#94a3b8" font-size="10.8">12 First-Party Presets · .hyabundle v4 · &lt;root&gt;/.hya/{bundles,plugins}</text>
+  <text x="420" y="421" fill="#94a3b8" font-size="10.8">12 First-Party Presets Â· .hyabundle v4 Â· &lt;root&gt;/.hya/{bundles,plugins}</text>
 
   <rect x="776" y="382" width="340" height="54" rx="8" fill="#0f172a" stroke="#fbbf24" stroke-width="1.2"/>
   <text x="790" y="403" fill="#f1f5f9" font-size="12.5" font-weight="600">WorkflowControl &amp; Compiler</text>
-  <text x="790" y="421" fill="#94a3b8" font-size="10.8">*.hya.md flowchart TD ’ Immutable Stage DAG &amp; Revisions</text>
+  <text x="790" y="421" fill="#94a3b8" font-size="10.8">*.hya.md flowchart TD â†’ Immutable Stage DAG &amp; Revisions</text>
 
   <!-- Arrows Layer 3 -> Layer 4 -->
   <line x1="580" y1="450" x2="580" y2="480" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
@@ -90,18 +90,18 @@
 
   <rect x="44" y="514" width="350" height="76" rx="8" fill="#0f172a" stroke="#f472b6" stroke-width="1.2"/>
   <text x="58" y="535" fill="#f1f5f9" font-size="13" font-weight="600">SessionEngine &amp; Turn Loop</text>
-  <text x="58" y="553" fill="#94a3b8" font-size="11">TurnBinding snapshot · 5-stage Compaction</text>
-  <text x="58" y="570" fill="#64748b" font-size="10.5">Live seq:0 deltas + durable batches · Snapshots/Revert</text>
+  <text x="58" y="553" fill="#94a3b8" font-size="11">TurnBinding snapshot Â· 5-stage Compaction</text>
+  <text x="58" y="570" fill="#64748b" font-size="10.5">Live seq:0 deltas + durable batches Â· Snapshots/Revert</text>
 
   <rect x="408" y="514" width="368" height="76" rx="8" fill="#0f172a" stroke="#f472b6" stroke-width="1.2"/>
   <text x="422" y="535" fill="#f1f5f9" font-size="13" font-weight="600">Episodic Resident Actors &amp; Channels</text>
-  <text x="422" y="553" fill="#94a3b8" font-size="11">spawn ’ work/mail ’ report + handoff + archive ’ revive</text>
-  <text x="422" y="570" fill="#64748b" font-size="10.5">Vertical #announce-{8} &amp; #DM-{8} · MAX_DEPTH=2 · Governor</text>
+  <text x="422" y="553" fill="#94a3b8" font-size="11">spawn â†’ work/mail â†’ report + handoff + archive â†’ revive</text>
+  <text x="422" y="570" fill="#64748b" font-size="10.5">Vertical #announce-{8} &amp; #DM-{8} Â· MAX_DEPTH=2 Â· Governor</text>
 
   <rect x="790" y="514" width="326" height="76" rx="8" fill="#0f172a" stroke="#475569" stroke-width="1.2"/>
   <text x="804" y="535" fill="#f1f5f9" font-size="13" font-weight="600">Engine-Owned Stop Governance</text>
-  <text x="804" y="553" fill="#94a3b8" font-size="11">Goal Evaluator · Loop Verifier &amp; Shell Predicates</text>
-  <text x="804" y="570" fill="#64748b" font-size="10.5">Durable Workflow Stage runner · EventBus &amp; Hooks</text>
+  <text x="804" y="553" fill="#94a3b8" font-size="11">Goal Evaluator Â· Loop Verifier &amp; Shell Predicates</text>
+  <text x="804" y="570" fill="#64748b" font-size="10.5">Durable Workflow Stage runner Â· EventBus &amp; Hooks</text>
 
   <!-- Arrows Layer 4 -> Layer 5 -->
   <line x1="218" y1="604" x2="218" y2="634" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
@@ -114,16 +114,16 @@
 
   <rect x="44" y="668" width="320" height="72" rx="8" fill="#0f172a" stroke="#38bdf8" stroke-width="1.2"/>
   <text x="58" y="689" fill="#f1f5f9" font-size="12.5" font-weight="600">ProviderRouter (hya-provider)</text>
-  <text x="58" y="707" fill="#94a3b8" font-size="10.8">OpenAI Chat / Responses / Codex · Grok Build</text>
-  <text x="58" y="723" fill="#64748b" font-size="10.5">Anthropic · Google Gemini · Offline DevProvider</text>
+  <text x="58" y="707" fill="#94a3b8" font-size="10.8">OpenAI Chat / Responses / Codex Â· Grok Build</text>
+  <text x="58" y="723" fill="#64748b" font-size="10.5">Anthropic Â· Google Gemini Â· Offline DevProvider</text>
 
   <rect x="378" y="668" width="388" height="72" rx="8" fill="#0f172a" stroke="#fbbf24" stroke-width="1.2"/>
-  <text x="392" y="689" fill="#f1f5f9" font-size="12.5" font-weight="600">Tool &amp; Permission Plane (hya-tool · mcp · plugin)</text>
-  <text x="392" y="707" fill="#94a3b8" font-size="10.8">28 Builtins (5 native dylibs) · ProjectScope multi-root guard</text>
-  <text x="392" y="723" fill="#64748b" font-size="10.5">MCP (mcp__srv__tool) · Out-of-process Rust / Bun / Claude</text>
+  <text x="392" y="689" fill="#f1f5f9" font-size="12.5" font-weight="600">Tool &amp; Permission Plane (hya-tool Â· mcp Â· plugin)</text>
+  <text x="392" y="707" fill="#94a3b8" font-size="10.8">28 Builtins (5 native dylibs) Â· ProjectScope multi-root guard</text>
+  <text x="392" y="723" fill="#64748b" font-size="10.5">MCP (mcp__srv__tool) Â· Out-of-process Rust / Bun / Claude</text>
 
   <rect x="780" y="668" width="336" height="72" rx="8" fill="#0f172a" stroke="#34d399" stroke-width="1.2"/>
-  <text x="794" y="689" fill="#f1f5f9" font-size="12.5" font-weight="600">SQLite WAL Store &amp; Projection (hya-store · proto)</text>
-  <text x="794" y="707" fill="#94a3b8" font-size="10.8">event_log · Projection reducer · projection_snapshot</text>
-  <text x="794" y="723" fill="#64748b" font-size="10.5">project_root · resident_actor_claim · pending_resume</text>
+  <text x="794" y="689" fill="#f1f5f9" font-size="12.5" font-weight="600">SQLite WAL Store &amp; Projection (hya-store Â· proto)</text>
+  <text x="794" y="707" fill="#94a3b8" font-size="10.8">event_log Â· Projection reducer Â· projection_snapshot</text>
+  <text x="794" y="723" fill="#64748b" font-size="10.5">project_root Â· resident_actor_claim Â· pending_resume</text>
 </svg>

@@ -5,12 +5,12 @@
 - A client can create a session with `ephemeral: true` (`CreateSession`; `SessionInfo.ephemeral` reports it). The flag is ignored for subagent sessions and sessions created with a title. The first prompt, command, shell turn, rename, archive, or fork makes the session permanent.
 - The daemon deletes an ephemeral session that is still unused once nobody watches it: 5 s after the last session stream closes, or 30 s after creation if nobody ever watched it. At startup it also clears leftovers after 30 s. Each deletion sends `sessionDeleted`.
 - The TUI creates its start-up and `/new` sessions as ephemeral and no longer deletes them itself. Quitting no longer waits for that cleanup, which could lose the delete under load. A killed TUI no longer leaves its empty session behind, and one client quitting no longer deletes an empty session that another client is still viewing.
-- New durable event `session_ephemeral_set`; the projection reducer version is 8. See [Protocol guide](docs/protocol/README.md) and [ADR-0023](docs/adr/0023-persistent-backend-daemon.md).
+- New durable event `session_ephemeral_set`; the projection reducer version is 8. See [Protocol guide](../protocol/README.md) and [ADR-0023](../adr/0023-persistent-backend-daemon.md).
 
 ## `/v1/mcp` lists a connected server's tools
 
 - `McpServerStatus.tools` now holds a connected server's tools as their namespaced `mcp__<server>__<tool>` names, in the server's order. The list comes from `GET /v1/mcp` and from the add, connect, and disconnect answers. Servers that aren't connected report none. The list is read at connect time; the server's `tools/list_changed` notices aren't followed.
-- The TUI's `/mcp` detail screen shows the tools under the server's own names. See [Protocol guide](docs/protocol/README.md).
+- The TUI's `/mcp` detail screen shows the tools under the server's own names. See [Protocol guide](../protocol/README.md).
 
 ## Fix: `/diff` shows its last line
 
@@ -21,7 +21,7 @@
 
 - The sidebar's session list now changes as soon as any client creates, renames, archives, deletes, or runs a session. It also follows another client's agent, model, and permission-mode switches. The TUI re-lists after a `resync`.
 - If another client deletes the session you have open, the TUI shows `Session <id> was deleted elsewhere; opened a new session` and opens a new one.
-- `/sessions` and `/resume` show the list as it was when you opened them; reopen them to see changes. The `/sessions` hint now fits at 80 columns. See [TUI](docs/tui.md).
+- `/sessions` and `/resume` show the list as it was when you opened them; reopen them to see changes. The `/sessions` hint now fits at 80 columns. See [TUI](../tui.md).
 
 ## Quit and archive, or quit and keep running; `--resume`
 
@@ -30,7 +30,7 @@
 - A killed or signalled TUI, including a closed tab, never archives. Switching sessions isn't quitting. Whichever way you leave, an empty session you never used is deleted.
 - `--resume [id]` (TUI) and `hya --resume [id]` open a session and unarchive it. Without an id, they show a picker of the directory's sessions, archived ones marked `[archived]`. `/resume` does the same inside the TUI, so the terminal and the WebUI can resume each other's sessions. `--continue` skips archived sessions.
 - In `/sessions`, Ctrl+A shows or hides archived sessions, and opening an archived one resumes it. When another client archives or unarchives the open session, the TUI updates right away.
-- Bare `hya` starts WebUI tabs with the new TUI flag `--web-tab`; add it yourself when you run the WebUI host by hand. See [TUI](docs/tui.md).
+- Bare `hya` starts WebUI tabs with the new TUI flag `--web-tab`; add it yourself when you run the WebUI host by hand. See [TUI](../tui.md).
 
 ## Session list changes reach every client
 
@@ -39,7 +39,7 @@
   - rename, agent or model switch, permission mode, archive state: `sessionUpdated`;
   - busy/idle: `sessionUpdated {busy}`, live-only, one frame per transition;
   - deletion: `sessionDeleted`, live-only.
-- These frames also reach `interactionsOnly=true` subscribers; a `resync` there means you should re-list sessions. Subagent sessions produce none of these frames. See [Protocol guide](docs/protocol/README.md).
+- These frames also reach `interactionsOnly=true` subscribers; a `resync` there means you should re-list sessions. Subagent sessions produce none of these frames. See [Protocol guide](../protocol/README.md).
 - The HTTP router and gRPC now share one run registry, so a run started over HTTP counts as busy over gRPC too.
 - `CreateSession`'s docs now say that an empty agent or model uses the server default.
 
@@ -53,7 +53,7 @@
 
 - `hya exec`, `hya run`, and `hya workflow use|state|run` with a durable `--db` now run through the backend that holds the database. The session shows up there, and the output and exit codes match a local run. Options that can't be sent to the backend (`--pure`, `workflow run --revision`/`--yolo`) exit 75 with a message naming the backend.
 - With no backend running, these commands hold `<db>.lock` while they run, so no server becomes a second writer. Listing sessions and `tail-session` only read. `-p`, `loop`, and `rpc` use a private database and are unaffected.
-- `CreateSession` with an empty agent or model now uses the server's default agent and that agent's model, instead of returning `invalid_argument`. See [CLI](docs/cli.md).
+- `CreateSession` with an empty agent or model now uses the server's default agent and that agent's model, instead of returning `invalid_argument`. See [CLI](../cli.md).
 
 ## The backend runs as a daemon that outlives its clients
 
@@ -64,21 +64,21 @@
 - When the backend goes away, a TUI finds or starts one again, then reconnects and reloads the open session. The status line shows `Server stopped · reconnecting…`, then `Started a new server` or `Server moved`. A turn that was running on the old backend is lost.
 - A TUI started without `--session` or `--continue` creates a session as soon as it connects. A session it created and never used is deleted when you leave it or quit.
 - A client that finds a daemon of another hya version suggests `hya serve restart`.
-- `/status` shows `daemon · pid N · db D · started …`. The TUI flag `--attached-pid` is removed. While shutting down, `/v1/health` answers 503. See [CLI](docs/cli.md#backend-daemon) and [ADR-0023](docs/adr/0023-persistent-backend-daemon.md).
+- `/status` shows `daemon · pid N · db D · started …`. The TUI flag `--attached-pid` is removed. While shutting down, `/v1/health` answers 503. See [CLI](../cli.md#backend-daemon) and [ADR-0023](../adr/0023-persistent-backend-daemon.md).
 
 ## Archived sessions
 
 - Root sessions can be archived and unarchived with `PATCH /v1/sessions/{id} {"archived": true|false}`. Archiving never cancels a running turn. A new prompt, command, or shell turn unarchives the session.
 - `SessionInfo` has `archived` and `archivedAt`. `ListSessions` hides archived sessions unless you pass `includeArchived=true` or `archivedOnly=true`. `sessionUpdated` carries the flag, so other clients update live.
 - `hya sessions --all` / `--archived` list archived sessions too, or only them. `hya sessions archive|unarchive <id>` changes one; while a server holds the database, the change goes through that server.
-- New durable event `session_unarchived`. The existing `session_archived` now carries a timestamp in milliseconds, and a zero stamp means unarchived. The projection reducer version is 7. See [Protocol guide](docs/protocol/README.md#archived-sessions).
+- New durable event `session_unarchived`. The existing `session_archived` now carries a timestamp in milliseconds, and a zero stamp means unarchived. The projection reducer version is 7. See [Protocol guide](../protocol/README.md#archived-sessions).
 
 ## `config.yaml` edits keep your comments and formatting
 
 - When hya writes `config.yaml` (Provider View, the provider and model routes, OAuth login), it now changes only the affected lines. Comments, blank lines, key order, quoting, indentation, CRLF line endings, a BOM, and a leading `---` stay as they were.
 - New lines follow the file's own indentation. An entry that can't be edited in place, such as a flow-style `{}` map, is rewritten on its own, in block style.
 - Before writing, hya parses the edited text again and checks it gives exactly the intended config. If not, the file is left untouched.
-- Files that use anchors, aliases, tags, multi-line scalars, or tab indentation fall back to a full rewrite, which drops comments, and the server logs a warning. See [Configuration](docs/configuration.md).
+- Files that use anchors, aliases, tags, multi-line scalars, or tab indentation fall back to a full rewrite, which drops comments, and the server logs a warning. See [Configuration](../configuration.md).
 
 ## TUI follows server-side catalog changes and new compaction names
 
@@ -91,7 +91,7 @@
 
 - `hya serve --db <file>` and bare `hya` now lock the database (`<db>.lock`) and, once listening, write `<db>.server.json` (`{url, pid, version, startedAt}`). A second `hya serve` on the same database exits with status 75 and names the running server's URL and pid.
 - A TUI started without `--server`, and bare `hya`, first look for a running server on their database. If they find a healthy one, they attach to it and start nothing. So two TUIs on the default database now share one server and see each other's sessions and live events. `/status` shows `attached to a running server · pid N`. Quitting an attached TUI leaves the server running; if the server's owner quits, attached TUIs lose their connection.
-- `hya exec --db` and `hya workflow` do not take the lock yet. See [CLI](docs/cli.md#bare-hya), [ADR-0022](docs/adr/0022-one-writer-per-database.md), and [Troubleshooting](docs/troubleshooting.md).
+- `hya exec --db` and `hya workflow` do not take the lock yet. See [CLI](../cli.md#bare-hya), [ADR-0022](../adr/0022-one-writer-per-database.md), and [Troubleshooting](../troubleshooting.md).
 
 ## Server fixes: saved rules, compaction names, stream filters, bad request bodies, MCP add
 
@@ -102,19 +102,19 @@
 - A request body that can't be decoded now returns a v1 `invalid_argument` JSON error on every route, instead of a plain-text 422, 400, or 415.
 - Models that report no context limit or reasoning support now show those fields as unknown instead of a made-up `200000` and `reasoning: true`. The runtime still assumes 200000 for compaction.
 - `POST /v1/mcp` keeps a server that fails to start as `FAILED` with its error, instead of failing the request. Connect errors now return `unavailable` instead of `not_found`.
-- A forked session is titled `<source title> (fork)`, and auto-titling leaves that title alone. See [Protocol guide](docs/protocol/README.md).
+- A forked session is titled `<source title> (fork)`, and auto-titling leaves that title alone. See [Protocol guide](../protocol/README.md).
 
 ## TUI image attachments
 
 - Mention an image file with `@path` (png, jpg, jpeg, gif, webp) and it is sent with the prompt. The `@path` text stays in the prompt. Pasting an image file's path, even quoted or with escaped spaces, inserts the mention.
 - Above the input, the TUI lists pending images as `[image] name · size`. It checks the type, the 10 MiB per-image and 20 MiB per-turn limits, and whether the current model accepts images, and it doesn't send the prompt while an attachment has a problem. Queued prompts keep their images.
-- The transcript shows each image under its prompt as `↳ attachment · name · type · size`. Fix: attachments on user messages were not shown at all. See [TUI](docs/tui.md).
+- The transcript shows each image under its prompt as `↳ attachment · name · type · size`. Fix: attachments on user messages were not shown at all. See [TUI](../tui.md).
 
 ## TUI `/undo`, `/redo`, and `/fork`
 
 - `/undo` (or Ctrl+X U) takes back the last prompt and its replies and restores the files those turns changed. If the input is empty, it gets the reverted prompt; text you typed is kept. The status line lists restored, deleted, skipped, and failed files. Run it again to go further back.
 - `/redo` (or Ctrl+X R) brings the messages and file changes back, until the next prompt makes the undo permanent. While an undo is pending, the transcript ends with `↶ N messages reverted · /redo or Ctrl+X R restores them · the next prompt makes it permanent`. It updates live when another client undoes.
-- `/fork` (or Ctrl+X F) opens a picker: fork at the latest message, or before one of your earlier prompts. The TUI switches to the new session and puts that prompt in the input. The sidebar and `/status` show `Forked from <title>`. See [TUI](docs/tui.md).
+- `/fork` (or Ctrl+X F) opens a picker: fork at the latest message, or before one of your earlier prompts. The TUI switches to the new session and puts that prompt in the input. The sidebar and `/status` show `Forked from <title>`. See [TUI](../tui.md).
 
 ## Image attachments on prompts
 
@@ -124,14 +124,14 @@
   - The turns route accepts request bodies up to 32 MiB over HTTP and 24 MiB over gRPC.
 - A model declared in config with `modalities: {input: [text]}` refuses image prompts with a clear error. When support is unknown, the prompt is sent. `ModelSummary.imageInput` reports the model's support.
 - Messages list images as `attachment` parts with name, type, and size, but without the bytes. The stream sends `partsAdded` when a prompt's images are added.
-- Image bytes are stored per session next to the file snapshots. They are not stored in the event log, they count toward the 256 MiB per-session limit, and a fork copies them. See [Protocol guide](docs/protocol/README.md).
+- Image bytes are stored per session next to the file snapshots. They are not stored in the event log, they count toward the 256 MiB per-session limit, and a fork copies them. See [Protocol guide](../protocol/README.md).
 
 ## TUI views: `/diff`, `/mcp`, `/rules`, `/agent-models`
 
 - `/diff` shows the working tree's changes (`git diff HEAD` plus untracked files) full screen. The file list shows `+N -M` counts and the diff lines are colored. `n`/`p` or `]`/`[` switch files, `r` reloads, and the usual keys and the mouse wheel scroll.
 - `/mcp` lists MCP servers with their state, tool count, and error. Enter shows a server's tools; `c` connects and `x` disconnects. `a` starts auth: it copies the authorization URL and asks for the code.
 - `/rules` lists saved permission rules; `d` deletes one after you confirm.
-- `/agent-models` lists each agent's effective model and where it comes from (session, configured, remembered, or default). Enter sets an agent's default model from the model picker, and `c` clears it. Agents whose model is fixed in config show why they can't be changed. See [TUI](docs/tui.md).
+- `/agent-models` lists each agent's effective model and where it comes from (session, configured, remembered, or default). Enter sets an agent's default model from the model picker, and `c` clears it. Agents whose model is fixed in config show why they can't be changed. See [TUI](../tui.md).
 
 ## Revert and redo sessions with file restore; fork at a message
 
@@ -146,7 +146,7 @@
   - `write`, `edit`, and `apply_patch` are recorded in any directory.
   - `bash` (including your own `!` commands) is recorded only inside a git work tree.
   - Limits: 2 MiB per file and 256 MiB per session.
-- Fork: `POST /v1/sessions/{session}/fork` with `{"messageId": …}` forks before that user message and returns its text as `promptText`. `untilSeq` is now honored. A fork of the latest state now keeps the last message; before, it was dropped. `SessionInfo.forkedFrom` names the source session. See [Protocol guide](docs/protocol/README.md).
+- Fork: `POST /v1/sessions/{session}/fork` with `{"messageId": …}` forks before that user message and returns its text as `promptText`. `untilSeq` is now honored. A fork of the latest state now keeps the last message; before, it was dropped. `SessionInfo.forkedFrom` names the source session. See [Protocol guide](../protocol/README.md).
 - The projection reducer version is now 6. Existing logs replay unchanged.
 
 ## Provider View in the TUI
@@ -157,12 +157,12 @@
   - `t` tests the highlighted model by sending `hi` with a 1-token limit and shows whether it replied, the finish reason, and the latency. Esc cancels a running test.
   - `m` adds a model and `e` edits a model's display name, limits, or reasoning; both are written to `config.yaml`, and only the fields you change are saved. `d` removes a model's config override.
   - If the session would still run on the offline model after you add a provider, the `/model` picker opens with the new provider's models.
-- Removed: `/keys`, `/login <provider>`, and `/key set|remove <provider>`. See [TUI](docs/tui.md#provider-view).
+- Removed: `/keys`, `/login <provider>`, and `/key set|remove <provider>`. See [TUI](../tui.md#provider-view).
 
 ## TUI: dividers for earlier compactions, and live prompts from other sessions
 
 - An opened session now shows a `context compacted` divider before every compaction summary, including compactions that happened before the TUI opened it (`--session`, `--continue`, `/open`, `/sessions`, and subagent views).
-- A permission or question prompt from another session on the same server now appears as soon as it is raised. The TUI subscribes to `GET /v1/events/stream` for this. The status line reads `Permission needed in <n>. <session> · /open <n> to answer there`, and the pending block names the session. It also sends a desktop notification while the TUI is unfocused. You answer the prompt after opening that session. See [TUI](docs/tui.md).
+- A permission or question prompt from another session on the same server now appears as soon as it is raised. The TUI subscribes to `GET /v1/events/stream` for this. The status line reads `Permission needed in <n>. <session> · /open <n> to answer there`, and the pending block names the session. It also sends a desktop notification while the TUI is unfocused. You answer the prompt after opening that session. See [TUI](../tui.md).
 
 ## Providers can be managed live; model lists are cached in `model_cache.db`
 
@@ -171,31 +171,31 @@
   - `POST /v1/providers/{providerId}/refresh` re-fetches the provider's models from its remote.
   - `PUT` / `DELETE /v1/providers/{providerId}/models` adds or edits a model entry in `config.yaml` (name, context and output limits, reasoning), or removes it. An edit changes only the fields it sends; an empty name or a `0` limit removes that field.
   - `POST /v1/providers/{providerId}/test` sends `hi` to one model with a 1-token output limit (16 for Responses-style providers, which reject anything smaller) and reports whether it answered.
-  - gRPC has the same calls. See [Protocol guide](docs/protocol/README.md#providers-and-keys).
+  - gRPC has the same calls. See [Protocol guide](../protocol/README.md#providers-and-keys).
 - Saving or removing a key (`PUT` / `DELETE /v1/auth/{id}`) now takes effect immediately; a restart is no longer needed. Keys are written to `auth/<id>.yaml` with mode 0600. Provider rows now show `kind`, `baseUrl`, `keySource` (`saved`, `oauth`, `config`, or `none`; the key itself is never returned), and `modelCount`. Each model row now shows `source` (`remote`, `config`, `override`, or `offline`) and a display name.
-- Model lists fetched from providers are stored in `$XDG_CACHE_HOME/hya/model_cache.db`, which replaces `models.yml.cache` (imported once). A provider's models are the fetched models plus the `models:` in `config.yaml`, merged by model id. Fields set in the config win and unset fields keep the fetched values. Listing models in `config.yaml` no longer turns off fetching. Model entries accept `name` and `reasoning: true|false`. Editing through the API rewrites `config.yaml`. See [Configuration](docs/configuration.md).
+- Model lists fetched from providers are stored in `$XDG_CACHE_HOME/hya/model_cache.db`, which replaces `models.yml.cache` (imported once). A provider's models are the fetched models plus the `models:` in `config.yaml`, merged by model id. Fields set in the config win and unset fields keep the fetched values. Listing models in `config.yaml` no longer turns off fetching. Model entries accept `name` and `reasoning: true|false`. Editing through the API rewrites `config.yaml`. See [Configuration](../configuration.md).
 - `hya models --refresh [provider]` re-fetches models; `--verbose` shows each model's source and limits.
 - Discovery also reads display names and limits from Anthropic, Google, and OpenRouter-style model lists.
 
 ## Desktop notifications
 
-- While the terminal is in the background, the TUI sends a desktop notification when a turn finishes or fails, or when a permission or question prompt appears. It uses OSC 9 and OSC 777 and detects focus through terminal focus reporting. Turn it off with `/notifications off` (saved in `tui.json`). See [TUI](docs/tui.md#desktop-notifications).
-- The WebUI shows these as browser notifications while its tab is hidden or unfocused. It asks for permission on your first click or key press. A notification that arrives as both OSC 9 and OSC 777 appears once. See [ADR-0021](docs/adr/0021-webui-desktop-notifications.md).
+- While the terminal is in the background, the TUI sends a desktop notification when a turn finishes or fails, or when a permission or question prompt appears. It uses OSC 9 and OSC 777 and detects focus through terminal focus reporting. Turn it off with `/notifications off` (saved in `tui.json`). See [TUI](../tui.md#desktop-notifications).
+- The WebUI shows these as browser notifications while its tab is hidden or unfocused. It asks for permission on your first click or key press. A notification that arrives as both OSC 9 and OSC 777 appears once. See [ADR-0021](../adr/0021-webui-desktop-notifications.md).
 
 ## TUI copy, external editor, and vim mode
 
 - Copy: drag with the mouse to select text; it is copied to the clipboard when you release (OSC 52), and the status line shows `Copied N chars`. `/copy` copies the last assistant reply. On a terminal without OSC 52 the TUI reports `Copy failed`.
 - External editor: `/editor` or Ctrl+X Ctrl+E opens the input in `$VISUAL`, else `$EDITOR`, else `vi`. The edited text goes back into the input without being sent.
-- Vim mode: `/vim` (or `/vim on|off`) turns on vim keys in the input and saves the choice in `tui.json`. It supports normal and insert mode, the common motions, `dd`/`dw`/`cw`/`yy`/`p`, counts, `u` and Ctrl+R. The status bar shows `-- INSERT --` or `-- NORMAL --`. With vim on, Esc in insert mode only switches to normal mode; press it again in normal mode to cancel a turn or deny a prompt. See [TUI](docs/tui.md#vim-mode).
+- Vim mode: `/vim` (or `/vim on|off`) turns on vim keys in the input and saves the choice in `tui.json`. It supports normal and insert mode, the common motions, `dd`/`dw`/`cw`/`yy`/`p`, counts, `u` and Ctrl+R. The status bar shows `-- INSERT --` or `-- NORMAL --`. With vim on, Esc in insert mode only switches to normal mode; press it again in normal mode to cancel a turn or deny a prompt. See [TUI](../tui.md#vim-mode).
 
 ## Your own `!` commands run without a permission prompt
 
-- A shell command you type yourself (`!cmd` in the TUI, or a v1 `ShellTurn`) no longer asks for permission in any mode: `manual`, `yolo`, or a bundle mode. Explicit deny rules still block it, a working directory outside the project still asks, and a plugin's `tool.execute.before` veto still applies. A plugin's `permission.ask` hook and a bundle mode's `permission.approve` approver are not consulted for it. Commands the model runs through `bash` ask as before. See [Configuration](docs/configuration.md).
+- A shell command you type yourself (`!cmd` in the TUI, or a v1 `ShellTurn`) no longer asks for permission in any mode: `manual`, `yolo`, or a bundle mode. Explicit deny rules still block it, a working directory outside the project still asks, and a plugin's `tool.execute.before` veto still applies. A plugin's `permission.ask` hook and a bundle mode's `permission.approve` approver are not consulted for it. Commands the model runs through `bash` ask as before. See [Configuration](../configuration.md).
 
 ## TUI themes and a preferences file
 
 - `/theme` opens a picker of the built-in themes: `hya` (the default look), `light`, `contrast`, and `ember`. Moving the highlight previews a theme live; Enter keeps it; Esc restores the previous one.
-- The chosen theme is saved in the TUI preferences file, `$XDG_CONFIG_HOME/hya/tui.json` (else `~/.config/hya/tui.json`). Set `HYA_TUI_CONFIG` to use another path. A missing or corrupt file falls back to the defaults, and the TUI shows a warning in the status line. See [TUI](docs/tui.md#themes).
+- The chosen theme is saved in the TUI preferences file, `$XDG_CONFIG_HOME/hya/tui.json` (else `~/.config/hya/tui.json`). Set `HYA_TUI_CONFIG` to use another path. A missing or corrupt file falls back to the defaults, and the TUI shows a warning in the status line. See [TUI](../tui.md#themes).
 - CI now runs the TUI unit tests and the browser TUI suite.
 
 ## `hya` starts the TUI and the WebUI
@@ -208,14 +208,14 @@
 - The TUI shows the WebUI address in the status bar, the sidebar, and `/status`. When the WebUI can't start, for example because the port is taken, the TUI shows `WebUI unavailable: <reason> · hya --port <N>` and otherwise works as usual. New TUI flags: `--web-url` and `--web-error`.
 - Bare `hya` writes server and WebUI output to `$XDG_STATE_HOME/hya/hya.log` instead of the terminal.
 - The WebUI host now ends every tab's process (SIGHUP, then SIGKILL) when it gets SIGINT, SIGTERM, or SIGHUP.
-- The TUI package is self-contained. `gen-api` now also generates its `/api` catalog into `packages/hya-tui/src/operations.json`. See [ADR-0020](docs/adr/0020-bundle-tui-and-webui-in-hya.md).
+- The TUI package is self-contained. `gen-api` now also generates its `/api` catalog into `packages/hya-tui/src/operations.json`. See [ADR-0020](../adr/0020-bundle-tui-and-webui-in-hya.md).
 - Release archives and `install.sh` now ship the TUI (`lib/hya/tui`, with the target's OpenTUI native package) and the WebUI host (`lib/hya/tui-web`), each with production dependencies only, so bare `hya` works from an installed layout.
 - The release smoke test and `xtask release-rehearsal` check the staged TUI and WebUI: required files and dependencies are present, no dev-only packages are included, `--help` runs from outside the checkout, and every import resolves inside the staged directories. The rehearsal also checks that the WebUI page and its assets are served.
 - Fix: `xtask release-rehearsal` built a package named `hya` that doesn't exist; it now builds `hya-backend`, like the release workflow.
 
 ## Live assistant text and turn errors on the v1 stream
 
-- v1 streams (SSE and gRPC, session and global) now deliver assistant text as it is generated. The live frames are `partStarted`, `partAppended`, and `partCompleted` with no `seq`, and they use the same message and part ids as the durable events. Before, text arrived only when the round finished. Each part's final text arrives as a durable `partReplaced` stream event, which is also sent when reasoning is replaced. Live frames cannot be replayed. Streams filter by `sinceSeq` but do not replay history, so after a reconnect a client re-reads the projection or calls `ListEvents`. See [Protocol guide](docs/protocol/README.md).
+- v1 streams (SSE and gRPC, session and global) now deliver assistant text as it is generated. The live frames are `partStarted`, `partAppended`, and `partCompleted` with no `seq`, and they use the same message and part ids as the durable events. Before, text arrived only when the round finished. Each part's final text arrives as a durable `partReplaced` stream event, which is also sent when reasoning is replaced. Live frames cannot be replayed. Streams filter by `sinceSeq` but do not replay history, so after a reconnect a client re-reads the projection or calls `ListEvents`. See [Protocol guide](../protocol/README.md).
 - A failed turn now records its error. A durable `error` event names the failed message and streams as `errorReported {message, code, errorMessage}`. The same error appears in `MessageInfo.error {code, message}` and in `TurnInfo.errorCode` / `errorMessage`, for example `provider_error`. The projection reducer version is now 3.
 - `GET /v1/interactions` and gRPC `ListInteractions` without a `type` filter now list every pending interaction. Before, they returned nothing.
 - `hya-sdk-v1` `V1SessionMirror` now:
@@ -268,13 +268,13 @@
 - When a switch takes effect: from the next permission check, including checks inside turns that are already running. Switching to `yolo` allows the tree's pending permission requests once.
 - `SessionInfo.permissionMode` reports the effective mode. `SessionUpdated.permissionMode` is streamed on the root session.
 - A server started with `--yolo` or `permission.model: danger` now really asks for sessions switched to `manual`. Sessions that are never switched behave as before.
-- Bundles can declare approval modes with `permission_modes: [{id, title, description?}]`. Such a bundle also needs `extensions.process` and a `permission.approve` hook resource. While a bundle's mode is active, its new `permission.approve` hook (params `{session, root_session, agent?, mode, action, resource}`) answers `allow_once`, `allow_always`, `reject`, or `defer`. A `defer` answer, an error, or a timeout falls through to the user. The Bun adapter supports the hook, and `hya bundle info` prints one `permission_mode=` line per mode. See [Configuration](docs/configuration.md) and [AgentBundle authoring](docs/agent-bundle-authoring.md).
+- Bundles can declare approval modes with `permission_modes: [{id, title, description?}]`. Such a bundle also needs `extensions.process` and a `permission.approve` hook resource. While a bundle's mode is active, its new `permission.approve` hook (params `{session, root_session, agent?, mode, action, resource}`) answers `allow_once`, `allow_always`, `reject`, or `defer`. A `defer` answer, an error, or a timeout falls through to the user. The Bun adapter supports the hook, and `hya bundle info` prints one `permission_mode=` line per mode. See [Configuration](../configuration.md) and [AgentBundle authoring](../agent-bundle-authoring.md).
 - `PROJECTION_REDUCER_VERSION` is now 2, so stored projection snapshots are rebuilt once from the event log. Older binaries fold the new event as `unknown`.
 - The `permission_modes:` example in the bundle authoring guide now includes a working `approver.ts`. The script speaks plugin protocol v1 itself, because an explicit `extensions.process` command runs as written, without the Bun adapter. The guide's `apis:` and `permission_modes:` examples are now tested; the test runs the example script under Bun where Bun is installed.
 
 ## Bun/OpenTUI frontend
 
-- New interactive TUI in `packages/hya-tui`, adopted from a contributor fork ([ADR-0019](docs/adr/0019-adopt-opentui-frontend.md)). It is a Bun/OpenTUI client over the v1 HTTP/JSON+SSE contract. The screen shows sessions, the selected transcript, and pending interactions, plus views for models, Workflows, saved provider keys (`/keys`, `/key set|remove <provider>` with concealed entry), and a generic `/api METHOD /v1/path [JSON]` command. Tab completes slash commands and their arguments, and a footer row shows the next step for the current view. Run it from source with `bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080 --dir "$PWD"` against `hya serve`. It is not in the release archive. See [OpenTUI frontend](docs/tui.md).
+- New interactive TUI in `packages/hya-tui`, adopted from a contributor fork ([ADR-0019](../adr/0019-adopt-opentui-frontend.md)). It is a Bun/OpenTUI client over the v1 HTTP/JSON+SSE contract. The screen shows sessions, the selected transcript, and pending interactions, plus views for models, Workflows, saved provider keys (`/keys`, `/key set|remove <provider>` with concealed entry), and a generic `/api METHOD /v1/path [JSON]` command. Tab completes slash commands and their arguments, and a footer row shows the next step for the current view. Run it from source with `bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080 --dir "$PWD"` against `hya serve`. It is not in the release archive. See [OpenTUI frontend](../tui.md).
 - `packages/hya-tui-web` gains `e2e/hya-tui.spec.ts`: Playwright drives the real TUI in Chromium against an isolated `hya serve` on the offline model. The spec checks the connection, panel layout, prompt admission and reply, and Tab completion.
 - The TUI now uses `@opentui/solid` 0.5.12 (`solid-js` 1.9.12) and requires Bun 1.4.2. The code is split into a state store, a controller, a slash-command registry, a key-binding table, and Solid components. The look, commands, keys, and CLI flags are unchanged. A new browser spec (`e2e/hya-tui-commands.spec.ts`) locks the colors, `/help`, `/models`, `/api`, concealed `/key set` with Esc, narrow widths, and Ctrl+C.
 - Browser specs can script the model. `packages/hya-tui-web/e2e/fake-model.ts` is a fake OpenAI-compatible server that streams text in timed chunks and can emit tool calls, HTTP errors, and hangs you release later. The `backend` fixture's `model: { steps: [...] }` option points the isolated `hya serve` at it. Without the option, specs keep using the offline echo model.
@@ -330,7 +330,7 @@
 
 - New package `packages/hya-tui-web` runs a terminal program on a real PTY and renders it in the browser with xterm.js. Start it with `bun packages/hya-tui-web/src/main.ts [--host 127.0.0.1] [--port 7681] [--cwd DIR] -- <command...>`. Each browser connection gets its own process. Browser resizes reach the program as SIGWINCH. The host rejects cross-origin WebSocket upgrades and binds loopback by default.
 - The `/pty` WebSocket speaks the protojson form of the `hya.v1` `PtyClientFrame`/`PtyServerFrame` messages (`input`, `resize`, `ping` / `output`, `exit`, `pong`).
-- A Playwright harness (`e2e/harness.ts`) drives TUIs in Chromium. It reads the screen text and per-cell color and width, sends keys, resizes the viewport, waits for the exit code, and attaches a screenshot for every test. An OpenTUI probe fixture checks borders, truecolor, wide glyphs, input, resize, and Ctrl+C. See [Browser-rendered TUI](docs/tui-web.md) and [ADR-0018](docs/adr/0018-browser-rendered-tui-test-environment.md).
+- A Playwright harness (`e2e/harness.ts`) drives TUIs in Chromium. It reads the screen text and per-cell color and width, sends keys, resizes the viewport, waits for the exit code, and attaches a screenshot for every test. An OpenTUI probe fixture checks borders, truecolor, wide glyphs, input, resize, and Ctrl+C. See [Browser-rendered TUI](../tui-web.md) and [ADR-0018](../adr/0018-browser-rendered-tui-test-environment.md).
 
 ## Every bundle has one `config.yml`
 
@@ -353,7 +353,7 @@
 
 ## Optional `hya-extra/*` bundles
 
-- New `bundles/extra/` ships four optional bundles. None is installed by default: package one with `cargo run -p xtask -- package-bundle bundles/extra/<name> <name>.hyabundle`, then run `hya bundle install`. Each also serves as a coverage fixture, checked by `crates/hya-bundle/tests/extra_bundles.rs` and e2e rows T2.26–T2.28. See [hya-extra bundles](docs/extra-bundles.md).
+- New `bundles/extra/` ships four optional bundles. None is installed by default: package one with `cargo run -p xtask -- package-bundle bundles/extra/<name> <name>.hyabundle`, then run `hya bundle install`. Each also serves as a coverage fixture, checked by `crates/hya-bundle/tests/extra_bundles.rs` and e2e rows T2.26–T2.28. See [hya-extra bundles](../extra-bundles.md).
 - `hya-extra/zvec-grep` (Plugin): gives agents [zvec-grep](https://github.com/zvec-ai/zvec-grep) semantic workspace search. It runs `zg server --stdio` as a bundle MCP server and ships a usage skill. It needs `npm install -g @zvec/zvec-grep`.
 - `hya-extra/scout` (AgentSetBundle): the `scout` subagent, a cheap-model retrieval scout (`model_policy.category: quick`). It uses its own zvec-grep MCP server plus `read`/`grep`/`glob`, and returns answers with `path:line` evidence.
 - `hya-extra/jev-model-router` (Plugin, Bun process, `chat.params`): asks TypeSafe's Jev model how hard a request is, then rewrites `request.model` to the matching configured tier. The decision sticks to the request chain (`root_session`) so prompt caches stay warm. It falls back to `default_tier` when Jev fails or is unsure. Configure it in its bundle `config.yml`.
@@ -362,16 +362,16 @@
 
 ## Per-round token accounting with the serving model
 
-- Every provider decoder now reports usage under one documented `TokenUsage` invariant: `input` is uncached prompt tokens (it excludes `cache_read` and `cache_write`), `output` counts every generated token including thinking, and `reasoning` is the thinking share of `output`. OpenAI Chat and Responses/Codex/Grok subtract cached tokens from `input`. Google adds `thoughtsTokenCount` into `output`. New `reasoning_unknown` flag (omitted when false): Anthropic, and OpenAI routes that don't send reasoning details, mark the thinking split as unknown instead of estimating it. See [providers](docs/architecture/providers.md#token-usage-normalization).
+- Every provider decoder now reports usage under one documented `TokenUsage` invariant: `input` is uncached prompt tokens (it excludes `cache_read` and `cache_write`), `output` counts every generated token including thinking, and `reasoning` is the thinking share of `output`. OpenAI Chat and Responses/Codex/Grok subtract cached tokens from `input`. Google adds `thoughtsTokenCount` into `output`. New `reasoning_unknown` flag (omitted when false): Anthropic, and OpenAI routes that don't send reasoning details, mark the thinking split as unknown instead of estimating it. See [providers](../architecture/providers.md#token-usage-normalization).
 - New event `usage_recorded { session, message?, step?, model, purpose, tokens }`. It records every provider call that reports usage, with the model that actually served it (after `chat.params`, the fallback chain, the `model.fallback` hook, or a Workflow route). Turn rounds (`purpose: turn`) are recorded even when the message later ends `cancelled` or `error`, and even when the stream fails after reporting usage. Title generation (`title`) and summarizer calls (`compaction`: ladder summary/handoff, `/compact`, terminal handoff) are billed to their session with no message. Older binaries fold the event as `unknown`.
-- `SessionProjection.usage` folds billed usage by serving model (`by_model`) and by purpose (`by_purpose`). Each `UsageTotals` holds `input`, `cache_read`, `cache_write`, `output`, `reasoning`, `reasoning_unknown_output`, `rounds`, and `legacy_messages`. `UsageTotals::output_split()` separates thinking, visible, and unknown-split output. The totals never shrink when messages are deleted or reverted, or when the transcript is compacted. For logs that have no per-round records, each message's `MessageFinished.tokens` counts once, under model `unattributed`. `MessageFinished.tokens` itself is unchanged. See [event model](docs/architecture/event-model.md#session-usage-fold).
+- `SessionProjection.usage` folds billed usage by serving model (`by_model`) and by purpose (`by_purpose`). Each `UsageTotals` holds `input`, `cache_read`, `cache_write`, `output`, `reasoning`, `reasoning_unknown_output`, `rounds`, and `legacy_messages`. `UsageTotals::output_split()` separates thinking, visible, and unknown-split output. The totals never shrink when messages are deleted or reverted, or when the transcript is compacted. For logs that have no per-round records, each message's `MessageFinished.tokens` counts once, under model `unattributed`. `MessageFinished.tokens` itself is unchanged. See [event model](../architecture/event-model.md#session-usage-fold).
 - The usage ledger records the model that served the message and counts the whole prompt (`input + cache_read + cache_write`). It also keeps billed usage for cancelled and errored messages. Context-window occupancy now includes cache-write tokens.
 
 ## Bundles can register their own API endpoints
 
-- New manifest key `apis:` for any bundle kind with an explicit `extensions.process` (prepare rejects endpoints without one): `{ id, method: GET|POST|PUT|PATCH|DELETE, scope: session|global, path, description?, request_schema?, response_schema? }`. Paths are templates such as `/items/{id}`: a leading `/`, 1–16 segments of `[A-Za-z0-9._-]+` literals or whole-segment `{name}` parameters, at most 256 bytes, no wildcards. Two endpoints with the same method and scope may not have overlapping templates (`/items/{id}` and `/items/latest` are rejected rather than ranked). Schema paths must name `extensions.files` entries holding a JSON Schema, so they are packaged and covered by the digest. At most 64 endpoints per bundle. The endpoints are stored sorted in a new document-level `apis` section of the prepared catalog, skipped when empty. `hya bundle info` prints one `api=<METHOD> <scope> <path> id=<id>` line per endpoint. See [AgentBundle authoring](docs/agent-bundle-authoring.md#api-endpoints-apis).
-- New v1 service `BundleApi` (17 services / 82 rpcs): `ListBundleApis` (`GET /v1/bundle-apis`, every published endpoint with its schemas), `InvokeSessionBundleApi` (`/v1/sessions/{session}/bundles/{bundle}/{path…}`), and `InvokeGlobalBundleApi` (`/v1/bundles/{bundle}/api/{path…}`), each served for all five methods. The bundle id is one percent-encoded path segment (`hya-extra%2Ftoken-summary`), the query string and a JSON body (at most 512 KiB) reach the process, and the HTTP response is the process's own status (`200..=599`) and JSON body verbatim. Over gRPC the reply is `BundleApiResponse { bundle, api, status, content_type, body }`, and a process status is data, not a gRPC error. New stable error codes for host-side failures: `bundle_api_not_found` (404 / `NOT_FOUND`), `bundle_api_method_not_allowed` (405 with `Allow` / `UNIMPLEMENTED`), `bundle_api_bad_request` (400 / `INVALID_ARGUMENT`), and `bundle_api_failed` (502 / `UNAVAILABLE`). `gen-api` accepts a documented `ANY` binding for these passthrough rpcs and expands it into five OpenAPI operations. See [protocol guide](docs/protocol/README.md#bundle-api-endpoints).
-- Plugin protocol v1, additive: the initialize reply can list `apis: [{ name, description? }]`, and a bundle process must list exactly its manifest endpoint ids or the bundle fails to start. The host sends a new request, `api/request { api, method, path, path_params, query, body, session?, call, host_capability }`, and the process answers `{ status?, body? }` (unknown fields rejected). The request uses the normal 30 s timeout, and each request is served by the live runtime generation, which stays alive until the request completes. `host/capability` `session` is now optional: a global request's capability has none. See [plugin protocol](docs/plugin-protocol.md#bundle-api-endpoints-apirequest) and [bundle runtime](docs/bundle-runtime.md#bundle-api-endpoints).
+- New manifest key `apis:` for any bundle kind with an explicit `extensions.process` (prepare rejects endpoints without one): `{ id, method: GET|POST|PUT|PATCH|DELETE, scope: session|global, path, description?, request_schema?, response_schema? }`. Paths are templates such as `/items/{id}`: a leading `/`, 1–16 segments of `[A-Za-z0-9._-]+` literals or whole-segment `{name}` parameters, at most 256 bytes, no wildcards. Two endpoints with the same method and scope may not have overlapping templates (`/items/{id}` and `/items/latest` are rejected rather than ranked). Schema paths must name `extensions.files` entries holding a JSON Schema, so they are packaged and covered by the digest. At most 64 endpoints per bundle. The endpoints are stored sorted in a new document-level `apis` section of the prepared catalog, skipped when empty. `hya bundle info` prints one `api=<METHOD> <scope> <path> id=<id>` line per endpoint. See [AgentBundle authoring](../agent-bundle-authoring.md#api-endpoints-apis).
+- New v1 service `BundleApi` (17 services / 82 rpcs): `ListBundleApis` (`GET /v1/bundle-apis`, every published endpoint with its schemas), `InvokeSessionBundleApi` (`/v1/sessions/{session}/bundles/{bundle}/{path…}`), and `InvokeGlobalBundleApi` (`/v1/bundles/{bundle}/api/{path…}`), each served for all five methods. The bundle id is one percent-encoded path segment (`hya-extra%2Ftoken-summary`), the query string and a JSON body (at most 512 KiB) reach the process, and the HTTP response is the process's own status (`200..=599`) and JSON body verbatim. Over gRPC the reply is `BundleApiResponse { bundle, api, status, content_type, body }`, and a process status is data, not a gRPC error. New stable error codes for host-side failures: `bundle_api_not_found` (404 / `NOT_FOUND`), `bundle_api_method_not_allowed` (405 with `Allow` / `UNIMPLEMENTED`), `bundle_api_bad_request` (400 / `INVALID_ARGUMENT`), and `bundle_api_failed` (502 / `UNAVAILABLE`). `gen-api` accepts a documented `ANY` binding for these passthrough rpcs and expands it into five OpenAPI operations. See [protocol guide](../protocol/README.md#bundle-api-endpoints).
+- Plugin protocol v1, additive: the initialize reply can list `apis: [{ name, description? }]`, and a bundle process must list exactly its manifest endpoint ids or the bundle fails to start. The host sends a new request, `api/request { api, method, path, path_params, query, body, session?, call, host_capability }`, and the process answers `{ status?, body? }` (unknown fields rejected). The request uses the normal 30 s timeout, and each request is served by the live runtime generation, which stays alive until the request completes. `host/capability` `session` is now optional: a global request's capability has none. See [plugin protocol](../plugin-protocol.md#bundle-api-endpoints-apirequest) and [bundle runtime](../bundle-runtime.md#bundle-api-endpoints).
 - Request-scoped host capabilities: tool calls into every installed bundle process now carry `host_capability`, whatever the process kind (`rust`, `bun`, `claude`), and so do API requests. Before this change only Rust processes got one. Configured plugins still never do. A new read-only operation, `session.usage { scope: session | tree | root }`, returns per-session and merged billed usage. Each session's usage is folded from its own replayed projection, the tree follows subagent spawn edges, and each model's totals include `split { thinking, visible, unknown }`. A session-scoped API request may read only its own session and that session's subagents; a global one has no session to read (`-32001`). `permission.assert` is tool-call only, so the capability stays read-only for every HTTP method: write endpoints change only the bundle's own state. `context.describe` now includes `request` (`tool_call` or `api`; API requests also report `api`, `scope`, and `call`).
 
 ## Provider error frames inside a 200 stream are retried before the first event

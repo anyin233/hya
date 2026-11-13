@@ -143,7 +143,7 @@ sequenceDiagram
     Store-->>Client: SSE StreamFrame (durable user message)
 
     loop Until round finishes with no tool calls
-        Engine->>Store: read_projection() + run 5-stage Compaction if needed
+        Engine->>Store: read_projection_shared() + run 5-stage Compaction if needed
         Engine->>Provider: stream(CompletionRequest)
         Provider-->>Engine: TextDelta chunks
         Engine-->>Client: publish_live(seq = 0, TextDelta)
@@ -181,20 +181,20 @@ consume zero tokens until revived by a downward DM from their parent.
 ```mermaid
 stateDiagram-v2
     [*] --> Admitting: Parent calls task(tasks[])
-    Admitting --> EpisodeActive: AdmissionJournal claim + Governor debit<br/>+ ActorClaim(epoch=1) + mint #DM-{8} & join #announce-{8}
+    Admitting --> EpisodeActive: Atomic batch registration + active-claim capacity<br/>+ ActorClaim(epoch=1) + mint #DM-{8} & join #announce-{8}
 
     state EpisodeActive {
-        [*] --> Working: Arming directive turn
+        [*] --> Working: First parent-DM directive
         Working --> Idle: Turn completes without report()
         Idle --> Working: Coalesced inbound mail wake (#DM or #announce)
-        Working --> Reporting: Subagent calls report(status, summary)
+        Working --> Reporting: Subagent calls report(result, outcome?)
         Reporting --> Working: Rejected if inbox unread or child still live
     }
 
-    EpisodeActive --> Archived: ARCHIVE txn<br/>SubagentReported + HandoffCommitted(n) + AgentArchived<br/>+ Claim release + Governor refund + DM report mail -> wakes Parent
-    EpisodeActive --> Archived: Parent archive(target) / Shutdown drain / Budget kill<br/>(degraded handoff + refund)
+    EpisodeActive --> Archived: ARCHIVE txn<br/>SubagentReported + HandoffCommitted(n) + AgentArchived<br/>+ Claim release + capacity release + DM report mail -> wakes Parent
+    EpisodeActive --> Archived: Parent archive(target) / Shutdown drain / Budget kill<br/>(degraded handoff + claim release)
 
-    Archived --> EpisodeActive: Parent sends downward DM (#DM-{8} or handle)<br/>AgentRestarted + epoch+1 + Governor re-debit<br/>Context = system prompt + handoff(n) + new DM body
+    Archived --> EpisodeActive: Parent sends downward DM (handle alias resolves to #DM-{8})<br/>AgentRestarted + epoch+1 + capacity claim<br/>Context = system prompt + handoff(n) + new DM body
 ```
 
 Vertical Team Topology (`MAX_SUBAGENT_DEPTH = 2`):
