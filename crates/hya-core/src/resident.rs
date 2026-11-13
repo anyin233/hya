@@ -319,6 +319,7 @@ struct TeamState {
     registrations: usize,
     // Terminal mail keeps main alive between episode removal and bus routing.
     routing_mail: HashSet<u64>,
+    /// Active Workflow/headless root drivers suppress autonomous root turns.
     workflow_runs: usize,
     main_autonomous: bool,
     phase: TeamPhase,
@@ -528,10 +529,10 @@ impl Drop for TeamRegistration {
     }
 }
 
-/// Workflow execution owns team progress; a cold lead has no model turn to resume.
-pub(crate) struct WorkflowActivity(TeamRegistration);
+/// A Workflow or headless driver owns root progress while this guard is held.
+pub struct RootDriverActivity(TeamRegistration);
 
-impl Drop for WorkflowActivity {
+impl Drop for RootDriverActivity {
     fn drop(&mut self) {
         let mut state = self.0.lock();
         state.workflow_runs -= 1;
@@ -3197,10 +3198,11 @@ impl ResidentSupervisor {
         Ok(TeamRegistration::new(team.clone()))
     }
 
-    pub(crate) async fn workflow_activity(
+    /// Hold sole ownership of root continuations until the returned guard drops.
+    pub async fn root_driver_activity(
         &self,
         session: SessionId,
-    ) -> Result<WorkflowActivity, CoreError> {
+    ) -> Result<RootDriverActivity, CoreError> {
         let (root, _) = self.engine.session_lineage(session).await?;
         let team = self.team_for(root).await?;
         {
@@ -3210,7 +3212,7 @@ impl ResidentSupervisor {
             }
             state.workflow_runs += 1;
         }
-        Ok(WorkflowActivity(team))
+        Ok(RootDriverActivity(team))
     }
 
     fn new_team(&self, root: SessionId, main: MainActivation) -> Arc<TeamActor> {
@@ -3228,7 +3230,10 @@ impl ResidentSupervisor {
         let team = teams
             .entry(root)
             .or_insert_with(|| self.new_team(root, main));
-        team.lock().main_autonomous = true;
+        let mut state = team.lock();
+        if state.workflow_runs == 0 {
+            state.main_autonomous = true;
+        }
     }
 
     fn request_team_end(&self, team: &TeamActor, ending: Ending) -> (bool, Vec<EpisodeDone>) {

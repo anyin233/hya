@@ -199,6 +199,32 @@ async fn e5_a_budgeted_run_gets_its_deadline_notice_in_turn() {
     assert_eq!(env.fake.route_remaining(ROOT).unwrap(), Some(1));
 }
 
+#[tokio::test]
+async fn e10_continuation_does_not_repeat_the_deadline_header() {
+    let (env, _, requests) = run_lead(
+        vec![
+            tool_step(
+                "todo__update_content",
+                json!({"operations": [{"op": "add", "content": "finish"}]}),
+            ),
+            text_step("Item remains."),
+            todo_status(&[("1", "completed")]),
+            text_step("FINAL_ANSWER"),
+            text_step("ROOT_EXTRA"),
+        ],
+        &["--time-budget", "40"],
+    )
+    .await;
+    assert_eq!(requests.len(), 4, "{}", env.diagnostics());
+    assert!(requests[2].contains("your turn ended"));
+    assert_eq!(
+        requests[2].matches("HEADLESS RUN — FINAL").count(),
+        1,
+        "the tool result already delivered the deadline header"
+    );
+    assert_eq!(env.fake.route_remaining(ROOT).unwrap(), Some(1));
+}
+
 /// Within the grace (30 s for a 30 s budget) no continuation turn starts.
 #[tokio::test]
 async fn e7_no_continuation_past_the_grace() {

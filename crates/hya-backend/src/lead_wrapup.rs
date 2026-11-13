@@ -7,7 +7,7 @@
 //! In a budgeted run the deadline bounds this: past the grace no turn starts,
 //! and in the final window one ignored notice ends the run.
 
-use hya_core::{AgentSpec, CoreError, SessionEngine};
+use hya_core::{AgentSpec, CoreError, ResidentSupervisor, SessionEngine};
 use hya_proto::{
     FinishReason, MessageId, PartProjection, Projection, Role, RosterEntry, RosterStatus,
     SessionId, TodoItem, TodoStatus, scope,
@@ -32,11 +32,13 @@ const QUOTE_CHARS: usize = 200;
 /// a cancelled or failed turn ends the run at once.
 pub(crate) async fn run_lead(
     engine: &SessionEngine,
+    supervisor: &ResidentSupervisor,
     session: SessionId,
     agent: &AgentSpec,
     cancel: CancellationToken,
     initial_prompt: MessageId,
 ) -> Result<FinishReason, CoreError> {
+    let _driver = supervisor.root_driver_activity(session).await?;
     let (mut ignored, mut notices) = (0u32, 0u32);
     let mut last_notice: Option<MessageId> = None;
     let mut initial_prompt = Some(initial_prompt);
@@ -84,12 +86,12 @@ pub(crate) async fn run_lead(
             return Ok(finish);
         }
         notices += 1;
-        // A late stage leads the notice, so no in-turn notice repeats it.
-        let time = deadline.filter(|_| stage >= Stage::WrapUp).map(|deadline| {
-            deadline.mark_notified(session, stage);
-            deadline.notice(stage, false)
+        let time = deadline.and_then(|deadline| {
+            deadline
+                .take_notice(session)
+                .map(|stage| deadline.notice(stage, false))
         });
-        let notice = pending.notice(time.as_deref());
+        let notice = pending.notice(time.as_deref(), stage >= Stage::WrapUp);
         last_notice = Some(engine.inject_system_message(session, notice).await?);
     }
 }
@@ -98,6 +100,7 @@ pub(crate) async fn run_lead(
 struct Pending<'a> {
     subagents: Vec<&'a RosterEntry>,
     todos: Vec<&'a TodoItem>,
+    unread_mail: u64,
     narration: Option<Narration>,
 }
 
@@ -119,17 +122,21 @@ impl<'a> Pending<'a> {
         Self {
             subagents: live_subagents(projection),
             todos: unfinished_todos(projection),
+            unread_mail: unread_root_mail(projection),
             narration: narration(projection, finish),
         }
     }
 
     fn is_empty(&self) -> bool {
-        self.subagents.is_empty() && self.todos.is_empty() && self.narration.is_none()
+        self.subagents.is_empty()
+            && self.todos.is_empty()
+            && self.unread_mail == 0
+            && self.narration.is_none()
     }
 
     /// One notice listing every reason, most costly to leave first, after
     /// the deadline notice `time` of a late stage.
-    fn notice(&self, time: Option<&str>) -> String {
+    fn notice(&self, time: Option<&str>, late_stage: bool) -> String {
         let mut notice = String::new();
         if let Some(time) = time {
             notice.push_str(time);
@@ -144,11 +151,14 @@ impl<'a> Pending<'a> {
                 notice.push_str(&subagent_line(entry));
                 notice.push('\n');
             }
-            notice.push_str(if time.is_some() {
+            notice.push_str(if late_stage {
                 "  → `archive` the subagents whose work you cannot integrate in the time left; `wait` briefly for the rest.\n"
             } else {
                 "  → call `wait` to collect their reports and integrate the results, or `archive` the ones you no longer need.\n"
             });
+        }
+        if self.unread_mail != 0 {
+            notice.push_str(&format!("Your inbox has {} unread message(s).\n  → Read and integrate the new mail before completing the run.\n", self.unread_mail));
         }
         if !self.todos.is_empty() {
             notice.push_str("Your todo list has unfinished items:\n");
@@ -193,7 +203,45 @@ fn live_subagents(projection: &Projection) -> Vec<&RosterEntry> {
         .roster
         .values()
         .filter(|entry| scope::parent_path(&entry.handle) == Some(scope::ROOT_HANDLE))
+        .filter(|entry| !matches!(entry.status, RosterStatus::Done | RosterStatus::Failed))
+        .filter(|entry| {
+            // Finished Workflow actors stay parked for reuse; only busy ones
+            // represent work the lead still needs to collect.
+            entry.status != RosterStatus::Idle
+                || !projection
+                    .session
+                    .workflow
+                    .as_ref()
+                    .and_then(|workflow| workflow.run.as_ref())
+                    .filter(|run| run.status.is_terminal())
+                    .is_some_and(|run| {
+                        run.stages
+                            .iter()
+                            .flat_map(|stage| &stage.members)
+                            .any(|linked| {
+                                projection.session.members.iter().any(|member| {
+                                    member.member == linked.member
+                                        && member.child == Some(entry.session)
+                                })
+                            })
+                    })
+        })
         .collect()
+}
+
+/// Mail that the supervisor would otherwise deliver in its next root turn.
+fn unread_root_mail(projection: &Projection) -> u64 {
+    let inbox_len = projection
+        .team
+        .inboxes
+        .get(scope::ROOT_HANDLE)
+        .map_or(0, |inbox| inbox.len() as u64);
+    let cursor = projection
+        .team
+        .roster
+        .get(scope::ROOT_HANDLE)
+        .map_or(0, |entry| entry.resident_cursor);
+    inbox_len.saturating_sub(cursor)
 }
 
 /// The lead's own todos still to do. `Blocked` is the way out for an item
@@ -486,6 +534,101 @@ mod tests {
         }
     }
 
+    fn roster(handle: &str, status: RosterStatus) -> RosterEntry {
+        serde_json::from_value(serde_json::json!({
+            "handle": handle, "session": SessionId::new(), "status": status,
+        }))
+        .expect("roster fixture")
+    }
+
+    #[test]
+    fn l1_unread_root_mail_holds_exec_open_until_consumed() {
+        let mut projection = Projection::default();
+        let root = roster(scope::ROOT_HANDLE, RosterStatus::Idle);
+        projection.team.roster.insert(root.handle.clone(), root);
+        projection.team.inboxes.insert(
+            scope::ROOT_HANDLE.into(),
+            vec![hya_proto::MailMessage {
+                from: "main/worker".into(),
+                to: hya_proto::MailEndpoint::Handle(scope::ROOT_HANDLE.into()),
+                kind: hya_proto::MailKind::Message,
+                body: "result".into(),
+            }],
+        );
+        let pending = Pending::of(&projection, FinishReason::Stop);
+        assert!(!pending.is_empty());
+        assert!(pending.notice(None, false).contains("1 unread message"));
+        projection
+            .team
+            .roster
+            .get_mut(scope::ROOT_HANDLE)
+            .unwrap()
+            .resident_cursor = 1;
+        assert!(Pending::of(&projection, FinishReason::Stop).is_empty());
+    }
+
+    #[test]
+    fn l6_late_stage_archive_guidance_does_not_need_a_new_header() {
+        let mut projection = Projection::default();
+        let worker = roster("main/worker", RosterStatus::Idle);
+        projection.team.roster.insert(worker.handle.clone(), worker);
+        let notice = Pending::of(&projection, FinishReason::Stop).notice(None, true);
+        assert!(notice.contains("`archive` the subagents whose work you cannot integrate"));
+        assert!(!notice.contains("HEADLESS RUN — FINAL"));
+    }
+
+    #[test]
+    fn l4_terminal_roster_entries_do_not_hold_exec_open() {
+        let mut projection = Projection::default();
+        for status in [RosterStatus::Done, RosterStatus::Failed] {
+            let entry = roster("main/worker", status);
+            projection.team.roster.insert(entry.handle.clone(), entry);
+            assert!(live_subagents(&projection).is_empty(), "{status:?}");
+        }
+    }
+
+    #[test]
+    fn l4_finished_workflow_actors_are_parked_not_pending() {
+        let mut projection = Projection::default();
+        let worker = roster("main/stage", RosterStatus::Idle);
+        let member = hya_proto::MemberId::new();
+        projection.session.members.push(
+            serde_json::from_value(serde_json::json!({
+                "member": member, "child": worker.session, "subagent_type": "worker",
+                "description": "stage", "depth": 1, "status": "done"
+            }))
+            .expect("member fixture"),
+        );
+        projection.team.roster.insert(worker.handle.clone(), worker);
+        let run = serde_json::json!({
+            "id": hya_proto::WorkflowRunId::new(),
+            "workflow": {"source": "test", "name": "test", "revision": "00".repeat(32)},
+            "request_hash": "test", "owner": hya_proto::OwnerRunId::new(),
+            "status": "completed", "stages": [{
+                "id": "stage", "agent": "worker", "mode": "once", "level": 0,
+                "status": "completed", "members": [{"member": member, "role": "worker", "iteration": 0}]
+            }]
+        });
+        projection.session.workflow = Some(
+            serde_json::from_value(serde_json::json!({"run": run})).expect("workflow fixture"),
+        );
+        assert!(live_subagents(&projection).is_empty());
+        projection
+            .session
+            .workflow
+            .as_mut()
+            .unwrap()
+            .run
+            .as_mut()
+            .unwrap()
+            .status = hya_proto::WorkflowRunStatus::Running;
+        assert_eq!(
+            live_subagents(&projection).len(),
+            1,
+            "an active workflow still owns work"
+        );
+    }
+
     #[test]
     fn u1_pending_and_in_progress_todos_are_unfinished() {
         let mut projection = Projection::default();
@@ -645,7 +788,7 @@ mod tests {
             todo("3", TodoStatus::Pending),
             todo("4", TodoStatus::Completed),
         ]);
-        let notice = Pending::of(&projection, FinishReason::Stop).notice(None);
+        let notice = Pending::of(&projection, FinishReason::Stop).notice(None, false);
         assert!(notice.starts_with("HEADLESS RUN"));
         let todos = notice.find("#3 [pending] item 3").expect("todo listed");
         let narration = notice.find("\"Now let me run it:\"").expect("quoted");

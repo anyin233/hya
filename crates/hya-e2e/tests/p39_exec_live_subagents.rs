@@ -81,6 +81,87 @@ fn lead_requests(env: &E2eEnv) -> Vec<String> {
         .collect()
 }
 
+/// An idle member without a report must not give the resident supervisor a
+/// second root driver between the exec lead's turns.
+#[tokio::test]
+async fn t2_38_exec_alone_continues_after_a_worker_goes_idle() {
+    let env = E2eEnvBuilder::new()
+        .route(WORKER, vec![text_step("WORKER_IDLE"), text_step("WORKER_EXTRA")])
+        .route(ROOT, vec![
+            spawn_worker(),
+            tool_step("wait", json!({"timeout_secs": 60})),
+            text_step("ROOT_STOP"),
+            tool_step("archive", json!({"target": worker_handle(), "reason": "worker stopped without reporting"})),
+            text_step("FINAL_ANSWER"),
+            text_step("ROOT_EXTRA"),
+        ])
+        .build().await.expect("e2e env");
+    let output = run_exec(&env, "delegate, then finish").await;
+    assert!(
+        output.status.success(),
+        "{}; {}",
+        String::from_utf8_lossy(&output.stderr),
+        env.diagnostics()
+    );
+    let requests = lead_requests(&env);
+    assert!(
+        requests[2].contains("stalled"),
+        "the worker is idle before the lead ends its turn"
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.contains("TEAM QUIESCED")),
+        "resident synthesis must not drive exec: {requests:#?}"
+    );
+    assert_eq!(
+        requests.len(),
+        5,
+        "no turn after the final answer; {}",
+        env.diagnostics()
+    );
+    assert_eq!(
+        requests[3].matches(NOTICE).count(),
+        1,
+        "one continuation notice"
+    );
+    assert_eq!(env.fake.route_remaining(ROOT).unwrap(), Some(1));
+    assert_eq!(env.fake.route_remaining(WORKER).unwrap(), Some(1));
+    let events: Vec<hya_proto::Envelope> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("exec envelope"))
+        .collect();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|envelope| matches!(
+                envelope.event,
+                hya_proto::Event::MessageStarted {
+                    role: hya_proto::Role::User,
+                    ..
+                }
+            ))
+            .count(),
+        1,
+        "exactly one user prompt in the root transcript"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|envelope| matches!(
+                envelope.event,
+                hya_proto::Event::MessageStarted {
+                    role: hya_proto::Role::Assistant,
+                    ..
+                }
+            ))
+            .count(),
+        2,
+        "only the initial and continuation turns; no turn starts after the final answer"
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("FINAL_ANSWER"));
+}
+
 #[tokio::test]
 async fn t2_38_exec_lead_collects_a_live_worker_before_the_run_ends() {
     let env = E2eEnvBuilder::new()

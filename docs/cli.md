@@ -739,15 +739,19 @@ run; when a server (the backend daemon) already holds it, `exec` runs the turn
 through that server instead, still with the caller's cwd as the workdir (see
 [Database lock and the backend daemon](#database-lock-and-the-backend-daemon)).
 
-For an in-process run, a lead turn ending with live direct subagents,
+For an in-process run, the exec driver alone owns root continuation turns;
+the resident supervisor does not admit `TEAM QUIESCED` synthesis prompts.
+A lead turn ending with live direct subagents or unread root mail,
 pending/in-progress todos, an announced next step, or length-truncated output
 receives a `HEADLESS RUN —` system notice and another turn. Raw DSML tool
 markup, unexecuted XML tool-call suffixes outside closed Markdown code fences,
 and an internal `<analysis>`/`<summary>` response also trigger correction:
 the agent must issue a structured tool call or deliver its normal final answer.
 A trailing separator paragraph is ignored when checking an announcement.
-Completed/blocked todos do not hold the run open. Use `wait` to collect workers
-or `archive` workers whose results are no longer needed.
+Done/failed roster entries and idle actors belonging to the finished Workflow
+run do not hold it open. Completed/blocked todos do not hold the run open.
+Use `wait` to collect workers or `archive` workers whose results are no longer
+needed.
 
 For example, if `hya exec "implement and verify the change"` stops after
 “Now let me run the checks:”, the notice asks it to take that step. A normal
@@ -756,6 +760,9 @@ without any tool call end it too; without a budget there are at most 12 notices.
 In the Final window one ignored notice ends the run, and no continuation starts
 inside the Over guard. The first turn consumes the admitted user prompt;
 continuations add system notices without admitting another user prompt.
+Deadline headers appear at most once per stage per session, including notices
+added by the continuation driver; late-stage worker guidance still asks for
+archiving work that cannot be integrated in time.
 These guards add no CLI flags, RPC routes, or wire types; `--json` includes the
 notices and continuation events in the same session's canonical JSONL stream.
 Routed runs retain the server's single-prompt-turn behavior.
@@ -811,8 +818,8 @@ the same way.
 
 **Stopping and end of run.** Nothing keeps streaming after `exec` returns.
 When the lead's turn ends, `exec` drains every other in-flight turn — team
-members, subagents, and a quiescence-synthesis turn that may have started on
-the lead — before it flushes the trajectory, so the log (and `--json` stdout)
+members and subagents — before it flushes the trajectory, so the log (and
+`--json` stdout)
 ends on terminal events: each open assistant message gets `message_finished
 { finish: "cancelled", cause }`, open tool parts get a `tool_error`, and
 members are archived (`reason: shutdown`) so a later run on the same `--db`
