@@ -280,9 +280,8 @@ fn narration(projection: &Projection, finish: FinishReason) -> Option<Narration>
     })
 }
 
-/// Text the turn's last step produced: the Text parts after the last Tool
-/// part of the session's last assistant message (one message spans all the
-/// turn's steps).
+/// Only a tool-free last step is eligible for text continuation checks.
+/// One assistant message spans all steps of a turn.
 fn final_step_text(projection: &Projection) -> Option<String> {
     let message = projection
         .session
@@ -290,12 +289,14 @@ fn final_step_text(projection: &Projection) -> Option<String> {
         .iter()
         .rev()
         .find(|message| message.role == Role::Assistant)?;
-    let from = message
-        .parts
+    let parts = &message.parts[message.last_step_start.unwrap_or(0)..];
+    if parts
         .iter()
-        .rposition(|part| matches!(part, PartProjection::Tool { .. }))
-        .map_or(0, |at| at + 1);
-    let text = message.parts[from..]
+        .any(|part| matches!(part, PartProjection::Tool { .. }))
+    {
+        return None;
+    }
+    let text = parts
         .iter()
         .filter_map(|part| match part {
             PartProjection::Text { text, .. } => Some(text.as_str()),
@@ -306,54 +307,109 @@ fn final_step_text(projection: &Projection) -> Option<String> {
     Some(text)
 }
 
-/// DSML is never a user-facing tool result. XML suffixes count only
-/// outside closed Markdown fences, where examples are normal final answers.
+/// Ignore code examples; a result suffix can belong to a long parameter
+/// whose opening lies well before the tail window.
 fn malformed_tool_markup(text: &str) -> Option<String> {
-    if text.to_lowercase().contains("｜dsml｜") {
-        return Some("｜DSML｜".into());
+    let outside = outside_closed_code(text).to_lowercase();
+    if outside.contains("｜dsml｜") {
+        return Some("DSML".into());
     }
-    let outside = outside_closed_fences(text.trim_end());
     let tail: String = outside
+        .trim_end()
         .chars()
         .rev()
         .take(400)
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
-        .collect::<String>()
-        .to_lowercase();
-    for marker in ["</invoke>", "</tool_call>", "</function_calls>", "calls>"] {
+        .collect();
+    for marker in ["</invoke>", "</tool_call>", "</function_calls>"] {
         if tail.ends_with(marker) {
             return Some(marker.into());
         }
     }
-    (tail.contains("<parameter ") && tail.contains("</result>"))
+    if let Some(prefix) = tail.strip_suffix("calls>") {
+        // An angle bracket after a word is a generic type, e.g. Vec<Calls>.
+        let prefix = prefix.strip_suffix('<').unwrap_or(prefix);
+        if prefix
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric())
+        {
+            return Some("calls>".into());
+        }
+    }
+    (outside.contains("<parameter ") && tail.ends_with("</result>"))
         .then(|| "<parameter …></result>".into())
 }
 
-fn outside_closed_fences(text: &str) -> String {
-    let mut outside = String::new();
+/// Blank only closed Markdown fences and matched inline backtick spans.
+/// Preserve byte offsets while blanking, including non-ASCII examples.
+fn outside_closed_code(text: &str) -> String {
+    let mut outside = text.to_string();
     let mut open = None;
     let mut offset = 0;
-    let mut copied = 0;
     for line in text.split_inclusive('\n') {
         let trimmed = line.trim_start();
-        let ticks = trimmed.chars().take_while(|c| *c == '`').count();
-        if ticks >= 3 {
-            match open {
-                None => open = Some((offset, ticks)),
-                Some((start, width)) if ticks >= width && trimmed[ticks..].trim().is_empty() => {
-                    outside.push_str(&text[copied..start]);
-                    copied = offset + line.len();
-                    outside.extend(text[start..copied].chars().map(|_| ' '));
-                    open = None;
+        let delimiter = trimmed.chars().next().unwrap_or(' ');
+        if matches!(delimiter, '`' | '~') {
+            let width = trimmed.chars().take_while(|c| *c == delimiter).count();
+            if width >= 3 {
+                match open {
+                    None if delimiter != '`' || !trimmed[width..].contains('`') => {
+                        open = Some((offset, delimiter, width));
+                    }
+                    Some((start, fence, opening_width))
+                        if delimiter == fence
+                            && width >= opening_width
+                            && trimmed[width..].trim().is_empty() =>
+                    {
+                        let end = offset + line.len();
+                        outside.replace_range(start..end, &" ".repeat(end - start));
+                        open = None;
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
         offset += line.len();
     }
-    outside.push_str(&text[copied..]);
+    // An unclosed fence is unfinished output, not an inline code span.
+    let inline_end = open.map_or(text.len(), |(start, _, _)| start);
+    let mut at = 0;
+    while at < inline_end {
+        if outside.as_bytes()[at] != b'`' {
+            at += 1;
+            continue;
+        }
+        let width = outside.as_bytes()[at..inline_end]
+            .iter()
+            .take_while(|c| **c == b'`')
+            .count();
+        let mut end = at + width;
+        let mut close = None;
+        while end < inline_end {
+            if outside.as_bytes()[end] == b'`' {
+                let closing_width = outside.as_bytes()[end..inline_end]
+                    .iter()
+                    .take_while(|c| **c == b'`')
+                    .count();
+                if closing_width == width {
+                    close = Some(end + width);
+                    break;
+                }
+                end += closing_width;
+            } else {
+                end += 1;
+            }
+        }
+        if let Some(end) = close {
+            outside.replace_range(at..end, &" ".repeat(end - at));
+            at = end;
+        } else {
+            at += width;
+        }
+    }
     outside
 }
 
@@ -721,28 +777,30 @@ mod tests {
     }
 
     #[test]
-    fn u7_only_text_after_the_last_tool_call_counts() {
-        let projection = with_messages(vec![
-            message(Role::User, vec![text("do it")]),
-            message(
-                Role::Assistant,
-                vec![
-                    text("Now let me check the file:"),
-                    tool("bash"),
-                    text("Done."),
-                    text("Changed files: a.txt."),
-                ],
-            ),
-        ]);
+    fn u7_only_a_tool_free_last_step_counts() {
+        let row = message(
+            Role::Assistant,
+            vec![text("Now let me check the file:"), tool("bash")],
+        );
+        let id = row.id;
+        let mut projection = with_messages(vec![message(Role::User, vec![text("do it")]), row]);
+        apply_step(&mut projection, id, 1);
+        projection.session.messages[1]
+            .parts
+            .extend([text("Done."), text("Changed files: a.txt.")]);
         assert_eq!(
             final_step_text(&projection).as_deref(),
             Some("Done.\nChanged files: a.txt.")
         );
         assert_eq!(narration(&projection, FinishReason::Stop), None);
-        let announced = with_messages(vec![message(
-            Role::Assistant,
-            vec![tool("bash"), text("Now let me verify the output:")],
-        )]);
+
+        let row = message(Role::Assistant, vec![tool("bash")]);
+        let id = row.id;
+        let mut announced = with_messages(vec![row]);
+        apply_step(&mut announced, id, 1);
+        announced.session.messages[0]
+            .parts
+            .push(text("Now let me verify the output:"));
         assert_eq!(
             narration(&announced, FinishReason::Stop),
             Some(Narration::Announces(
@@ -899,5 +957,164 @@ mod tests {
             vec![text("<summary>User-facing result.</summary>")],
         )]);
         assert_eq!(narration(&normal, FinishReason::Stop), None);
+    }
+    #[test]
+    fn l2_long_parameter_values_still_detect_a_result_suffix() {
+        for ending in ["</result>", "</parameter></result>"] {
+            let leak = format!(
+                "<result><name>write</name><parameter name=\"content\">{}{}",
+                "多行内容\n".repeat(200),
+                ending
+            );
+            assert!(malformed_tool_markup(&leak).is_some(), "{ending}");
+        }
+    }
+
+    #[test]
+    fn l3_dsml_examples_in_closed_backtick_fences_are_not_leaks() {
+        assert_eq!(
+            malformed_tool_markup(
+                "Example:\n```xml\n｜DSML｜ calls>\n</｜DSML｜ invoke>\n```\nDone."
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn l3_dsml_examples_in_closed_tilde_fences_are_not_leaks() {
+        assert_eq!(
+            malformed_tool_markup("Example:\n~~~xml\n｜DSML｜ calls>\n~~~\nDone."),
+            None
+        );
+    }
+
+    #[test]
+    fn l3_xml_examples_in_closed_tilde_fences_are_not_leaks() {
+        assert_eq!(
+            malformed_tool_markup(
+                "Example:\n~~~xml\n<parameter name=\"x\">value</result>\n~~~\nDone."
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn l3_inline_dsml_examples_are_not_leaks() {
+        for text in [
+            "Used `｜DSML｜ calls>` as the example.",
+            "Used ``</｜DSML｜ invoke>`` as the example.",
+        ] {
+            assert_eq!(malformed_tool_markup(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn l3_inline_xml_examples_are_not_leaks() {
+        for text in [
+            "The tags are `<parameter name=\"x\">` and `</result>`.",
+            "Example: ``<parameter name=\"x\">`value`</result>``",
+            "Example `<parameter name=\"x\">value` ends with </result>",
+        ] {
+            assert_eq!(malformed_tool_markup(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn l3_ordinary_calls_word_endings_are_not_leaks() {
+        for text in ["Vec<Calls>", "syscalls>", "callbacks>", "Unicode字calls>"] {
+            assert_eq!(malformed_tool_markup(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn l3_parameter_result_pair_must_end_the_output() {
+        assert_eq!(
+            malformed_tool_markup(
+                "<parameter name=\"x\">value</result>\n\nDone. The format is documented."
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn l3_a_single_line_backtick_span_does_not_open_a_fence() {
+        assert_eq!(
+            malformed_tool_markup(
+                "```foo```\n\n```\n<parameter name=\"x\">example</result>\n```\n\nDone."
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn l3_notice_names_dsml_without_repeating_the_glyph_sequence() {
+        let projection = with_messages(vec![message(
+            Role::Assistant,
+            vec![text("｜DSML｜ calls>")],
+        )]);
+        let notice = Pending::of(&projection, FinishReason::Stop).notice(None, false);
+        assert!(notice.contains("(DSML)"));
+        assert!(!notice.contains("｜DSML｜"));
+        assert_eq!(
+            malformed_tool_markup("Ran it via a tool call instead of DSML markup."),
+            None
+        );
+    }
+
+    #[test]
+    fn l3_unclosed_code_and_tool_call_tag_suffixes_still_detect_leaks() {
+        for leak in [
+            "```xml\n｜DSML｜ calls>",
+            "~~~xml\n</invoke>",
+            "`<parameter name=\"command\">pwd</result>",
+            "<tool_calls>",
+            "</tool_calls>",
+            " calls>",
+            "<calls>",
+            "\n<result><parameter name=\"command\">pwd</result>  ",
+            "```safe```\n</tool_call>",
+        ] {
+            assert!(malformed_tool_markup(leak).is_some(), "{leak}");
+        }
+    }
+
+    fn apply_step(projection: &mut Projection, message: MessageId, step: u32) {
+        projection.apply(&hya_proto::Envelope {
+            seq: hya_proto::EventSeq(0),
+            ts_millis: 0,
+            event: hya_proto::Event::StepStarted {
+                session: SessionId::new(),
+                message,
+                step,
+            },
+        });
+    }
+
+    #[test]
+    fn l5_a_reasoning_only_last_step_does_not_reuse_previous_text() {
+        let row = message(Role::Assistant, vec![text("Now verify the file:")]);
+        let id = row.id;
+        let mut projection = with_messages(vec![row]);
+        apply_step(&mut projection, id, 1);
+        projection.session.messages[0]
+            .parts
+            .push(PartProjection::Reasoning {
+                id: PartId::new(),
+                text: "thinking".into(),
+                reason: None,
+                provider_data: None,
+            });
+        assert_eq!(final_step_text(&projection).as_deref(), Some(""));
+        assert_eq!(narration(&projection, FinishReason::Stop), None);
+    }
+
+    #[test]
+    fn l5_a_step_with_tool_then_text_is_not_checked_as_narration() {
+        let projection = with_messages(vec![message(
+            Role::Assistant,
+            vec![tool("bash"), text("</invoke>")],
+        )]);
+        assert_eq!(final_step_text(&projection), None);
+        assert_eq!(narration(&projection, FinishReason::Stop), None);
     }
 }

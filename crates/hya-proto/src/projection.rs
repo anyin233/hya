@@ -212,6 +212,9 @@ pub struct MessageProjection {
     pub agents: Vec<serde_json::Value>,
     /// Ordered content parts (text / reasoning / tool only — no media).
     pub parts: Vec<PartProjection>,
+    /// Part offset at the newest `StepStarted`; absent before the first step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_step_start: Option<usize>,
     /// Files this message's tool calls changed, with their prior state
     /// (`FilesChanged`), in call order. What a revert restores from.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -662,7 +665,7 @@ pub fn session_archive_event(
 /// different projection, or when `Projection` (or anything it contains)
 /// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
 /// the bump is recorded.
-pub const PROJECTION_REDUCER_VERSION: u32 = 5;
+pub const PROJECTION_REDUCER_VERSION: u32 = 6;
 
 /// Durable snapshot encoding: the wire projection plus replay-only reducer
 /// state the wire form deliberately omits.
@@ -694,8 +697,8 @@ pub struct Projection {
 }
 
 /// The transcript message an event folds onto, if any (drives
-/// `MessageProjection::time_created` / `time_updated`). Step markers are
-/// reducer no-ops, and switch/compaction anchors only point at a message.
+/// `MessageProjection::time_created` / `time_updated`). Step boundaries do not
+/// change content timestamps; switch/compaction anchors only point at a message.
 fn changed_message(event: &Event) -> Option<MessageId> {
     match event {
         Event::MessageStarted { message, .. }
@@ -1105,9 +1108,15 @@ impl Projection {
                         files: Vec::new(),
                         agents: Vec::new(),
                         parts: Vec::new(),
+                        last_step_start: None,
                         file_changes: Vec::new(),
                         error: None,
                     });
+                }
+            }
+            Event::StepStarted { message, .. } => {
+                if let Some(message) = self.message_mut(*message) {
+                    message.last_step_start = Some(message.parts.len());
                 }
             }
             Event::TurnBindingRecorded {
@@ -1185,8 +1194,13 @@ impl Projection {
                 }
             }
             Event::PartDeleted { message, part, .. } => {
-                if let Some(message) = self.message_mut(*message) {
-                    message.parts.retain(|item| item.id() != *part);
+                if let Some(message) = self.message_mut(*message)
+                    && let Some(at) = message.parts.iter().position(|item| item.id() == *part)
+                {
+                    message.parts.remove(at);
+                    if let Some(start) = &mut message.last_step_start && at < *start {
+                        *start -= 1;
+                    }
                 }
             }
             Event::TextStart { message, part, .. } => push_part(
@@ -1640,7 +1654,6 @@ impl Projection {
             | Event::SessionStatus { .. }
             | Event::ToolInputDelta { .. }
             | Event::CommandExecuted { .. }
-            | Event::StepStarted { .. }
             | Event::StepFinished { .. }
             | Event::Error {
                 failed_message: None,
