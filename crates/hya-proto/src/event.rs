@@ -347,7 +347,7 @@ pub enum Event {
     },
 
     // -------- assistant streaming --------
-    /// Provider round started; reducer no-op (UI / step markers).
+    /// Provider round started; records the message's last-step part boundary.
     StepStarted {
         /// Session this event belongs to.
         session: SessionId,

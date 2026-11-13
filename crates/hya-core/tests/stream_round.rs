@@ -459,6 +459,7 @@ async fn forked_reasoning_provider_data_reaches_next_request() {
                 time_created: None,
                 time_updated: None,
                 config_generation: None,
+                last_step_start: None,
                 finish: Some(FinishReason::Stop),
                 tokens: None,
                 usage: None,

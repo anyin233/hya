@@ -744,9 +744,15 @@ the resident supervisor does not admit `TEAM QUIESCED` synthesis prompts.
 A lead turn ending with live direct subagents or unread root mail,
 pending/in-progress todos, an announced next step, or length-truncated output
 receives a `HEADLESS RUN —` system notice and another turn. Raw DSML tool
-markup, unexecuted XML tool-call suffixes outside closed Markdown code fences,
-and an internal `<analysis>`/`<summary>` response also trigger correction:
+markup, unexecuted XML tool-call suffixes, and an internal `<analysis>`/`<summary>` response also trigger correction:
 the agent must issue a structured tool call or deliver its normal final answer.
+These checks read only a tool-free final provider step; a reasoning-only final
+step does not reuse text from an earlier step. Closed backtick/tilde fences
+and matched inline code spans are excluded from tool-markup detection.
+A parameter opener may precede a long value, but its result closing tag must
+end the output. Ordinary endings such as `Vec<Calls>` and `syscalls>` do not
+count as tool calls. Corrective notices name DSML without repeating its raw
+marker glyphs.
 A trailing separator paragraph is ignored when checking an announcement.
 Done/failed roster entries and idle actors belonging to the finished Workflow
 run do not hold it open. Completed/blocked todos do not hold the run open.

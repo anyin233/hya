@@ -98,6 +98,17 @@ only that loop injects continuation system notices. A cold root stays
 non-autonomous when the guard drops; a later externally started root turn
 restores normal resident supervision.
 
+The shared transcript reducer records `MessageProjection.last_step_start:
+Option<usize>` as the part offset at the newest `StepStarted` for that message.
+It is absent before a step starts and omitted from JSON when absent. For
+example, after `[Tool]`, a new step records offset `1`; a subsequent text part
+belongs to that step, while a reasoning-only step yields no final text. A tool
+anywhere within that step excludes its text from headless markup/announcement
+checks. `PartDeleted` adjusts the offset when an earlier part is removed.
+The field survives snapshot/replay; reducer version `6` invalidates older cached
+projections. `StepStarted` does not change message content timestamps, and no
+RPC or event payload fields change.
+
 ## Build and Quality Gate
 
 Local verification is **per component**: run the checks for the crates and
