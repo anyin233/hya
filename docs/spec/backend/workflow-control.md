@@ -261,3 +261,9 @@ failed/skipped Stages. Cancellation stops admission and drains Stage futures
 before ending all registered run-owned actors under `RootDriverActivity`.
 Public plan/state `level: usize` fields remain topological display metadata;
 no wire schema or configuration changes.
+
+Finished delivery runs on the existing runtime task tracker too. Dropping the
+waiting caller cancels its run token; it does not drop the execution future.
+The task retains admission ownership through actor cleanup and the terminal
+`WorkflowRunFinished` write. Root-driver activity also covers that write. Started
+delivery transfers ownership to its background task on successful return.
