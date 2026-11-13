@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use hya_proto::{ReportOutcome, SessionId, ToolSchema};
+use hya_proto::{ActorClaim, ReportOutcome, SessionId, ToolSchema};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
@@ -30,6 +30,8 @@ pub enum LifecycleRequest {
     Wait {
         /// Waiting session.
         session: SessionId,
+        /// Claim captured by the calling turn; roots use `None`.
+        actor_claim: Option<ActorClaim>,
         /// Parsed request.
         spec: WaitSpec,
         /// Rejection text or the outcome.
@@ -610,6 +612,7 @@ impl ReportLatch {
 pub struct LifecyclePlane {
     tx: Option<mpsc::UnboundedSender<LifecycleRequest>>,
     session: Option<SessionId>,
+    actor_claim: Option<ActorClaim>,
     channel_policy: Option<ChannelPolicySnapshot>,
     report_latch: Option<ReportLatch>,
 }
@@ -629,6 +632,7 @@ impl LifecyclePlane {
             Self {
                 tx: Some(tx),
                 session: None,
+                actor_claim: None,
                 channel_policy: None,
                 report_latch: None,
             },
@@ -642,6 +646,7 @@ impl LifecyclePlane {
         Self {
             tx: None,
             session: None,
+            actor_claim: None,
             channel_policy: None,
             report_latch: None,
         }
@@ -656,8 +661,19 @@ impl LifecyclePlane {
     /// Scope requests to the acting session.
     #[must_use]
     pub fn for_session(&self, session: SessionId) -> Self {
+        self.for_session_with_actor(session, None)
+    }
+
+    /// Scope requests to the acting turn's durable capability.
+    #[must_use]
+    pub fn for_session_with_actor(
+        &self,
+        session: SessionId,
+        actor_claim: Option<ActorClaim>,
+    ) -> Self {
         let mut plane = self.clone();
         plane.session = Some(session);
+        plane.actor_claim = actor_claim;
         plane
     }
 
@@ -756,6 +772,7 @@ impl LifecyclePlane {
         self.tx()?
             .send(LifecycleRequest::Wait {
                 session,
+                actor_claim: self.actor_claim,
                 spec,
                 reply: reply_tx,
             })

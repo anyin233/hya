@@ -583,7 +583,7 @@ async fn consumed_results_do_not_repeat_synthesis(via_wait: bool, late_mail: boo
         service.abort();
     } else {
         let read = engine
-            .read_channel_history(root, "scout", None)
+            .read_channel_history(None, root, "scout", None)
             .await
             .unwrap();
         assert_eq!(read.messages[0].1, "findings ready");
@@ -688,7 +688,7 @@ async fn reading_incoming_mail_ignores_an_outgoing_directive_on_another_dm() {
     }
     // Both notifications have counted as work before this read's snapshot.
     engine
-        .read_channel_history(root, "scout", None)
+        .read_channel_history(None, root, "scout", None)
         .await
         .unwrap();
     drop(lease);
@@ -757,7 +757,7 @@ async fn reading_another_channel_keeps_the_synthesis_for_unseen_mail() {
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     let read = engine
-        .read_channel_history(root, "scout", None)
+        .read_channel_history(None, root, "scout", None)
         .await
         .unwrap();
     assert_eq!(read.messages[0].1, "findings ready");
