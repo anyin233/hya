@@ -576,3 +576,6 @@ registration, including when restore tools already ended the staged claim.
 An empty or rejected server restore releases its engine turn lease and server
 run reservation before returning its admission result; an immediate client turn
 therefore observes the completed admission.
+
+Wait stall notices are keyed to the actor claim as well as its last answer. A
+wait snapshot from an ended episode cannot mark the revived episode as notified.

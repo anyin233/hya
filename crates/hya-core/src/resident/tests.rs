@@ -1968,9 +1968,10 @@ async fn m412_episode_end_forgets_wait_stalls() {
     let supervisor = ResidentSupervisor::start(engine.clone());
     let driver = supervisor.root_driver_activity(root).await.unwrap();
     let (child, handle) = parked(&supervisor, root).await;
-    supervisor.record_wait_stall(root, child, None);
+    let claim = supervisor.member_claim(child).unwrap();
+    supervisor.record_wait_stall(root, claim, None);
     supervisor.end_member(root, &handle).await.unwrap();
-    let retained = supervisor.wait_stall_reported(root, child, None);
+    let retained = supervisor.wait_stall_reported(root, claim, None);
     drop(driver);
     supervisor
         .drain(FinishCause::Shutdown, Duration::from_secs(5))
@@ -1986,11 +1987,12 @@ async fn m412_delete_caller_forgets_only_its_wait_stalls() {
     let supervisor = ResidentSupervisor::start(engine.clone());
     let driver = supervisor.root_driver_activity(other).await.unwrap();
     let (member, _) = parked(&supervisor, other).await;
-    supervisor.record_wait_stall(caller, member, None);
-    supervisor.record_wait_stall(other, member, None);
+    let claim = supervisor.member_claim(member).unwrap();
+    supervisor.record_wait_stall(caller, claim, None);
+    supervisor.record_wait_stall(other, claim, None);
     engine.delete_session(caller).await.unwrap();
-    let retained = supervisor.wait_stall_reported(caller, member, None);
-    assert!(supervisor.wait_stall_reported(other, member, None));
+    let retained = supervisor.wait_stall_reported(caller, claim, None);
+    assert!(supervisor.wait_stall_reported(other, claim, None));
     drop(driver);
     supervisor
         .drain(FinishCause::Shutdown, Duration::from_secs(5))
@@ -2169,9 +2171,10 @@ async fn m412_late_stall_record_cannot_retain_ended_episode() {
     let supervisor = ResidentSupervisor::start(engine.clone());
     let driver = supervisor.root_driver_activity(root).await.unwrap();
     let (child, handle) = parked(&supervisor, root).await;
+    let claim = supervisor.member_claim(child).unwrap();
     supervisor.end_member(root, &handle).await.unwrap();
-    supervisor.record_wait_stall(root, child, None);
-    let retained = supervisor.wait_stall_reported(root, child, None);
+    supervisor.record_wait_stall(root, claim, None);
+    let retained = supervisor.wait_stall_reported(root, claim, None);
     drop(driver);
     supervisor
         .drain(FinishCause::Shutdown, Duration::from_secs(5))
@@ -2317,4 +2320,26 @@ async fn o4_ended_staged_claim_still_recovers_its_roots_unread_mail() {
         Event::TextDelta { delta, .. } if delta.contains("unread root mail")));
     supervisor.drain(FinishCause::Shutdown, Duration::from_secs(5)).await;
     assert!(recovered, "the stale claim retired its root before inbox recovery");
+}
+
+#[tokio::test]
+async fn o5_late_stall_from_an_ended_episode_does_not_mark_its_revival() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let driver = supervisor.root_driver_activity(root).await.unwrap();
+    let (child, handle) = parked(&supervisor, root).await;
+    let old_claim = supervisor.team_with_resident(child).unwrap().lock().residents[&child].claim;
+    supervisor.end_member(root, &handle).await.unwrap();
+    // Hold the revived turn before its first answer, while an old wait's
+    // snapshot remains suspended before recording the stall.
+    let lease = engine.try_begin_turn(child).unwrap();
+    engine.mail_send(root, MailEndpoint::Handle(handle), MailKind::Message, "revive".into()).await.unwrap();
+    supervisor.record_wait_stall(root, old_claim.unwrap(), None);
+    let inherited = supervisor.wait_stall_reported(root, supervisor.member_claim(child).unwrap(), None);
+    engine.begin_drain(FinishCause::Shutdown);
+    drop(lease);
+    drop(driver);
+    supervisor.drain(FinishCause::Shutdown, Duration::from_secs(5)).await;
+    assert!(!inherited, "revived episode inherited an old wait snapshot");
 }
