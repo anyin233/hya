@@ -439,7 +439,10 @@ server) made it. Child (subagent) sessions never produce these frames.
   (as before) but never `busy` or `sessionDeleted`.
 - **Busy.** `sessionUpdated.busy` mirrors `SessionInfo.busy`: `true` when a
   turn (prompt, command, shell, engine wake) or a Workflow run starts on the
-  session, `false` when it is idle again. A server turn stays busy until its
+  session, `false` when it is idle again. This includes server admission
+  reservations before an engine turn lease exists, and the full Workflow
+  orchestration window even when only child sessions hold turn leases.
+  A server turn stays busy until its
   automatic title call also finishes or is cancelled. It is sent once per transition —
   never per token — with `seq` 0 and no other field set; a transition that
   the server notices late (an engine-internal turn, a Workflow run) arrives
