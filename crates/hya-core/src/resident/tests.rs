@@ -1512,3 +1512,69 @@ async fn review_r5_registration_frames_precede_siblings_and_activation_mail() {
         "root registration must publish in commit order before activation mail, without waiting for session-start hooks"
     );
 }
+
+#[tokio::test]
+async fn review_r2_concurrent_roster_orphan_rejects_activation_before_mail() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    engine
+        .store()
+        .claim_runtime_owner(supervisor.owner_run_id)
+        .unwrap();
+    let _driver = supervisor.root_driver_activity(root).await.unwrap();
+    let (child, handle) = parked(&supervisor, root).await;
+    supervisor.end_member(root, &handle).await.unwrap();
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    *supervisor.registration_pause.lock().unwrap() = Some((entered.clone(), release.clone()));
+    let activation = tokio::spawn({
+        let supervisor = supervisor.clone();
+        async move {
+            supervisor
+                .activate(
+                    root,
+                    child,
+                    "must not commit".into(),
+                    Arc::from(""),
+                    None,
+                    None,
+                )
+                .await
+        }
+    });
+    entered.notified().await;
+    let projection = engine.read_projection(root).await.unwrap();
+    let dm = crate::engine::dm_channel_between(&projection, "main", &handle).unwrap();
+    // A concurrent revival committed but left no episode (e.g. failed terminal
+    // persistence). The serialized roster, not the pre-lock snapshot, is live.
+    engine
+        .store()
+        .revive_episode(
+            root,
+            supervisor.owner_run_id,
+            u64::MAX,
+            None,
+            child,
+            "main".into(),
+            MailEndpoint::Channel(dm),
+            MailKind::Message,
+            "prior revival".into(),
+            hya_provider::COMPACT_CONTEXT_MARKER,
+            None,
+        )
+        .await
+        .unwrap();
+    let before = engine.replay(root).await.unwrap();
+    release.notify_one();
+    assert!(activation.await.unwrap().is_err());
+    let after = engine.replay(root).await.unwrap();
+    supervisor.end_member(root, &handle).await.unwrap();
+    supervisor
+        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
+        .await;
+    assert_eq!(
+        before, after,
+        "rejected activation committed mail to a roster orphan"
+    );
+}

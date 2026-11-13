@@ -4115,11 +4115,11 @@ impl ResidentSupervisor {
             }
         }
         let mut write = self.claim_writes.lock().await;
-        loop {
+        let current = loop {
             let current = self.engine.read_projection(root).await?;
             // A live roster wins: never wait for a concurrent revival's episode.
             if current.team.roster.contains_key(target) {
-                break;
+                break current;
             }
             let previous = self.team_with_resident(child).and_then(|previous| {
                 previous
@@ -4129,13 +4129,13 @@ impl ResidentSupervisor {
                     .map(|slot| slot.done.subscribe())
             });
             let Some(done) = previous else {
-                break;
+                break current;
             };
             drop(write);
             let _ = await_episode(done).await;
             team = self.team_for(root).await?;
             write = self.claim_writes.lock().await;
-        }
+        };
         // Reserve the existing turn seam before checking idle: unrelated mail
         // cannot start work until guidance, route and completion are installed.
         let activation_lease = activation
@@ -4156,7 +4156,7 @@ impl ResidentSupervisor {
                         "resident Workflow activation requires an idle episode".into(),
                     ));
                 }
-            } else if projection.team.roster.contains_key(target) {
+            } else if current.team.roster.contains_key(target) {
                 return Err(CoreError::Invalid(
                     "resident session is not registered".into(),
                 ));
