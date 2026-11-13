@@ -1310,10 +1310,10 @@ async fn spawn_after_an_empty_team_is_killed_resets_its_budgets() {
     let (first_child, _) = spawn(&supervisor, &engine, &agent, root, None)
         .await
         .unwrap();
-    let mut events = engine.bus().subscribe();
     tokio::time::timeout(Duration::from_secs(5), async {
         while supervisor.member_busy(root, first_child) != Some(false) {
-            events.recv().await.unwrap();
+            // The last durable event can precede the in-memory idle transition.
+            tokio::task::yield_now().await;
         }
     })
     .await
@@ -1517,4 +1517,137 @@ async fn m46_review_s5_agent_spawn_fires_for_creation_only() {
         .drain(FinishCause::Shutdown, crate::DRAIN_DEADLINE)
         .await;
     assert_eq!(after, spawned, "revival repeated creation hooks");
+}
+
+#[tokio::test]
+async fn registered_directive_waits_before_bus_delivery() {
+    registered_directive_before_bus(false, false).await;
+}
+
+#[tokio::test]
+async fn registered_directive_can_be_user_stopped_before_bus_delivery() {
+    registered_directive_before_bus(true, false).await;
+}
+
+#[tokio::test]
+async fn registered_directive_blocks_quiescence_before_bus_delivery() {
+    registered_directive_before_bus(false, true).await;
+}
+
+async fn registered_directive_before_bus(cancel: bool, release_lead: bool) {
+    let hooks = Arc::new(Hooks::default());
+    let (engine, supervisor, agent, root) =
+        fixture(SubagentLimits::default(), Some(hooks.clone())).await;
+    let mut lead = Some(engine.try_begin_turn(root).unwrap());
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    *hooks.pause_start.lock().unwrap() = Some((entered.clone(), release.clone()));
+    let spawning = tokio::spawn({
+        let engine = engine.clone();
+        let supervisor = supervisor.clone();
+        async move { spawn(&supervisor, &engine, &agent, root, None).await }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), entered.notified())
+        .await
+        .unwrap();
+    let projection = engine.read_projection(root).await.unwrap();
+    let child = projection
+        .team
+        .roster
+        .values()
+        .find(|entry| entry.session != root)
+        .unwrap()
+        .session;
+    assert!(
+        engine
+            .read_projection(child)
+            .await
+            .unwrap()
+            .session
+            .messages
+            .is_empty()
+    );
+    if release_lead {
+        drop(lead.take());
+        crate::TurnBoundaryObserver::turn_released(supervisor.as_ref(), root);
+        assert_eq!(
+            supervisor.member_busy(root, root),
+            Some(false),
+            "pending member must hold back quiescence"
+        );
+    }
+    let spec = hya_tool::WaitSpec::parse(&serde_json::json!({"timeout_secs": 0}), false).unwrap();
+    let outcome = if cancel {
+        assert!(
+            engine.cancel_user_turn(child),
+            "installed directive must be cancellable before its bus event"
+        );
+        assert!(engine.stopped_by_user(child));
+        None
+    } else {
+        Some(
+            crate::member_wait::wait_for_members(&engine, &supervisor, root, spec)
+                .await
+                .unwrap(),
+        )
+    };
+    *hooks.pause_start.lock().unwrap() = None;
+    release.notify_one();
+    spawning.await.unwrap().unwrap();
+    if let Some(outcome) = outcome {
+        assert_eq!(
+            outcome.woke_by,
+            hya_tool::WaitWake::Timeout,
+            "pending first work must not be reported stalled"
+        );
+    } else {
+        assert!(
+            engine
+                .read_projection(child)
+                .await
+                .unwrap()
+                .session
+                .messages
+                .is_empty(),
+            "late bus delivery must not run a user-stopped directive"
+        );
+        engine.resume_after_user_stop(child);
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let projection = engine.read_projection(root).await.unwrap();
+            let entry = projection
+                .team
+                .roster
+                .values()
+                .find(|entry| entry.session == child)
+                .unwrap();
+            if entry.resident_cursor == 1
+                && supervisor.member_busy(root, child) == Some(false)
+                && engine.mail_mark(root).is_some_and(|mark| mark >= 1)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("directive must finish once after initialization or explicit resume");
+    assert_eq!(
+        engine
+            .read_projection(child)
+            .await
+            .unwrap()
+            .session
+            .messages
+            .iter()
+            .filter(|message| message.role == Role::User)
+            .count(),
+        1
+    );
+    assert_eq!(engine.replay(root).await.unwrap().iter().filter(|envelope| matches!(envelope.event, hya_proto::Event::ResidentWorkStarted { actor_session, .. } if actor_session == child)).count(), 1, "late bus delivery must not admit the directive twice");
+    drop(lead);
+    supervisor
+        .drain(FinishCause::Shutdown, std::time::Duration::from_secs(2))
+        .await;
 }

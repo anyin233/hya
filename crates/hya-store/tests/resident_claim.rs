@@ -2163,3 +2163,115 @@ async fn concurrent_registration_batches_share_the_roots_durable_capacity() {
         1
     );
 }
+
+#[tokio::test]
+async fn aborted_first_wake_closes_unanswered_prompt_before_the_next_wake() {
+    for assistant in [None, Some(""), Some("partial answer")] {
+        let store = SessionStore::connect_memory().await.unwrap();
+        let (root, claim) = work_fixture(&store).await;
+        let (prompt, _) = store
+            .begin_work(
+                Some(&claim),
+                root,
+                "main/worker",
+                1,
+                hya_store::ResidentWorkPrompt::Text("aborted instruction".into()),
+                "working".into(),
+            )
+            .await
+            .unwrap();
+        if let Some(text) = assistant {
+            let message = MessageId::new();
+            let part = PartId::new();
+            store
+                .append_event(
+                    claim.actor_id,
+                    &Event::MessageStarted {
+                        session: claim.actor_id,
+                        message,
+                        role: Role::Assistant,
+                        agent: None,
+                        model: None,
+                    },
+                )
+                .await
+                .unwrap();
+            store
+                .append_event(
+                    claim.actor_id,
+                    &Event::TextStart {
+                        session: claim.actor_id,
+                        message,
+                        part,
+                    },
+                )
+                .await
+                .unwrap();
+            if !text.is_empty() {
+                store
+                    .append_event(
+                        claim.actor_id,
+                        &Event::TextDelta {
+                            session: claim.actor_id,
+                            message,
+                            part,
+                            delta: text.into(),
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+        let recovered = store
+            .recover_claim(claim.actor_id, OwnerRunId::new())
+            .await
+            .unwrap();
+        let result = store
+            .recover_resident_actor(&recovered, root, "main/worker")
+            .await
+            .unwrap();
+        assert!(matches!(
+            result.work,
+            hya_store::RecoveredResidentWork::AbortedRunning { .. }
+        ));
+        store
+            .begin_work(
+                Some(&recovered.claim),
+                root,
+                "main/worker",
+                2,
+                hya_store::ResidentWorkPrompt::Text("next instruction".into()),
+                "working".into(),
+            )
+            .await
+            .unwrap();
+        let projection = store.read_projection(claim.actor_id).await.unwrap();
+        let messages = &projection.session.messages;
+        assert_eq!(messages[0].id, prompt);
+        if assistant == Some("partial answer") {
+            assert_eq!(
+                messages.len(),
+                3,
+                "already answered work needs no synthetic answer"
+            );
+            continue;
+        }
+        let closing = messages
+            .iter()
+            .skip(1)
+            .find(|message| {
+                message.parts.iter().any(
+                    |part| matches!(part, PartProjection::Text { text, .. } if !text.is_empty()),
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            closing.role,
+            Role::Assistant,
+            "aborted instruction needs a nonempty closing answer before the next user message"
+        );
+        assert_eq!(closing.finish, Some(FinishReason::Cancelled));
+        assert_eq!(closing.cause, Some(hya_proto::FinishCause::Interrupted));
+        assert_eq!(messages.last().unwrap().role, Role::User);
+    }
+}
