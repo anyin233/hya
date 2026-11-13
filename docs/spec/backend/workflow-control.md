@@ -238,3 +238,10 @@ fail it, while requested run cancellation returns Cancelled. The episode drops
 request-local route recorders before resolving settlement and on ending, so a
 parked actor cannot retain a completed run's route sender. These types remain
 crate-visible; no wire or plugin schema is added by the activation API.
+
+Deadline notices use the current `CompletionRequest.tools: Vec<ToolSchema>`
+to select their completion instruction. A child receives “call report” only
+when the `report` schema is offered; otherwise it receives the normal turn
+completion notice. For example, a core Workflow without a governor hides
+report at depth zero and completes through `Settled.final_text`. No new
+configuration, tool or wire contract is required.

@@ -2248,8 +2248,12 @@ impl SessionEngine {
                             if let Some(deadline) = hya_tool::deadline::current()
                                 && let Some(stage) = deadline.take_notice(session)
                             {
-                                let notice =
-                                    deadline.notice(stage, projection.session.parent.is_some());
+                                let can_report = projection.session.parent.is_some()
+                                    && request
+                                        .tools
+                                        .iter()
+                                        .any(|tool| tool.name.as_str() == "report");
+                                let notice = deadline.notice(stage, can_report);
                                 append_steer_notice(&mut output, &format!("\n\n{notice}"));
                             }
                         }
