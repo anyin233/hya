@@ -55,9 +55,13 @@ only; live reconciliation callers use fresh uncancelled tokens, so no change.
 
 `AppState::shutdown().await` cancels and joins the server's frame/catalog relays,
 Project busy watcher, session-list tracker, ephemeral startup sweep, delayed
-reaper children, and permission/question bridges. `stop_for_restart` includes
-this join, and `HyaRuntime::shutdown()` joins it before built-engine shutdown.
+reaper children, and permission/question bridges. The join comes last:
+`stop_for_restart` and `HyaRuntime::shutdown()` fence admission and close streams,
+drain turns, Workflow runs and residents (`built.shutdown()`), and only then join
+these services, so a turn waiting on a permission or question is cancelled by the
+stop instead of seeing an unavailable bridge.
 `RuntimeTaskOwner` is now defined in hya-server and re-exported through the
 existing hya-app path. Routers retain the owner in an extension; service tasks
 hold only token/tracker handles, avoiding an owner/task cycle. The resident bus
-listener and plugin/MCP I/O remain outside this server guarantee.
+listener remains outside this guarantee; plugin/MCP connection I/O is joined
+through the owner's `io_tasks` tracker.
