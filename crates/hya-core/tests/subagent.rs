@@ -3831,10 +3831,7 @@ async fn resident_running_loss_never_runs_recovery_transaction() {
         )
         .await
         .unwrap();
-    entered_rx
-        .recv()
-        .await
-        .expect("provider must enter first turn");
+    assert_eq!(entered_rx.recv().await, Some(child));
     assert_eq!(ready.load(Ordering::SeqCst), 1);
     assert!(healthy.load(Ordering::SeqCst));
 
@@ -3940,7 +3937,11 @@ async fn resident_running_loss_never_runs_recovery_transaction() {
     assert_eq!(supervisor.episode_count(), 0);
     assert_eq!(matching_failures, 1);
     assert_eq!(aborted_recovery_events, 0);
-    assert_eq!(polls.load(Ordering::SeqCst), 1);
+    // The root may enter the provider for synthesis after the member fails;
+    // only a further entry by the member would be a second member turn.
+    while let Ok(session) = entered_rx.try_recv() {
+        assert_ne!(session, child, "member started another turn");
+    }
     assert_eq!(child_events, child_replay_at_failure);
     assert!(!successful_provider_output);
     assert_sidecar_failed(&engine, &supervisor, root, child, &handle).await;
