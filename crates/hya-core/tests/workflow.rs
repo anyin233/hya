@@ -2230,21 +2230,60 @@ flowchart TD
 
 /// Holds the first registration after commit, allowing a real concurrent task
 /// to consume capacity before the next Stage registration.
-struct RegistrationGate {
-    first: AtomicBool,
+struct StageLinkGate {
+    role: hya_proto::WorkflowMemberRole,
+    iteration: u32,
     entered: tokio::sync::Notify,
-    release: tokio::sync::Notify,
+    released: Mutex<bool>,
+    release: std::sync::Condvar,
+}
+impl StageLinkGate {
+    fn new(role: hya_proto::WorkflowMemberRole, iteration: u32) -> Arc<Self> {
+        Arc::new(Self {
+            role,
+            iteration,
+            entered: tokio::sync::Notify::new(),
+            released: Mutex::new(false),
+            release: std::sync::Condvar::new(),
+        })
+    }
+    fn unblock(&self) {
+        *self.released.lock().unwrap() = true;
+        self.release.notify_one();
+    }
+}
+struct RegistrationGate {
+    gates: Vec<Arc<StageLinkGate>>,
 }
 
 #[async_trait]
 impl hya_core::HookDispatcher for RegistrationGate {
-    fn dispatch_event(&self, _: &hya_proto::Envelope) {}
-    async fn agent_spawn(&self, _: hya_core::AgentSpawnInput) {
-        if self.first.swap(false, Ordering::SeqCst) {
-            self.entered.notify_one();
-            self.release.notified().await;
+    fn dispatch_event(&self, envelope: &hya_proto::Envelope) {
+        if let Event::WorkflowStageMemberLinked {
+            role, iteration, ..
+        } = &envelope.event
+        {
+            for gate in &self.gates {
+                if *role == gate.role && *iteration == gate.iteration {
+                    gate.entered.notify_one();
+                    // Let Tokio run store/pool continuations while this synchronous hook waits.
+                    tokio::task::block_in_place(|| {
+                        let released = gate.released.lock().unwrap();
+                        let (_released, timeout) = gate
+                            .release
+                            .wait_timeout_while(
+                                released,
+                                std::time::Duration::from_secs(5),
+                                |released| !*released,
+                            )
+                            .unwrap();
+                        assert!(!timeout.timed_out(), "link barrier not released");
+                    });
+                }
+            }
         }
     }
+    async fn agent_spawn(&self, _: hya_core::AgentSpawnInput) {}
     async fn command_execute_before(
         &self,
         input: hya_core::CommandExecuteBeforeInput,
@@ -2284,7 +2323,7 @@ impl hya_core::HookDispatcher for RegistrationGate {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn w1_partial_registration_overload_releases_every_workflow_claim() {
     for named in [false, true] {
         let actors = if named {
@@ -2298,7 +2337,7 @@ async fn w1_partial_registration_overload_releases_every_workflow_claim() {
                 r#"---
 kind: Workflow
 name: partial
-description: Compete with a task before the successor registers.
+description: Compete between ready sibling registrations.
 nodes:
   first:
     agent: builder
@@ -2308,15 +2347,15 @@ nodes:
 {}    directive: Second.
 ---
 flowchart TD
-  first --> second
+  first
+  second
 "#,
                 actors[0], actors[1]
             ),
         );
-        let gate = Arc::new(RegistrationGate {
-            first: AtomicBool::new(true),
-            entered: tokio::sync::Notify::new(),
-            release: tokio::sync::Notify::new(),
+        let gate = StageLinkGate::new(hya_proto::WorkflowMemberRole::Worker, 0);
+        let hooks = Arc::new(RegistrationGate {
+            gates: vec![gate.clone()],
         });
         let engine = engine_with_limits(
             RecordingProvider::new(),
@@ -2326,7 +2365,7 @@ flowchart TD
             },
         )
         .await;
-        let engine = Arc::new((*engine).clone().with_hooks(gate.clone()));
+        let engine = Arc::new((*engine).clone().with_hooks(hooks));
         let lead = start_lead(&engine).await;
         let root_turn = engine.try_begin_turn(lead).unwrap();
         let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
@@ -2346,7 +2385,7 @@ flowchart TD
                 resident_supervisor: Some(supervisor.clone()),
                 routing: None,
             },
-            None,
+            Some(hya_proto::WorkflowRunId::new()),
         )
         .await
         .unwrap();
@@ -2357,19 +2396,11 @@ flowchart TD
         let (agent, runtime) = engine
             .resolve_resident_runtime(binding, &base, &AgentName::new("builder"))
             .unwrap();
-        let (task, handle) = supervisor
-            .spawn_resident_typed(
-                lead,
-                agent,
-                runtime,
-                "Concurrent task.".into(),
-                hya_core::TaskSpawnOrigin::default(),
-                None,
-                None,
-            )
+        let (task, handle, _) = supervisor
+            .spawn_resident_parked(lead, agent, runtime, "Concurrent task.".into(), None, None)
             .await
             .unwrap();
-        gate.release.notify_one();
+        gate.unblock();
         let error = tokio::time::timeout(std::time::Duration::from_secs(3), run)
             .await
             .unwrap()
@@ -2392,6 +2423,16 @@ flowchart TD
         );
         let root = engine.read_projection(lead).await.unwrap();
         assert_eq!(root.team.archived.len(), 1);
+        let parked = root.team.archived.values().next().unwrap().session;
+        assert!(
+            !engine
+                .replay(parked)
+                .await
+                .unwrap()
+                .iter()
+                .any(|e| matches!(e.event, Event::MessageStarted { .. })),
+            "partially registered sibling must never activate"
+        );
         supervisor.end_member(lead, &handle).await.unwrap();
         assert_eq!(engine.store().live_member_count(lead).await.unwrap(), 0);
         drop(root_turn);
