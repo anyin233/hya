@@ -949,7 +949,7 @@ impl Drop for DaemonCleanup {
 }
 
 #[cfg(unix)]
-async fn check_setsid_capture(pty: bool, timeout: bool, cancel: bool) {
+async fn check_setsid_capture(pty: bool, timeout: bool, cancel: bool, output: &str) {
     let dir = tempdir();
     let _workspace = TempDirGuard::new(&dir);
     let cleanup = DaemonCleanup {
@@ -962,16 +962,17 @@ async fn check_setsid_capture(pty: bool, timeout: bool, cancel: bool) {
     // Fork before setsid: the shell's exec'ed Python is already a group leader.
     // The handshake ensures the daemon owns a new session before its parent exits.
     let command = format!(
-        "printf '%s' \"$$\" > {}; python3 - {} {} <<'PY'\nimport os, signal, sys, time\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\nr, w = os.pipe()\nif os.fork() == 0:\n    os.close(r)\n    os.setsid()\n    with open(sys.argv[1], 'w') as f:\n        f.write(str(os.getpid()))\n    os.write(w, b'ready')\n    os.close(w)\n    time.sleep(60)\n    os._exit(0)\nos.close(w)\nos.read(r, 5)\nos.close(r)\nif sys.argv[2] == 'wait':\n    time.sleep(60)\nPY",
+        "printf '%s' \"$$\" > {}; python3 - {} {} {} <<'PY'\nimport os, signal, sys, time\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\nr, w = os.pipe()\nif os.fork() == 0:\n    os.close(r)\n    os.setsid()\n    with open(sys.argv[1], 'w') as f:\n        f.write(str(os.getpid()))\n    os.write(w, b'ready')\n    os.close(w)\n    if sys.argv[3] == 'chatty':\n        while True:\n            os.write(1, b'daemon-tick\\n')\n            time.sleep(0.05)\n    time.sleep(60)\n    os._exit(0)\nos.close(w)\nos.read(r, 5)\nos.close(r)\nif sys.argv[3] == 'payload':\n    for fd in (1, 2):\n        view = memoryview(b'X' * (4 * 1024 * 1024))\n        while view:\n            view = view[os.write(fd, view):]\nif sys.argv[2] == 'wait':\n    time.sleep(60)\nPY",
         shell_quote(&cleanup.shell_pid),
         shell_quote(&cleanup.daemon_pid),
         if timeout { "wait" } else { "exit" },
+        output,
     );
     let started = std::time::Instant::now();
     let mut task = tokio::spawn(async move {
         tool.execute(
             &ctx,
-            json!({ "command": command, "timeout": if timeout { 1 } else { 30 }, "pty": pty }),
+            json!({ "command": command, "timeout": if timeout && !cancel { 1 } else { 30 }, "pty": pty }),
         )
         .await
     });
@@ -985,9 +986,10 @@ async fn check_setsid_capture(pty: bool, timeout: bool, cancel: bool) {
     }
     let result = tokio::time::timeout(Duration::from_secs(4), &mut task).await;
     let elapsed = started.elapsed();
-    eprintln!("H1 pty={pty} timeout={timeout} cancel={cancel}: {elapsed:?}");
+    eprintln!("H1 pty={pty} timeout={timeout} cancel={cancel} output={output}: {elapsed:?}");
     // Close the foreign-session fd even when the implementation hit our guard.
     cleanup.kill();
+    wait_for_process_exit(daemon_pid).await;
     let result = match result {
         Ok(joined) => joined.unwrap(),
         Err(_) => {
@@ -1010,6 +1012,15 @@ async fn check_setsid_capture(pty: bool, timeout: bool, cancel: bool) {
         let result = result.unwrap();
         assert_eq!(result["metadata"]["timedOut"], timeout);
         assert_eq!(result["metadata"]["pty"], pty);
+        if output == "chatty" {
+            assert!(result["output"].as_str().unwrap().contains("daemon-tick"));
+        } else if output == "payload" {
+            let artifact = tokio::fs::read(result["metadata"]["outputPath"].as_str().unwrap())
+                .await
+                .unwrap();
+            assert_eq!(artifact.len(), 8 * 1024 * 1024);
+            assert!(artifact.iter().all(|byte| *byte == b'X'));
+        }
         assert_eq!(
             result["metadata"]["exit"],
             if timeout { Value::Null } else { json!(0) }
@@ -1020,48 +1031,50 @@ async fn check_setsid_capture(pty: bool, timeout: bool, cancel: bool) {
 #[cfg(unix)]
 #[tokio::test]
 async fn t_h1_1_setsid_pipe_returns_real_exit() {
-    check_setsid_capture(false, false, false).await;
+    check_setsid_capture(false, false, false, "silent").await;
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn t_h1_2_setsid_pipe_timeout_drain_is_bounded() {
-    check_setsid_capture(false, true, false).await;
+    check_setsid_capture(false, true, false, "silent").await;
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn t_h1_3_same_group_background_output_is_captured() {
-    let dir = tempdir();
-    let _cleanup = TempDirGuard::new(&dir);
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
-    let started = std::time::Instant::now();
-    let result = execute_with_guard(
-        tool.as_ref(),
-        &ctx,
-        json!({ "command": "(sleep 0.3; printf 'bg-ok') &", "timeout": 30 }),
-    )
-    .await
-    .unwrap();
-    let elapsed = started.elapsed();
-    eprintln!("T_H1_3: {elapsed:?}");
-    assert!(elapsed >= Duration::from_millis(300), "{elapsed:?}");
-    assert_eq!(result["output"], "bg-ok");
-    assert_eq!(result["metadata"]["exit"], 0);
-    assert_eq!(result["metadata"]["timedOut"], false);
+    for pty in [false, true] {
+        let dir = tempdir();
+        let _cleanup = TempDirGuard::new(&dir);
+        let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
+        let tool = ToolRegistry::builtins().get("bash").unwrap();
+        let started = std::time::Instant::now();
+        let result = execute_with_guard(
+            tool.as_ref(),
+            &ctx,
+            json!({ "command": "trap '' HUP; (sleep 0.3; printf 'bg-ok') &", "timeout": 30, "pty": pty }),
+        )
+        .await
+        .unwrap();
+        let elapsed = started.elapsed();
+        eprintln!("T_H1_3: {elapsed:?}");
+        assert!(elapsed >= Duration::from_millis(300), "{elapsed:?}");
+        assert_eq!(result["output"], "bg-ok");
+        assert_eq!(result["metadata"]["exit"], 0);
+        assert_eq!(result["metadata"]["timedOut"], false);
+    }
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn t_h1_4_setsid_pty_returns_real_exit() {
-    check_setsid_capture(true, false, false).await;
+    check_setsid_capture(true, false, false, "silent").await;
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn t_h1_4_setsid_pty_timeout_drain_is_bounded() {
-    check_setsid_capture(true, true, false).await;
+    check_setsid_capture(true, true, false, "silent").await;
 }
 
 #[cfg(unix)]
@@ -1069,8 +1082,28 @@ async fn t_h1_4_setsid_pty_timeout_drain_is_bounded() {
 async fn t_h1_setsid_cancellation_drain_is_bounded() {
     for pty in [false, true] {
         for leader_waiting in [false, true] {
-            check_setsid_capture(pty, leader_waiting, true).await;
+            check_setsid_capture(pty, leader_waiting, true, "silent").await;
         }
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn t_h1_chatty_setsid_pipe_returns_real_exit() {
+    check_setsid_capture(false, false, false, "chatty").await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn t_h1_chatty_setsid_pty_returns_real_exit() {
+    check_setsid_capture(true, false, false, "chatty").await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn t_h1_setsid_large_buffered_output_is_complete() {
+    for pty in [false, true] {
+        check_setsid_capture(pty, false, false, "payload").await;
     }
 }
 

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
 
 use async_trait::async_trait;
 use hya_proto::{ToolName, ToolSchema};
@@ -30,9 +30,11 @@ const CONTROL_RUNNING: u8 = 0;
 const CONTROL_CANCELLED: u8 = 1;
 const CONTROL_TIMED_OUT: u8 = 2;
 const PIPE_BUFFER_BYTES: usize = 8192;
+const FINAL_DRAIN_BYTES: usize = 1024 * 1024;
 const POST_KILL_DRAIN_GRACE: Duration = Duration::from_millis(100);
 #[cfg(unix)]
 const ORPHAN_PIPE_GRACE: Duration = Duration::from_millis(200);
+#[cfg(unix)]
 const POLL_INTERVAL_MILLISECONDS: libc::c_int = 50;
 
 static NEXT_OUTPUT_ID: AtomicU64 = AtomicU64::new(0);
@@ -535,6 +537,12 @@ async fn capture_pipes(
             break;
         }
         if drain_cutoff.is_some_and(|at| Instant::now() >= at) {
+            drain_ready_pipe(stdout, sink)
+                .await
+                .map_err(|error| contextual_io("drain Bash stdout", error))?;
+            drain_ready_pipe(stderr, sink)
+                .await
+                .map_err(|error| contextual_io("drain Bash stderr", error))?;
             break;
         }
         #[cfg(unix)]
@@ -620,7 +628,7 @@ async fn capture_pipes(
         } else {
             tokio::select! {
                 biased;
-                _ = wait_for_deadline(drain_cutoff) => break,
+                _ = wait_for_deadline(drain_cutoff) => {},
                 _ = tokio::time::sleep(Duration::from_millis(100)), if cfg!(unix) && drain_cutoff.is_none() => {}
                 _ = cancel.cancelled(), if !cancellation_seen => {
                     terminate_pipe_process_group(process_group)?;
@@ -657,6 +665,71 @@ async fn capture_pipes(
         }
     }
     Ok(completion.unwrap_or(Completion::Finished(None)))
+}
+
+/// Capture only immediately ready pipe bytes, bounded against foreign writers.
+#[cfg(unix)]
+async fn drain_ready_pipe(pipe: &mut impl AsRawFd, sink: &mut OutputSink) -> io::Result<()> {
+    drain_ready_fd(pipe.as_raw_fd(), sink)
+}
+
+#[cfg(not(unix))]
+async fn drain_ready_pipe(
+    pipe: &mut (impl tokio::io::AsyncRead + Unpin),
+    sink: &mut OutputSink,
+) -> io::Result<()> {
+    use std::task::Poll;
+
+    let mut buffer = [0_u8; PIPE_BUFFER_BYTES];
+    let mut remaining = FINAL_DRAIN_BYTES;
+    while remaining > 0 {
+        let limit = remaining.min(buffer.len());
+        let result = {
+            // A cooperative yield is not evidence that the pipe is empty.
+            let mut read =
+                std::pin::pin!(tokio::task::unconstrained(pipe.read(&mut buffer[..limit])));
+            std::future::poll_fn(|cx| Poll::Ready(std::future::Future::poll(read.as_mut(), cx)))
+                .await
+        };
+        match result {
+            Poll::Ready(Ok(0)) | Poll::Pending => break,
+            Poll::Ready(Ok(count)) => {
+                sink.push(&buffer[..count])?;
+                remaining -= count;
+            }
+            Poll::Ready(Err(error)) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+/// Read nonblocking descriptors directly so reactor readiness cannot hide bytes.
+#[cfg(unix)]
+fn drain_ready_fd(fd: std::os::fd::RawFd, sink: &mut OutputSink) -> io::Result<()> {
+    let mut buffer = [0_u8; PIPE_BUFFER_BYTES];
+    let mut remaining = FINAL_DRAIN_BYTES;
+    while remaining > 0 {
+        let limit = remaining.min(buffer.len());
+        // SAFETY: the capture loop owns this nonblocking pipe or PTY descriptor;
+        // buffer is writable for at least limit bytes.
+        let count = unsafe { libc::read(fd, buffer.as_mut_ptr().cast(), limit) };
+        if count < 0 {
+            let error = io::Error::last_os_error();
+            // Linux PTY masters report EIO when their slave side closes.
+            if error.kind() == io::ErrorKind::WouldBlock || error.raw_os_error() == Some(libc::EIO)
+            {
+                break;
+            }
+            return Err(error);
+        }
+        if count == 0 {
+            break;
+        }
+        let count = count as usize;
+        sink.push(&buffer[..count])?;
+        remaining -= count;
+    }
+    Ok(())
 }
 
 /// Wait for an absolute deadline, or remain pending when deadlines are disabled.
@@ -845,6 +918,11 @@ fn run_pty_blocking(
             drain_cutoff.get_or_insert_with(|| Instant::now() + ORPHAN_PIPE_GRACE);
         }
         if drain_cutoff.is_some_and(|at| Instant::now() >= at) {
+            if let Err(error) = drain_ready_fd(master.as_raw_fd(), &mut sink) {
+                let drain_error = contextual_io("drain Bash PTY output", error);
+                let cleanup = terminate_pty_child(&mut child, Some(process_group), leader_reaped);
+                return Err(with_cleanup_error(drain_error, cleanup));
+            }
             break;
         }
         if eof {
@@ -873,9 +951,6 @@ fn run_pty_blocking(
         match master.read(&mut buffer) {
             Ok(0) => eof = true,
             Ok(count) => {
-                if drain_cutoff.is_some() && !group_terminated {
-                    drain_cutoff = Some(Instant::now() + ORPHAN_PIPE_GRACE);
-                }
                 if let Err(error) = sink.push(&buffer[..count]) {
                     let capture_error = contextual_io("capture Bash PTY output", error);
                     let cleanup =
