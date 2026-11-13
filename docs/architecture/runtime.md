@@ -890,10 +890,18 @@ the claim after asynchronous work; stale cleanup quietly exits. The existing
 
 Before runtime readiness, `hya-app` advances all active resident claims, folds
 the canonical projections, terminalizes old-epoch running work through the
-recovered claim, and recreates the existing
-`ResidentSupervisor` slots.
-Committed queued mail resumes under the new epoch; work that crossed the
-durable start marker is aborted and never automatically retried.
+recovered claim, and stages the existing residents without starting their
+episodes. The daemon and `HyaRuntime` call
+`BuiltSessionEngine::resume_interrupted(&AppState)`: admit every root restore
+through the server, then call `ResidentSupervisor::start_recovered()`.
+Each restore reserves its engine turn lease before acknowledging admission;
+queued recovered mail cannot drive main until that restore has answered.
+Installation rechecks member inboxes and queues root inbox recovery, including
+mail persisted before the listener existed. A staged claim ended or replaced
+by a restore tool remains fenced and is skipped; other installation errors fail
+startup. Committed queued mail resumes under
+the new epoch; work that crossed the durable start marker is aborted and never
+automatically retried.
 
 The single fencing write seam is **`emit_for_actor`**: with `Some(claim)` it
 routes to `commit_resident_mutation` (fenced, publish-after-commit); with
@@ -997,6 +1005,10 @@ when its live or shutdown-archived roster identifies them.
 `AppState::resume_interrupted_turns()` on the next start injects one user-role
 restore prompt and starts a turn through the normal server path: project
 guidance, external directories, RunGuard busy tracking, and cancellation.
+The daemon's shared app startup helper then starts recovered episodes, before
+publishing readiness. An admitted restore holds the root lease throughout its
+answer, so recovered mail waits for that answer without delaying admission of
+other roots' restores.
 The row remains until the assistant message starts, so a crash between prompt
 injection and turn start does not lose the turn or duplicate the prompt for
 that interruption. A second shutdown cancellation is a new interruption and

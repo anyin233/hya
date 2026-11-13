@@ -1513,6 +1513,18 @@ impl BuiltSessionEngine {
         Arc::clone(&self.mcp_control)
     }
 
+    /// Admit every daemon restore before starting recovered resident episodes.
+    /// The restore turn owns its root lease before recovered child mail can wake main.
+    pub async fn resume_interrupted(
+        &self,
+        state: &hya_server::AppState,
+    ) -> Result<Vec<SessionId>, CoreError> {
+        let restored = state.resume_interrupted_turns().await;
+        let residents = self.resident_supervisor.start_recovered().await?;
+        crate::startup_trace::mark("residents_recovered", Some(&residents.to_string()));
+        Ok(restored)
+    }
+
     /// Graceful stop of every in-flight turn in every session (see
     /// [`ResidentSupervisor::drain`]): new turns are refused, active turns are
     /// cancelled with `cause` and given [`DRAIN_DEADLINE`] to close their
@@ -2245,7 +2257,6 @@ async fn build_session_engine_with_mcp_defer(
     // Drive resident (long-lived actor) subagents + quiescence (ADR-0002). Started
     // before the team supervisor so its bus subscription is live for the first mail.
     let resident_supervisor = ResidentSupervisor::start_with_owner(engine.clone(), owner_run_id);
-    let recovered_resident_count = recovered_claims.len();
     for recovered in recovered_claims {
         let actor_id = recovered.claim.actor_id;
         let (root, _) = engine
@@ -2295,22 +2306,15 @@ async fn build_session_engine_with_mcp_defer(
         let (recovered_agent, recovered_runtime) = engine
             .resolve_resident_runtime(recovered_binding, &base, recorded)
             .context("resolve recovered resident capabilities from current catalog")?;
-        resident_supervisor
-            .register_recovered_resident(
-                root,
-                entry.handle,
-                recovered_agent,
-                recovered_runtime,
-                recovered,
-                report.work,
-            )
-            .await
-            .context("recreate recovered resident runtime owner")?;
+        resident_supervisor.defer_recovered_resident(
+            root,
+            entry.handle,
+            recovered_agent,
+            recovered_runtime,
+            recovered,
+            report.work,
+        );
     }
-    crate::startup_trace::mark(
-        "residents_recovered",
-        Some(&recovered_resident_count.to_string()),
-    );
     let workflow_control = crate::WorkflowControl::new_with_routing(
         engine.clone(),
         agent.clone(),
@@ -2478,6 +2482,7 @@ impl HyaRuntime {
         if let Err(error) = state.restore_saved_permissions().await {
             tracing::warn!(%error, "failed to restore saved permission grants");
         }
+        built.resume_interrupted(&state).await?;
         let app_state = state.clone();
         let router = hya_server::router(state);
         Ok(Self {
@@ -4018,7 +4023,7 @@ You are the runtime-installed agent.
     }
 
     #[tokio::test]
-    async fn engine_build_fences_running_resident_and_resumes_queued_mail_before_readiness() {
+    async fn engine_build_fences_residents_but_defers_queued_work_until_start() {
         let _env = StableEnvGuard::new();
         let database = tempdir().join("resident-recovery.db");
         let store = SessionStore::connect(database.to_str().unwrap())
@@ -4161,6 +4166,11 @@ You are the runtime-installed agent.
         let _asks = built.take_asks();
         let _questions = built.take_questions();
         let _mcp = built.mcp_control();
+        assert_eq!(built.resident_supervisor().episode_count(), 0);
+        let before = store.read_projection(queued_root).await.unwrap();
+        assert_eq!(before.team.roster["main/queued-1"].resident_cursor, 0);
+        assert!(before.team.roster["main/queued-1"].resident_work.is_none());
+        built.resident_supervisor().start_recovered().await.unwrap();
         let _built = built;
 
         let running = store.read_projection(running_root).await.unwrap();
@@ -4366,6 +4376,8 @@ You are the installed resident agent.
         let _asks = built.take_asks();
         let _questions = built.take_questions();
         let _mcp = built.mcp_control();
+        assert_eq!(built.resident_supervisor().episode_count(), 0);
+        built.resident_supervisor().start_recovered().await.unwrap();
         let _built = built;
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
