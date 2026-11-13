@@ -38,7 +38,7 @@
 //! queued, and it can never hang (the last resident to idle always runs the check).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
@@ -354,8 +354,7 @@ struct TeamState {
     // Terminal mail keeps main alive between episode removal and bus routing.
     routing_mail: HashSet<u64>,
     /// Active Workflow/headless root drivers suppress autonomous root turns.
-    workflow_runs: Arc<AtomicUsize>,
-    main_autonomous: bool,
+    root_driver: Arc<RootDriverState>,
     phase: TeamPhase,
     turns_used: u64,
     messages_used: u64,
@@ -565,19 +564,30 @@ impl Drop for TeamRegistration {
     }
 }
 
+struct RootDriverState {
+    runs: AtomicUsize,
+    autonomous: AtomicBool,
+}
+
 /// A Workflow or headless driver owns root progress while this guard is held.
 pub struct RootDriverActivity(TeamRegistration);
 
 impl Drop for RootDriverActivity {
     fn drop(&mut self) {
-        let last = self.0.lock().workflow_runs.fetch_sub(1, Ordering::AcqRel) == 1;
+        let last = self
+            .0
+            .lock()
+            .root_driver
+            .runs
+            .fetch_sub(1, Ordering::AcqRel)
+            == 1;
         if last
             && let Some(supervisor) = self.0.supervisor.upgrade()
             && let Some(team) = supervisor.teams().get(&self.0.root).cloned()
         {
             let mut state = team.lock();
             state.last_synth_work_seq = state.work_seq;
-            if state.main_autonomous
+            if state.root_driver.autonomous.load(Ordering::Acquire)
                 && let Some(main) = state.residents.get(&team.root)
                 && main.has_work()
             {
@@ -592,10 +602,8 @@ impl TeamActor {
         root: SessionId,
         engine: Arc<SessionEngine>,
         supervisor: Weak<ResidentSupervisor>,
-        workflow_runs: Arc<AtomicUsize>,
+        root_driver: Arc<RootDriverState>,
     ) -> Self {
-        let main_autonomous =
-            workflow_runs.load(Ordering::Acquire) == 0 || engine.turn_active(root);
         Self {
             root,
             engine,
@@ -606,8 +614,7 @@ impl TeamActor {
                 busy: 0,
                 registrations: 0,
                 routing_mail: HashSet::new(),
-                workflow_runs,
-                main_autonomous,
+                root_driver,
                 phase: TeamPhase::Live,
                 turns_used: 0,
                 messages_used: 0,
@@ -855,8 +862,9 @@ impl TeamActor {
     /// Decide atomically what this claim does next, charging the turn budget.
     async fn next_action(&self, session: SessionId, claim: Option<&ActorClaim>) -> Action {
         let mut st = self.lock();
-        let lead_failed =
-            st.lead_failed || st.workflow_runs.load(Ordering::Acquire) != 0 || !st.main_autonomous;
+        let lead_failed = st.lead_failed
+            || st.root_driver.runs.load(Ordering::Acquire) != 0
+            || !st.root_driver.autonomous.load(Ordering::Acquire);
         let Some(slot) = st
             .residents
             .get_mut(&session)
@@ -1078,8 +1086,8 @@ impl TeamActor {
                 .values()
                 .any(|slot| !slot.is_main && slot.has_work())
             || st.lead_failed
-            || st.workflow_runs.load(Ordering::Acquire) != 0
-            || !st.main_autonomous
+            || st.root_driver.runs.load(Ordering::Acquire) != 0
+            || !st.root_driver.autonomous.load(Ordering::Acquire)
         {
             return;
         }
@@ -1172,8 +1180,8 @@ impl TeamActor {
         let mut st = self.lock();
         if st.main_session == Some(session) {
             st.lead_failed = false;
-            if st.workflow_runs.load(Ordering::Acquire) == 0 {
-                st.main_autonomous = true;
+            if st.root_driver.runs.load(Ordering::Acquire) == 0 {
+                st.root_driver.autonomous.store(true, Ordering::Release);
             }
         }
     }
@@ -2611,7 +2619,7 @@ pub struct ResidentSupervisor {
     owner_run_id: OwnerRunId,
     teams: Mutex<HashMap<SessionId, Arc<TeamActor>>>,
     /// Root-driver suppression spans killed and replacement team generations.
-    root_drivers: Mutex<HashMap<SessionId, Weak<AtomicUsize>>>,
+    root_drivers: Mutex<HashMap<SessionId, Weak<RootDriverState>>>,
     /// Includes episodes on teams already removed by a kill.
     episodes: Mutex<HashMap<SessionId, Arc<TeamActor>>>,
     /// Claim commit + install and orphan Takeover share this boundary across
@@ -3377,17 +3385,18 @@ impl ResidentSupervisor {
         let (root, _) = self.engine.session_lineage(session).await?;
         let team = self.team_for(root).await?;
         {
-            let mut state = team.lock();
-            if state.workflow_runs.load(Ordering::Acquire) == 0 && !self.engine.turn_active(root) {
-                state.main_autonomous = false;
+            let state = team.lock();
+            if state.root_driver.runs.load(Ordering::Acquire) == 0 && !self.engine.turn_active(root)
+            {
+                state.root_driver.autonomous.store(false, Ordering::Release);
             }
-            state.workflow_runs.fetch_add(1, Ordering::AcqRel);
+            state.root_driver.runs.fetch_add(1, Ordering::AcqRel);
         }
         Ok(RootDriverActivity(team))
     }
 
     fn new_team(&self, root: SessionId, main: MainActivation) -> Arc<TeamActor> {
-        let workflow_runs = {
+        let root_driver = {
             let mut drivers = self
                 .root_drivers
                 .lock()
@@ -3396,7 +3405,10 @@ impl ResidentSupervisor {
             if let Some(active) = entry.upgrade() {
                 active
             } else {
-                let active = Arc::new(AtomicUsize::new(0));
+                let active = Arc::new(RootDriverState {
+                    runs: AtomicUsize::new(0),
+                    autonomous: AtomicBool::new(true),
+                });
                 *entry = Arc::downgrade(&active);
                 active
             }
@@ -3405,7 +3417,7 @@ impl ResidentSupervisor {
             root,
             self.engine.clone(),
             self.self_ref.clone(),
-            workflow_runs,
+            root_driver,
         ));
         team.install_main(main);
         team
@@ -3416,9 +3428,9 @@ impl ResidentSupervisor {
         let team = teams
             .entry(root)
             .or_insert_with(|| self.new_team(root, main));
-        let mut state = team.lock();
-        if state.workflow_runs.load(Ordering::Acquire) == 0 {
-            state.main_autonomous = true;
+        let state = team.lock();
+        if state.root_driver.runs.load(Ordering::Acquire) == 0 {
+            state.root_driver.autonomous.store(true, Ordering::Release);
         }
     }
 
@@ -4993,9 +5005,9 @@ impl ResidentSupervisor {
                 .entry(root)
                 .or_insert_with(|| self.new_team(root, main));
             {
-                let mut state = team.lock();
-                if state.workflow_runs.load(Ordering::Acquire) == 0 {
-                    state.main_autonomous = true;
+                let state = team.lock();
+                if state.root_driver.runs.load(Ordering::Acquire) == 0 {
+                    state.root_driver.autonomous.store(true, Ordering::Release);
                 }
             }
             TeamRegistration::new(team.clone())
