@@ -87,7 +87,8 @@ addresses. `AgentRegistered` supplies a leaf plus `parent` (the root has no
 parent). Current command inputs can still use a leaf alias resolved by the
 writer's vertical addressing policy: parent or direct report, without siblings.
 
-The snapshot reducer version restarts at **1** for this incompatible baseline.
+The current snapshot reducer version is **8**; it began at **1** for this
+incompatible baseline. Older cached snapshots are rebuilt under the running reducer.
 The unused `projection_tree` and native HTTP `api` DTO modules are removed;
 server command and shell adapters consume generated `hya_api::v1::CommandTurn`
 and `ShellTurn` directly. Their request shapes remain the v1 contract.
@@ -316,7 +317,7 @@ the root.
 | `agent_activity_changed` | `session`, `handle`, `status: RosterStatus`, `current_task: Option<String>` | Fold: roster activity; activity is display-only; cancellation may show Idle while work remains pending |
 | `resident_work_started` | `session`, `actor_session`, `handle`, `epoch: ActorEpoch`, `inbox_through: u64` | Fold: marks fenced resident work on roster before tool/child/provider dispatch |
 | `resident_work_finished` | `session`, `handle`, `epoch: ActorEpoch`, `inbox_through: u64` | Internal completion marker; matching work epoch clears pending work and acknowledges its inbox boundary. Unlike `mail_consumed`, it settles the admitted prompt. |
-| `mail_sent` | `session`, `from: String` (canonical path), `to: MailEndpoint` (a canonical path, or a minted channel id), `kind: MailKind` (default), `body: String` | Fold: direct → recipient inbox; channel → channel log + fan-out to current **eligible** subscribers (skips any member whose roster entry is `mode.is_resident()` **and** status is `Done` or `Failed`; see [ADR-0001](../adr/0001-event-sourced-mailbox-and-channels.md)). Addresses are resolved to canonical form at **send** time, not fold time; see [ADR-0016](../adr/0016-channel-communication-plane.md) |
+| `mail_sent` | `session`, `from: String` (canonical path), `to: MailEndpoint` (a canonical path, or a minted channel id), `kind: MailKind` (default), `body: String` | Fold: stores one mail record; direct → recipient inbox index; channel → channel log and inbox indices for current **eligible** subscribers (skips any member whose roster entry is `mode.is_resident()` **and** status is `Done` or `Failed`; see [ADR-0001](../adr/0001-event-sourced-mailbox-and-channels.md)). Addresses are resolved to canonical form at **send** time, not fold time; see [ADR-0016](../adr/0016-channel-communication-plane.md) |
 | `channel_joined` | `session`, `channel: String`, `member: String` | Fold: add subscriber |
 
 `SubagentMode`: `transient` \| `resident`.  
@@ -653,6 +654,25 @@ Projection {
 Media attachments are **not** reconstructed by `read_projection` / replay fold.
 Anyone who needs media after a projection read must go to the raw event log (or
 another store of attachments).
+
+### `TeamProjection` mail records
+
+The team projection stores each mail body once so a channel post does not multiply
+its retained body by subscriber count. Replay appends a `MailMessage` to
+`team.mail: Vec<MailMessage>` in fold order. `team.inboxes` maps handles to
+`Vec<usize>` indices into that table; `team.channels[id].log` stores the same
+indices in channel order. `MailMessage` retains `from: String`, `to: MailEndpoint`,
+`kind: MailKind`, and `body: String`. These indices are projection-local positions,
+not event sequence numbers, and work for live events with sequence zero too.
+
+Use `team.unread_incoming_mail(handle, through)` to iterate incoming records after
+an inbox cursor, or resolve a channel index as `&team.mail[index]`. For example,
+a post stored at `team.mail[0]` can appear as index `0` in several inboxes and its
+channel log. Cursors still count raw inbox positions, including a sender's own
+posts, while unread counts exclude those self-posts. Consuming mail advances the
+cursor and keeps the single record for channel history and replay. Reducer version
+8 invalidates earlier serialized projection snapshots; the event and hya.v1
+contracts do not change and no database migration is needed.
 
 ### High-level fold behavior
 
