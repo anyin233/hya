@@ -7,13 +7,24 @@ settles that work under its epoch and advances the cursor. In-turn
 later user cancel cannot lose the prompt even if a tool acknowledged its mail.
 Both acknowledgements share the reducer's monotonic cursor rule.
 
-A cancelled mail wake stays held with its work and is re-armed. Resume reuses
-its existing user MessageId through begin_work's Admitted variant and appends
-only newly hooked mail. A pre-admission cancellation admits nothing and re-arms
-unread mail. A cancelled initial directive with no mail owes no autonomous wake;
-it stays idle until mailed, as the existing interrupt contract requires.
-Startup requeues Idle outstanding mail work. Busy crash work retains the prior
+A cancelled wake stays held with its work and is re-armed, even when its initial
+directive had no mail. Resume reuses its existing user MessageId only if no
+nonempty answer followed it. Otherwise begin_work settles the old boundary and
+admits new mail (or a minimal continuation) at the tail in the same transaction.
+The answered prompt remains immutable and mail follows the output it arrived
+after. A pre-admission cancellation admits nothing and re-arms unread mail.
+Historical inbox length alone never establishes owed work.
+Startup requeues all Idle outstanding work. Busy crash work retains the prior
 AbortedRunning policy and is settled under the recovered transaction.
+A failed completion write ends the episode as Failed; an in-memory idle slot
+does not establish that its work boundary committed.
+
+# Which cancellation API installs the user hold?
+
+`cancel_user_turn` holds the supervised subtree and cancels its active turns.
+`cancel_turn` only cancels one lease and records its cause; passing `UserCancel`
+does not install a hold. User-interrupt fixtures must use `cancel_user_turn`,
+as the server does, to assert that unfinished work waits for explicit resume.
 
 # How is user cancellation distinguished from sidecar loss?
 

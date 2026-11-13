@@ -1233,8 +1233,10 @@ impl TeamActor {
             return Ok(TurnOutcome::NotStarted);
         }
         let mut cursor = cursor;
+        let mut durable_cursor = 0;
         if let Some(entry) = projection.team.roster.get(&handle) {
             let durable = usize::try_from(entry.resident_cursor).unwrap_or(usize::MAX);
+            durable_cursor = durable;
             cursor = cursor.max(durable);
             let mut st = self.lock();
             if let Some(slot) = st
@@ -1245,6 +1247,7 @@ impl TeamActor {
                 slot.cursor = slot.cursor.max(durable);
             }
         }
+        let mut prompt_answered = false;
         if claim.is_some()
             && let Some(work) = projection
                 .team
@@ -1253,10 +1256,10 @@ impl TeamActor {
                 .and_then(|entry| entry.resident_work)
         {
             cursor = cursor.max(usize::try_from(work.inbox_through).unwrap_or(usize::MAX));
-            // A cancelled wake already has a durable, hooked prompt. Re-own it
-            // on resume; only later mail may be appended, never admitted twice.
+            // The old prompt has already been hooked. Only new mail or a
+            // continuation needs hooks; begin_work owns the transcript decision.
+            let actor = self.engine.read_projection(session).await?;
             if initial_prompt.is_none() {
-                let actor = self.engine.read_projection(session).await?;
                 initial_prompt = Some(
                     actor
                         .session
@@ -1270,12 +1273,22 @@ impl TeamActor {
                         .id,
                 );
             }
+            prompt_answered = actor
+                .session
+                .messages
+                .iter()
+                .rev()
+                .find(|message| {
+                    message.role != hya_proto::Role::Assistant || !message.parts.is_empty()
+                })
+                .is_some_and(|message| Some(message.id) != initial_prompt);
         }
         let inbox_len = projection
             .team
             .inboxes
             .get(&handle)
             .map_or(0, |inbox| inbox.len());
+        let mail_owed = initial_prompt.is_some() || inbox_len > durable_cursor;
         let channel_policy = ChannelPolicy::from_binding(&binding)?;
         let new_mail: Vec<(String, String)> = projection
             .team
@@ -1334,7 +1347,7 @@ impl TeamActor {
         if cancel.is_cancelled() {
             return Ok(TurnOutcome::Cancelled {
                 cause: self.engine.turn_cancel_cause(session),
-                mail_owed: inbox_len != 0,
+                mail_owed,
             });
         }
 
@@ -1352,7 +1365,7 @@ impl TeamActor {
                 .await;
             return Ok(TurnOutcome::Cancelled {
                 cause: self.engine.turn_cancel_cause(session),
-                mail_owed: inbox_len != 0,
+                mail_owed,
             });
         }
         let task_label = if synth && is_main {
@@ -1371,20 +1384,23 @@ impl TeamActor {
                 .iter()
                 .map(|(from, body)| format!("[mail from {from}] {body}")),
         );
+        if sections.is_empty() && prompt_answered {
+            sections.push("Continue the unfinished work.".into());
+        }
         let text = if sections.is_empty() {
             String::new()
         } else {
             // Hooks see the whole wake before any delivery or consumption commits.
             tokio::select! {
                 biased;
-                () = cancel.cancelled() => return Ok(TurnOutcome::Cancelled { cause: self.engine.turn_cancel_cause(session), mail_owed: inbox_len != 0 }),
+                () = cancel.cancelled() => return Ok(TurnOutcome::Cancelled { cause: self.engine.turn_cancel_cause(session), mail_owed }),
                 text = self.engine.user_text_after_hooks(&binding, agent.name.as_str(), session, sections.join("\n\n")) => text,
             }
         };
         if cancel.is_cancelled() {
             return Ok(TurnOutcome::Cancelled {
                 cause: self.engine.turn_cancel_cause(session),
-                mail_owed: inbox_len != 0,
+                mail_owed,
             });
         }
         let prompt = match initial_prompt {
@@ -1496,8 +1512,14 @@ impl TeamActor {
             .await;
         Ok(if finish == FinishReason::Cancelled {
             let projection = self.engine.read_projection(session).await?;
+            let root = self.engine.read_projection(self.root).await?;
+            let mail_owed = root.team.roster.get(&handle).is_some_and(|entry| {
+                entry.resident_work.is_some()
+                    || root.team.inboxes.get(&handle).map_or(0, Vec::len) as u64
+                        > entry.resident_cursor
+            });
             TurnOutcome::Cancelled {
-                mail_owed: inbox_len != 0,
+                mail_owed,
                 cause: projection
                     .session
                     .messages
@@ -2283,7 +2305,7 @@ async fn episode_task(
                         Ok(TurnOutcome::NotStarted) => {}
                         Ok(TurnOutcome::Finished { inbox_through }) => {
                             if let Some(claim) = claim.as_ref() {
-                                let _ = team
+                                if let Err(error) = team
                                     .engine
                                     .commit_resident_mutation(
                                         claim,
@@ -2303,7 +2325,18 @@ async fn episode_task(
                                             },
                                         ],
                                     )
+                                    .await
+                                {
+                                    finish_episode(
+                                        &team,
+                                        claim,
+                                        Ending::Failed(format!("work completion error: {error}")),
+                                        &mut sidecar_handle,
+                                        None,
+                                    )
                                     .await;
+                                    return;
+                                }
                             } else {
                                 let _ = team
                                     .record_activity(None, handle, RosterStatus::Idle, None)

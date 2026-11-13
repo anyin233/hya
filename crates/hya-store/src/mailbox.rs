@@ -256,12 +256,8 @@ impl SessionStore {
                 ));
             }
             if entry.status == RosterStatus::Idle {
-                if inbox_len > entry.resident_cursor || resident_work.inbox_through != 0 {
-                    RecoveredResidentWork::Queued {
-                        inbox_cursor: entry.resident_cursor,
-                    }
-                } else {
-                    RecoveredResidentWork::Idle
+                RecoveredResidentWork::Queued {
+                    inbox_cursor: entry.resident_cursor,
                 }
             } else {
                 envelopes.extend(

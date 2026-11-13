@@ -2639,6 +2639,348 @@ async fn m45_r1_user_cancel_retains_mail_and_resumes_its_existing_prompt_once() 
     assert_eq!(prompts[0].id, prompt);
     assert_eq!(root.team.roster[&handle].resident_cursor, 1);
     assert!(root.team.roster[&handle].resident_work.is_none());
+    let requests = h.provider.captured.lock().unwrap();
+    let resumed = requests
+        .iter()
+        .rev()
+        .find(|r| r.session == child && !r.completion.tools.is_empty())
+        .unwrap();
+    assert_resumed_request(&resumed.completion, "cancelled work", None);
+}
+
+fn assert_resumed_request(
+    request: &hya_provider::CompletionRequest,
+    cancelled: &str,
+    mail: Option<&str>,
+) {
+    use hya_proto::Message;
+    let messages = &request.messages;
+    assert!(
+        matches!(messages.last(), Some(Message::User { .. })),
+        "resume needs a user prompt at the tail: {messages:?}"
+    );
+    let roles = messages
+        .iter()
+        .filter_map(|m| match m {
+            Message::User { .. } => Some("user"),
+            Message::Assistant { .. } => Some("assistant"),
+            Message::System { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    for pair in roles.windows(2) {
+        assert_ne!(
+            pair[0], pair[1],
+            "provider roles must alternate: {messages:?}"
+        );
+    }
+    let answer = messages
+        .iter()
+        .position(|m| {
+            matches!(m, Message::Assistant { .. })
+                && serde_json::to_string(m).unwrap().contains(cancelled)
+        })
+        .unwrap();
+    assert!(answer < messages.len() - 1);
+    if let Some(mail) = mail {
+        let deliveries = messages
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| {
+                matches!(m, Message::User { .. })
+                    && serde_json::to_string(m).unwrap().contains(mail)
+            })
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            deliveries,
+            [messages.len() - 1],
+            "new mail belongs after the cancelled output"
+        );
+    }
+}
+
+#[tokio::test]
+async fn m46_s1_cancelled_initial_work_without_mail_is_owed_on_resume() {
+    let mut h = Harness::new().await;
+    let gate = Arc::new(Gate::default());
+    let (child, handle) = h
+        .spawn(vec![
+            Round::text("partial initial work").stream_gated(gate.clone()),
+            Round::text("initial work resumed"),
+        ])
+        .await;
+    gate.arrived().await;
+    assert!(h.engine.cancel_user_turn(h.root));
+    h.idle(child, &handle).await;
+    let mut requests = h.provider.requests.subscribe();
+    h.engine.resume_after_user_stop(h.root);
+    let request = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        request_for(&mut requests, child),
+    )
+    .await;
+    if request.is_ok() {
+        h.idle(child, &handle).await;
+    }
+    h.shutdown().await;
+    assert_resumed_request(
+        &request.expect("unfinished initial work was not re-armed"),
+        "partial initial work",
+        None,
+    );
+}
+
+#[tokio::test]
+async fn m46_s1_consumed_history_does_not_start_an_extra_turn_after_cancel() {
+    let mut h = Harness::new().await;
+    let gate = Arc::new(Gate::default());
+    let (child, handle) = h
+        .spawn(vec![Round::text("initial work").gated(gate.clone())])
+        .await;
+    let lead = h.engine.try_begin_turn(h.root).unwrap();
+    gate.release();
+    h.idle(child, &handle).await;
+    let marker = h
+        .provider
+        .script(vec![Round::text("consumed historical mail")]);
+    h.mail(&handle, marker).await.unwrap();
+    h.until(h.root, |p| p.team.roster[&handle].resident_cursor == 1)
+        .await;
+    h.idle(child, &handle).await;
+    let root = h.engine.read_projection(h.root).await.unwrap();
+    assert_eq!(root.team.roster[&handle].resident_cursor, 1);
+    assert!(root.team.roster[&handle].resident_work.is_none());
+    assert!(h.engine.cancel_user_turn(h.root));
+    h.engine.resume_after_user_stop(h.root);
+    drop(lead);
+    let next = h.provider.script(vec![Round::text("fresh mail")]);
+    h.mail(&handle, next).await.unwrap();
+    h.until(child, |p| p.session.messages.iter().any(|m| m.parts.iter().any(|part| matches!(part, hya_proto::PartProjection::Text { text, .. } if text == "fresh mail")))).await;
+    h.idle(child, &handle).await;
+    h.shutdown().await;
+    assert_eq!(
+        h.provider
+            .captured
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.session == child && !r.completion.tools.is_empty())
+            .count(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn m46_s2_new_mail_after_cancelled_initial_work_is_admitted_at_tail() {
+    cancelled_answer_then_new_mail(false).await;
+}
+
+#[tokio::test]
+async fn m46_s3_new_mail_after_cancelled_mail_work_is_admitted_at_tail() {
+    cancelled_answer_then_new_mail(true).await;
+}
+
+async fn cancelled_answer_then_new_mail(mail_wake: bool) {
+    let mut h = Harness::new().await;
+    let gate = Arc::new(Gate::default());
+    let rounds = vec![Round::text("cancelled answer").stream_gated(gate.clone())];
+    let (child, handle) = if mail_wake {
+        let (child, handle) = h.spawn(vec![Round::text("initial settled")]).await;
+        h.idle(child, &handle).await;
+        let marker = h.provider.script(rounds);
+        h.mail(&handle, format!("S3_OLD_MAIL {marker}"))
+            .await
+            .unwrap();
+        (child, handle)
+    } else {
+        h.spawn(rounds).await
+    };
+    gate.arrived().await;
+    assert!(h.engine.cancel_user_turn(child));
+    h.idle(child, &handle).await;
+    let before = h
+        .engine
+        .read_projection(child)
+        .await
+        .unwrap()
+        .session
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == hya_proto::Role::User)
+        .unwrap()
+        .clone();
+    let marker = h.provider.script(vec![Round::text("new mail answered")]);
+    let mut requests = h.provider.requests.subscribe();
+    h.engine
+        .steer_subagent(child, &format!("S2_NEW_MAIL {marker}"))
+        .await
+        .unwrap();
+    let request = request_for(&mut requests, child).await;
+    h.idle(child, &handle).await;
+    let actor = h.engine.read_projection(child).await.unwrap();
+    let root = h.engine.read_projection(h.root).await.unwrap();
+    h.shutdown().await;
+    assert_resumed_request(&request, "cancelled answer", Some("S2_NEW_MAIL"));
+    assert_eq!(
+        *actor
+            .session
+            .messages
+            .iter()
+            .find(|m| m.id == before.id)
+            .unwrap(),
+        before,
+        "answered prompt was edited"
+    );
+    assert_eq!(
+        root.team.roster[&handle].resident_cursor,
+        if mail_wake { 2 } else { 1 }
+    );
+    assert!(root.team.roster[&handle].resident_work.is_none());
+}
+
+#[tokio::test]
+async fn m46_s3_unanswered_admitted_prompt_is_reused_once() {
+    let mut h = Harness::new().await;
+    let gate = Arc::new(Gate::default());
+    let (child, handle) = h
+        .spawn(vec![Round::text("not emitted").gated(gate.clone())])
+        .await;
+    gate.arrived().await;
+    assert!(h.engine.cancel_user_turn(child));
+    h.idle(child, &handle).await;
+    let prompt = h
+        .engine
+        .read_projection(child)
+        .await
+        .unwrap()
+        .session
+        .messages
+        .iter()
+        .find(|m| m.role == hya_proto::Role::User)
+        .unwrap()
+        .id;
+    let marker = h.provider.script(vec![Round::text("answered once")]);
+    let mut requests = h.provider.requests.subscribe();
+    h.engine.steer_subagent(child, &marker).await.unwrap();
+    let request = request_for(&mut requests, child).await;
+    h.idle(child, &handle).await;
+    let actor = h.engine.read_projection(child).await.unwrap();
+    h.shutdown().await;
+    let prompts = actor
+        .session
+        .messages
+        .iter()
+        .filter(|m| m.role == hya_proto::Role::User)
+        .collect::<Vec<_>>();
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].id, prompt);
+    assert_eq!(
+        request.messages.len(),
+        1,
+        "empty cancelled assistant output is omitted"
+    );
+    assert!(matches!(&request.messages[0], hya_proto::Message::User { id, .. } if *id == prompt));
+}
+
+#[tokio::test]
+async fn m46_s7_work_finish_write_failure_ends_the_episode() {
+    use sqlx::Connection;
+    let mut h = Harness::new().await;
+    let gate = Arc::new(Gate::default());
+    let (child, handle) = h
+        .spawn(vec![Round::text("completed answer").gated(gate.clone())])
+        .await;
+    gate.arrived().await;
+    let mut db =
+        sqlx::SqliteConnection::connect(&format!("sqlite://{}", h.dir.join("events.db").display()))
+            .await
+            .unwrap();
+    sqlx::query("CREATE TRIGGER reject_work_finish BEFORE INSERT ON event_log WHEN json_extract(NEW.payload, '$.type') = 'resident_work_finished' BEGIN SELECT RAISE(ABORT, 'injected work finish failure'); END").execute(&mut db).await.unwrap();
+    drop(db);
+    gate.release();
+    let archived =
+        tokio::time::timeout(std::time::Duration::from_secs(2), h.archived(&handle)).await;
+    let root = h.engine.read_projection(h.root).await.unwrap();
+    h.shutdown().await;
+    assert!(
+        archived.is_ok(),
+        "failed completion did not enter its ending sequence: {:?}",
+        root.team.roster.get(&handle)
+    );
+    assert!(
+        root.team.archived.contains_key(&handle),
+        "failed completion parked the live episode: {:?}",
+        root.team.roster.get(&handle)
+    );
+    assert!(
+        root.session
+            .members
+            .iter()
+            .any(|m| m.child == Some(child) && m.status == hya_proto::MemberRunStatus::Failed)
+    );
+    assert!(h.engine.replay(h.root).await.unwrap().iter().any(|e| matches!(&e.event, Event::SubagentReported { child: actor, outcome: hya_proto::ReportOutcome::Failed, report, .. } if *actor == child && report.contains("injected work finish failure"))));
+}
+
+#[tokio::test]
+async fn m46_s2_restart_requeues_cancelled_zero_mail_work() {
+    let test = "m46_s2_restart_requeues_cancelled_zero_mail_work";
+    if std::env::var("HYA_M4_CRASH_SEED").as_deref() == Ok(test) {
+        use tokio::io::AsyncWriteExt;
+        let h = Harness::open(
+            std::path::PathBuf::from(std::env::var_os("HYA_M4_CRASH_DIR").unwrap()),
+            None,
+            Vec::new(),
+        )
+        .await;
+        let gate = Arc::new(Gate::default());
+        let (child, handle) = h
+            .spawn(vec![
+                Round::text("initial answer before process crash").stream_gated(gate.clone()),
+            ])
+            .await;
+        gate.arrived().await;
+        assert!(h.engine.cancel_user_turn(h.root));
+        h.idle(child, &handle).await;
+        let mut ready =
+            tokio::net::TcpStream::connect(std::env::var("HYA_M4_CRASH_READY").unwrap())
+                .await
+                .unwrap();
+        ready
+            .write_all(format!("{}\n", h.root).as_bytes())
+            .await
+            .unwrap();
+        std::future::pending::<()>().await;
+    }
+    let mut h = support::lifecycle::crashed_team(test).await;
+    let root = h.engine.read_projection(h.root).await.unwrap();
+    let (handle, child) = root
+        .team
+        .roster
+        .iter()
+        .find(|(path, _)| path.as_str() != "main")
+        .map(|(path, entry)| (path.clone(), entry.session))
+        .unwrap();
+    let request = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        h.until(h.root, |p| p.team.roster[&handle].resident_work.is_none())
+            .await;
+    })
+    .await;
+    let captured = h
+        .provider
+        .captured
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|r| r.session == child && !r.completion.tools.is_empty())
+        .cloned();
+    h.shutdown().await;
+    request.expect("startup parked zero-mail unfinished work");
+    assert_resumed_request(
+        &captured.unwrap().completion,
+        "initial answer before process crash",
+        None,
+    );
 }
 
 #[tokio::test]

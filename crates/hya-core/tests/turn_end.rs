@@ -1459,7 +1459,7 @@ async fn interrupting_a_subagent_cancels_only_its_turn() {
         "the member is mid-turn with an open tool part"
     );
 
-    assert!(engine.cancel_turn(worker, FinishCause::UserCancel));
+    assert!(engine.cancel_user_turn(worker));
     assert!(
         eventually(|| async { !engine.turn_active(worker) }).await,
         "the member's turn ends"
@@ -1568,8 +1568,22 @@ async fn cancelling_the_lead_stops_every_subagent_until_the_user_acts() {
         "{refused}"
     );
 
-    // The user prompts the lead: the stop lifts, and its mail wakes again.
+    // The user resumes the lead: both unfinished directives are owed, even
+    // without mail. Wait for settlement before sending another distinct wake.
     engine.resume_after_user_stop(root);
+    assert!(
+        eventually(|| async {
+            let team = engine.read_projection(root).await.unwrap().team;
+            provider.streams_for(first) == 2
+                && provider.streams_for(second) == 2
+                && ["main/first", "main/second"].iter().all(|handle| {
+                    team.roster[*handle].status == hya_proto::RosterStatus::Idle
+                        && team.roster[*handle].resident_work.is_none()
+                })
+        })
+        .await,
+        "both unfinished directives resume once"
+    );
     engine
         .mail_send(
             root,
@@ -1580,10 +1594,10 @@ async fn cancelling_the_lead_stops_every_subagent_until_the_user_acts() {
         .await
         .unwrap();
     assert!(
-        eventually(|| async { provider.streams_for(first) == 2 }).await,
+        eventually(|| async { provider.streams_for(first) == 3 }).await,
         "the lead's mail wakes the subagent again"
     );
-    assert_eq!(provider.streams_for(second), 1, "unmailed, it stays idle");
+    assert_eq!(provider.streams_for(second), 2, "settled work stays idle");
 }
 
 /// Interrupting one subagent stops it alone: its sibling keeps running, the
