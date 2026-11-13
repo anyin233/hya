@@ -28,3 +28,13 @@ lose ownership. Every committed registration receipt is retained immediately,
 and unsuccessful runs await all run-owned actors and descendants under the
 existing root-driver activity guard. Mail targets, claim semantics and capacity
 preflight are unchanged.
+
+# How does the partial-registration regression stop between ready siblings?
+
+Hold the first committed worker link in a synchronous event hook, before the
+scheduler registers the second ready sibling. Use `block_in_place` around the
+bounded test barrier so Tokio can run store/pool continuations. A concurrent
+parked actor then consumes the final claim. The second registration must return
+typed overload, release the first sibling's claim without activating it, and
+retain the unrelated claim. An `agent_spawn` hook only blocks initialization;
+it cannot enforce this registration boundary for parked actors.
