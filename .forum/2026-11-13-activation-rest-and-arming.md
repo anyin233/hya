@@ -27,3 +27,12 @@ No. Recovery counts only non-empty Text or Tool parts. Reasoning-only output can
 be omitted by providers, so a fenced recovery supplies a visible cancelled Text
 answer before the next directive. No database compatibility or schema layer is
 introduced.
+
+# Why capture cleanup targets before reading the store?
+
+Root deletion can remove the roster while an ending waiter is pending. Capture
+live episode identities synchronously, then end descendants deepest-first and
+join the parent ending. An initial projection await can instead re-resolve an
+already deleted handle and fail with "unknown resident". The existing
+`a4_delete_racing_init_resolves_every_ending_waiter` and
+`a4_delete_racing_report_resolves_every_ending_waiter` tests cover this ordering.

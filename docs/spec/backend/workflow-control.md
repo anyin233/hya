@@ -201,6 +201,10 @@ A busy, stopped, ending, or already armed
 member is refused without arming mail. No SQL connection spans a non-store
 await.
 
+Run cleanup captures live episode identities before any await, then ends
+descendants deepest-first and joins the parent ending. Root deletion can remove
+the roster while these ending waiters are pending without invalidating them.
+
 `ActivationWaiter::wait(&mut self) -> Result<ActivationResult, CoreError>` is
 cancel-safe: dropping a pending wait does not end the episode. Its result is
 one of `Settled { final_text: String }`,
