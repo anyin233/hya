@@ -35,6 +35,7 @@ pub(super) async fn connect_one(
     let (event_tx, event_rx) = mpsc::channel(EVENT_CHANNEL_CAP);
     let activation_loss = spec.is_activation().then(|| live.client.closed_token());
     let conn = Arc::new(PluginConn {
+        io_tasks: hya_mcp::io_tasks::current(),
         id: spec.id.clone(),
         hooks,
         contributions,
@@ -52,9 +53,14 @@ pub(super) async fn connect_one(
         event_tx,
         event_drops: std::sync::atomic::AtomicU64::new(0),
         host_reads,
+        event_task: std::sync::Mutex::new(None),
     });
     if has_event_hook {
-        spawn_event_drain(Arc::downgrade(&conn), event_rx);
+        let task = spawn_event_drain(Arc::downgrade(&conn), event_rx);
+        *conn
+            .event_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(task);
     }
     Ok(conn)
 }
@@ -94,13 +100,19 @@ pub(super) async fn start_client(
     }
 }
 
-fn spawn_event_drain(conn: Weak<PluginConn>, mut rx: mpsc::Receiver<Envelope>) {
-    tokio::spawn(async move {
+fn spawn_event_drain(
+    conn: Weak<PluginConn>,
+    mut rx: mpsc::Receiver<Envelope>,
+) -> tokio::task::JoinHandle<()> {
+    hya_mcp::io_tasks::spawn(async move {
         while let Some(envelope) = rx.recv().await {
-            match conn.upgrade() {
-                Some(conn) => conn.notify_event(envelope).await,
+            let client = conn
+                .upgrade()
+                .and_then(|conn| conn.lock_live().as_ref().map(|live| live.client.clone()));
+            match client {
+                Some(client) => PluginConn::notify_event(client, envelope).await,
                 None => break,
             }
         }
-    });
+    })
 }

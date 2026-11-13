@@ -228,6 +228,15 @@ pub(crate) struct ClassicSseTransport {
     post_url: String,
     next_id: AtomicU64,
     pending: Pending,
+    reader_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+impl Drop for ClassicSseTransport {
+    fn drop(&mut self) {
+        if let Some(task) = self.reader_task.get_mut() {
+            task.abort();
+        }
+    }
 }
 
 impl ClassicSseTransport {
@@ -254,19 +263,40 @@ impl ClassicSseTransport {
 
         let pending: Pending = Arc::new(Mutex::new(std::collections::HashMap::new()));
         let (endpoint_tx, endpoint_rx) = oneshot::channel();
-        tokio::spawn(run_sse_stream(response, base, pending.clone(), endpoint_tx));
-        let post_url = tokio::time::timeout(Duration::from_secs(10), endpoint_rx)
+        let reader_task =
+            crate::io_tasks::spawn(run_sse_stream(response, base, pending.clone(), endpoint_tx));
+        let mut transport = Self {
+            http,
+            post_url: String::new(),
+            next_id: AtomicU64::new(1),
+            pending,
+            reader_task: Mutex::new(Some(reader_task)),
+        };
+        transport.post_url = tokio::time::timeout(Duration::from_secs(10), endpoint_rx)
             .await
             .map_err(|_| McpError::Timeout {
                 method: "sse endpoint".to_string(),
             })?
             .map_err(|_| McpError::Closed)?;
-        Ok(Self {
-            http,
-            post_url,
-            next_id: AtomicU64::new(1),
-            pending,
-        })
+        Ok(transport)
+    }
+
+    pub(crate) fn stop_now(&self) {
+        if let Ok(task) = self.reader_task.try_lock()
+            && let Some(task) = task.as_ref()
+        {
+            task.abort();
+        }
+    }
+
+    pub(crate) async fn shutdown(&self) {
+        let mut task = self.reader_task.lock().await;
+        if let Some(task) = task.as_mut() {
+            task.abort();
+            let _ = task.await;
+        }
+        task.take();
+        crate::client::close_pending(&self.pending, McpError::Closed).await;
     }
 
     /// POST a request and await its response frame on the SSE stream.
@@ -373,4 +403,51 @@ async fn run_sse_stream(
         }
     }
     crate::client::close_pending(&pending, McpError::Closed).await;
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod ownership_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn shutdown_joins_idle_sse_reader() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                assert_eq!(socket.read(&mut byte).await.unwrap(), 1);
+                request.push(byte[0]);
+            }
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\nevent: endpoint\ndata: /messages\n\n").await.unwrap();
+            let mut buffer = [0; 64];
+            assert_eq!(socket.read(&mut buffer).await.unwrap(), 0);
+        });
+        let transport = ClassicSseTransport::connect(&format!("http://{address}/sse"))
+            .await
+            .unwrap();
+        let reader = transport
+            .reader_task
+            .lock()
+            .await
+            .as_ref()
+            .unwrap()
+            .abort_handle();
+        assert!(!reader.is_finished());
+        tokio::time::timeout(std::time::Duration::from_secs(2), transport.shutdown())
+            .await
+            .unwrap();
+        assert!(reader.is_finished());
+        tokio::time::timeout(std::time::Duration::from_secs(2), transport.shutdown())
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
 }

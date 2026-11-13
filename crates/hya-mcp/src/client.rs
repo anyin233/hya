@@ -6,8 +6,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -15,6 +15,7 @@ use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, oneshot};
+use tokio::task::JoinHandle;
 
 use crate::http::{ClassicSseTransport, StreamableHttpTransport};
 use crate::protocol::{JsonRpcRequest, JsonRpcResponse};
@@ -87,6 +88,7 @@ impl From<crate::codec::FrameError> for McpError {
 #[derive(Clone)]
 pub struct McpClient {
     transport: Transport,
+    closed: Arc<AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -100,6 +102,15 @@ struct ClientInner {
     writer: Mutex<Box<dyn AsyncWrite + Send + Unpin>>,
     next_id: AtomicU64,
     pending: Pending,
+    reader_task: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl Drop for ClientInner {
+    fn drop(&mut self) {
+        if let Some(task) = self.reader_task.get_mut() {
+            task.abort();
+        }
+    }
 }
 
 /// Owns a spawned MCP child process; on drop, kill through its process handle and wait.
@@ -107,19 +118,34 @@ struct ClientInner {
 /// Keep this guard alive for as long as the paired [`McpClient`] should talk to
 /// the process. Dropping it tears down the server even if client clones remain.
 pub struct ChildGuard {
-    child: StdMutex<Option<Child>>,
+    io_tasks: Option<tokio_util::task::TaskTracker>,
+    child: Mutex<Option<Child>>,
+    client: McpClient,
+}
+
+impl ChildGuard {
+    /// Stop the connection and reap the process even if tool clients survive.
+    pub async fn shutdown(&self) {
+        self.client.shutdown().await;
+        let mut child = self.child.lock().await;
+        if let Some(child) = child.as_mut() {
+            terminate_child(child).await;
+        }
+        child.take();
+    }
 }
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {
-        let child = match self.child.lock() {
-            Ok(mut guard) => guard.take(),
-            Err(poisoned) => poisoned.into_inner().take(),
-        };
+        self.client.stop_now();
+        let child = self.child.get_mut().take();
         if let Some(mut child) = child {
+            let _ = child.start_kill();
             match tokio::runtime::Handle::try_current() {
-                Ok(handle) => {
-                    handle.spawn(async move {
+                Ok(_) => {
+                    let client = self.client.clone();
+                    crate::io_tasks::spawn_in(self.io_tasks.clone(), async move {
+                        client.shutdown().await;
                         terminate_child(&mut child).await;
                     });
                 }
@@ -146,12 +172,14 @@ impl McpClient {
         W: AsyncWrite + Send + Unpin + 'static,
     {
         let pending = Arc::new(Mutex::new(HashMap::new()));
-        spawn_reader(reader, Arc::clone(&pending));
+        let reader_task = spawn_reader(reader, Arc::clone(&pending));
         Self {
+            closed: Arc::new(AtomicBool::new(false)),
             transport: Transport::Stdio(Arc::new(ClientInner {
                 writer: Mutex::new(Box::new(writer)),
                 next_id: AtomicU64::new(1),
                 pending,
+                reader_task: Mutex::new(Some(reader_task)),
             })),
         }
     }
@@ -160,6 +188,7 @@ impl McpClient {
     /// captured from the `initialize` response).
     pub fn connect_streamable_http(url: String) -> Result<Self, McpError> {
         Ok(Self {
+            closed: Arc::new(AtomicBool::new(false)),
             transport: Transport::StreamableHttp(Arc::new(StreamableHttpTransport::new(url)?)),
         })
     }
@@ -167,6 +196,7 @@ impl McpClient {
     /// Open a classic HTTP+SSE channel and wait for its `endpoint` event.
     pub async fn connect_classic_sse(url: &str) -> Result<Self, McpError> {
         Ok(Self {
+            closed: Arc::new(AtomicBool::new(false)),
             transport: Transport::ClassicSse(Arc::new(ClassicSseTransport::connect(url).await?)),
         })
     }
@@ -218,12 +248,46 @@ impl McpClient {
         let mut child = cmd.spawn().map_err(|e| McpError::Io(e.to_string()))?;
         let stdout = child.stdout.take().ok_or(McpError::MissingPipe("stdout"))?;
         let stdin = child.stdin.take().ok_or(McpError::MissingPipe("stdin"))?;
-        Ok((
-            Self::new(stdout, stdin),
-            ChildGuard {
-                child: StdMutex::new(Some(child)),
-            },
-        ))
+        let client = Self::new(stdout, stdin);
+        let guard = ChildGuard {
+            io_tasks: crate::io_tasks::current(),
+            child: Mutex::new(Some(child)),
+            client: client.clone(),
+        };
+        Ok((client, guard))
+    }
+
+    /// Cancel and join connection I/O. Retained clones cannot restart it.
+    pub async fn shutdown(&self) {
+        self.closed.store(true, Ordering::Release);
+        match &self.transport {
+            Transport::Stdio(inner) => {
+                let mut task = inner.reader_task.lock().await;
+                if let Some(task) = task.as_mut() {
+                    task.abort();
+                    let _ = task.await;
+                }
+                task.take();
+                close_pending(&inner.pending, McpError::Closed).await;
+            }
+            Transport::ClassicSse(transport) => transport.shutdown().await,
+            Transport::StreamableHttp(_) => {}
+        }
+    }
+
+    pub(crate) fn stop_now(&self) {
+        self.closed.store(true, Ordering::Release);
+        match &self.transport {
+            Transport::Stdio(inner) => {
+                if let Ok(task) = inner.reader_task.try_lock()
+                    && let Some(task) = task.as_ref()
+                {
+                    task.abort();
+                }
+            }
+            Transport::ClassicSse(transport) => transport.stop_now(),
+            Transport::StreamableHttp(_) => {}
+        }
     }
 
     /// Send MCP `initialize` with hya client info; uses [`INITIALIZE_TIMEOUT`].
@@ -244,6 +308,9 @@ impl McpClient {
     /// spec-required `notifications/initialized` handshake and other client → server
     /// notifications.
     pub async fn notify(&self, method: &str, params: Value) -> Result<(), McpError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(McpError::Closed);
+        }
         match &self.transport {
             Transport::Stdio(inner) => {
                 let message = json!({ "jsonrpc": "2.0", "method": method, "params": params });
@@ -264,6 +331,9 @@ impl McpClient {
         params: Value,
         timeout: Duration,
     ) -> Result<Value, McpError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(McpError::Closed);
+        }
         match &self.transport {
             Transport::Stdio(inner) => {
                 let id = inner.next_id.fetch_add(1, Ordering::SeqCst);
@@ -296,11 +366,11 @@ impl McpClient {
     }
 }
 
-fn spawn_reader<R>(reader: R, pending: Pending)
+fn spawn_reader<R>(reader: R, pending: Pending) -> JoinHandle<()>
 where
     R: AsyncRead + Send + Unpin + 'static,
 {
-    tokio::spawn(async move {
+    crate::io_tasks::spawn(async move {
         let mut reader = BufReader::new(reader);
         let mut buf = Vec::new();
         loop {
@@ -344,7 +414,7 @@ where
             }
         }
         close_pending(&pending, McpError::Closed).await;
-    });
+    })
 }
 
 pub(crate) async fn close_pending(pending: &Pending, error: McpError) {
@@ -363,6 +433,49 @@ mod tests {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, duplex};
 
     #[cfg(unix)]
+    struct PendingReader(Option<tokio::sync::oneshot::Sender<()>>);
+
+    impl tokio::io::AsyncRead for PendingReader {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            _buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Pending
+        }
+    }
+
+    impl Drop for PendingReader {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn shutdown_joins_idle_reader_while_client_clones_survive() {
+        let (dropped, mut observed) = tokio::sync::oneshot::channel();
+        let client = McpClient::new(PendingReader(Some(dropped)), tokio::io::sink());
+        let retained = client.clone();
+        tokio::time::timeout(std::time::Duration::from_secs(2), client.shutdown())
+            .await
+            .unwrap();
+        assert!(
+            observed.try_recv().is_ok(),
+            "reader must be destroyed before shutdown returns"
+        );
+        assert!(matches!(
+            retained
+                .call("after-stop", json!({}), std::time::Duration::from_secs(1))
+                .await,
+            Err(McpError::Closed)
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(2), client.shutdown())
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn dropping_guard_closes_child_stdout() {
         use tokio::io::AsyncReadExt;
@@ -374,7 +487,9 @@ mod tests {
             .unwrap();
         let mut stdout = child.stdout.take().unwrap();
         let guard = ChildGuard {
-            child: StdMutex::new(Some(child)),
+            io_tasks: crate::io_tasks::current(),
+            child: Mutex::new(Some(child)),
+            client: McpClient::new(tokio::io::empty(), tokio::io::sink()),
         };
         drop(guard);
         let mut output = Vec::new();

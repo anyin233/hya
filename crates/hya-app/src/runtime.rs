@@ -289,6 +289,7 @@ fn validate_materialized_resource_path(source_path: &str) -> Result<(), CoreErro
 }
 
 struct BundleSidecarEnvironment {
+    io_tasks: Option<tokio_util::task::TaskTracker>,
     command: Option<Vec<String>>,
     staging_root: PathBuf,
     #[cfg(test)]
@@ -299,6 +300,7 @@ impl BundleSidecarEnvironment {
     #[cfg(test)]
     fn from_command(command: Vec<String>, staging_root: PathBuf) -> Self {
         Self {
+            io_tasks: hya_mcp::io_tasks::current(),
             command: Some(command),
             staging_root,
             terminate_notify: None,
@@ -312,6 +314,7 @@ impl BundleSidecarEnvironment {
             |parent| parent.join("activations"),
         );
         Self {
+            io_tasks: hya_mcp::io_tasks::current(),
             command: plugins::bundle_sidecar_command(),
             staging_root,
             #[cfg(test)]
@@ -347,6 +350,7 @@ impl SidecarEnvironment for BundleSidecarEnvironment {
             ));
         };
         Ok(Some(Arc::new(BundleSidecarFactory {
+            io_tasks: self.io_tasks.clone(),
             binding: binding.clone(),
             stable_agent_id: stable_agent_id.to_string(),
             command: command.clone(),
@@ -358,6 +362,7 @@ impl SidecarEnvironment for BundleSidecarEnvironment {
 }
 
 struct BundleSidecarFactory {
+    io_tasks: Option<tokio_util::task::TaskTracker>,
     binding: TurnBinding,
     stable_agent_id: String,
     command: Vec<String>,
@@ -492,11 +497,12 @@ impl BoundSidecarFactory for BundleSidecarFactory {
             },
         };
         let host = Arc::new(
-            PluginHost::connect(spec, host_info(), None)
-                .await
-                .map_err(|error| {
-                    CoreError::Invalid(format!("initialize bundle sidecar: {error}"))
-                })?,
+            hya_mcp::io_tasks::scope(
+                self.io_tasks.clone(),
+                PluginHost::connect(spec, host_info(), None),
+            )
+            .await
+            .map_err(|error| CoreError::Invalid(format!("initialize bundle sidecar: {error}")))?,
         );
         let plugin = host.prepared_plugins().remove(0);
         let contributions = plugin.contributions();
@@ -1521,10 +1527,15 @@ impl BuiltSessionEngine {
         let engine = self.engine.clone();
         let residents = self.resident_supervisor.clone();
         let shutdown = self.lifecycle.shutdown();
+        let io_tasks = self.lifecycle.io_tasks.clone();
         async move {
             engine.begin_drain(cause);
             shutdown.await;
-            residents.drain(cause, DRAIN_DEADLINE).await
+            let report = residents.drain(cause, DRAIN_DEADLINE).await;
+            engine.runtime_registry().shutdown_sources().await;
+            io_tasks.close();
+            io_tasks.wait().await;
+            report
         }
     }
 
@@ -2078,11 +2089,13 @@ async fn build_session_engine_with_mcp_defer(
         })?;
     }
     let categories = Arc::new(settings.categories());
-    let reconciler = Arc::new(RuntimeReconciler::new(runtime.clone()));
+    let reconciler =
+        Arc::new(RuntimeReconciler::new(runtime.clone()).with_io_tasks(lifecycle.io_tasks.clone()));
     let mcp_control = Arc::new(RuntimeMcpControl::new(reconciler.clone()));
     let catalog_refresh = Arc::new(RuntimeExtensionsRefresh::new(
         crate::ProjectScopeRefresh::new(Arc::new(
             InstalledBundleRefresh::new(bundle_registry_path())
+                .with_io_tasks(lifecycle.io_tasks.clone())
                 .with_host_reads(Arc::new(hya_core::StoreSessionReads::new(store.clone()))),
         ))
         .with_project_plugins(project_plugins),
@@ -2109,7 +2122,10 @@ async fn build_session_engine_with_mcp_defer(
         Arc::new(ModelSummarizer::new(router.clone(), agent.model.clone()));
     let bus = EventBus::new(crate::config::resolve_event_bus_capacity());
     let governor = SubagentGovernor::new(subagent_limits);
-    let sidecar_environment = Arc::new(BundleSidecarEnvironment::production());
+    let sidecar_environment = Arc::new(BundleSidecarEnvironment {
+        io_tasks: Some(lifecycle.io_tasks.clone()),
+        ..BundleSidecarEnvironment::production()
+    });
     let context_settings = settings.context();
     let engine_builder = SessionEngine::new(store, router, runtime, permission, bus)
         .with_base_system_prompt(agent.system_prompt.clone())
@@ -2954,19 +2970,120 @@ mod tests {
             .expect("idempotent shutdown after drain");
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_stops_plugin_and_mcp_sources_retained_by_retired_bindings() {
+        let _env = StableEnvGuard::new();
+        let root = tempdir();
+        let plugin_pid = root.join("plugin.pid");
+        let mcp_pid = root.join("mcp.pid");
+        let with_pid = |mut command: Vec<String>, path: &Path| {
+            command[2] = format!(
+                "import os\nfrom pathlib import Path\nPath({}).write_text(str(os.getpid()))\n{}",
+                serde_json::to_string(path).unwrap(),
+                command[2]
+            );
+            command
+        };
+        let (router, model) = offline_router(None);
+        let agent = agent_with_model(&model, None);
+        let mut built = build_session_engine_with_mcp_defer(
+            SessionStore::connect_memory().await.unwrap(),
+            router,
+            &agent,
+            BTreeMap::from([(
+                "owned".into(),
+                McpServerConfig {
+                    command: with_pid(mcp_fixture(), &mcp_pid),
+                    ..Default::default()
+                },
+            )]),
+            vec![PluginSpec {
+                id: "owned".into(),
+                kind: hya_plugin::messages::PluginKindWire::Rust,
+                command: with_pid(plugin_fixture("owned"), &plugin_pid),
+                timeout_ms: Some(1000),
+                env: BTreeMap::new(),
+                plugin_dir: None,
+                launch: Default::default(),
+            }],
+            (
+                WebSearchConfig::default(),
+                InvocationPolicy::default(),
+                config::EngineSettings::default(),
+            ),
+            EngineBuildOptions {
+                defer_mcp: false,
+                pure: true,
+            },
+        )
+        .await
+        .unwrap();
+        let engine = built.engine();
+        let runtime = engine.runtime_registry();
+        let binding = runtime.bind_turn(&root).unwrap();
+        assert!(binding.resolve_tool("owned__plugin_ping").is_some());
+        assert!(binding.resolve_tool("mcp__owned__ping").is_some());
+        runtime
+            .refresh(|candidate| {
+                candidate.remove_sources(&std::collections::BTreeSet::from([
+                    hya_core::RuntimeSourceId::plugin("owned"),
+                    hya_core::RuntimeSourceId::mcp("owned"),
+                ]));
+                Ok(())
+            })
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), built.shutdown())
+            .await
+            .unwrap()
+            .unwrap();
+        for path in [&plugin_pid, &mcp_pid] {
+            let pid: i32 = std::fs::read_to_string(path).unwrap().parse().unwrap();
+            assert_eq!(
+                unsafe { libc::kill(pid, 0) },
+                -1,
+                "source process {pid} survived shutdown"
+            );
+        }
+        let mut ctx = sidecar_test_ctx(&root);
+        let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![
+            Rule::new(Action::Tool, "*", Mode::Allow),
+            Rule::new(Action::Mcp, "*", Mode::Allow),
+        ]));
+        ctx.permission = permission;
+        for tool in ["owned__plugin_ping", "mcp__owned__ping"] {
+            let result = binding
+                .resolve_tool(tool)
+                .unwrap()
+                .tool
+                .execute(&ctx, json!({}))
+                .await;
+            assert!(result.is_err(), "retained {tool} must stay closed");
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), built.shutdown())
+            .await
+            .unwrap()
+            .unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[tokio::test]
     async fn built_shutdown_cancels_and_joins_deferred_mcp_preparation() {
         let _env = StableEnvGuard::new();
-        use tokio::io::AsyncReadExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+        let endpoint = format!("http://{}/sse", listener.local_addr().unwrap());
         let (entered, handshake) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
+            let (mut sse, _) = listener.accept().await.unwrap();
             let mut buffer = [0; 4096];
-            assert!(socket.read(&mut buffer).await.unwrap() > 0);
+            assert!(sse.read(&mut buffer).await.unwrap() > 0);
+            sse.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\nevent: endpoint\ndata: /messages\n\n").await.unwrap();
+            let (mut post, _) = listener.accept().await.unwrap();
+            assert!(post.read(&mut buffer).await.unwrap() > 0);
             entered.send(()).unwrap();
-            std::future::pending::<()>().await;
+            // Initialization is pending: no prepared source owns this reader yet.
+            assert_eq!(sse.read(&mut buffer).await.unwrap(), 0);
         });
         let (router, model) = offline_router(None);
         let agent = agent_with_model(&model, None);
@@ -2978,6 +3095,7 @@ mod tests {
                 "gated".into(),
                 McpServerConfig {
                     url: Some(endpoint),
+                    transport: Some("sse".into()),
                     ..Default::default()
                 },
             )]),
@@ -2998,13 +3116,17 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let stopped = tokio::time::timeout(Duration::from_secs(2), built.shutdown()).await;
-        server.abort();
-        assert!(server.await.unwrap_err().is_cancelled());
-        stopped
-            .expect("shutdown must cancel MCP preparation")
+        assert!(!built.lifecycle.io_tasks.is_empty());
+        tokio::time::timeout(Duration::from_secs(5), built.shutdown())
+            .await
+            .expect("shutdown must cancel MCP preparation and join its reader")
             .unwrap();
         assert!(built.lifecycle.tasks.is_empty());
+        assert!(built.lifecycle.io_tasks.is_empty());
+        tokio::time::timeout(Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test]

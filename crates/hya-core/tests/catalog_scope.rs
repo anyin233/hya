@@ -240,6 +240,7 @@ fn a_failing_lazy_rebuild_is_typed_and_recovers_once_the_base_conflict_is_gone()
 #[test]
 fn drop_scope_and_dropping_bindings_release_the_source_owner() {
     struct Owner;
+    impl hya_core::RuntimeSourceOwner for Owner {}
     let root = TestDir::new("scope-drop");
     let registry = registry();
     let scope = project(&[&root]);
