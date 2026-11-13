@@ -152,21 +152,14 @@ impl SessionEngine {
         };
         mailbox.queue = projection
             .team
-            .inboxes
-            .get(&mailbox.handle)
-            .map(|inbox| {
-                inbox
-                    .iter()
-                    .skip(usize::try_from(cursor).unwrap_or(usize::MAX))
-                    .filter(|message| mailbox.allows_steer(&message.from, &message.to))
-                    .map(|message| SteeredMail {
-                        from: message.from.clone(),
-                        body: message.body.clone(),
-                        channel: delivered_channel(&message.to, &mailbox.dm_by_peer),
-                    })
-                    .collect()
+            .unread_incoming_mail(&mailbox.handle, cursor)
+            .filter(|message| mailbox.allows_steer(&message.from, &message.to))
+            .map(|message| SteeredMail {
+                from: message.from.clone(),
+                body: message.body.clone(),
+                channel: delivered_channel(&message.to, &mailbox.dm_by_peer),
             })
-            .unwrap_or_default();
+            .collect();
         mailbox.through = projection
             .team
             .inboxes
@@ -312,10 +305,9 @@ impl SteerMailbox {
             self.through = self.committed_through;
             return Ok(());
         };
-        let pending = inbox
-            .iter()
-            .skip(usize::try_from(self.committed_through).unwrap_or(usize::MAX))
-            .filter(|message| message.from != self.handle)
+        let pending = projection
+            .team
+            .unread_incoming_mail(&self.handle, self.committed_through)
             .filter(|message| self.allows_steer(&message.from, &message.to))
             .map(|message| SteeredMail {
                 from: message.from.clone(),
