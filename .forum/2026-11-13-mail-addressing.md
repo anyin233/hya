@@ -25,8 +25,10 @@ provided. Reducer version advances because ChannelJoined no longer changes state
 # Does a send receipt count the sender's DM history copy?
 
 Yes: aliases now use the existing channel receipt (two eligible DM members),
-matching replay fan-out. Revival preserves the existing channel receipt of one
-revived recipient. Incoming-only unread/wake rules still exclude the sender.
+matching replay fan-out. Only the call that actually revives reports one
+revived recipient; a losing concurrent reviver returns the writer transaction's
+ordinary live fan-out count. The registration-pause regression fixes the order
+so both callers initially observe archive and the second caller wins revival. Incoming-only unread/wake rules still exclude the sender.
 Report endings require the registered parent DM and have no handle fallback.
 
 # How does recovery treat the sender's new channel history copy?
