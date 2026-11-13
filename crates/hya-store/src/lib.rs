@@ -234,7 +234,7 @@ fn resolve_database_path(path: &Path, links_left: &mut usize) -> std::io::Result
                         resolved.pop();
                         resolved = resolve_database_path(&resolved.join(target), links_left)?;
                     }
-                    Ok(_) => {}
+                    Ok(_) => resolved = fs::canonicalize(&resolved)?,
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                     Err(error) => return Err(error),
                 }

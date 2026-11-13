@@ -752,7 +752,9 @@ in-memory URIs. Plain filenames preserve `?`, `#`, and `%` literally.
 `DatabasePaths` contains `PathBuf` fields `database`, `lock`,
 `discovery`, `log`, `stop`, and `relay_identity`. It resolves relative paths,
 parent symlinks, and database symlinks (including dangling targets), so creation
-of the target does not change the ownership identity. Filesystem errors surface
+of the target does not change the ownership identity. Existing components are
+canonicalized (including case on platforms that resolve it); hard links and bind
+mount aliases of a database are unsupported. Filesystem errors surface
 to the ownership caller.
 
 For example, `hya exec --db sessions.db "hello"` reserves ownership before
