@@ -193,8 +193,8 @@ test("a tool call folds from its start, argument fragments, and state changes", 
   const effect = overlay.apply(ev(2, toolStarted("m_a", "p_t", "bash", "call_1")))
   expect(effect.changed).toBe(true)
   expect(toolOf(overlay.messages(), "m_a")).toEqual({ tool: "bash", callId: "call_1", state: "TOOL_EXECUTION_STATE_PENDING", inputJson: "" })
-  overlay.apply(ev(3, appended("m_a", "p_t", "{\"command\":")))
-  overlay.apply(ev(4, appended("m_a", "p_t", "\"ls\"}")))
+  overlay.apply(ev(0, appended("m_a", "p_t", "{\"command\":")))
+  overlay.apply(ev(0, appended("m_a", "p_t", "\"ls\"}")))
   expect(toolOf(overlay.messages(), "m_a")?.inputJson).toBe("{\"command\":\"ls\"}")
   overlay.apply(ev(5, toolState("m_a", "p_t", { callId: "call_1", state: "TOOL_EXECUTION_STATE_RUNNING", tool: "bash", inputJson: "{\"command\": \"ls\"}" })))
   expect(toolOf(overlay.messages(), "m_a")).toMatchObject({ state: "TOOL_EXECUTION_STATE_RUNNING", inputJson: "{\"command\": \"ls\"}" })
@@ -202,6 +202,20 @@ test("a tool call folds from its start, argument fragments, and state changes", 
   expect(toolOf(overlay.messages(), "m_a")).toEqual({
     tool: "bash", callId: "call_1", state: "TOOL_EXECUTION_STATE_OK", inputJson: "{\"command\": \"ls\"}", outputJson: "{\"output\":\"a\"}", durationMs: "42",
   })
+})
+
+test("the full tool input recovers missed argument fragments after reconnect or resync", () => {
+  for (const resync of [false, true]) {
+    const overlay = new TranscriptOverlay("0")
+    overlay.apply(ev(1, toolStarted("m_a", "p_t", "read", "call_1")))
+    if (resync) {
+      overlay.apply(live(appended("m_a", "p_t", "{\"path\":")))
+      overlay.markLiveLost()
+    }
+    overlay.apply(live(appended("m_a", "p_t", "\"file\"}")))
+    overlay.apply(ev(2, toolState("m_a", "p_t", { state: "TOOL_EXECUTION_STATE_RUNNING", inputJson: "{\"path\":\"file\"}" })))
+    expect(toolOf(overlay.messages(), "m_a")?.inputJson).toBe("{\"path\":\"file\"}")
+  }
 })
 
 test("a failed tool call keeps its error code and message", () => {
@@ -219,6 +233,21 @@ test("a direct part overwrite (empty callId) updates the part and keeps its call
   // An overwrite for a part the overlay never saw starts it.
   overlay.apply(ev(3, toolState("m_b", "p_u", { state: "TOOL_EXECUTION_STATE_OK", inputJson: "{}" })))
   expect(toolOf(overlay.messages(), "m_b")).toMatchObject({ state: "TOOL_EXECUTION_STATE_OK" })
+})
+
+test("live argument fragments remain visible over a pending projection", () => {
+  const input = JSON.stringify({ command: "ls" })
+  const prefix = input.slice(0, 11)
+  const pending: MessageInfo[] = [{ id: "m_a", role: "ROLE_ASSISTANT", parts: [{ id: "p_t", toolCall: { tool: "bash", callId: "call_1", state: "TOOL_EXECUTION_STATE_PENDING", inputJson: "" } }] }]
+  const overlay = new TranscriptOverlay("0")
+  overlay.apply(ev(1, toolStarted("m_a", "p_t", "bash", "call_1")))
+  overlay.apply(live(appended("m_a", "p_t", prefix)))
+  expect(toolOf(mergeTranscript(pending, overlay.messages()), "m_a")?.inputJson).toBe(prefix)
+  overlay.apply(live(appended("m_a", "p_t", input.slice(prefix.length))))
+  expect(toolOf(mergeTranscript(pending, overlay.messages()), "m_a")?.inputJson).toBe(input)
+  const fullInput = JSON.stringify({ command: "ls" }, null, 2)
+  const running: MessageInfo[] = [{ id: "m_a", role: "ROLE_ASSISTANT", parts: [{ id: "p_t", toolCall: { tool: "bash", callId: "call_1", state: "TOOL_EXECUTION_STATE_RUNNING", inputJson: fullInput } }] }]
+  expect(toolOf(mergeTranscript(running, overlay.messages()), "m_a")?.inputJson).toBe(fullInput)
 })
 
 test("the more advanced tool state wins the merge; the projection wins a tie", () => {
