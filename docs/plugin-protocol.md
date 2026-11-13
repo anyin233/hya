@@ -911,3 +911,35 @@ with `Child::wait` on the active runtime, without spawning a kill utility.
 - [Configuration](configuration.md) — `plugins:` YAML and `plugin.toml`
 - [Agent bundle authoring](agent-bundle-authoring.md) — sidecar lifecycle framing
 - [Runtime architecture](architecture/runtime.md) — how the engine drives hooks
+
+### Activation process adapter
+
+`hya_plugin::activation` owns private activation process startup and lifetime.
+It creates the activation directory, connects through `PluginHost`, terminates a
+process whose exports fail validation, and returns a core `SidecarHandle` with
+the selected tools/hooks and the process loss token. Shutdown and termination
+remove the directory after stopping the process; drop stops it immediately.
+This uses the existing initialize, tool and hook wire contracts above.
+
+Hosts call the async
+`start_activation_sidecar(start: SidecarStart, command: &[String], staging_root: &Path,
+host_info: HostInfo, io_tasks: Option<TaskTracker>, launch, bind)
+-> Result<Box<dyn SidecarHandle>, CoreError>`.
+`launch: FnOnce(&SidecarStart, &Path) -> Result<PluginSpec, CoreError>` composes the
+bound command, materialized resources and application configuration.
+`bind: FnOnce(&PreparedPlugin, Arc<PluginHost>) -> Result<ActivationBindings, CoreError>`
+validates the complete declaration and selects its agent-visible view.
+`ActivationBindings` contains `tools: Arc<[ResolvedTool]>` and
+`hooks: Option<Arc<dyn HookDispatcher>>`.
+For example, app composition supplies the captured bundle resource closure and
+configuration-file environment in `launch`, then validates and binds that
+catalog's tool/hook selections in `bind`. The plugin adapter retains the sole
+connection owner. No new command, configuration key, or wire message is needed.
+
+The adapter's captured-resource helpers are
+`materialize_bundle_sidecar_resources(&TurnBinding, &str, &Path) -> Result<Vec<PathBuf>, CoreError>`,
+`bind_bundle_sidecar_tools(&TurnBinding, &str, &PreparedPlugin) -> Result<Arc<[ResolvedTool]>, CoreError>`,
+and `validate_bundle_sidecar_hooks(&TurnBinding, &str, &[HookRegistration]) -> Result<(), CoreError>`.
+The string argument is the stable agent identity. Materialization uses only the
+captured resource closure; tool/hook validation checks the complete loaded
+module declaration before selecting the agent-visible exports.

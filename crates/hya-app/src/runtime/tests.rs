@@ -3,7 +3,7 @@
 use crate::resident_fixture::{ResidentTurn, run_residents};
 use hya_core::CreateSession;
 use hya_core::resident::ResolvedSpawnMember;
-use hya_tool::SpawnMember;
+use hya_tool::{ResolvedTool, SpawnMember};
 
 /// Test shim: wrap an installed-bundle catalog as an [`AgentCatalog`] over
 /// the compiled-in built-ins.
@@ -27,8 +27,11 @@ use hya_core::hooks::{
     ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
     ToolExecuteBeforeOutcome, ToolOutcomeNative,
 };
-use hya_plugin::messages::{METHOD_TOOL_CALL, ToolCallParams, ToolInfo};
+use hya_plugin::messages::{
+    HookName, HookRegistration, METHOD_TOOL_CALL, ToolCallParams, ToolInfo,
+};
 use hya_plugin::protocol::Frame;
+use hya_plugin::{PluginHost, PreparedPlugin};
 use hya_proto::{
     Event, FinishReason, MailEndpoint, MailKind, MemberRunStatus, MessageId, OwnerRunId,
     RosterStatus, SubagentMode, ToolName, ToolSchema, WorkflowIdentity, WorkflowRevision,
@@ -5946,7 +5949,11 @@ fn bundle_sidecar_duplicate_hook_declaration_is_rejected() {
             name: HookName::Event,
         },
     ];
-    let result = declared_bundle_sidecar_hooks(&registrations);
+    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog_with_agents(&[]));
+    let binding = runtime
+        .bind_turn(&std::env::temp_dir())
+        .expect("bind duplicate hook fixture");
+    let result = validate_bundle_sidecar_hooks(&binding, "build", &registrations);
     let detail = match result {
         Err(CoreError::Invalid(detail)) => detail,
         Ok(_) => "validator returned Ok".to_string(),
@@ -7017,4 +7024,37 @@ async fn catalog_scope_sweeper_evicts_idle_scopes_until_stopped() {
         .await
         .expect("the sweeper stops with its token")
         .unwrap();
+}
+
+/// Test-only notification at the adapter's completed termination boundary.
+pub(super) struct NotifySidecarHandle {
+    pub(super) inner: Box<dyn SidecarHandle>,
+    pub(super) notify: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl SidecarHandle for NotifySidecarHandle {
+    async fn ready(&mut self) -> Result<(), CoreError> {
+        self.inner.ready().await
+    }
+    async fn shutdown(&mut self) -> Result<(), CoreError> {
+        self.inner.shutdown().await
+    }
+    fn is_healthy(&self) -> bool {
+        self.inner.is_healthy()
+    }
+    fn loss_token(&self) -> Option<CancellationToken> {
+        self.inner.loss_token()
+    }
+    async fn terminate(&mut self) -> Result<(), CoreError> {
+        let result = self.inner.terminate().await;
+        self.notify.notify_one();
+        result
+    }
+    fn tool_bindings(&self) -> Arc<[ResolvedTool]> {
+        self.inner.tool_bindings()
+    }
+    fn hook_dispatcher(&self) -> Option<Arc<dyn hya_core::hooks::HookDispatcher>> {
+        self.inner.hook_dispatcher()
+    }
 }

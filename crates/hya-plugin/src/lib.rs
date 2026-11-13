@@ -9,6 +9,8 @@
 //! The host spawns each configured binary, runs `initialize`, then dispatches
 //! tools and hooks over newline-delimited JSON on the child's stdio.
 
+/// Activation-sidecar process handshake, ownership, and stop protocol.
+pub mod activation;
 pub mod client;
 /// Newline-delimited frame reader/writer over async stdio.
 pub mod codec;
