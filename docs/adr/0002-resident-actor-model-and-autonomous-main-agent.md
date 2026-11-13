@@ -1,6 +1,14 @@
 # Resident actor model and autonomous main agent
 
-Subagents have a **hybrid** lifecycle: `transient` (the default — spawn, run one turn, return a
+> **Superseded in part by [ADR-0015](0015-unified-resident-subagent-lifecycle.md).**
+> The hybrid `transient`/`resident` split below was replaced by a single
+> episodic resident actor model: every spawned subagent is a resident actor that
+> archives on `report` and revives on downward DM. The event-driven mail wake,
+> quiescence detector, per-team turn/message budgets, and `ActorClaim`
+> incarnation fencing (`ActorEpoch` + `OwnerRunId` + `ResidentWorkStarted`)
+> defined below remain active invariants.
+
+Subagents originally had a **hybrid** lifecycle: `transient` (spawn, run one turn, return a
 bounded summary, parent blocks) stays unchanged, and a new opt-in `resident` mode makes a subagent
 a long-lived, event-driven **actor** that idles at zero token cost and wakes on inbound mail to run
 exactly one turn. The **main agent is also an actor**, woken by child mail, so a team runs
@@ -26,8 +34,8 @@ that wakes the main agent to synthesize.
   quiescence wake in memory.
 - Resident spawns are **non-blocking** (parent gets the handle and continues), which diverges from
   the transient `run_team` join model — the two spawn paths coexist.
-- User input never wakes a resident: residents wake *only* via mail. This is what lets the TUI bind
-  all user input to the main agent (see ADR-0003).
+- User input never wakes a resident: residents wake *only* via mail. This lets the TUI bind
+  all user prompt input exclusively to the main agent.
 
 ## Crash recovery and fencing (0.34.7)
 

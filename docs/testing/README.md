@@ -8,10 +8,7 @@ process E2E when an in-process suite already owns them.
 | --- | --- | --- |
 | **I** (in-process) | Crate `#[test]` / integration tests with `FakeProvider`, in-memory store, Axum router | Engine rules, projection, permissions math, `hya.v1` route shapes and HTTP/gRPC parity (`crates/hya-server/tests/v1_api.rs`, `v1_grpc_parity.rs`) |
 | **P** (process) | Real `hya serve` + scripted OpenAI-compatible **FakeLlm** (`crates/hya-e2e`), driven entirely through the v1 client | Product path: config → HTTP provider → tools → sessions → MCP/skills/subagents/hyabundle |
-
-There is no Track T (TUI) today: the legacy TypeScript TUI was removed and its
-frontend suites retired with it; frontend-on-`hya-sdk-v1` coverage returns with
-a future TUI.
+| **TUI** (terminal & browser) | `packages/hya-tui` unit tests + `packages/hya-tui-web/tui-exp` headless Bun PTY + optional Playwright Chromium E2E (`packages/hya-tui-web/e2e/*.spec.ts`) | Interactive OpenTUI rendering, keybindings, resize, sessions, Projects, and WebUI PTY host ([tui-web.md](../tui-web.md)) |
 
 Machine registry of PR-matrix IDs: [`../../crates/hya-e2e/matrix.toml`](../../crates/hya-e2e/matrix.toml).
 
@@ -21,7 +18,6 @@ Machine registry of PR-matrix IDs: [`../../crates/hya-e2e/matrix.toml`](../../cr
 | --- | --- |
 | [Agent feature matrix](agent-matrix.md) | T0–T3 scenario inventory (Track P implemented + Track I index-only) |
 | [Process E2E harness](process-e2e.md) | How `hya-e2e` builds environments, scripts FakeLlm, and asserts outcomes |
-| [CI wiring](ci-agent-e2e-snippet.yml) | Historical note — Track P is now enforced directly in `.github/workflows/ci.yml` |
 
 ## Local gate: affected components only
 
@@ -84,10 +80,8 @@ cargo test -p hya-e2e --test <pNN_scenario> -- --test-threads=1
 
 ## Coverage
 
-Line-coverage baseline and how to regenerate it:
-[coverage-baseline.md](coverage-baseline.md). The recorded workspace baseline is
-**85.56% lines** (`hya-e2e` excluded), measured on 2026-08-05 at commit
-`1a7db256`; it is not a current-HEAD coverage claim.
+Generate a local workspace line-coverage summary with `cargo-llvm-cov` (run
+collection and reporting in two steps so `--no-fail-fast` is accepted):
 
 ```sh
 cargo llvm-cov --no-report --workspace --exclude hya-e2e --no-fail-fast

@@ -122,8 +122,8 @@ cargo clippy -p hya-e2e --all-targets -- -D warnings
 ```
 
 See [Testing](testing/README.md), [Process E2E](testing/process-e2e.md), and the
-[agent feature matrix](testing/agent-matrix.md). Optional CI wiring is sketched
-in [ci-agent-e2e-snippet.yml](testing/ci-agent-e2e-snippet.yml).
+[agent feature matrix](testing/agent-matrix.md). CI enforces Track P in
+[`ci.yml`](../.github/workflows/ci.yml).
 
 ### Bun unit tests in extra bundles
 
