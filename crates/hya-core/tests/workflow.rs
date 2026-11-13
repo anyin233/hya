@@ -2458,3 +2458,79 @@ async fn w1_preflight_occupancy_is_typed_capacity_refusal() {
         .drain(hya_proto::FinishCause::Shutdown, hya_core::DRAIN_DEADLINE)
         .await;
 }
+
+#[tokio::test]
+async fn review_w3_anonymous_stage_requires_supervisor_before_effects() {
+    let run = setup("review-w3-supervisor").await;
+    let workflow = compile_workflow(
+        "anonymous.hya.md",
+        "---\nkind: Workflow\nname: anonymous\ndescription: Supervisor preflight\nnodes:\n  work:\n    agent: builder\n    directive: Work.\n---\nflowchart TD\n  work\n",
+    );
+    let before = run.engine.replay(run.lead).await.unwrap().len();
+    let result = hya_core::prepare_workflow_run(
+        run.engine.clone(),
+        run.lead,
+        &workflow,
+        hya_core::WorkflowRunContext {
+            binding: run.binding,
+            caller: "hya-main".into(),
+            base_agent: base_spec(),
+            inputs: BTreeMap::new(),
+            resident_supervisor: None,
+            routing: None,
+        },
+        None,
+    )
+    .await;
+    assert!(
+        matches!(result, Err(hya_core::WorkflowError::Invalid { detail, .. }) if detail.contains("supervisor"))
+    );
+    assert_eq!(run.engine.replay(run.lead).await.unwrap().len(), before);
+}
+
+#[tokio::test]
+async fn review_w3_loop_member_link_keeps_typed_store_failure() {
+    let run = setup("review-w3-store").await;
+    run.provider.script_verdict(false);
+    let workflow = compile_workflow(
+        "store.hya.md",
+        "---\nkind: Workflow\nname: store\ndescription: Typed link failure\nnodes:\n  work:\n    agent: builder\n    directive: Work.\n    mode: loop\n    verify:\n      agent: reviewer\n      until: More work.\n      max_iterations: 2\n---\nflowchart TD\n  work\n",
+    );
+    let mut tx = run.engine.store().begin_transaction().await.unwrap();
+    sqlx::query("CREATE TRIGGER reject_loop_link BEFORE INSERT ON event_log WHEN json_extract(NEW.payload, '$.type') = 'workflow_stage_member_linked' AND json_extract(NEW.payload, '$.iteration') = 1 AND json_extract(NEW.payload, '$.role') = 'worker' BEGIN SELECT RAISE(ABORT, 'review W3 link failure'); END").execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let prepared = hya_core::prepare_workflow_run(
+        run.engine.clone(),
+        run.lead,
+        &workflow,
+        hya_core::WorkflowRunContext {
+            binding: run.binding,
+            caller: "hya-main".into(),
+            base_agent: base_spec(),
+            inputs: BTreeMap::new(),
+            resident_supervisor: Some(hya_core::ResidentSupervisor::start(run.engine.clone())),
+            routing: None,
+        },
+        Some(hya_proto::WorkflowRunId::new()),
+    )
+    .await
+    .unwrap();
+    let result = prepared.execute(CancellationToken::new()).await;
+    assert!(
+        matches!(
+            result,
+            Err(hya_core::WorkflowError::Engine(hya_core::CoreError::Store(
+                _
+            )))
+        ),
+        "{result:?}"
+    );
+    assert_eq!(
+        run.engine
+            .store()
+            .live_member_count(run.lead)
+            .await
+            .unwrap(),
+        0
+    );
+}

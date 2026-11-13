@@ -4166,3 +4166,39 @@ async fn review_w1_dropped_finished_caller_cancels_and_terminalizes_owned_run() 
         assert!(hya_server::WorkflowControl::active_run(&control, h.root).is_none());
     }
 }
+
+#[tokio::test]
+async fn review_w3_stage_failure_output_is_the_report_text() {
+    let mut h = Harness::new().await;
+    let marker = h.provider.script(vec![Round::tool(
+        "report",
+        json!({"outcome":"failed", "result":"exact worker failure"}),
+    )]);
+    let source = format!(
+        "---\nkind: Workflow\nname: raw-failure\ndescription: Raw stage output\nnodes:\n  work:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {marker}\n---\nflowchart TD\n  work\n"
+    );
+    let workflow = hya_workflow::compile(hya_workflow::WorkflowSource::new(
+        "raw-failure.hya.md",
+        &source,
+    ))
+    .unwrap();
+    let binding = h.engine.bind_session_runtime(h.root, &h.dir).await.unwrap();
+    let report = hya_core::run_workflow(
+        h.engine.clone(),
+        h.root,
+        &workflow,
+        hya_core::WorkflowRunContext {
+            binding,
+            caller: "hya-main".into(),
+            base_agent: h.agent.clone(),
+            inputs: Default::default(),
+            resident_supervisor: Some(h.built.resident_supervisor().clone()),
+            routing: None,
+        },
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.stages[0].output, "exact worker failure");
+    h.shutdown().await;
+}

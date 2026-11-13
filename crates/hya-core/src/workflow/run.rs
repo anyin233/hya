@@ -54,7 +54,7 @@ pub struct WorkflowRunContext {
     pub base_agent: AgentSpec,
     /// Values for declared workflow inputs. Every declared key must be present.
     pub inputs: BTreeMap<String, String>,
-    /// Resident scheduling owner required only when the compiled plan has actors.
+    /// Resident scheduling owner required for every Stage activation.
     pub resident_supervisor: Option<Arc<ResidentSupervisor>>,
     /// Configured category/provider context for explicit Stage route admission.
     /// `None` preserves direct core callers and the old no-assignment path.
@@ -763,10 +763,14 @@ impl PreparedWorkflowRun {
                                 .await
                                 {
                                     Ok(completed) => report = completed,
-                                    Err(WorkflowError::Engine(CoreError::Store(
-                                        error @ hya_store::StoreError::CapacityExceeded { .. },
-                                    ))) => {
-                                        return Err(CoreError::Store(error).into());
+                                    Err(WorkflowError::Engine(error @ CoreError::Store(_))) => {
+                                        return Err(error.into());
+                                    }
+                                    Err(WorkflowError::Engine(
+                                        CoreError::WorkflowActivationFailed(text),
+                                    )) => {
+                                        report.status = StageStatus::Failed;
+                                        report.output = clamp(text);
                                     }
                                     Err(error) => {
                                         report.status = if run_cancel.is_cancelled() {
@@ -936,6 +940,12 @@ fn validate_resolved_semantics(
     resolved: &[ResolvedAgent],
     ctx: &WorkflowRunContext,
 ) -> Result<(), WorkflowError> {
+    if ctx.resident_supervisor.is_none() {
+        return Err(WorkflowError::Invalid {
+            workflow: workflow.to_string(),
+            detail: "every Workflow Stage requires a resident supervisor".into(),
+        });
+    }
     let mut actor_routes: BTreeMap<&str, Option<&WorkflowModelRoute>> = BTreeMap::new();
     for (stage, worker) in stages.iter().zip(resolved) {
         if let Some(actor) = stage.actor() {
@@ -955,17 +965,6 @@ fn validate_resolved_semantics(
         // Every Agent is a resident actor (0.41.0): a Stage's `actor` key,
         // not the Agent definition, selects a persistent actor Session; a
         // Stage without one runs a fresh one-shot member Session.
-        if let Some(actor) = stage.actor()
-            && ctx.resident_supervisor.is_none()
-        {
-            return Err(WorkflowError::Invalid {
-                workflow: workflow.to_string(),
-                detail: format!(
-                    "Stage `{}` requires a resident supervisor for actor `{actor}`",
-                    stage.id()
-                ),
-            });
-        }
         if stage.actor().is_some() && stage.mode() == StageMode::Loop {
             return Err(WorkflowError::Invalid {
                 workflow: workflow.to_string(),
@@ -1039,7 +1038,7 @@ async fn activate_resident_stage(
             StageStatus::Cancelled,
             "Workflow activation cancelled".into(),
         ),
-        Err(error @ CoreError::Store(hya_store::StoreError::CapacityExceeded { .. })) => {
+        Err(error @ CoreError::Store(_)) => {
             return Err(error.into());
         }
         Err(error) => (StageStatus::Failed, error.to_string()),
@@ -1095,8 +1094,8 @@ async fn activate_actor(
             outcome: ReportOutcome::Done,
             text,
         } => Ok(text),
-        ActivationResult::Reported { text, .. } => Err(CoreError::Invalid(text)),
-        ActivationResult::Ended { note, .. } => Err(CoreError::Invalid(note)),
+        ActivationResult::Reported { text, .. } => Err(CoreError::WorkflowActivationFailed(text)),
+        ActivationResult::Ended { note, .. } => Err(CoreError::WorkflowActivationFailed(note)),
     }
 }
 
@@ -1280,8 +1279,7 @@ impl IterationExecutor for LoopWorkerExecutor {
                         iteration,
                     },
                 )
-                .await
-                .map_err(|error| CoreError::Invalid(error.to_string()))?;
+                .await?;
         }
         let route = self.route.clone().map(|route| {
             WorkflowTurnRoute::new(WorkflowTurnRouteSpec {

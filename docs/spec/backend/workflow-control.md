@@ -267,3 +267,10 @@ waiting caller cancels its run token; it does not drop the execution future.
 The task retains admission ownership through actor cleanup and the terminal
 `WorkflowRunFinished` write. Root-driver activity also covers that write. Started
 delivery transfers ownership to its background task on successful return.
+
+All Stages, including anonymous Stages, require a resident supervisor during
+preflight. Reported failure/ending text is Stage evidence verbatim;
+`CoreError::WorkflowActivationFailed(String)` distinguishes it from invalid
+input (turn error code `workflow_activation_failed` if surfaced as a turn error).
+Store failures, including loop member-link writes, retain their typed
+`CoreError::Store` through execution and the public error mapping.
