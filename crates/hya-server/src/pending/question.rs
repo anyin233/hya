@@ -91,6 +91,11 @@ impl QuestionRequests {
         self.events.subscribe()
     }
 
+    #[cfg(test)]
+    pub(crate) fn receiver_count(&self) -> usize {
+        self.events.receiver_count()
+    }
+
     /// Pending-plane bridge retained for the interaction event stream.
     #[allow(dead_code)]
     #[allow(dead_code)]
