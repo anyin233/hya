@@ -2036,6 +2036,7 @@ struct EpisodeInit {
     agent: hya_proto::AgentName,
     parent: SessionId,
     envelopes: Vec<hya_proto::Envelope>,
+    published: oneshot::Receiver<()>,
     ready: oneshot::Sender<Result<(), CoreError>>,
 }
 
@@ -2050,8 +2051,11 @@ async fn initialize_episode(
         agent,
         parent,
         envelopes,
+        published,
         ready,
     } = init;
+    // No child hook or turn may overtake the committed parent registration.
+    let _ = published.await;
     let session = claim.actor_id;
     let created = envelopes.iter().any(|envelope| {
         matches!(envelope.event,
@@ -2073,8 +2077,8 @@ async fn initialize_episode(
         _ = cancel.cancelled() => {},
         () = hooks => {},
     }
-    // Registration is already durable. Even cancellation must publish it before
-    // the terminal events; a stale initializer can never publish after revival.
+    // Only child-log events wait for session-start hooks. Cancellation still
+    // publishes them before the episode can write its terminal events.
     for envelope in envelopes {
         team.engine.publish_envelope(envelope);
     }
@@ -4221,11 +4225,16 @@ impl ResidentSupervisor {
             .get(parent)
             .map_or(root, |entry| entry.session);
         let (ready, initialized) = oneshot::channel();
+        let (publication, published) = oneshot::channel();
+        let (child_envelopes, parent_envelopes): (Vec<_>, Vec<_>) = envelopes
+            .into_iter()
+            .partition(|envelope| envelope.event.session() == Some(child));
         let init = EpisodeInit {
             binding: binding.clone(),
             agent: agent.name.clone(),
             parent: parent_session,
-            envelopes,
+            envelopes: child_envelopes,
+            published,
             ready,
         };
         team.install_episode(
@@ -4257,6 +4266,10 @@ impl ResidentSupervisor {
             },
             Some(init),
         );
+        for envelope in parent_envelopes {
+            self.engine.publish_envelope(envelope);
+        }
+        let _ = publication.send(());
         drop(write);
         drop(activation_lease);
         if activated {
@@ -4931,23 +4944,38 @@ impl ResidentSupervisor {
             )
             .await?;
         let mut initialized_members = Vec::with_capacity(installs.len());
+        let mut publications = Vec::with_capacity(installs.len());
         for ((claim, envelopes), (session, parent, mut episode, channel_policy)) in
             registered.into_iter().zip(installs)
         {
             self.engine
                 .update_session_channel_policy(session, channel_policy);
             let (ready, initialized) = oneshot::channel();
+            let (publication, published) = oneshot::channel();
+            let (child_envelopes, parent_envelopes): (Vec<_>, Vec<_>) = envelopes
+                .into_iter()
+                .partition(|envelope| envelope.event.session() == Some(session));
             let init = EpisodeInit {
                 binding: episode.binding.clone(),
                 agent: episode.agent.name.clone(),
                 parent,
-                envelopes,
+                envelopes: child_envelopes,
+                published,
                 ready,
             };
             episode.claim = Some(claim);
             episode.cancel = team.cancel.child_token();
             team.install_episode(session, episode, Some(init));
             initialized_members.push(initialized);
+            publications.push((parent_envelopes, publication));
+        }
+        for (envelopes, _) in &publications {
+            for envelope in envelopes {
+                self.engine.publish_envelope(envelope.clone());
+            }
+        }
+        for (_, publication) in publications {
+            let _ = publication.send(());
         }
         drop(write);
         // Commit is the batch's success boundary. Each episode owns initializer

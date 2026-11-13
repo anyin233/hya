@@ -1377,3 +1377,138 @@ async fn recovered_episode_does_not_queue_an_outgoing_dm_copy() {
         "outgoing history must not owe a recovery wake"
     );
 }
+
+struct PausedStart {
+    target: Mutex<Option<SessionId>>,
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
+}
+#[async_trait::async_trait]
+impl crate::hooks::HookDispatcher for PausedStart {
+    fn dispatch_event(&self, _: &hya_proto::Envelope) {}
+    async fn command_execute_before(
+        &self,
+        i: crate::hooks::CommandExecuteBeforeInput,
+    ) -> crate::hooks::CommandExecuteBeforeOutcome {
+        crate::hooks::NoopHookHost.command_execute_before(i).await
+    }
+    async fn text_complete(
+        &self,
+        i: crate::hooks::TextCompleteInput,
+    ) -> crate::hooks::TextCompleteOutcome {
+        crate::hooks::NoopHookHost.text_complete(i).await
+    }
+    async fn message_user_before(
+        &self,
+        i: crate::hooks::MessageUserBeforeInput,
+    ) -> crate::hooks::MessageUserBeforeOutcome {
+        crate::hooks::NoopHookHost.message_user_before(i).await
+    }
+    async fn tool_execute_before(
+        &self,
+        i: crate::hooks::ToolExecuteBeforeInput,
+    ) -> crate::hooks::ToolExecuteBeforeOutcome {
+        crate::hooks::NoopHookHost.tool_execute_before(i).await
+    }
+    async fn tool_execute_after(
+        &self,
+        i: crate::hooks::ToolExecuteAfterInput,
+    ) -> crate::hooks::ToolExecuteAfterOutcome {
+        crate::hooks::NoopHookHost.tool_execute_after(i).await
+    }
+    async fn chat_params(
+        &self,
+        input: crate::hooks::ChatParamsInput,
+    ) -> crate::hooks::ChatParamsOutcome {
+        crate::hooks::NoopHookHost.chat_params(input).await
+    }
+    async fn session_start(&self, input: SessionLifecycleInput) {
+        if *self.target.lock().unwrap() == Some(input.session) {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn review_r5_registration_frames_precede_siblings_and_activation_mail() {
+    let hooks = Arc::new(PausedStart {
+        target: Mutex::new(None),
+        entered: Arc::new(Notify::new()),
+        release: Arc::new(Notify::new()),
+    });
+    let engine = Arc::new((*engine().await).clone().with_hooks(hooks.clone()));
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let _driver = supervisor.root_driver_activity(root).await.unwrap();
+    let mut prepared = Vec::new();
+    for _ in 0..2 {
+        let agent = AgentSpec {
+            name: AgentName::new("hya-scout"),
+            model: ModelRef::new("hya/offline"),
+            workdir: ".".into(),
+            system_prompt: String::new(),
+            reasoning: None,
+        };
+        let binding = engine.bind_runtime(&agent.workdir).unwrap();
+        let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
+        prepared.push(
+            supervisor
+                .prepare_resident(
+                    root,
+                    agent,
+                    (binding, Arc::from([]), resources, None),
+                    ResidentSpawnContext::new("parked".into(), None, None, None),
+                )
+                .await
+                .unwrap()
+                .1,
+        );
+    }
+    let first = prepared[0].session;
+    *hooks.target.lock().unwrap() = Some(first);
+    let mut bus = engine.bus().subscribe();
+    let mut initialized = supervisor
+        .register_episodes(root, prepared, None)
+        .await
+        .unwrap();
+    hooks.entered.notified().await;
+    initialized.pop().unwrap().await.unwrap().unwrap();
+    // Parked identity is usable even while its initializer remains blocked.
+    let mut activation = supervisor
+        .activate(root, first, "work".into(), Arc::from(""), None, None)
+        .await
+        .unwrap();
+    let before_release = engine
+        .replay(root)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|e| {
+            matches!(
+                e.event,
+                Event::MemberSpawned { .. }
+                    | Event::AgentRegistered { .. }
+                    | Event::ChannelCreated { .. }
+                    | Event::MailSent { .. }
+            )
+        })
+        .map(|e| e.seq)
+        .collect::<Vec<_>>();
+    let mut observed = Vec::new();
+    while let Ok(e) = bus.try_recv() {
+        if e.event.session() == Some(root) && before_release.contains(&e.seq) {
+            observed.push(e.seq);
+        }
+    }
+    hooks.release.notify_one();
+    initialized.pop().unwrap().await.unwrap().unwrap();
+    activation.wait().await.unwrap();
+    supervisor
+        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
+        .await;
+    assert_eq!(
+        observed, before_release,
+        "root registration must publish in commit order before activation mail, without waiting for session-start hooks"
+    );
+}
