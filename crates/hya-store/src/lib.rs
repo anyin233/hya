@@ -1050,7 +1050,10 @@ pub async fn append_event_in_transaction(
             let base = projection_cache::load_snapshot(tx, session)
                 .await?
                 .map(Arc::new);
-            let projection = projection_cache::fold(tx, session, base).await?.projection;
+            let projection = projection_cache::fold(tx, session, base)
+                .await?
+                .finish()
+                .projection;
             if projection.session.id.is_some()
                 && projection.session.parent.is_none()
                 && !projection.session.is_archived()

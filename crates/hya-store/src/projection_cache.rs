@@ -72,7 +72,7 @@ pub(crate) struct Base {
 
 /// Database read completed; applying the decoded tail requires no await.
 pub(crate) struct PreparedFold {
-    pub(crate) projection: Arc<Projection>,
+    projection: Arc<Projection>,
     tail: Vec<Envelope>,
     applied: u64,
     rebuilt: bool,
