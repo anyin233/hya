@@ -454,3 +454,89 @@ async fn outgoing_directive_reader(steer: bool) {
         .drain(FinishCause::Shutdown, Duration::from_secs(2))
         .await;
 }
+
+#[tokio::test]
+async fn mandatory_parent_delivery_requires_the_actual_parent_and_own_dm() {
+    let engine = engine().await;
+    let binding = engine.bind_runtime(std::path::Path::new(".")).unwrap();
+    let policy = ChannelPolicy::from_binding(&binding).unwrap();
+    let mut projection = hya_proto::Projection::default();
+    for (id, members) in [
+        ("own", vec!["main/lead", "main/lead/child"]),
+        ("other", vec!["main/lead", "main/lead/other"]),
+        (
+            "three",
+            vec!["main/lead", "main/lead/child", "main/lead/other"],
+        ),
+    ] {
+        projection.team.channels.insert(
+            id.into(),
+            hya_proto::ChannelProjection {
+                kind: ChannelKind::Dm,
+                members: members.into_iter().map(str::to_string).collect(),
+                ..Default::default()
+            },
+        );
+    }
+    for (sender, to, expected) in [
+        ("main/lead", MailEndpoint::Channel("own".into()), true),
+        (
+            "main/lead",
+            MailEndpoint::Handle("main/lead/child".into()),
+            true,
+        ),
+        (
+            "main/lead/other",
+            MailEndpoint::Channel("own".into()),
+            false,
+        ),
+        ("main", MailEndpoint::Channel("own".into()), false),
+        ("main/lead", MailEndpoint::Channel("missing".into()), false),
+        ("main/lead", MailEndpoint::Channel("other".into()), false),
+        ("main/lead", MailEndpoint::Channel("three".into()), false),
+        (
+            "main/lead",
+            MailEndpoint::Handle("main/lead/other".into()),
+            false,
+        ),
+    ] {
+        let (kind, role) = recipient_channel_role(&projection, &to, "main/lead/child", sender);
+        assert_eq!(
+            resident_delivery_allowed(&policy, "hya-scout", kind, role),
+            expected,
+            "sender {sender}, endpoint {to:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn parked_workflow_actor_has_no_pending_directive() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let lead = engine.try_begin_turn(root).unwrap();
+    let (child, handle) = parked(&supervisor, root).await;
+    assert_eq!(supervisor.member_busy(root, child), Some(false));
+    assert!(
+        engine
+            .read_projection(child)
+            .await
+            .unwrap()
+            .session
+            .messages
+            .is_empty()
+    );
+    assert!(
+        !engine
+            .read_projection(root)
+            .await
+            .unwrap()
+            .team
+            .inboxes
+            .contains_key(&handle)
+    );
+    drop(lead);
+    supervisor
+        .drain(FinishCause::Shutdown, Duration::from_secs(2))
+        .await;
+}
