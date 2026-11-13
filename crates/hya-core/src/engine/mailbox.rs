@@ -2282,6 +2282,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn steer_denies_group_mail_after_member_archive() {
+        let engine = engine().await;
+        let org = org(&engine).await;
+        engine
+            .mail_announce(org.lead_1.session, "group mail before archive".into())
+            .await
+            .unwrap();
+        let mut steer = engine
+            .steer_mailbox_snapshot_with_policy(
+                org.worker_1.session,
+                engine.session_channel_policy(org.worker_1.session),
+            )
+            .await;
+        engine
+            .store()
+            .append_event(
+                org.root,
+                &Event::AgentArchived {
+                    session: org.root,
+                    handle: org.worker_1.path,
+                    child: org.worker_1.session,
+                    reason: hya_proto::ArchiveReason::ArchivedByParent,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(steer.drain(&engine).await.unwrap().is_none());
+        assert!(
+            steer.take_acknowledgement().unwrap().1,
+            "filtered incoming mail is acknowledged"
+        );
+    }
+
+    #[tokio::test]
     async fn steer_cursor_ack_marks_work_only_for_incoming_mail() {
         let engine = engine().await;
         let org = org(&engine).await;
