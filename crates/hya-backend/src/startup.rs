@@ -85,6 +85,7 @@ pub(crate) struct HeadlessSession {
     pub(crate) evaluator_router: ProviderRouter,
     pub(crate) evaluator_model: String,
     responder: RejectResponder,
+    _root_drivers: Vec<hya_core::resident::RootDriverActivity>,
 }
 
 struct RejectResponder(tokio::task::JoinHandle<()>);
@@ -170,10 +171,14 @@ impl HeadlessSession {
                     .await
                     .context("create session")?
             };
-            Ok::<_, anyhow::Error>((session, responder))
+            let drivers = built
+                .resident_supervisor()
+                .start_recovered_headless(session)
+                .await?;
+            Ok::<_, anyhow::Error>((session, responder, drivers))
         }
         .await;
-        let (session, responder) = match prepared {
+        let (session, responder, drivers) = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
                 shutdown(&mut built).await?;
@@ -187,6 +192,7 @@ impl HeadlessSession {
             evaluator_router,
             evaluator_model,
             responder,
+            _root_drivers: drivers,
         })
     }
 }
@@ -260,5 +266,132 @@ mod tests {
             "runtime must have drained despite the command error"
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn o1_headless_start_recovers_crashed_members_without_root_turns() -> anyhow::Result<()> {
+        use hya_proto::{Event, MailEndpoint, MailKind, Role, SessionId};
+        let test = "startup::tests::o1_headless_start_recovers_crashed_members_without_root_turns";
+        let mode = std::env::var("HYA_TEST_RECOVERY_CHILD").unwrap_or_default();
+        if mode.is_empty() {
+            let dir =
+                std::env::temp_dir().join(format!("hya-headless-recovery-{}", SessionId::new()));
+            std::fs::create_dir_all(&dir)?;
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args(["--exact", test, "--nocapture"])
+                .env_clear()
+                .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+                .env("HOME", &dir)
+                .env("XDG_CONFIG_HOME", dir.join("config"))
+                .env("HYA_CONFIG_HOME", dir.join("hya"))
+                .env("HYA_TEST_RECOVERY_CHILD", "run")
+                .current_dir(&dir)
+                .output()?;
+            std::fs::remove_dir_all(dir)?;
+            anyhow::ensure!(
+                output.status.success(),
+                "headless recovery failed: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Ok(());
+        }
+        if mode == "run" {
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args(["--exact", test, "--nocapture"])
+                .env("HYA_TEST_RECOVERY_CHILD", "seed")
+                .output()?;
+            anyhow::ensure!(
+                output.status.success(),
+                "crash seed failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let store = hya_store::SessionStore::connect("events.db").await?;
+        let session = if mode == "run" {
+            Some(std::fs::read_to_string("root.id")?.parse::<SessionId>()?)
+        } else {
+            None
+        };
+        let headless =
+            super::HeadlessSession::start(store, Some("hya/offline".into()), true, true, session)
+                .await?;
+        let engine = headless.built.engine();
+        if mode == "seed" {
+            let supervisor = headless.built.resident_supervisor();
+            let binding = engine.bind_runtime(&headless.agent.workdir)?;
+            let agent = engine.agent_spec_for_binding(&binding, &headless.agent, "hya-scout")?;
+            let resources = binding.agent_resource_policy("hya-scout")?;
+            let (_, handle, _) = supervisor
+                .spawn_resident_parked(
+                    headless.session,
+                    agent,
+                    (binding, std::sync::Arc::from([]), resources, None),
+                    "parked".into(),
+                    None,
+                    None,
+                )
+                .await?;
+            for target in [handle, "main".into()] {
+                engine
+                    .store()
+                    .append_event(
+                        headless.session,
+                        &Event::MailSent {
+                            session: headless.session,
+                            from: "harness".into(),
+                            to: MailEndpoint::Handle(target),
+                            kind: MailKind::Message,
+                            body: "RECOVER_HEADLESS_WORK".into(),
+                        },
+                    )
+                    .await?;
+            }
+            std::fs::write("root.id", headless.session.to_string())?;
+            // Exit without Drop/shutdown, preserving the live durable claim.
+            std::process::exit(0);
+        }
+        let root = headless.session;
+        let supervisor = headless.built.resident_supervisor();
+        headless
+            .run(async |headless| {
+                anyhow::ensure!(
+                    supervisor.episode_count() == 1,
+                    "headless startup left the recovered actor staged"
+                );
+                anyhow::ensure!(
+                    supervisor.start_recovered().await? == 0,
+                    "startup must install recovery exactly once"
+                );
+                let mut bus = engine.bus().subscribe();
+                let projection = engine.read_projection(root).await?;
+                let child = projection
+                    .team
+                    .roster
+                    .values()
+                    .find(|entry| entry.session != root)
+                    .ok_or_else(|| anyhow::anyhow!("recovered member missing"))?
+                    .session;
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        let p = engine.read_projection(child).await?;
+                        if p.session.messages.iter().any(|message| {
+                            message.role == Role::Assistant && message.finish.is_some()
+                        }) {
+                            break Ok::<_, anyhow::Error>(());
+                        }
+                        bus.recv().await?;
+                    }
+                })
+                .await??;
+                let projection = engine.read_projection(root).await?;
+                anyhow::ensure!(
+                    projection.session.messages.is_empty(),
+                    "recovery started an autonomous root turn"
+                );
+                anyhow::ensure!(headless.session == root);
+                Ok(())
+            })
+            .await
     }
 }

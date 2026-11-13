@@ -346,7 +346,7 @@ impl TurnGate {
     fn release(&self, session: SessionId, id: u64) {
         let observer = {
             let mut state = self.state();
-            if !state.active.get(&session).is_some_and(|turn| turn.id == id) {
+            if state.active.get(&session).is_none_or(|turn| turn.id != id) {
                 return;
             }
             state.active.remove(&session);
@@ -362,11 +362,14 @@ impl TurnGate {
                 if let Some(observer) = observer {
                     // Register under the gate lock before drain closes the tracker.
                     // A queued callback must not retain the supervisor or engine.
-                    self.observer_tasks.spawn_on(async move {
-                        if let Some(observer) = observer.upgrade() {
-                            observer.turn_released(session);
-                        }
-                    }, &runtime);
+                    self.observer_tasks.spawn_on(
+                        async move {
+                            if let Some(observer) = observer.upgrade() {
+                                observer.turn_released(session);
+                            }
+                        },
+                        &runtime,
+                    );
                 }
                 None
             } else {
@@ -378,7 +381,6 @@ impl TurnGate {
             observer.turn_released(session);
         }
     }
-
 }
 
 /// Proof that the holder owns `session`'s one active turn. Dropping it ends

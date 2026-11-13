@@ -4475,3 +4475,30 @@ async fn m412_start_recovered_preserves_an_actor_ended_during_restore() {
     assert!(projection.team.archived.contains_key(&handle));
     assert!(!active.contains(&ended));
 }
+
+#[tokio::test]
+async fn o1_with_built_engine_starts_recovery_before_the_body() {
+    let test = "o1_with_built_engine_starts_recovery_before_the_body";
+    support::lifecycle::crash_seed_if_requested(test, false).await;
+    let mut h = support::lifecycle::crashed_team(test).await;
+    let replacement = hya_app::build_session_engine_pure(
+        hya_store::SessionStore::connect_memory().await.unwrap(),
+        hya_provider::ProviderRouter::new().with(h.provider.clone()),
+        &h.agent,
+        Default::default(),
+        Vec::new(),
+        Default::default(),
+    )
+    .await
+    .unwrap();
+    let built = std::mem::replace(&mut h.built, replacement);
+    let count = hya_app::with_built_session_engine(built, |built| {
+        std::future::ready(Ok::<_, hya_core::CoreError>(
+            built.resident_supervisor().episode_count(),
+        ))
+    })
+    .await
+    .unwrap();
+    h.shutdown().await;
+    assert_eq!(count, 2, "the embedding body received staged actors");
+}

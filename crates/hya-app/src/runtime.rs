@@ -1635,7 +1635,8 @@ impl hya_server::WorkflowControl for crate::WorkflowControl {
     }
 }
 
-/// Run a body against a built engine and always attempt supervisor shutdown.
+/// Start recovered residents, run a body, and always attempt supervisor shutdown.
+/// Server embedders admit restore prompts with `resume_interrupted` first.
 pub async fn with_built_session_engine<T, E, F, Fut>(
     mut built: BuiltSessionEngine,
     body: F,
@@ -1645,7 +1646,10 @@ where
     Fut: std::future::Future<Output = Result<T, E>>,
     E: From<CoreError>,
 {
-    let body_result = body(&mut built).await;
+    let body_result = match built.resident_supervisor.start_recovered().await {
+        Ok(_) => body(&mut built).await,
+        Err(error) => Err(E::from(error)),
+    };
     let shutdown_result = built.shutdown().await.map_err(E::from);
     match (body_result, shutdown_result) {
         (Ok(value), Ok(())) => Ok(value),

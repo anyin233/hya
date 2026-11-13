@@ -940,6 +940,11 @@ mod tests {
             })
             .await
             .unwrap();
+        let _drivers = built
+            .resident_supervisor()
+            .start_recovered_headless(root)
+            .await
+            .unwrap();
         let binding = engine.bind_runtime(&agent.workdir).unwrap();
         let worker = engine
             .agent_spec_for_binding(&binding, &agent, "hya-scout")

@@ -616,12 +616,13 @@ async fn cancel_turn(
     Ok(Json(info))
 }
 
-
 #[cfg(test)]
 mod admission_tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
-    use hya_core::{AgentCatalog, AgentSpec, CreateSession, EventBus, RuntimeRegistry, SessionEngine};
+    use hya_core::{
+        AgentCatalog, AgentSpec, CreateSession, EventBus, RuntimeRegistry, SessionEngine,
+    };
     use hya_proto::{AgentName, ModelRef};
     use hya_provider::ProviderRouter;
     use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
@@ -636,20 +637,35 @@ mod admission_tests {
         let (permission, _) = PermissionPlane::new(PermissionRules::default());
         let engine = Arc::new(SessionEngine::new(
             hya_store::SessionStore::connect_memory().await.unwrap(),
-            Arc::new(ProviderRouter::new()), Arc::new(runtime), permission, EventBus::default(),
+            Arc::new(ProviderRouter::new()),
+            Arc::new(runtime),
+            permission,
+            EventBus::default(),
         ));
         let agent = Arc::new(AgentSpec {
-            name: AgentName::new("hya-main"), model: ModelRef::new("hya/offline"),
-            workdir: std::env::temp_dir(), system_prompt: String::new(), reasoning: None,
+            name: AgentName::new("hya-main"),
+            model: ModelRef::new("hya/offline"),
+            workdir: std::env::temp_dir(),
+            system_prompt: String::new(),
+            reasoning: None,
         });
-        engine.store().claim_runtime_owner(engine.runtime_owner()).unwrap();
+        engine
+            .store()
+            .claim_runtime_owner(engine.runtime_owner())
+            .unwrap();
         let app = crate::AppState::new(engine.clone(), agent.clone());
         let mut st = ServerState::new(app.clone());
-        let session = engine.create(CreateSession {
-            parent: None, agent: agent.name.clone(), model: agent.model.clone(),
-            workdir: agent.workdir.to_string_lossy().into_owned(), project: None,
-            kind: hya_proto::SessionKind::Project,
-        }).await.unwrap();
+        let session = engine
+            .create(CreateSession {
+                parent: None,
+                agent: agent.name.clone(),
+                model: agent.model.clone(),
+                workdir: agent.workdir.to_string_lossy().into_owned(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
+            })
+            .await
+            .unwrap();
         for fail in [false, true] {
             let run = st.start_run(session).unwrap();
             if fail {
@@ -659,15 +675,37 @@ mod admission_tests {
                 let engine = engine.clone();
                 let runs = st.runs.clone();
                 move || {
-                    assert!(!engine.turn_active(session), "reply retained the restore lease");
-                    assert!(!runs.is_busy(session), "reply retained the server run guard");
+                    assert!(
+                        !engine.turn_active(session),
+                        "reply retained the restore lease"
+                    );
+                    assert!(
+                        !runs.is_busy(session),
+                        "reply retained the server run guard"
+                    );
                 }
             }));
-            let result = spawn_turn_run(&st, session, run, PreparedTurn {
-                agent: (*agent).clone(), guidance: None, external_dirs: Vec::new(), explicit_model: None,
-            }, Admission::Restore).await;
-            if fail { assert!(result.is_err()); } else {
-                assert!(matches!(result, Ok(false)), "{}", result.err().map(|e| e.message).unwrap_or_default());
+            let result = spawn_turn_run(
+                &st,
+                session,
+                run,
+                PreparedTurn {
+                    agent: (*agent).clone(),
+                    guidance: None,
+                    external_dirs: Vec::new(),
+                    explicit_model: None,
+                },
+                Admission::Restore,
+            )
+            .await;
+            if fail {
+                assert!(result.is_err());
+            } else {
+                assert!(
+                    matches!(result, Ok(false)),
+                    "{}",
+                    result.err().map(|e| e.message).unwrap_or_default()
+                );
             }
         }
         app.shutdown().await;

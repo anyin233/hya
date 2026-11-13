@@ -2234,17 +2234,25 @@ async fn o2_interactive_turn_release_retires_the_finished_team() {
     let (child, handle) = parked(&supervisor, root).await;
     let team = supervisor.team_with_resident(child).unwrap();
     supervisor.end_member(root, &handle).await.unwrap();
-    engine.emit_for_actor(None, root, Event::MailSent {
-        session: root,
-        from: scope::HARNESS_HANDLE.into(),
-        to: MailEndpoint::Handle(scope::ROOT_HANDLE.into()),
-        kind: MailKind::Message,
-        body: "child ended".into(),
-    }).await.unwrap();
+    engine
+        .emit_for_actor(
+            None,
+            root,
+            Event::MailSent {
+                session: root,
+                from: scope::HARNESS_HANDLE.into(),
+                to: MailEndpoint::Handle(scope::ROOT_HANDLE.into()),
+                kind: MailKind::Message,
+                body: "child ended".into(),
+            },
+        )
+        .await
+        .unwrap();
     // Seal bus intake so a late terminal envelope cannot retire the team
     // on behalf of the turn boundary under test.
     supervisor.listener_stop.cancel();
-    supervisor.listener.lock().unwrap().take().unwrap().await.unwrap();
+    let listener = supervisor.listener.lock().unwrap().take().unwrap();
+    listener.await.unwrap();
     let (done, flushed) = oneshot::channel();
     team.enqueue(TeamEvent::Flush(done));
     flushed.await.unwrap();
@@ -2265,7 +2273,9 @@ async fn o2_interactive_turn_release_retires_the_finished_team() {
         assert!(supervisor.tasks.is_empty());
         assert!(team.lock().residents.is_empty());
     }
-    supervisor.drain(FinishCause::Shutdown, Duration::from_secs(5)).await;
+    supervisor
+        .drain(FinishCause::Shutdown, Duration::from_secs(5))
+        .await;
     assert!(retired.is_ok(), "root turn release retained its idle team");
     assert!(supervisor.teams().is_empty());
 }
@@ -2280,8 +2290,14 @@ async fn o3_turn_release_during_shutdown_cannot_retain_the_engine() {
     engine.begin_drain(FinishCause::Shutdown);
     // A current-thread runtime keeps the release task queued until we yield.
     drop(lease);
-    assert_eq!(Arc::strong_count(&supervisor), 1, "draining release queued a strong supervisor owner");
-    supervisor.drain(FinishCause::Shutdown, Duration::from_secs(5)).await;
+    assert_eq!(
+        Arc::strong_count(&supervisor),
+        1,
+        "draining release queued a strong supervisor owner"
+    );
+    supervisor
+        .drain(FinishCause::Shutdown, Duration::from_secs(5))
+        .await;
     drop(supervisor);
     drop(engine);
     assert!(weak.upgrade().is_none());
@@ -2294,32 +2310,62 @@ async fn o4_ended_staged_claim_still_recovers_its_roots_unread_mail() {
     let previous = ResidentSupervisor::start(engine.clone());
     let driver = previous.root_driver_activity(root).await.unwrap();
     let (child, handle) = parked(&previous, root).await;
-    let claim = previous.team_with_resident(child).unwrap().lock().residents[&child].claim.unwrap();
+    let claim = previous.team_with_resident(child).unwrap().lock().residents[&child]
+        .claim
+        .unwrap();
     previous.end_member(root, &handle).await.unwrap();
     drop(driver);
     previous.listener_stop.cancel();
-    previous.listener.lock().unwrap().take().unwrap().await.unwrap();
+    let listener = previous.listener.lock().unwrap().take().unwrap();
+    listener.await.unwrap();
     previous.tasks.close();
     previous.tasks.wait().await;
     drop(previous);
     let supervisor = ResidentSupervisor::start(engine.clone());
     let (agent, runtime) = activation_runtime(&engine);
-    supervisor.defer_recovered_resident(root, handle, agent, runtime,
-        hya_store::RecoveredActorClaim { claim, previous_epoch: claim.epoch }, ResidentRecovery::Idle);
+    supervisor.defer_recovered_resident(
+        root,
+        handle,
+        agent,
+        runtime,
+        hya_store::RecoveredActorClaim {
+            claim,
+            previous_epoch: claim.epoch,
+        },
+        ResidentRecovery::Idle,
+    );
     // Persisted before startup; no live bus envelope can recover it for us.
-    engine.store().append_event(root, &Event::MailSent {
-        session: root, from: scope::HARNESS_HANDLE.into(),
-        to: MailEndpoint::Handle("main".into()), kind: MailKind::Message,
-        body: "unread root mail".into(),
-    }).await.unwrap();
+    engine
+        .store()
+        .append_event(
+            root,
+            &Event::MailSent {
+                session: root,
+                from: scope::HARNESS_HANDLE.into(),
+                to: MailEndpoint::Handle("main".into()),
+                kind: MailKind::Message,
+                body: "unread root mail".into(),
+            },
+        )
+        .await
+        .unwrap();
     assert_eq!(supervisor.start_recovered().await.unwrap(), 0);
     supervisor.tasks.close();
-    tokio::time::timeout(Duration::from_secs(5), supervisor.tasks.wait()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), supervisor.tasks.wait())
+        .await
+        .unwrap();
     let replay = engine.replay(root).await.unwrap();
-    let recovered = replay.iter().any(|envelope| matches!(&envelope.event,
-        Event::TextDelta { delta, .. } if delta.contains("unread root mail")));
-    supervisor.drain(FinishCause::Shutdown, Duration::from_secs(5)).await;
-    assert!(recovered, "the stale claim retired its root before inbox recovery");
+    let recovered = replay.iter().any(|envelope| {
+        matches!(&envelope.event,
+        Event::TextDelta { delta, .. } if delta.contains("unread root mail"))
+    });
+    supervisor
+        .drain(FinishCause::Shutdown, Duration::from_secs(5))
+        .await;
+    assert!(
+        recovered,
+        "the stale claim retired its root before inbox recovery"
+    );
 }
 
 #[tokio::test]
@@ -2329,21 +2375,36 @@ async fn o5_late_stall_from_an_ended_episode_does_not_mark_its_revival() {
     let supervisor = ResidentSupervisor::start(engine.clone());
     let driver = supervisor.root_driver_activity(root).await.unwrap();
     let (child, handle) = parked(&supervisor, root).await;
-    let old_claim = supervisor.team_with_resident(child).unwrap().lock().residents[&child].claim;
+    let old_claim = supervisor
+        .team_with_resident(child)
+        .unwrap()
+        .lock()
+        .residents[&child]
+        .claim;
     supervisor.end_member(root, &handle).await.unwrap();
     // Hold the revived turn before its first answer, while an old wait's
     // snapshot remains suspended before recording the stall.
     let lease = engine.try_begin_turn(child).unwrap();
-    engine.mail_send(root, MailEndpoint::Handle(handle), MailKind::Message, "revive".into()).await.unwrap();
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::Handle(handle),
+            MailKind::Message,
+            "revive".into(),
+        )
+        .await
+        .unwrap();
     supervisor.record_wait_stall(root, old_claim.unwrap(), None);
-    let inherited = supervisor.wait_stall_reported(root, supervisor.member_claim(child).unwrap(), None);
+    let inherited =
+        supervisor.wait_stall_reported(root, supervisor.member_claim(child).unwrap(), None);
     engine.begin_drain(FinishCause::Shutdown);
     drop(lease);
     drop(driver);
-    supervisor.drain(FinishCause::Shutdown, Duration::from_secs(5)).await;
+    supervisor
+        .drain(FinishCause::Shutdown, Duration::from_secs(5))
+        .await;
     assert!(!inherited, "revived episode inherited an old wait snapshot");
 }
-
 
 #[tokio::test]
 async fn o7_blocked_team_queue_retains_only_routing_fields_in_order() {
@@ -2351,28 +2412,59 @@ async fn o7_blocked_team_queue_retains_only_routing_fields_in_order() {
     let root = root(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     let (events, mut queue) = tokio::sync::mpsc::unbounded_channel();
-    let team = Arc::new(TeamActor::new(root, engine.clone(), Arc::downgrade(&supervisor),
-        Arc::new(RootDriverState { runs: AtomicUsize::new(0), autonomous: AtomicBool::new(true) }),
-        supervisor.tasks.clone(), events));
+    let team = Arc::new(TeamActor::new(
+        root,
+        engine.clone(),
+        Arc::downgrade(&supervisor),
+        Arc::new(RootDriverState {
+            runs: AtomicUsize::new(0),
+            autonomous: AtomicBool::new(true),
+        }),
+        supervisor.tasks.clone(),
+        events,
+    ));
     supervisor.teams().insert(root, team.clone());
     // Retain the receiver without a worker, deterministically blocking consumption.
     for (seq, event) in [
-        Event::TextDelta { session: root, message: hya_proto::MessageId::new(),
-            part: hya_proto::PartId::new(), delta: "LARGE_ACTIVITY_PAYLOAD".repeat(100_000) },
-        Event::MailSent { session: root, from: "harness".into(),
-            to: MailEndpoint::Handle("main".into()), kind: MailKind::Message,
-            body: "LARGE_MAIL_PAYLOAD".repeat(100_000) },
-    ].into_iter().enumerate() {
-        supervisor.route_envelope(hya_proto::Envelope { seq: hya_proto::EventSeq(seq as u64), ts_millis: 0, event });
+        Event::TextDelta {
+            session: root,
+            message: hya_proto::MessageId::new(),
+            part: hya_proto::PartId::new(),
+            delta: "LARGE_ACTIVITY_PAYLOAD".repeat(100_000),
+        },
+        Event::MailSent {
+            session: root,
+            from: "harness".into(),
+            to: MailEndpoint::Handle("main".into()),
+            kind: MailKind::Message,
+            body: "LARGE_MAIL_PAYLOAD".repeat(100_000),
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        supervisor.route_envelope(hya_proto::Envelope {
+            seq: hya_proto::EventSeq(seq as u64),
+            ts_millis: 0,
+            event,
+        });
     }
     let first = format!("{:?}", queue.try_recv().unwrap());
     let second = format!("{:?}", queue.try_recv().unwrap());
-    assert!(!first.contains("LARGE_ACTIVITY_PAYLOAD"), "activity queue retained its payload");
-    assert!(!second.contains("LARGE_MAIL_PAYLOAD"), "mail queue retained its body");
+    assert!(
+        !first.contains("LARGE_ACTIVITY_PAYLOAD"),
+        "activity queue retained its payload"
+    );
+    assert!(
+        !second.contains("LARGE_MAIL_PAYLOAD"),
+        "mail queue retained its body"
+    );
     assert!(first.contains(&format!("{root:?}")));
     assert!(second.contains("main"));
     assert_eq!(team.lock().queued_wakes, 1);
     assert!(queue.try_recv().is_err());
     supervisor.teams().remove(&root);
-    supervisor.drain(FinishCause::Shutdown, Duration::from_secs(5)).await;
+    supervisor
+        .drain(FinishCause::Shutdown, Duration::from_secs(5))
+        .await;
 }

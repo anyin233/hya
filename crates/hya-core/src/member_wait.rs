@@ -50,8 +50,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use hya_proto::{
-    ActorClaim, ArchiveReason, Event, MailEndpoint, MemberRunStatus, MessageId, Projection, Role, RosterStatus,
-    SessionId, scope,
+    ActorClaim, ArchiveReason, Event, MailEndpoint, MemberRunStatus, MessageId, Projection, Role,
+    RosterStatus, SessionId, scope,
 };
 use hya_tool::{WaitMail, WaitMember, WaitMemberState, WaitMode, WaitOutcome, WaitSpec, WaitWake};
 

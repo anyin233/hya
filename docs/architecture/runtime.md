@@ -896,6 +896,10 @@ episodes. The daemon and `HyaRuntime` call
 through the server, then call `ResidentSupervisor::start_recovered()`.
 Each restore reserves its engine turn lease before acknowledging admission;
 queued recovered mail cannot drive main until that restore has answered.
+Headless commands reserve external driver ownership of the selected and recovered
+roots before starting their episodes, keeping root continuation with `run_lead`.
+`with_built_session_engine` starts recovered residents before its body runs;
+server embedders admit their restore prompts first.
 Installation rechecks member inboxes and queues root inbox recovery, including
 mail persisted before the listener existed. A staged claim ended or replaced
 by a restore tool remains fenced and is skipped; other installation errors fail

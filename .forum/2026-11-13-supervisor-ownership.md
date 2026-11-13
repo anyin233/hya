@@ -73,3 +73,22 @@ fencing result, preserves the archive/successor, and continues its peers; every
 other error propagates. The returned count includes only installed episodes.
 The real crash/end_member regression failed before this change with
 StaleActorClaim and checks that the peer starts while the ended actor stays archived.
+
+# Which startup path owns recovered actors outside a server?
+
+`HeadlessSession::start` (exec and direct database Workflow commands) calls
+`start_recovered_headless(session)` and retains its returned root-driver guards
+through drain. Guards cover the selected root and all staged roots before any
+recovered episode starts, so `run_lead` retains root continuation ownership.
+`with_built_session_engine` starts staged episodes before invoking its body;
+server embedders still admit restores first with `resume_interrupted`.
+
+# What did the review regressions expose?
+
+Root turn release must recheck idle retirement after `wait` consumes its mail.
+Queued turn-boundary callbacks need weak captures, tracked joins and a drain
+fence. Root inbox recovery must receive liveness from a registration even when
+its staged claim is stale. Wait stall snapshots need the full actor claim,
+because revival reuses session ids. Empty/failed restore admission releases
+both reservations before replying. Queue items retain only routing fields, and
+handle allocation propagates failed projection reads before reserving a name.
