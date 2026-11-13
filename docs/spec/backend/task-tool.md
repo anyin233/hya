@@ -403,7 +403,8 @@ The single bus listener performs only indexed routing. Member session IDs map
 to their owning episode's team, including killed generations; root IDs map to
 the current team. Each team has a FIFO queue for mail, activity and lag recovery.
 It processes its own queue outside locks, so a slow team cannot delay another
-root. Queued events and unpublished terminal mail prevent idle retirement.
+root. Queued mail/recovery wakes and unpublished terminal mail prevent idle retirement.
+Generic activity does not retire a main context prepared for registration.
 
 Name reservations cover only uncommitted resident preparations. Registration
 commit releases them before initializer hooks; dropping a failed or cancelled

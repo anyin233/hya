@@ -927,6 +927,7 @@ cancelling it; callers await shutdown before releasing runtime resources.
 The listener never awaits a team. It routes envelopes through the existing
 session-to-episode-team index and current-root-team map into each team's FIFO.
 Lag recovery is queued behind prior deliveries for that team. Retirement waits
-for queued events as well as member endings, lead idleness, registrations and
-terminal mail publication. Root-driver count and continuation ownership stay
+for queued mail/recovery wakes as well as member endings, lead idleness,
+registrations and terminal mail publication. Generic progress alone neither
+holds a finished team alive nor retires a main context prepared for registration. Root-driver count and continuation ownership stay
 shared across replacement teams.

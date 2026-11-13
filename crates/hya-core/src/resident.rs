@@ -354,7 +354,7 @@ struct TeamState {
     registrations: usize,
     // Terminal mail keeps main alive between episode removal and bus routing.
     routing_mail: HashSet<u64>,
-    queued_events: usize,
+    queued_wakes: usize,
     /// Active Workflow/headless root drivers suppress autonomous root turns.
     root_driver: Arc<RootDriverState>,
     phase: TeamPhase,
@@ -548,6 +548,17 @@ enum TeamEvent {
     Recover,
 }
 
+impl TeamEvent {
+    fn keeps_team_live(&self) -> bool {
+        match self {
+            Self::Envelope(envelope) => matches!(envelope.event, Event::MailSent { .. }),
+            Self::Recover => true,
+            #[cfg(test)]
+            Self::Flush(_) => false,
+        }
+    }
+}
+
 /// Keeps a selected team alive across claim writes and initialization.
 struct TeamRegistration(Arc<TeamActor>);
 
@@ -630,7 +641,7 @@ impl TeamActor {
                 busy: 0,
                 registrations: 0,
                 routing_mail: HashSet::new(),
-                queued_events: 0,
+                queued_wakes: 0,
                 root_driver,
                 phase: TeamPhase::Live,
                 turns_used: 0,
@@ -739,7 +750,9 @@ impl TeamActor {
         if self.cancel.is_cancelled() {
             return;
         }
-        state.queued_events += 1;
+        if event.keeps_team_live() {
+            state.queued_wakes += 1;
+        }
         let _ = self.events.send(event);
     }
 
@@ -754,6 +767,7 @@ impl TeamActor {
                 event = events.recv() => event,
             };
             let Some(event) = event else { break };
+            let wake = event.keeps_team_live();
             match event {
                 TeamEvent::Envelope(envelope) => {
                     if let Event::MailSent { from, to, .. } = &envelope.event {
@@ -770,9 +784,11 @@ impl TeamActor {
                     let _ = done.send(());
                 }
             }
-            self.lock().queued_events -= 1;
-            if let Some(supervisor) = self.supervisor.upgrade() {
-                supervisor.retire_team(&self);
+            if wake {
+                self.lock().queued_wakes -= 1;
+                if let Some(supervisor) = self.supervisor.upgrade() {
+                    supervisor.retire_team(&self);
+                }
             }
         }
     }
@@ -3578,7 +3594,7 @@ impl ResidentSupervisor {
             || state.busy != 0
             || state.registrations != 0
             || !state.routing_mail.is_empty()
-            || state.queued_events != 0
+            || state.queued_wakes != 0
             || self.engine.turn_active(team.root)
             || state
                 .residents
