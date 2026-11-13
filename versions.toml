@@ -1,5 +1,5 @@
 [backend]
-version = "0.45.10"
+version = "0.46.0"
 
 [frontend]
 version = "0.44.23-dev.6"
