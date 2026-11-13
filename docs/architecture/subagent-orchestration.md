@@ -239,22 +239,32 @@ boundary and clears the matching work. Explicit in-turn `MailConsumed` events
 advance the mail cursor monotonically without settling the admitted wake.
 
 A user cancel keeps the episode live and held, displays Idle, and retains
-`resident_work` and its unconsumed inbox boundary. Resume reuses the existing
-user `MessageId` through `begin_work(ResidentWorkPrompt::Admitted { message,
-append })`; only later mail is hooked and appended. It never admits the earlier
-prompt twice. For example, after `engine.cancel_user_turn(root)`,
-`engine.resume_after_user_stop(root)` resumes the owed mail wake using the same
-admitted prompt. A wake cancelled before `begin_work` commits is re-armed with its
-mail still unread. A cancelled initial directive with no inbox mail owes no
-autonomous wake and stays idle until mailed. The coalesced user-text hook is raced with the leased turn's
-cancellation, so an ending need not wait for the straggler deadline to stop it.
+`resident_work` and its unconsumed inbox boundary. A later wake is owed only for
+unfinished admitted work or unread mail, including a cancelled initial directive
+with no mail. For example, `engine.cancel_user_turn(root)` holds that work until
+`engine.resume_after_user_stop(root)` explicitly resumes it.
+
+`begin_work(ResidentWorkPrompt::Admitted { message: MessageId, append: String })`
+reuses the admitted user message only while it is the transcript's last message
+(empty assistant messages omitted from model requests do not count). Only new
+mail is hooked and appended. Once an answer follows it, the old prompt is
+immutable: the same transaction settles the old work boundary and admits one
+new user message at the tail. That message contains the new mail, or
+`Continue the unfinished work.` when there is none. Thus mail arriving after a
+cancelled answer follows that answer in the model request and appears once.
+A wake cancelled before `begin_work` commits is re-armed with its mail unread.
+The coalesced user-text hook runs before the transaction and is raced with the
+leased turn's cancellation, so an ending need not wait for the straggler deadline.
 
 Forced endings and Failed episodes do not acknowledge unfinished wake mail;
 their handoff retains it as Pending. A successful Reported turn has already
 settled its wake; later mail refuses the report and creates another wake.
-Recovery requeues Idle pending work with its existing prompt. Work that was
+Recovery requeues all Idle pending work, including zero-mail initial directives,
+using the same transcript rule. Work that was
 Busy when the process crashed keeps the existing aborted-work policy: settle
 that boundary, classify `AbortedRunning`, and queue only later mail.
+Failure to commit `ResidentWorkFinished` ends the episode through the normal
+Failed ending sequence; it never parks a completed turn with unsettled work.
 
 Sidecar death ends an episode as Failed only if loss interrupted the turn.
 Loss noticed after a user cancellation disposes the dead handle while retaining

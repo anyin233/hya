@@ -234,74 +234,100 @@ impl SessionStore {
         }
         let session = claim.map_or(root, |claim| claim.actor_id);
         let mut events = Vec::new();
-        let message = match prompt {
-            ResidentWorkPrompt::Text(text) => {
-                let message = MessageId::new();
-                let part = PartId::new();
-                events.extend([
-                    Event::MessageStarted {
-                        session,
-                        message,
-                        role: Role::User,
-                        agent: None,
-                        model: None,
-                    },
-                    Event::TextStart {
-                        session,
-                        message,
-                        part,
-                    },
-                    Event::TextDelta {
-                        session,
-                        message,
-                        part,
-                        delta: text,
-                    },
-                    Event::TextEnd {
-                        session,
-                        message,
-                        part,
-                    },
-                    Event::MessageFinished {
-                        session,
-                        message,
-                        role: Role::User,
-                        finish: FinishReason::Stop,
-                        tokens: None,
-                        cause: None,
-                    },
-                ]);
-                message
-            }
+        let (admitted, text) = match prompt {
+            ResidentWorkPrompt::Text(text) => (None, text),
             ResidentWorkPrompt::Admitted { message, append } => {
-                if !append.is_empty() {
-                    let projection =
-                        crate::replay_projection(&self.projections, &mut tx, session).await?;
-                    let (part, text) = projection
-                        .session
-                        .messages
-                        .iter()
-                        .find(|entry| entry.id == message)
-                        .and_then(|entry| {
-                            entry.parts.iter().find_map(|part| match part {
-                                PartProjection::Text { id, text, .. } => Some((*id, text)),
-                                _ => None,
+                let projection =
+                    crate::replay_projection(&self.projections, &mut tx, session).await?;
+                let tail = projection
+                    .session
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|entry| entry.role != Role::Assistant || !entry.parts.is_empty());
+                if tail.is_some_and(|entry| entry.id == message) {
+                    if !append.is_empty() {
+                        let (part, text) = tail
+                            .and_then(|entry| {
+                                entry.parts.iter().find_map(|part| match part {
+                                    PartProjection::Text { id, text, .. } => Some((*id, text)),
+                                    _ => None,
+                                })
                             })
-                        })
-                        .ok_or_else(|| {
-                            StoreError::ActorClaimData(
-                                "admitted resident prompt has no text".into(),
-                            )
-                        })?;
-                    events.push(Event::TextReplace {
-                        session,
-                        message,
-                        part,
-                        text: format!("{text}\n\n{append}"),
-                    });
+                            .ok_or_else(|| {
+                                StoreError::ActorClaimData(
+                                    "admitted resident prompt has no text".into(),
+                                )
+                            })?;
+                        events.push(Event::TextReplace {
+                            session,
+                            message,
+                            part,
+                            text: format!("{text}\n\n{append}"),
+                        });
+                    }
+                    (Some(message), String::new())
+                } else {
+                    // Answered prompts are immutable. Settle the previous
+                    // boundary before recording the replacement wake below.
+                    let root_projection =
+                        crate::replay_projection(&self.projections, &mut tx, root).await?;
+                    if let Some(work) = root_projection
+                        .team
+                        .roster
+                        .get(handle)
+                        .and_then(|entry| entry.resident_work)
+                    {
+                        events.push(Event::ResidentWorkFinished {
+                            session: root,
+                            handle: handle.into(),
+                            epoch: work.epoch,
+                            inbox_through: work.inbox_through,
+                        });
+                    }
+                    (None, append)
                 }
-                message
             }
+        };
+        let message = if let Some(message) = admitted {
+            message
+        } else {
+            let message = MessageId::new();
+            let part = PartId::new();
+            events.extend([
+                Event::MessageStarted {
+                    session,
+                    message,
+                    role: Role::User,
+                    agent: None,
+                    model: None,
+                },
+                Event::TextStart {
+                    session,
+                    message,
+                    part,
+                },
+                Event::TextDelta {
+                    session,
+                    message,
+                    part,
+                    delta: text,
+                },
+                Event::TextEnd {
+                    session,
+                    message,
+                    part,
+                },
+                Event::MessageFinished {
+                    session,
+                    message,
+                    role: Role::User,
+                    finish: FinishReason::Stop,
+                    tokens: None,
+                    cause: None,
+                },
+            ]);
+            message
         };
         if let Some(claim) = claim {
             events.push(Event::ResidentWorkStarted {
