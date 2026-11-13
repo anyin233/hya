@@ -1562,7 +1562,7 @@ The current CLI exposes both goal mode (`hya -p`) and loop mode (`hya loop --tar
 
 Team-related code is split across:
 
-- [`resident.rs`](../../crates/hya-core/src/resident.rs) (all member episodes)
+- [`actor/`](../../crates/hya-core/src/actor/mod.rs) (all member episodes)
 - [`mailbox.rs`](../../crates/hya-core/src/mailbox.rs) and [`engine/mailbox.rs`](../../crates/hya-core/src/engine/mailbox.rs)
 - [`workspace.rs`](../../crates/hya-core/src/workspace.rs)
 - [`category.rs`](../../crates/hya-core/src/category.rs)
