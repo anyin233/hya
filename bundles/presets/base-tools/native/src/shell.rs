@@ -30,6 +30,9 @@ const CONTROL_RUNNING: u8 = 0;
 const CONTROL_CANCELLED: u8 = 1;
 const CONTROL_TIMED_OUT: u8 = 2;
 const PIPE_BUFFER_BYTES: usize = 8192;
+const POST_KILL_DRAIN_GRACE: Duration = Duration::from_millis(100);
+#[cfg(unix)]
+const ORPHAN_PIPE_GRACE: Duration = Duration::from_millis(200);
 const POLL_INTERVAL_MILLISECONDS: libc::c_int = 50;
 
 static NEXT_OUTPUT_ID: AtomicU64 = AtomicU64::new(0);
@@ -504,7 +507,7 @@ async fn execute_pipes(
     Ok(CapturedRun { completion, output })
 }
 
-/// Drain both pipes until EOF after the process is reaped.
+/// Drain both pipes after reaping, bounding capture of foreign-session writers.
 ///
 /// # Errors
 /// Returns contextual errors for pipe reads, child waits, or process cleanup.
@@ -518,6 +521,7 @@ async fn capture_pipes(
     cancel: &CancellationToken,
 ) -> Result<Completion, ToolError> {
     let mut deadline = timeout.and_then(|duration| Instant::now().checked_add(duration));
+    let mut drain_cutoff = None;
     let mut stdout_done = false;
     let mut stderr_done = false;
     let mut reaped = false;
@@ -530,6 +534,13 @@ async fn capture_pipes(
         if reaped && stdout_done && stderr_done {
             break;
         }
+        if drain_cutoff.is_some_and(|at| Instant::now() >= at) {
+            break;
+        }
+        #[cfg(unix)]
+        if reaped && drain_cutoff.is_none() && !process_group_alive(process_group) {
+            drain_cutoff = Some(Instant::now() + ORPHAN_PIPE_GRACE);
+        }
         if !reaped {
             if cancel.is_cancelled() {
                 terminate_pipe_child(child, process_group).await?;
@@ -537,6 +548,7 @@ async fn capture_pipes(
                 completion = Some(Completion::Cancelled);
                 cancellation_seen = true;
                 deadline = None;
+                drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
                 continue;
             }
             if deadline.is_some_and(|at| Instant::now() >= at) {
@@ -544,6 +556,7 @@ async fn capture_pipes(
                 reaped = true;
                 completion = Some(Completion::TimedOut);
                 deadline = None;
+                drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
                 continue;
             }
         } else {
@@ -552,11 +565,13 @@ async fn capture_pipes(
                 completion = Some(Completion::Cancelled);
                 cancellation_seen = true;
                 deadline = None;
+                drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
             }
             if deadline.is_some_and(|at| Instant::now() >= at) {
                 terminate_pipe_process_group(process_group)?;
                 completion = Some(Completion::TimedOut);
                 deadline = None;
+                drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
             }
         }
 
@@ -569,12 +584,14 @@ async fn capture_pipes(
                     completion = Some(Completion::Cancelled);
                     cancellation_seen = true;
                     deadline = None;
+                    drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
                 }
                 _ = wait_for_deadline(deadline) => {
                     terminate_pipe_child(child, process_group).await?;
                     reaped = true;
                     completion = Some(Completion::TimedOut);
                     deadline = None;
+                    drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
                 }
                 result = child.wait() => {
                     let status = result.map_err(|error| contextual_io("wait for Bash process", error))?;
@@ -603,16 +620,20 @@ async fn capture_pipes(
         } else {
             tokio::select! {
                 biased;
+                _ = wait_for_deadline(drain_cutoff) => break,
+                _ = tokio::time::sleep(Duration::from_millis(100)), if cfg!(unix) && drain_cutoff.is_none() => {}
                 _ = cancel.cancelled(), if !cancellation_seen => {
                     terminate_pipe_process_group(process_group)?;
                     completion = Some(Completion::Cancelled);
                     cancellation_seen = true;
                     deadline = None;
+                    drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
                 }
                 _ = wait_for_deadline(deadline) => {
                     terminate_pipe_process_group(process_group)?;
                     completion = Some(Completion::TimedOut);
                     deadline = None;
+                    drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
                 }
                 result = stdout.read(&mut stdout_buffer), if !stdout_done => {
                     let count = result.map_err(|error| contextual_io("read Bash stdout", error))?;
@@ -774,6 +795,7 @@ fn run_pty_blocking(
     let mut buffer = [0_u8; PIPE_BUFFER_BYTES];
     let mut leader_reaped = false;
     let mut group_terminated = false;
+    let mut drain_cutoff = None;
     let mut eof = false;
     let mut completion = None;
     loop {
@@ -782,6 +804,7 @@ fn run_pty_blocking(
             if !group_terminated {
                 terminate_pty_child(&mut child, Some(process_group), leader_reaped)?;
                 group_terminated = true;
+                drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
                 leader_reaped = true;
             }
             completion = Some(Completion::Cancelled);
@@ -791,6 +814,7 @@ fn run_pty_blocking(
             if !group_terminated {
                 terminate_pty_child(&mut child, Some(process_group), leader_reaped)?;
                 group_terminated = true;
+                drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
                 leader_reaped = true;
             }
             completion = Some(Completion::TimedOut);
@@ -814,7 +838,13 @@ fn run_pty_blocking(
         // A PTY master may report EIO/HUP when the leader exits even though a
         // descendant still owns the slave.  EOF is terminal only after the
         // saved process group is absent.
-        if leader_reaped && eof && !pty_process_group_alive(process_group) {
+        if leader_reaped && !process_group_alive(Some(process_group)) {
+            if eof {
+                break;
+            }
+            drain_cutoff.get_or_insert_with(|| Instant::now() + ORPHAN_PIPE_GRACE);
+        }
+        if drain_cutoff.is_some_and(|at| Instant::now() >= at) {
             break;
         }
         if eof {
@@ -843,6 +873,9 @@ fn run_pty_blocking(
         match master.read(&mut buffer) {
             Ok(0) => eof = true,
             Ok(count) => {
+                if drain_cutoff.is_some() && !group_terminated {
+                    drain_cutoff = Some(Instant::now() + ORPHAN_PIPE_GRACE);
+                }
                 if let Err(error) = sink.push(&buffer[..count]) {
                     let capture_error = contextual_io("capture Bash PTY output", error);
                     let cleanup =
@@ -869,7 +902,7 @@ fn run_pty_blocking(
             .map_err(|error| contextual_io("reap Bash PTY process", error))?;
         completion.get_or_insert(Completion::Finished(status.code()));
     }
-    // Close the master exactly once after all bytes have been observed.
+    // Close the master after EOF or the final drain grace.
     drop(master);
     let output = sink
         .finish()
@@ -941,9 +974,12 @@ fn terminate_pty_process_group(process_group: Option<u32>) -> Result<(), ToolErr
     }
     Ok(())
 }
-/// Return whether any member remains in the PTY process group.
+/// Return whether any member remains in the saved process group.
 #[cfg(unix)]
-fn pty_process_group_alive(process_group: u32) -> bool {
+fn process_group_alive(process_group: Option<u32>) -> bool {
+    let Some(process_group) = process_group else {
+        return false;
+    };
     let Ok(pid) = libc::pid_t::try_from(process_group) else {
         return false;
     };

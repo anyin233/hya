@@ -923,6 +923,158 @@ fn kill_test_process(pid: i32) {
 }
 
 #[cfg(unix)]
+struct DaemonCleanup {
+    shell_pid: PathBuf,
+    daemon_pid: PathBuf,
+}
+
+#[cfg(unix)]
+impl DaemonCleanup {
+    fn kill(&self) {
+        for (path, group) in [(&self.shell_pid, true), (&self.daemon_pid, false)] {
+            if let Ok(raw) = std::fs::read_to_string(path) {
+                let pid = raw.trim().parse::<i32>().unwrap();
+                assert!(pid > 1);
+                kill_test_process(if group { -pid } else { pid });
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for DaemonCleanup {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
+#[cfg(unix)]
+async fn check_setsid_capture(pty: bool, timeout: bool, cancel: bool) {
+    let dir = tempdir();
+    let _workspace = TempDirGuard::new(&dir);
+    let cleanup = DaemonCleanup {
+        shell_pid: dir.join("shell.pid"),
+        daemon_pid: dir.join("daemon.pid"),
+    };
+    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
+    let cancellation = ctx.cancel.clone();
+    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    // Fork before setsid: the shell's exec'ed Python is already a group leader.
+    // The handshake ensures the daemon owns a new session before its parent exits.
+    let command = format!(
+        "printf '%s' \"$$\" > {}; python3 - {} {} <<'PY'\nimport os, signal, sys, time\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\nr, w = os.pipe()\nif os.fork() == 0:\n    os.close(r)\n    os.setsid()\n    with open(sys.argv[1], 'w') as f:\n        f.write(str(os.getpid()))\n    os.write(w, b'ready')\n    os.close(w)\n    time.sleep(60)\n    os._exit(0)\nos.close(w)\nos.read(r, 5)\nos.close(r)\nif sys.argv[2] == 'wait':\n    time.sleep(60)\nPY",
+        shell_quote(&cleanup.shell_pid),
+        shell_quote(&cleanup.daemon_pid),
+        if timeout { "wait" } else { "exit" },
+    );
+    let started = std::time::Instant::now();
+    let mut task = tokio::spawn(async move {
+        tool.execute(
+            &ctx,
+            json!({ "command": command, "timeout": if timeout { 1 } else { 30 }, "pty": pty }),
+        )
+        .await
+    });
+    let daemon_pid = wait_for_pid(&cleanup.daemon_pid).await;
+    assert!(process_is_alive(daemon_pid));
+    if cancel {
+        if !timeout {
+            wait_for_process_exit(wait_for_pid(&cleanup.shell_pid).await).await;
+        }
+        cancellation.cancel();
+    }
+    let result = tokio::time::timeout(Duration::from_secs(4), &mut task).await;
+    let elapsed = started.elapsed();
+    eprintln!("H1 pty={pty} timeout={timeout} cancel={cancel}: {elapsed:?}");
+    // Close the foreign-session fd even when the implementation hit our guard.
+    cleanup.kill();
+    let result = match result {
+        Ok(joined) => joined.unwrap(),
+        Err(_) => {
+            let _ = tokio::time::timeout(Duration::from_secs(2), &mut task).await;
+            panic!("setsid capture exceeded outer guard: {elapsed:?}");
+        }
+    };
+    let bound = if !pty && !timeout && !cancel {
+        1500
+    } else {
+        2500
+    };
+    assert!(
+        elapsed < Duration::from_millis(bound),
+        "{elapsed:?} >= {bound}ms"
+    );
+    if cancel {
+        assert!(matches!(result, Err(ToolError::Cancelled)), "{result:?}");
+    } else {
+        let result = result.unwrap();
+        assert_eq!(result["metadata"]["timedOut"], timeout);
+        assert_eq!(result["metadata"]["pty"], pty);
+        assert_eq!(
+            result["metadata"]["exit"],
+            if timeout { Value::Null } else { json!(0) }
+        );
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn t_h1_1_setsid_pipe_returns_real_exit() {
+    check_setsid_capture(false, false, false).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn t_h1_2_setsid_pipe_timeout_drain_is_bounded() {
+    check_setsid_capture(false, true, false).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn t_h1_3_same_group_background_output_is_captured() {
+    let dir = tempdir();
+    let _cleanup = TempDirGuard::new(&dir);
+    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
+    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let started = std::time::Instant::now();
+    let result = execute_with_guard(
+        tool.as_ref(),
+        &ctx,
+        json!({ "command": "(sleep 0.3; printf 'bg-ok') &", "timeout": 30 }),
+    )
+    .await
+    .unwrap();
+    let elapsed = started.elapsed();
+    eprintln!("T_H1_3: {elapsed:?}");
+    assert!(elapsed >= Duration::from_millis(300), "{elapsed:?}");
+    assert_eq!(result["output"], "bg-ok");
+    assert_eq!(result["metadata"]["exit"], 0);
+    assert_eq!(result["metadata"]["timedOut"], false);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn t_h1_4_setsid_pty_returns_real_exit() {
+    check_setsid_capture(true, false, false).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn t_h1_4_setsid_pty_timeout_drain_is_bounded() {
+    check_setsid_capture(true, true, false).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn t_h1_setsid_cancellation_drain_is_bounded() {
+    for pty in [false, true] {
+        for leader_waiting in [false, true] {
+            check_setsid_capture(pty, leader_waiting, true).await;
+        }
+    }
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn bash_pty_timeout_kills_descendant_after_shell_exits() {
     // Given: the direct PTY shell exits while a background child retains the slave.
