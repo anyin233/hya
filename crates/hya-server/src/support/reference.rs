@@ -29,10 +29,11 @@ pub(crate) async fn session_workdir(
 ) -> Result<PathBuf, CoreError> {
     st.engine
         .store()
-        .read_projection(session)
+        .read_projection_shared(session)
         .await?
         .session
         .workdir
+        .as_ref()
         .map(PathBuf::from)
         .ok_or_else(|| CoreError::Invalid(format!("session not found: {session}")))
 }
@@ -47,7 +48,7 @@ pub(crate) async fn session_agent_with_guidance(
     session: SessionId,
     model: Option<&hya_proto::ModelRef>,
 ) -> Result<SessionTurnAgent, CoreError> {
-    let projection = st.engine.store().read_projection(session).await?;
+    let projection = st.engine.store().read_projection_shared(session).await?;
     let workdir = projection
         .session
         .workdir

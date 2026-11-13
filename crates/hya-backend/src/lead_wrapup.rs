@@ -62,7 +62,7 @@ pub(crate) async fn run_lead(
         if stage == Stage::Over {
             return Ok(finish);
         }
-        let projection = engine.read_projection(session).await?;
+        let projection = engine.read_projection_shared(session).await?;
         let pending = Pending::of(&projection, finish);
         if pending.is_empty() {
             return Ok(finish);

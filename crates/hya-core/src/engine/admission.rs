@@ -14,7 +14,7 @@ impl SessionEngine {
         &self,
         session: SessionId,
     ) -> Result<(TurnBinding, String), CoreError> {
-        let projection = self.read_projection(session).await?;
+        let projection = self.read_projection_shared(session).await?;
         let stable_id = projection
             .session
             .agent
@@ -94,7 +94,7 @@ impl SessionEngine {
         }
         // Without a supervisor there can be no in-memory episode. The store's
         // runtime-owner check remains authoritative for orphan Takeover.
-        let projection = self.read_projection(root).await?;
+        let projection = self.read_projection_shared(root).await?;
         let mut members = projection
             .team
             .roster

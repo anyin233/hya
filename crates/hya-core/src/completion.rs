@@ -421,7 +421,7 @@ impl IterationExecutor for LeadTurnExecutor {
                 Some(prompt),
             )
             .await?;
-        let projection = self.engine.read_projection(self.session).await?;
+        let projection = self.engine.read_projection_shared(self.session).await?;
         Ok(render_transcript(&projection))
     }
 }

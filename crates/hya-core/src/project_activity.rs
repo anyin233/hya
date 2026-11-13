@@ -30,7 +30,7 @@ async fn query(
     caller: hya_proto::SessionId,
     request: hya_tool::ProjectActivityRequest,
 ) -> Result<ProjectActivityResult, hya_store::StoreError> {
-    let caller_projection = store.read_projection(caller).await?;
+    let caller_projection = store.read_projection_shared(caller).await?;
     let Some(project) = caller_projection.session.project else {
         return Ok(ProjectActivityResult {
             sessions: Vec::new(),
@@ -49,7 +49,7 @@ async fn query(
     let mut sessions = Vec::with_capacity(rows.len());
     for row in rows {
         let root = lineage_root(store, row.session).await?;
-        let projection = store.read_projection(row.session).await?;
+        let projection = store.read_projection_shared(row.session).await?;
         let relation = if row.session == caller {
             "self"
         } else if caller_projection.session.parent == Some(row.session) {
@@ -68,11 +68,12 @@ async fn query(
             agent: projection
                 .session
                 .agent
+                .as_ref()
                 .map_or_else(|| "unknown".to_string(), |v| v.to_string()),
-            title: projection.session.title.unwrap_or_default(),
+            title: projection.session.title.clone().unwrap_or_default(),
             status: if active(row.session) { "busy" } else { "idle" }.to_string(),
             last_activity_ms: row.updated_millis,
-            workdir: projection.session.workdir.unwrap_or_default(),
+            workdir: projection.session.workdir.clone().unwrap_or_default(),
             parent: projection.session.parent.map(|v| v.to_string()),
             lineage_root: root.to_string(),
             relation: relation.to_string(),
@@ -101,7 +102,7 @@ async fn lineage_root(
     mut session: hya_proto::SessionId,
 ) -> Result<hya_proto::SessionId, hya_store::StoreError> {
     for _ in 0..64 {
-        let projection = store.read_projection(session).await?;
+        let projection = store.read_projection_shared(session).await?;
         let Some(parent) = projection.session.parent else {
             return Ok(session);
         };
