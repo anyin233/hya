@@ -16,13 +16,15 @@
  * - After a `resync` (`markLiveLost`), live deltas of parts that were already
  *   streaming are dropped until the durable `partReplaced` sets their text,
  *   so a gap never garbles the text.
- * - Tool calls (docs/protocol/README.md "Tool calls", all durable):
+ * - Tool calls (docs/protocol/README.md "Tool calls"):
+ *   argument fragments are live-only; start and state changes are durable.
  *   `partStarted{kind: "tool_call", tool, callId}` starts a pending tool
  *   part, each `partAppended` appends an argument fragment to its input,
  *   and `toolStateChanged` sets the state and every field it carries
  *   (`inputJson` replaces the fragments), keeping the fields it does not.
  *   An overwrite frame (empty `callId`) keeps the part's call id. When the
- *   projection has the same part, the more advanced state wins the merge.
+ *   projection has the same part, the more advanced state wins the merge;
+ *   live fragments fill an unknown pending input.
  *
  * Pure TypeScript (no Solid): the store wraps it and publishes snapshots.
  */
@@ -266,8 +268,11 @@ const toolRank: Record<string, number> = {
   TOOL_EXECUTION_STATE_PENDING: 0, TOOL_EXECUTION_STATE_RUNNING: 1, TOOL_EXECUTION_STATE_OK: 2, TOOL_EXECUTION_STATE_ERROR: 2,
 }
 
-/** The overlay's tool part wins only when its state is further along than the projection's. */
+/** Live arguments fill pending input; otherwise the more advanced state wins. */
 function mergeTool(projected: ToolCallPart, live: ToolCallPart): ToolCallPart {
+  if (projected.state === "TOOL_EXECUTION_STATE_PENDING" && live.state === "TOOL_EXECUTION_STATE_PENDING" && !projected.inputJson && live.inputJson) {
+    return { ...projected, inputJson: live.inputJson }
+  }
   if ((toolRank[live.state ?? ""] ?? 0) <= (toolRank[projected.state ?? ""] ?? 0)) return projected
   const known = Object.fromEntries(Object.entries(live).filter(([, value]) => value !== undefined && value !== ""))
   return { ...projected, ...known }

@@ -1976,8 +1976,10 @@ is still used in activity text and narrow views:
 | anything else (MCP/plugin tools) | Compact JSON arguments | Tool output |
 
 Arguments still stream before the call is complete; the card keeps updating from
-the call's argument fragments. Cards appear before the projection is re-read (see
-[Stream frames and the transcript](#stream-frames-and-the-transcript)).
+the call's live argument fragments, including after a projection read returns a
+pending part whose input is still unknown. The complete input replaces these
+fragments when the call starts running. Cards appear before the projection is
+re-read (see [Stream frames and the transcript](#stream-frames-and-the-transcript)).
 
 ### Subagents
 

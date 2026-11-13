@@ -490,16 +490,8 @@ impl Script {
                 part,
                 delta: word,
             },
-            PartKind::Tool(call) => match self.rng.below(4) {
-                0 => Event::ToolInputDelta {
-                    session,
-                    message,
-                    part,
-                    call,
-                    name: "read".into(),
-                    delta: word,
-                },
-                1 => Event::ToolCallRequested {
+            PartKind::Tool(call) => match self.rng.below(3) {
+                0 => Event::ToolCallRequested {
                     session,
                     message,
                     part,
@@ -507,7 +499,7 @@ impl Script {
                     name: "read".into(),
                     input: serde_json::json!({ "path": word, "n": 1.5 }),
                 },
-                2 => Event::ToolResult {
+                1 => Event::ToolResult {
                     session,
                     message,
                     part,

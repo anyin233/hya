@@ -662,7 +662,7 @@ pub fn session_archive_event(
 /// different projection, or when `Projection` (or anything it contains)
 /// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
 /// the bump is recorded.
-pub const PROJECTION_REDUCER_VERSION: u32 = 4;
+pub const PROJECTION_REDUCER_VERSION: u32 = 5;
 
 /// Durable snapshot encoding: the wire projection plus replay-only reducer
 /// state the wire form deliberately omits.
@@ -712,7 +712,6 @@ fn changed_message(event: &Event) -> Option<MessageId> {
         | Event::ReasoningEnd { message, .. }
         | Event::ReasoningReplace { message, .. }
         | Event::ToolInputStart { message, .. }
-        | Event::ToolInputDelta { message, .. }
         | Event::ToolCallRequested { message, .. }
         | Event::ToolResult { message, .. }
         | Event::ToolError { message, .. }

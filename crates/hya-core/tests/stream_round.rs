@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use futures::stream;
+use futures::{StreamExt, stream};
 use hya_core::{AgentSpec, CreateSession, EventBus, SessionEngine};
 use hya_proto::{
     AgentName, Event, FinishReason, Message, MessageId, MessageProjection, ModelRef, Part, PartId,
@@ -91,6 +91,42 @@ impl Provider for DelayedDeltaProvider {
                 Some((Ok(event), (events, index + 1)))
             },
         )))
+    }
+}
+
+/// Hold the parsed-input event until the test has observed its live fragment.
+struct GatedArgumentsProvider {
+    inner: FakeProvider,
+    resume: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl Provider for GatedArgumentsProvider {
+    fn id(&self) -> &str {
+        self.inner.id()
+    }
+
+    fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+        self.inner.capabilities(model)
+    }
+
+    async fn stream(
+        &self,
+        req: CompletionRequest,
+        session: SessionId,
+        message: MessageId,
+    ) -> Result<EventStream, ProviderError> {
+        let resume = self.resume.clone();
+        let events = self.inner.stream(req, session, message).await?;
+        Ok(Box::pin(events.then(move |event| {
+            let resume = resume.clone();
+            async move {
+                if matches!(&event, Ok(Event::ToolCallRequested { .. })) {
+                    resume.notified().await;
+                }
+                event
+            }
+        })))
     }
 }
 
@@ -268,6 +304,117 @@ async fn stream_round_deltas_are_live_but_replay_commits_final_text_once() {
         durable_assistant_deltas.len() <= 1,
         "durable replay must not commit every streamed token delta: {durable_assistant_deltas:?}"
     );
+}
+
+#[tokio::test]
+async fn tool_arguments_stream_live_and_late_subscribers_recover_full_input() {
+    let workdir = tempdir();
+    let path = workdir.join("input.txt");
+    std::fs::write(&path, "content").unwrap();
+    let input = serde_json::json!({ "path": path });
+    let resume = Arc::new(tokio::sync::Notify::new());
+    let provider = GatedArgumentsProvider {
+        inner: FakeProvider::scripted_turns(vec![
+            vec![
+                FakeStep::ToolCall {
+                    name: "read".into(),
+                    input: input.clone(),
+                },
+                FakeStep::Finish(FinishReason::ToolCalls),
+            ],
+            vec![
+                FakeStep::Text("done".into()),
+                FakeStep::Finish(FinishReason::Stop),
+            ],
+        ]),
+        resume: resume.clone(),
+    };
+    let (permission, _asks) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+        Action::Read,
+        "/**",
+        Mode::Allow,
+    )]));
+    let engine = Arc::new(SessionEngine::new(
+        SessionStore::connect_memory().await.unwrap(),
+        Arc::new(ProviderRouter::new().with(Arc::new(provider))),
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        permission,
+        EventBus::default(),
+    ));
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    engine
+        .admit_user_prompt(session, "read".into())
+        .await
+        .unwrap();
+    let mut live = engine.bus().subscribe();
+    let runner = engine.clone();
+    let spec = agent(&workdir);
+    let turn = tokio::spawn(async move {
+        runner
+            .run_turn(session, &spec, CancellationToken::new())
+            .await
+    });
+    let delta = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let envelope = live.recv().await.unwrap();
+            if matches!(envelope.event, Event::ToolInputDelta { .. }) {
+                break envelope;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(delta.seq.0, 0);
+    assert!(
+        matches!(&delta.event, Event::ToolInputDelta { delta, .. } if delta == &input.to_string())
+    );
+    assert!(!turn.is_finished());
+    let mut late = engine.bus().subscribe();
+    let pending = engine.store().replay(session).await.unwrap();
+    assert_eq!(
+        pending
+            .iter()
+            .filter(|e| matches!(e.event, Event::ToolInputStart { .. }))
+            .count(),
+        1
+    );
+    assert!(!pending.iter().any(|e| matches!(
+        e.event,
+        Event::ToolInputDelta { .. } | Event::ToolCallRequested { .. }
+    )));
+    resume.notify_one();
+    assert_eq!(turn.await.unwrap().unwrap(), FinishReason::Stop);
+    let replay = engine.store().replay(session).await.unwrap();
+    assert_eq!(
+        replay
+            .iter()
+            .filter(|e| matches!(e.event, Event::ToolInputDelta { .. }))
+            .count(),
+        0
+    );
+    let final_input = |events: &[hya_proto::Envelope]| {
+        events.iter().find_map(|e| match &e.event {
+            Event::ToolCallRequested { input, .. } => Some(input.clone()),
+            _ => None,
+        })
+    };
+    assert_eq!(final_input(&replay), Some(input.clone()));
+    let mut received = Vec::new();
+    while let Ok(envelope) = late.try_recv() {
+        received.push(envelope);
+    }
+    assert_eq!(final_input(&received), Some(input));
+    let _ = std::fs::remove_dir_all(&workdir);
 }
 
 #[tokio::test]
