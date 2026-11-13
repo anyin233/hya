@@ -285,7 +285,10 @@ example, a loop worker that settles and then receives a verifier's denial keeps
 one live slot across both iterations; each judgment temporarily uses a second
 slot. The shared iteration driver still owns stop decisions. Workers and
 verifiers can both call `report`; plain assistant text also completes an
-activation. There is no transient executor.
+activation. There is no transient executor. Deadline notices ask an actor to
+call `report` only if its current request offers that tool; otherwise they ask
+it to finish its turn. This also covers core embedders without a governor,
+where `report` is hidden by the depth-zero tool view.
 
 Cancellation stops new admissions, cancels one-shot Stage work, stops active
 run-owned resident work, waits for admitted boundaries, and returns a truthful
