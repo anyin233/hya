@@ -10,48 +10,17 @@ use crate::model::CompiledWorkflow;
 /// directive.
 pub const MAX_PREDECESSOR_OUTPUT_BYTES: usize = 4_000;
 
-/// Terminal status carried with direct predecessor evidence.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum StageEvidenceStatus {
-    /// The predecessor finished successfully.
-    Done,
-    /// The predecessor finished with an execution failure.
-    Failed,
-    /// The predecessor stopped because the run was cancelled.
-    Cancelled,
-    /// Failure policy or an unsuccessful ancestor prevented activation.
-    Skipped,
-}
-
-impl StageEvidenceStatus {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Done => "done",
-            Self::Failed => "failed",
-            Self::Cancelled => "cancelled",
-            Self::Skipped => "skipped",
-        }
-    }
-}
-
-/// Borrowed terminal evidence for one compiled Stage index.
+/// Borrowed successful evidence for one compiled Stage index.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StageEvidence<'a> {
-    status: StageEvidenceStatus,
     output: &'a str,
 }
 
 impl<'a> StageEvidence<'a> {
-    /// Bind a typed terminal status to its bounded-at-render output.
+    /// Bind successful predecessor output; rendering applies its byte cap.
     #[must_use]
-    pub const fn new(status: StageEvidenceStatus, output: &'a str) -> Self {
-        Self { status, output }
-    }
-
-    /// Terminal predecessor status.
-    #[must_use]
-    pub const fn status(self) -> StageEvidenceStatus {
-        self.status
+    pub const fn new(output: &'a str) -> Self {
+        Self { output }
     }
 
     /// Unbounded source output; rendering applies the public byte cap.
@@ -179,9 +148,7 @@ impl CompiledWorkflow {
                 directive.push_str(&predecessor.id);
                 directive.push_str("\" agent=\"");
                 directive.push_str(&predecessor.agent);
-                directive.push_str("\" status=\"");
-                directive.push_str(item.status.as_str());
-                directive.push_str("\">\n");
+                directive.push_str("\" status=\"done\">\n");
                 push_xml_text(
                     &mut directive,
                     truncate_utf8(item.output, MAX_PREDECESSOR_OUTPUT_BYTES),

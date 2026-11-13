@@ -4343,3 +4343,55 @@ async fn review_s2_cancelled_run_keeps_status_after_execution_error() {
             .contains("S2 cancellation persistence failure")
     );
 }
+
+#[tokio::test]
+async fn review_s3_skipped_stage_is_durable_while_independent_branch_runs() {
+    let mut h = Harness::new().await;
+    let held = Arc::new(Gate::default());
+    let failed = h.provider.script(vec![Round::failure("stage failed")]);
+    let slow = h
+        .provider
+        .script(vec![Round::text("independent").stream_gated(held.clone())]);
+    m414_source(
+        &h,
+        &format!(
+            "  failed:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {failed}\n  skipped:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: Must not run.\n  slow:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {slow}\n"
+        ),
+        "  failed --> skipped\n  slow",
+        "collect_all",
+    );
+    let mut events = h.engine.bus().subscribe();
+    let running = tokio::spawn(m414_run(
+        h.built.workflow_control(),
+        h.root,
+        tokio_util::sync::CancellationToken::new(),
+    ));
+    held.arrived().await;
+    let skipped_early = tokio::time::timeout(support::lifecycle::BOUND, async {
+        loop {
+            let p = h.engine.read_projection(h.root).await.unwrap();
+            let run = p.session.workflow.as_ref().unwrap().run.as_ref().unwrap();
+            if run.stages.iter().any(|s| {
+                s.plan.id == "skipped" && s.status == hya_proto::WorkflowStageStatus::Skipped
+            }) {
+                assert_eq!(run.status, hya_proto::WorkflowRunStatus::Running);
+                break;
+            }
+            events.recv().await.unwrap();
+        }
+    })
+    .await
+    .is_ok();
+    held.release();
+    tokio::time::timeout(support::lifecycle::BOUND, running)
+        .await
+        .unwrap()
+        .unwrap();
+    let replay = h.engine.replay(h.root).await.unwrap();
+    h.shutdown().await;
+    assert!(
+        skipped_early,
+        "scheduler left skipped Stage pending while another branch ran"
+    );
+    assert_eq!(replay.iter().filter(|e| matches!(&e.event, Event::WorkflowStageFinished { stage, status: hya_proto::WorkflowStageStatus::Skipped, .. } if stage == "skipped")).count(), 1);
+}

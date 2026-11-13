@@ -15,10 +15,7 @@ pub use model::{
     StageMode, VerifySpec, WorkflowDefinition, WorkflowLevel, WorkflowModelAssignment,
     WorkflowModelCandidate, WorkflowPlan, WorkflowRevision, WorkflowStage,
 };
-pub use render::{
-    MAX_PREDECESSOR_OUTPUT_BYTES, RenderedStage, StageEvidence, StageEvidenceStatus,
-    WorkflowRenderError,
-};
+pub use render::{MAX_PREDECESSOR_OUTPUT_BYTES, RenderedStage, StageEvidence, WorkflowRenderError};
 
 /// Borrowed Workflow document and its display identity.
 #[derive(Clone, Copy, Debug)]
