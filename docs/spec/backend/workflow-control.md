@@ -283,3 +283,10 @@ preflight. Reported failure/ending text is Stage evidence verbatim;
 input (turn error code `workflow_activation_failed` if surfaced as a turn error).
 Store failures, including loop member-link writes, retain their typed
 `CoreError::Store` through execution and the public error mapping.
+
+An admitted run owns its terminal `WorkflowRunFinished` append independently of
+its calling actor's lifetime. Admission and execution effects remain actor-fenced;
+the tracked run owner writes the terminal Event without the caller's claim, which
+may already be released during cancellation cleanup. A cancelled run remains
+`cancelled` if execution or ending fails; its bounded error is persisted and the
+caller still receives the typed error. No tool parameters or wire fields change.
