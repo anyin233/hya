@@ -541,17 +541,24 @@ struct TeamActor {
     events: tokio::sync::mpsc::UnboundedSender<TeamEvent>,
 }
 
+#[cfg_attr(test, derive(Debug))]
 enum TeamEvent {
     #[cfg(test)]
     Flush(oneshot::Sender<()>),
-    Envelope(Box<hya_proto::Envelope>),
+    Mail {
+        seq: hya_proto::EventSeq,
+        from: String,
+        to: MailEndpoint,
+    },
+    Activity(SessionId),
     Recover,
 }
 
 impl TeamEvent {
     fn keeps_team_live(&self) -> bool {
         match self {
-            Self::Envelope(envelope) => matches!(envelope.event, Event::MailSent { .. }),
+            Self::Mail { .. } => true,
+            Self::Activity(_) => false,
             Self::Recover => true,
             #[cfg(test)]
             Self::Flush(_) => false,
@@ -769,15 +776,12 @@ impl TeamActor {
             let Some(event) = event else { break };
             let wake = event.keeps_team_live();
             match event {
-                TeamEvent::Envelope(envelope) => {
-                    if let Event::MailSent { from, to, .. } = &envelope.event {
-                        self.on_mail(from, to).await;
-                        self.lock().routing_mail.remove(&envelope.seq.0);
-                    }
-                    if let Some(actor) = envelope.event.session() {
-                        self.note_activity(actor).await;
-                    }
+                TeamEvent::Mail { seq, from, to } => {
+                    self.on_mail(&from, &to).await;
+                    self.lock().routing_mail.remove(&seq.0);
+                    self.note_activity(self.root).await;
                 }
+                TeamEvent::Activity(actor) => self.note_activity(actor).await,
                 TeamEvent::Recover => self.recover().await,
                 #[cfg(test)]
                 TeamEvent::Flush(done) => {
@@ -3491,16 +3495,21 @@ impl ResidentSupervisor {
     }
 
     fn route_envelope(&self, envelope: hya_proto::Envelope) {
-        if let Event::MailSent { session: root, .. } = &envelope.event {
-            // Select and enqueue under the map lock, excluding retirement.
-            if let Some(team) = self.teams().get(root) {
-                team.enqueue(TeamEvent::Envelope(Box::new(envelope)));
+        match envelope.event {
+            Event::MailSent { session: root, from, to, .. } => {
+                // Select and enqueue under the map lock, excluding retirement.
+                if let Some(team) = self.teams().get(&root) {
+                    team.enqueue(TeamEvent::Mail { seq: envelope.seq, from, to });
+                }
             }
-        } else if !matches!(envelope.event, Event::AgentHeartbeat { .. })
-            && let Some(actor) = envelope.event.session()
-            && let Some(team) = self.team_with_resident(actor)
-        {
-            team.enqueue(TeamEvent::Envelope(Box::new(envelope)));
+            Event::AgentHeartbeat { .. } => {}
+            event => {
+                if let Some(actor) = event.session()
+                    && let Some(team) = self.team_with_resident(actor)
+                {
+                    team.enqueue(TeamEvent::Activity(actor));
+                }
+            }
         }
     }
 

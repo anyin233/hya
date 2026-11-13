@@ -579,3 +579,9 @@ therefore observes the completed admission.
 
 Wait stall notices are keyed to the actor claim as well as its last answer. A
 wait snapshot from an ended episode cannot mark the revived episode as notified.
+
+The resident listener preserves per-team FIFO order using compact routing items:
+mail carries only its sequence, sender and target; other activity carries only
+the session id. Event and mail bodies remain in the canonical store. The worker
+awaits local store work and bounded team endings, never a model or plugin call;
+no overflow recovery policy is added.
