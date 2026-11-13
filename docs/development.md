@@ -38,8 +38,9 @@ composition tasks. Keep it alive while using its engine, then call
 admitted Workflow work and waits for the spawn/Workflow workers,
 mailbox/lifecycle services and their request handlers, deferred MCP preparation,
 and catalog scope sweeper. It then drains turns and residents, after every
-admitted registration has settled, and stops and joins plugin/MCP connection
-I/O. Runtime teardown terminates processes after resident drain; explicit
+admitted registration has settled, joins the resident listener and all episode,
+main and team queue tasks, then stops sources and joins plugin/MCP connection
+I/O. Both engine supervisor references are weak. Runtime teardown terminates processes after resident drain; explicit
 `PluginHost::shutdown` and `PreparedPlugin::shutdown` keep the graceful shutdown
 RPC. Source owners remain reachable for shutdown through weak references even
 when only an older turn binding retains their generation. Retaining an engine

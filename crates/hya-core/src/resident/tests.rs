@@ -1943,3 +1943,122 @@ async fn review_r4_replacement_preserves_headless_policy_during_a_lead_turn() {
         "a live headless lead turn was mistaken for autonomous continuation ownership"
     );
 }
+
+#[tokio::test]
+async fn m412_drop_supervisor_releases_listener_without_shutdown() {
+    let engine = engine().await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let weak = Arc::downgrade(&supervisor);
+    let mut receiver = engine.bus().subscribe();
+    drop(supervisor);
+    assert!(
+        weak.upgrade().is_none(),
+        "listener or engine owns the supervisor"
+    );
+    let root = root(&engine).await;
+    receiver.recv().await.unwrap();
+    assert!(engine.resident_supervisor().is_none());
+    assert!(engine.session_exists(root).await.unwrap());
+}
+
+#[tokio::test]
+async fn m412_slow_team_mail_does_not_block_another_root() {
+    let engine = engine().await;
+    let first = root(&engine).await;
+    let second = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let first_driver = supervisor.root_driver_activity(first).await.unwrap();
+    let second_driver = supervisor.root_driver_activity(second).await.unwrap();
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    *supervisor.mail_pause.lock().unwrap() = Some((first, entered.clone(), release.clone()));
+    let publish = |root| {
+        let engine = engine.clone();
+        async move {
+            engine
+                .emit_for_actor(
+                    None,
+                    root,
+                    Event::MailSent {
+                        session: root,
+                        from: scope::HARNESS_HANDLE.into(),
+                        to: MailEndpoint::Handle(scope::ROOT_HANDLE.into()),
+                        kind: MailKind::Message,
+                        body: "queue".into(),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+    };
+    publish(first).await;
+    entered.notified().await;
+    // Root two must receive its wake while root one's handler is held.
+    let second_entered = Arc::new(Notify::new());
+    let second_release = Arc::new(Notify::new());
+    *supervisor.mail_pause.lock().unwrap() =
+        Some((second, second_entered.clone(), second_release.clone()));
+    publish(first).await;
+    publish(second).await;
+    let routed = tokio::time::timeout(Duration::from_secs(1), second_entered.notified()).await;
+    let first_team = supervisor.teams().get(&first).unwrap().clone();
+    let before_release = first_team.lock().messages_used;
+    let (flushed, flush) = oneshot::channel();
+    first_team.enqueue(TeamEvent::Flush(flushed));
+    release.notify_one();
+    second_release.notify_one();
+    tokio::time::timeout(Duration::from_secs(5), flush)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(before_release, 0, "a later envelope overtook held mail");
+    assert_eq!(first_team.lock().messages_used, 2, "queued mail was lost");
+    drop(first_driver);
+    drop(second_driver);
+    supervisor
+        .drain(FinishCause::Shutdown, Duration::from_secs(5))
+        .await;
+    assert!(routed.is_ok(), "slow root blocked another root's mail");
+}
+
+#[tokio::test]
+async fn m412_drain_joins_listener_and_every_team_task() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let driver = supervisor.root_driver_activity(root).await.unwrap();
+    let (child, _) = parked(&supervisor, root).await;
+    let old = supervisor.team_with_resident(child).unwrap();
+    old.kill(Ending::Killed("replace".into())).await;
+    let replacement = supervisor.team_for(root).await.unwrap();
+    drop(replacement);
+    drop(driver);
+    supervisor
+        .drain(FinishCause::Shutdown, Duration::from_secs(5))
+        .await;
+    assert!(
+        supervisor.listener.lock().unwrap().is_none(),
+        "listener was not joined"
+    );
+    assert!(supervisor.tasks.is_empty(), "team futures survived drain");
+    assert_eq!(supervisor.episode_count(), 0);
+    assert!(supervisor.teams().is_empty());
+}
+
+#[tokio::test]
+async fn m412_last_episode_retires_team_and_removes_member_index() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let driver = supervisor.root_driver_activity(root).await.unwrap();
+    let (child, handle) = parked(&supervisor, root).await;
+    let team = supervisor.team_with_resident(child).unwrap();
+    supervisor.end_member(root, &handle).await.unwrap();
+    assert!(supervisor.team_with_resident(child).is_none());
+    drop(driver);
+    assert!(team.cancel.is_cancelled());
+    assert!(supervisor.teams().get(&root).is_none());
+    supervisor
+        .drain(FinishCause::Shutdown, Duration::from_secs(5))
+        .await;
+}

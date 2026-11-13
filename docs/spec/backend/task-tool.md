@@ -389,3 +389,18 @@ host's base prompt for reconstructing resident and autonomous main agents. App
 composition supplies its host `AgentSpec.system_prompt`; core embedders with a
 nonempty host prompt supply it through this builder. A catalog `prompt: None`
 keeps that base after revival, while `Some(prompt)` still replaces it.
+
+### Supervisor lifetime and event routing
+
+The built engine owns the resident supervisor; the engine's revival seam is
+weak, as is its turn observer. `BuiltSessionEngine::shutdown()` fences admission,
+joins composition handlers and Workflows, drains turns and resident endings,
+then joins the supervisor listener and all team tasks before stopping sources
+and joining connection I/O. Server-owned services join last. Dropping the owner
+signals cancellation; embedders await shutdown to prove task completion.
+
+The single bus listener performs only indexed routing. Member session IDs map
+to their owning episode's team, including killed generations; root IDs map to
+the current team. Each team has a FIFO queue for mail, activity and lag recovery.
+It processes its own queue outside locks, so a slow team cannot delay another
+root. Queued events and unpublished terminal mail prevent idle retirement.

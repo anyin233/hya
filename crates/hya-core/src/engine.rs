@@ -404,7 +404,7 @@ pub struct SessionEngine {
     /// implementor (resident supervisor) itself holds the engine —
     /// [`ResidentSupervisor::start`](crate::resident::ResidentSupervisor::start)
     /// wires it.
-    reviver: RwLock<Option<Arc<crate::resident::ResidentSupervisor>>>,
+    reviver: RwLock<Option<std::sync::Weak<crate::resident::ResidentSupervisor>>>,
     /// Runtime-owner claim used for durable stop/start records.
     runtime_owner: hya_proto::OwnerRunId,
     /// Single-active-turn registry shared by every clone of this engine.
@@ -944,7 +944,7 @@ impl SessionEngine {
 
     /// Wire the archive-revival seam on a shared engine. Idempotent; the
     /// resident supervisor calls this from its own start.
-    pub fn set_reviver(&self, reviver: Arc<crate::resident::ResidentSupervisor>) {
+    pub fn set_reviver(&self, reviver: std::sync::Weak<crate::resident::ResidentSupervisor>) {
         match self.reviver.write() {
             Ok(mut slot) => *slot = Some(reviver),
             Err(poisoned) => *poisoned.into_inner() = Some(reviver),
@@ -1021,7 +1021,8 @@ impl SessionEngine {
         self.reviver
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
     }
 
     /// Install the `SubagentGovernor` that bounds nested/parallel subagent
