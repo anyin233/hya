@@ -1625,3 +1625,9 @@ wakes, then archives descendants deepest-first from both installed episodes and
 the durable roster. Releasing the parent's claim fences racing task spawns; a
 final descendant sweep ends children committed before that release. Captured
 episode completions remain joinable if root deletion removes the roster.
+
+Workflow activations carry their preflighted `AgentSpec` and resolved resident
+runtime (binding, reachable agents, resources and sidecar factory). Reviving a
+reported worker reuses those exact inputs, preserving its stage prompt and
+reasoning even if the live catalog changed. Ordinary mail-driven revival keeps
+resolving the current runtime.
