@@ -119,7 +119,7 @@ test("the lock and discovery files sit next to the database, resolved from --dir
   expect(databasePaths(join(dir, "state/s.db"), "/elsewhere")).toEqual({ lock: join(real, "state/s.db.lock"), discovery: join(real, "state/s.db.server.json") })
   // A relative --db is relative to --dir (the started server's working directory).
   expect(databasePaths("state/s.db", dir)?.discovery).toBe(join(real, "state/s.db.server.json"))
-  for (const db of ["", ":memory:", "file:x.db?mode=memory"]) expect(databasePaths(db, dir)).toBeUndefined()
+  for (const db of ["", ":memory:"]) expect(databasePaths(db, dir)).toBeUndefined()
 })
 
 test("parses the discovery file and rejects anything malformed", () => {

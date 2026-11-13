@@ -586,8 +586,8 @@ A file-backed runtime takes the canonical database's exclusive kernel owner lock
 before opening SQLite and recovering claims. The next runtime cannot take over
 while that descriptor remains held; stalled threads and a stopped process keep
 it held. Graceful release follows cancellation and joining of the old runtime;
-process exit closes the descriptor and also ends its turns. Persistent database
-URI spellings are rejected at this boundary (see the [CLI ownership contract](cli.md#database-lock-and-the-backend-daemon)).
+process exit closes the descriptor and also ends its turns. All database
+URI spellings (including in-memory URIs) are rejected at this boundary (see the [CLI ownership contract](cli.md#database-lock-and-the-backend-daemon)).
 
 There is no timer or liveness guarantee for a silent stream whose claim is
 superseded through an unowned store pool or a caller that releases ownership

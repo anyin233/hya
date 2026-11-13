@@ -299,3 +299,67 @@ async fn check_stop_start_restore(unanswered_permission: bool) {
     assert_eq!(client.events(session, None).await.unwrap().iter().filter(|e| matches!(&e.event,
         Event::TextDelta { delta, .. } if delta.contains("Your previous turn was interrupted by a restart."))).count(), 1);
 }
+
+/// Every database-taking CLI surface reports invalid spellings before discovery,
+/// ID parsing, configuration loading, or database initialization.
+#[test]
+fn database_uri_rejection_reaches_every_cli_entry_point() {
+    let dir =
+        std::env::temp_dir().join(format!("hya-db-arguments-{}", hya_proto::SessionId::new()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let commands: &[&[&str]] = &[
+        &["serve", "status"],
+        &["serve", "relay", "status"],
+        &["serve", "start"],
+        &["serve", "stop"],
+        &["serve", "restart"],
+        &["serve"],
+        &["exec", "hello"],
+        &["workflow", "list"],
+        &["workflow", "state", "--session", "invalid-session"],
+        &["sessions"],
+        &["sessions", "archive", "invalid-session"],
+        &["tail-session", "invalid-session"],
+        &["-p", "hello"],
+        &["loop", "--target", "hello"],
+        &[],
+    ];
+    for uri in ["sqlite::memory:", "file:events.db?mode=memory"] {
+        for command in commands {
+            let output = std::process::Command::new(hya_e2e::default_backend_bin())
+                .args(["--db", uri])
+                .args(*command)
+                .current_dir(&dir)
+                .env("HOME", &dir)
+                .env("XDG_CONFIG_HOME", &dir)
+                .output()
+                .unwrap();
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !output.status.success() && error.contains("plain filesystem path"),
+                "{command:?} {uri}: {:?} {error}",
+                output.status.code()
+            );
+        }
+        for command in [
+            vec!["serve", "status", "--db", uri],
+            vec!["serve", "relay", "status", "--db", uri],
+            vec!["sessions", "--db", uri],
+            vec!["tail-session", "invalid-session", "--db", uri],
+        ] {
+            let output = std::process::Command::new(hya_e2e::default_backend_bin())
+                .args(&command)
+                .current_dir(&dir)
+                .output()
+                .unwrap();
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !output.status.success() && error.contains("plain filesystem path"),
+                "{command:?}: {:?} {error}",
+                output.status.code()
+            );
+        }
+    }
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    std::fs::remove_dir(&dir).unwrap();
+}
