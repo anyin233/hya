@@ -71,6 +71,7 @@ impl SessionEngine {
                     ))
                 })?
         };
+        drop(projection);
         // The shared send boundary resolves this handle to the persistent DM,
         // including when the child is archived. The receipt always names it.
         let receipt = self

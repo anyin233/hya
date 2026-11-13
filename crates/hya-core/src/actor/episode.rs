@@ -577,6 +577,7 @@ impl TeamActor {
         let Some(parent) = child_projection.session.parent else {
             return;
         };
+        drop(child_projection);
         let Ok(parent_projection) = self.engine.read_projection_shared(parent).await else {
             return;
         };
@@ -592,6 +593,8 @@ impl TeamActor {
             return;
         }
         let member = row.member;
+        let status = row.status;
+        drop(parent_projection);
         let result = match claim {
             Some(claim) => {
                 self.engine
@@ -613,7 +616,7 @@ impl TeamActor {
             }
         };
         if let Err(error) = result {
-            tracing::warn!("resident member row stayed {:?}: {error}", row.status);
+            tracing::warn!("resident member row stayed {:?}: {error}", status);
         }
     }
 
@@ -751,6 +754,7 @@ impl TeamActor {
             })
             .unwrap_or_default();
 
+        drop(projection);
         if resumed_prompt.is_none() && !synth && new_mail.is_empty() {
             if cancel.is_cancelled() {
                 return Ok(TurnOutcome::NotStarted);

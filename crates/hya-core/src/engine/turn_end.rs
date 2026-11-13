@@ -483,6 +483,7 @@ impl SessionEngine {
             })
             .map(|entry| entry.handle.clone())
             .collect();
+        drop(projection);
         if members.is_empty() {
             return;
         }

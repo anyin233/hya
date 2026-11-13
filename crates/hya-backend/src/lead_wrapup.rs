@@ -92,6 +92,7 @@ pub(crate) async fn run_lead(
                 .map(|stage| deadline.notice(stage, false))
         });
         let notice = pending.notice(time.as_deref(), stage >= Stage::WrapUp);
+        drop(projection);
         last_notice = Some(engine.inject_system_message(session, notice).await?);
     }
 }

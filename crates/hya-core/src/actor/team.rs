@@ -812,6 +812,7 @@ impl TeamActor {
                 }
             }
         }
+        drop(projection);
         for (session, claim, handle, through) in consumed {
             if self
                 .engine
@@ -893,6 +894,7 @@ impl TeamActor {
                 }
             }
         }
+        drop(projection);
         for (claim, handle, through) in consumed {
             if self
                 .engine

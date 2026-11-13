@@ -250,6 +250,7 @@ impl SessionEngine {
                 )));
             }
         }
+        drop(policy_projection);
         #[cfg(test)]
         if let Some(gate) = self.mail_pre_append_gate.as_ref() {
             gate.entered.notify_one();
@@ -344,6 +345,7 @@ impl SessionEngine {
                     .to_string(),
             ));
         };
+        drop(projection);
         let (envelope, recipients) = self
             .store()
             .append_channel_mail(
@@ -378,6 +380,7 @@ impl SessionEngine {
             channel.kind == hya_proto::ChannelKind::Group
                 && channel.unit.as_deref() == Some(from.as_str())
         });
+        drop(projection);
         if leads_unit {
             return self
                 .mail_announce_for_actor_with_policy(
@@ -545,6 +548,8 @@ impl SessionEngine {
                 .iter()
                 .any(|(from, body)| *from == unread.from && *body == unread.body)
         });
+        drop(unread);
+        drop(projection);
         if cursor < inbox_len {
             self.emit_for_actor(
                 None,

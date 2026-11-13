@@ -861,10 +861,10 @@ impl SessionEngine {
     pub(crate) async fn fall_back_from_missing_agent(
         &self,
         session: SessionId,
-        projection: &hya_proto::Projection,
+        recorded: Option<&AgentName>,
         binding: &TurnBinding,
     ) -> Result<bool, CoreError> {
-        let Some(recorded) = projection.session.agent.as_ref() else {
+        let Some(recorded) = recorded else {
             return Ok(false);
         };
         if binding.resolve_agent(recorded.as_str()).is_some()
@@ -922,7 +922,11 @@ impl SessionEngine {
                         binding = self.bind_session_runtime(session, &workdir) => binding?,
                     };
                     if self
-                        .fall_back_from_missing_agent(session, &projection, &binding)
+                        .fall_back_from_missing_agent(
+                            session,
+                            projection.session.agent.as_ref(),
+                            &binding,
+                        )
                         .await?
                     {
                         projection = self.store.read_projection_shared(session).await?;

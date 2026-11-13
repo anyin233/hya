@@ -100,18 +100,20 @@ impl SessionEngine {
             .roster
             .iter()
             .filter(|(path, _)| path.as_str() != hya_proto::ROOT_HANDLE)
+            .map(|(path, entry)| (path.clone(), entry.session))
             .collect::<Vec<_>>();
+        drop(projection);
         members.sort_by_key(|(path, _)| std::cmp::Reverse(path.len()));
         for (handle, member) in members {
-            let handoff = self.degraded_terminal_handoff(member.session).await;
+            let handoff = self.degraded_terminal_handoff(member).await;
             let (_, envelopes) = self
                 .store
                 .finalize_resident_archive(
                     hya_store::ResidentArchiveOwner::Takeover,
                     root,
-                    handle,
+                    &handle,
                     hya_store::ResidentArchive {
-                        actor: member.session,
+                        actor: member,
                         generation: handoff.generation,
                         doc: handoff.doc,
                         degraded: handoff.degraded,

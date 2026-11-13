@@ -440,7 +440,7 @@ available for callers that deliberately need a mutable copy. Transaction-local
 replay returns `Arc<Projection>`; registration and revival use `Arc::make_mut`
 only when they apply their own uncommitted events. Turn preparation copies its
 small parent/agent metadata and releases the shared transcript after conversion,
-so it does not retain an old projection through provider and tool execution.
+so it does not retain an old projection through provider and tool execution. Actor wake, activation, mail delivery and archive paths likewise copy their cursor, identity and recipient values before writes or handoff generation. Descendant archive loops copy only paths and session ids before ending each member. Existing reads of post-mail inbox boundaries remain after the mail commits.
 A read of an unchanged session costs one
 indexed query that returns only the anchor row.
 
