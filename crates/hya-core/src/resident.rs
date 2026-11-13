@@ -404,6 +404,7 @@ pub struct TaskResidentSpawn {
 }
 
 struct PreparedResident {
+    reservation: Option<crate::handle_naming::HandleReservation>,
     session: SessionId,
     parent_path: String,
     leaf: String,
@@ -1124,6 +1125,7 @@ impl TeamActor {
                 episodes.remove(&session);
             }
             drop(episodes);
+            supervisor.forget_wait_stalls(session);
             if claim.is_some() {
                 supervisor.retire_team(self);
             }
@@ -1864,7 +1866,10 @@ impl TeamActor {
         #[cfg(test)]
         {
             let pause = self.supervisor.upgrade().and_then(|supervisor| {
-                let mut pause = supervisor.mail_pause.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut pause = supervisor
+                    .mail_pause
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if pause
                     .as_ref()
                     .is_some_and(|(root, _, _)| *root == self.root)
@@ -3862,6 +3867,13 @@ impl ResidentSupervisor {
         led.or_else(|| self.team_with_resident(session))
     }
 
+    pub(crate) fn forget_wait_stalls(&self, session: SessionId) {
+        self.wait_stalls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|(caller, member), _| *caller != session && *member != session);
+    }
+
     /// Whether `caller`'s `wait` already reported `member` as stopped at the
     /// turn ending in `last_answer` (so a repeated wait must not wake on it).
     pub(crate) fn wait_stall_reported(
@@ -3885,11 +3897,18 @@ impl ResidentSupervisor {
         member: SessionId,
         last_answer: Option<hya_proto::MessageId>,
     ) {
-        let mut stalls = match self.wait_stalls.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        stalls.insert((caller, member), last_answer);
+        // Serialize insertion with index removal: a late wait snapshot cannot
+        // recreate a stall entry after that episode's ending cleaned it up.
+        let episodes = self
+            .episodes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if episodes.contains_key(&member) {
+            self.wait_stalls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert((caller, member), last_answer);
+        }
     }
 
     /// The team-wide cancellation token for `root`, if the team is tracked. Exposed
@@ -4737,7 +4756,13 @@ impl ResidentSupervisor {
         } else {
             self.engine.resolve_handle(root, parent).await?
         };
-        let leaf = self.engine.mint_member_leaf(root, &prefix).await;
+        let reservation = {
+            // A commit may release a reservation only after this snapshot has
+            // observed its durable identity; stale snapshots cannot reuse it.
+            let _write = self.claim_writes.lock().await;
+            self.engine.mint_member_leaf(root, &prefix).await
+        };
+        let leaf = reservation.leaf.clone();
         let member = MemberId::new();
         let description = task
             .as_ref()
@@ -4758,6 +4783,7 @@ impl ResidentSupervisor {
         Ok((
             root,
             PreparedResident {
+                reservation: Some(reservation),
                 session,
                 parent_path,
                 leaf,
@@ -4955,6 +4981,7 @@ impl ResidentSupervisor {
             .register_episodes(
                 root,
                 vec![PreparedResident {
+                    reservation: None,
                     session,
                     parent_path,
                     leaf,
@@ -4987,8 +5014,10 @@ impl ResidentSupervisor {
             .and_then(|member| member.activation.parent_claim);
         let mut registrations = Vec::with_capacity(members.len());
         let mut installs = Vec::with_capacity(members.len());
+        let mut reservations = Vec::with_capacity(members.len());
         for member in members {
             let PreparedResident {
+                reservation,
                 session,
                 parent_path,
                 leaf,
@@ -4996,6 +5025,7 @@ impl ResidentSupervisor {
                 runtime,
                 activation,
             } = member;
+            reservations.push(reservation);
             let ResidentActivation {
                 mut events,
                 parent_claim: _,
@@ -5161,6 +5191,9 @@ impl ResidentSupervisor {
                 registrations,
             )
             .await?;
+        // Committed identities now belong to durable history. Release while
+        // claim_writes still excludes name allocation from a stale snapshot.
+        drop(reservations);
         let mut initialized_members = Vec::with_capacity(installs.len());
         let mut publications = Vec::with_capacity(installs.len());
         for ((claim, envelopes), (session, parent, mut episode, channel_policy)) in

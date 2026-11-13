@@ -15,3 +15,18 @@ could retire main after enqueue but before its report was delivered. Killed
 generations remain reachable through the existing episode index until their
 tasks remove them. The current-root map and per-root driver state retain their
 existing roles; replacing the latter with a team-local count would regress R4.
+
+# How can a committed name reservation be released without allowing duplicates?
+
+An owned HandleReservation lives with PreparedResident until registration commit
+(or failed/cancelled preparation). Allocation reads durable names while holding
+the same claim-write boundary as registration commit and reservation release.
+Without that serialization, a concurrent allocator could read an old snapshot,
+then mint after the committed reservation was released. Historical names remain
+in durable roster/archive/inbox/channel identity facts, not a daemon-lifetime set.
+
+# Can a late wait snapshot recreate a forgotten stall?
+
+Recording holds the episode index while inserting the stall. Ending removes the
+index entry before clearing stalls, so insertion either precedes cleanup or sees
+that the episode is gone. Caller deletion clears its rows after store deletion.

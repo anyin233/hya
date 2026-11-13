@@ -404,3 +404,14 @@ to their owning episode's team, including killed generations; root IDs map to
 the current team. Each team has a FIFO queue for mail, activity and lag recovery.
 It processes its own queue outside locks, so a slow team cannot delay another
 root. Queued events and unpublished terminal mail prevent idle retirement.
+
+Name reservations cover only uncommitted resident preparations. Registration
+commit releases them before initializer hooks; dropping a failed or cancelled
+preparation releases them too. Allocation and commit share claim-write
+serialization so a stale pre-commit snapshot cannot reuse a released name.
+Durable roster, archived identities, inbox owners and channel members preserve
+historical uniqueness. No naming options or wire fields change.
+
+Wait-stall deduplication lasts only for the member's episode and caller lifetime.
+Ending removes the member's entries, session deletion removes that caller's
+entries, and a late wait snapshot cannot recreate an ended member's entry.
