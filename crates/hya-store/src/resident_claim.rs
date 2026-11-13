@@ -34,7 +34,8 @@ impl SessionStore {
     /// Reactivate an archived member, cut its context and append its first mail
     /// in one writer transaction. Authorization is rechecked here, including
     /// when another sender already revived the member. In that case only mail
-    /// is appended and the returned claim is None.
+    /// is appended and the returned claim is None. The final tuple item is the
+    /// live fan-out count, or one recipient when this call revived the actor.
     #[allow(clippy::too_many_arguments)]
     pub async fn revive_episode(
         &self,
@@ -49,7 +50,7 @@ impl SessionStore {
         body: String,
         context_marker: &str,
         policy: Option<hya_proto::mail::ChannelPolicySnapshot>,
-    ) -> Result<(Option<(ActorClaim, u64)>, Vec<Envelope>), StoreError> {
+    ) -> Result<(Option<(ActorClaim, u64)>, Vec<Envelope>, usize), StoreError> {
         use hya_proto::{SubagentMode, scope};
         let mut tx = self.begin_transaction().await?;
         if let Some(claim) = parent_claim {
@@ -68,12 +69,11 @@ impl SessionStore {
             &projection,
             policy,
         )
-        .await
-        .map(|(envelope, _)| envelope);
+        .await;
         let target = match append {
-            Ok(envelope) => {
+            Ok((envelope, recipients)) => {
                 tx.commit().await?;
-                return Ok((None, vec![envelope]));
+                return Ok((None, vec![envelope], recipients));
             }
             Err(StoreError::MailRevivalRequired { target, .. }) => target,
             Err(error) => return Err(error),
@@ -174,7 +174,7 @@ impl SessionStore {
         .await?;
         envelopes.push(mail);
         tx.commit().await?;
-        Ok((Some((claim, cursor)), envelopes))
+        Ok((Some((claim, cursor)), envelopes, 1))
     }
 
     /// Deliver one coalesced wake and record its work boundary under one writer
