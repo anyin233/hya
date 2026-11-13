@@ -1162,9 +1162,8 @@ async fn build_session_engine_with_mcp_defer(
         .recover_nonterminal_workflows(owner_run_id, "backend startup recovery")
         .await
         .context("recover nonterminal Workflows before spawn readiness")?;
-    let recovered_claims = hya_core::resident::recover_resident_claims(&store, owner_run_id)
-        .await
-        .context("fence resident actors before startup recovery")?;
+    let recovered_claims =
+        hya_core::resident::recover_resident_claims(&store, owner_run_id).await?;
     crate::startup_trace::mark("store_recovery", None);
     let (websearch, invocation_policy, settings) = tool_config;
     let router = Arc::new(router);
