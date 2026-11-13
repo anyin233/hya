@@ -1,150 +1,90 @@
-
 <p align="center">
   <img src="docs/assets/hya-icon-8bit.png" alt="Hya icon" width="20%"><br>
 </p>
 
 ---
 
-hya is an event-sourced, multi-agent coding agent. `hya` owns the
-runtime: it normalizes OpenAI Chat/Responses/Codex, Grok Build, Anthropic, and
-Google provider routes into one canonical event stream and executes tools behind
-a permission plane. Every client-facing surface speaks one consolidated contract
-— `hya.v1` — served identically over HTTP/JSON+SSE+WebSocket (`/v1`) and gRPC
-on the same port; the legacy Compat and native HTTP routes are gone. The
-interactive frontend is the Bun/OpenTUI TUI in `packages/hya-tui`: running
-`hya` in a terminal starts it together with the WebUI, the same TUI rendered
-in a browser through `packages/hya-tui-web`, both connected to a backend
-daemon that `hya` starts when none runs and that keeps running after you quit
-(`hya serve status|stop|restart`; see [Run the TUI](#run-the-tui)). Other clients use `hya-sdk-v1`, `hya-client`,
-or any `hya.v1` client.
+`hya` is an event-sourced, multi-agent coding agent written in Rust. It
+normalizes OpenAI Chat/Responses/Codex, Grok Build, Anthropic Messages, and
+Google Gemini routes into one canonical `Event` stream, executes 28 builtin tools
+(plus MCP servers and out-of-process Rust/Bun/Claude bundle extensions) behind a
+multi-root permission plane, and orchestrates episodic resident subagents and
+compiled `Workflow` DAGs.
 
+Every client speaks one consolidated contract — **`hya.v1`** (18 services, 107
+RPCs) — served identically over HTTP/JSON + SSE + WebSocket (`/v1`) and gRPC on
+a single port. Running bare `hya` in a terminal discovers or auto-starts the
+database's persistent backend daemon and launches both the interactive
+Bun/OpenTUI terminal frontend (`packages/hya-tui`) and the browser WebUI
+(`packages/hya-tui-web` on `http://127.0.0.1:3250`). With no provider
+configured, `hya` starts offline against its built-in echo provider
+(`hya/offline`), so the entire stack runs out of the box without API keys.
 
-If no provider is configured, hya still runs: it falls back to an offline
-"dev" provider that echoes prompts, so the whole stack is usable without API
-keys while you set things up.
+![hya System Architecture](docs/assets/hya-architecture.svg)
 
 ## Status
 
-hya is under active development (backend version `0.45.11`, frontend version
-`0.44.23-dev.6`, `MIT OR Apache-2.0`). The frontend requires a backend at least
-`0.45.10`. Backend and frontend releases are independent; release tags are
-`backend/<version>` and `frontend/<version>`, so there is no single complete
-`v<version>` package. APIs, config, and command surfaces may still change.
+`hya` is under active development (backend version `0.45.11`, frontend version
+`0.44.23-dev.6`, minimum compatible backend `0.45.10`, licensed under
+`MIT OR Apache-2.0`). Backend and frontend releases iterate independently via
+`backend/<version>` and `frontend/<version>` tags.
 
-## Install a Release
+## Quick Install
 
-One command installs the complete hya — the latest backend and the latest
-frontend release — into `$HOME/.local`:
+Install the latest backend and frontend releases (including a bundled Bun
+runtime) into `$HOME/.local`:
 
 ```sh
 curl -fsSL https://hya.ed-aisys.com/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"   # if the installer says it is not on PATH
-hya                                    # the TUI here, the WebUI on http://127.0.0.1:3250
+export PATH="$HOME/.local/bin:$PATH"   # if not already on PATH
+hya                                    # Terminal TUI here + WebUI on http://127.0.0.1:3250
 ```
 
-The installer is not a release asset: `hya.ed-aisys.com/install.sh` serves
-[`scripts/hya-install.sh`](scripts/hya-install.sh) from `main`, and it looks up
-the newest `backend/<version>` and `frontend/<version>` releases on GitHub each
-time it runs. The release ships its own Bun, so no separate Bun install is
-needed. Supported targets are glibc Linux (x86_64, aarch64) and Apple silicon
-macOS.
-
-### Update
+Update or install a single side (`--backend-only` for headless servers,
+`--tui-only` for the TUI/WebUI):
 
 ```sh
-hya update                  # update the backend and the frontend together
-hya update --backend-only   # only the backend (bin/hya, bundles, Bun adapter)
-hya update --tui-only       # only the frontend (TUI, WebUI); also adds a missing one
+hya update
+hya update --backend-only
+hya update --tui-only
 ```
 
-The same flags select one side at install time, for example a headless server
-without the TUI/WebUI:
+To build and install from a source checkout instead (requires Rust `1.91`+, Git,
+and Bun `1.4.2`+):
 
 ```sh
-curl -fsSL https://hya.ed-aisys.com/install.sh | sh -s -- --backend-only
-```
-
-`--version <version>` pins a release, `--prefix <dir>` installs elsewhere, and
-`--force` reinstalls; each works for both the installer and `hya update`. A
-side whose installed version is current is skipped. A running backend daemon
-keeps its old version until `hya serve restart`.
-
-Backend archives contain `bin/hya`, backend bundles, and the Bun adapter, but
-no TUI/WebUI. Frontend archives contain `lib/hya/bin/bun`, `lib/hya/tui`, and
-`lib/hya/tui-web`, but no `bin/hya`; a frontend-only install therefore cannot
-provide the `hya` command until the backend is installed. Backend-only
-commands such as `hya serve` and `hya exec` work without the frontend. See
-[Install and update](docs/install.md) for targets, options, environment
-variables, compatibility, and version pinning.
-
-
-## Build From Source
-
-Requires a Rust toolchain matching the workspace manifest
-([`Cargo.toml`](Cargo.toml); currently edition 2024, Rust `1.91`), Git, and Bun
-(pinned at 1.4.2 for the Bun adapter runtime).
-
-```sh
-git clone <this-repo> hya
-cd hya
 ./install.sh --prefix "$HOME/.local"
 export PATH="$HOME/.local/bin:$PATH"
-hya serve
 ```
 
-The source installer places `bin/hya`, the eleven first-party backend bundles
-under `bundles/`, and the three Bun programs with their production dependencies
-under `lib/hya/`: `bun-adapter/` (JavaScript bundle extensions), `tui/` (the
-terminal UI), and `tui-web/` (the WebUI host). Bun must be on `PATH`. Release
-archives are split: the backend archive has `bin/hya`, bundles, and the
-adapter; the frontend archive has Bun and the TUI/WebUI but no `bin/hya`.
-Each first-party bundle is also published as a standalone release asset (see
-[first-party bundles](docs/bundle-runtime.md#release-assets)).
+See [Quick Start Guide](docs/getting-started.md) and
+[Install and Update](docs/install.md) for platform targets, WSL 2, and version
+pinning.
 
+## Run `hya` & Configure a Provider
 
-## Run the TUI
-
-Run `hya` in a terminal (a release install ships Bun; a source install needs
-Bun on `PATH`):
+Launch the interactive TUI and browser WebUI:
 
 ```sh
-hya                # the TUI here, the WebUI on http://127.0.0.1:3250
-hya --port 8000    # the WebUI on another port
+hya                # Terminal TUI + WebUI on http://127.0.0.1:3250
+hya --port 8000    # Custom WebUI port
+hya --resume       # Pick and resume a session in the current Project
 ```
 
-The TUI and every browser tab of the WebUI share one server inside the `hya`
-process, and sessions are kept in `$XDG_STATE_HOME/hya/sessions.db`. `?` lists
-every key and command; `/exit` stops the TUI, the WebUI, and the server. See
-[Bare `hya`](docs/cli.md#bare-hya) and the [TUI guide](docs/tui.md#start-it).
-
-From a source checkout, install the frontends' dependencies once, or run the
-TUI directly with Bun for development:
+The detached backend daemon keeps running after `/exit` so reconnects are
+instant (`hya serve status|stop|restart`). Add a live model provider via the
+guided CLI (or `/key` inside the TUI):
 
 ```sh
-(cd packages/hya-tui && bun install --frozen-lockfile)
-(cd packages/hya-tui-web && bun install --frozen-lockfile)
-cargo run -p hya-backend --bin hya                      # bare hya from the checkout
-bun packages/hya-tui/src/main.ts --dir "$PWD" --continue # the TUI alone; starts its own hya serve
+hya provider add                                       # guided base URL, protocol, API key
+hya oauth login --provider codex --type openai-codex   # or ChatGPT Codex / Grok Build OAuth
+hya models                                             # inspect resolved model catalog
 ```
 
-## Configure a Provider and Log In
-
-By default `hya` starts offline. The quickest way to add a live model is the
-guided setup. It asks for the base URL, the protocol (`openai-chat`,
-`openai-responses`, or `anthropic-messages`), and the API key. It then fetches
-the model list and saves the provider (see [`hya provider`](docs/cli.md#hya-provider)):
-
-```sh
-hya provider add      # guided: base URL, protocol, key -> model list -> config
-hya provider list     # providers and their models
-hya provider remove <id>
-```
-
-Or declare the provider yourself in `~/.config/hya/config.yaml`
-(or `$XDG_CONFIG_HOME/hya/config.yaml`):
+Or configure `~/.config/hya/config.yaml` directly:
 
 ```yaml
-default_model: claude-sonnet-4-6
+default_model: anthropic/claude-sonnet-4-6
 providers:
   anthropic:
     kind: anthropic
@@ -153,70 +93,27 @@ providers:
     models: [claude-sonnet-4-6]
 ```
 
-You can supply the key inline (via `{env:VAR}`, `{file:/path}`, or a literal)
-or store it with `hya login`, which takes precedence over an inline `api_key`:
+Headless and remote commands:
 
 ```sh
-hya login anthropic "$ANTHROPIC_API_KEY"
-hya models  # inspect the resolved catalog
-hya serve   # start the HTTP/SSE server against the live provider
+hya exec "summarize this repository"
+hya -p "make all unit tests pass" --max-iterations 6
+hya loop --target "clean clippy" --until "cargo clippy --workspace -- -D warnings"
+hya --connect -    # connect TUI + WebUI to a remote backend over a Noise_NKpsk0 relay link
 ```
-
-For ChatGPT Codex or Grok Build subscription OAuth (no API key):
-
-```sh
-hya oauth login --provider codex --type openai-codex
-hya oauth login --provider grok --type grok-build
-hya oauth status
-```
-
-See [docs/configuration.md](docs/configuration.md) for first-run behavior,
-the `HYA_*` (and related) environment-variable tables, and a fully-commented
-sample config.
-
-## What hya Can Do
-
-- Headless single-turn execution (`hya exec` / `hya run`) and iterative goal
-  mode (`hya -p "<goal>"`).
-- HTTP/SSE/WebSocket server (`hya serve`) exposing the consolidated
-  `hya.v1` contract under `/v1`, plus gRPC on the same port; see the
-  [protocol guide](docs/protocol/README.md) and generated
-  [API reference](docs/protocol/api-reference.md). Typed clients:
-  `hya-sdk-v1` and `hya-client` (crates), or any generated `hya.v1` stub.
-- MCP servers, plugins (including a Compat plugin adapter), and a formatter
-  plane, all driven from the same config.
-
-Public AgentBundles may remain static/process-free or supply selected
-Bundle-local Bun sidecar capabilities. Public WorkflowBundles package one
-compiled Workflow with its exact reachable Agent closure. Both kinds can be
-inspected and installed with `hya bundle info -f example.hyabundle` and
-`hya bundle install example.hyabundle`. See the
-[AgentBundle authoring guide](docs/agent-bundle-authoring.md),
-[Workflow and WorkflowBundle guide](docs/workflows.md),
-[static example](docs/examples/bundle.hya.md),
-[transient Bun example](docs/examples/bun-transient/),
-[resident Bun example](docs/examples/bun-resident/),
-[disjoint Bun example](docs/examples/bun-disjoint/), and the full
-[Argus WorkflowBundle example](bundles/examples/argus-example/) plus the
-[CLI reference](docs/cli.md#bundle-commands).
 
 ## Documentation
 
-| Page | Purpose |
-| --- | --- |
-| [docs/README.md](docs/README.md) | Documentation index and reading paths. |
-| [docs/getting-started.md](docs/getting-started.md) | Zero-to-running: build, headless turns, goal mode, server, and a first live provider. |
-| [docs/configuration.md](docs/configuration.md) | Config file, first-run/offline behavior, `HYA_*` env vars, providers/auth, MCP, plugins, formatter, custom commands. |
-| [docs/tui.md](docs/tui.md) | OpenTUI frontend setup, commands, and v1 interface contracts. |
-| [docs/tui-web.md](docs/tui-web.md) | Browser-rendered TUI (WebUI host) and the Playwright TUI test harness. |
-| [docs/cli.md](docs/cli.md) | `hya` commands, flags, and exit codes. |
-| [docs/workflows.md](docs/workflows.md) | Workflow document format, governance, CLI/tool execution, and WorkflowBundle packaging. |
-| [docs/troubleshooting.md](docs/troubleshooting.md) | Common local, provider, permission, and server issues. |
-| [docs/project-structure.md](docs/project-structure.md) | Repository layout, crates, and data flow. |
-| [docs/architecture/](docs/architecture) | Engine, event model, providers, tools/permissions, storage, and server/client internals. |
-| [docs/compat-parity.md](docs/compat-parity.md) | Historical record of the pre-v1 Compat HTTP parity work (that surface is deleted; CLI aliases and the Compat plugin adapter remain). |
-| [docs/hya-pi-compat-comparison.md](docs/hya-pi-compat-comparison.md) | Feature comparison across hya, upstream stock Pi, and current Compat. |
+Full documentation lives in **[docs/README.md](docs/README.md)**, organized into
+three core categories:
 
-The Rust workspace is licensed under either MIT or Apache-2.0 at your option.
-The checked-out Bun adapter has no separate license file; consult the
-repository license files for the complete applicable terms.
+| Category | Key Documents |
+| --- | --- |
+| **1. Design Philosophy & Architecture** | [Design Philosophy & Architecture Overview](docs/architecture/overview.md) · [Project Structure](docs/project-structure.md) · [Domain Glossary (`CONTEXT.md`)](CONTEXT.md) · [Runtime](docs/architecture/runtime.md) · [Event Model](docs/architecture/event-model.md) · [Subagent Orchestration](docs/architecture/subagent-orchestration.md) · [Storage](docs/architecture/storage.md) · [Server & Client](docs/architecture/server-client.md) · [ADRs](docs/adr/) |
+| **2. Usage Guides: Quick Start & Configuration** | [Quick Start Guide](docs/getting-started.md) · [Configuration Guide](docs/configuration.md) · [Install & Update](docs/install.md) · [CLI Reference](docs/cli.md) · [OpenTUI Frontend](docs/tui.md) · [WebUI (`hya-tui-web`)](docs/tui-web.md) · [Secure Relay](docs/relay.md) · [Workflows](docs/workflows.md) · [Bundle Authoring](docs/agent-bundle-authoring.md) · [Troubleshooting](docs/troubleshooting.md) |
+| **3. Architecture & Design Diagrams** | [Architecture & Design Diagrams](docs/architecture/diagrams.md) · [System Blueprint SVG](docs/assets/hya-architecture.svg) · [v1 Protocol Guide](docs/protocol/README.md) · [Generated API Reference](docs/protocol/api-reference.md) |
+
+## License
+
+Licensed under either `MIT` or `Apache-2.0` at your option. Consult the
+repository license files and `THIRD_PARTY_NOTICES` for complete terms.
