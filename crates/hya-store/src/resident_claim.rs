@@ -21,6 +21,9 @@ pub struct RecoveredActorClaim {
 pub enum ResidentWorkPrompt {
     /// Admit one new coalesced user message.
     Text(String),
+    /// First wake of a fresh episode, with no prior work or new text to append.
+    /// The registered directive is still the transcript tail by construction.
+    Fresh(MessageId),
     /// Reuse the initial directive committed at registration.
     Admitted {
         /// The registered user message owned by this turn.
@@ -237,6 +240,7 @@ impl SessionStore {
         let mut events = Vec::new();
         let (admitted, text) = match prompt {
             ResidentWorkPrompt::Text(text) => (None, text),
+            ResidentWorkPrompt::Fresh(message) => (Some(message), String::new()),
             ResidentWorkPrompt::Admitted { message, append } => {
                 let projection =
                     crate::replay_projection(&self.projections, &mut tx, session).await?;
