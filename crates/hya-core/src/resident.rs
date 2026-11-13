@@ -2758,6 +2758,7 @@ pub struct ResidentSupervisor {
     #[cfg(test)]
     mail_pause: Mutex<Option<MailRoutingPause>>,
     self_ref: Weak<ResidentSupervisor>,
+    recovered: Mutex<Vec<RecoveredResident>>,
     tasks: TaskTracker,
     listener_stop: CancellationToken,
     listener: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -2784,6 +2785,15 @@ impl Drop for ResidentSupervisor {
             }
         }
     }
+}
+
+struct RecoveredResident {
+    root: SessionId,
+    handle: String,
+    agent: AgentSpec,
+    runtime: ResolvedResidentRuntime,
+    claim: hya_store::RecoveredActorClaim,
+    disposition: ResidentRecovery,
 }
 
 type EpisodeFinalization = Vec<hya_proto::Envelope>;
@@ -3411,6 +3421,7 @@ impl ResidentSupervisor {
             #[cfg(test)]
             mail_pause: Mutex::new(None),
             self_ref: self_ref.clone(),
+            recovered: Mutex::new(Vec::new()),
             tasks: TaskTracker::new(),
             listener_stop: CancellationToken::new(),
             listener: Mutex::new(None),
@@ -5252,6 +5263,69 @@ impl ResidentSupervisor {
         // Commit is the batch's success boundary. Each episode owns initializer
         // errors and its ending; none can retract these committed identities.
         Ok(initialized_members)
+    }
+
+    /// Stage a fenced actor without creating a team or starting any work.
+    pub fn defer_recovered_resident(
+        &self,
+        root: SessionId,
+        handle: String,
+        agent: AgentSpec,
+        runtime: ResolvedResidentRuntime,
+        claim: hya_store::RecoveredActorClaim,
+        disposition: ResidentRecovery,
+    ) {
+        self.recovered
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(RecoveredResident {
+                root,
+                handle,
+                agent,
+                runtime,
+                claim,
+                disposition,
+            });
+    }
+
+    /// Install recovered episodes after the server has admitted restore prompts.
+    /// Repeated calls have no effects once the staged actors have been installed.
+    pub async fn start_recovered(&self) -> Result<usize, CoreError> {
+        let recovered = std::mem::take(
+            &mut *self
+                .recovered
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        let mut count = 0;
+        let roots = recovered
+            .iter()
+            .map(|member| member.root)
+            .collect::<HashSet<_>>();
+        for member in recovered {
+            match self
+                .register_recovered_resident(
+                    member.root,
+                    member.handle,
+                    member.agent,
+                    member.runtime,
+                    member.claim,
+                    member.disposition,
+                )
+                .await
+            {
+                Ok(()) => count += 1,
+                // Restore tools may end or replace a staged claim before installation.
+                Err(CoreError::Store(hya_store::StoreError::StaleActorClaim { .. })) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        for root in roots {
+            if let Some(team) = self.teams().get(&root) {
+                team.enqueue(TeamEvent::Recover);
+            }
+        }
+        Ok(count)
     }
 
     /// Re-register a recovered resident into the live supervisor map.

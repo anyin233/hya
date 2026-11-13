@@ -911,7 +911,7 @@ report outcome are `failed`, and the archive reason is `reported`. To continue,
 the parent sends mail to that member, starting a new episode. No in-process
 claim recovery occurs. An idle sidecar loss discards only the handle; the next
 wake starts a fresh sidecar within the same episode, without a failure report.
-Startup recovery after process restart remains unchanged. These rules add no
+Startup claim fencing still follows process restart; episode installation now waits for server restore admission. These rules add no
 public tool parameters or events.
 
 ### Runtime ownership and ordered routing
@@ -931,3 +931,17 @@ for queued mail/recovery wakes as well as member endings, lead idleness,
 registrations and terminal mail publication. Generic progress alone neither
 holds a finished team alive nor retires a main context prepared for registration. Root-driver count and continuation ownership stay
 shared across replacement teams.
+
+
+### Restore admission before recovered work
+
+Construction fences active claims, terminalizes interrupted member work and
+resolves capabilities, but stages the recovered episodes without installing a
+team. The daemon and in-process server share
+`BuiltSessionEngine::resume_interrupted(&AppState)`: server restore admission
+first, then `ResidentSupervisor::start_recovered()`. A restore reserves its
+engine lease before its admission acknowledgment. Recovered children may execute
+after admission, but their queued mail cannot start main before its restore
+answer closes. Startup also queues recovery of root inboxes, so mail persisted
+before construction is not stranded. Repeating start on an empty recovery set
+starts nothing.

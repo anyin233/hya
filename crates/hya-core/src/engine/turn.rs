@@ -602,6 +602,31 @@ impl SessionEngine {
             .await
     }
 
+    /// Run an admitted external turn under a lease reserved before admission.
+    /// Restore startup uses this to acknowledge admission only after excluding
+    /// recovered main work. The lease identifies the session and lasts through
+    /// the turn's own message closure.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_admitted_turn(
+        &self,
+        lease: TurnLease,
+        agent: &AgentSpec,
+        cancel: CancellationToken,
+        external_dirs: &[PathBuf],
+        guidance: Option<Arc<str>>,
+        explicit_model: Option<ModelRef>,
+        admitted_prompt: MessageId,
+    ) -> Result<FinishReason, CoreError> {
+        let session = lease.session();
+        self.ensure_external_turn_allowed(session).await?;
+        let mut request = TurnRequestContext::new(cancel, external_dirs, guidance, None, None)
+            .with_admitted_prompt(Some(admitted_prompt))
+            .with_lease(lease);
+        request.explicit_model = explicit_model;
+        self.run_turn_with_external_dirs_and_claim(session, agent, TurnActivation::Root, request)
+            .await
+    }
+
     pub(crate) async fn run_bound_turn(
         &self,
         session: SessionId,

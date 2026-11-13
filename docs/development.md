@@ -54,6 +54,32 @@ built.shutdown().await?;
 result
 ```
 
+For a server embedder, construction stages fenced recovered actors without
+running them. Build its AppState and call the same startup helper as the daemon
+before advertising readiness:
+
+```rust,ignore
+let state = hya_server::AppState::new(built.engine(), agent);
+let restored = built.resume_interrupted(&state).await?;
+// Serve the state, then use the ordered shutdown above.
+```
+
+The Rust startup contracts are
+`BuiltSessionEngine::resume_interrupted(&self, state: &AppState) -> Result<Vec<SessionId>, CoreError>`
+and `ResidentSupervisor::start_recovered(&self) -> Result<usize, CoreError>`
+(both async). The first admits root restores then invokes the second; the count
+is the number of staged episodes installed. Claims ended or replaced by restore
+tools before installation stay fenced and are skipped. A lower-level embedder explicitly
+calls the second after admitting its own restores. The revival seam is
+`SessionEngine::set_reviver(Weak<ResidentSupervisor>) -> ()`.
+
+For server restores,
+`SessionEngine::run_admitted_turn(lease: TurnLease, agent: &AgentSpec, cancel: CancellationToken, external_dirs: &[PathBuf], guidance: Option<Arc<str>>, explicit_model: Option<ModelRef>, admitted_prompt: MessageId) -> Result<FinishReason, CoreError>`
+is async and consumes the lease reserved before admission. The lease identifies
+the session and remains owned through the turn's message closure. Ordinary
+external turn entry points retain their existing admission behavior. No CLI
+flags, configuration fields, RPCs or event payloads change.
+
 The lower-level `spawn_team_supervisor(...) -> RuntimeTaskOwner` also requires
 retaining its returned owner and awaiting `owner.shutdown()`. Its sidecar
 environment carries the owner's connection I/O tracker, including initialization

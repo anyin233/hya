@@ -31,6 +31,18 @@ Recording holds the episode index while inserting the stall. Ending removes the
 index entry before clearing stalls, so insertion either precedes cleanup or sees
 that the episode is gone. Caller deletion clears its rows after store deletion.
 
+# Why is deferring recovered installation insufficient by itself?
+
+The server previously acknowledged restore admission before core acquired the
+root turn lease (external-turn validation can await). A recovered child's mail
+could win that gap. Restore admission now reserves the lease first and executes
+through run_admitted_turn, which consumes it. The app startup helper is shared by
+the daemon, HyaRuntime and I22; construction stages actors, the helper admits all
+restores, then start_recovered installs actors and queues root inbox recovery.
+The old I22 fixture only checked its first provider request and could miss
+stranded mail. It now gates the restore answer and requires the persisted mail's
+distinct main prompt afterward, with exactly one answer for the restore.
+
 
 # Why must Drop request endings before cancelling live teams?
 
@@ -50,3 +62,14 @@ first member registration, forcing root binding before the wake admits its
 prompt. Both existing root binding-wake ownership tests reproduced that hang and
 pass with mail/recovery-only queue liveness. Generic activity stays FIFO, but
 does not delay retirement of a finished team or retire a prepared main.
+
+
+# What if a restore tool ends an actor before recovered installation starts?
+
+That actor is still an orphan between construction and start_recovered. Its
+normal end_member Takeover can commit during restore admission. Installing the
+cached old claim then returns StaleActorClaim. Startup skips exactly that typed
+fencing result, preserves the archive/successor, and continues its peers; every
+other error propagates. The returned count includes only installed episodes.
+The real crash/end_member regression failed before this change with
+StaleActorClaim and checks that the peer starts while the ended actor stays archived.

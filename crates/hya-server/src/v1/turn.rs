@@ -155,6 +155,17 @@ async fn spawn_turn_run(
             return;
         }
         let title_after_admission = !matches!(&admission, Admission::Restore);
+        let restore_lease = if title_after_admission {
+            None
+        } else {
+            match st.engine.try_begin_turn(session) {
+                Ok(lease) => Some(lease),
+                Err(error) => {
+                    let _ = admitted.send(Err(V1Error::from(error)));
+                    return;
+                }
+            }
+        };
         let prompt = match admit(&st, session, admission, &turn).await {
             Ok(Some(prompt)) => prompt,
             result => {
@@ -163,15 +174,33 @@ async fn spawn_turn_run(
             }
         };
         let _ = admitted.send(Ok(true));
-        let execution = st.engine.run_turn_with_external_dirs_and_guidance(
-            session,
-            &turn.agent,
-            run.token(),
-            &turn.external_dirs,
-            turn.guidance,
-            turn.explicit_model,
-            Some(prompt),
-        );
+        let execution = async {
+            if let Some(lease) = restore_lease {
+                st.engine
+                    .run_admitted_turn(
+                        lease,
+                        &turn.agent,
+                        run.token(),
+                        &turn.external_dirs,
+                        turn.guidance,
+                        turn.explicit_model,
+                        prompt,
+                    )
+                    .await
+            } else {
+                st.engine
+                    .run_turn_with_external_dirs_and_guidance(
+                        session,
+                        &turn.agent,
+                        run.token(),
+                        &turn.external_dirs,
+                        turn.guidance,
+                        turn.explicit_model,
+                        Some(prompt),
+                    )
+                    .await
+            }
+        };
         let title = async {
             if title_after_admission {
                 auto_title(&st, session, &turn.agent.model, run.token()).await;
