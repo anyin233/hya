@@ -947,6 +947,10 @@ impl TeamActor {
         // user resumes it (the synthesis re-fires after its next turn).
         if st.phase.killed()
             || st.busy != 0
+            || st
+                .residents
+                .values()
+                .any(|slot| !slot.is_main && slot.has_work())
             || st.lead_failed
             || st.workflow_runs != 0
             || !st.main_autonomous
@@ -1837,38 +1841,49 @@ fn recipient_channel_role(
     to: &MailEndpoint,
     recipient: &str,
     sender: &str,
-) -> (ChannelTemplateKind, ChannelParticipantRole) {
+) -> (ChannelTemplateKind, Option<ChannelParticipantRole>) {
     if let MailEndpoint::Channel(channel) = to
         && let Some(state) = projection.team.channels.get(channel)
         && state.kind == ChannelKind::Group
     {
         return (
             ChannelTemplateKind::Unit,
-            if state.unit.as_deref() == Some(recipient) {
+            Some(if state.unit.as_deref() == Some(recipient) {
                 ChannelParticipantRole::UnitLeader
             } else {
                 ChannelParticipantRole::DirectReports
-            },
+            }),
         );
     }
-    (
-        ChannelTemplateKind::ParentDm,
-        if scope::parent_path(sender) == Some(recipient) {
-            ChannelParticipantRole::Parent
-        } else {
-            ChannelParticipantRole::Child
-        },
-    )
+    let role = if scope::parent_path(recipient) == Some(sender) {
+        Some(ChannelParticipantRole::Child)
+    } else if scope::parent_path(sender) == Some(recipient) {
+        Some(ChannelParticipantRole::Parent)
+    } else {
+        None
+    };
+    let own_dm = match to {
+        MailEndpoint::Handle(handle) => handle == recipient,
+        MailEndpoint::Channel(channel) => {
+            projection.team.channels.get(channel).is_some_and(|state| {
+                state.kind == ChannelKind::Dm
+                    && state.members.len() == 2
+                    && state.members.contains(recipient)
+                    && state.members.contains(sender)
+            })
+        }
+    };
+    (ChannelTemplateKind::ParentDm, role.filter(|_| own_dm))
 }
 
 fn resident_delivery_allowed(
     policy: &ChannelPolicy,
     agent: &str,
     kind: ChannelTemplateKind,
-    role: ChannelParticipantRole,
+    role: Option<ChannelParticipantRole>,
 ) -> bool {
-    // The direct parent's DM is the member's work address, including its
-    // spawn directive; bundle wake policy cannot disable that address.
+    let Some(role) = role else { return false };
+    // The direct parent's own DM is the member's mandatory work address.
     if kind == ChannelTemplateKind::ParentDm && role == ChannelParticipantRole::Child {
         return true;
     }
@@ -4450,6 +4465,7 @@ impl ResidentSupervisor {
                 },
             ]);
             let initial = initial.filter(|text| !text.trim().is_empty());
+            let pending = initial.is_some();
             if let Some(text) = initial {
                 events.push(Event::MailSent {
                     session: root,
@@ -4482,7 +4498,7 @@ impl ResidentSupervisor {
                 sidecar_factory,
                 is_main: false,
                 status: SlotStatus::Idle,
-                pending: false,
+                pending,
                 report: None,
                 user_stopped: false,
                 synth_pending: false,

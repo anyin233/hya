@@ -106,6 +106,20 @@ Depth is a constant `MAX_SUBAGENT_DEPTH = 2` in `hya-core`
 (`crates/hya-core/src/lib.rs` re-export). The `subagent.max_depth` config key
 is removed; `SubagentLimits` keeps concurrency/budget fields only.
 
+Mandatory parent mail bypasses bundle wake restrictions only when its sender is
+the recipient's direct parent and its endpoint is their own two-member DM (or
+the recipient's handle). Siblings, grandparents and unrelated or unknown DMs
+cannot use this bypass during delivery or replay.
+
+An episode installed with nonblank directive mail is pending immediately, before
+its registration events reach the bus. `wait` therefore sees it working, and
+`cancel_user_turn(child)` can hold it before its first wake. Parked Workflow
+actors without directive mail stay idle. Pending member work blocks quiescence;
+the later bus notification coalesces with the existing pending wake. For example,
+`task` followed immediately by `wait` waits for execution rather than reporting
+an initial stall. Registration still admits no user prompt: one `begin_work`
+transaction owns each nonempty wake.
+
 ### 2.1 Handles: agent type + operator name (0.41.0)
 
 A member's canonical handle is its parent's path plus a **leaf**
@@ -247,7 +261,11 @@ settled its wake; later mail refuses the report and creates another wake.
 Recovery requeues all Idle pending work, including admitted directive-mail wakes,
 using the same transcript rule. Work that was
 Busy when the process crashed keeps the existing aborted-work policy: settle
-that boundary, classify `AbortedRunning`, and queue only later mail.
+that boundary, classify `AbortedRunning`, and queue only later mail. If its last
+nonempty transcript message is still a user instruction, recovery appends an
+assistant answer with `finish: cancelled`, `cause: interrupted` and explanatory
+text before the next wake. This applies only to aborted running work; archives
+and user-cancelled queued work do not receive a fabricated answer.
 Failure to commit `ResidentWorkFinished` ends the episode through the normal
 Failed ending sequence; it never parks a completed turn with unsettled work.
 

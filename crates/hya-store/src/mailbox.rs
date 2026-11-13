@@ -1,7 +1,7 @@
 use hya_proto::{
-    ActorClaim, ActorEpoch, ArchiveReason, Envelope, Event, MailEndpoint, MailKind, MemberId,
-    MemberRunStatus, Projection, ReportOutcome, RosterEntry, RosterStatus, SessionId, SubagentMode,
-    scope,
+    ActorClaim, ActorEpoch, ArchiveReason, Envelope, Event, FinishCause, FinishReason,
+    MailEndpoint, MailKind, MemberId, MemberRunStatus, MessageId, PartId, PartProjection,
+    Projection, ReportOutcome, Role, RosterEntry, RosterStatus, SessionId, SubagentMode, scope,
 };
 
 use crate::{
@@ -251,15 +251,57 @@ impl SessionStore {
                     inbox_cursor: entry.resident_cursor,
                 }
             } else {
-                envelopes.extend(
-                    append_resident_effects_in_transaction(
-                        &self.projections,
-                        &mut tx,
-                        recovered.claim.actor_id,
-                        recovery_reason,
-                    )
-                    .await?,
-                );
+                let actor =
+                    replay_projection(&self.projections, &mut tx, recovered.claim.actor_id).await?;
+                let actor_id = recovered.claim.actor_id;
+                let mut events = resident_effect_terminal_events(actor_id, &actor, recovery_reason);
+                let tail = actor.session.messages.iter().rev().find(|message| {
+                    message.parts.iter().any(|part| match part {
+                        PartProjection::Text { text, .. }
+                        | PartProjection::Reasoning { text, .. } => !text.is_empty(),
+                        PartProjection::Tool { .. } => true,
+                    })
+                });
+                if tail.is_some_and(|message| message.role == Role::User) {
+                    let message = MessageId::new();
+                    let part = PartId::new();
+                    events.extend([
+                        Event::MessageStarted {
+                            session: actor_id,
+                            message,
+                            role: Role::Assistant,
+                            agent: None,
+                            model: None,
+                        },
+                        Event::TextStart {
+                            session: actor_id,
+                            message,
+                            part,
+                        },
+                        Event::TextDelta {
+                            session: actor_id,
+                            message,
+                            part,
+                            delta: "Interrupted before this work completed.".into(),
+                        },
+                        Event::TextEnd {
+                            session: actor_id,
+                            message,
+                            part,
+                        },
+                        Event::MessageFinished {
+                            session: actor_id,
+                            message,
+                            role: Role::Assistant,
+                            finish: FinishReason::Cancelled,
+                            tokens: None,
+                            cause: Some(FinishCause::Interrupted),
+                        },
+                    ]);
+                }
+                for event in events {
+                    envelopes.push(append_event_in_transaction(&mut tx, actor_id, event).await?);
+                }
                 envelopes.push(
                     append_event_in_transaction(
                         &mut tx,
