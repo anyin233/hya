@@ -2034,7 +2034,27 @@ mod team_tests {
             assert_eq!(team.resolve_dm("main/lead", alias), None);
         }
         // Roster rows alone cannot create an address or grant membership.
+        for (handle, mode) in [
+            ("main", SubagentMode::Transient),
+            ("main/worker", SubagentMode::Resident),
+        ] {
+            team.roster.insert(
+                handle.into(),
+                RosterEntry {
+                    handle: handle.into(),
+                    session: SessionId::new(),
+                    agent_type: AgentName::new("worker"),
+                    mode,
+                    status: RosterStatus::Idle,
+                    current_task: None,
+                    resident_cursor: 0,
+                    heartbeat_ms: 0,
+                    resident_work: None,
+                },
+            );
+        }
         assert_eq!(team.resolve_dm("main", "worker"), None);
+        assert_eq!(team.resolve_dm("main", "main/worker"), None);
         assert_eq!(team.resolve_dm("main/lead/worker", "main"), None);
     }
 
