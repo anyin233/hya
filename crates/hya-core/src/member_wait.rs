@@ -50,7 +50,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use hya_proto::{
-    ArchiveReason, Event, MailEndpoint, MemberRunStatus, MessageId, Projection, Role, RosterStatus,
+    ActorClaim, ArchiveReason, Event, MailEndpoint, MemberRunStatus, MessageId, Projection, Role, RosterStatus,
     SessionId, scope,
 };
 use hya_tool::{WaitMail, WaitMember, WaitMemberState, WaitMode, WaitOutcome, WaitSpec, WaitWake};
@@ -85,7 +85,7 @@ struct Standing {
     /// Working, or stopped without a report (`idle`).
     running: Vec<WaitMember>,
     /// Stopped targets: (session, last assistant message).
-    stalled: Vec<(SessionId, Option<MessageId>)>,
+    stalled: Vec<(ActorClaim, Option<MessageId>)>,
     /// Full report bodies of `finished` targets: (handle, body), to recognize
     /// their report mail.
     reports: Vec<(String, String)>,
@@ -334,9 +334,11 @@ async fn evaluate(
             } else if busy || leads_live {
                 WaitMemberState::Working
             } else {
-                standing
-                    .stalled
-                    .push((target.session, last_answer(engine, target.session).await?));
+                let claim = supervisor.member_claim(target.session);
+                let last = last_answer(engine, target.session).await?;
+                if let Some(claim) = claim {
+                    standing.stalled.push((claim, last));
+                }
                 WaitMemberState::Idle
             };
             standing.running.push(WaitMember {
