@@ -350,6 +350,9 @@ impl AppState {
 
 #[derive(Clone)]
 pub(crate) struct ServerState {
+    #[cfg(test)]
+    pub(crate) stream_conversions: Arc<std::sync::atomic::AtomicUsize>,
+    pub(crate) frames: crate::v1::events::FrameHub,
     pub(crate) engine: Arc<SessionEngine>,
     pub(crate) agent: Arc<AgentSpec>,
     pub(crate) runs: runs::RunRegistry,
@@ -381,6 +384,9 @@ impl ServerState {
     pub(crate) fn new(app: AppState) -> Self {
         let global = support::global_state::GlobalState::new(app.engine.lsp().is_configured());
         Self {
+            #[cfg(test)]
+            stream_conversions: Arc::default(),
+            frames: crate::v1::events::FrameHub::new(app.engine.bus().capacity()),
             engine: app.engine,
             agent: app.agent,
             runs: app.runs,

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use crate::{
     Bundle, BundleError, PreparedAgent, PreparedCatalog, PreparedChannelTemplate, PreparedResource,
@@ -38,7 +39,7 @@ impl ExportKind {
 /// Pure immutable catalog built only from prepared installable bundle data.
 #[derive(Debug)]
 pub struct BundleCatalog {
-    bundles: Vec<Bundle>,
+    bundles: Vec<Arc<Bundle>>,
     agents: BTreeMap<String, (usize, usize)>,
     workflows: BTreeMap<String, (usize, usize)>,
     workflow_names: BTreeMap<String, Vec<(usize, usize)>>,
@@ -53,8 +54,12 @@ impl BundleCatalog {
     /// Rejects duplicate bundle/Agent ids, namespace/alias collisions, and
     /// unsupported hook declarations. Empty input is valid.
     pub fn from_prepared(bundles: &[Bundle]) -> Result<Self, BundleError> {
+        Self::from_shared(bundles.iter().cloned().map(Arc::new).collect())
+    }
+
+    fn from_shared(bundles: Vec<Arc<Bundle>>) -> Result<Self, BundleError> {
         let mut catalog = Self {
-            bundles: bundles.to_vec(),
+            bundles,
             agents: BTreeMap::new(),
             workflows: BTreeMap::new(),
             workflow_names: BTreeMap::new(),
@@ -158,9 +163,9 @@ impl BundleCatalog {
     pub fn from_verified_catalogs(catalogs: &[&PreparedCatalog]) -> Result<Self, BundleError> {
         let bundles = catalogs
             .iter()
-            .flat_map(|catalog| catalog.bundles.iter().cloned())
+            .map(|catalog| Arc::clone(&catalog.bundle))
             .collect::<Vec<_>>();
-        let mut catalog = Self::from_prepared(&bundles)?;
+        let mut catalog = Self::from_shared(bundles)?;
         let records = encode_verified_catalog_records(catalogs)?;
         catalog.semantic_identity_v1 = Some(encode_semantic_identity_v1(&records)?);
         Ok(catalog)
@@ -174,7 +179,7 @@ impl BundleCatalog {
 
     /// All prepared installable payloads held by this catalog.
     #[must_use]
-    pub fn bundles(&self) -> &[Bundle] {
+    pub fn bundles(&self) -> &[Arc<Bundle>] {
         &self.bundles
     }
 
@@ -201,7 +206,7 @@ impl BundleCatalog {
         self.bundles
             .iter()
             .find(|bundle| bundle.identity().id == bundle_id)
-            .map_or(&[], Bundle::channels)
+            .map_or(&[], |bundle| bundle.channels())
     }
 
     /// Resolve a Workflow by its exact qualified id or an unambiguous bare id.
@@ -300,7 +305,7 @@ fn encode_verified_catalog_records(
     for catalog in catalogs {
         let mut record = Vec::new();
         append_bytes(&mut record, catalog.digest.as_bytes())?;
-        let mut bundles = catalog.bundles.iter().collect::<Vec<_>>();
+        let mut bundles = catalog.bundles().iter().collect::<Vec<_>>();
         bundles.sort_by(|left, right| compare_bundle_identity(left, right));
         append_count(&mut record, bundles.len())?;
         for bundle in bundles {

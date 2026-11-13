@@ -480,3 +480,20 @@ fn workflow_catalog_rejects_ambiguous_bare_names_but_keeps_qualified_ids() {
     assert!(catalog.resolve_agent("worker-one").is_some());
     assert!(catalog.resolve_agent("worker-two").is_some());
 }
+
+#[test]
+fn verified_catalogs_share_prepared_bundle_assets() -> Result<(), BundleError> {
+    let prepared = prepare_package(source("shared", "hya/shared", "shared", "shared asset"))?;
+    let first = BundleCatalog::from_verified_catalogs(&[&prepared])?;
+    let second = BundleCatalog::from_verified_catalogs(&[&prepared])?;
+    assert!(std::sync::Arc::ptr_eq(
+        &first.bundles()[0],
+        &second.bundles()[0]
+    ));
+    assert!(std::ptr::eq(
+        &prepared.bundles()[0],
+        first.bundles()[0].as_ref()
+    ));
+    assert_eq!(first.bundles()[0].skills()[0].content, "shared asset");
+    Ok(())
+}

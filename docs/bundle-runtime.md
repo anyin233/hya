@@ -27,7 +27,12 @@ Each package stores one complete `Bundle` with `format_version: 4` (`u32`).
 Its `agents[]`, optional `workflow`, `channels[]`, resources, process command,
 URI schemes, APIs, permission modes, and TUI declarations all enter its digest.
 Changing only process argv changes both bundle digest and Workflow revision.
-Derived catalog indexes are rebuilt on load and are never stored.
+Derived catalog indexes are rebuilt on load and are never stored. Verified
+catalog construction shares each immutable prepared `Bundle` through `Arc`,
+including resource text and native payloads; rebuilding lookup indexes does not
+copy those assets. `BundleCatalog::from_verified_catalogs(&[&prepared])` retains
+that shared ownership, and `BundleCatalog::bundles()` exposes `&[Arc<Bundle>]`.
+`PreparedCatalog::bundles()` remains a borrowed `&[Bundle]` view.
 The removed `spawn_lifecycle` field is no longer part of `PreparedAgent`.
 Older install records are **unreadable**, with a **please reinstall** diagnostic;
 they are never migrated or decoded through a compatibility path. The registry

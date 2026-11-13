@@ -1236,7 +1236,12 @@ async fn queued_spawn_uses_parent_turn_binding_after_catalog_publication() {
     });
     let queued_request = queued_rx.recv().await.expect("queued spawn request");
 
-    let mut published_bundles = old_binding.bundle_catalog().bundles().to_vec();
+    let mut published_bundles = old_binding
+        .bundle_catalog()
+        .bundles()
+        .iter()
+        .map(|bundle| bundle.as_ref().clone())
+        .collect::<Vec<_>>();
     let quick = published_bundles
         .iter_mut()
         .flat_map(|bundle| &mut bundle.agents)

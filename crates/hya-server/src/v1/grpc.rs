@@ -461,12 +461,15 @@ impl V1Grpc {
             }
             Err(error) => return Err(Status::internal(error.to_string())),
         }
-        Ok(GrpcResponse::new(Box::pin(super::events::frame_stream(
-            self.state.clone(),
-            super::events::StreamScope::session(session, inner.include_descendants),
-            inner.since_seq,
-            false,
-        ))))
+        Ok(GrpcResponse::new(Box::pin(
+            super::events::frame_stream(
+                self.state.clone(),
+                super::events::StreamScope::session(session, inner.include_descendants),
+                inner.since_seq,
+                false,
+            )
+            .map(|frame| Ok(frame.frame.clone())),
+        )))
     }
 
     async fn special_stream_global_events(
@@ -477,12 +480,15 @@ impl V1Grpc {
         Status,
     > {
         let inner = request.into_inner();
-        Ok(GrpcResponse::new(Box::pin(super::events::frame_stream(
-            self.state.clone(),
-            super::events::StreamScope::Global,
-            inner.since_seq,
-            inner.interactions_only,
-        ))))
+        Ok(GrpcResponse::new(Box::pin(
+            super::events::frame_stream(
+                self.state.clone(),
+                super::events::StreamScope::Global,
+                inner.since_seq,
+                inner.interactions_only,
+            )
+            .map(|frame| Ok(frame.frame.clone())),
+        )))
     }
 }
 
