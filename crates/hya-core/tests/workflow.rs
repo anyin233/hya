@@ -1236,8 +1236,8 @@ flowchart TD
     );
     assert_eq!(
         engine.store().live_member_count(lead).await.unwrap(),
-        1,
-        "settlement retains the worker claim; judgments release their claims"
+        0,
+        "anonymous workers end after verification; judgments release their claims"
     );
     let events = engine.replay(lead).await.unwrap();
     assert_eq!(events.iter().filter(|e| matches!(e.event, Event::AgentRegistered { agent_session, .. } if agent_session == worker_rounds[0].0)).count(), 1,
@@ -2746,4 +2746,90 @@ async fn review_w2_wrap_up_cancellation_keeps_evidence_and_never_completes_stage
         }
     )));
     assert_eq!(engine.store().live_member_count(lead).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn review_s1_second_anonymous_run_releases_capacity() {
+    let provider = RecordingProvider::new();
+    let engine = engine_with_limits(
+        provider.clone(),
+        SubagentLimits {
+            per_run_budget: 2,
+            ..SubagentLimits::default()
+        },
+    )
+    .await;
+    let lead = start_lead(&engine).await;
+    let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
+    let workflow = compile_workflow("repeat.hya.md", TWO_STAGE_WORKFLOW);
+    let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
+    let context = hya_core::WorkflowRunContext {
+        binding,
+        caller: "hya-main".into(),
+        base_agent: base_spec(),
+        inputs: BTreeMap::from([("target".into(), "repeat".into())]),
+        resident_supervisor: Some(supervisor.clone()),
+        routing: None,
+    };
+    for _ in 0..2 {
+        let report = run_workflow(
+            engine.clone(),
+            lead,
+            &workflow,
+            context.clone(),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("same root accepts another anonymous run");
+        assert_eq!(report.status, WorkflowStatus::Completed);
+    }
+    assert_eq!(engine.store().live_member_count(lead).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn review_s1_stage_ends_before_its_successor_including_loop_wrap_up() {
+    for loop_verdict in [None, Some(true), Some(false)] {
+        let provider = RecordingProvider::new();
+        if let Some(met) = loop_verdict {
+            provider.script_verdict(met);
+        }
+        let engine = engine(provider.clone()).await;
+        let lead = start_lead(&engine).await;
+        *provider.capacity.lock().unwrap() = Some((engine.store().clone(), lead));
+        let verification = if loop_verdict.is_some() {
+            "    mode: loop\n    verify:\n      agent: reviewer\n      until: Done.\n      max_iterations: 1\n"
+        } else {
+            ""
+        };
+        let workflow = compile_workflow(
+            "stage-end.hya.md",
+            &format!(
+                "---\nkind: Workflow\nname: stage-end\ndescription: Stage lifetime\nnodes:\n  first:\n    agent: builder\n    directive: First.\n{verification}  next:\n    agent: builder\n    directive: Next.\n---\nflowchart TD\n  first --> next\n"
+            ),
+        );
+        let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
+        let report = run_workflow(
+            engine.clone(),
+            lead,
+            &workflow,
+            hya_core::WorkflowRunContext {
+                binding,
+                caller: "hya-main".into(),
+                base_agent: base_spec(),
+                inputs: BTreeMap::new(),
+                resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
+                routing: None,
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.status, WorkflowStatus::Completed);
+        assert_eq!(
+            provider.live_counts.lock().unwrap().last(),
+            Some(&(false, 1)),
+            "successor must not overlap a completed anonymous worker"
+        );
+        assert_eq!(engine.store().live_member_count(lead).await.unwrap(), 0);
+    }
 }

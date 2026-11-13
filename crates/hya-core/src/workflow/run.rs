@@ -737,63 +737,71 @@ impl PreparedWorkflowRun {
                         let run_cancel = run_cancel.clone();
                         let route_recorder = route_recorder.clone();
                         running.push(async move {
-                            let mut report = activate_resident_stage(
-                                engine.clone(),
-                                lead,
-                                supervisor,
-                                stage,
-                                activation,
-                            )
-                            .await?;
-                            if let Some((verify, verifier)) =
-                                stage.verify().zip(verifiers[index].clone())
-                                && report.status == StageStatus::Done
-                            {
-                                match drive_loop_stage(
-                                    engine,
+                            let result = async {
+                                let mut report = activate_resident_stage(
+                                    engine.clone(),
                                     lead,
-                                    name,
-                                    context,
+                                    supervisor.clone(),
                                     stage,
-                                    verify,
-                                    rendered.directive(),
-                                    rendered.system_context(),
-                                    rendered
-                                        .verification_condition()
-                                        .unwrap_or_else(|| verify.until()),
-                                    actor,
-                                    &resolved[index],
-                                    verifier,
-                                    report.clone(),
-                                    run_cancel.clone(),
-                                    actor_claim,
-                                    durable_run,
-                                    route_recorder,
+                                    activation,
                                 )
-                                .await
+                                .await?;
+                                if let Some((verify, verifier)) =
+                                    stage.verify().zip(verifiers[index].clone())
+                                    && report.status == StageStatus::Done
                                 {
-                                    Ok(completed) => report = completed,
-                                    Err(WorkflowError::Engine(error @ CoreError::Store(_))) => {
-                                        return Err(error.into());
-                                    }
-                                    Err(WorkflowError::Engine(
-                                        CoreError::WorkflowActivationFailed(text),
-                                    )) => {
-                                        report.status = StageStatus::Failed;
-                                        report.output = clamp(text);
-                                    }
-                                    Err(error) => {
-                                        report.status = if run_cancel.is_cancelled() {
-                                            StageStatus::Cancelled
-                                        } else {
-                                            StageStatus::Failed
-                                        };
-                                        report.output =
-                                            clamp(format!("loop Stage failed: {error}"));
+                                    match drive_loop_stage(
+                                        engine.clone(),
+                                        lead,
+                                        name,
+                                        context,
+                                        stage,
+                                        verify,
+                                        rendered.directive(),
+                                        rendered.system_context(),
+                                        rendered
+                                            .verification_condition()
+                                            .unwrap_or_else(|| verify.until()),
+                                        actor.clone(),
+                                        &resolved[index],
+                                        verifier,
+                                        report.clone(),
+                                        run_cancel.clone(),
+                                        actor_claim,
+                                        durable_run,
+                                        route_recorder,
+                                    )
+                                    .await
+                                    {
+                                        Ok(completed) => report = completed,
+                                        Err(WorkflowError::Engine(error @ CoreError::Store(_))) => {
+                                            return Err(error.into());
+                                        }
+                                        Err(WorkflowError::Engine(
+                                            CoreError::WorkflowActivationFailed(text),
+                                        )) => {
+                                            report.status = StageStatus::Failed;
+                                            report.output = clamp(text);
+                                        }
+                                        Err(error) => {
+                                            report.status = if run_cancel.is_cancelled() {
+                                                StageStatus::Cancelled
+                                            } else {
+                                                StageStatus::Failed
+                                            };
+                                            report.output =
+                                                clamp(format!("loop Stage failed: {error}"));
+                                        }
                                     }
                                 }
+                                Ok::<_, WorkflowError>((index, report))
                             }
-                            Ok::<_, WorkflowError>((index, report))
+                            .await;
+                            if stage.actor().is_none() {
+                                let (root, _) = engine.session_lineage(lead).await?;
+                                supervisor.end_member(root, &actor.handle).await?;
+                            }
+                            result
                         });
                     }
                 }
