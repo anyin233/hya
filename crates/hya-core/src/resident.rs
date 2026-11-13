@@ -2769,7 +2769,12 @@ pub struct ResidentSupervisor {
     /// `wait` stall notices already given: (waiting session, member session)
     /// → the member's last assistant message when it was reported stopped.
     /// In-memory only: after a restart a stopped member is reported once more.
-    wait_stalls: Mutex<HashMap<(SessionId, SessionId), Option<hya_proto::MessageId>>>,
+    wait_stalls: Mutex<HashMap<(SessionId, SessionId), WaitStall>>,
+}
+
+struct WaitStall {
+    claim: ActorClaim,
+    last_answer: Option<hya_proto::MessageId>,
 }
 
 impl Drop for ResidentSupervisor {
@@ -3909,40 +3914,42 @@ impl ResidentSupervisor {
             .retain(|(caller, member), _| *caller != session && *member != session);
     }
 
-    /// Whether `caller`'s `wait` already reported `member` as stopped at the
-    /// turn ending in `last_answer` (so a repeated wait must not wake on it).
+    pub(crate) fn member_claim(&self, member: SessionId) -> Option<ActorClaim> {
+        self.team_with_resident(member)?.lock().residents.get(&member)?.claim
+    }
+
+    /// Whether this episode's stopped turn has already been reported to the caller.
     pub(crate) fn wait_stall_reported(
         &self,
         caller: SessionId,
-        member: SessionId,
+        claim: ActorClaim,
         last_answer: Option<hya_proto::MessageId>,
     ) -> bool {
-        let stalls = match self.wait_stalls.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        stalls.get(&(caller, member)) == Some(&last_answer)
+        self.wait_stalls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&(caller, claim.actor_id))
+            .is_some_and(|stall| stall.claim == claim && stall.last_answer == last_answer)
     }
 
-    /// Remember that `caller`'s `wait` reported `member` stopped at
-    /// `last_answer`.
+    /// Record a snapshot only while its exact episode still owns the member.
     pub(crate) fn record_wait_stall(
         &self,
         caller: SessionId,
-        member: SessionId,
+        claim: ActorClaim,
         last_answer: Option<hya_proto::MessageId>,
     ) {
-        // Serialize insertion with index removal: a late wait snapshot cannot
-        // recreate a stall entry after that episode's ending cleaned it up.
         let episodes = self
             .episodes
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if episodes.contains_key(&member) {
+        if episodes.get(&claim.actor_id).is_some_and(|team| {
+            team.lock().residents.get(&claim.actor_id).is_some_and(|slot| slot.claim == Some(claim))
+        }) {
             self.wait_stalls
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert((caller, member), last_answer);
+                .insert((caller, claim.actor_id), WaitStall { claim, last_answer });
         }
     }
 
