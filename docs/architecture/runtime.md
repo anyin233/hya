@@ -1609,3 +1609,9 @@ App composition retains the host prompt through
 use the same builder with their host `AgentSpec.system_prompt.clone()`. Agents
 with no catalog prompt keep that base when revived or reconstructed as main.
 See [initialization inputs and hook usage](../spec/backend/task-tool.md#creation-hooks-and-revival-boundaries).
+
+Resident registration publishes parent/root envelopes in commit order under the
+claim-write boundary, before activation mail or initialization can emit later
+frames on those logs. Only child-log envelopes wait for session-start hooks.
+Parked registration still returns the committed identity before those hooks
+finish, so cancellation can end a blocked initializer.
