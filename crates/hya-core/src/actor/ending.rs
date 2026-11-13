@@ -27,7 +27,7 @@ pub(super) async fn commit_episode_ending(
             tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Err(CoreError::Cancelled),
-                handoff = team.engine.terminal_handoff_claimed(child) => handoff,
+                handoff = team.engine.terminal_handoff_claimed(child, Some(claim)) => handoff,
             }
         }
         _ => team.engine.degraded_terminal_handoff(child).await,

@@ -1590,7 +1590,7 @@ async fn registered_directive_before_bus(cancel: bool, release_lead: bool) {
         None
     } else {
         Some(
-            crate::member_wait::wait_for_members(&engine, &supervisor, root, spec)
+            crate::member_wait::wait_for_members(None, &engine, &supervisor, root, spec)
                 .await
                 .unwrap(),
         )
