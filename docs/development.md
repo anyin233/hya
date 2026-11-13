@@ -576,6 +576,24 @@ in `hya_server`; `stop: CancellationToken` and `tasks: TaskTracker` track servic
 cancellation and completion. Explicit shutdown joins; drop only cancels.
 Resident bus listeners and plugin/MCP connection I/O have separate owners.
 
+Actor-owned turns monitor their durable claim every 100 ms, independently of
+provider deltas. This stops a superseded turn even when another runtime owner
+recovers or ends its claim while the provider is silent. Monitoring is automatic
+for turns with an `ActorClaim { actor_id: SessionId, epoch: ActorEpoch,
+owner_run_id: OwnerRunId }`; root turns have no claim monitor and there is no
+configuration or protocol change.
+
+For example, `SessionStore::recover_claim(actor, new_owner)` immediately fences
+the previous claim. Its turn cancels on the next check: at most 100 ms plus
+store-query and scheduler latency. Live-only deltas can continue until that
+check, but no durable write under the old claim can commit after takeover.
+Text/reasoning boundaries, tool results, work completion and endings retain
+their existing transactional claim fences; tool dispatch keeps its boundary
+checks after permission and hook awaits. Local archive, kill, root deletion and
+shutdown request episode endings and cancel immediately. The monitor is polled
+alongside the turn, cancels its effective token on claim loss, and ends with the
+turn; it owns no detached task or connection across a non-store await.
+
 Member handle allocation propagates projection/store errors before reserving a name;
 a failed read cannot be interpreted as an empty team.
 
