@@ -189,6 +189,30 @@ async fn stop_while_a_run_is_reserved_waits_for_it_and_nothing_is_admitted() {
     let app = router(state.clone());
     let request = tokio::spawn(post_prompt(app.clone(), session));
     barrier.wait().await;
+    assert!(
+        !state.engine.turn_active(session),
+        "admission has no engine lease yet"
+    );
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/v1/sessions/{session}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let info: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(info["busy"], true, "reserved admission must remain busy");
+    assert_eq!(
+        post_prompt(app.clone(), session).await,
+        StatusCode::CONFLICT
+    );
     let mut stop =
         tokio::spawn(async move { state.stop_for_restart(Duration::from_secs(2)).await });
     let returned_early = tokio::time::timeout(Duration::from_millis(50), &mut stop).await;
