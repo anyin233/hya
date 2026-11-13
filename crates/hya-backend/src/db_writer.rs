@@ -70,7 +70,7 @@ mod tests {
 
     #[tokio::test]
     async fn in_memory_stores_are_direct_and_unlocked() {
-        for db in ["", ":memory:", "file:x.db?mode=memory"] {
+        for db in ["", ":memory:"] {
             assert!(matches!(
                 claim(db, "exec").await.unwrap(),
                 Writer::Direct(_)

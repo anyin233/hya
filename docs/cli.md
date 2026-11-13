@@ -104,21 +104,23 @@ writes a file database checks the lock first:
   starting, or another command below): exit **75** with
   `hya <command>: database <db> is in use by pid <pid> and it does not serve HTTP yet; try again or stop it`.
 
-File-backed runtime stores require a plain filesystem path, for example
-`hya serve --db ./sessions.db`. Relative paths, absolute paths and symlink
-aliases resolve to one `<resolved-db>.runtime-owner.lock`. Persistent `sqlite:`
-and `file:` URI spellings are rejected with an error directing the caller to a
-plain path, before SQLite initialization. This prevents a URI from bypassing
-the file owner's lock. Read-only connections do not acquire runtime ownership.
+Database arguments accept plain filesystem paths, for example
+`hya serve --db ./sessions.db`, and exactly two in-memory spellings: `""` and
+`":memory:"`. All `sqlite:` and `file:` URI spellings, including in-memory URIs,
+are rejected at runtime and read-only entry points before SQLite opens or a lock
+is taken. Characters such as `?`, `#`, and `%` in a plain path are literal.
+Relative paths, absolute paths and symlink aliases resolve to one
+`<resolved-db>.runtime-owner.lock`. Read-only connections do not acquire runtime
+ownership and remain available while a daemon owns the database.
 
-In-memory stores (`--db ""`, the default of `exec`/`serve`) and explicit
-in-memory URI forms remain unlocked: `sqlite::memory:`, `file::memory:` and
-`file:work?mode=memory&cache=shared`, for example. The store's
+In-memory stores remain unlocked (`--db ""` is the default of `exec`/`serve`).
 `database_paths(db: &str) -> io::Result<Option<DatabasePaths>>` returns `Some`
-for plain file paths, `None` for memory databases, and `InvalidInput` for other
-URI spellings. `SessionStore::connect_runtime` reports that error before
-opening SQLite; `claim_runtime_owner` continues to return `RuntimeOwnerBusy`
-when a canonical file's lock is already held.
+for plain file paths, `None` for the two memory spellings, and `InvalidInput`
+for any URI spelling. `SessionStore::connect`, `connect_runtime`, and
+`connect_read_only` accept this same argument contract; the two memory spellings
+use the store's single-connection pool with a keeper connection.
+`connect_runtime` reserves the canonical file's lock before opening SQLite;
+`claim_runtime_owner` returns `RuntimeOwnerBusy` when that lock is already held.
 
 | Command | Store | Server holds the file `--db` | Nobody holds it |
 | --- | --- | --- | --- |

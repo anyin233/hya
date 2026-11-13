@@ -178,53 +178,16 @@ pub struct DatabasePaths {
 }
 
 /// Resolve a plain database filename and all sidecars using one identity.
-/// Memory databases have no ownership files. File-backed URIs are rejected:
+/// Only `""` and `":memory:"` select memory. All database URIs are rejected:
 /// runtime writers must use a plain path with a canonical lock identity.
 pub fn database_paths(db: &str) -> std::io::Result<Option<DatabasePaths>> {
     if db.is_empty() || db == ":memory:" {
         return Ok(None);
     }
     if db.starts_with("file:") || db.starts_with("sqlite:") {
-        let memory_modes = |query: &str| {
-            query
-                .split('&')
-                .filter_map(|pair| pair.split_once('='))
-                .filter(|(key, _)| {
-                    percent_encoding::percent_decode_str(key).eq(b"mode".iter().copied())
-                })
-                .map(|(_, value)| {
-                    percent_encoding::percent_decode_str(value).eq(b"memory".iter().copied())
-                })
-                .collect::<Vec<_>>()
-        };
-        let (name, query) = db.split_once('?').unwrap_or((db, ""));
-        let name = name
-            .trim_start_matches("sqlite://")
-            .trim_start_matches("sqlite:");
-        let filename = percent_encoding::percent_decode_str(name)
-            .decode_utf8()
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
-        let outer_memory = memory_modes(query).contains(&true);
-        // SQLx decodes the filename before SQLite interprets a native file: URI.
-        let memory = if let Some(native) = filename.strip_prefix("file:") {
-            let native = native.split_once('#').map_or(native, |(name, _)| name);
-            let (name, query) = native.split_once('?').unwrap_or((native, ""));
-            if query.is_empty() {
-                percent_encoding::percent_decode_str(name).eq(b":memory:".iter().copied())
-                    || outer_memory
-            } else {
-                let modes = memory_modes(query);
-                !modes.is_empty() && modes.iter().all(|memory| *memory)
-            }
-        } else {
-            filename == ":memory:" || outer_memory
-        };
-        if memory {
-            return Ok(None);
-        }
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "only in-memory database URIs are supported; use a plain filesystem path for a file-backed database",
+            "database URIs are not supported; use a plain filesystem path or :memory:",
         ));
     }
     let database = resolve_database_path(Path::new(db), &mut 40)?;
@@ -408,36 +371,36 @@ pub struct ProjectActivityFile {
 }
 
 impl SessionStore {
-    /// Open or create a file-backed store at `sqlite://{path}`, initialize the schema, enable WAL.
+    /// Open a plain filesystem path (initialize the schema and enable WAL), or
+    /// `""` / `":memory:"` with the keeper-backed in-memory mode.
     /// Existing databases without the current baseline return [`StoreError::UnsupportedDatabase`].
     pub async fn connect(path: &str) -> Result<Self, StoreError> {
         let paths = database_paths(path)
             .map_err(|source| runtime_owner_lock_error(Some(Path::new(path)), source))?;
-        Self::connect_file(path, paths, None).await
+        match paths {
+            Some(paths) => Self::connect_file(paths, None).await,
+            None => Self::connect_memory().await,
+        }
     }
 
     async fn connect_file(
-        path: &str,
-        paths: Option<DatabasePaths>,
+        paths: DatabasePaths,
         lock: Option<RuntimeOwnerLock>,
     ) -> Result<Self, StoreError> {
-        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{path}"))?
+        let opts = SqliteConnectOptions::new()
+            .filename(&paths.database)
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
             .busy_timeout(Duration::from_secs(5))
             .foreign_keys(true);
-        let opts = match paths.as_ref() {
-            Some(paths) => opts.filename(&paths.database),
-            None => opts,
-        };
         let pool_options = SqlitePoolOptions::new().max_connections(8);
         #[cfg(feature = "lifecycle-bench")]
         let pool_options =
             pool_options.after_connect(|connection, _| Box::pin(bench::install(connection)));
         let pool = pool_options.connect_with(opts).await?;
         Self::migrate(&pool).await?;
-        let runtime_owner = paths.map_or_else(RuntimeOwnerState::memory, RuntimeOwnerState::file);
+        let runtime_owner = RuntimeOwnerState::file(paths);
         *runtime_owner
             .pending_lock
             .lock()
@@ -456,14 +419,25 @@ impl SessionStore {
     pub async fn connect_runtime(path: &str) -> Result<Self, StoreError> {
         let paths = database_paths(path)
             .map_err(|source| runtime_owner_lock_error(Some(Path::new(path)), source))?;
-        let lock = paths.as_ref().map(acquire_runtime_owner_lock).transpose()?;
-        Self::connect_file(path, paths, lock).await
+        match paths {
+            Some(paths) => {
+                let lock = acquire_runtime_owner_lock(&paths)?;
+                Self::connect_file(paths, Some(lock)).await
+            }
+            None => Self::connect_memory().await,
+        }
     }
 
     /// Open an existing database read-only, without initialization or ownership.
     /// SQLite rejects a missing file; projection reads never persist snapshots.
     pub async fn connect_read_only(path: &str) -> Result<Self, StoreError> {
-        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{path}"))?
+        let Some(paths) = database_paths(path)
+            .map_err(|source| runtime_owner_lock_error(Some(Path::new(path)), source))?
+        else {
+            return Self::connect_memory().await;
+        };
+        let opts = SqliteConnectOptions::new()
+            .filename(&paths.database)
             .read_only(true)
             .create_if_missing(false)
             .busy_timeout(Duration::from_secs(5));
@@ -1138,6 +1112,33 @@ pub(crate) fn decode_event(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod event_contract_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn memory_spellings_keep_data_across_pool_connections() {
+        for path in ["", ":memory:"] {
+            for store in [
+                SessionStore::connect(path).await.unwrap(),
+                SessionStore::connect_runtime(path).await.unwrap(),
+                SessionStore::connect_read_only(path).await.unwrap(),
+            ] {
+                let session = SessionId::new();
+                store
+                    .append_event(
+                        session,
+                        &Event::SessionArchived {
+                            session,
+                            archived: 1.into(),
+                        },
+                    )
+                    .await
+                    .unwrap();
+                for _ in 0..3 {
+                    store.pool.acquire().await.unwrap().close().await.unwrap();
+                    assert_eq!(store.replay(session).await.unwrap().len(), 1);
+                }
+            }
+        }
+    }
 
     #[tokio::test]
     async fn replay_page_decodes_only_the_sql_interval() {

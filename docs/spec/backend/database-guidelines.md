@@ -46,8 +46,8 @@
   releasing them. No connection or transaction spans a hook/model await.
 - Runtime file databases require plain paths so relative, absolute and symlink
   spellings use one canonical runtime-owner lock before SQLite opens.
-  `database_paths` rejects persistent URI spellings; explicit in-memory URIs
-  remain unlocked. See the [CLI ownership contract](../../cli.md#database-lock-and-the-backend-daemon).
+  `database_paths` rejects all `sqlite:` and `file:` URI spellings; only
+  `""` and `":memory:"` select the keeper-backed in-memory store. See the [CLI ownership contract](../../cli.md#database-lock-and-the-backend-daemon).
 
 ---
 

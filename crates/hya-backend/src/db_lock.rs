@@ -60,7 +60,7 @@ fn auto_transport() -> String {
 }
 
 /// The lock and discovery paths of `db`, or `None` for stores that are not
-/// locked (in-memory, SQLite URIs).
+/// locked (in-memory).
 pub(crate) fn paths(db: &str) -> Option<DbPaths> {
     // Best-effort paths for optional log/relay display. Ownership callers use
     // the fallible store resolver directly so filesystem errors surface.
@@ -391,8 +391,8 @@ mod tests {
     }
 
     #[test]
-    fn in_memory_and_uri_stores_are_not_locked() {
-        for db in ["", ":memory:", "file:x.db?mode=memory", "sqlite::memory:"] {
+    fn in_memory_stores_are_not_locked() {
+        for db in ["", ":memory:"] {
             assert!(paths(db).is_none(), "{db}");
             assert!(owned_metadata(db).unwrap().is_none(), "{db}");
         }

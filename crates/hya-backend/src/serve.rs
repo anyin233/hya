@@ -203,7 +203,7 @@ pub(crate) async fn cmd_serve_action(
         }
         ServeAction::Status { json } => {
             let Some(found) = daemon::running(&db).await else {
-                match db_lock::holder(&db).ok().flatten() {
+                match db_lock::holder(&db)? {
                     Some(busy) => eprintln!(
                         "hya server pid {} holds {db} but does not answer (starting or stopping)",
                         busy.holder_pid
