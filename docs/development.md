@@ -572,3 +572,7 @@ tracks and joins them during drain, and draining lease releases enqueue no wakes
 
 Recovered registration queues root inbox recovery while holding its team
 registration, including when restore tools already ended the staged claim.
+
+An empty or rejected server restore releases its engine turn lease and server
+run reservation before returning its admission result; an immediate client turn
+therefore observes the completed admission.

@@ -149,6 +149,7 @@ async fn spawn_turn_run(
     let st = st.clone();
     tokio::spawn(async move {
         if run.admission_closed() {
+            drop(run);
             let _ = admitted.send(Err(V1Error::unavailable(
                 "the session run was cancelled before admission",
             )));
@@ -161,6 +162,7 @@ async fn spawn_turn_run(
             match st.engine.try_begin_turn(session) {
                 Ok(lease) => Some(lease),
                 Err(error) => {
+                    drop(run);
                     let _ = admitted.send(Err(V1Error::from(error)));
                     return;
                 }
@@ -169,6 +171,12 @@ async fn spawn_turn_run(
         let prompt = match admit(&st, session, admission, &turn).await {
             Ok(Some(prompt)) => prompt,
             result => {
+                drop(restore_lease);
+                drop(run);
+                #[cfg(test)]
+                if let Some(hook) = &st.admission_reply_hook {
+                    hook();
+                }
                 let _ = admitted.send(result.map(|_| false));
                 return;
             }
@@ -606,4 +614,62 @@ async fn cancel_turn(
         info.finish = pb::FinishReason::Cancelled as i32;
     }
     Ok(Json(info))
+}
+
+
+#[cfg(test)]
+mod admission_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use hya_core::{AgentCatalog, AgentSpec, CreateSession, EventBus, RuntimeRegistry, SessionEngine};
+    use hya_proto::{AgentName, ModelRef};
+    use hya_provider::ProviderRouter;
+    use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+
+    #[tokio::test]
+    async fn o6_empty_and_failed_restores_release_both_reservations_before_reply() {
+        let catalog = hya_bundle::BundleCatalog::from_prepared(&[]).unwrap();
+        let runtime = RuntimeRegistry::from_snapshot(
+            ToolRegistry::from_tool_families(&[]).snapshot(),
+            Arc::new(AgentCatalog::new(Arc::new(catalog)).unwrap()),
+        );
+        let (permission, _) = PermissionPlane::new(PermissionRules::default());
+        let engine = Arc::new(SessionEngine::new(
+            hya_store::SessionStore::connect_memory().await.unwrap(),
+            Arc::new(ProviderRouter::new()), Arc::new(runtime), permission, EventBus::default(),
+        ));
+        let agent = Arc::new(AgentSpec {
+            name: AgentName::new("hya-main"), model: ModelRef::new("hya/offline"),
+            workdir: std::env::temp_dir(), system_prompt: String::new(), reasoning: None,
+        });
+        engine.store().claim_runtime_owner(engine.runtime_owner()).unwrap();
+        let app = crate::AppState::new(engine.clone(), agent.clone());
+        let mut st = ServerState::new(app.clone());
+        let session = engine.create(CreateSession {
+            parent: None, agent: agent.name.clone(), model: agent.model.clone(),
+            workdir: agent.workdir.to_string_lossy().into_owned(), project: None,
+            kind: hya_proto::SessionKind::Project,
+        }).await.unwrap();
+        for fail in [false, true] {
+            let run = st.start_run(session).unwrap();
+            if fail {
+                engine.delete_session(session).await.unwrap();
+            }
+            st.admission_reply_hook = Some(Arc::new({
+                let engine = engine.clone();
+                let runs = st.runs.clone();
+                move || {
+                    assert!(!engine.turn_active(session), "reply retained the restore lease");
+                    assert!(!runs.is_busy(session), "reply retained the server run guard");
+                }
+            }));
+            let result = spawn_turn_run(&st, session, run, PreparedTurn {
+                agent: (*agent).clone(), guidance: None, external_dirs: Vec::new(), explicit_model: None,
+            }, Admission::Restore).await;
+            if fail { assert!(result.is_err()); } else {
+                assert!(matches!(result, Ok(false)), "{}", result.err().map(|e| e.message).unwrap_or_default());
+            }
+        }
+        app.shutdown().await;
+    }
 }
