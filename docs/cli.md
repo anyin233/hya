@@ -355,6 +355,16 @@ installed|replaced <BUNDLE_ID> <VERSION> scope=project path=<DIR>
 unchanged <BUNDLE_ID> <VERSION> scope=<user|project>
 ```
 
+`hya bundle refresh` publishes edited bundles and `config.yml` files in the
+running backend for `--db` (the usual database default applies), including the
+current directory's Project. For example, after editing
+`.hya/bundles/acme__tools/config.yml`, run `hya bundle refresh`; the next turn
+uses the refreshed generation. It takes no subcommand flags and calls
+`POST /v1/bundles:refresh` with `{directory: <current directory>}`. Success prints
+`refreshed bundles: generation=<N>`; any response `errors[]` fails the command.
+With no running daemon it prints `no backend runs for <db>; nothing to refresh`
+and exits 0 without starting one. See the [refresh contract](bundle-runtime.md).
+
 `remove` prints `removed <BUNDLE_ID> scope=user generation=<N>` or
 `removed <BUNDLE_ID> scope=project path=<DIR>`.
 
