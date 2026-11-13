@@ -1193,7 +1193,6 @@ async fn drive_loop_stage(
                 ),
             ),
             route: resolved_worker.route.clone(),
-            cancel: cancel.clone(),
             first: tokio::sync::Mutex::new(Some(first_report.output.clone())),
             latest_output: tokio::sync::Mutex::new(first_report.output.clone()),
             guidance: Arc::from(system_context.to_string()),
@@ -1212,7 +1211,6 @@ async fn drive_loop_stage(
         verifier: resolved_verifier,
         until: verification_condition.to_string(),
         label: format!("Workflow {workflow_name} / {}", stage.id()),
-        cancel: cancel.clone(),
         guidance: Arc::from(system_context.to_string()),
         actor_claim,
         durable_run,
@@ -1229,7 +1227,7 @@ async fn drive_loop_stage(
             &executor,
             &gate,
             format!("{directive}\nContinue working toward the verified condition."),
-            cancel.clone(),
+            cancel,
         )
         .await?;
 
@@ -1275,7 +1273,6 @@ struct LoopWorkerExecutor {
     supervisor: Arc<ResidentSupervisor>,
     worker: ResidentActor,
     route: Option<WorkflowModelRoute>,
-    cancel: CancellationToken,
     first: tokio::sync::Mutex<Option<String>>,
     latest_output: tokio::sync::Mutex<String>,
     guidance: Arc<str>,
@@ -1297,9 +1294,9 @@ impl IterationExecutor for LoopWorkerExecutor {
     async fn run_iteration(
         &self,
         directive: &str,
-        _cancel: &CancellationToken,
+        cancel: &CancellationToken,
     ) -> Result<String, CoreError> {
-        if self.cancel.is_cancelled() {
+        if cancel.is_cancelled() {
             return Err(CoreError::Cancelled);
         }
         if let Some(first) = self.first.lock().await.take() {
@@ -1348,7 +1345,7 @@ impl IterationExecutor for LoopWorkerExecutor {
             self.guidance.clone(),
             route,
             self.actor_claim.as_ref(),
-            &self.cancel,
+            cancel,
         )
         .await?;
         *self.latest_output.lock().await = text.clone();
@@ -1366,7 +1363,6 @@ struct VerifierGate {
     verifier: ResolvedAgent,
     until: String,
     label: String,
-    cancel: CancellationToken,
     guidance: Arc<str>,
     actor_claim: Option<ActorClaim>,
     durable_run: Option<WorkflowRunId>,
@@ -1380,7 +1376,7 @@ impl IterationGate for VerifierGate {
     async fn judge(
         &self,
         transcript: &str,
-        _cancel: &CancellationToken,
+        cancel: &CancellationToken,
     ) -> Result<GateOutcome, CoreError> {
         let directive = format!(
             "You are an independent verifier with no stake in the work. Judge ONLY \
@@ -1391,7 +1387,7 @@ impl IterationGate for VerifierGate {
             self.until,
             render_transcript_bounded(transcript)
         );
-        if self.cancel.is_cancelled() {
+        if cancel.is_cancelled() {
             return Err(CoreError::Cancelled);
         }
         let (session, handle, member) = self
@@ -1466,7 +1462,7 @@ impl IterationGate for VerifierGate {
                 self.guidance.clone(),
                 route,
                 self.actor_claim.as_ref(),
-                &self.cancel,
+                cancel,
             )
             .await
         }

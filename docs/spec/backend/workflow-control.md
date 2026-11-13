@@ -195,6 +195,8 @@ Parked registration returns the committed identity after episode installation,
 before initializer hooks finish. Its episode still completes initialization
 before any turn. This lets the controller cancel an activation while a hook is
 blocked. Ordinary task registration retains its initialization wait. The
+iteration driver's cancellation parameter is the authority for each worker
+iteration and verifier judgment; neither controller stores a second token. The
 iteration driver does not race and drop a pending Workflow judgment: worker and
 verifier activation controllers observe the run token and finish their owned
 cleanup before returning. No extra executor task or wire API is introduced.
