@@ -914,13 +914,13 @@ impl WorkflowControl {
         session: SessionId,
         captured_binding: Option<TurnBinding>,
     ) -> Result<WorkflowProjection, WorkflowControlError> {
-        let projection = self.engine.read_projection(session).await?;
+        let projection = self.engine.read_projection_shared(session).await?;
         if projection.session.workdir.is_none() || projection.session.id.is_none() {
             return Err(WorkflowControlError::SessionNotFound { session });
         }
         let (workdir, binding) = self.session_binding(session, captured_binding).await?;
         let catalog = self.catalog(&workdir, &binding).await?;
-        let mut state = projection.session.workflow.unwrap_or_default();
+        let mut state = projection.session.workflow.clone().unwrap_or_default();
         decorate_projection(&catalog, &mut state);
         Ok(state)
     }
@@ -954,7 +954,7 @@ impl WorkflowControl {
             requested_run,
             cancel,
         } = request;
-        let projection = self.engine.read_projection(session).await?;
+        let projection = self.engine.read_projection_shared(session).await?;
         if projection.session.workdir.is_none() {
             return Err(WorkflowControlError::SessionNotFound { session });
         }
@@ -1331,8 +1331,8 @@ impl WorkflowControl {
 
     /// Resolve the durable Session work directory used for discovery.
     async fn session_workdir(&self, session: SessionId) -> Result<PathBuf, WorkflowControlError> {
-        let projection = self.engine.read_projection(session).await?;
-        match (projection.session.id, projection.session.workdir) {
+        let projection = self.engine.read_projection_shared(session).await?;
+        match (projection.session.id, projection.session.workdir.as_deref()) {
             (Some(_), Some(workdir)) => Ok(PathBuf::from(workdir)),
             _ => Err(WorkflowControlError::SessionNotFound { session }),
         }

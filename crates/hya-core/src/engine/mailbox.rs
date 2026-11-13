@@ -69,7 +69,7 @@ impl SessionEngine {
         root: SessionId,
         actor_claim: Option<&hya_store::ActorClaim>,
     ) -> Result<String, CoreError> {
-        let projection = self.read_projection(root).await?;
+        let projection = self.read_projection_shared(root).await?;
         if let Some(entry) = projection
             .team
             .roster
@@ -110,7 +110,7 @@ impl SessionEngine {
         root: SessionId,
         session: SessionId,
     ) -> Result<String, CoreError> {
-        let projection = self.read_projection(root).await?;
+        let projection = self.read_projection_shared(root).await?;
         if let Some(entry) = projection
             .team
             .roster
@@ -141,7 +141,7 @@ impl SessionEngine {
     /// still reachable, whereas a rejected registration would strand it.
     pub(crate) async fn parent_agent_path(&self, root: SessionId, session: SessionId) -> String {
         let fallback = scope::ROOT_HANDLE.to_string();
-        let Ok(projection) = self.read_projection(session).await else {
+        let Ok(projection) = self.read_projection_shared(session).await else {
             return fallback;
         };
         let Some(parent) = projection.session.parent else {
@@ -212,7 +212,7 @@ impl SessionEngine {
     ) -> Result<MailReceipt, CoreError> {
         let root = self.team_root(from_session).await?;
         let from = self.resolve_handle(root, from_session).await?;
-        let policy_projection = self.read_projection(root).await?;
+        let policy_projection = self.read_projection_shared(root).await?;
         let channel = match to {
             MailEndpoint::Channel(channel) => channel.trim().to_string(),
             MailEndpoint::Handle(handle) => policy_projection
@@ -328,7 +328,7 @@ impl SessionEngine {
         let from = self.resolve_handle(root, from_session).await?;
         // ADR-0016: broadcast rides the unit's minted group channel
         // (`announce-{8}`, leader-only posting).
-        let projection = self.read_projection(root).await?;
+        let projection = self.read_projection_shared(root).await?;
         let Some(group) = projection
             .team
             .channels
@@ -373,7 +373,7 @@ impl SessionEngine {
     ) -> Result<MailReceipt, CoreError> {
         let root = self.team_root(from_session).await?;
         let from = self.resolve_handle(root, from_session).await?;
-        let projection = self.read_projection(root).await?;
+        let projection = self.read_projection_shared(root).await?;
         let leads_unit = projection.team.channels.iter().any(|(_, channel)| {
             channel.kind == hya_proto::ChannelKind::Group
                 && channel.unit.as_deref() == Some(from.as_str())
@@ -416,7 +416,7 @@ impl SessionEngine {
     ) -> Result<Vec<hya_tool::ChannelRow>, CoreError> {
         let root = self.team_root(session).await?;
         let handle = self.resolve_handle(root, session).await?;
-        let projection = self.read_projection(root).await?;
+        let projection = self.read_projection_shared(root).await?;
         let cursor = projection
             .team
             .roster
@@ -482,7 +482,7 @@ impl SessionEngine {
         let handle = self.resolve_handle(root, session).await?;
         // Taken before the snapshot below: work counted later stays owed.
         let mark = self.mail_mark(session);
-        let projection = self.read_projection(root).await?;
+        let projection = self.read_projection_shared(root).await?;
         // Models write `##X`, `#X`, or whitespace-padded ids when reading mail
         // history. Normalize (trim + strip every leading `#`; case stays
         // exact) and echo the correction so the right spelling is learned
@@ -581,7 +581,7 @@ impl SessionEngine {
     ) -> Result<Vec<hya_tool::MemberStatusRow>, CoreError> {
         let root = self.team_root(session).await?;
         let handle = self.resolve_handle(root, session).await?;
-        let projection = self.read_projection(root).await?;
+        let projection = self.read_projection_shared(root).await?;
         let now = u64::try_from(hya_proto::now_millis()).unwrap_or(0);
         let mut rows = Vec::new();
         for (path, entry) in &projection.team.roster {
@@ -609,14 +609,14 @@ impl SessionEngine {
     ) -> Result<Vec<hya_tool::ArchivedAgentRow>, CoreError> {
         let root = self.team_root(session).await?;
         let handle = self.resolve_handle(root, session).await?;
-        let projection = self.read_projection(root).await?;
+        let projection = self.read_projection_shared(root).await?;
         let needle = query.trim().to_ascii_lowercase();
         let mut rows = Vec::new();
         for (path, entry) in &projection.team.archived {
             if hya_proto::scope::parent_path(path) != Some(handle.as_str()) {
                 continue;
             }
-            let child_projection = self.read_projection(entry.session).await?;
+            let child_projection = self.read_projection_shared(entry.session).await?;
             let handoff = child_projection.session.handoff.clone();
             let (goal, pending, degraded) = match &handoff {
                 Some(handoff) => (

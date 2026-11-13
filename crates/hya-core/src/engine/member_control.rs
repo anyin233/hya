@@ -52,7 +52,7 @@ impl SessionEngine {
             return Err(CoreError::Invalid("a steer message needs text".to_string()));
         }
         let root = self.subagent_root(child).await?;
-        let projection = self.read_projection(root).await?;
+        let projection = self.read_projection_shared(root).await?;
         let target =
             resolve_member_target(&projection, root, scope::ROOT_HANDLE, &child.to_string())?;
         let parent = scope::parent_path(&target.handle).unwrap_or(scope::ROOT_HANDLE);

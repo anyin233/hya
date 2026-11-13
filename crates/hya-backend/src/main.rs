@@ -264,7 +264,7 @@ async fn cmd_exec(
                 printer.flush().context("flush json stream")?;
             } else if turn.is_ok() {
                 let projection = engine
-                    .read_projection(session)
+                    .read_projection_shared(session)
                     .await
                     .context("read projection")?;
                 print!("{}", render_transcript(&projection));

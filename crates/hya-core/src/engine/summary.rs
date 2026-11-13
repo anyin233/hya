@@ -18,7 +18,7 @@ impl SessionEngine {
             .begin_turn(session, &tokio_util::sync::CancellationToken::new())
             .await?
             .ok_or(CoreError::Cancelled)?;
-        let projection = self.store.read_projection(session).await?;
+        let projection = self.store.read_projection_shared(session).await?;
         // Empty projection has no session id; fail before workdir/catalog lookup.
         if projection.session.id.is_none() {
             return Err(CoreError::Invalid("session not found".to_string()));
