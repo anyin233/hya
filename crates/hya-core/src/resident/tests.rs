@@ -1830,3 +1830,77 @@ async fn review_r3_revival_keeps_the_preflighted_stage_spec_and_catalog() {
         "revival resolved a preflighted Workflow agent against the live catalog"
     );
 }
+
+#[tokio::test]
+async fn review_r4_root_driver_survives_team_replacement() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let driver = supervisor.root_driver_activity(root).await.unwrap();
+    let previous = supervisor.teams().get(&root).unwrap().clone();
+    for done in previous.kill(Ending::Killed("team budget".into())).await {
+        await_episode(done).await.unwrap();
+    }
+    let replacement = supervisor.team_for(root).await.unwrap();
+    {
+        let mut state = replacement.lock();
+        state.work_seq += 1;
+        replacement.maybe_fire_quiescence(&mut state);
+        assert!(
+            !state.residents[&root].synth_pending,
+            "replacement team synthesized during a root driver"
+        );
+    }
+    drop(driver);
+    drop(replacement);
+    supervisor
+        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
+        .await;
+}
+
+#[tokio::test]
+async fn review_r4_task_registration_preserves_headless_root_ownership() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let driver = supervisor.root_driver_activity(root).await.unwrap();
+    let main = supervisor.resolve_main_activation(root).await.unwrap();
+    let agent = AgentSpec {
+        name: AgentName::new("hya-scout"),
+        model: ModelRef::new("hya/offline"),
+        workdir: ".".into(),
+        system_prompt: String::new(),
+        reasoning: None,
+    };
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
+    supervisor
+        .spawn_residents_typed(
+            root,
+            vec![TaskResidentSpawn {
+                agent,
+                runtime: (binding, Arc::from([]), resources, None),
+                directive: "work".into(),
+                task: TaskSpawnOrigin {
+                    subagent_type: "hya-scout".into(),
+                    description: "work".into(),
+                    tool_call: None,
+                },
+                guidance: None,
+            }],
+            main,
+            None,
+        )
+        .await
+        .unwrap();
+    let team = supervisor.teams().get(&root).unwrap().clone();
+    let autonomous = team.lock().main_autonomous;
+    drop(driver);
+    supervisor
+        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
+        .await;
+    assert!(
+        !autonomous,
+        "task registration transferred headless continuation ownership to the supervisor"
+    );
+}

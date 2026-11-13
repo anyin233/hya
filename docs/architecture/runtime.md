@@ -1631,3 +1631,8 @@ runtime (binding, reachable agents, resources and sidecar factory). Reviving a
 reported worker reuses those exact inputs, preserving its stage prompt and
 reasoning even if the live catalog changed. Ordinary mail-driven revival keeps
 resolving the current runtime.
+
+Root-driver suppression is per root and survives team replacement after a team
+budget kill. The guard covers the run and its cleanup. Task registration during
+a root driver cannot enable autonomous main turns; headless `hya exec` keeps
+root continuation ownership in `run_lead` after the guard drops.
