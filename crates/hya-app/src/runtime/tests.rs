@@ -2,6 +2,8 @@
 
 use crate::resident_fixture::{ResidentTurn, run_residents};
 use hya_core::CreateSession;
+use hya_core::resident::ResolvedSpawnMember;
+use hya_tool::SpawnMember;
 
 /// Test shim: wrap an installed-bundle catalog as an [`AgentCatalog`] over
 /// the compiled-in built-ins.

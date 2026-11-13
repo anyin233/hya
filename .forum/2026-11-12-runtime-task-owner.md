@@ -72,3 +72,14 @@ tasks: making every owner join I/O there would deadlock BuiltSessionEngine,
 which stops sources after joining composition handlers. AppState has no
 connection I/O. The standalone regression keeps a connection task pending and
 checks shutdown cannot complete before that task exits.
+
+## Where are spawn policy and resident reconstruction owned?
+
+Core's `actor/spawn.rs` owns caller target authorization, dispatch model/effort
+selection, main activation resolution and the registration/reply lifetime. App
+passes the captured configuration and its tracked task set. Shutdown still joins
+that task set before resident drain. `actor/recovery.rs` fences claims before
+engine construction, then reconstructs and stages the exact recorded agents
+after composition; it never starts their episodes. Restore admission and
+`start_recovered` retain their separate ordering boundary. The standalone
+`spawn_team_supervisor` still serves `xtask lifecycle-bench`, besides app tests.

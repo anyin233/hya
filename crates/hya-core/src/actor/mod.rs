@@ -669,7 +669,14 @@ mod tests;
 
 mod ending;
 mod episode;
+mod recovery;
+mod spawn;
 mod supervisor;
+pub use recovery::{ResidentRecoveryError, recover_resident_claims};
+pub use spawn::{
+    ResolveSpawnMemberCtx, ResolvedSpawnMember, resolve_main_activation_context,
+    resolve_spawn_member,
+};
 mod team;
 
 use ending::commit_episode_ending;
