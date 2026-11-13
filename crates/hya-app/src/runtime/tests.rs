@@ -100,11 +100,6 @@ impl Provider for CountingDevProvider {
 }
 
 #[test]
-fn resident_owner_run_id_is_stable_for_the_process() {
-    assert_eq!(process_owner_run_id(), process_owner_run_id());
-}
-
-#[test]
 fn builtin_agent_catalog_retains_semantic_identity_with_first_party() {
     let _env = StableEnvGuard::new();
     let catalog = builtin_agent_catalog().expect("builtin agent catalog must build");
@@ -780,7 +775,6 @@ async fn build_session_engine_interrupts_prior_workflow_owner() {
     let session = SessionId::new();
     let run = hya_proto::WorkflowRunId::new();
     let prior_owner = OwnerRunId::new();
-    assert_ne!(prior_owner, process_owner_run_id());
     store
         .append_event(
             session,
@@ -922,7 +916,7 @@ flowchart TD
         .for_session_with_agents(lead, agents);
     let tasks = RuntimeTaskOwner::new();
     let stop = tasks.stop.clone();
-    let owner = process_owner_run_id();
+    let owner = OwnerRunId::new();
     let resident_supervisor = ResidentSupervisor::start_with_owner(Arc::clone(&engine), owner);
     let control = crate::WorkflowControl::new_with_routing(
         Arc::clone(&engine),
@@ -6991,4 +6985,89 @@ impl SidecarHandle for NotifySidecarHandle {
     fn hook_dispatcher(&self) -> Option<Arc<dyn hya_core::hooks::HookDispatcher>> {
         self.inner.hook_dispatcher()
     }
+}
+
+#[tokio::test]
+async fn each_engine_build_owns_the_store_until_shutdown_and_recovers_on_rebuild() {
+    let _env = StableEnvGuard::new();
+    let store = SessionStore::connect_memory().await.unwrap();
+    let build = || {
+        let store = store.clone();
+        async move {
+            let (router, model) = offline_router(None);
+            let agent = agent_with_model(&model, None);
+            build_session_engine_pure(
+                store,
+                router,
+                &agent,
+                BTreeMap::new(),
+                Vec::new(),
+                (
+                    WebSearchConfig::default(),
+                    InvocationPolicy::default(),
+                    config::EngineSettings::default(),
+                ),
+            )
+            .await
+        }
+    };
+    let mut first = build().await.unwrap();
+    let first_owner = first.engine().runtime_owner();
+    let error = match build().await {
+        Ok(mut second) => {
+            second.shutdown().await.unwrap();
+            first.shutdown().await.unwrap();
+            panic!("a second live engine was accepted on the same store");
+        }
+        Err(error) => error,
+    };
+    assert!(
+        matches!(
+            error.downcast_ref::<hya_store::StoreError>(),
+            Some(hya_store::StoreError::RuntimeOwnerBusy)
+        ),
+        "{error:#}"
+    );
+    let session = SessionId::new();
+    let run = hya_proto::WorkflowRunId::new();
+    store
+        .append_event(
+            session,
+            &Event::WorkflowRunStarted {
+                session,
+                run,
+                workflow: WorkflowIdentity {
+                    source: hya_proto::WorkflowSourceId::new("test:in-process-rebuild"),
+                    name: "rebuild".into(),
+                    revision: WorkflowRevision::from_bytes([1; 32]),
+                },
+                request_hash: "inputs".into(),
+                owner: first_owner,
+                stages: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    first.shutdown().await.unwrap();
+    let mut next = build().await.unwrap();
+    first.shutdown().await.unwrap();
+    assert!(matches!(
+        store.claim_runtime_owner(OwnerRunId::new()),
+        Err(hya_store::StoreError::RuntimeOwnerBusy)
+    ));
+    assert_ne!(next.engine().runtime_owner(), first_owner);
+    let projection = store.read_projection(session).await.unwrap();
+    assert_eq!(
+        projection
+            .session
+            .workflow
+            .as_ref()
+            .unwrap()
+            .run
+            .as_ref()
+            .unwrap()
+            .status,
+        hya_proto::WorkflowRunStatus::Interrupted
+    );
+    next.shutdown().await.unwrap();
 }

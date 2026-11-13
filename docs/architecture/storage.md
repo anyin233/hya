@@ -733,6 +733,12 @@ optional `relay` and `allowHosts` fields (see the CLI Backend daemon section).
 `SessionStore::connect_runtime(path: &str) -> Result<SessionStore, StoreError>`
 reserves that same lock before SQLite initialization and transfers it to the
 first `claim_runtime_owner(owner: OwnerRunId) -> Result<(), StoreError>` call.
+Each app engine build uses a fresh `OwnerRunId`. A second build sharing an
+already-owned store is refused before recovery; `BuiltSessionEngine::shutdown`
+releases its owner after draining turns, residents and composition tasks. A later
+build can then recover Workflow runs left by the earlier build in the same process.
+Callers must await shutdown before rebuilding; dropping only requests cancellation.
+
 Every file-backed runtime writer uses this entry point, including `exec`,
 `workflow use|run|state`, `sessions archive|unarchive`, and `serve`, so concurrent
 initializers cannot race on SQLite's first WAL setup. A conflicting reservation
