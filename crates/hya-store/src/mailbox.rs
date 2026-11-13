@@ -426,12 +426,7 @@ impl SessionStore {
             });
             let unread: Vec<_> = projection
                 .team
-                .inboxes
-                .get(handle)
-                .into_iter()
-                .flatten()
-                .skip(usize::try_from(read_through).unwrap_or(usize::MAX))
-                .filter(|mail| mail.from != handle)
+                .unread_incoming_mail(handle, read_through)
                 .collect();
             if !unread.is_empty() {
                 let channels: std::collections::BTreeSet<_> = unread

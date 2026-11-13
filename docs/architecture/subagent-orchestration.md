@@ -72,6 +72,14 @@ transaction. Main synthesis also owns a user prompt. See
 store types and examples. A failed commit leaves both prompt and consumption
 absent; policy-denied mail alone never starts a turn.
 
+Channel histories retain both participants' posts, but unread work excludes the
+reader's own posts. For example, sending a task directive on one DM does not
+increase `list_channel` unread counts, hold `hya exec` open after the child
+archives, or retain a synthesis after all incoming results were read.
+`TeamProjection::unread_incoming_mail(handle: &str, through: u64)` returns
+incoming `&MailMessage` entries after the raw inbox cursor. Cursors still count
+all inbox positions, including outgoing copies; no event or tool schema changes.
+
 ## 2. Unified spawn admission
 
 Every `task` batch resolves all members, then registers them in one transaction.

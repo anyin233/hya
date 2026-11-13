@@ -631,6 +631,81 @@ async fn consumed_results_do_not_repeat_synthesis(via_wait: bool, late_mail: boo
     assert_eq!(max_open_assistant(&events, root), 1);
 }
 
+/// An outgoing directive on a different DM is history, not unseen work.
+#[tokio::test]
+async fn reading_incoming_mail_ignores_an_outgoing_directive_on_another_dm() {
+    let (engine, agent, provider) = engine_with_gate().await;
+    let root = make_session(&engine, None, "hya-main").await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let lease = engine.try_begin_turn(root).unwrap();
+    register_main(&supervisor, &engine, &agent, root).await;
+    let mut children = Vec::new();
+    for handle in ["scout", "other"] {
+        let child = make_session(&engine, Some(root), "hya-task").await;
+        supervisor
+            .register_existing_resident(root, child, handle.into(), agent.clone(), None)
+            .await
+            .unwrap();
+        children.push(child);
+    }
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::Channel(
+                engine
+                    .read_projection(root)
+                    .await
+                    .unwrap()
+                    .team
+                    .channels
+                    .iter()
+                    .find(|(_, channel)| {
+                        channel.kind == hya_proto::ChannelKind::Dm
+                            && channel.members.contains("main/other")
+                    })
+                    .unwrap()
+                    .0
+                    .clone(),
+            ),
+            MailKind::Message,
+            "outgoing directive".into(),
+        )
+        .await
+        .unwrap();
+    engine
+        .mail_send(
+            children[0],
+            MailEndpoint::Handle("^parent".into()),
+            MailKind::Message,
+            "findings ready".into(),
+        )
+        .await
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while hya_core::TurnBoundaryObserver::mail_mark(supervisor.as_ref(), root).unwrap() < 2 {
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::task::yield_now().await;
+    }
+    // Both notifications have counted as work before this read's snapshot.
+    engine
+        .read_channel_history(root, "scout", None)
+        .await
+        .unwrap();
+    drop(lease);
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(300);
+    while tokio::time::Instant::now() < deadline {
+        assert!(
+            !has_quiesced_notice(&engine, root).await,
+            "outgoing mail must not retain a redundant synthesis"
+        );
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(provider.streams_for(root), 0);
+    supervisor
+        .drain(hya_proto::FinishCause::Shutdown, Duration::from_secs(2))
+        .await;
+}
+
 /// Reading one channel commits the whole inbox cursor, but it acknowledges
 /// only what it showed: a report that arrived on another channel keeps the
 /// lead's synthesis, so the lead still hears of it.
