@@ -311,7 +311,6 @@ pub(crate) async fn serve_until(
         ..
     } = prepared;
     let stop_request = lock.as_ref().map(db_lock::DbLock::stop_request_path);
-    let engine = built.engine();
     let drain_runtime = built.drain(hya_proto::FinishCause::Shutdown);
     let stopping = tokio_util::sync::CancellationToken::new();
     let extra_served = extra.map(|listener| {
@@ -343,11 +342,8 @@ pub(crate) async fn serve_until(
         task.await.context("join extra gRPC listener")?;
     }
     relay.shutdown().await;
-    let shutdown_result = built.shutdown().await.context("shutdown spawn supervisor");
     drop(lock);
-    engine
-        .store()
-        .release_runtime_owner(engine.runtime_owner())?;
+    let shutdown_result = built.shutdown().await.context("shutdown spawn supervisor");
     drop(built);
     drain_result.await.context("receive drain result")??;
     shutdown_result
