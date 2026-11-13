@@ -1534,8 +1534,13 @@ Workflow failures use the shared stable error table, preserving structured
 | `WORKFLOW_NOT_FOUND`, `WORKFLOW_NOT_SELECTED`, `session_not_found` | 404 |
 | `WORKFLOW_UNAUTHORIZED` | 403 |
 | `WORKFLOW_BUSY`, `WORKFLOW_OPERATION_CONFLICT`, `WORKFLOW_STALE_REVISION` | 409 |
-| `WORKFLOW_RUNTIME_UNAVAILABLE` | 503 |
+| `WORKFLOW_RUNTIME_UNAVAILABLE`, `WORKFLOW_OVERLOADED` | 503 |
 
 For example, a malformed `/workflow` command returns `WORKFLOW_SYNTAX` with
 HTTP 400. gRPC maps these respectively to InvalidArgument, NotFound,
 PermissionDenied, FailedPrecondition, or Unavailable through that same table.
+
+`WORKFLOW_OVERLOADED` maps to gRPC `ResourceExhausted` and tool
+`Overloaded`. It includes registration/revival capacity exhaustion and
+preflight refusal caused by current occupancy. A graph that exceeds the
+configured budget even on an empty root remains `WORKFLOW_INVALID_SOURCE`.

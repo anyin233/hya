@@ -78,6 +78,7 @@ WorkflowControl::cancel(session)
 | Unauthorized Stage or verifier Agent | `WORKFLOW_UNAUTHORIZED` | 403 |
 | Busy Session, stale revision, or changed immutable operation request | `WORKFLOW_BUSY` / `WORKFLOW_STALE_REVISION` / `WORKFLOW_OPERATION_CONFLICT` | 409 |
 | Runtime fingerprint unavailable | `WORKFLOW_RUNTIME_UNAVAILABLE` | 503 |
+| Workflow live capacity exhausted | `WORKFLOW_OVERLOADED` | 503 |
 | Store or internal failure | `WORKFLOW_INTERNAL` | 500 |
 | Another live process owns the database | `RUNTIME_OWNER_BUSY` | startup failure |
 | Recovery without the matching claim | `RUNTIME_OWNER_CLAIM_REQUIRED` | startup failure |
@@ -164,3 +165,22 @@ All public `WorkflowControl` entry points (`execute`, `list`, `decorate`) take
 a runtime tracker token before checking cancellation. Once shutdown returns,
 they reject new work with `WORKFLOW_RUNTIME_UNAVAILABLE`. Work admitted before
 shutdown remains tracked through any Started run handoff and terminal write.
+
+### Stage capacity and unsuccessful run cleanup
+
+Workflow preflight does not reserve slots. A graph whose worst-case activation
+count exceeds `subagents.per_run_budget: u64` is invalid source. When that graph
+fits but current live claims leave too few slots, preflight returns
+`WORKFLOW_OVERLOADED`. Registration and revival recheck capacity transactionally;
+mid-run refusals use the same code (HTTP 503, gRPC `ResourceExhausted`,
+`ToolError::Overloaded`). For example, with budget 2, a two-Stage graph can pass
+preflight and then be refused if a concurrent `task` occupies one slot.
+
+On an error, cancellation, or failed run, the controller waits for the normal
+ending of every actor it registered, including parked actors in a partially
+registered level. Claims belonging to concurrent tasks are untouched. Successful
+runs retain their parked actors for subsequent activation.
+
+Loop continuations still use the transient executor. The controller ends their
+first resident episode before that executor reuses the child Session; M4-10
+will replace this handoff with repeated episode activations.

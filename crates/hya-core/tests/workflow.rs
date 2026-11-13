@@ -2191,3 +2191,235 @@ flowchart TD
         pings
     );
 }
+
+/// Holds the first registration after commit, allowing a real concurrent task
+/// to consume capacity before the next Stage registration.
+struct RegistrationGate {
+    first: AtomicBool,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl hya_core::HookDispatcher for RegistrationGate {
+    fn dispatch_event(&self, _: &hya_proto::Envelope) {}
+    async fn agent_spawn(&self, _: hya_core::AgentSpawnInput) {
+        if self.first.swap(false, Ordering::SeqCst) {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
+    }
+    async fn command_execute_before(
+        &self,
+        input: hya_core::CommandExecuteBeforeInput,
+    ) -> hya_core::CommandExecuteBeforeOutcome {
+        hya_core::CommandExecuteBeforeOutcome::Continue { text: input.text }
+    }
+    async fn text_complete(
+        &self,
+        input: hya_core::TextCompleteInput,
+    ) -> hya_core::TextCompleteOutcome {
+        hya_core::TextCompleteOutcome::Continue { text: input.text }
+    }
+    async fn message_user_before(
+        &self,
+        input: hya_core::MessageUserBeforeInput,
+    ) -> hya_core::MessageUserBeforeOutcome {
+        hya_core::MessageUserBeforeOutcome::Continue { text: input.text }
+    }
+    async fn chat_params(&self, input: hya_core::ChatParamsInput) -> hya_core::ChatParamsOutcome {
+        hya_core::ChatParamsOutcome::Continue {
+            request: input.request,
+        }
+    }
+    async fn tool_execute_before(
+        &self,
+        input: hya_core::ToolExecuteBeforeInput,
+    ) -> hya_core::ToolExecuteBeforeOutcome {
+        hya_core::ToolExecuteBeforeOutcome::Continue { input: input.input }
+    }
+    async fn tool_execute_after(
+        &self,
+        input: hya_core::ToolExecuteAfterInput,
+    ) -> hya_core::ToolExecuteAfterOutcome {
+        hya_core::ToolExecuteAfterOutcome::Continue {
+            result: input.result,
+        }
+    }
+}
+
+#[tokio::test]
+async fn w1_partial_registration_overload_releases_every_workflow_claim() {
+    for named in [false, true] {
+        let actors = if named {
+            ["    actor: first\n", "    actor: second\n"]
+        } else {
+            ["", ""]
+        };
+        let workflow = compile_workflow(
+            "partial.hya.md",
+            &format!(
+                r#"---
+kind: Workflow
+name: partial
+description: Compete with a task between registrations.
+nodes:
+  first:
+    agent: builder
+{}    directive: First.
+  second:
+    agent: builder
+{}    directive: Second.
+---
+flowchart TD
+  first
+  second
+"#,
+                actors[0], actors[1]
+            ),
+        );
+        let gate = Arc::new(RegistrationGate {
+            first: AtomicBool::new(true),
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let engine = engine_with_limits(
+            RecordingProvider::new(),
+            SubagentLimits {
+                per_run_budget: 2,
+                ..SubagentLimits::default()
+            },
+        )
+        .await;
+        let engine = Arc::new((*engine).clone().with_hooks(gate.clone()));
+        let lead = start_lead(&engine).await;
+        let root_turn = engine.try_begin_turn(lead).unwrap();
+        let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
+        let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
+        let base = engine
+            .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
+            .unwrap();
+        let prepared = hya_core::prepare_workflow_run(
+            engine.clone(),
+            lead,
+            &workflow,
+            hya_core::WorkflowRunContext {
+                binding: binding.clone(),
+                caller: "hya-main".into(),
+                base_agent: base.clone(),
+                inputs: BTreeMap::new(),
+                resident_supervisor: Some(supervisor.clone()),
+                routing: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+        let run = tokio::spawn(prepared.execute(CancellationToken::new()));
+        tokio::time::timeout(std::time::Duration::from_secs(3), gate.entered.notified())
+            .await
+            .unwrap();
+        let (agent, runtime) = engine
+            .resolve_resident_runtime(binding, &base, &AgentName::new("builder"))
+            .unwrap();
+        let (task, handle) = supervisor
+            .spawn_resident_typed(
+                lead,
+                agent,
+                runtime,
+                "Concurrent task.".into(),
+                hya_core::TaskSpawnOrigin::default(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        gate.release.notify_one();
+        let error = tokio::time::timeout(std::time::Duration::from_secs(3), run)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                hya_core::WorkflowError::Engine(hya_core::CoreError::Store(
+                    hya_store::StoreError::CapacityExceeded { .. }
+                ))
+            ),
+            "{error}"
+        );
+        let live = engine.store().active_actor_ids().await.unwrap();
+        assert_eq!(
+            live,
+            vec![task],
+            "run must release every claim it registered (named={named})"
+        );
+        let root = engine.read_projection(lead).await.unwrap();
+        assert_eq!(root.team.archived.len(), 1);
+        supervisor.end_member(lead, &handle).await.unwrap();
+        assert_eq!(engine.store().live_member_count(lead).await.unwrap(), 0);
+        drop(root_turn);
+        supervisor
+            .drain(hya_proto::FinishCause::Shutdown, hya_core::DRAIN_DEADLINE)
+            .await;
+    }
+}
+
+#[tokio::test]
+async fn w1_preflight_occupancy_is_typed_capacity_refusal() {
+    let workflow = compile_workflow(
+        "occupancy.hya.md",
+        &TWO_STAGE_WORKFLOW
+            .replace("inputs:\n  target: What to explore.\n", "")
+            .replace("{{input.target}}", "target"),
+    );
+    let engine = engine_with_limits(
+        RecordingProvider::new(),
+        SubagentLimits {
+            per_run_budget: 2,
+            ..SubagentLimits::default()
+        },
+    )
+    .await;
+    let lead = start_lead(&engine).await;
+    let root_turn = engine.try_begin_turn(lead).unwrap();
+    let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
+    let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
+    let base = engine
+        .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
+        .unwrap();
+    let (agent, runtime) = engine
+        .resolve_resident_runtime(binding.clone(), &base, &AgentName::new("builder"))
+        .unwrap();
+    let (_, handle, _) = supervisor
+        .spawn_resident_parked(lead, agent, runtime, "Occupant".into(), None, None)
+        .await
+        .unwrap();
+    let result = hya_core::prepare_workflow_run(
+        engine.clone(),
+        lead,
+        &workflow,
+        hya_core::WorkflowRunContext {
+            binding,
+            caller: "hya-main".into(),
+            base_agent: base,
+            inputs: BTreeMap::new(),
+            resident_supervisor: Some(supervisor.clone()),
+            routing: None,
+        },
+        None,
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Err(hya_core::WorkflowError::Engine(hya_core::CoreError::Store(
+            hya_store::StoreError::CapacityExceeded { .. }
+        )))
+    ));
+    supervisor.end_member(lead, &handle).await.unwrap();
+    drop(root_turn);
+    supervisor
+        .drain(hya_proto::FinishCause::Shutdown, hya_core::DRAIN_DEADLINE)
+        .await;
+}

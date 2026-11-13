@@ -160,6 +160,7 @@ impl ApiError {
             "WORKFLOW_OPERATION_CONFLICT" => Code::WorkflowOperationConflict,
             "WORKFLOW_STALE_REVISION" => Code::WorkflowStaleRevision,
             "WORKFLOW_RUNTIME_UNAVAILABLE" => Code::WorkflowRuntimeUnavailable,
+            "WORKFLOW_OVERLOADED" => Code::WorkflowOverloaded,
             "SESSION_NOT_FOUND" => Code::SessionNotFound,
             _ if status == StatusCode::SERVICE_UNAVAILABLE => Code::Unavailable,
             _ => Code::Internal,
@@ -446,6 +447,7 @@ mod workflow_error_regression {
             ("WORKFLOW_OPERATION_CONFLICT", 409),
             ("WORKFLOW_STALE_REVISION", 409),
             ("WORKFLOW_RUNTIME_UNAVAILABLE", 503),
+            ("WORKFLOW_OVERLOADED", 503),
             ("WORKFLOW_INTERNAL", 500),
         ] {
             let error = ApiError::workflow(crate::WorkflowControlError::new(code, "failure"));
