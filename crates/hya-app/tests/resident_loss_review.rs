@@ -310,7 +310,7 @@ async fn report_after_consumed_progress(failed: bool) {
         .unwrap();
     assert_eq!(
         h.engine.read_projection(h.root).await.unwrap().team.roster["main"].resident_cursor,
-        1
+        2
     );
     let mut requests = h.provider.requests.subscribe();
     child_gate.release();
@@ -492,7 +492,7 @@ async fn f1_empty_steered_wake_with_lost_cached_sidecar_stays_live() {
         projection.team.roster.contains_key(&handle),
         "empty wake failed the episode"
     );
-    assert_eq!(projection.team.roster[&handle].resident_cursor, 1);
+    assert_eq!(projection.team.roster[&handle].resident_cursor, 2);
     assert_eq!(count, 1, "empty follow-up must start no assistant turn");
 }
 

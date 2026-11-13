@@ -392,6 +392,7 @@ async fn registered_session_start_precedes_initial_hook_and_events() {
     let (child, _) = spawn(&supervisor, &engine, &agent, root, None)
         .await
         .unwrap();
+    review_wait_idle(&engine, &supervisor, root, child).await;
     let seen = hooks
         .seen
         .lock()
@@ -716,21 +717,65 @@ async fn armed_child(
     (child, lease)
 }
 
-async fn assert_cancelled_task(engine: &SessionEngine, child: SessionId, cause: FinishCause) {
-    let projection = engine.read_projection(child).await.unwrap();
-    let last = projection.session.messages.last().unwrap();
-    assert_eq!(
-        last.role,
-        Role::Assistant,
-        "ended episode left its initial user directive open"
+#[tokio::test]
+async fn first_directive_and_queued_mail_are_hooked_as_one_wake() {
+    let hooks = Arc::new(Hooks::default());
+    let (engine, supervisor, agent, root) =
+        fixture(SubagentLimits::default(), Some(hooks.clone())).await;
+    let root_turn = engine.try_begin_turn(root).unwrap();
+    let (child, child_turn) = armed_child(&engine, &supervisor, &agent, root).await;
+    engine
+        .mail_send(
+            root,
+            hya_proto::MailEndpoint::Handle("main/worker".into()),
+            hya_proto::MailKind::Message,
+            "do Y too".into(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        hooks.user_texts.lock().unwrap().is_empty(),
+        "registration must not hook the directive"
     );
-    assert_eq!(last.finish, Some(FinishReason::Cancelled));
-    assert_eq!(last.cause, Some(cause));
-    assert!(last.parts.iter().any(|part| matches!(part, hya_proto::PartProjection::Text { text, .. } if text.contains("cancelled"))), "closure must survive the request mapper's empty-assistant filter");
+    drop(child_turn);
+    review_wait_idle(&engine, &supervisor, root, child).await;
+    let texts = hooks.user_texts.lock().unwrap().clone();
+    let wake = "[mail from main] do X\n\n[mail from main] do Y too";
+    assert_eq!(
+        texts.iter().filter(|text| text.as_str() == wake).count(),
+        1,
+        "{texts:?}"
+    );
+    assert!(texts.iter().all(|text| text.contains(wake)), "{texts:?}");
+    drop(root_turn);
+    supervisor
+        .drain(FinishCause::Shutdown, crate::DRAIN_DEADLINE)
+        .await;
+}
+
+async fn assert_pending_directive(engine: &SessionEngine, child: SessionId) {
+    let projection = engine.read_projection(child).await.unwrap();
+    assert!(
+        projection.session.messages.is_empty(),
+        "unstarted mail must not admit a transcript prompt"
+    );
+    let handoff = projection.session.handoff.unwrap();
+    assert!(
+        handoff.doc.contains("1. Goal - [mail from main] do X"),
+        "{}",
+        handoff.doc
+    );
+    assert!(
+        handoff
+            .doc
+            .contains("5. Pending tasks - [mail from main] do X"),
+        "{}",
+        handoff.doc
+    );
 }
 
 #[tokio::test]
-async fn archive_before_first_turn_closes_initial_task_before_revive() {
+async fn archive_before_first_wake_preserves_directive_in_handoff() {
     let hooks = Arc::new(Hooks::default());
     let (engine, supervisor, agent, root) =
         fixture(SubagentLimits::default(), Some(hooks.clone())).await;
@@ -744,7 +789,7 @@ async fn archive_before_first_turn_closes_initial_task_before_revive() {
         }
     );
     result.unwrap();
-    assert_cancelled_task(&engine, child, FinishCause::Archived).await;
+    assert_pending_directive(&engine, child).await;
     let ended_messages = engine
         .read_projection(child)
         .await
@@ -807,12 +852,12 @@ async fn archive_before_first_turn_closes_initial_task_before_revive() {
 }
 
 #[tokio::test]
-async fn stop_before_first_turn_closes_initial_task() {
+async fn stop_before_first_wake_preserves_pending_directive() {
     let (engine, supervisor, agent, root) = fixture(SubagentLimits::default(), None).await;
     let (child, lease) = armed_child(&engine, &supervisor, &agent, root).await;
     supervisor.end_member(root, "main/worker").await.unwrap();
     drop(lease);
-    assert_cancelled_task(&engine, child, FinishCause::Archived).await;
+    assert_pending_directive(&engine, child).await;
 }
 
 struct FailingSidecar;
@@ -828,7 +873,7 @@ impl crate::BoundSidecarFactory for FailingSidecar {
 }
 
 #[tokio::test]
-async fn sidecar_failure_before_first_turn_closes_initial_task() {
+async fn sidecar_failure_before_first_wake_preserves_pending_directive() {
     let (engine, supervisor, agent, root) = fixture(SubagentLimits::default(), None).await;
     let binding = engine.bind_runtime(&agent.workdir).unwrap();
     let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
@@ -861,11 +906,11 @@ async fn sidecar_failure_before_first_turn_closes_initial_task() {
     })
     .await
     .unwrap();
-    assert_cancelled_task(&engine, child, FinishCause::Other).await;
+    assert_pending_directive(&engine, child).await;
 }
 
 #[tokio::test]
-async fn team_turn_budget_kill_before_first_turn_closes_initial_task() {
+async fn team_turn_budget_kill_before_first_wake_preserves_pending_directive() {
     let (engine, supervisor, agent, root) = fixture(
         SubagentLimits {
             per_team_turn_budget: 1,
@@ -910,7 +955,7 @@ async fn team_turn_budget_kill_before_first_turn_closes_initial_task() {
     })
     .await
     .unwrap();
-    assert_cancelled_task(&engine, child, FinishCause::Other).await;
+    assert_pending_directive(&engine, child).await;
     engine
         .mail_send(
             root,
@@ -976,7 +1021,7 @@ async fn team_message_budget_kill_before_first_turn_closes_initial_task() {
     .await
     .unwrap();
     drop(lease);
-    assert_cancelled_task(&engine, child, FinishCause::Other).await;
+    assert_pending_directive(&engine, child).await;
 }
 
 #[tokio::test]
@@ -1066,9 +1111,10 @@ async fn mail_to_a_killed_team_waits_for_cleanup_and_restores_main() {
         .await
         .unwrap()
         .unwrap();
-    assert!(
-        matches!(spawned, Err(crate::CoreError::Cancelled)),
-        "cancelled initialization must report the ending spawn: {spawned:?}"
+    assert_eq!(
+        spawned.unwrap(),
+        (child, handle.clone()),
+        "initialization cancellation must retain the committed identity"
     );
     tokio::time::timeout(Duration::from_secs(5), revive)
         .await

@@ -81,20 +81,35 @@ the supervisor and tool reply to become terminal. Replacing the in-flight
 ## Scenario: Atomic Resident Registration and Arming
 
 A successful `task` batch commits every child `SessionCreated`, parent's
-`MemberSpawned`, root roster/channel events, actor claim and initial user message
-in one SQLite transaction. The raw initial prompt is committed before plugin
-calls. There is no volatile initial-directive queue. For example, spawning a
-worker with prompt `inspect the parser` persists that user message before the
-spawn returns; takeover before its first turn sees queued work and executes it.
-Parked registrations omit the initial message and await durable mail as before.
+`MemberSpawned`, root roster/channel events, actor claim and optional directive
+`MailSent` in one SQLite transaction. The mail is from the direct parent on the
+new parent–child DM channel. For example, spawning a worker with prompt
+`inspect the parser` persists that DM before spawn returns; takeover before its
+first wake sees ordinary queued mail. Parked Workflow registrations omit mail
+and await their first activation.
 
 After commit, registration installs every episode under claim-write serialization
 without awaiting a plugin. Each episode sends global and scoped `session.start`,
-publishes its registration envelopes, then runs `message.user.before`; any rewrite is
-persisted with `TextReplace` before the first turn. Finally it notifies the
-parent's `agent.spawn` hook and starts the resident loop. Dropping the spawning
-future during a hook does not drop this task. A failed registration transaction
-creates no session hook/policy map entry and makes no child plugin call.
+publishes registration envelopes, notifies the parent's `agent.spawn` hook, then
+starts its resident loop. The first wake coalesces the directive and any later
+mail as `[mail from main] inspect the parser`, runs `message.user.before` once
+per hook on that whole text outside SQL and locks, then calls `begin_work` to
+admit one User message and work boundary in one transaction. Cancellation races
+the hook; an unadmitted directive stays unread. Direct-parent DM mail is always
+deliverable even when bundle policy restricts `resident_mail` or `follow_up`.
+Dropping the spawning future during a hook does not drop the episode task.
+A failed registration transaction creates no hook/policy entry or child callback.
+After commit and episode installation, the batch always returns every committed
+identity. A member's initialization failure belongs to that episode's ending and
+parent report; it cannot make `task` report that the whole batch failed.
+
+`SessionStore::begin_work(claim: Option<&ActorClaim>, root: SessionId,
+handle: &str, inbox_through: u64, prompt: ResidentWorkPrompt,
+current_task: String) -> Result<(MessageId, Vec<Envelope>), StoreError>` accepts
+`Text(String)` for new mail or `Resume { message: MessageId, append: String }`
+for admitted work retained after user cancellation. Fresh mail needs no child
+projection read inside the wake transaction. Resume reuses an unanswered prompt;
+an answered prompt remains immutable and new work is admitted at the tail.
 
 Each slot belongs to its exact `ActorClaim`, including epoch and owner. After
 an awaited hook or other asynchronous operation, initialization and the resident
@@ -114,12 +129,12 @@ same SQLite writer reservation. A single `announce` therefore reaches every
 registered sibling. For example, a batch of eight first children joins one
 `main` group, with one persistent DM channel per child.
 
-If an armed task is archived, stopped, fails sidecar startup, or is killed by a
-team budget before its first assistant turn, the terminal transaction writes a
-nonempty cancelled assistant answer. For example, archiving `inspect the parser`
-then reviving with `inspect the tests instead` retains the old task as cancelled
-history rather than an open directive. This uses existing message events; it
-does not introduce an episode model or change the revive transaction.
+If directive mail is archived, stopped, fails sidecar startup, or is killed by a
+team budget before wake admission, it stays unread and appears in the handoff's
+Goal and Pending sections. No child user message or synthetic cancellation answer
+exists. For example, archive `inspect the parser` before its first wake, then
+revive with `inspect the tests instead`: only the new mail is admitted, alongside
+the prior handoff recording the unexecuted directive.
 
 Store contract: [`register_episodes`](../../architecture/admission-and-governor.md#store-interface)
 returns one claim and committed envelope group per member, in input order. A
@@ -158,7 +173,7 @@ again. The refused report is discarded: handling the mail never re-submits its
 old outcome or text.
 
 `finalize_resident_archive(owner: ResidentArchiveOwner<'_>, root: SessionId,
-handle: &str, archive: ResidentArchive, cause: FinishCause)` returns
+handle: &str, archive: ResidentArchive)` returns
 `Result<(ResidentArchiveOutcome, Vec<Envelope>), StoreError>`.
 `ResidentArchiveOwner::Claim(&ActorClaim)` fences the episode's capability;
 `Takeover` ends an orphan whose caller guarantees has no in-memory episode.
@@ -175,7 +190,7 @@ for a matching repeated finalization). `Refused` carries only the harness notice
 parent report/mail, cancellation cleanup, terminal activity, archive marker and
 claim release commit together. `publish_resident_finalization` publishes only
 after commit. Stop/failure entry points choose terminal reasons and
-use this same transaction, including cancellation of unstarted directives. The
+use this same transaction; unadmitted directive mail stays pending in the handoff. The
 caller supplies the archive reason, member status and handoff document; the
 store never synthesizes a handoff or derives a reason from the member status.
 Forced endings use the shared projection-derived handoff template, retaining a
@@ -262,17 +277,16 @@ current_task }` and the prompt together. Publication occurs only after commit.
 A stale claim or any failed write rolls back delivery and consumption together.
 
 `ResidentWorkPrompt::Text(String)` admits a new User message with its text part
-and finish. `Admitted { message: MessageId, append: String }` reuses the initial
-directive committed at registration; nonempty coalesced mail is appended with
-`TextReplace` in the work transaction. Every harness turn passes the returned
+and finish. `Resume { message: MessageId, append: String }` resumes an admitted
+wake retained by user cancellation. It reuses the unanswered prompt and appends
+new mail with `TextReplace`; after an answer it admits a new prompt at the tail. Every harness turn passes the returned
 message id as `TurnRequestContext.admitted_prompt`, including lead and synthesis
 turns, so cancellation during binding closes the owned answer and shutdown can
 record the root's resume obligation.
 
 Global and bundle user-text hooks run once on coalesced mail/synthesis text
-before the transaction, outside locks. Initial directives retain their
-registration-time hook/`TextReplace` path. Cancellation or failure before the
-work commit leaves the mail unread. Policy-ineligible mail is consumed without
+before the transaction, outside locks, including the first directive DM.
+Cancellation or failure before the work commit leaves the mail unread. Policy-ineligible mail is consumed without
 starting a turn or charging the turn budget, including multiple queued messages.
 
 ### Mail during a running turn
@@ -360,12 +374,10 @@ publish after the episode is removed and before its completion is resolved.
 
 ### Creation hooks and revival boundaries
 
-`EpisodeInit.initial_prompt: Option<MessageId>` identifies only the registered
-User directive to process with `message.user.before`. Registration supplies that
-ID; revival supplies `None`. Its System handoff boundary is never passed to user
-text hooks or rewritten by initialization, so the context marker keeps its
-prefix and the next request includes only the latest handoff and current episode.
-The reviving mail still passes through the normal user-text hook at work admission.
+Initialization does not process prompt text. Both creation directives and
+reviving mail use ordinary wake admission. The System handoff boundary is never
+passed to user text hooks or rewritten, so its context marker keeps its prefix
+and the next request includes only the latest handoff and current episode.
 
 `agent.spawn` describes member creation and runs once for each registered hook
 when `SessionCreated` belongs to the initializer. Revival reattaches session

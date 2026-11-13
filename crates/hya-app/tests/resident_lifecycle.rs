@@ -13,6 +13,109 @@ fn report(text: &str) -> Round {
 }
 
 #[tokio::test]
+async fn m48_w2_committed_batch_keeps_all_handles_after_member_initialization_fails() {
+    let plugin = support::lifecycle::BlockingPlugin::new().await;
+    let mut h = Harness::with_plugins(vec![plugin.spec.clone()]).await;
+    plugin.arm();
+    let mut requests = h.provider.requests.subscribe();
+    let tasks = (0..2)
+        .map(|index| {
+            json!({
+                "description": format!("batch member {index}"),
+                "prompt": h.provider.script(vec![Round::failure("W2 member failed after commit")]),
+                "subagent_type": "hya-task", "model": "fake",
+            })
+        })
+        .collect::<Vec<_>>();
+    let spawning = h.start_tool("task", json!({"tasks": tasks})).await;
+    plugin.gate.arrived().await;
+    // One initializer is blocked. Its sibling can run and fail, proving the
+    // entire batch committed before we cancel the remaining initializer.
+    let failed = tokio::time::timeout(support::lifecycle::BOUND, async {
+        loop {
+            let request = requests.recv().await.unwrap();
+            if request.session != h.root && !request.completion.tools.is_empty() {
+                break request.session;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let root = h.engine.read_projection(h.root).await.unwrap();
+    let members = root
+        .session
+        .members
+        .iter()
+        .map(|member| member.child.unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(members.len(), 2);
+    let blocked = members
+        .iter()
+        .copied()
+        .find(|child| *child != failed)
+        .unwrap();
+    let blocked_handle = root
+        .team
+        .roster
+        .iter()
+        .find(|(_, entry)| entry.session == blocked)
+        .unwrap()
+        .0
+        .clone();
+    h.built
+        .resident_supervisor()
+        .end_member(h.root, &blocked_handle)
+        .await
+        .unwrap();
+    plugin.gate.release();
+    tokio::time::timeout(support::lifecycle::BOUND, spawning)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    h.until(h.root, |p| {
+        p.session.members.iter().any(|member| {
+            member.child == Some(failed) && member.status == hya_proto::MemberRunStatus::Failed
+        })
+    })
+    .await;
+    let root = h.engine.read_projection(h.root).await.unwrap();
+    let state = root
+        .session
+        .messages
+        .iter()
+        .flat_map(|message| &message.parts)
+        .find_map(|part| match part {
+            hya_proto::PartProjection::Tool { name, state, .. } if name.as_str() == "task" => {
+                Some(state.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    h.shutdown().await;
+    drop(h);
+    plugin.shutdown().await;
+    let result = output(&state);
+    let returned = result["metadata"]["members"].as_array().unwrap();
+    assert_eq!(returned.len(), members.len(), "{result}");
+    for child in members {
+        assert!(
+            returned
+                .iter()
+                .any(|member| member["sessionId"] == child.to_string()),
+            "{result}"
+        );
+    }
+    assert!(
+        root.session
+            .members
+            .iter()
+            .any(|member| member.child == Some(failed)
+                && member.summary.contains("W2 member failed after commit"))
+    );
+}
+
+#[tokio::test]
 async fn i1_stale_session_start_cannot_remove_revived_episode() {
     let plugin = support::lifecycle::BlockingPlugin::new().await;
     let mut h = Harness::with_plugins(vec![plugin.spec.clone()]).await;
@@ -616,7 +719,7 @@ async fn i15_one_owed_wake_admits_one_coalesced_owned_prompt() {
         p.team
             .roster
             .get(&handle)
-            .is_some_and(|entry| entry.resident_cursor == 2)
+            .is_some_and(|entry| entry.resident_cursor == 3)
     })
     .await;
     let requests = h
@@ -667,7 +770,7 @@ async fn i15_failed_prompt_admission_rolls_back_work_started() {
         before_archive.apply(event);
     }
     assert_eq!(
-        before_archive.team.roster[&handle].resident_cursor, 0,
+        before_archive.team.roster[&handle].resident_cursor, 1,
         "failed admission must leave mail unread"
     );
     let after_child = h.engine.replay(child).await.unwrap();
@@ -719,7 +822,7 @@ async fn i15_cancelled_coalesced_hook_leaves_mail_unread() {
     initial.release();
     plugin.gate.arrived().await;
     let root = h.engine.read_projection(h.root).await.unwrap();
-    assert_eq!(root.team.roster[&handle].resident_cursor, 0);
+    assert_eq!(root.team.roster[&handle].resident_cursor, 1);
     assert!(
         root.team.roster[&handle].resident_work.is_none(),
         "hooks must precede the work boundary"
@@ -746,7 +849,7 @@ async fn i15_cancelled_coalesced_hook_leaves_mail_unread() {
     plugin.shutdown().await;
     output(&archived.expect("archive must complete before releasing the coalesced hook"));
     assert!(root.team.archived.contains_key(&handle));
-    assert_eq!(root.team.inboxes[&handle].len(), 2);
+    assert_eq!(root.team.inboxes[&handle].len(), 3);
     assert!(!actor.session.messages.iter().any(|message| message.parts.iter().any(|part| matches!(part, hya_proto::PartProjection::Text { text, .. } if text.contains("HOOK_")))));
 }
 
@@ -2402,8 +2505,8 @@ async fn a6_archive_bus_observation_implies_episode_gone() {
 }
 
 #[tokio::test]
-async fn a5_kill_during_init_publishes_registration_first_and_spawn_fails() {
-    let test = "a5_kill_during_init_publishes_registration_first_and_spawn_fails";
+async fn a5_kill_during_init_publishes_registration_first_and_keeps_spawn_identity() {
+    let test = "a5_kill_during_init_publishes_registration_first_and_keeps_spawn_identity";
     if support::lifecycle::isolated_config(test, &[("HYA_SUBAGENT_MESSAGE_BUDGET", "1")]) {
         return;
     }
@@ -2468,9 +2571,17 @@ async fn a5_kill_during_init_publishes_registration_first_and_spawn_fails() {
         registered < archived,
         "archive preceded registration: {events:?}"
     );
-    assert!(
-        matches!(result, Err(hya_core::CoreError::Cancelled)),
-        "cancelled init reported spawn success: {result:?}"
+    let (committed, handle) = result.unwrap();
+    assert_eq!(committed, child);
+    assert_eq!(
+        h.engine
+            .read_projection(h.root)
+            .await
+            .unwrap()
+            .team
+            .archived[&handle]
+            .session,
+        child
     );
     h.shutdown().await;
     drop(h);
@@ -2636,7 +2747,7 @@ async fn m45_r1_user_cancel_retains_mail_and_resumes_its_existing_prompt_once() 
     let root = h.engine.read_projection(h.root).await.unwrap();
     let before = h.engine.read_projection(child).await.unwrap();
     let prompt = before.session.messages.iter().find(|message| message.role == hya_proto::Role::User && message.parts.iter().any(|part| matches!(part, hya_proto::PartProjection::Text { text, .. } if text.contains("CANCELLED_WAKE")))).unwrap().id;
-    if root.team.roster[&handle].resident_cursor != 0 {
+    if root.team.roster[&handle].resident_cursor != 1 {
         h.shutdown().await;
         panic!(
             "cancelled wake was consumed: {:?}",
@@ -2653,7 +2764,7 @@ async fn m45_r1_user_cancel_retains_mail_and_resumes_its_existing_prompt_once() 
     let prompts = actor.session.messages.iter().filter(|message| message.role == hya_proto::Role::User && message.parts.iter().any(|part| matches!(part, hya_proto::PartProjection::Text { text, .. } if text.contains("CANCELLED_WAKE")))).collect::<Vec<_>>();
     assert_eq!(prompts.len(), 1);
     assert_eq!(prompts[0].id, prompt);
-    assert_eq!(root.team.roster[&handle].resident_cursor, 1);
+    assert_eq!(root.team.roster[&handle].resident_cursor, 2);
     assert!(root.team.roster[&handle].resident_work.is_none());
     let requests = h.provider.captured.lock().unwrap();
     let resumed = requests
@@ -2716,7 +2827,7 @@ fn assert_resumed_request(
 }
 
 #[tokio::test]
-async fn m46_s1_cancelled_initial_work_without_mail_is_owed_on_resume() {
+async fn m46_s1_cancelled_directive_mail_is_owed_on_resume() {
     let mut h = Harness::new().await;
     let gate = Arc::new(Gate::default());
     let (child, handle) = h
@@ -2760,11 +2871,11 @@ async fn m46_s1_consumed_history_does_not_start_an_extra_turn_after_cancel() {
         .provider
         .script(vec![Round::text("consumed historical mail")]);
     h.mail(&handle, marker).await.unwrap();
-    h.until(h.root, |p| p.team.roster[&handle].resident_cursor == 1)
+    h.until(h.root, |p| p.team.roster[&handle].resident_cursor == 2)
         .await;
     h.idle(child, &handle).await;
     let root = h.engine.read_projection(h.root).await.unwrap();
-    assert_eq!(root.team.roster[&handle].resident_cursor, 1);
+    assert_eq!(root.team.roster[&handle].resident_cursor, 2);
     assert!(root.team.roster[&handle].resident_work.is_none());
     assert!(h.engine.cancel_user_turn(h.root));
     h.engine.resume_after_user_stop(h.root);
@@ -2850,7 +2961,7 @@ async fn cancelled_answer_then_new_mail(mail_wake: bool) {
     );
     assert_eq!(
         root.team.roster[&handle].resident_cursor,
-        if mail_wake { 2 } else { 1 }
+        if mail_wake { 3 } else { 2 }
     );
     assert!(root.team.roster[&handle].resident_work.is_none());
 }
@@ -2939,8 +3050,8 @@ async fn m46_s7_work_finish_write_failure_ends_the_episode() {
 }
 
 #[tokio::test]
-async fn m46_s2_restart_requeues_cancelled_zero_mail_work() {
-    let test = "m46_s2_restart_requeues_cancelled_zero_mail_work";
+async fn m46_s2_restart_requeues_cancelled_directive_mail_work() {
+    let test = "m46_s2_restart_requeues_cancelled_directive_mail_work";
     if std::env::var("HYA_M4_CRASH_SEED").as_deref() == Ok(test) {
         use tokio::io::AsyncWriteExt;
         let h = Harness::open(
@@ -2991,7 +3102,7 @@ async fn m46_s2_restart_requeues_cancelled_zero_mail_work() {
         .find(|r| r.session == child && !r.completion.tools.is_empty())
         .cloned();
     h.shutdown().await;
-    request.expect("startup parked zero-mail unfinished work");
+    request.expect("startup parked unfinished directive mail");
     assert_resumed_request(
         &captured.unwrap().completion,
         "initial answer before process crash",
@@ -3031,7 +3142,7 @@ async fn m45_r1_user_cancel_before_begin_work_rearms_mail_for_resume() {
         panic!("user cancel did not release the blocked pre-admission hook");
     }
     let root = h.engine.read_projection(h.root).await.unwrap();
-    assert_eq!(root.team.roster[&handle].resident_cursor, 0);
+    assert_eq!(root.team.roster[&handle].resident_cursor, 1);
     assert!(root.team.roster[&handle].resident_work.is_none());
     h.engine.resume_after_user_stop(h.root);
     h.until(child, |projection| projection.session.messages.iter().any(|message| message.parts.iter().any(|part| matches!(part, hya_proto::PartProjection::Text { text, .. } if text == "resumed pre-admission wake")))).await;
@@ -3169,7 +3280,7 @@ async fn m46_sidecar_failed_episode_revives_with_only_new_mail_and_working_tools
     h.idle(child, &handle).await;
     assert_eq!(
         h.engine.read_projection(h.root).await.unwrap().team.roster[&handle].resident_cursor,
-        1
+        2
     );
     let gate = Arc::new(Gate::default());
     let handled = h.provider.script(vec![

@@ -3557,7 +3557,7 @@ async fn resident_prework_sidecar_loss_reports_failure_with_unread_mail() {
 }
 
 #[tokio::test]
-async fn resident_initial_directive_is_closed_after_prework_sidecar_loss() {
+async fn resident_directive_mail_stays_pending_after_prework_sidecar_loss() {
     assert_prework_loss_reports_failure(true).await;
 }
 
@@ -3641,23 +3641,20 @@ async fn assert_prework_loss_reports_failure(initial: bool) {
     assert_eq!(polls.load(Ordering::SeqCst), 0);
     assert_sidecar_failed(&engine, &supervisor, root, child, &handle).await;
     let projection = engine.read_projection(child).await.unwrap();
-    if initial {
-        assert!(
-            projection
-                .session
-                .messages
-                .iter()
-                .any(|m| m.role == Role::Assistant && m.finish == Some(FinishReason::Cancelled))
-        );
+    assert!(projection.session.messages.is_empty());
+    let handoff = projection.session.handoff.unwrap();
+    let directive = if initial {
+        "initial directive survives"
     } else {
-        assert!(
-            !projection
-                .session
-                .messages
-                .iter()
-                .any(|m| m.role == Role::User)
-        );
-    }
+        "rearm after prework loss"
+    };
+    assert!(
+        handoff
+            .doc
+            .contains(&format!("5. Pending tasks - [mail from main] {directive}")),
+        "{}",
+        handoff.doc
+    );
     assert_stopped_member_revives(
         &engine,
         root,

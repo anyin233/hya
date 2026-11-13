@@ -512,3 +512,124 @@ async fn registered_initial_task_survives_claim_takeover_before_first_turn() {
         .drain(hya_proto::FinishCause::Shutdown, Duration::from_secs(5))
         .await;
 }
+
+#[tokio::test]
+async fn spawn_directive_and_followup_are_parent_dm_mail_even_under_restrictive_policy() {
+    let package = hya_bundle::prepare_package(hya_bundle::BundleSource::new(
+        "deny-dm-wakes",
+        vec![hya_bundle::SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: test/deny-dm-wakes, version: 1.0.0, publisher: test }\nchannels:\n  - { id: dm, kind: parent_dm, participants: [{kind: role, role: child}], capabilities: [], scope: vertical, retention: team_session }\n")],
+    )).unwrap();
+    let catalog = hya_core::AgentCatalog::new(Arc::new(
+        hya_bundle::BundleCatalog::from_verified_catalogs(&[&package]).unwrap(),
+    ))
+    .unwrap();
+    let runtime = Arc::new(hya_core::RuntimeRegistry::new(
+        ToolRegistry::builtins(),
+        Arc::new(catalog),
+    ));
+    let (permission, _) = PermissionPlane::new(PermissionRules::default());
+    let engine = Arc::new(SessionEngine::new(
+        SessionStore::connect_memory().await.unwrap(),
+        Arc::new(ProviderRouter::new().with(Arc::new(DevProvider::new()))),
+        runtime,
+        permission,
+        EventBus::default(),
+    ));
+    let root = make_root(&engine).await;
+    let root_turn = engine.try_begin_turn(root).unwrap();
+    let child = make_child(&engine, root).await;
+    let child_turn = engine.try_begin_turn(child).unwrap();
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let agent = AgentSpec {
+        name: AgentName::new("hya-task"),
+        model: ModelRef::new("hya/offline"),
+        system_prompt: String::new(),
+        workdir: "/tmp".into(),
+        reasoning: None,
+    };
+    supervisor
+        .register_existing_resident(
+            root,
+            child,
+            "worker".into(),
+            agent,
+            Some("inspect parser".into()),
+        )
+        .await
+        .unwrap();
+    let projection = engine.read_projection(root).await.unwrap();
+    let mail = &projection.team.inboxes["main/worker"][0];
+    assert_eq!(mail.from, "main");
+    assert_eq!(mail.body, "inspect parser");
+    let MailEndpoint::Channel(dm) = &mail.to else {
+        panic!("directive must name its DM channel")
+    };
+    assert_eq!(
+        projection.team.channels[dm].kind,
+        hya_proto::ChannelKind::Dm
+    );
+    assert!(
+        engine
+            .read_projection(child)
+            .await
+            .unwrap()
+            .session
+            .messages
+            .is_empty()
+    );
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::Channel(dm.clone()),
+            MailKind::Message,
+            "also inspect tests".into(),
+        )
+        .await
+        .unwrap();
+    drop(child_turn);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while assistant_turns(&engine, child).await == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        wait_until(&engine, root, |p| p.team.roster["main/worker"]
+            .resident_work
+            .is_none())
+        .await
+    );
+    let actor = engine.read_projection(child).await.unwrap();
+    let prompts: Vec<_> = actor
+        .session
+        .messages
+        .iter()
+        .filter(|m| m.role == Role::User)
+        .collect();
+    assert_eq!(prompts.len(), 1);
+    assert!(
+        matches!(&prompts[0].parts[0], hya_proto::PartProjection::Text { text, .. }
+        if text == "[mail from main] inspect parser\n\n[mail from main] also inspect tests")
+    );
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::Channel(dm.clone()),
+            MailKind::Message,
+            "parent followup".into(),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while assistant_turns(&engine, child).await < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    drop(root_turn);
+    supervisor
+        .drain(hya_proto::FinishCause::Shutdown, Duration::from_secs(5))
+        .await;
+}

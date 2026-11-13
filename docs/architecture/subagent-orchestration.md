@@ -217,11 +217,11 @@ advance the mail cursor monotonically without settling the admitted wake.
 
 A user cancel keeps the episode live and held, displays Idle, and retains
 `resident_work` and its unconsumed inbox boundary. A later wake is owed only for
-unfinished admitted work or unread mail, including a cancelled initial directive
-with no mail. For example, `engine.cancel_user_turn(root)` holds that work until
+unfinished admitted work or unread mail, including a cancelled directive-mail
+wake with no later mail. For example, `engine.cancel_user_turn(root)` holds that work until
 `engine.resume_after_user_stop(root)` explicitly resumes it.
 
-`begin_work(ResidentWorkPrompt::Admitted { message: MessageId, append: String })`
+`begin_work(ResidentWorkPrompt::Resume { message: MessageId, append: String })`
 reuses the admitted user message only while it is the transcript's last message
 (empty assistant messages omitted from model requests do not count). Only new
 mail is hooked and appended. Once an answer follows it, the old prompt is
@@ -236,7 +236,7 @@ leased turn's cancellation, so an ending need not wait for the straggler deadlin
 Forced endings and Failed episodes do not acknowledge unfinished wake mail;
 their handoff retains it as Pending. A successful Reported turn has already
 settled its wake; later mail refuses the report and creates another wake.
-Recovery requeues all Idle pending work, including zero-mail initial directives,
+Recovery requeues all Idle pending work, including admitted directive-mail wakes,
 using the same transcript rule. Work that was
 Busy when the process crashed keeps the existing aborted-work policy: settle
 that boundary, classify `AbortedRunning`, and queue only later mail.
@@ -820,8 +820,7 @@ The internal completion contract is `watch<Option<Result<(), CoreError>>>`:
 `ResidentSupervisor::episode_count() -> usize` counts in-memory member episodes,
 excluding the lead. `ArchiveReviver::has_episode(session: SessionId) -> bool`
 queries the current in-memory episode. Its internal
-`reconcile_orphan(root: SessionId, handle: &str, archive: ResidentArchive,
-cause: FinishCause) -> Result<ResidentArchiveOutcome, CoreError>` takes the
+`reconcile_orphan(root: SessionId, handle: &str, archive: ResidentArchive) -> Result<ResidentArchiveOutcome, CoreError>` takes the
 supervisor claim-write boundary, refuses an existing episode, then calls the store finalizer
 with `Takeover`. `ResidentArchive` retains the store contract above; orphan
 archives always use `check_gate: false` and the runtime-owning store.
@@ -829,8 +828,9 @@ archives always use `check_gate: false` and the runtime-owning store.
 The client refusal is enforced by public prompt, model-turn and shell-turn
 entry points. The legacy internal Workflow executor retains its bound resume
 path until Workflow moves to episode activations; it is not a client entry.
-Startup recovery treats an unanswered initial user directive as owed input and
-passes that admitted prompt into the recovered episode's first turn.
+Startup recovery classifies an unread spawn directive as ordinary queued DM
+mail. Admitted work retained after user cancellation resumes its existing prompt
+under the same rules as any other mail wake.
 
 The client guard checks durable registration history, so it covers archived
 members, orphans and the interval between registration commit and in-memory

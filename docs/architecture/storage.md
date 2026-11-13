@@ -279,15 +279,13 @@ releases a lease with its canonical events. Startup advances active claims'
 epochs without changing their roots or capacity; root turns do not reset it.
 
 `register_episodes` commits the whole batch's child creation, member/roster/channel
-events, claims and raw initial prompts together, including main registration if
-absent. It checks live capacity under the writer reservation, as does revival.
+events, claims and optional first-DM directive mail together, including main
+registration if absent. It checks live capacity under the writer reservation, as does revival.
 See [capacity and exact store signatures](admission-and-governor.md).
 `begin_transaction()` uses `BEGIN IMMEDIATE`; group-channel
 lookup-or-create for a unit is performed under that reservation. Hooks and
-envelope publication run after commit. Stop/failure finalization closes an
-unanswered initial directive with a nonempty cancelled assistant answer in the
-same transaction as terminal activity and claim release. The text keeps that
-answer in later model requests, which omit empty assistant messages. See the
+envelope publication run after commit. Stop/failure finalization leaves
+unadmitted directive mail unread; the handoff includes it as Pending. It adds no synthetic assistant answer. See the
 [store signatures and cancellation causes](../spec/backend/database-guidelines.md)
 and [registration usage](../spec/backend/task-tool.md#scenario-atomic-resident-registration-and-arming).
 

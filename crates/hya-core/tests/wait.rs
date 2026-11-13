@@ -203,6 +203,18 @@ async fn spawn(team: &Team, parent: SessionId, gated: bool) -> (SessionId, Strin
         )
         .await
         .unwrap();
+    if gated {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if team.provider.gates.lock().unwrap().contains_key(&session) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("member must admit its directive mail before reporting");
+    }
     (session, handle)
 }
 
