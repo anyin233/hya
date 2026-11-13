@@ -33,7 +33,9 @@ substrate**:
 
 - First Stage activations, loop continuations and verifiers share the `task`
   episode substrate and count against live team capacity. A settled worker
-  retains its claim and runtime; a reported worker is revived under the same
+  retains its claim and runtime through its Stage; an anonymous worker ends
+  after the Stage, including verification and wrap-up. Named `actor:` Sessions
+  retain their resident lifetime after success. A reported worker is revived under the same
   identity through the fenced capacity check. Each judgment gets a fresh
   parked verifier, activated through the same waiter and ended after its result.
 - Verifier cancellation waits for its episode's ending, including cancellation

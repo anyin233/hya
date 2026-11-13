@@ -258,7 +258,10 @@ data while the compact presentation remains unchanged.
 actor: planner
 ```
 
-An actor key routes sequential Stages to one resident Session. Repeating an
+An actor key routes sequential Stages to one resident Session. Named actors
+retain today's resident lifetime after successful Stages and runs; anonymous
+workers end when their Stage finishes, after loop verification and wrap-up.
+Their claims and descendants are released before successors activate. Repeating an
 Agent id without `actor` still creates distinct one-shot Stage Sessions. Any
 Agent can back either shape: since 0.41.0 Agent definitions carry no spawn
 lifecycle (`spawn_lifecycle` is a removed manifest key), so the Stage's `actor`
