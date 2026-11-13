@@ -932,14 +932,24 @@ impl SessionEngine {
 
     /// Mint a fresh handle leaf `<prefix>-<operator>` for a new member of
     /// `root`'s team: never the leaf of any handle the team ever registered
-    /// (live or archived) nor one this process already minted for it.
-    pub(crate) async fn mint_member_leaf(&self, root: SessionId, prefix: &str) -> String {
+    /// (live or archived) nor one this process currently reserves.
+    /// Caller serializes this snapshot with registration commits.
+    pub(crate) async fn mint_member_leaf(
+        &self,
+        root: SessionId,
+        prefix: &str,
+    ) -> crate::handle_naming::HandleReservation {
         let taken = self
             .read_projection_shared(root)
             .await
             .map(|projection| crate::handle_naming::team_leaves(&projection))
             .unwrap_or_default();
-        self.handle_namer.mint(root, prefix, taken)
+        self.handle_namer.reserve(root, prefix, taken)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_member_names(&self, root: SessionId) -> usize {
+        self.handle_namer.reserved_count(root)
     }
 
     /// Wire the archive-revival seam on a shared engine. Idempotent; the
@@ -2029,6 +2039,9 @@ impl SessionEngine {
         }
         let deleted = self.store.delete_session(session).await?;
         if deleted {
+            if let Some(supervisor) = self.resident_supervisor() {
+                supervisor.forget_wait_stalls(session);
+            }
             self.notify_session_lifecycle(session, false).await;
         }
         Ok(deleted)

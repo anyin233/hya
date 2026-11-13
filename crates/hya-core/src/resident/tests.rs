@@ -1962,6 +1962,43 @@ async fn m412_drop_supervisor_releases_listener_without_shutdown() {
 }
 
 #[tokio::test]
+async fn m412_episode_end_forgets_wait_stalls() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let driver = supervisor.root_driver_activity(root).await.unwrap();
+    let (child, handle) = parked(&supervisor, root).await;
+    supervisor.record_wait_stall(root, child, None);
+    supervisor.end_member(root, &handle).await.unwrap();
+    let retained = supervisor.wait_stall_reported(root, child, None);
+    drop(driver);
+    supervisor
+        .drain(FinishCause::Shutdown, Duration::from_secs(5))
+        .await;
+    assert!(!retained, "ended episode retained its stall notice");
+}
+
+#[tokio::test]
+async fn m412_delete_caller_forgets_only_its_wait_stalls() {
+    let engine = engine().await;
+    let caller = root(&engine).await;
+    let other = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let driver = supervisor.root_driver_activity(other).await.unwrap();
+    let (member, _) = parked(&supervisor, other).await;
+    supervisor.record_wait_stall(caller, member, None);
+    supervisor.record_wait_stall(other, member, None);
+    engine.delete_session(caller).await.unwrap();
+    let retained = supervisor.wait_stall_reported(caller, member, None);
+    assert!(supervisor.wait_stall_reported(other, member, None));
+    drop(driver);
+    supervisor
+        .drain(FinishCause::Shutdown, Duration::from_secs(5))
+        .await;
+    assert!(!retained, "deleted caller retained its stall notice");
+}
+
+#[tokio::test]
 async fn m412_slow_team_mail_does_not_block_another_root() {
     let engine = engine().await;
     let first = root(&engine).await;
@@ -2061,4 +2098,86 @@ async fn m412_last_episode_retires_team_and_removes_member_index() {
     supervisor
         .drain(FinishCause::Shutdown, Duration::from_secs(5))
         .await;
+}
+
+#[tokio::test]
+async fn m412_registration_releases_committed_handle_reservations() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let driver = supervisor.root_driver_activity(root).await.unwrap();
+    let (agent, runtime) = activation_runtime(&engine);
+    let (_, prepared, _) = supervisor
+        .prepare_resident(
+            root,
+            agent,
+            runtime,
+            ResidentSpawnContext::new("park".into(), None, None, None),
+        )
+        .await
+        .unwrap();
+    let leaf = prepared.leaf.clone();
+    assert_eq!(engine.pending_member_names(root), 1);
+    supervisor
+        .register_episodes(root, vec![prepared], None)
+        .await
+        .unwrap();
+    let reserved = engine.pending_member_names(root);
+    let durable = engine.read_projection(root).await.unwrap();
+    assert!(crate::handle_naming::team_leaves(&durable).contains(&leaf));
+    drop(driver);
+    supervisor
+        .drain(FinishCause::Shutdown, Duration::from_secs(5))
+        .await;
+    assert_eq!(
+        reserved, 0,
+        "committed identity retained a process reservation"
+    );
+}
+
+#[tokio::test]
+async fn m412_cancelled_preparation_releases_handle_reservation() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let (agent, runtime) = activation_runtime(&engine);
+    let (_, prepared, _) = supervisor
+        .prepare_resident(
+            root,
+            agent,
+            runtime,
+            ResidentSpawnContext::new("park".into(), None, None, None),
+        )
+        .await
+        .unwrap();
+    assert_eq!(engine.pending_member_names(root), 1);
+    drop(prepared);
+    let reserved = engine.pending_member_names(root);
+    supervisor
+        .drain(FinishCause::Shutdown, Duration::from_secs(5))
+        .await;
+    assert_eq!(
+        reserved, 0,
+        "abandoned preparation retained its name reservation"
+    );
+}
+
+#[tokio::test]
+async fn m412_late_stall_record_cannot_retain_ended_episode() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let driver = supervisor.root_driver_activity(root).await.unwrap();
+    let (child, handle) = parked(&supervisor, root).await;
+    supervisor.end_member(root, &handle).await.unwrap();
+    supervisor.record_wait_stall(root, child, None);
+    let retained = supervisor.wait_stall_reported(root, child, None);
+    drop(driver);
+    supervisor
+        .drain(FinishCause::Shutdown, Duration::from_secs(5))
+        .await;
+    assert!(
+        !retained,
+        "a wait snapshot recorded an already ended episode"
+    );
 }

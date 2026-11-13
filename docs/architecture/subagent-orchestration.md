@@ -154,7 +154,7 @@ sorted. Nothing is filtered out.
 **Never reused within a team.** A candidate leaf is rejected when it equals
 the leaf of any handle the team ever registered — live roster, archived rows,
 inbox owners, and channel members (all durable, read from the root
-projection) — or one this process already minted for the team (which also
+projection) — or one this process reserves for an uncommitted preparation (which also
 keeps concurrent spawns apart), plus the reserved `main` and `harness`. On a
 collision the draw is retried; after 16 failed single-name draws the leaf
 falls back to two distinct operator names (`scout-suzuran-amiya`), then to a
@@ -166,9 +166,7 @@ member — never a newer one.
 `HYA_HANDLE_SEED=<u64>` seeds it for reproducible runs, and
 `SessionEngine::with_handle_rng` injects a generator in tests), but the minted
 handle is recorded in `AgentRegistered` and replay reads it back — nothing
-re-derives a handle. Logs from earlier releases keep their counter handles
-(`main/scout-1`, `main/hya-implementer-2`); they replay and resolve unchanged
-and are never migrated. Handles are opaque strings: operator names contain
+re-derives a handle. Handles are opaque strings: operator names contain
 `-`, so code never parses a leaf back into prefix and name.
 
 Workflow Stage members without an `actor` key (the one-shot runner, §10) use
