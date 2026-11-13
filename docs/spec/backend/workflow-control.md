@@ -200,11 +200,16 @@ cleanup before returning. No extra executor task or wire API is introduced.
 ### Episode activation contract (core-internal)
 
 `ResidentSupervisor::activate(parent: SessionId, member: SessionId,
-directive: String, guidance: Arc<str>, route: Option<WorkflowTurnRoute>,
+resolved: (AgentSpec, ResolvedResidentRuntime), directive: String, guidance: Arc<str>, route: Option<WorkflowTurnRoute>,
 parent_claim: Option<&ActorClaim>) -> Result<ActivationWaiter, CoreError>`
 configures one idle member and sends its directive on the existing parent-child
 DM channel, or revives an archived member in the fenced capacity-checked
-transaction. Blank directives are rejected before leasing or mail effects.
+transaction. `ResolvedResidentRuntime` is `(TurnBinding, Arc<[AgentDef]>,
+AgentResourcePolicy, Option<Arc<dyn BoundSidecarFactory>>)`. Workflow revival
+reuses the supplied preflighted spec and runtime, including stage reasoning and
+prompt; it does not resolve the live catalog again. Ordinary mail-driven revival
+continues to resolve the current runtime. Blank directives are rejected before
+leasing or mail effects.
 Live/archive selection is serialized with endings by the claim-write boundary.
 The existing turn lease
 prevents any mail wake from starting before guidance, route and the post-mail
