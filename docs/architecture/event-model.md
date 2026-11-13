@@ -6,9 +6,9 @@ It is shared by the engine, store, provider layer, and server, which fold
 this projection directly either: `hya-sdk-v1`'s `V1SessionMirror` folds the
 curated v1 `StreamFrame`/read shapes into an equivalent client-side view, and
 server-side reads (`ListMessages`, `GetSessionTodo`, …) are produced by folding
-this same projection before serialization. The legacy TypeScript TUI (now
-removed) consumed the deleted Compat SDK/SyncProvider surface; a replacement
-frontend built on `hya-sdk-v1` may be built later.
+this same projection before serialization. The interactive Bun/OpenTUI frontend
+(`packages/hya-tui`) and browser WebUI (`packages/hya-tui-web`) consume these
+same `hya.v1` server-folded reads and live `StreamFrame` notifications.
 
 ## Strong Ids
 
@@ -16,7 +16,7 @@ frontend built on `hya-sdk-v1` may be built later.
 
 | Id | Wire / display |
 | --- | --- |
-| `SessionId` | New ids: `hysec_[A-Za-z0-9]{20}`; still parses legacy `ses_...` / raw UUID forms |
+| `SessionId` | `hysec_[A-Za-z0-9]{20}` only; JSON strings and ASCII storage keys |
 | `MessageId` | UUIDv7 with `msg_` prefix |
 | `PartId` | UUIDv7 with `part_` prefix |
 | `ToolCallId` | UUIDv7 with `tc_` prefix |
@@ -74,6 +74,24 @@ pub enum Event { ... }
 Wire JSON is tagged on `"type"` with snake_case variant names (for example
 `"message_started"`, `"tool_call_requested"`).
 
+Only current event tags are accepted. Unknown or retired tags are decode errors;
+store replay reports the owning session, global sequence and JSON error. Old
+logs and UUID-backed session ids are unsupported. For example,
+`{"type":"session_unarchived","session":"hysec_ABCDEFGHIJKLMNOPQRST"}`
+decodes, while `{"type":"session_moved"}` fails with an unknown-variant error.
+There is no import flag or compatibility mode.
+
+Team events carry canonical member paths and qualified or minted channel keys.
+The reducer stores those addresses directly; it does not normalize bare legacy
+addresses. `AgentRegistered` supplies a leaf plus `parent` (the root has no
+parent). Current command inputs can still use a leaf alias resolved by the
+writer's vertical addressing policy: parent or direct report, without siblings.
+
+The snapshot reducer version restarts at **1** for this incompatible baseline.
+The unused `projection_tree` and native HTTP `api` DTO modules are removed;
+server command and shell adapters consume generated `hya_api::v1::CommandTurn`
+and `ShellTurn` directly. Their request shapes remain the v1 contract.
+
 An `Envelope` wraps an event with:
 
 | Field | Type | Meaning |
@@ -96,7 +114,7 @@ their original typed values therefore remain visible in replay. Live-only
 fresh replay uses the persisted final state rather than reconstructing live
 stream deltas.
 
-### Full `Event` catalog (71 variants)
+### Full `Event` catalog
 
 Reducer effects:
 
@@ -109,20 +127,16 @@ Reducer effects:
 
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
-| `session_created` | `session: SessionId`, `parent: Option<SessionId>`, `agent: AgentName`, `model: ModelRef`, `workdir: String`, `project: Option<ProjectId>` (default `null`), `kind: SessionKind` (`project` \| `temporary`, default `project`) | Fold: sets session id, parent, agent, model, workdir, project, kind. `parent` is the link `session_lineage` walks toward the team root. `project` names the session's Project (ADR-0024; wire form is the UUID, `ProjectId` displays as `prj_<uuid-simple>`); `kind: temporary` sessions have no Project. A subagent session carries its parent's `project` and `kind`. Logs written before these fields decode as `project: null`, `kind: project`; the fold arrived in projection reducer version 9. The store mirrors both in `session.project_id` / `session.kind`. |
+| `session_created` | `session: SessionId`, `parent: Option<SessionId>`, `agent: AgentName`, `model: ModelRef`, `workdir: String`, `project: Option<ProjectId>` (default `null`), `kind: SessionKind` (`project` \| `temporary`, default `project`) | Fold: sets session id, parent, agent, model, workdir, project, kind. `parent` is the link `session_lineage` walks toward the team root. `project` names the session's Project (ADR-0024; wire form is the UUID, `ProjectId` displays as `prj_<uuid-simple>`); `kind: temporary` sessions have no Project. A subagent session carries its parent's `project` and `kind`. The store mirrors both in `session.project_id` / `session.kind`. |
 | `session_agent_model_override_set` | `session`, `agent: AgentName`, `model: Option<ModelRef>` | Fold: insert or remove one Agent entry in `agent_model_overrides`. `None` clears that Agent; unrelated entries remain. |
-| `session_permission_mode_set` | `session`, `mode: String` | Fold: `permission_mode` (last write wins). Emitted only on the lineage root; subagent sessions inherit the root's mode. `mode` is `manual`, `yolo`, or `<bundle-id>/<mode-id>`; see [Session permission modes](../configuration.md#session-permission-modes). Older binaries fold it as `unknown` (no-op). The v1 stream maps it to `sessionUpdated.permissionMode`. |
-| `session_moved` | `session`, `workdir: String` | Fold: workdir |
+| `session_permission_mode_set` | `session`, `mode: String` | Fold: `permission_mode` (last write wins). Emitted only on the lineage root; subagent sessions inherit the root's mode. `mode` is `manual`, `yolo`, or `<bundle-id>/<mode-id>`; see [Session permission modes](../configuration.md#session-permission-modes). The v1 stream maps it to `sessionUpdated.permissionMode`. |
 | `session_titled` | `session`, `title: String` | Fold: title |
 | `session_metadata_set` | `session`, `metadata: Value` | Fold: replaces metadata |
-| `session_permission_set` | `session`, `permission: Vec<Value>` | Fold: **replaces** the whole permission list (does not merge) |
-| `session_archived` | `session`, `archived: Number` | Fold: `archived` = the stamp (unix epoch milliseconds when the root session was archived). A zero stamp (the deleted Compat surface's "clear archive") folds as `None`. Appended by `SessionEngine::archive_session` only on a root session that is not archived (idempotent; the first stamp is kept). Archiving never cancels a running turn. v1: `SessionInfo.archived`/`archivedAt`, `sessionUpdated.archived: true`. Zero-stamp folding and `session_unarchived` arrived in projection reducer version 7. |
-| `session_unarchived` | `session` | Fold: `archived` → `None`. Appended by `SessionEngine::unarchive_session` when the session is archived: an explicit unarchive (`UpdateSession.archived: false`, `hya sessions unarchive`), or implicitly when the v1 surface admits a new prompt, command (including `/workflow`), or shell turn on it (before the turn's user message). Engine-internal continuations (goal/loop rounds, member wake-ups) do not unarchive. Older binaries fold it as `unknown`. v1: `sessionUpdated.archived: false`. |
-| `session_ephemeral_set` | `session`, `ephemeral: bool` | Fold: `ephemeral` = the value. `true` is appended by the v1 `CreateSession` with `ephemeral: true` on a new root session without a title (`SessionEngine::set_session_ephemeral`, which never marks a child or a used session); `false` on the source of a `ForkSession`. The fold also clears `ephemeral` for good on any `message_started`, `session_titled`, and a nonzero `session_archived`. The server deletes an ephemeral session once no `StreamSessionEvents` stream watches it (docs/protocol/README.md "Ephemeral sessions"). Older binaries fold it as `unknown`. Arrived in projection reducer version 8. v1: `SessionInfo.ephemeral`. |
-| `session_share_set` | `session`, `url: String` | Fold: share url |
-| `session_share_cleared` | `session` | Fold: share → `None` |
-| `agent_switched` | `session`, `message: Option<MessageId>`, `agent: AgentName` | Fold: session agent only (`message` is **not** stored on the session row). Engine emit always sets `message: Some(MessageId::new())` — a **fresh** id that is **not** a pointer into existing `SessionProjection.messages`. (The deleted Compat surface used that id as the identity of a **synthetic** switch pseudo-message in its message list, not as a transcript anchor.) |
-| `model_switched` | `session`, `message: Option<MessageId>`, `model: ModelRef` | Fold: session model only. Same `message` semantics as `agent_switched` (fresh synthetic id on emit). |
+| `session_archived` | `session`, `archived: Number` | Fold: `archived` = the stamp (unix epoch milliseconds when the root session was archived). Appended by `SessionEngine::archive_session` only on a root session that is not archived (idempotent; the first stamp is kept). Archiving never cancels a running turn. v1: `SessionInfo.archived`/`archivedAt`, `sessionUpdated.archived: true`. |
+| `session_unarchived` | `session` | Fold: `archived` → `None`. Appended by `SessionEngine::unarchive_session` when the session is archived: an explicit unarchive (`UpdateSession.archived: false`, `hya sessions unarchive`), or implicitly when the v1 surface admits a new prompt, command (including `/workflow`), or shell turn on it (before the turn's user message). Engine-internal continuations (goal/loop rounds, member wake-ups) do not unarchive. v1: `sessionUpdated.archived: false`. |
+| `session_ephemeral_set` | `session`, `ephemeral: bool` | Fold: `ephemeral` = the value. `true` is appended by the v1 `CreateSession` with `ephemeral: true` on a new root session without a title (`SessionEngine::set_session_ephemeral`, which never marks a child or a used session); `false` on the source of a `ForkSession`. The fold also clears `ephemeral` for good on any `message_started`, `session_titled`, and `session_archived`. The server deletes an ephemeral session once no `StreamSessionEvents` stream watches it (docs/protocol/README.md "Ephemeral sessions"). v1: `SessionInfo.ephemeral`. |
+| `agent_switched` | `session`, `agent: AgentName` | Fold: session agent. Does not create a transcript row or message id. |
+| `model_switched` | `session`, `model: ModelRef` | Fold: session model. Does not create a transcript row or message id. |
 | `session_status` | `session`, `status: Value` | **no-op** — free-form status ping; the deleted Compat surface bridged it to `session.status` |
 | `command_executed` | `session`, `command: String`, `arguments: String`, `message: MessageId` | **no-op** — records that a `/slash` command produced that user message; the deleted Compat surface bridged it to `command.executed` |
 
@@ -152,7 +166,6 @@ preferred model plus ordered fallback candidates and per-candidate reasoning.
 | `turn_binding_recorded` | `session`, `message`, `generation: ConfigGeneration` | Fold: `config_generation` on that message. Engine emits it immediately after `MessageStarted{Assistant}` so the immutable runtime snapshot identity is durable before any provider call. |
 | `user_prompt_context_recorded` | `session`, `message`, `files: Vec<Value>`, `agents: Vec<Value>` | Fold: prompt `@file` / `@agent` attachment metadata, and prompt images: one `files` entry `{type: "image_attachment", part, name, mime, size, blob, path?}` per image, where `blob` is the sha256 of the bytes in the session's `file_blob` table (the bytes never ride on the event). An image prompt appends it in the same transaction as the user message, between `text_end` and `message_finished`. Engine **emits nothing** when both vectors are empty. v1: `partsAdded` with one `AttachmentPart` per image (no other entries map). |
 | `message_finished` | `session`, `message`, `role`, `finish: FinishReason`, `tokens: Option<TokenUsage>`, `cause: Option<FinishCause>` | Fold: finish + cause + tokens. `tokens` is the legacy sum of the message's rounds and is only set on a normal finish. Engine force-emits this with `error` or `cancelled` (and `tokens: None`) on turn failure, cancel, drain, sidecar loss, or crash recovery so clients never wait forever after `message_started` (see [End-event invariant](#end-event-invariant)); `cause` says why (omitted when the model ended the message, and absent in logs written before 0.41.0). Billed rounds of such a message are still counted through `usage_recorded`. For a message with no `usage_recorded` record (a legacy log) a non-zero `tokens` is folded once into `SessionProjection.usage` under model `unattributed`, except in forked sessions, whose copied messages carry the source's sums. |
-| `message_deleted` | `session`, `message` | Fold: retain-by-id removal of the whole message |
 | `part_deleted` | `session`, `message`, `part: PartId` | Fold: removes that part from the message |
 
 #### Step markers (provider rounds)
@@ -187,10 +200,9 @@ One record per provider call that reported usage:
 
 Side calls (`title`, `compaction`) omit `message` and `step` and never create
 transcript messages. `UsagePurpose` is `turn` \| `title` \| `compaction`; an
-unknown value from a newer binary decodes as `other`. An older binary folds the
-whole variant as `unknown`. The v1 curated stream does not map it (the IDL's
-`TokensRecorded` payload stays unconstructed); read the fold from the
-projection. Not attributed today: provider-native compaction
+unknown purpose value decodes as `other`. The v1 curated stream maps usage
+records to `TokensRecorded { message, model, usage }`; read the session aggregate
+from the projection. Not attributed today: provider-native compaction
 (`/responses/compact` reports no usage to the engine), goal evaluators, and
 loop verifiers. Usage of a stream that is dropped before its decoder reports
 usage (mid-stream cancel or transport failure) is not known to the engine and
@@ -226,7 +238,7 @@ snapshot (without provider data), preserving partial thinking for replay.
 | Wire `type` | Payload fields | ToolPartState | Reducer |
 | --- | --- | --- | --- |
 | `tool_input_start` | `session`, `message`, `part`, `call: ToolCallId`, `name: ToolName` | → `Pending { input: null }` | Fold: push tool part |
-| `tool_input_delta` | `session`, `message`, `part`, `call`, `name`, `delta: String` | (unchanged) | **no-op** (compat bridge may forward raw argument JSON) |
+| `tool_input_delta` | `session`, `message`, `part`, `call`, `name`, `delta: String` | (unchanged) | **live-only**, never persisted; `tool_call_requested` stores the complete input |
 | `tool_call_requested` | `session`, `message`, `part`, `call`, `name`, `input: Value` | → `Running { input }` | Fold: upsert running tool. Turn loop collects these into the round's `tool_calls` list. |
 | `tool_result` | `session`, `message`, `part`, `call`, `output: Value`, `time_ms: u64` | → `Completed { input, output, time_ms }` | Fold |
 | `tool_error` | `session`, `message`, `part`, `call`, `message_text: String`, `value: Option<Value>` | → `Error { input, message, value }` | Fold. Engine commonly sets `value` to `{ "error": { "type": "...", "message": "..." } }`. |
@@ -254,10 +266,11 @@ not arbitrary input-key rendering. `env` values and ANSI terminal control data
 are not presentation metadata.
 
 When a tool-level cancellation reaches the terminal tool-event boundary, it is a
-durable `tool_error` with wire type `cancelled`; an actor-level turn cancellation
-may instead terminate the turn and finish the surrounding message/step with
-`cancelled` without emitting a per-call result. A nonzero Bash exit or timeout
-remains a completed structured result with status metadata; it is not converted
+durable `tool_error` with wire type `cancelled`. A result already produced stays
+a `tool_result` even if the turn is cancelled immediately afterwards; the
+surrounding message finishes with `cancelled`. Cancellation before a result
+exists closes an open call with a cancellation error. A nonzero Bash exit or
+timeout remains a completed structured result with status metadata; it is not converted
 to a durable `ToolError` unless execution itself is cancelled or fails before a
 terminal result is built.
 
@@ -299,15 +312,22 @@ the root.
 
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
-| `agent_registered` | `session` (team root), `agent_session: SessionId`, `handle: String` (the agent's **leaf** name), `parent: Option<String>` (default absent = team root), `agent_type: AgentName` (default empty), `mode: SubagentMode` (default `transient`) | Fold: roster entry keyed by **canonical path** `{parent}/{handle}`; a root registration (`agent_session == session`) keys as `main`. See [ADR-0011](../adr/0011-hierarchy-scoped-mailbox.md) |
-| `agent_activity_changed` | `session`, `handle`, `status: RosterStatus`, `current_task: Option<String>` | Fold: roster activity; idle/terminal clears in-flight resident work and advances durable cursor |
+| `agent_registered` | `session` (team root), `agent_session: SessionId`, `handle: String` (the agent's **leaf** name), `parent: Option<String>` (default absent = team root), `agent_type: AgentName` (default empty), `mode: SubagentMode` (default `transient`) | Fold: roster entry keyed by **canonical path** `{parent}/{handle}`; a new row starts its cursor at the current inbox length, and a revived row rejoins its parent unit broadcast channel; a root registration (`agent_session == session`) keys as `main`. See [ADR-0016](../adr/0016-channel-communication-plane.md) |
+| `agent_activity_changed` | `session`, `handle`, `status: RosterStatus`, `current_task: Option<String>` | Fold: roster activity; activity is display-only; cancellation may show Idle while work remains pending |
 | `resident_work_started` | `session`, `actor_session`, `handle`, `epoch: ActorEpoch`, `inbox_through: u64` | Fold: marks fenced resident work on roster before tool/child/provider dispatch |
-| `mail_sent` | `session`, `from: String` (canonical path), `to: MailEndpoint` (a canonical path, or a unit-qualified channel key `{unit}#{name}`), `kind: MailKind` (default), `body: String` | Fold: direct → recipient inbox; channel → channel log + fan-out to current **eligible** subscribers (skips any member whose roster entry is `mode.is_resident()` **and** status is `Done` or `Failed`; see [ADR-0001](../adr/0001-event-sourced-mailbox-and-channels.md)). Addresses are resolved to canonical form at **send** time, not fold time; see [ADR-0011](../adr/0011-hierarchy-scoped-mailbox.md) |
+| `resident_work_finished` | `session`, `handle`, `epoch: ActorEpoch`, `inbox_through: u64` | Internal completion marker; matching work epoch clears pending work and acknowledges its inbox boundary. Unlike `mail_consumed`, it settles the admitted prompt. |
+| `mail_sent` | `session`, `from: String` (canonical path), `to: MailEndpoint` (a canonical path, or a minted channel id), `kind: MailKind` (default), `body: String` | Fold: direct → recipient inbox; channel → channel log + fan-out to current **eligible** subscribers (skips any member whose roster entry is `mode.is_resident()` **and** status is `Done` or `Failed`; see [ADR-0001](../adr/0001-event-sourced-mailbox-and-channels.md)). Addresses are resolved to canonical form at **send** time, not fold time; see [ADR-0016](../adr/0016-channel-communication-plane.md) |
 | `channel_joined` | `session`, `channel: String`, `member: String` | Fold: add subscriber |
-| `channel_left` | `session`, `channel`, `member` | Fold: remove subscriber |
 
 `SubagentMode`: `transient` \| `resident`.  
 `RosterStatus`: `idle` \| `busy` \| `done` \| `failed`.
+
+Revival commits `agent_registered`, `agent_restarted` (`session`, canonical
+`handle`, `child`, `epoch`), a child system context boundary and the first DM
+`mail_sent` together. Live re-registration preserves the cursor. Earlier unread
+mail stays in history and appears in the prior episode handoff's Pending section,
+while only the reviving mail is owed to the new episode. See the
+[revival contract and example](subagent-orchestration.md#4-revival).
 
 #### Context, fork, and reduction observability
 
@@ -315,7 +335,7 @@ the root.
 | --- | --- | --- |
 | `context_compacted` | `session`, summary `message`, `strategy`, `from_message`, `to_message`, `folded_count`, `input_tokens_est`, `threshold` | **no-op** for projection; durable checkpoint marker. The system message carries summary output and the range points to the folded log entries. A manual compaction (`CompactSession` / `SummarizeSession`) records `strategy: local_summarizer` over the whole window it summarized, with `threshold: 0` (no threshold tripped); v1 maps it to `compactionApplied { manual: true }`. |
 | `todos_updated` | `session`, `todos: [TodoItem { id, content, status }]` | Fold: `SessionProjection.todos` = the full list. Appended by the engine right after a todo tool's `tool_result` whose `metadata.todos` differs from the folded list (reads and no-op writes append nothing). Sessions without it (logs before reducer version 5) read the latest todo tool result instead. |
-| `session_forked` | `session`, `source`, optional `before_message` | Fold: `SessionProjection.forked_from = source`, `forked_before = before_message` (the source-log user message the copy stopped before; `None` for a head fork, which copies every visible message). Records a fork edge separate from subagent `SessionCreated.parent`. Copied messages receive fresh ids; their copied `tokens` never count toward the fork's `usage`. v1: `SessionInfo.forkedFrom`. `forked_before` folds from projection reducer version 6 (0.41.0). |
+| `session_forked` | `session`, `source`, optional `before_message` | Fold: `SessionProjection.forked_from = source`, `forked_before = before_message` (the source-log user message the copy stopped before; `None` for a head fork, which copies every visible message). Records a fork edge separate from subagent `SessionCreated.parent`. Copied messages receive fresh ids; their copied `tokens` never count toward the fork's `usage`. v1: `SessionInfo.forkedFrom`. |
 | `context_evicted` | `session`, `evicted_parts`, `tokens_before`, `tokens_after`, `threshold` | **no-op**; request-local tool-output reduction. The event log retains full outputs. |
 
 `ContextCompacted` is durable replay evidence and a baseline/checkpoint marker,
@@ -346,17 +366,13 @@ size, reason }` (content not kept: `too_large`, `session_cap`,
 **Commit.** There is no commit event: the fold of the next `message_started`
 for a new message (any role) drops a pending revert first
 (`revert = None`), so the hidden messages are gone for good and an unrevert
-after it is a no-op. Logs written before 0.41.0 contain none of these events
-and fold exactly as before (`revert` and `file_changes` stay empty and are
-omitted from the serialized projection); an older binary folds them as
-`unknown`. Projection reducer version 6.
+after it is a no-op.
 
-#### Errors and forward compatibility
+#### Errors and decoding
 
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
-| `error` | `session: Option<SessionId>`, `code: String`, `message: String`, `failed_message: Option<MessageId>` | Fold only with `failed_message`: sets `MessageProjection.error = {code, message}` on that message; otherwise **no-op**. The engine appends it when a turn fails (`code`: `provider_error`, `tool_error`, `store_error`, …; `message`: the error's display text, at most 2000 bytes) immediately before the message's `message_finished { finish: error }`. `session` optional so a global error is expressible; `Event::session()` returns `None` when absent. v1: `errorReported`, `MessageInfo.error`, `TurnInfo.errorCode`/`errorMessage`. `failed_message` is absent in logs written before 0.41.0 (projection reducer version 3). |
-| `unknown` | (unit; original payload dropped on typed decode) | **no-op**. `#[serde(other)]` catch-all so older binaries can deserialize newer tags without failing. Lossless forwarding must keep raw JSON. |
+| `error` | `session: Option<SessionId>`, `code: String`, `message: String`, `failed_message: Option<MessageId>` | Fold only with `failed_message`: sets `MessageProjection.error = {code, message}` on that message; otherwise **no-op**. The engine appends it when a turn fails (`code`: `provider_error`, `tool_error`, `store_error`, …; `message`: the error's display text, at most 2000 bytes) immediately before the message's `message_finished { finish: error }`. `session` optional so a global error is expressible; `Event::session()` returns `None` when absent. v1: `errorReported`, `MessageInfo.error`, `TurnInfo.errorCode`/`errorMessage`. |
 
 ### Events the reducer does not fold
 
@@ -369,10 +385,8 @@ but `Projection::apply_event` ignores them:
 - `step_finished`
 - `text_end`
 - `tool_input_delta`
-- `context_compacted`
 - `context_evicted`
 - `error` without `failed_message`
-- `unknown`
 
 ## Pending permission plane (server-side)
 
@@ -543,7 +557,7 @@ UsageTotals {
   `unattributed` (`UNATTRIBUTED_MODEL`), purpose `turn`, thinking unknown.
   Messages with records never fall back, so nothing is counted twice. Forked
   sessions skip the fallback.
-- Billed stays billed: `message_deleted`, revert, and compaction never
+- Billed stays billed: revert and compaction never
   decrement it.
 - `UsageTotals::output_split() -> OutputSplit { thinking, visible, unknown }`
   keeps partial knowledge (`thinking + visible + unknown == output`);
@@ -552,10 +566,6 @@ UsageTotals {
 - Child (subagent) sessions keep their own logs; aggregate a tree by folding
   each session and calling `SessionUsage::merge`. `SessionUsage::total()` sums
   every model.
-
-This is **not** the `token_ledger` row shape (session/role/iteration/run-id
-columns in storage). Ledger accounting and envelope `TokenUsage` are different
-models.
 
 The store schema keeps a `message.cost_json` column, but no workspace writer
 populates it and `hya-proto` no longer defines a cost type for it; integrators
@@ -594,17 +604,15 @@ Projection {
 
 | Field | Source events |
 | --- | --- |
-| `id`, `parent`, `agent`, `model`, `workdir` | `session_created` (+ switch/move) |
+| `id`, `parent`, `agent`, `model`, `workdir` | `session_created` (+ agent/model switches) |
 | `project` | `session_created.project` (omitted when `None`) |
 | `kind` | `session_created.kind` (`project` for logs written before the field) |
 | `agent_model_overrides` | `session_agent_model_override_set` (`None` model removes that Agent) |
 | `permission_mode` | `session_permission_mode_set` on the root (omitted when `None`; `None` means the process default: `yolo` under `--yolo`/`model: danger`, else `manual`) |
 | `title` | `session_titled` |
 | `metadata` | `session_metadata_set` |
-| `permission` | `session_permission_set` (replace) |
 | `archived` | `session_archived` / `session_unarchived` (`None` when not archived; only root sessions are archived) |
-| `ephemeral` | `session_ephemeral_set`; cleared by `message_started`, `session_titled`, nonzero `session_archived` (`false` when never marked) |
-| `share` | `session_share_set` / `session_share_cleared` |
+| `ephemeral` | `session_ephemeral_set`; cleared by `message_started`, `session_titled`, `session_archived` (`false` when never marked) |
 | `messages` | message lifecycle + part events |
 | `members` | member lifecycle (parent log) |
 | `workflow` | workflow lifecycle events |
