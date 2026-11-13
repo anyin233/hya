@@ -563,3 +563,6 @@ Resident bus listeners and plugin/MCP connection I/O have separate owners.
 
 Member handle allocation propagates projection/store errors before reserving a name;
 a failed read cannot be interpreted as an empty team.
+
+Interactive root turn release rechecks team retirement after delivering deferred
+wakes. A consumed inbox and ended children leave no idle team tasks behind.

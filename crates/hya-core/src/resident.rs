@@ -1236,6 +1236,10 @@ impl TeamActor {
             slot.notify.notify_one();
         }
         self.maybe_fire_quiescence(&mut st);
+        drop(st);
+        if let Some(supervisor) = self.supervisor.upgrade() {
+            supervisor.retire_team(self);
+        }
     }
 
     /// The lead's turn failed: hold back every harness-started lead turn
