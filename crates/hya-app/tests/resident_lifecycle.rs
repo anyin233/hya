@@ -4100,3 +4100,69 @@ async fn m414_shared_actor_waits_for_its_busy_earlier_stage_across_levels() {
     assert_eq!(earlier.session, later.session);
     h.shutdown().await;
 }
+
+#[tokio::test]
+async fn review_w1_dropped_finished_caller_cancels_and_terminalizes_owned_run() {
+    for verifying in [false, true] {
+        let mut h = Harness::new().await;
+        let held = Arc::new(Gate::default());
+        let worker = h.provider.script(vec![if verifying {
+            Round::text("worker evidence")
+        } else {
+            Round::text("partial").stream_gated(held.clone())
+        }]);
+        let verifier = h.provider.script(vec![
+            Round::text(r#"{"met":true,"reason":"done"}"#).gated(held.clone()),
+        ]);
+        let verify = if verifying {
+            format!(
+                "    mode: loop\n    verify:\n      agent: hya-reviewer\n      model: {{ id: fake }}\n      until: {verifier}\n      max_iterations: 1\n"
+            )
+        } else {
+            String::new()
+        };
+        m414_source(
+            &h,
+            &format!(
+                "  work:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {worker}\n{verify}"
+            ),
+            "  work",
+            "collect_all",
+        );
+        let control = h.built.workflow_control();
+        let caller = tokio::spawn(m414_run(
+            control.clone(),
+            h.root,
+            tokio_util::sync::CancellationToken::new(),
+        ));
+        held.arrived().await;
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        let terminal = tokio::time::timeout(support::lifecycle::BOUND, async {
+            let mut updates = h.engine.bus().subscribe();
+            loop {
+                let p = h.engine.read_projection(h.root).await.unwrap();
+                if p.session
+                    .workflow
+                    .as_ref()
+                    .and_then(|w| w.run.as_ref())
+                    .is_some_and(|r| r.status == hya_proto::WorkflowRunStatus::Cancelled)
+                {
+                    break;
+                }
+                updates.recv().await.unwrap();
+            }
+        })
+        .await
+        .is_ok();
+        let live = h.engine.store().live_member_count(h.root).await.unwrap();
+        held.release();
+        h.shutdown().await;
+        assert!(
+            terminal,
+            "dropped caller stranded its run (verifier={verifying})"
+        );
+        assert_eq!(live, 0);
+        assert!(hya_server::WorkflowControl::active_run(&control, h.root).is_none());
+    }
+}

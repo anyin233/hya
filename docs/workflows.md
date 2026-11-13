@@ -394,4 +394,7 @@ The `workflow` tool handles each request independently. While
 `workflow {"action":"list"}` and `workflow {"action":"state"}` return without
 waiting for completion, including in the same Session. The command and result
 schemas are unchanged; per-session admission still rejects a second active run.
-Runtime shutdown cancels and waits for admitted background Workflow execution.
+Runtime shutdown cancels and waits for admitted Workflow execution. Finished
+delivery also uses a tracked task: disconnecting or dropping its waiting caller
+cancels the run, and cleanup and the terminal Event finish before ownership is
+released. Started delivery continues after its admission response.
