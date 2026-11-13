@@ -190,10 +190,14 @@ will replace this handoff with repeated episode activations.
 `ResidentSupervisor::activate(parent: SessionId, member: SessionId,
 directive: String, guidance: Arc<str>, route: Option<WorkflowTurnRoute>,
 parent_claim: Option<&ActorClaim>) -> Result<ActivationWaiter, CoreError>`
-configures one idle member and sends durable parent mail, or revives an archived
-member in the fenced capacity-checked transaction. The existing turn lease
+configures one idle member and sends its directive on the existing parent-child
+DM channel, or revives an archived member in the fenced capacity-checked
+transaction. Blank directives are rejected before leasing or mail effects.
+Live/archive selection is serialized with endings by the claim-write boundary.
+The existing turn lease
 prevents any mail wake from starting before guidance, route and the post-mail
-inbox boundary have been installed. A busy, stopped, ending, or already armed
+inbox boundary and pending work have been installed, before bus delivery.
+A busy, stopped, ending, or already armed
 member is refused without arming mail. No SQL connection spans a non-store
 await.
 
@@ -203,7 +207,11 @@ one of `Settled { final_text: String }`,
 `Reported { outcome: ReportOutcome, text: String }`, or
 `Ended { reason: ArchiveReason, status: MemberRunStatus, note: String }`.
 The episode sends `Settled` only after the durable work-finished/idle commit
-covers the boundary and no accepted report or requested ending owns completion.
+covers the boundary, at the Idle decision with no pending work, unread incoming
+mail or live child. A trailing empty wake still reaches this decision without
+starting a model turn. The route remains installed across follow-up turns and
+is cleared only at true rest. Accepted reports and requested endings own
+completion before settlement.
 Its own ending sends `Reported`/`Ended` after terminal publication and claim
 release. A terminal-write failure is returned as `CoreError`.
 

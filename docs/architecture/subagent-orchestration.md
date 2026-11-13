@@ -91,7 +91,7 @@ task(members[]) → bounded SpawnerPlane (full → overloaded)
 → resolve all agents, models, resources, sidecar factories and root context
 → check depth and cancellation
 → register_episodes (one transaction): parent fence + live-capacity check
-   + lazy main registration + all child/member/roster/channel/prompt events + claims
+   + lazy main registration + all child/member/roster/channel events + directive DM mail + claims
 → install every committed episode under claim-write serialization
 → initialize episodes concurrently; publish registration before each ending
 → reply with running handles
