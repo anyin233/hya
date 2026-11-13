@@ -114,7 +114,9 @@ async fn set_archived(db: &str, id: &str, archived: bool) -> anyhow::Result<()> 
                 .map_or(0, |elapsed| {
                     i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
                 });
-            match session_archive_event(&projection, archived, now) {
+            let event = session_archive_event(&projection, archived, now);
+            drop(projection);
+            match event {
                 Ok(Some(event)) => {
                     store
                         .append_event(session, &event)
