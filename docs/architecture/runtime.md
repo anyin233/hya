@@ -72,7 +72,7 @@ The server's process-level `AgentSpec` (`hya_app::agent_base_with_model`) has
 an **empty** workdir: `hya serve` has no working directory (ADR-0024). Each
 turn's `AgentSpec` takes its workdir from the session's recorded workdir, and
 so do workflow members and recovered residents. The client-side direct
-commands (`hya exec`/`run`/`-p`/`loop`, `agent_with_model`) name the caller's
+commands (`hya exec`, `hya -p`, `hya loop`, `agent_with_model`) name the caller's
 cwd as an absolute workdir instead.
 
 ### No process working directory
@@ -224,8 +224,8 @@ empty — a prompt with no `@mentions` leaves no context event in the log, and
 consumers must not expect one per user message. When present, that metadata is
 replayed through the projection and provider request builder.
 
-`admit_user_prompt_with_attachments(session, text, attachments)` admits a
-prompt with images ([`attachments.rs`](../../crates/hya-core/src/attachments.rs)):
+`admit_user_prompt_with_attachments(session, message, text, attachments)`
+admits a prompt with images under the caller's message id ([`attachments.rs`](../../crates/hya-core/src/attachments.rs)):
 it validates them (PNG/JPEG/GIF/WebP by signature, 10 MiB each, 20 MiB per
 turn), then in **one** store transaction
 (`SessionStore::append_events_with_blobs`) writes each image to the session's
@@ -313,7 +313,7 @@ remain visible as stale or unavailable.
 | --- | --- | --- |
 | `run_turn` | `Root` | Interactive / top-level path |
 | `run_turn_with_external_dirs` | `Root` | Adds external-directory permission rules |
-| `run_turn_with_external_dirs_and_guidance` | `Root` | Also attaches request-scoped guidance |
+| `run_turn_with_external_dirs_and_guidance` | `Root` | Also attaches request-scoped guidance; `admitted_prompt` makes the turn own the prompt its caller admitted |
 | `run_bound_turn` | `Bound` | Child path reusing parent binding |
 | `run_bound_turn_for_actor` | `Bound` | Resident path with `ActorClaim` |
 | `run_resolved_turn_with_sidecar_tools` | `Resolved` | Child with pre-resolved sidecar tools |
@@ -450,7 +450,7 @@ Together that is a 128-permit live stream budget.
 For each `ToolCallRequested` collected in the round, in order:
 
 1. Re-validate the actor claim.
-2. **`tool.execute.before` hooks** — global plugin host first, then activation
+2. **`tool.execute.before` hooks** — captured plugin sources, then activation
    (sidecar). A `Veto { reason }` produces `ToolError` with message
    `blocked by plugin: <reason>` and the tool never runs.
 3. After the before-hook batch, re-check activation-hook health (unhealthy →
@@ -649,8 +649,7 @@ it came from:
   processes exit even if the sessions stay idle (a turn in flight keeps its
   binding, and so its processes, until it ends).
 - A released session's out-of-turn events and lifecycle hooks reach no
-  bundle or scope hooks until its next bind. Process-wide (config) plugin
-  hooks are separate and unaffected.
+  bundle, configured-plugin, or scope hooks until its next bind.
 
 #### `ToolRegistrySnapshot` and dispatch identity
 
@@ -687,14 +686,16 @@ changes the fingerprint, so a reload can detect that permissions actually
 changed rather than re-deriving the rule set.
 
 `hya-app::RuntimeReconciler` owns only desired/observed coordination for MCP
-and startup plugin declarations. It has no resolve or dispatch API and caches
+and configured plugin declarations. It has no resolve or dispatch API and caches
 no effective tool set. Stable source IDs are `(mcp|plugin, configured_id)`;
 the effective source manifest, declaration digest, client/child owner, and
-exports live only in `RuntimeSnapshot`. Startup, deferred MCP, and Compat MCP
-control all submit to this reconciler. Complete current-revision candidates
-publish through `RuntimeRegistry`; stale successes are dropped, failures leave
-the prior generation unchanged, and explicit removals publish before unrelated
-additions. The publication closure always starts from the current snapshot, so
+exports live only in `RuntimeSnapshot`. Startup, deferred MCP, plugin config
+edits, and v1 MCP control all submit to this reconciler. Each source has its own
+operation ticket and publishes its complete contribution through `RuntimeRegistry`.
+A mutation of one source leaves other pending preparations valid. Stale results
+are dropped, failed sources can be retried with identical declarations, and
+explicit removals publish before unrelated additions. A failed source keeps its
+previous contribution without preventing independent successes from publishing. The publication closure always starts from the current snapshot, so
 it cannot overwrite a concurrent skill refresh with an older candidate.
 
 #### Deferred MCP startup
@@ -718,15 +719,27 @@ ASCII alphanumerics, `_`, and `-`, and replaces every other character with
 Resources are **not** registered as tools and are **not** reachable by the
 model through the tool registry today.
 
-Configured Plugin reconciliation covers tool exports and their RPC binding;
-startup callbacks remain owned by the configured `PluginHost`. A respawn must
-reproduce the complete canonical initialize declaration or calls fail closed.
+Configured Plugin reconciliation publishes tools, Skills, and hooks together;
+the published source retains its single-plugin `PluginHost`. Configuration edits
+are checked at the same bind/explicit-refresh boundary as bundles. There is no
+separate live host or permission interceptor for configured plugins. A respawn
+must reproduce the complete canonical initialize declaration or calls fail closed.
+User-global plugins precede installed plugin bundles and project plugins in hook
+and permission dispatch. Active turns retain their global source snapshot;
+out-of-turn events and session lifecycle dispatch use the currently published
+global sources, so idle sessions cannot pin removed global plugins. A base
+publication also releases cached Project compositions; their overlays remain,
+and their next bind recomposes against the new base. Live turn bindings retain
+their captured snapshot across this invalidation.
 
 `RuntimeSnapshot` owns exactly one `BundleCatalog`. At root admission, new turn
 binding, subsequent root model-round boundaries, and catalog refresh, `hya-app` merges project, installed, and
 first-party payloads. It prepares static Skills, native/Bun/Claude process
 contributions, and bundled MCP servers before publishing catalog and Bundle
-sources atomically. Initialization failure preserves the previous generation.
+sources atomically. A failed project source retains its previous publication;
+independent sources can still advance. Automatic binds remember failed inputs
+and continue using the retained catalog. Explicit refresh retries failures even
+when declarations are unchanged.
 Unchanged sources reuse their process owners; retained bindings keep those
 owners and staged files alive across replacement and uninstall.
 
@@ -754,6 +767,46 @@ execution (and, for Workflow Stages without an `actor` key, into the one-shot
 Stage runner). The child path does not query the bundle registry database
 for a generation or bind whichever runtime is current when a queued request
 runs.
+
+Resident registration commits the child, parent member, roster/channels, claim,
+and raw initial user directive together. It then installs the slot and its owned
+task before awaiting plugins. The task sends global and scoped `session.start`,
+publishes the committed registration events, applies `message.user.before`
+rewrites with `TextReplace`, notifies `agent.spawn`, then enters the resident
+loop. Cancelling the spawning future during either hook leaves the owned task
+running. Failed commits produce no child hook calls or captured hook/policy
+entries. Concurrent siblings join one group channel, resolved inside the writer
+transaction, so one `announce` reaches the whole unit.
+
+If the initial directive is cancelled before an assistant turn starts, stop,
+archive, sidecar startup failure, and team-budget termination durably append an
+explicit cancelled assistant answer with the terminal activity and claim
+release. For example, archive `inspect the parser` before it runs, then revive
+with `inspect the tests instead`: the model sees the old task followed by its
+cancellation answer before the new directive. No extra tool arguments are
+needed. See the [task registration contract](../spec/backend/task-tool.md#scenario-atomic-resident-registration-and-arming)
+for the store interface and ordering.
+
+Resident exits use one [atomic terminal transition](../spec/backend/task-tool.md#atomic-resident-termination):
+the caller supplies a prepared handoff, explicit archive reason and member
+status; cleanup, report/mail when present, archive and claim release commit
+together. Forced handoffs retain prior state and remain searchable. `wait`
+returns the current episode's failure reason, including a kill before its first
+turn. A refused voluntary report is discarded; handling late mail requires a
+new `report` call. Terminal errors are returned or logged with the session id,
+without a competing terminal writer. Root teardown requests each episode's
+ending, awaits its completion, then reconciles orphans; it sends no report mail.
+
+A killed team leaves the live map immediately. New tasks use fresh activity
+counters and the triggering turn's `main` context while old episodes finish.
+Only revival of the same member waits for its previous episode. For example,
+mail a new directive to an archived budget-killed child: it revives under the
+same session and can wake its parent again. A refused competing revival writes
+neither its prior-handoff message nor its directive. Registration plus episode
+installation and orphan Takeover share a supervisor claim-write boundary across
+team generations; kill does not wait on it. Shutdown joins composition intake
+before resident draining, overlaps turn drain with episode endings, and joins
+the supervisor bus listener before returning.
 
 ## AgentBundle activation sidecars (0.34.11)
 
@@ -808,9 +861,9 @@ is no TTL, heartbeat, reclaim, second runtime, or persisted process state.
 
 ### Activation-hook health gate
 
-A task-local activation hook dispatcher is scoped to one session and runs
-**in addition to** (not instead of) the global plugin host for
-`tool.execute.before` / `tool.execute.after` (and event dispatch).
+A task-local activation hook dispatcher is scoped to one session and includes
+the configured/project plugin sources captured by its binding, followed by the
+selected bundle and activation sidecar hooks for tool and event dispatch.
 
 The turn loop checks the activation hook dispatcher's `is_healthy()`:
 
@@ -832,6 +885,15 @@ identity, current monotonic epoch, and per-process owner identity. Actor epochs
 and runtime configuration generations are independent: takeover does not
 terminate old snapshot owners, and a runtime refresh does not take over an
 actor.
+
+Resident slots also belong to that exact claim in memory. Archiving and
+reviving a child keeps its session id but installs a new claim. For example,
+if the old episode is blocked in a plugin's `session.start` or `agent.spawn`,
+releasing the hook after revival does not publish its old registration, replace
+the revived session's hooks or channel policy, start a second resident driver,
+or remove the new slot. Initialization, turn bookkeeping and cleanup recheck
+the claim after asynchronous work; stale cleanup quietly exits. The existing
+`archive` and downward-mail revival interfaces need no extra options.
 
 Before runtime readiness, `hya-app` advances all active resident claims, aborts
 non-actor admissions through the existing startup seam, folds the canonical
@@ -881,6 +943,21 @@ Each step is checked against the projection, so a part or message that already
 reached a terminal state is never closed twice. Shell turns (`run_shell`) bind
 the same cancel token and close their message the same way on error.
 
+Sidecar loss cancels the resident or transient subagent's turn token and awaits
+the turn, so buffered text/reasoning and tool file changes are flushed before
+the message closes. A completed tool result stays a `ToolResult` if cancellation
+arrives just after it; cancellation stops the turn after recording it. Cancelled
+results skip after-hooks on both model and direct shell turns. For example,
+`hya serve stop` during a direct shell call keeps its shutdown finish and
+restore record even if a configured after-hook rewrites errors to success.
+
+Replay equals the content observed live except for content produced after an
+actor lost its claim: the stale actor cannot flush text, reasoning, or file
+changes through the claim fence, and recovery closes its message. Cancellation
+may repeat durable `TextStart`/`TextEnd` boundaries already seen live; the
+projection handles them idempotently. A straggler can append `ToolResult` after
+the drain deadline's `MessageFinished`, without a second finish.
+
 ### Graceful drain
 
 A graceful stop — SIGINT/SIGTERM on `exec`/`run`/`-p`/`loop`, the normal end
@@ -888,6 +965,15 @@ of those runs, `serve` shutdown (SIGTERM/SIGINT/SIGHUP), `BuiltSessionEngine::sh
 — drains every in-flight turn in **every** session (roots, members,
 subagents, and a quiescence-synthesis turn that started on the lead during
 shutdown):
+
+`BuiltSessionEngine::drain(cause)` owns the stop order for server stops,
+restarts, and headless commands. It closes the turn gate, cancels composition
+intake, and joins admitted registration and Workflow handlers before calling
+`ResidentSupervisor::drain`. Cancelled registrations and Workflow runs still
+finish their terminal store writes. Embedders retain the built value and await
+`built.shutdown().await?`; dropping it only signals cancellation. Lower-level
+`spawn_team_supervisor` callers retain its `RuntimeTaskOwner`, await
+`tasks.shutdown()`, then drain their resident supervisor.
 
 1. `begin_drain(cause)`: the turn gate refuses every new claim from now on
    (`try_begin_turn` → `CoreError::Cancelled`; queued `run_turn*` →
@@ -907,6 +993,42 @@ shutdown):
    lead is never archived and its session stays resumable. (A member whose
    archive cannot commit falls back to roster `failed` with a `stopped: …`
    reason and a released claim, as before 0.41.0.)
+
+Daemon stops additionally call `SessionEngine::stop_for_restart(deadline)`.
+It refuses new turns and drains every active session with cause `shutdown`.
+Turn preparation cancelled before its assistant message starts still emits an
+assistant start/finish pair through the common turn closer. The store writer
+indexes each shutdown-cancelled assistant message in `pending_resume` in that
+finish event's transaction, for non-archived roots only. Children stay under the
+resident supervisor's recovery; the root prompt names interrupted subagents
+when its live or shutdown-archived roster identifies them.
+`AppState::resume_interrupted_turns()` on the next start injects one user-role
+restore prompt and starts a turn through the normal server path: project
+guidance, external directories, RunGuard busy tracking, and cancellation.
+The row remains until the assistant message starts, so a crash between prompt
+injection and turn start does not lose the turn or duplicate the prompt for
+that interruption. A second shutdown cancellation is a new interruption and
+gets one more prompt. Any assistant start, including an ordinary engine turn,
+deletes the row. Prompt text is built at startup from the interrupted message's
+tool parts that are not `Completed`, including errors and denials.
+Missing, archived, and child sessions, and an injected prompt reverted with
+`/undo`, are discarded; failures are logged per
+session and do not abort other restores or startup. The model decides what to
+redo. An unanswered permission or question never becomes a synthetic successful
+tool result.
+A new process binds fresh listeners and publishes new discovery metadata
+(ADR-0031); listener inheritance and rollback generations no longer exist.
+
+```rust
+impl SessionEngine {
+    pub async fn stop_for_restart(&self, deadline: Duration) -> Result<TurnDrainReport, CoreError>;
+    /// The restore prompt the next turn answers (new or already injected); `None`: nothing to restore.
+    pub async fn inject_restart_prompt(&self, session: SessionId) -> Result<Option<MessageId>, CoreError>;
+}
+impl AppState {
+    pub async fn resume_interrupted_turns(&self) -> Vec<SessionId>;
+}
+```
 
 Causes: SIGINT → `user_cancel`; SIGTERM, normal end, `serve` shutdown →
 `shutdown`; end of a one-shot run whose lead turn failed → `leader_failed`.
@@ -929,8 +1051,9 @@ impl ResidentSupervisor {
     pub async fn drain(&self, cause: FinishCause, deadline: Duration) -> TurnDrainReport;
 }
 impl BuiltSessionEngine { // hya-app
-    pub async fn drain(&self, cause: FinishCause) -> TurnDrainReport; // DRAIN_DEADLINE
-    pub async fn shutdown(&mut self) -> Result<(), CoreError>;         // drain(Shutdown) first
+    // Owned future for a server callback; joins composition, then drains residents.
+    pub fn drain(&self, cause: FinishCause) -> impl Future<Output = TurnDrainReport> + Send + 'static + use<>;
+    pub async fn shutdown(&mut self) -> Result<(), CoreError>;      // drain(Shutdown)
 }
 ```
 
@@ -1011,10 +1134,9 @@ over to `anthropic/claude-sonnet` yields two `turn` records and two
 `by_model` entries; the Anthropic entry's output lands in
 `reasoning_unknown_output` because Anthropic does not report thinking.
 
-The token ledger (`record_session_usage`, best-effort, one row per finished
-assistant message) prefers the message's attributed rounds: the sum of its
-records with the latest round's serving model, `prompt_tokens =
-input + cache_read + cache_write`.
+Finishing an assistant message performs no separate usage accounting. Calls
+without reported usage add no estimates; transcript text is not concatenated
+or tokenized for billing.
 
 ## Compaction and Summaries
 
@@ -1039,6 +1161,26 @@ applies. A fraction outside `(0.0, 1.0]` falls back to the flat threshold.
 `reasoning`, `previous_summary` (the anchored summary this one updates),
 `max_output_tokens`, and `handoff` (send the verbatim transcript plus one
 trailing handoff prompt instead of the rendered serialization).
+
+### Final request window check
+
+Each round accounts for the composed system prompt and tool schemas when
+measuring context for the reduction ladder. Its threshold includes this
+fixed request material as well as the transcript. For example, a large system
+prompt can trigger reduction even when the conversation alone is small.
+
+After reduction and `chat.params` rewriting, immediately before opening a
+provider stream, the engine estimates the final
+`CompletionRequest` with `TokenAccounting`, using the selected model's reasoning
+replay policy. It includes `system`, `messages` (including images), and `tools`
+(name, description, and input schema), plus any explicit `max_output_tokens`
+reservation. The guard runs for every configured, hook-selected, and Workflow
+fallback candidate against that candidate's advertised nonzero `max_context`.
+An oversized request fails with a `ProviderError::Incompatible` containing the
+model, estimated input/output tokens, and context window; that request is never
+sent. Unknown models still use the router's normal unknown-model error.
+No new configuration is required; existing compaction settings control reduction.
+Estimates are local estimates, not a provider tokenizer guarantee.
 
 ### The reduction ladder
 
@@ -1137,8 +1279,8 @@ Callers cannot pass an arbitrary agent id into these seams.
 `cleanup_empty_unnamed_session` deletes a session if and only if
 `title::is_empty_unnamed_session` holds: the session exists, has **no** title,
 and has **no** messages (no user content and no assigned title). It calls
-through to `SessionStore::delete_session`, which removes `token_ledger` rows
-then `event_log` rows in one transaction.
+through to `SessionStore::delete_session`, which removes event-log rows and
+associated auxiliary state in one transaction.
 
 ## Shell turns
 
@@ -1205,14 +1347,19 @@ with hya's event log in place of opencode's git snapshot directory.
 
 ### Snapshots (`files_changed`)
 
-Before a tool call runs, the engine captures the prior state of the files it
-may change ([`file_snapshot.rs`](../../crates/hya-core/src/engine/file_snapshot.rs));
+After authorizing a tool call and before running it, the engine captures the
+prior state of the files it may change
+([`file_snapshot.rs`](../../crates/hya-core/src/engine/file_snapshot.rs));
 after the call it keeps the prior content of each file that actually changed
 as a per-session blob (`file_blob` table, keyed by sha256) and appends one
- `files_changed { message, call, files: [{path, before, observed}] }` after the call's
- `tool_result` / `tool_error`. `before` is `absent`, `stored {hash, size}`, or
- `omitted {size, reason}`; `observed` is true only for bash changes inferred from
+ `files_changed { message, call, files: [{path, before, observed}] }` for that call.
+ `before` is `absent`, `stored {hash, size}`, or `omitted {size, reason}`;
+ `observed` is true only for bash changes inferred from
  git status (and defaults to false when replaying older events).
+
+An edit made by the user while a permission prompt is pending is part of the
+authorized tool's starting state. If permission is denied or cancelled, the
+tool takes no snapshot and records no `FilesChanged` event.
 
 | Tool | What is captured |
 | --- | --- |
@@ -1306,16 +1453,15 @@ bridge (see below).
 | `tool_execute_before` | `ToolExecuteBeforeInput { session, message, call, tool, input }` | `Continue { input }` or `Veto { reason }` |
 | `tool_execute_after` | `ToolExecuteAfterInput { …, result: ToolOutcomeNative }` | `Continue { result }` where result is `Ok { output, time_ms }` or `Err { message }` |
 
-The CLI installs a `PluginHost` when `plugins:` are configured.
+The app publishes one complete runtime source for each configured plugin.
 
 ### `tool.execute.before`
 
 Runs before every model-issued tool call and also for direct shell turns. A
 hook may return rewritten input JSON (replaces the model's arguments) or a
 `Veto` with a reason. A veto skips execution entirely and emits a `ToolError`
-whose message is `blocked by plugin: <reason>`. Both the global plugin host
-and the per-session activation (sidecar) dispatcher run this hook (global
-first).
+whose message is `blocked by plugin: <reason>`. Captured configured/project
+plugin hooks run before the selected bundle and activation sidecar hooks.
 
 ### `text_complete`
 
@@ -1349,9 +1495,9 @@ through to the normal user prompt.
 
 ### Activation hooks
 
-A task-local activation hook dispatcher is scoped to one session and runs
-alongside the global host for the same tool before/after hooks and event
-dispatch. If it reports unhealthy while a tool call is in flight, the whole
+A task-local activation hook dispatcher is scoped to one session and includes
+its captured source hooks and activation sidecar for tool before/after hooks
+and event dispatch. If it reports unhealthy while a tool call is in flight, the whole
 turn is cancelled rather than silently continuing without the sidecar's hooks
 (see [Activation-hook health gate](#activation-hook-health-gate)).
 
@@ -1386,7 +1532,7 @@ It is a lower-level planner/verifier loop:
 - `LoopVerifier` grades transcript evidence.
 - `LoopPlanner` proposes the next directive.
 - `LoopGate` is the only component allowed to stop for success.
-- `cost_preflight` rejects budgets outside the hard ceiling before workers run.
+- `validate_budget` rejects budgets outside the hard ceiling before workers run.
 
 Current guards include:
 
@@ -1396,41 +1542,40 @@ Current guards include:
 - no-progress detection
 - repeated-directive detection unless the planner marks a strategy change
 
-The current CLI exposes goal mode directly; loop mode is available as core
-runtime API.
+The current CLI exposes both goal mode (`hya -p`) and loop mode (`hya loop --target …`) directly.
 
 ## Teams, Members, and Workspaces
 
 Team-related code is split across:
 
-- [`subagent.rs`](../../crates/hya-core/src/subagent.rs)
+- [`subagent.rs`](../../crates/hya-core/src/subagent.rs) and [`resident.rs`](../../crates/hya-core/src/resident.rs)
+- [`mailbox.rs`](../../crates/hya-core/src/mailbox.rs) and [`engine/mailbox.rs`](../../crates/hya-core/src/engine/mailbox.rs)
 - [`workspace.rs`](../../crates/hya-core/src/workspace.rs)
 - [`category.rs`](../../crates/hya-core/src/category.rs)
 
-There is no `team.rs` and no in-memory `TeamControlPlane`. Inter-agent mail and
-channels are event-sourced (`MailSent`, `ChannelJoined`, `ChannelLeft`) and
-folded by `hya-proto::Projection` (see
-[ADR 0001](../adr/0001-event-sourced-mailbox-and-channels.md)).
+There is no `team.rs` and no in-memory `TeamControlPlane`. Every spawned subagent
+is an episodic resident actor ([ADR-0015](../adr/0015-unified-resident-subagent-lifecycle.md)),
+and inter-agent mail and channels are event-sourced (`MailSent`, `ChannelJoined`,
+`ChannelLeft`) on the team-root log and folded by `hya-proto::Projection` (see
+[ADR-0001](../adr/0001-event-sourced-mailbox-and-channels.md)).
 
-Reach is **hierarchy-scoped**: an agent addresses only its parent, its
-same-parent siblings, and its direct reports. Handles are canonical paths
+Reach is **strictly vertical** ([ADR-0016](../adr/0016-channel-communication-plane.md)):
+an agent addresses only its parent and its direct reports over event-minted
+unit broadcast (`#announce-{8}`) and pair DM (`#DM-{8}`) channels; siblings are
+invisible to one another. Handles are canonical paths
 (`main/hya-plan-amiya/hya-task-texas`; leaves are `<subagent_type>-<operator>`, see
-[subagent-orchestration.md §2.1](subagent-orchestration.md#21-handles-agent-type--operator-name-0410))
-and channels belong to one unit (`main/hya-plan-amiya#build`). The rule itself is pure path arithmetic in
-`hya-proto::scope`, enforced at a write gate in `hya-store` and a read filter in
-`hya-core` (see
-[ADR 0011](../adr/0011-hierarchy-scoped-mailbox.md)).
-
-`run_team` runs member specs in child sessions and returns bounded evidence
-summaries. It intentionally does not project full child transcripts into the
-lead session.
+[subagent-orchestration.md §2.1](subagent-orchestration.md#21-handles-agent-type--operator-name-0410)).
+See [Subagent Orchestration](subagent-orchestration.md) for the complete episode,
+handoff, archive, and revival specification.
 
 `WorktreeManager` allocates git worktrees under `.hya/worktrees` and only cleans
 up paths it recorded as owned.
 
-These primitives are present in `hya-core`; the shipped CLI exposes
-single-turn/run aliases, goal, server, replay, sessions, catalog/auth, and
-JSONL RPC surfaces (bare startup prints a guidance banner).
+On a terminal, bare `hya` finds or auto-starts the persistent backend daemon and
+launches the Bun/OpenTUI terminal frontend and browser WebUI host; headless
+subcommands cover `exec`, `-p` goal mode, `loop`, `serve`, `tail-session`,
+`sessions`, `workflow`, `bundle`, `agent`, `provider`/`login`/`oauth`/`models`,
+and the secure relay (`proxy`, `bridge`, `relay doctor`).
 
 ## Errors
 

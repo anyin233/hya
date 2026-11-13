@@ -5,7 +5,7 @@ engine exposes tool schemas to the model, then executes requested calls only
 after permission checks pass.
 
 The interface crate owns the registry and session-scoped service planes.
-All 27 concrete built-in tool bodies and schemas live in five family sources
+All 28 canonical built-in tool bodies and schemas live in five family sources
 under [`../../bundles/presets`](../../bundles/presets). They are packaged as
 lockstep Rust libraries and loaded by `ToolRegistry::builtins()`. The tools
 use session-scoped planes through `ToolCtx`; plane methods and request types
@@ -25,7 +25,7 @@ remain in `hya-tool` so host authority stays with the session runtime.
   ([External directory boundary](#external-directory-boundary)).
 - `ToolRegistry`: name-to-tool map, aliases, and model-facing schemas.
 
-`ToolRegistry::builtins()` installs **27** canonical schema names before model
+`ToolRegistry::builtins()` installs **28** canonical schema names before model
 filtering ([`tool.rs`](../../crates/hya-tool/src/tool.rs)). The table below is
 the complete inventory. Advertised fields are the model-facing JSON schema
 `required`/`properties` keys; a schema marked **closed** rejects unknown keys.
@@ -79,6 +79,7 @@ stay globally unique inside a registry. `hya-tool` exposes the mechanism in
 | `plan_exit` (`plan`) | plan status input | Plan-mode completion signal. |
 | `send` | `{ "channel"?: string, "body": string }` — `#channel`/channel id/handle/`^parent`; omitted = role default | Delivery receipt: group channel = broadcast announcement, DM channel/handle = private mail (archived child revives), default = led unit or parent. `^parent` auto-infers the DM channel minted with the direct parent at registration time (works even when the parent handle is not yet in the roster, and at any depth — it never targets the root); without a DM channel it falls back to the parent handle. |
 | `list_channel` | (none) | The caller's channels: group pipes with can-post flag, DM channels with peer + unread. |
+| `report` | `{ "status": "completed"\|"failed"\|"blocked", "summary": string }` | Subagent terminal episode report: gates on drained inbox and archived children, writes state handoff, archives the caller, and delivers report mail to its parent. |
 | `search_agent` | `{ "query"?: string }` | The caller's archived direct children (handle, digests, degraded flag). |
 | `project_activity` | `{ "since_ms"?: integer, "limit"?: integer 1..200, "include_self"?: boolean }` — defaults: last 2 hours, 50, false | `{sessions[{id, agent, title, status: busy\|idle, last_activity_ms, workdir, parent, lineage_root, relation: self\|parent\|child\|sibling\|unrelated}], files[{path, session, last_changed_ms, change_kind: created\|changed}], note}` scoped to the caller's Project; newest change per path. Permission class `read_only`. |
 | `wait` | `{ "targets"?: string[], "mode"?: "all"\|"any", "timeout_secs"?: integer 0..1800 }` — omitted targets = every live direct subagent | `{woke_by: members\|mail\|timeout\|nothing_to_wait_for, finished[], running[], mail[], waited_ms}`; blocks the turn until the condition, bounded; the channel-tools override also wakes on mail. Permission class `read_only`. |
