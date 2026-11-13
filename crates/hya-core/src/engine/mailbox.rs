@@ -2190,6 +2190,40 @@ mod tests {
             "the message crossed units, one in-scope hop at a time"
         );
     }
+
+    #[tokio::test]
+    async fn steer_cursor_ack_marks_work_only_for_incoming_mail() {
+        let engine = engine().await;
+        let org = org(&engine).await;
+        engine
+            .mail_send(
+                org.root,
+                MailEndpoint::Handle(org.lead_1.path.clone()),
+                MailKind::Message,
+                "outgoing directive".into(),
+            )
+            .await
+            .unwrap();
+        // Both snapshots hide their notice, but only the child's cursor covers
+        // incoming work. The parent's outgoing history must not settle work.
+        for (session, handle, incoming) in [
+            (org.root, "main", false),
+            (org.lead_1.session, org.lead_1.path.as_str(), true),
+        ] {
+            let mut steer = engine
+                .steer_mailbox_snapshot_with_policy(
+                    session,
+                    Some(hya_tool::ChannelPolicySnapshot::default()),
+                )
+                .await;
+            assert!(steer.drain(&engine).await.unwrap().is_none());
+            let (ack, consumed_incoming) = steer.take_acknowledgement().unwrap();
+            assert!(
+                matches!(ack, Event::MailConsumed { handle: target, through: 1, .. } if target == handle)
+            );
+            assert_eq!(consumed_incoming, incoming);
+        }
+    }
 }
 
 /// One `channel://` read result.
