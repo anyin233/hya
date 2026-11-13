@@ -781,20 +781,16 @@ impl SessionStore {
                     projection: Arc::new(projection),
                 }),
         };
-        let (mut persisted_seq, mut unpersisted) = base
+        let (persisted_seq, unpersisted) = base
             .as_ref()
             .map_or((0, 0), |base| (base.persisted_seq, base.unpersisted));
-        let folded =
+        let prepared =
             projection_cache::fold(&mut conn, session, base.map(|base| base.projection)).await?;
-        if folded.rebuilt {
-            persisted_seq = 0;
-            unpersisted = folded.applied;
-        } else {
-            unpersisted = unpersisted.saturating_add(folded.applied);
-        }
+        let (folded, persisted_seq, unpersisted) =
+            self.projections
+                .advance(session, prepared, persisted_seq, unpersisted);
         let last_seq = folded.projection.last_seq;
         if last_seq == 0 {
-            self.projections.remove(session);
             return Ok(folded.projection);
         }
         if !self.read_only
@@ -804,20 +800,14 @@ impl SessionStore {
             // Best effort: a failed write only means a later read folds more.
             match projection_cache::persist_snapshot(&mut conn, session, &folded.projection).await {
                 Ok(()) => {
-                    persisted_seq = last_seq;
-                    unpersisted = 0;
+                    self.projections
+                        .put(session, Arc::clone(&folded.projection), last_seq, 0);
                 }
                 Err(error) => {
                     tracing::debug!(%session, "projection snapshot not persisted: {error}");
                 }
             }
         }
-        self.projections.put(
-            session,
-            Arc::clone(&folded.projection),
-            persisted_seq,
-            unpersisted,
-        );
         Ok(folded.projection)
     }
 
@@ -1053,7 +1043,7 @@ pub(crate) async fn replay_projection(
     session: SessionId,
 ) -> Result<Arc<Projection>, StoreError> {
     let base = projection_cache::transaction_base(cache, tx, session).await?;
-    let folded = projection_cache::fold(tx, session, base).await?;
+    let folded = projection_cache::fold(tx, session, base).await?.finish();
     Ok(folded.projection)
 }
 
