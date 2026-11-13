@@ -97,6 +97,14 @@ task(members[]) → bounded SpawnerPlane (full → overloaded)
 → reply with running handles
 ```
 
+Spawn authorization and model/effort resolution live in `hya_core::resident`:
+`resolve_spawn_member(&ResolveSpawnMemberCtx, SpawnMember)` returns the resolved
+child specification, roster, resource policy and bound sidecar factory without
+writing durable state. `resolve_main_activation_context` resolves the team's root
+against the same captured binding before registration. App composition supplies
+the process base, model categories, provider predicate and sidecar environment;
+resident registration and permission inheritance remain in core.
+
 Registration failure leaves no member. `per_run_budget` limits live members per
 root across turns and restart. Idle and parked residents consume a lease;
 archive releases it, and revival checks one additional lease inside its
@@ -875,6 +883,20 @@ members, orphans and the interval between registration commit and in-memory
 installation.
 Public command-prompt admission uses the same guard as text prompts.
 
+
+### Startup recovery composition
+
+Before constructing the engine, composition calls
+`hya_core::resident::recover_resident_claims(&SessionStore, OwnerRunId)` to fence
+active claims in store order. After constructing its configured engine, it calls
+`ResidentSupervisor::start_with_recovery(Arc<SessionEngine>, OwnerRunId,
+&AgentSpec, Vec<RecoveredActorClaim>)`. Core terminalizes interrupted member work,
+resolves the recorded identity in that session's current runtime and stages it.
+This helper starts the listener without starting recovered episodes. The server
+admits restore prompts and reserves their root leases before `start_recovered`;
+headless commands retain the guards from `start_recovered_headless` until drain.
+For example, a recovered member uses its recorded workdir and identity, without
+reapplying the caller's new-spawn allowlist.
 
 ### Team ending ownership
 
