@@ -1430,6 +1430,16 @@ impl TeamActor {
             });
         }
         let prompt = match initial_prompt {
+            Some(message)
+                if text.is_empty()
+                    && projection
+                        .team
+                        .roster
+                        .get(&handle)
+                        .is_some_and(|entry| entry.resident_work.is_none()) =>
+            {
+                hya_store::ResidentWorkPrompt::Fresh(message)
+            }
             Some(message) => hya_store::ResidentWorkPrompt::Admitted {
                 message,
                 append: text,
