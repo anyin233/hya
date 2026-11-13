@@ -144,13 +144,10 @@ methods `Any`.
 
 ## Clients
 
-- [`../../crates/hya-sdk-v1`](../../crates/hya-sdk-v1) — typed SDK for new
-  frontends (HTTP + SSE + `V1SessionMirror`), plus typed tooling and process-harness calls.
+- [`../../packages/hya-tui`](../../packages/hya-tui) and [`../../packages/hya-tui-web`](../../packages/hya-tui-web) — the interactive Bun/OpenTUI terminal frontend and browser WebUI host (v1 HTTP/JSON+SSE or direct gRPC).
+- [`../../crates/hya-sdk-v1`](../../crates/hya-sdk-v1) — typed Rust SDK for frontends (HTTP + SSE + `V1SessionMirror`), plus typed tooling and process-harness calls.
 - gRPC through `V1Grpc` — same contract over tonic, on the server's HTTP
   port (h2c); `HYA_GRPC_BIND` adds an optional extra listener.
-
-The legacy Compat-era SDK and in-process transport that served the old TUI were
-removed.
 
 ## Testing
 
