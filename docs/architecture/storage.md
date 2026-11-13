@@ -464,7 +464,8 @@ the cache's Arc and never publish their uncommitted view.
   copy — the base is discarded and the full log is folded.
 - A durable snapshot is used only when its `reducer_version` equals the
   running `PROJECTION_REDUCER_VERSION` and its payload decodes to a
-  projection whose `last_seq` matches the row; anything else is ignored and
+  projection whose `last_seq` matches the row and whose inbox/channel-log indices
+  are all below `team.mail.len()`; anything else is ignored and
   overwritten by the next snapshot write. Snapshot writes are anchored in SQL
   (`INSERT … SELECT … WHERE EXISTS (anchor row)`), so a write racing a delete
   is a no-op.

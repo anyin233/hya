@@ -744,7 +744,7 @@ impl Projection {
     /// same [`PROJECTION_REDUCER_VERSION`].
     ///
     /// # Errors
-    /// Returns the JSON decoder error for bytes that are not a snapshot.
+    /// Returns a decoder error for malformed snapshots or out-of-range mail indices.
     pub fn decode_snapshot(bytes: &[u8]) -> Result<Self, serde_json::Error> {
         let SnapshotOwned {
             mut projection,
@@ -752,6 +752,24 @@ impl Projection {
         } = serde_json::from_slice(bytes)?;
         if let Some(workflow) = projection.session.workflow.as_mut() {
             workflow.seen_runs = workflow_seen_runs;
+        }
+        if projection
+            .team
+            .inboxes
+            .values()
+            .flatten()
+            .chain(
+                projection
+                    .team
+                    .channels
+                    .values()
+                    .flat_map(|channel| &channel.log),
+            )
+            .any(|index| *index >= projection.team.mail.len())
+        {
+            return Err(<serde_json::Error as serde::de::Error>::custom(
+                "projection snapshot contains an out-of-range mail index",
+            ));
         }
         Ok(projection)
     }
