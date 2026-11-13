@@ -16,13 +16,14 @@ returning its receipt; initialization remains owned by that episode and must
 finish before its turn begins. Ordinary task registration still waits for its
 initializer. No SQL connection or transaction spans a hook await.
 
-# Why does the Workflow iteration driver receive a separate cancellation token?
+# Who owns cancellation while a verifier judgment is pending?
 
-IterationDriver races judgment against its token and drops the judgment future
-when cancelled. That could drop registration or an ending await. The Workflow
-worker and verifier controllers observe the actual run token themselves and
-await their resident endings; the driver does not drop them. RootDriverActivity
-therefore covers all cleanup without an extra executor task.
+`IterationDriver` passes the actual run token to `IterationGate::judge`. Each
+judgment honors cancellation and finishes its own cleanup before returning; the
+driver never races and drops the judgment. Workflow worker and verifier
+controllers await resident endings, so RootDriverActivity covers their cleanup.
+Wrap-up errors propagate, and cancelled loop reports retain the latest worker
+evidence. No separate unconnected driver token or executor task is needed.
 
 # Can Workflow actors follow the deadline notice that asks them to report?
 
