@@ -100,3 +100,19 @@ test("connects through native gRPC for bootstrap and live session frames", async
     server.forceShutdown()
   }
 })
+
+for (const errors of [[], [{ bundleId: "acme/tools", message: "bad config" }]]) {
+  test(`refreshBundles uses Catalog.RefreshBundles over gRPC (${errors.length})`, async () => {
+    const calls: unknown[] = []
+    const client = new GrpcHyaClient("backend:8080", "/work", {
+      unary: async (service, method, request) => { calls.push([service, method, request]); return { generation: "2", errors } },
+      stream: async () => {},
+      close: () => {},
+    })
+    try {
+      if (errors.length) await expect(client.refreshBundles()).rejects.toThrow("acme/tools: bad config")
+      else await client.refreshBundles()
+      expect(calls).toEqual([["Catalog", "RefreshBundles", { directory: "/work" }]])
+    } finally { client.close() }
+  })
+}

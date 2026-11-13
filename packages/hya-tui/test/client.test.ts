@@ -429,3 +429,16 @@ test("an empty scope (remote start before a Project) names no directory", async 
     ["/v1/agent-models/hya-task", {}, null],
   ])
 })
+
+for (const errors of [[], [{ bundleId: "acme/tools", message: "bad config" }]]) {
+  test(`refreshBundles scopes HTTP refresh and surfaces response errors (${errors.length})`, async () => {
+    const calls: unknown[] = []
+    const client = new HyaClient("http://backend", "/work", async (input, init) => {
+      calls.push([String(input), init?.method, JSON.parse(String(init?.body))])
+      return Response.json({ generation: "2", errors })
+    })
+    if (errors.length) await expect(client.refreshBundles()).rejects.toThrow("acme/tools: bad config")
+    else await client.refreshBundles()
+    expect(calls).toEqual([["http://backend/v1/bundles:refresh", "POST", { directory: "/work" }]])
+  })
+}

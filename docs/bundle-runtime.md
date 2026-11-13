@@ -145,8 +145,9 @@ A bundle update goes live in four steps, each of which can refuse it:
 `hya bundle remove`, `enable`, and `disable` also request a refresh of the
 running database backend and the current directory's Project, without changing
 the daemon PID. Without a running daemon the next start reads the written
-registry. Configured plugin edits use the same refresh boundary (or the next
-turn/catalog bind); see [Configuration](configuration.md#reloading-configured-plugins).
+registry. After editing bundle source or `config.yml` files on disk, run
+`hya bundle refresh` or press `r` in the TUI `/bundles` view. Listing bundles
+alone does not publish edits. Configured plugin edits use the same refresh boundary; see [Configuration](configuration.md#reloading-configured-plugins).
 
 `Catalog.RefreshBundles` (`POST /v1/bundles:refresh`, gRPC
 `hya.v1.Catalog/RefreshBundles`):
@@ -156,7 +157,7 @@ turn/catalog bind); see [Configuration](configuration.md#reloading-configured-pl
 | request `directory` | string | Scope: its Project's bundles are refreshed too; empty for global. |
 | `generation` | uint64 | Runtime generation now bound for the scope. |
 | `bundles[]` | `{id, version, preparedDigest, scope}` | Every published bundle; `scope` is `user` (registry, first-party included) or `project`. |
-| `errors[]` | `{bundleId: string, message: string}` | Per-source refresh failures. `bundleId` identifies the bundle, source path for a failed scan, or scope for a scope-wide failure (`global` for the global scope). Unreadable registry rows have separate entries with their stored ids. Independent successes can advance the generation; failed replacements retain their previous publication when one exists. The CLI fails for its target's errors and prints other sources' errors as warnings on stderr. |
+| `errors[]` | `{bundleId: string, message: string}` | Per-source refresh failures. `bundleId` identifies the bundle, source path for a failed scan, or scope for a scope-wide failure (`global` for the global scope). Unreadable registry rows have separate entries with their stored ids. Independent successes can advance the generation; failed replacements retain their previous publication when one exists. Install/remove/enable/disable fail for their target's errors and print other sources' errors as warnings on stderr. Explicit `hya bundle refresh` and TUI refresh report every error as a failure. |
 | `scope` | string | `global`, `directory` (not in a registered Project), or `project`. |
 
 `catalog.updated` is emitted when the refresh published a new generation.

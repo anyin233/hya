@@ -1,7 +1,7 @@
 /**
  * The Bundles view's calls (`/bundles`; state/bundles.ts holds its state and
  * keys): `ListBundles`, `InstallBundle`, `UninstallBundle`,
- * `SetBundleEnabled`, and the TUI-side preferences of a bundle's extension
+ * `SetBundleEnabled`, `RefreshBundles`, and the TUI-side preferences of a bundle's extension
  * (`extensionEnabled`, `extensionTrusted`). After every change the list and
  * the TUI extension catalog reload, so panels appear and disappear at once.
  */
@@ -36,17 +36,15 @@ export function createBundlesController({ store, client, directory, savePreferen
   }
 
   async function reload(): Promise<void> {
-    try {
-      store.setBundles(await client.listBundles())
-      patch((current) => settleBundlesView(current, rows()))
-    } catch (error) {
-      patch((current) => ({ ...current, notice: { tone: "error", text: `Reload failed: ${errorText(error)}` } }))
-    }
+    store.setBundles(await client.listBundles())
+    patch((current) => settleBundlesView(current, rows()))
   }
 
   function open(): void {
     store.setBundlesView(initialBundlesView(rows(), client.directory !== ""))
-    void reload()
+    void reload().catch((error) => {
+      patch((current) => ({ ...current, notice: { tone: "error", text: `Reload failed: ${errorText(error)}` } }))
+    })
   }
 
   function close(): void {
@@ -106,7 +104,7 @@ export function createBundlesController({ store, client, directory, savePreferen
       case "update": store.setBundlesView(outcome.view); return
       case "close": close(); return
       case "cancelBusy": abort?.abort(); return
-      case "refresh": void reload(); return
+      case "refresh": void run("Refreshing", "Bundles refreshed", (signal) => client.refreshBundles(signal)); return
       case "command": void command(outcome.command); return
       case "none": return
     }

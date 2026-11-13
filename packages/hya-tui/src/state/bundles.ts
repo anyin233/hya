@@ -85,7 +85,7 @@ export const bundleKeyRows: readonly BundleKeyRow[] = [
   { keys: "x", description: "Uninstall the highlighted bundle (asks first; first-party bundles cannot be removed)", hint: "x uninstall", screens: ["list", "detail"] },
   { keys: "e", description: "Enable or disable the highlighted bundle: a disabled bundle publishes nothing, TUI extension included", hint: "e enable/disable", screens: ["list", "detail"] },
   { keys: "t", description: "Trust or untrust the bundle's TUI extension: trusted extensions run on the JIT (no VM memory cap)", hint: "t trust", screens: ["list", "detail"] },
-  { keys: "r", description: "Reload the bundle list", hint: "r reload", screens: ["list", "detail"] },
+  { keys: "r", description: "Refresh bundles from disk", hint: "r refresh", screens: ["list", "detail"] },
   { keys: "/", description: "Filter the rows by typing; Enter keeps the filter, Esc clears it", hint: "/ filter", screens: ["list"] },
   { keys: "Esc", description: "Cancel a running call, close a pop-up, back out of the filter, back to the list, close the view", screens: ["list", "detail"] },
 ]
