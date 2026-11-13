@@ -192,6 +192,7 @@ struct ActivationCompletion {
 }
 
 struct WorkflowActivation {
+    resolved: (AgentSpec, ResolvedResidentRuntime),
     guidance: Arc<str>,
     route: Option<WorkflowTurnRoute>,
     done: oneshot::Sender<Result<ActivationResult, CoreError>>,
@@ -4143,33 +4144,36 @@ impl ResidentSupervisor {
                     .map(|entry| entry.session)
             })
             .ok_or_else(|| CoreError::Invalid(format!("resident not found: {target}")))?;
-        let child_projection = self.engine.read_projection(child).await?;
-        let stable = child_projection
-            .session
-            .agent
-            .as_ref()
-            .ok_or_else(|| CoreError::Invalid("resident has no recorded agent".into()))?;
-        let workdir = child_projection
-            .session
-            .workdir
-            .as_ref()
-            .map(std::path::PathBuf::from)
-            .ok_or_else(|| CoreError::Invalid(format!("session not found: {child}")))?;
-        let binding = self.engine.bind_session_runtime(child, &workdir).await?;
-        let base = AgentSpec {
-            name: stable.clone(),
-            model: child_projection
-                .session
-                .model
-                .clone()
-                .ok_or_else(|| CoreError::Invalid("resident has no model".into()))?,
-            system_prompt: self.engine.base_system_prompt().into(),
-            workdir,
-            reasoning: None,
-        };
-        let (agent, (binding, agents, resources, sidecar_factory)) = self
-            .engine
-            .resolve_resident_runtime(binding, &base, stable)?;
+        let (agent, (binding, agents, resources, sidecar_factory)) =
+            if let Some(activation) = &activation {
+                activation.resolved.clone()
+            } else {
+                let child_projection = self.engine.read_projection(child).await?;
+                let stable =
+                    child_projection.session.agent.as_ref().ok_or_else(|| {
+                        CoreError::Invalid("resident has no recorded agent".into())
+                    })?;
+                let workdir = child_projection
+                    .session
+                    .workdir
+                    .as_ref()
+                    .map(std::path::PathBuf::from)
+                    .ok_or_else(|| CoreError::Invalid(format!("session not found: {child}")))?;
+                let binding = self.engine.bind_session_runtime(child, &workdir).await?;
+                let base = AgentSpec {
+                    name: stable.clone(),
+                    model: child_projection
+                        .session
+                        .model
+                        .clone()
+                        .ok_or_else(|| CoreError::Invalid("resident has no model".into()))?,
+                    system_prompt: self.engine.base_system_prompt().into(),
+                    workdir,
+                    reasoning: None,
+                };
+                self.engine
+                    .resolve_resident_runtime(binding, &base, stable)?
+            };
         let channel_policy =
             ChannelPolicy::from_binding(&binding)?.snapshot_for(agent.name.as_str());
         let mut team = self.team_for(root).await?;
@@ -4648,6 +4652,7 @@ impl ResidentSupervisor {
         &self,
         parent: SessionId,
         member: SessionId,
+        resolved: (AgentSpec, ResolvedResidentRuntime),
         directive: String,
         guidance: Arc<str>,
         route: Option<WorkflowTurnRoute>,
@@ -4753,6 +4758,7 @@ impl ResidentSupervisor {
             parent_claim,
             None,
             Some(WorkflowActivation {
+                resolved,
                 guidance,
                 route,
                 done,

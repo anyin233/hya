@@ -32,6 +32,19 @@ async fn root(engine: &SessionEngine) -> SessionId {
         .unwrap()
 }
 
+fn activation_runtime(engine: &SessionEngine) -> (AgentSpec, ResolvedResidentRuntime) {
+    let agent = AgentSpec {
+        name: AgentName::new("hya-scout"),
+        model: ModelRef::new("hya/offline"),
+        workdir: ".".into(),
+        system_prompt: String::new(),
+        reasoning: None,
+    };
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
+    (agent, (binding, Arc::from([]), resources, None))
+}
+
 async fn parked(supervisor: &ResidentSupervisor, root: SessionId) -> (SessionId, String) {
     let agent = AgentSpec {
         name: AgentName::new("hya-scout"),
@@ -688,6 +701,7 @@ async fn activation_waiter_settles_reports_revives_and_ends_on_the_episode() {
         .activate(
             root,
             child,
+            activation_runtime(&supervisor.engine),
             "FIRST_ACTIVATION".into(),
             Arc::from("first guidance"),
             None,
@@ -710,6 +724,7 @@ async fn activation_waiter_settles_reports_revives_and_ends_on_the_episode() {
         .activate(
             root,
             child,
+            activation_runtime(&supervisor.engine),
             "must not be mailed".into(),
             Arc::from("bad guidance"),
             None,
@@ -741,6 +756,7 @@ async fn activation_waiter_settles_reports_revives_and_ends_on_the_episode() {
         .activate(
             root,
             child,
+            activation_runtime(&supervisor.engine),
             "SECOND_ACTIVATION".into(),
             Arc::from("second guidance"),
             None,
@@ -782,6 +798,7 @@ async fn activation_waiter_settles_reports_revives_and_ends_on_the_episode() {
         .activate(
             root,
             child,
+            activation_runtime(&supervisor.engine),
             "THIRD_ACTIVATION".into(),
             Arc::from("revived guidance"),
             None,
@@ -854,6 +871,7 @@ async fn review_a1_rest_case(with_child: bool) {
         .activate(
             root,
             child,
+            activation_runtime(&supervisor.engine),
             "REVIEW_FIRST".into(),
             Arc::from("guidance"),
             None,
@@ -898,6 +916,7 @@ async fn review_a1_rest_case(with_child: bool) {
                 .activate(
                     root,
                     child,
+                    activation_runtime(&supervisor.engine),
                     "REVIEW_NEXT".into(),
                     Arc::from("next"),
                     None,
@@ -924,6 +943,7 @@ async fn review_a1_rest_case(with_child: bool) {
             .activate(
                 root,
                 child,
+                activation_runtime(&supervisor.engine),
                 "REVIEW_NEXT".into(),
                 Arc::from("next"),
                 None,
@@ -976,6 +996,7 @@ async fn review_a2_activation_directives_are_in_the_parent_dm_history() {
             .activate(
                 root,
                 child,
+                activation_runtime(&supervisor.engine),
                 format!("REVIEW_DM_{index}"),
                 Arc::from("guidance"),
                 None,
@@ -1043,6 +1064,7 @@ async fn review_a3_pending_case(live_revive: bool) {
                 None,
                 None,
                 Some(WorkflowActivation {
+                    resolved: activation_runtime(&supervisor.engine),
                     guidance: Arc::from("guidance"),
                     route: None,
                     done,
@@ -1056,6 +1078,7 @@ async fn review_a3_pending_case(live_revive: bool) {
             .activate(
                 root,
                 child,
+                activation_runtime(&supervisor.engine),
                 "REVIEW_PENDING".into(),
                 Arc::from("guidance"),
                 None,
@@ -1148,6 +1171,7 @@ async fn review_a5_blank_activation_has_no_lease_mail_or_turn_effects() {
         .activate(
             root,
             child,
+            activation_runtime(&supervisor.engine),
             " \n\t ".into(),
             Arc::from("guidance"),
             None,
@@ -1181,6 +1205,7 @@ async fn review_a5_archive_before_activation_lock_revives_the_member() {
                 .activate(
                     root,
                     child,
+                    activation_runtime(&supervisor.engine),
                     "REVIEW_RACE".into(),
                     Arc::from("guidance"),
                     None,
@@ -1230,6 +1255,7 @@ async fn review_a1_consumed_trailing_wake_settles_without_another_model_turn() {
         .activate(
             root,
             child,
+            activation_runtime(&supervisor.engine),
             "REVIEW_FIRST".into(),
             Arc::from("guidance"),
             None,
@@ -1476,7 +1502,15 @@ async fn review_r5_registration_frames_precede_siblings_and_activation_mail() {
     initialized.pop().unwrap().await.unwrap().unwrap();
     // Parked identity is usable even while its initializer remains blocked.
     let mut activation = supervisor
-        .activate(root, first, "work".into(), Arc::from(""), None, None)
+        .activate(
+            root,
+            first,
+            activation_runtime(&supervisor.engine),
+            "work".into(),
+            Arc::from(""),
+            None,
+            None,
+        )
         .await
         .unwrap();
     let before_release = engine
@@ -1535,6 +1569,7 @@ async fn review_r2_concurrent_roster_orphan_rejects_activation_before_mail() {
                 .activate(
                     root,
                     child,
+                    activation_runtime(&supervisor.engine),
                     "must not commit".into(),
                     Arc::from(""),
                     None,
@@ -1703,5 +1738,95 @@ async fn review_r1_ending_takes_over_a_roster_orphan_descendant() {
         &order[1..],
         &[orphan_handle, handle],
         "orphan must end before its ancestor"
+    );
+}
+
+#[tokio::test]
+async fn review_r3_revival_keeps_the_preflighted_stage_spec_and_catalog() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let _driver = supervisor.root_driver_activity(root).await.unwrap();
+    let agent = AgentSpec {
+        name: AgentName::new("resident"),
+        model: ModelRef::new("hya/offline"),
+        workdir: ".".into(),
+        system_prompt: "PINNED_STAGE_PROMPT".into(),
+        reasoning: Some(hya_provider::ReasoningEffort::High),
+    };
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
+    let (child, handle, _) = supervisor
+        .spawn_resident_parked(
+            root,
+            agent.clone(),
+            (binding.clone(), Arc::from([]), resources.clone(), None),
+            "parked".into(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    supervisor.end_member(root, &handle).await.unwrap();
+    let mut activation = supervisor
+        .activate(
+            root,
+            child,
+            (
+                agent.clone(),
+                (binding.clone(), Arc::from([]), resources.clone(), None),
+            ),
+            "revived stage".into(),
+            Arc::from(""),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let actual = {
+        let team = supervisor.team_with_resident(child).unwrap();
+        let state = team.lock();
+        let slot = &state.residents[&child];
+        (slot.agent.system_prompt.clone(), slot.agent.reasoning)
+    };
+    supervisor.end_member(root, &handle).await.unwrap();
+    activation.wait().await.unwrap();
+    // Remove the custom agent from the live catalog; the next activation is
+    // still entitled to the Workflow's previously resolved runtime snapshot.
+    let catalog = crate::AgentCatalog::new(Arc::new(
+        hya_bundle::BundleCatalog::from_prepared(&[]).unwrap(),
+    ))
+    .unwrap();
+    engine
+        .runtime_registry()
+        .publish_catalog(Arc::new(catalog))
+        .unwrap();
+    let revived = supervisor
+        .activate(
+            root,
+            child,
+            (
+                agent.clone(),
+                (binding.clone(), Arc::from([]), resources.clone(), None),
+            ),
+            "pinned catalog".into(),
+            Arc::from(""),
+            None,
+            None,
+        )
+        .await;
+    let kept_catalog = revived.is_ok();
+    supervisor.end_member(root, &handle).await.unwrap();
+    supervisor
+        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
+        .await;
+    assert_eq!(
+        actual,
+        (agent.system_prompt, agent.reasoning),
+        "revival rebuilt the stage from the base agent"
+    );
+    assert!(
+        kept_catalog,
+        "revival resolved a preflighted Workflow agent against the live catalog"
     );
 }
