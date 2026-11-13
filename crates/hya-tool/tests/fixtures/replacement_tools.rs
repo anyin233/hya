@@ -20,7 +20,12 @@ impl Tool for Replacement {
         }
     }
     async fn execute(&self, _: &ToolCtx, input: Value) -> Result<Value, ToolError> {
-        Ok(json!({"implementation":"replacement", "input":input}))
+        let mut output = json!({"implementation":"replacement", "input":input});
+        if let Some(deadline) = hya_tool::deadline::current() {
+            output["budgetSeconds"] = json!(deadline.budget().as_secs());
+            output["cappedSeconds"] = json!(deadline.cap(None).0.as_secs());
+        }
+        Ok(output)
     }
 }
 
@@ -49,4 +54,11 @@ pub unsafe extern "C" fn hya_tool_bundle_with_runtime_v1(
     state: *mut std::ffi::c_void,
 ) {
     unsafe { hya_tool::native_bundle::with_runtime_v1(handle, callback, state) };
+}
+
+/// # Safety
+/// `cell` is the matching host's process-lifetime deadline cell.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hya_tool_bundle_share_deadline_v1(cell: *const std::ffi::c_void) {
+    unsafe { hya_tool::native_bundle::share_deadline_v1(cell) };
 }

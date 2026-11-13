@@ -22,6 +22,8 @@
 
 mod agents;
 mod base_tools;
+/// Wall-clock budget and staged notices for a headless run.
+pub mod deadline;
 mod formatter;
 mod formatter_catalog;
 mod formatter_command;
