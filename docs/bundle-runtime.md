@@ -15,8 +15,12 @@ First-party in-process tool families can carry a Rust dynamic library under
 `hya_tool_bundle_register_v1` registers tools after the bundle identity and
 declared names are checked. `hya_tool_bundle_with_runtime_v1` enters the
 bundle's Tokio runtime on each tool future poll while the host runtime
-remains available to host services. The backend and library must be built from the
-same workspace and toolchain; Rust trait objects have no stable plugin ABI.
+remains available to host services. `hya_tool_bundle_share_deadline_v1(cell: *const c_void)`
+adopts the host's process-lifetime run-deadline cell once at load, after ABI
+validation. Every native family and replacement library must export it and
+forward to `hya_tool::native_bundle::share_deadline_v1`; it reads the shared
+cell even if the deadline is installed after the library loads. The backend
+and library must be built from the same workspace and toolchain; Rust trait objects have no stable plugin ABI.
 The release asset stores each trusted family package under `bundles/` beside
 `bin/`. Installed third-party bundles do not gain in-process execution by
 declaring a library resource.
@@ -48,6 +52,27 @@ For prepared first-party catalogs, `hya bundle info` reports the actual format
 version (`prepared-v4`).
 Only public 7z packages can be inspected and installed; private envelopes are
 unsupported.
+
+### Run deadline shared state
+
+`hya_tool::deadline::install(Duration)` installs one process-wide budget;
+`current() -> Option<&'static RunDeadline>` reads it in the host and loaded
+libraries. Install once per headless process. `RunDeadline::cap(Option<Duration>)`
+returns `(Duration, bool)` (effective timeout and whether shortened), reserving
+the final grace and allowing at least five seconds for a capped tool. `None`
+means an unlimited requested timeout, which is still capped when budgeted.
+For example, a 900-second budget with 200 seconds remaining reserves 45 seconds
+and caps an unlimited tool call to about 155 seconds.
+
+`take_notice(SessionId) -> Option<Stage>` advances that session's notification
+stage once; `notice(Stage, bool)` renders the lead or subagent text.
+`mark_notified(SessionId, Stage)` records a notice delivered by a caller.
+`opening() -> String` announces the initial budget. Stages use the remaining
+budget: WrapUp at `min(clamp(35% B, 300s, 3600s), 50% B)`, Final at
+`clamp(12% B, 90s, 600s)`, and Over at `clamp(5% B, 30s, 120s)`.
+Over emits Final text. `budget()`, `elapsed()`, `remaining()`, `wrap_up_window()`,
+`final_window()` and `grace()` return `Duration`; `stage()` returns `Stage`.
+The clock itself does not terminate the process; its caller owns that limit.
 
 ## Bun extension interface
 

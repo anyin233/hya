@@ -15,3 +15,9 @@ pub extern "C" fn hya_tool_bundle_register_v1() {
 pub extern "C" fn hya_tool_bundle_with_runtime_v1() {
     std::process::abort();
 }
+
+/// Abort if the host shares state with an incompatible library.
+#[unsafe(no_mangle)]
+pub extern "C" fn hya_tool_bundle_share_deadline_v1() {
+    std::process::abort();
+}

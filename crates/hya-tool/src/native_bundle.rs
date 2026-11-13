@@ -214,6 +214,20 @@ pub unsafe fn with_runtime_v1(
     }
 }
 
+/// Read the host's run deadline from this bundle's copy of `hya-tool`.
+///
+/// Native libraries export a C wrapper that calls this function; the host
+/// calls it once, right after loading the library.
+///
+/// # Safety
+///
+/// `cell` must point to the host's deadline cell from the matching lockstep
+/// build; it lives for the process.
+pub unsafe fn share_deadline_v1(cell: *const libc::c_void) {
+    // SAFETY: the checked host passes its 'static cell of the same layout.
+    crate::deadline::adopt(unsafe { &*cell.cast() });
+}
+
 /// Digest of the lockstep Rust tool ABI required by built-in bundle libraries.
 ///
 /// Bundle libraries call this from their own linked copy of `hya-tool` before
@@ -232,6 +246,7 @@ pub fn abi_digest_v1() -> [u8; 32] {
     hash.update(std::mem::size_of::<tokio::runtime::Handle>().to_be_bytes());
     hash.update(std::mem::align_of::<tokio::runtime::Handle>().to_be_bytes());
     hash.update(include_bytes!("tool.rs"));
+    hash.update(include_bytes!("deadline.rs"));
     hash.finalize().into()
 }
 
@@ -261,6 +276,12 @@ pub(crate) fn load_family(stem: &'static str) -> Result<Vec<Arc<dyn Tool>>, Stri
             Some(handle) => *handle,
             None => {
                 let loaded = open_library(stem)?;
+                let share = symbol(loaded, b"hya_tool_bundle_share_deadline_v1\0")?;
+                // SAFETY: this checked bundle symbol takes the host's cell.
+                let share: unsafe extern "C" fn(*const libc::c_void) =
+                    unsafe { std::mem::transmute(share) };
+                // SAFETY: the cell is this host's 'static deadline cell.
+                unsafe { share(std::ptr::from_ref(crate::deadline::cell()).cast()) };
                 libraries.insert(stem, loaded);
                 loaded
             }

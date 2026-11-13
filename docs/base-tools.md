@@ -313,8 +313,9 @@ extensions:
 package must have one library named `runtime`; its exported C symbols are
 `hya_tool_bundle_abi_v1(*mut u8)` and
 `hya_tool_bundle_register_v1(*mut Vec<Arc<dyn Tool>>)` and
-`hya_tool_bundle_with_runtime_v1(*const c_void, unsafe extern "C" fn(*mut c_void), *mut c_void)`.
-The host checks the 32-byte ABI digest before calling `register`, and the
+`hya_tool_bundle_with_runtime_v1(*const c_void, unsafe extern "C" fn(*mut c_void), *mut c_void)` and
+`hya_tool_bundle_share_deadline_v1(*const c_void)`.
+The host checks the 32-byte ABI digest before sharing its deadline cell or calling `register`, and the
 library remains mapped for the process lifetime. The runtime callback polls
 one tool future synchronously while the bundle's Tokio runtime is entered.
 Calls with an existing host runtime stay on their original task, preserving
@@ -387,8 +388,10 @@ All exports use `unsafe extern "C"` and unmangled symbol names:
 | `hya_tool_bundle_register_v1` | `out: *mut Vec<Arc<dyn Tool>>`: append the family's implementations to the host's live vector, only after ABI validation. |
 | `hya_tool_bundle_with_runtime_v1` | `handle: *const c_void, callback: unsafe extern "C" fn(*mut c_void), state: *mut c_void`: synchronously poll through `hya_tool::native_bundle::with_runtime_v1`; retain neither pointer nor callback state. |
 
+| `hya_tool_bundle_share_deadline_v1` | `cell: *const c_void`: call `hya_tool::native_bundle::share_deadline_v1` once at load to adopt the host's process-lifetime deadline cell from the matching lockstep build. |
+
 The digest covers the native ABI v1 discriminator, backend version, OS,
-architecture, relevant Rust sizes/alignments, and `tool.rs` source bytes. It is
+architecture, relevant Rust sizes/alignments, and `tool.rs` / `deadline.rs` source bytes. It is
 a lockstep guard, not proof that arbitrary native code is safe or a complete
 compiler fingerprint. The loader resolves required symbols and rejects a
 mismatch with `built for a different hya-tool ABI` before registration. Registry
