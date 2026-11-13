@@ -117,6 +117,7 @@ async fn exec_entry(
     yolo: bool,
     json: bool,
     pure: bool,
+    time_budget: Option<u64>,
 ) -> anyhow::Result<()> {
     match db_writer::claim(db, "exec").await? {
         db_writer::Writer::Server(server) => {
@@ -126,6 +127,14 @@ async fn exec_entry(
                     db,
                     &server,
                     "--pure cannot apply to a running server (it loaded its own context)",
+                );
+            }
+            if time_budget.is_some() {
+                db_writer::exit_unroutable(
+                    "exec",
+                    db,
+                    &server,
+                    "--time-budget cannot apply to a running server (its clock is not this run's)",
                 );
             }
             routed::exec(
@@ -140,7 +149,7 @@ async fn exec_entry(
             .await
         }
         db_writer::Writer::Direct(store) => {
-            cmd_exec(prompt, model_override, store, yolo, json, pure).await
+            cmd_exec(prompt, model_override, store, yolo, json, pure, time_budget).await
         }
     }
 }
@@ -170,7 +179,11 @@ async fn cmd_exec(
     yolo: bool,
     json: bool,
     pure: bool,
+    time_budget: Option<u64>,
 ) -> anyhow::Result<()> {
+    if let Some(seconds) = time_budget {
+        hya_tool::deadline::install(std::time::Duration::from_secs(seconds));
+    }
     let headless = startup::HeadlessSession::start(store, model_override, yolo, pure, None).await?;
     let (turn, stop) = headless
         .run(async move |headless| {
@@ -201,6 +214,12 @@ async fn cmd_exec(
                 .admit_user_prompt(session, prompt)
                 .await
                 .context("admit prompt")?;
+            if let Some(deadline) = hya_tool::deadline::current() {
+                engine
+                    .inject_system_message(session, deadline.opening())
+                    .await
+                    .context("announce the time budget")?;
+            }
             let cancel = CancellationToken::new();
             let (turn, stop) = run_until_stopped(
                 built,
@@ -666,9 +685,11 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             );
             Ok(())
         }
-        Some(Command::Exec { prompt, json }) => {
-            exec_entry(prompt, model, &db, yolo, json, pure).await
-        }
+        Some(Command::Exec {
+            prompt,
+            json,
+            time_budget,
+        }) => exec_entry(prompt, model, &db, yolo, json, pure, time_budget).await,
         Some(Command::Serve {
             action: Some(action),
             db: command_db,

@@ -274,6 +274,19 @@ async fn exec_that_cannot_be_routed_exits_75_naming_the_server() -> TestResult {
     let stderr = String::from_utf8(output.stderr)?;
     assert!(stderr.contains(&server.url), "{stderr}");
     assert!(stderr.contains("hya serve stop"), "{stderr}");
+    let output = scratch.run(&["exec", "--time-budget", "30", "needs its own clock"])?;
+    assert_eq!(
+        output.status.code(),
+        Some(EXIT_DB_IN_USE),
+        "{}",
+        text(&output)
+    );
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(
+        stderr.contains("--time-budget cannot apply to a running server"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(&server.url), "{stderr}");
     assert!(server_sessions(&server.url).await?.is_empty());
     drop(server);
     Ok(())

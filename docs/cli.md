@@ -109,7 +109,7 @@ URIs are never locked.
 
 | Command | Store | Server holds the file `--db` | Nobody holds it |
 | --- | --- | --- | --- |
-| `exec` | `--db`, else in-memory | Through the server: a new root session in the current directory, one prompt turn, the same stdout. `--model` sets the session's model, `--yolo` its permission mode. `--pure` exits 75. | Lock held for the run |
+| `exec` | `--db`, else in-memory | Through the server: a new root session in the current directory, one prompt turn, the same stdout. `--model` sets the session's model, `--yolo` its permission mode. `--pure` or `--time-budget` exits 75. | Lock held for the run |
 | `workflow use`, `workflow state` | `--db`, else in-memory | Through the server (`/v1/sessions/{id}/workflow`) | Lock held for the command |
 | `workflow run` | `--db`, else in-memory | Through the server; a run without `--session` creates the session there. `--revision`, `--pure`, and `--yolo` exit 75 (no `/v1` field for them). | Lock held for the run |
 | `workflow list`, `workflow info` | Catalog only; existing `--db` read-only for Project lookup | Read directly, no lock | Read directly, no lock |
@@ -708,6 +708,7 @@ runs whose prompt context is exactly what you passed.
 ```sh
 hya exec "summarize this repo"
 hya exec --json "summarize this repo"
+hya exec --time-budget 900 "implement the requested change"
 ```
 
 Runs one headless turn and prints the rendered transcript. The session works
@@ -726,6 +727,30 @@ prints the canonical event stream as JSONL. A file `--db` is locked for the
 run; when a server (the backend daemon) already holds it, `exec` runs the turn
 through that server instead, still with the caller's cwd as the workdir (see
 [Database lock and the backend daemon](#database-lock-and-the-backend-daemon)).
+
+`--time-budget <SECS>` accepts a positive integer (`u64`, at least 1). It
+announces the whole run's wall-clock budget with a system message after session
+startup. It appends WrapUp/Final notices to the next successful tool result,
+once per stage per session, after any team steer mail. Both notices enter the
+same tool-result transaction. Earlier messages are unchanged. Subagents receive
+notices directing them to finish and `report` their work.
+
+The thresholds are remaining time: WrapUp is
+`min(clamp(35% B, 300s, 3600s), 50% B)`, Final is
+`clamp(12% B, 90s, 600s)`, and the Over guard is `clamp(5% B, 30s, 120s)`.
+Over uses the Final notice. Bash and member `wait` timeouts are capped to
+`max(remaining - guard, 5s)`; a shorter requested timeout remains unchanged.
+This includes Bash's omitted timeout and `timeout: 0`. Bash reports
+`metadata.deadlineCapped: true` when shortened and explains the effective
+limit in `<shell_metadata>`. For example, a 900-second run with 200 seconds
+left caps a 300-second Bash call to about 155 seconds, reserving 45 seconds.
+
+The flag is for an in-process run. When a running daemon owns `--db`, it exits
+75 through the normal unroutable-command diagnostic before creating a session;
+stop that daemon or select another database. The budget supplies guidance and
+tool timeout caps; it does not itself kill the process or create continuation
+turns. An outside harness owns the final wall-clock limit. Without the flag,
+no deadline is installed and existing timeouts apply.
 
 `--json` streams live: envelopes print as the engine broadcasts them (the
 database is written per-event regardless), with an initial catch-up pass for

@@ -401,6 +401,26 @@ and single `runtime` library validation; no process extension is allowed.
 Verified bytes use the disposable native cache described in
 [bundle runtime](bundle-runtime.md#native-tool-startup-cache).
 
+## Budgeted Bash timeouts
+
+An in-process `hya exec --time-budget 900 "implement the change"` installs a
+wall-clock deadline shared with the native Bash library. Bash keeps the normal
+300-second default, `timeout: 0` disables its requested timeout, and positive
+values clamp to `1..=3600` seconds. With a run budget, all of these are additionally
+capped to `max(remaining - grace, 5s)` by `RunDeadline::cap`. A shorter requested
+timeout is preserved. This changes only the execution timeout; the fixed 200 ms
+orphan grace, 100 ms post-kill drain and bounded final drain still apply.
+
+A capped result retains `{title, output, metadata}`. `metadata.timeoutSeconds`
+is the effective rounded limit (`number`), `metadata.deadlineCapped: true`
+(`boolean`, omitted when not shortened) survives the host output cap, and
+`output` includes a `<shell_metadata>` explanation naming the limit and seconds
+remaining. `timeoutClamped: true` continues to describe ordinary argument
+clamping when the run deadline did not replace it. For example, with 200 seconds
+left in a 900-second run, a 300-second request runs for about 155 seconds,
+reserving the 45-second guard. Member `wait` uses the same cap; its existing
+request and response fields are unchanged.
+
 ## Output limit audit
 
 The host cap remains necessary. Tool-local limits constrain different parts of
