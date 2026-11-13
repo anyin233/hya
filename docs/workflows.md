@@ -154,10 +154,19 @@ child Sessions.
 
 `on_failure` has two values:
 
-- `fail_fast` (default): finish the admitted level, mark later Stages skipped,
-  and finish the run failed.
-- `collect_all`: continue eligible Stages with explicit failed evidence, then
-  finish the run failed if any Stage failed.
+- `fail_fast` (default): finish already activated Stages, stop new activations
+  after observing failure, mark remaining Stages skipped, and finish failed.
+- `collect_all`: continue independent eligible branches, skip successors of
+  failed or skipped Stages, and finish failed if any Stage failed.
+
+Stages become ready when their unfinished direct-predecessor count reaches zero.
+Every predecessor must have succeeded before activation. For `a --> c` with an
+independent `b`, `c` can start and finish while `b` is still running. Each loop
+Stage starts its verifier as soon as its worker completes. Join evidence remains
+in compiled predecessor order even when the predecessors finish in reverse
+order. No scheduling option or concurrency limit is added; team capacity still
+bounds the run. Topological levels are retained in plan/state responses and
+Stage guidance as graph metadata, not scheduling barriers.
 
 ## Loop Stages
 
@@ -251,8 +260,9 @@ Agent id without `actor` still creates distinct one-shot Stage Sessions. Any
 Agent can back either shape: since 0.41.0 Agent definitions carry no spawn
 lifecycle (`spawn_lifecycle` is a removed manifest key), so the Stage's `actor`
 key alone selects a persistent actor Session. An actor key bound to different
-Agent ids, an actor key combined with `mode: loop`, or same-level reuse of one
-actor key fails before execution.
+Agent ids or an actor key combined with `mode: loop` fails before execution.
+Ready Stages sharing an actor serialize in compiled Stage order; an actor is
+never activated while its earlier Stage is busy, even across graph levels.
 
 The first and later actor directives are durable parent mail. The episode
 completes an activation after its inbox boundary is consumed and its work
@@ -276,8 +286,8 @@ sidecar. Before any child or mail effect, the executor checks the complete
 worst-case activation count against the configured budget and the root's
 remaining live capacity. Preflight reserves nothing. An oversized graph is
 invalid source; current occupancy or a later registration/revival capacity
-refusal returns `WORKFLOW_OVERLOADED`. Same-level one-shot Stages (no `actor`)
-register parked residents and activate them concurrently. Loop continuations
+refusal returns `WORKFLOW_OVERLOADED`. Ready one-shot Stages (no `actor`)
+register parked residents and activate independently. Loop continuations
 reactivate the same worker: settlement retains its claim and runtime, while a
 report releases capacity and a later activation revives it. Every verifier
 judgment uses a fresh resident and releases its claim after judgment. For
@@ -290,9 +300,10 @@ call `report` only if its current request offers that tool; otherwise they ask
 it to finish its turn. This also covers core embedders without a governor,
 where `report` is hidden by the depth-zero tool view.
 
-Cancellation stops new admissions, cancels one-shot Stage work, stops active
-run-owned resident work, waits for admitted boundaries, and returns a truthful
-cancelled report.
+Cancellation stops new admissions and activations, waits for active Stage
+controllers, and ends every run-owned actor and its descendants, including
+registered actors that have not activated. Cleanup completes while the run owns
+root-driver activity, before returning a cancelled report.
 
 ## Durable Session state
 
@@ -315,8 +326,8 @@ the core executor runs the compiled plan.
 
 Clients render Workflow state from the typed Workflow Projection delivered
 through normal bootstrap and `session.updated` synchronization: selection and
-revision availability, run status, graph level, declaration-ordered active
-Stages, active/total Agent instances, Stage progress, and bounded current work.
+revision availability, run status, topological Stage levels (which may be
+active concurrently), declaration-ordered active Stages, active/total Agent instances, Stage progress, and bounded current work.
 A client should not poll, create a second SDK client, fold raw Workflow
 Events, or replace the existing run-tree roster used to navigate child Agents.
 

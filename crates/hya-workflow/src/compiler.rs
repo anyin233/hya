@@ -803,27 +803,6 @@ fn normalize(
             stage_levels[stage_index] = level_index;
         }
     }
-    for level in &levels {
-        let mut actors = BTreeSet::new();
-        for &stage_index in &level.stage_indices {
-            let id = &graph.order[stage_index];
-            let Some(actor) = author.nodes.get(id).and_then(|node| node.actor.as_deref()) else {
-                continue;
-            };
-            if !actors.insert(actor) {
-                let location = frontmatter_locations
-                    .get(id)
-                    .copied()
-                    .unwrap_or(SourcePoint { line: 1, column: 1 });
-                return Err(WorkflowCompileError::new(
-                    source,
-                    location.line,
-                    location.column,
-                    format!("same actor key `{actor}` in one level is ambiguous"),
-                ));
-            }
-        }
-    }
     let mut stages = Vec::with_capacity(graph.order.len());
     for (index, id) in graph.order.iter().enumerate() {
         let Some(node) = author.nodes.get(id) else {
