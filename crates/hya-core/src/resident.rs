@@ -3814,7 +3814,7 @@ impl ResidentSupervisor {
                     // Suppress later wakes without letting the parent archive
                     // before its descendants. Its claim fences in-flight spawns.
                     slot.user_stopped = true;
-                    self.engine.cancel_turn(*session, FinishCause::UserCancel);
+                    self.engine.cancel_turn(*session, FinishCause::Archived);
                     if slot.handle == handle {
                         live = Some(*session);
                     }
