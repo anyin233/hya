@@ -734,6 +734,8 @@ child guards synchronously, closes clients and kills children immediately,
 then reaps on the current runtime. A private sidecar handle calls it on drop
 before removing its activation directory, including when tool or hook views
 outlive the handle. Calls through retained stopped views return `Closed`.
+Dropping a child guard also closes the client and kills synchronously; its tracked
+cleanup only reaps and joins I/O, without a graceful RPC or grace-period wait.
 Use `shutdown().await` to send the shutdown RPC and await reaping.
 `TurnBinding::sidecar_hook_view(agent: &str, dispatcher: Arc<dyn HookDispatcher>)`
 returns `Result<Option<Arc<dyn HookDispatcher>>, BundleError>`: no selected hooks
