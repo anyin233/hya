@@ -180,7 +180,10 @@ verify:
 
 Loop repetition uses the shared `IterationDriver`. A fresh verifier Session is
 the stop authority for each judgment. The worker cannot finish its own loop by
-claiming success.
+claiming success. The run's cancellation token reaches every iteration and
+judgment. A cancelled loop retains its latest completed worker output and is
+recorded Cancelled. A wrap-up capacity refusal remains `WORKFLOW_OVERLOADED`;
+wrap-up errors or cancellation cannot complete the Stage successfully.
 
 ## Stage model routing
 

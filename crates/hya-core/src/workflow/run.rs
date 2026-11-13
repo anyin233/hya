@@ -1183,9 +1183,7 @@ async fn drive_loop_stage(
             &executor,
             &gate,
             format!("{directive}\nContinue working toward the verified condition."),
-            // Activations own cancellation and cleanup. The driver's select
-            // would drop a judgment during registration or its ending await.
-            CancellationToken::new(),
+            cancel.clone(),
         )
         .await?;
 
@@ -1331,7 +1329,11 @@ struct VerifierGate {
 
 #[async_trait]
 impl IterationGate for VerifierGate {
-    async fn judge(&self, transcript: &str) -> Result<GateOutcome, CoreError> {
+    async fn judge(
+        &self,
+        transcript: &str,
+        _cancel: &CancellationToken,
+    ) -> Result<GateOutcome, CoreError> {
         let directive = format!(
             "You are an independent verifier with no stake in the work. Judge ONLY \
              whether the condition below is satisfied by the latest worker output.\n\

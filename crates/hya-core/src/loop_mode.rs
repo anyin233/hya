@@ -345,92 +345,103 @@ impl LoopGate {
 
 #[async_trait]
 impl IterationGate for LoopGate {
-    async fn judge(&self, transcript: &str) -> Result<GateOutcome, CoreError> {
-        // The deterministic predicate outranks the model verdict: it alone
-        // decides stop-vs-continue, and a broken condition stops as a failure.
-        if let Some(predicate) = &self.config.predicate {
-            match predicate.evaluate().await {
-                LoopPredicateOutcome::Satisfied { reason } => {
-                    return Ok(GateOutcome::Stop {
-                        reason: format!(
-                            "{} condition {reason}",
-                            self.config
-                                .predicate
-                                .as_ref()
-                                .map_or(String::new(), |_| String::new())
-                        ),
-                    });
+    async fn judge(
+        &self,
+        transcript: &str,
+        cancel: &CancellationToken,
+    ) -> Result<GateOutcome, CoreError> {
+        let judgment = async {
+            // The deterministic predicate outranks the model verdict: it alone
+            // decides stop-vs-continue, and a broken condition stops as a failure.
+            if let Some(predicate) = &self.config.predicate {
+                match predicate.evaluate().await {
+                    LoopPredicateOutcome::Satisfied { reason } => {
+                        return Ok(GateOutcome::Stop {
+                            reason: format!(
+                                "{} condition {reason}",
+                                self.config
+                                    .predicate
+                                    .as_ref()
+                                    .map_or(String::new(), |_| String::new())
+                            ),
+                        });
+                    }
+                    LoopPredicateOutcome::Broken { detail } => {
+                        return Ok(GateOutcome::InvalidCondition {
+                            reason: format!("broken condition: {detail}"),
+                        });
+                    }
+                    LoopPredicateOutcome::Continue => {}
                 }
-                LoopPredicateOutcome::Broken { detail } => {
-                    return Ok(GateOutcome::InvalidCondition {
-                        reason: format!("broken condition: {detail}"),
-                    });
+            }
+            // Engine-supplied post-turn consult: a `Some(reason)` is a legitimate
+            // stop, decided before the verifier is even consulted. Fail-open is
+            // the dispatcher's contract (errors read as `None`).
+            if let Some(hook) = &self.should_stop
+                && let Some(reason) = hook.loop_should_stop(&self.target, transcript).await
+            {
+                return Ok(GateOutcome::Stop {
+                    reason: format!("loop.should_stop: {reason}"),
+                });
+            }
+            let verdict = self.verifier.grade(&self.target, transcript).await?;
+            let mut st = self.state.lock().await;
+            st.history.push(verdict.iteration_summary.clone());
+
+            // Engine authority: only the verifier (not the planner) can declare success.
+            if self.config.predicate.is_none()
+                && self.config.stop_when_satisfied
+                && verdict.satisfied
+                && verdict.score >= self.config.satisfaction_threshold
+                && verdict.critical_gaps.is_empty()
+                && verdict.evidence_quality >= EvidenceQuality::Supported
+            {
+                return Ok(GateOutcome::Stop {
+                    reason: format!("satisfied: score {}", verdict.score),
+                });
+            }
+
+            let gap_fp = fingerprint(&verdict.critical_gaps);
+            if self.config.max_no_progress > 0 {
+                if st.last_gap_fp == Some(gap_fp) {
+                    st.no_progress += 1;
+                } else {
+                    st.no_progress = 1;
+                    st.last_gap_fp = Some(gap_fp);
                 }
-                LoopPredicateOutcome::Continue => {}
+                if st.no_progress >= self.config.max_no_progress {
+                    return Ok(GateOutcome::Stalled);
+                }
             }
-        }
-        // Engine-supplied post-turn consult: a `Some(reason)` is a legitimate
-        // stop, decided before the verifier is even consulted. Fail-open is
-        // the dispatcher's contract (errors read as `None`).
-        if let Some(hook) = &self.should_stop
-            && let Some(reason) = hook.loop_should_stop(&self.target, transcript).await
-        {
-            return Ok(GateOutcome::Stop {
-                reason: format!("loop.should_stop: {reason}"),
-            });
-        }
-        let verdict = self.verifier.grade(&self.target, transcript).await?;
-        let mut st = self.state.lock().await;
-        st.history.push(verdict.iteration_summary.clone());
 
-        // Engine authority: only the verifier (not the planner) can declare success.
-        if self.config.predicate.is_none()
-            && self.config.stop_when_satisfied
-            && verdict.satisfied
-            && verdict.score >= self.config.satisfaction_threshold
-            && verdict.critical_gaps.is_empty()
-            && verdict.evidence_quality >= EvidenceQuality::Supported
-        {
-            return Ok(GateOutcome::Stop {
-                reason: format!("satisfied: score {}", verdict.score),
-            });
-        }
+            let notes = st.planner_notes.clone();
+            let history = st.history.clone();
+            drop(st);
+            let plan = self
+                .planner
+                .plan_next(&self.target, &history, &verdict, &notes)
+                .await?;
 
-        let gap_fp = fingerprint(&verdict.critical_gaps);
-        if self.config.max_no_progress > 0 {
-            if st.last_gap_fp == Some(gap_fp) {
-                st.no_progress += 1;
-            } else {
-                st.no_progress = 1;
-                st.last_gap_fp = Some(gap_fp);
-            }
-            if st.no_progress >= self.config.max_no_progress {
+            let mut st = self.state.lock().await;
+            let directive_fp = fingerprint(std::slice::from_ref(&plan.directive));
+            if st.recent_directive_fps.contains(&directive_fp) && !plan.strategy_change {
                 return Ok(GateOutcome::Stalled);
             }
-        }
+            st.recent_directive_fps.push(directive_fp);
+            if st.recent_directive_fps.len() > 2 {
+                st.recent_directive_fps.remove(0);
+            }
+            st.planner_notes = plan.planner_notes;
 
-        let notes = st.planner_notes.clone();
-        let history = st.history.clone();
-        drop(st);
-        let plan = self
-            .planner
-            .plan_next(&self.target, &history, &verdict, &notes)
-            .await?;
-
-        let mut st = self.state.lock().await;
-        let directive_fp = fingerprint(std::slice::from_ref(&plan.directive));
-        if st.recent_directive_fps.contains(&directive_fp) && !plan.strategy_change {
-            return Ok(GateOutcome::Stalled);
+            Ok(GateOutcome::Continue {
+                directive: format!("{}\n\n{}", plan.directive, plan.continuity_brief),
+            })
+        };
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => Err(CoreError::Cancelled),
+            result = judgment => result,
         }
-        st.recent_directive_fps.push(directive_fp);
-        if st.recent_directive_fps.len() > 2 {
-            st.recent_directive_fps.remove(0);
-        }
-        st.planner_notes = plan.planner_notes;
-
-        Ok(GateOutcome::Continue {
-            directive: format!("{}\n\n{}", plan.directive, plan.continuity_brief),
-        })
     }
 }
 

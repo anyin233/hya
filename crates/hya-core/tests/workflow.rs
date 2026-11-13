@@ -1303,6 +1303,12 @@ flowchart TD
         .expect("Workflow task must not panic")
         .expect("cancellation is a terminal report, not a core error");
     assert_eq!(report.status, WorkflowStatus::Cancelled);
+    assert_eq!(report.stages[0].status.to_string(), "cancelled");
+    assert!(
+        report.stages[0].output.contains("WORKER_DONE"),
+        "{:?}",
+        report.stages[0]
+    );
 }
 
 /// Sequential Stages with one explicit actor key reuse one resident Session and
@@ -2574,4 +2580,170 @@ async fn review_w3_loop_member_link_keeps_typed_store_failure() {
             .unwrap(),
         0
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn review_w2_wrap_up_capacity_refusal_never_completes_stage() {
+    let verifier = StageLinkGate::new(hya_proto::WorkflowMemberRole::Verifier, 0);
+    let wrap = StageLinkGate::new(hya_proto::WorkflowMemberRole::Worker, 1);
+    let provider = RecordingProvider::new();
+    provider.script_verdict(false);
+    let engine = engine_with_limits(
+        provider,
+        SubagentLimits {
+            per_run_budget: 2,
+            ..SubagentLimits::default()
+        },
+    )
+    .await;
+    let engine = Arc::new((*engine).clone().with_hooks(Arc::new(RegistrationGate {
+        gates: vec![verifier.clone(), wrap.clone()],
+    })));
+    let lead = start_lead(&engine).await;
+    let root_turn = engine.try_begin_turn(lead).unwrap();
+    let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
+    let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
+    let base = engine
+        .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
+        .unwrap();
+    let workflow = compile_workflow(
+        "wrap.hya.md",
+        "---\nkind: Workflow\nname: wrap\ndescription: Wrap-up revival capacity\nnodes:\n  work:\n    agent: builder\n    directive: Work.\n    mode: loop\n    verify:\n      agent: reviewer\n      until: More work.\n      max_iterations: 1\n---\nflowchart TD\n  work\n",
+    );
+    let prepared = hya_core::prepare_workflow_run(
+        engine.clone(),
+        lead,
+        &workflow,
+        hya_core::WorkflowRunContext {
+            binding: binding.clone(),
+            caller: "hya-main".into(),
+            base_agent: base.clone(),
+            inputs: Default::default(),
+            resident_supervisor: Some(supervisor.clone()),
+            routing: None,
+        },
+        Some(hya_proto::WorkflowRunId::new()),
+    )
+    .await
+    .unwrap();
+    let run = tokio::spawn(prepared.execute(CancellationToken::new()));
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        verifier.entered.notified(),
+    )
+    .await
+    .unwrap();
+    let root = engine.read_projection(lead).await.unwrap();
+    let worker = root
+        .team
+        .roster
+        .values()
+        .find(|entry| entry.agent_type.as_str() == "builder")
+        .unwrap();
+    supervisor.end_member(lead, &worker.handle).await.unwrap();
+    verifier.unblock();
+    tokio::time::timeout(std::time::Duration::from_secs(3), wrap.entered.notified())
+        .await
+        .unwrap();
+    let mut competitors = Vec::new();
+    for _ in 0..2 {
+        let (agent, runtime) = engine
+            .resolve_resident_runtime(binding.clone(), &base, &AgentName::new("builder"))
+            .unwrap();
+        let (_, handle, _) = supervisor
+            .spawn_resident_parked(
+                lead,
+                agent,
+                runtime,
+                "competing parked task".into(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        competitors.push(handle);
+    }
+    wrap.unblock();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(3), run)
+        .await
+        .unwrap()
+        .unwrap();
+    let events = engine.replay(lead).await.unwrap();
+    for handle in competitors {
+        supervisor.end_member(lead, &handle).await.unwrap();
+    }
+    drop(root_turn);
+    assert!(
+        matches!(
+            result,
+            Err(hya_core::WorkflowError::Engine(hya_core::CoreError::Store(
+                hya_store::StoreError::CapacityExceeded { .. }
+            )))
+        ),
+        "{result:?}"
+    );
+    assert!(!events.iter().any(|event| matches!(
+        event.event,
+        Event::WorkflowStageFinished {
+            status: hya_proto::WorkflowStageStatus::Completed,
+            ..
+        }
+    )));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn review_w2_wrap_up_cancellation_keeps_evidence_and_never_completes_stage() {
+    let wrap = StageLinkGate::new(hya_proto::WorkflowMemberRole::Worker, 1);
+    let provider = RecordingProvider::new();
+    provider.script_verdict(false);
+    let engine = engine(provider).await;
+    let engine = Arc::new((*engine).clone().with_hooks(Arc::new(RegistrationGate {
+        gates: vec![wrap.clone()],
+    })));
+    let lead = start_lead(&engine).await;
+    let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
+    let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
+    let workflow = compile_workflow(
+        "cancel-wrap.hya.md",
+        "---\nkind: Workflow\nname: cancel-wrap\ndescription: Cancel wrap-up\nnodes:\n  work:\n    agent: builder\n    directive: Work.\n    mode: loop\n    verify:\n      agent: reviewer\n      until: More work.\n      max_iterations: 1\n---\nflowchart TD\n  work\n",
+    );
+    let prepared = hya_core::prepare_workflow_run(
+        engine.clone(),
+        lead,
+        &workflow,
+        hya_core::WorkflowRunContext {
+            binding,
+            caller: "hya-main".into(),
+            base_agent: base_spec(),
+            inputs: Default::default(),
+            resident_supervisor: Some(supervisor),
+            routing: None,
+        },
+        Some(hya_proto::WorkflowRunId::new()),
+    )
+    .await
+    .unwrap();
+    let cancel = CancellationToken::new();
+    let run = tokio::spawn(prepared.execute(cancel.clone()));
+    tokio::time::timeout(std::time::Duration::from_secs(3), wrap.entered.notified())
+        .await
+        .unwrap();
+    cancel.cancel();
+    wrap.unblock();
+    let report = tokio::time::timeout(std::time::Duration::from_secs(3), run)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(report.status, WorkflowStatus::Cancelled);
+    assert_eq!(report.stages[0].status.to_string(), "cancelled");
+    assert!(report.stages[0].output.contains("WORKER_DONE"));
+    assert!(!engine.replay(lead).await.unwrap().iter().any(|e| matches!(
+        e.event,
+        Event::WorkflowStageFinished {
+            status: hya_proto::WorkflowStageStatus::Completed,
+            ..
+        }
+    )));
+    assert_eq!(engine.store().live_member_count(lead).await.unwrap(), 0);
 }

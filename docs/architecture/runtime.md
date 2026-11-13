@@ -1498,7 +1498,13 @@ turn is cancelled rather than silently continuing without the sidecar's hooks
 Goal mode lives in [`completion.rs`](../../crates/hya-core/src/completion.rs).
 It uses three pieces:
 
-- `IterationDriver`: generic loop runner with safety caps.
+- `IterationDriver`: generic loop runner with safety caps. Wrap-up errors
+  propagate; cancellation returns `RunOutcome::Cancelled`.
+- `IterationGate::judge(&self, transcript: &str, cancel: &CancellationToken)
+  -> Result<GateOutcome, CoreError>`: judgments honor cancellation and await any
+  owned cleanup before returning. The driver awaits this contract instead of
+  dropping a pending judgment. Goal/loop model judgments race their cancellable
+  work locally; Workflow verifiers await their resident ending.
 - `LeadTurnExecutor`: admits the next directive into the lead session and runs a
   turn.
 - `GoalGate`: asks a `GoalEvaluator` whether the transcript satisfies the goal.

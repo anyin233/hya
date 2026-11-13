@@ -474,3 +474,90 @@ fn goal_contract_validation_accepts_freeform_and_rejects_partial_structure() {
     let good = "## Objective\nShip it.\n## Success criteria\nall green.\n## Verification\n`cargo test`\n## Boundaries\nrepo only.\n## Stop conditions\ntwo failures.\n";
     assert!(validate_goal_condition(good).is_ok());
 }
+
+struct WrapFailure {
+    calls: AtomicUsize,
+    cancel: bool,
+}
+
+#[async_trait]
+impl hya_core::completion::IterationExecutor for WrapFailure {
+    async fn run_iteration(&self, _: &str, token: &CancellationToken) -> Result<String, CoreError> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Ok("latest worker evidence".into());
+        }
+        if self.cancel {
+            token.cancel();
+            return Err(CoreError::Cancelled);
+        }
+        Err(hya_store::StoreError::CapacityExceeded {
+            root: hya_proto::SessionId::new(),
+            live: 1,
+            requested: 1,
+            limit: 1,
+        }
+        .into())
+    }
+}
+
+struct ContinueGate;
+#[async_trait]
+impl hya_core::completion::IterationGate for ContinueGate {
+    async fn judge(
+        &self,
+        _: &str,
+        _: &CancellationToken,
+    ) -> Result<hya_core::GateOutcome, CoreError> {
+        Ok(hya_core::GateOutcome::Continue {
+            directive: "continue".into(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn review_w2_wrap_up_propagates_capacity_failure() {
+    let worker = WrapFailure {
+        calls: AtomicUsize::new(0),
+        cancel: false,
+    };
+    let result = hya_core::completion::IterationDriver::new(SafetyCaps {
+        max_iterations: 1,
+        ..SafetyCaps::default()
+    })
+    .run(
+        &worker,
+        &ContinueGate,
+        "work".into(),
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(
+        matches!(
+            result,
+            Err(CoreError::Store(
+                hya_store::StoreError::CapacityExceeded { .. }
+            ))
+        ),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn review_w2_wrap_up_preserves_cancellation() {
+    let worker = WrapFailure {
+        calls: AtomicUsize::new(0),
+        cancel: true,
+    };
+    let result = hya_core::completion::IterationDriver::new(SafetyCaps {
+        max_iterations: 1,
+        ..SafetyCaps::default()
+    })
+    .run(
+        &worker,
+        &ContinueGate,
+        "work".into(),
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(matches!(result, Ok(RunOutcome::Cancelled)), "{result:?}");
+}
