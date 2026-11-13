@@ -123,6 +123,26 @@ async fn t2_1_task_tool_spawns_general_subagent() {
         "child resident must run its first episode; ids={child_ids:?}; {}",
         env.diagnostics()
     );
+    let request = env.route_dump("MARKER_CHILD_PROMPT").unwrap();
+    assert!(
+        request.contains("[mail from main] do the child work"),
+        "{request}"
+    );
+    let events = env.events(session, None).await.unwrap();
+    let dm = events
+        .iter()
+        .find_map(|envelope| match &envelope.event {
+            Event::MailSent {
+                from,
+                to: hya_proto::MailEndpoint::Channel(channel),
+                body,
+                ..
+            } if from == "main" && body == "do the child work" => Some(channel),
+            _ => None,
+        })
+        .expect("spawn directive must be visible as mail in the parent log");
+    assert!(events.iter().any(|envelope| matches!(&envelope.event,
+        Event::ChannelCreated { channel, kind: hya_proto::ChannelKind::Dm, .. } if channel == dm)));
 }
 
 #[tokio::test]

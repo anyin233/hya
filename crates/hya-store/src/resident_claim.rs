@@ -16,19 +16,16 @@ pub struct RecoveredActorClaim {
     pub previous_epoch: ActorEpoch,
 }
 
-/// A wake either admits new text or owns the directive already committed at registration.
+/// A wake admits new mail or resumes work retained by user cancellation.
 #[derive(Debug)]
 pub enum ResidentWorkPrompt {
     /// Admit one new coalesced user message.
     Text(String),
-    /// First wake of a fresh episode, with no prior work or new text to append.
-    /// The registered directive is still the transcript tail by construction.
-    Fresh(MessageId),
-    /// Reuse the initial directive committed at registration.
-    Admitted {
-        /// The registered user message owned by this turn.
+    /// Resume an unfinished admitted wake after user cancellation.
+    Resume {
+        /// The unfinished user message owned by this turn.
         message: MessageId,
-        /// Coalesced new mail, appended to that directive when nonempty.
+        /// Coalesced new mail, appended only if the prompt is still unanswered.
         append: String,
     },
 }
@@ -240,8 +237,7 @@ impl SessionStore {
         let mut events = Vec::new();
         let (admitted, text) = match prompt {
             ResidentWorkPrompt::Text(text) => (None, text),
-            ResidentWorkPrompt::Fresh(message) => (Some(message), String::new()),
-            ResidentWorkPrompt::Admitted { message, append } => {
+            ResidentWorkPrompt::Resume { message, append } => {
                 let projection =
                     crate::replay_projection(&self.projections, &mut tx, session).await?;
                 let tail = projection
@@ -711,7 +707,7 @@ fn decode_claim(row: sqlx::sqlite::SqliteRow) -> Result<ActorClaim, StoreError> 
 pub struct EpisodeRegistration {
     /// Member session whose active claim is the capacity lease.
     pub actor: SessionId,
-    /// Session, member, roster, channel and initial prompt events.
+    /// Session, member, roster, channel and optional directive-mail events.
     pub events: Vec<Event>,
 }
 

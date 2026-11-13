@@ -762,22 +762,21 @@ for a generation or bind whichever runtime is current when a queued request
 runs.
 
 Resident registration commits the child, parent member, roster/channels, claim,
-and raw initial user directive together. It then installs the slot and its owned
-task before awaiting plugins. The task sends global and scoped `session.start`,
-publishes the committed registration events, applies `message.user.before`
-rewrites with `TextReplace`, notifies `agent.spawn`, then enters the resident
-loop. Cancelling the spawning future during either hook leaves the owned task
-running. Failed commits produce no child hook calls or captured hook/policy
-entries. Concurrent siblings join one group channel, resolved inside the writer
-transaction, so one `announce` reaches the whole unit.
+and optional directive as the first parent–child DM mail together. It installs
+the episode before awaiting plugins. Initialization sends global and scoped
+`session.start`, publishes registration, notifies `agent.spawn`, then enters the
+resident loop. The first wake uses ordinary coalesced mail admission: hooks run
+once on `[mail from <parent>] …` before `begin_work`, outside SQL and locks.
+Direct-parent DM mail remains deliverable under restrictive bundle wake policy.
+Failed commits produce no child hook calls or captured hook/policy entries.
+Concurrent siblings join one group channel, resolved inside the writer transaction.
 
-If the initial directive is cancelled before an assistant turn starts, stop,
-archive, sidecar startup failure, and team-budget termination durably append an
-explicit cancelled assistant answer with the terminal activity and claim
-release. For example, archive `inspect the parser` before it runs, then revive
-with `inspect the tests instead`: the model sees the old task followed by its
-cancellation answer before the new directive. No extra tool arguments are
-needed. See the [task registration contract](../spec/backend/task-tool.md#scenario-atomic-resident-registration-and-arming)
+Archive, stop, prework sidecar failure, and team-budget termination before the
+first wake leave the directive unread, recorded in the handoff's Goal and Pending
+sections. No synthetic cancellation answer is appended. Revival cuts the ended
+episode and skips its old inbox history, admitting only new mail; prior pending
+work is visible through the handoff. See the
+[task registration contract](../spec/backend/task-tool.md#scenario-atomic-resident-registration-and-arming)
 for the store interface and ordering.
 
 Resident exits use one [atomic terminal transition](../spec/backend/task-tool.md#atomic-resident-termination):

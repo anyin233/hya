@@ -71,14 +71,6 @@ pub type ResolvedResidentRuntime = (
     Option<Arc<dyn BoundSidecarFactory>>,
 );
 
-/// Initial activation policy for the shared resident registration path.
-enum ResidentRegistration {
-    /// Register and immediately arm the supplied directive.
-    Armed(String),
-    /// Register without an implicit first turn.
-    Parked(String),
-}
-
 /// Durable recovery disposition for a resident actor after restart.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResidentRecovery {
@@ -200,8 +192,6 @@ struct Episode {
     cancel: CancellationToken,
     ending: Option<Ending>,
     done: EpisodeCompletion,
-    /// The committed initial directive is an input even when no mail is owed.
-    initial_prompt: Option<hya_proto::MessageId>,
     /// Accepted-but-not-yet-executed terminal report (ADR-0015).
     report: Option<PendingReport>,
     /// The user cancelled this slot's or an ancestor's turn: the harness
@@ -395,7 +385,6 @@ struct RunPlan {
     synth: bool,
     claim: Option<ActorClaim>,
     cancel: CancellationToken,
-    initial_prompt: Option<hya_proto::MessageId>,
     /// The session's single-active-turn claim, taken atomically with the
     /// decision to run and held until the turn ends.
     lease: TurnLease,
@@ -450,7 +439,8 @@ pub struct TaskSpawnOrigin {
 
 /// Owned registration context for one resident creation operation.
 struct ResidentSpawnContext {
-    registration: ResidentRegistration,
+    directive: String,
+    initial: Option<String>,
     parent_claim: Option<ActorClaim>,
     guidance: Option<Arc<str>>,
     /// The `task` call behind the spawn, when there is one.
@@ -459,12 +449,14 @@ struct ResidentSpawnContext {
 
 impl ResidentSpawnContext {
     fn new(
-        registration: ResidentRegistration,
+        directive: String,
+        initial: Option<String>,
         parent_claim: Option<&ActorClaim>,
         guidance: Option<Arc<str>>,
     ) -> Self {
         Self {
-            registration,
+            directive,
+            initial,
             parent_claim: parent_claim.copied(),
             guidance,
             task: None,
@@ -607,7 +599,6 @@ impl TeamActor {
                     cancel: cancel.clone(),
                     ending: None,
                     done: watch::channel(None).0,
-                    initial_prompt: None,
                     cursor: 0,
                     last_activity: None,
                     last_heartbeat_emit: None,
@@ -850,7 +841,6 @@ impl TeamActor {
                 }
             };
             let synth = slot.synth_pending;
-            let initial_prompt = slot.initial_prompt;
             let claim = slot.claim;
             let cursor = slot.cursor;
             let agent = slot.agent.clone();
@@ -884,7 +874,6 @@ impl TeamActor {
                 is_main,
                 cursor,
                 synth,
-                initial_prompt,
                 claim,
                 cancel,
                 lease,
@@ -1215,7 +1204,7 @@ impl TeamActor {
         }
     }
 
-    /// Run exactly one turn for `session`: inject the initial directive (once), the
+    /// Run exactly one turn for `session`: coalesce durable mail and the
     /// synthesis directive (main, on quiescence), and every inbox message since the
     /// cursor, then advance the cursor and stream one turn. All of this is coalesced
     /// into a single turn — many queued messages produce one turn, never several.
@@ -1241,7 +1230,6 @@ impl TeamActor {
             is_main,
             cursor,
             synth,
-            mut initial_prompt,
             claim,
             cancel,
             lease,
@@ -1274,6 +1262,7 @@ impl TeamActor {
                 slot.cursor = slot.cursor.max(durable);
             }
         }
+        let mut resumed_prompt = None;
         let mut prompt_answered = false;
         if claim.is_some()
             && let Some(work) = projection
@@ -1286,20 +1275,18 @@ impl TeamActor {
             // The old prompt has already been hooked. Only new mail or a
             // continuation needs hooks; begin_work owns the transcript decision.
             let actor = self.engine.read_projection(session).await?;
-            if initial_prompt.is_none() {
-                initial_prompt = Some(
-                    actor
-                        .session
-                        .messages
-                        .iter()
-                        .rev()
-                        .find(|message| message.role == hya_proto::Role::User)
-                        .ok_or_else(|| {
-                            CoreError::Invalid("resident work has no admitted prompt".into())
-                        })?
-                        .id,
-                );
-            }
+            resumed_prompt = Some(
+                actor
+                    .session
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|message| message.role == hya_proto::Role::User)
+                    .ok_or_else(|| {
+                        CoreError::Invalid("resident work has no admitted prompt".into())
+                    })?
+                    .id,
+            );
             prompt_answered = actor
                 .session
                 .messages
@@ -1308,14 +1295,14 @@ impl TeamActor {
                 .find(|message| {
                     message.role != hya_proto::Role::Assistant || !message.parts.is_empty()
                 })
-                .is_some_and(|message| Some(message.id) != initial_prompt);
+                .is_some_and(|message| Some(message.id) != resumed_prompt);
         }
         let inbox_len = projection
             .team
             .inboxes
             .get(&handle)
             .map_or(0, |inbox| inbox.len());
-        let mail_owed = initial_prompt.is_some() || inbox_len > durable_cursor;
+        let mail_owed = resumed_prompt.is_some() || inbox_len > durable_cursor;
         let channel_policy = ChannelPolicy::from_binding(&binding)?;
         let new_mail: Vec<(String, String)> = projection
             .team
@@ -1326,6 +1313,9 @@ impl TeamActor {
                     .iter()
                     .skip(cursor)
                     .filter(|message| {
+                        if message.from == handle {
+                            return false;
+                        }
                         if message.from == scope::HARNESS_HANDLE {
                             return true;
                         }
@@ -1342,7 +1332,7 @@ impl TeamActor {
             })
             .unwrap_or_default();
 
-        if initial_prompt.is_none() && !synth && new_mail.is_empty() {
+        if resumed_prompt.is_none() && !synth && new_mail.is_empty() {
             if cancel.is_cancelled() {
                 return Ok(TurnOutcome::NotStarted);
             }
@@ -1430,18 +1420,8 @@ impl TeamActor {
                 mail_owed,
             });
         }
-        let prompt = match initial_prompt {
-            Some(message)
-                if text.is_empty()
-                    && projection
-                        .team
-                        .roster
-                        .get(&handle)
-                        .is_some_and(|entry| entry.resident_work.is_none()) =>
-            {
-                hya_store::ResidentWorkPrompt::Fresh(message)
-            }
-            Some(message) => hya_store::ResidentWorkPrompt::Admitted {
+        let prompt = match resumed_prompt {
+            Some(message) => hya_store::ResidentWorkPrompt::Resume {
                 message,
                 append: text,
             },
@@ -1485,7 +1465,6 @@ impl TeamActor {
                 return Ok(TurnOutcome::NotStarted);
             };
             slot.cursor = slot.cursor.max(inbox_len);
-            slot.initial_prompt = None;
         }
         // Exactly one turn, under the team-wide cancel so a budget kill stops it.
         let finish = match (claim.as_ref(), agents, resources) {
@@ -1722,6 +1701,9 @@ impl TeamActor {
                     let cursor = slot.cursor.max(durable);
                     let allowed = ChannelPolicy::from_binding(&slot.binding).is_ok_and(|policy| {
                         inbox.iter().skip(cursor).any(|mail| {
+                            if mail.from == slot.handle {
+                                return false;
+                            }
                             if mail.from == scope::HARNESS_HANDLE {
                                 return true;
                             }
@@ -1797,6 +1779,9 @@ impl TeamActor {
                 }
                 let policy = ChannelPolicy::from_binding(&slot.binding).ok();
                 let has_deliverable = inbox.iter().skip(slot.cursor).any(|message| {
+                    if message.from == slot.handle {
+                        return false;
+                    }
                     if message.from == scope::HARNESS_HANDLE {
                         return true;
                     }
@@ -1882,6 +1867,11 @@ fn resident_delivery_allowed(
     kind: ChannelTemplateKind,
     role: ChannelParticipantRole,
 ) -> bool {
+    // The direct parent's DM is the member's work address, including its
+    // spawn directive; bundle wake policy cannot disable that address.
+    if kind == ChannelTemplateKind::ParentDm && role == ChannelParticipantRole::Child {
+        return true;
+    }
     [ChannelCapability::ResidentMail, ChannelCapability::FollowUp]
         .into_iter()
         .all(|capability| match kind {
@@ -1898,7 +1888,6 @@ struct EpisodeInit {
     agent: hya_proto::AgentName,
     parent: SessionId,
     envelopes: Vec<hya_proto::Envelope>,
-    initial_prompt: Option<hya_proto::MessageId>,
     ready: oneshot::Sender<Result<(), CoreError>>,
 }
 
@@ -1913,7 +1902,6 @@ async fn initialize_episode(
         agent,
         parent,
         envelopes,
-        initial_prompt,
         ready,
     } = init;
     let session = claim.actor_id;
@@ -1921,20 +1909,6 @@ async fn initialize_episode(
         matches!(envelope.event,
         Event::SessionCreated { session: id, .. } if id == session)
     });
-    let initial = envelopes
-        .iter()
-        .rev()
-        .find_map(|envelope| match &envelope.event {
-            Event::TextDelta {
-                session: id,
-                message,
-                part,
-                delta,
-            } if *id == session && Some(*message) == initial_prompt => {
-                Some((*message, *part, delta.clone()))
-            }
-            _ => None,
-        });
     let hooks = async {
         if created {
             team.engine.notify_session_start(session).await;
@@ -1957,26 +1931,6 @@ async fn initialize_episode(
         team.engine.publish_envelope(envelope);
     }
     let initialize = async {
-        if let Some((message, part, original)) = initial {
-            let text = team
-                .engine
-                .user_text_after_hooks(&binding, agent.as_str(), session, original.clone())
-                .await;
-            if text != original {
-                team.engine
-                    .commit_resident_mutation(
-                        claim,
-                        session,
-                        vec![Event::TextReplace {
-                            session,
-                            message,
-                            part,
-                            text,
-                        }],
-                    )
-                    .await?;
-            }
-        }
         if created && let Some(hooks) = team.engine.session_hook_dispatcher(parent) {
             hooks
                 .agent_spawn(AgentSpawnInput {
@@ -2581,7 +2535,6 @@ async fn commit_episode_ending(
                 check_gate,
                 expected_work,
             },
-            ending.cause(),
         )
         .await?;
     if outcome == hya_store::ResidentArchiveOutcome::Refused {
@@ -2806,16 +2759,16 @@ async fn report_gate_projection(
     let entry = projection.team.roster.get(canonical).ok_or_else(|| {
         CoreError::Invalid(format!("resident `{canonical}` is not on the roster"))
     })?;
-    let inbox_len = projection
-        .team
-        .inboxes
-        .get(canonical)
-        .map_or(0, |inbox| inbox.len() as u64);
     // Mail the current resident wake injected into this turn was read there.
     let read_through = entry.resident_work.map_or(entry.resident_cursor, |work| {
         entry.resident_cursor.max(work.inbox_through)
     });
-    if read_through < inbox_len {
+    if projection.team.inboxes.get(canonical).is_some_and(|inbox| {
+        inbox
+            .iter()
+            .skip(usize::try_from(read_through).unwrap_or(usize::MAX))
+            .any(|mail| mail.from != canonical)
+    }) {
         return Err(CoreError::Invalid(unread_mail_rejection(
             &projection,
             canonical,
@@ -2852,6 +2805,7 @@ fn unread_mail_rejection(
             inbox
                 .iter()
                 .skip(usize::try_from(read_through).unwrap_or(usize::MAX))
+                .filter(|mail| mail.from != canonical)
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -2964,7 +2918,6 @@ impl ArchiveReviver for ResidentSupervisor {
         root: SessionId,
         handle: &str,
         archive: hya_store::ResidentArchive,
-        cause: FinishCause,
     ) -> Result<hya_store::ResidentArchiveOutcome, CoreError> {
         let _write = self.claim_writes.lock().await;
         if self.team_with_resident(archive.actor).is_some() {
@@ -2980,7 +2933,6 @@ impl ArchiveReviver for ResidentSupervisor {
                 root,
                 handle,
                 archive,
-                cause,
             )
             .await?;
         self.engine.publish_resident_finalization(envelopes);
@@ -3361,7 +3313,6 @@ impl ResidentSupervisor {
                     check_gate: false,
                     expected_work: None,
                 },
-                ending.cause(),
             )
             .await?;
         self.engine.publish_resident_finalization(envelopes);
@@ -3839,7 +3790,6 @@ impl ResidentSupervisor {
                     check_gate: false,
                     expected_work: None,
                 },
-                FinishCause::Archived,
             )
             .await?;
         self.engine.publish_resident_finalization(envelopes);
@@ -3975,7 +3925,6 @@ impl ResidentSupervisor {
             agent: agent.name.clone(),
             parent: parent_session,
             envelopes,
-            initial_prompt: None,
             ready,
         };
         team.install_episode(
@@ -3999,7 +3948,6 @@ impl ResidentSupervisor {
                 cancel: team.cancel.child_token(),
                 ending: None,
                 done: watch::channel(None).0,
-                initial_prompt: None,
                 cursor: usize::try_from(cursor).unwrap_or(usize::MAX),
                 last_activity: None,
                 last_heartbeat_emit: None,
@@ -4087,7 +4035,8 @@ impl ResidentSupervisor {
                 agent,
                 resolved,
                 ResidentSpawnContext::new(
-                    ResidentRegistration::Armed(directive),
+                    directive.clone(),
+                    Some(directive),
                     parent_claim,
                     guidance,
                 ),
@@ -4122,7 +4071,8 @@ impl ResidentSupervisor {
                 agent,
                 resolved,
                 ResidentSpawnContext::new(
-                    ResidentRegistration::Armed(directive),
+                    directive.clone(),
+                    Some(directive),
                     parent_claim,
                     guidance,
                 )
@@ -4150,11 +4100,7 @@ impl ResidentSupervisor {
             parent,
             agent,
             resolved,
-            ResidentSpawnContext::new(
-                ResidentRegistration::Parked(registration_directive),
-                parent_claim,
-                guidance,
-            ),
+            ResidentSpawnContext::new(registration_directive, None, parent_claim, guidance),
         )
         .await
     }
@@ -4194,7 +4140,8 @@ impl ResidentSupervisor {
                     member.agent,
                     member.runtime,
                     ResidentSpawnContext::new(
-                        ResidentRegistration::Armed(member.directive),
+                        member.directive.clone(),
+                        Some(member.directive),
                         parent_claim,
                         member.guidance,
                     )
@@ -4219,7 +4166,8 @@ impl ResidentSupervisor {
         context: ResidentSpawnContext,
     ) -> Result<(SessionId, PreparedResident, MemberId), CoreError> {
         let ResidentSpawnContext {
-            registration,
+            directive,
+            initial,
             parent_claim,
             guidance,
             task,
@@ -4228,10 +4176,6 @@ impl ResidentSupervisor {
             task.as_ref()
                 .map_or(agent.name.as_str(), |task| task.subagent_type.as_str()),
         );
-        let (registration_directive, initial) = match registration {
-            ResidentRegistration::Armed(directive) => (directive.clone(), Some(directive)),
-            ResidentRegistration::Parked(directive) => (directive, None),
-        };
         let (binding, agents, resources, sidecar_factory) = resolved;
         let (root, parent_depth) = self.engine.session_lineage(parent).await?;
         let session = SessionId::new();
@@ -4268,10 +4212,7 @@ impl ResidentSupervisor {
             .as_ref()
             .map(|task| task.description.trim())
             .filter(|description| !description.is_empty())
-            .map_or_else(
-                || registration_directive.chars().take(80).collect(),
-                ToString::to_string,
-            );
+            .map_or_else(|| directive.chars().take(80).collect(), ToString::to_string);
         let tool_call = task.as_ref().and_then(|task| task.tool_call);
         events.push(Event::MemberSpawned {
             session: parent,
@@ -4280,7 +4221,7 @@ impl ResidentSupervisor {
             subagent_type: agent.name.clone(),
             description,
             depth: parent_depth.saturating_add(1),
-            directive: registration_directive,
+            directive,
             tool_call,
         });
         Ok((
@@ -4502,16 +4443,21 @@ impl ResidentSupervisor {
                 // that outlives archive cycles.
                 Event::ChannelCreated {
                     session: root,
-                    channel: dm_channel,
+                    channel: dm_channel.clone(),
                     kind: ChannelKind::Dm,
                     unit: None,
                     members: vec![parent_path.clone(), handle.clone()],
                 },
             ]);
             let initial = initial.filter(|text| !text.trim().is_empty());
-            let has_initial = initial.is_some();
             if let Some(text) = initial {
-                events.extend(self.engine.prepare_initial_resident_prompt(session, text));
+                events.push(Event::MailSent {
+                    session: root,
+                    from: parent_path.clone(),
+                    to: MailEndpoint::Channel(dm_channel),
+                    kind: hya_proto::MailKind::Message,
+                    body: text,
+                });
             }
             let channel_policy =
                 ChannelPolicy::from_binding(&binding)?.snapshot_for(agent.name.as_str());
@@ -4521,15 +4467,6 @@ impl ResidentSupervisor {
                 .roster
                 .get(&parent_path)
                 .map_or(root, |entry| entry.session);
-            let initial_prompt = events.iter().find_map(|event| match event {
-                Event::MessageStarted {
-                    session: id,
-                    message,
-                    role: hya_proto::Role::User,
-                    ..
-                } if *id == session => Some(*message),
-                _ => None,
-            });
             registrations.push(hya_store::EpisodeRegistration {
                 actor: session,
                 events,
@@ -4545,7 +4482,7 @@ impl ResidentSupervisor {
                 sidecar_factory,
                 is_main: false,
                 status: SlotStatus::Idle,
-                pending: has_initial,
+                pending: false,
                 report: None,
                 user_stopped: false,
                 synth_pending: false,
@@ -4553,7 +4490,6 @@ impl ResidentSupervisor {
                 cancel: CancellationToken::new(),
                 ending: None,
                 done: watch::channel(None).0,
-                initial_prompt,
                 cursor: 0,
                 last_activity: None,
                 last_heartbeat_emit: None,
@@ -4633,7 +4569,6 @@ impl ResidentSupervisor {
                 agent: episode.agent.name.clone(),
                 parent,
                 envelopes,
-                initial_prompt: episode.initial_prompt,
                 ready,
             };
             episode.claim = Some(claim);
@@ -4642,12 +4577,9 @@ impl ResidentSupervisor {
             initialized_members.push(initialized);
         }
         drop(write);
-        // Every committed member is already installed, even if one initializer fails.
-        let results = futures::future::join_all(initialized_members).await;
-        for result in results {
-            result
-                .map_err(|_| CoreError::Invalid("resident initialization task exited".into()))??;
-        }
+        // Commit is the batch's success boundary. Each episode owns initializer
+        // errors and its ending; none can retract these committed identities.
+        let _ = futures::future::join_all(initialized_members).await;
         Ok(())
     }
 
@@ -4694,15 +4626,6 @@ impl ResidentSupervisor {
         {
             return Err(CoreError::Invalid("resident already has an episode".into()));
         }
-        let actor = self
-            .engine
-            .read_projection(recovered.claim.actor_id)
-            .await?;
-        let initial_prompt = matches!(disposition, ResidentRecovery::Queued { .. })
-            .then(|| actor.session.messages.last())
-            .flatten()
-            .filter(|message| message.role == hya_proto::Role::User)
-            .map(|message| message.id);
         let notify = Arc::new(Notify::new());
         team.install_episode(
             recovered.claim.actor_id,
@@ -4726,7 +4649,6 @@ impl ResidentSupervisor {
                 cancel: team.cancel.child_token(),
                 ending: None,
                 done: watch::channel(None).0,
-                initial_prompt,
                 cursor: usize::try_from(cursor).unwrap_or(usize::MAX),
                 last_activity: None,
                 last_heartbeat_emit: None,

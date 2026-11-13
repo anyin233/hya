@@ -177,6 +177,7 @@ impl SessionEngine {
             .into_iter()
             .flatten()
             .skip(usize::try_from(entry.resident_cursor).unwrap_or(usize::MAX))
+            .filter(|mail| mail.from != entry.handle)
             .map(|mail| format!("[mail from {}] {}", mail.from, mail.body))
             .collect()
     }

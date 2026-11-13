@@ -242,27 +242,29 @@ runtime.publish_agent_model_preferences(map.clone());
 Commit precedes one infallible publication, while the request keeps its original
 binding for validation and response projection.
 
-Resident creation and arming use `register_episodes`: the whole batch's child
-sessions, parent member relations, roster/channels, claims and initial user
-messages commit with lazy root registration and a live-capacity check. Failed
-registration leaves none of these rows/events behind.
-Publication uses only the returned committed envelopes; recovery identifies the
-persisted user message as queued work before `ResidentWorkStarted`.
+Resident creation uses `register_episodes`: the whole batch's child sessions,
+parent member relations, roster/channels, claims and optional directive `MailSent`
+commit with lazy root registration and a live-capacity check. Failed registration
+leaves none of these rows/events behind. The directive names the parent–child
+DM and direct parent sender. Recovery identifies it as ordinary unread mail.
+Parked registrations omit mail; they have no initial user message.
 
 `SessionStore::begin_transaction()` acquires SQLite's writer reservation with
 `BEGIN IMMEDIATE`, before any read. Registration resolves an existing group
 channel for the same root/unit inside that transaction, so concurrent siblings
-join one broadcast channel.
+join one broadcast channel. Publication uses returned committed envelopes.
 
-Stopping an actor whose last message is an unanswered user directive writes a
-nonempty assistant cancellation answer in the existing stop/failure transaction,
-alongside terminal activity, member closure and claim release. This prevents
-revival from presenting an unrun, cancelled task as an open directive. The text
-is required because model requests omit empty assistant messages. Existing open
-turn cleanup remains unchanged.
+Wake hooks run before `begin_work`, outside SQL and locks. A fresh wake admits
+one coalesced user message without reading the child projection in its writer
+transaction. `ResidentWorkPrompt::Resume` is reserved for user-cancelled admitted
+work. Stopping before first admission leaves directive mail in the handoff's
+Pending section; no synthetic assistant cancellation answer is written.
+Outgoing DM copies stay in channel history and the sender inbox, but cannot wake
+the sender or prevent its report. Report checks ignore those copies both before
+handoff and in the terminal writer transaction.
 
 `finalize_resident_archive(owner: ResidentArchiveOwner<'_>, root: SessionId,
-handle: &str, archive: ResidentArchive, cause: FinishCause)` returns
+handle: &str, archive: ResidentArchive)` returns
 `Result<(ResidentArchiveOutcome, Vec<Envelope>), StoreError>`.
 `Claim(&ActorClaim)` fences the episode; `Takeover` requires the store's registered
 runtime owner and bumps an orphan's active claim epoch under that owner inside
@@ -281,8 +283,8 @@ claim tuple unchanged. A store error rolls back everything, including takeover.
 The engine supplies
 the prepared handoff, archive reason, terminal note and `member_status` explicitly
 (see [Task Tool](task-tool.md#atomic-resident-termination)); the store never
-synthesizes a handoff. Causes are `UserCancel` for ordinary stop, `Archived` for
-parent archive, `Shutdown` for drain, and `Other` for failure. Returned envelopes
+synthesizes a handoff. Turn owners close running assistant messages with their
+ending cause before finalization. Returned envelopes
 are published after commit. Handoff, optional report/mail, archive and claim
 release share that transaction; a failed transition has no fallback writes.
 Terminal member closure also replaces the previous episode's result when a

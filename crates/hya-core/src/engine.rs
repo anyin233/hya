@@ -524,9 +524,8 @@ pub trait ArchiveReviver: Send + Sync {
         root: SessionId,
         handle: &str,
         archive: hya_store::ResidentArchive,
-        cause: hya_proto::FinishCause,
     ) -> Result<hya_store::ResidentArchiveOutcome, CoreError> {
-        let _ = (root, handle, archive, cause);
+        let _ = (root, handle, archive);
         Err(CoreError::Invalid(
             "resident orphan has no supervisor".into(),
         ))

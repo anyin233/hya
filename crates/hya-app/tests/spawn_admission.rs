@@ -2324,7 +2324,7 @@ async fn batch_registration_failure_rolls_back_every_member_and_lazy_main() {
     let mut connection = SqliteConnection::connect(&format!("sqlite://{}", database.path()))
         .await
         .unwrap();
-    sqlx::query("CREATE TRIGGER reject_second_prompt BEFORE INSERT ON event_log WHEN json_extract(NEW.payload, '$.type') = 'text_delta' AND json_extract(NEW.payload, '$.delta') = 'reject second member' BEGIN SELECT RAISE(ABORT, 'second registration failed'); END")
+    sqlx::query("CREATE TRIGGER reject_second_prompt BEFORE INSERT ON event_log WHEN json_extract(NEW.payload, '$.type') = 'mail_sent' AND json_extract(NEW.payload, '$.body') = 'reject second member' BEGIN SELECT RAISE(ABORT, 'second registration failed'); END")
         .execute(&mut connection).await.unwrap();
     let result = fixture
         .scoped_spawner()
