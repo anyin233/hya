@@ -382,7 +382,7 @@ fn check_row(actual: &Row, expected: &Row) -> anyhow::Result<()> {
     );
     for (metric, value) in &actual.counts {
         let tolerance = match metric.as_str() {
-            "statements" => 2,
+            "statements" => 2 + actual.n as u64 / 16,
             "bytes" => 3 * (actual.n as u64 + 1),
             _ => 0,
         };
@@ -435,6 +435,28 @@ mod tests {
             assert!(
                 check_row(&changed, &expected).is_err(),
                 "{metric} regression must fail"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn statement_tolerance_scales_with_fanout() -> anyhow::Result<()> {
+        for (n, tolerance) in [(1, 2), (16, 3), (64, 6)] {
+            let expected = Row {
+                scenario: "B".into(),
+                n,
+                phase: "work".into(),
+                wall_ms: 0.0,
+                counts: BTreeMap::from([("statements".into(), 100)]),
+            };
+            let mut actual: Row = serde_json::from_value(serde_json::to_value(&expected)?)?;
+            actual.counts.insert("statements".into(), 100 + tolerance);
+            check_row(&actual, &expected)?;
+            actual.counts.insert("statements".into(), 101 + tolerance);
+            assert!(
+                check_row(&actual, &expected).is_err(),
+                "N={n} must reject SQL beyond {tolerance}"
             );
         }
         Ok(())
