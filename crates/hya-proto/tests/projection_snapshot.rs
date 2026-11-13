@@ -164,3 +164,32 @@ fn reducer_fingerprint_pins_the_version() {
          the new fingerprint {fingerprint:#018x}"
     );
 }
+
+#[test]
+fn snapshot_rejects_out_of_range_inbox_mail_index() {
+    let mut projection = Projection::default();
+    projection.team.inboxes.insert("main".into(), vec![0]);
+    let bytes = projection.encode_snapshot().unwrap();
+    assert!(Projection::decode_snapshot(&bytes).is_err());
+}
+
+#[test]
+fn snapshot_rejects_out_of_range_channel_mail_index() {
+    let session = SessionId::new();
+    let mut projection = Projection::from_events(&envelopes(vec![Event::ChannelCreated {
+        session,
+        channel: "DM-corrupt".into(),
+        kind: hya_proto::ChannelKind::Dm,
+        unit: None,
+        members: vec!["main".into()],
+    }]));
+    projection
+        .team
+        .channels
+        .get_mut("DM-corrupt")
+        .unwrap()
+        .log
+        .push(0);
+    let bytes = projection.encode_snapshot().unwrap();
+    assert!(Projection::decode_snapshot(&bytes).is_err());
+}
