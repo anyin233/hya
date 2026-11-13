@@ -808,7 +808,12 @@ with `SubagentReported { outcome: failed }`, parent DM mail, a degraded handoff,
 and `AgentArchived { reason: reported }`. Parent/user/Workflow archives instead
 write `MemberFinished { status: cancelled }` and reason `archived_by_parent`,
 without report mail. Team kill, teardown, shutdown and sidecar loss all use
-this same episode-owned ending sequence.
+this same episode-owned ending sequence. Ending a member prevents further turns
+on that member; the live root may still start its quiescence synthesis turn.
+Provider-entry assertions must distinguish those sessions. The running-stop
+regression uses a `SessionId` notification from the provider to observe the
+member's first entry and the root's synthesis entry before checking for an
+extra member turn.
 
 For example, `archive({"target":"main/hya-task-scout","reason":"stop review"})`
 requests that member's ending; `send` to its DM can revive it afterward. A refused

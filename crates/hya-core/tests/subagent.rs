@@ -122,7 +122,7 @@ impl Provider for AckProbeProvider {
 
 struct ResidentStopBarrierProvider {
     polls: Arc<AtomicUsize>,
-    entered: mpsc::UnboundedSender<()>,
+    entered: mpsc::UnboundedSender<SessionId>,
     release: Arc<Notify>,
 }
 
@@ -149,7 +149,7 @@ impl Provider for ResidentStopBarrierProvider {
     ) -> Result<EventStream, ProviderError> {
         self.polls.fetch_add(1, Ordering::SeqCst);
         self.entered
-            .send(())
+            .send(session)
             .map_err(|_| ProviderError::Decode("resident stop barrier dropped".to_string()))?;
         self.release.notified().await;
         let events = FakeProvider::materialize(
@@ -2637,11 +2637,10 @@ async fn message_budget_kill_terminates_sidecar_and_removes_resident_slot() {
 
 #[tokio::test]
 async fn explicit_running_resident_stop_is_idempotent_fences_and_drops_queued_mail() {
-    let polls = Arc::new(AtomicUsize::new(0));
     let (entered_tx, mut entered_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let provider = Arc::new(ResidentStopBarrierProvider {
-        polls: polls.clone(),
+        polls: Arc::new(AtomicUsize::new(0)),
         entered: entered_tx,
         release: release.clone(),
     });
@@ -2694,10 +2693,7 @@ async fn explicit_running_resident_stop_is_idempotent_fences_and_drops_queued_ma
         )
         .await
         .unwrap();
-    entered_rx
-        .recv()
-        .await
-        .expect("provider must enter first turn");
+    assert_eq!(entered_rx.recv().await, Some(child));
     engine
         .mail_send(
             root,
@@ -2732,7 +2728,16 @@ async fn explicit_running_resident_stop_is_idempotent_fences_and_drops_queued_ma
         first_result.is_ok(),
         "first running resident stop must complete: {first_result:?}"
     );
-    assert_eq!(polls.load(Ordering::SeqCst), 1);
+    // Archiving the last member wakes the root for synthesis. Observe that
+    // provider entry before checking which session polled.
+    let synthesis = tokio::time::timeout(COOPERATIVE_END_BOUND, entered_rx.recv())
+        .await
+        .expect("root must enter synthesis after member ending");
+    assert_eq!(synthesis, Some(root));
+    assert!(
+        entered_rx.try_recv().is_err(),
+        "member started another turn"
+    );
     assert_eq!(terminates.load(Ordering::SeqCst), 1);
     assert_eq!(shutdowns.load(Ordering::SeqCst), 0);
     assert!(
