@@ -129,13 +129,6 @@ impl SessionEngine {
                     None => break,
                 },
             };
-            if let Err(error) = self.validate_actor_claim(actor_claim).await {
-                return Err(RoundFailure {
-                    error,
-                    saw_tool_call: !tool_calls.is_empty(),
-                    saw_text,
-                });
-            }
             let event = match item {
                 Ok(event) => event,
                 Err(error) => {
