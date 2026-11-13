@@ -2206,3 +2206,18 @@ async fn m412_drop_supervisor_requests_live_episode_endings_before_cancellation(
     team.tasks.wait().await;
     assert!(team.lock().residents.is_empty());
 }
+
+#[tokio::test]
+async fn o8_name_allocation_does_not_reserve_after_a_store_failure() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let mut tx = engine.store().begin_transaction().await.unwrap();
+    sqlx::query("DROP TABLE event_log")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let reservation = engine.mint_member_leaf(root, "scout").await;
+    assert_eq!(engine.pending_member_names(root), 0);
+    assert!(matches!(reservation, Err(CoreError::Store(_))));
+}

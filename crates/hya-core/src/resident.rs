@@ -4791,7 +4791,7 @@ impl ResidentSupervisor {
             // A commit may release a reservation only after this snapshot has
             // observed its durable identity; stale snapshots cannot reuse it.
             let _write = self.claim_writes.lock().await;
-            self.engine.mint_member_leaf(root, &prefix).await
+            self.engine.mint_member_leaf(root, &prefix).await?
         };
         let leaf = reservation.leaf.clone();
         let member = MemberId::new();
