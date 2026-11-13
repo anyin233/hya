@@ -686,7 +686,7 @@ mod fanout_tests {
     #[tokio::test]
     async fn shutdown_joins_server_services_and_reaper_children() {
         let app = state().await;
-        let engine = std::sync::Arc::downgrade(&app.engine);
+        let engine = Arc::downgrade(&app.engine);
         let (permission, asks) = PermissionPlane::new(PermissionRules::default());
         let (questions, receiver) = hya_tool::InteractionPlane::new();
         let app = app
@@ -694,22 +694,55 @@ mod fanout_tests {
             .with_question_requests(receiver);
         let router = crate::router(app.clone());
         let st = app.server_state();
-        // Seven long-lived services plus at most one startup sweep. Reaching
-        // nine tracked tasks proves at least one delayed reaper child exists.
-        for _ in 0..3 {
-            st.watchers
-                .schedule(SessionId::new(), crate::ephemeral::Wait::Startup);
-        }
+        // Let the startup sweep finish: seven resident services must remain.
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            while st.tasks.len() < 9 {
+            while st.tasks.len() != 7 {
                 tokio::task::yield_now().await;
             }
         })
         .await
         .unwrap();
+        for _ in 0..3 {
+            st.watchers
+                .schedule(SessionId::new(), crate::ephemeral::Wait::Startup);
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while st.tasks.len() != 10 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            st.tasks.len(),
+            10,
+            "seven services and three reaper children"
+        );
         app.shutdown().await;
         assert!(st.stop.is_cancelled());
         assert!(st.tasks.is_empty(), "server tasks survived shutdown");
+        assert_eq!(st.permission_requests.receiver_count(), 0);
+        assert_eq!(st.question_requests.receiver_count(), 0);
+        assert_eq!(st.catalog_updates.receiver_count(), 0);
+        assert_eq!(st.projects_updates.receiver_count(), 0);
+        assert!(matches!(
+            permission
+                .assert(
+                    hya_tool::Action::Bash,
+                    hya_tool::Resource::Command("test".into())
+                )
+                .await,
+            Err(hya_tool::PermissionError::Unavailable)
+        ));
+        assert!(matches!(
+            questions
+                .ask(
+                    "test".into(),
+                    hya_tool::QuestionKind::FreeText { default: None }
+                )
+                .await,
+            Err(hya_tool::InteractionError::Unavailable)
+        ));
         // Keep the request senders and router alive through the join: channel
         // closure must not be what stopped either interaction bridge.
         drop((permission, questions, router, st, app));

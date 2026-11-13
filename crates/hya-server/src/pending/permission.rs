@@ -16,6 +16,8 @@ pub(crate) struct PermissionRequests {
     saved: SavedPermissions,
     events: broadcast::Sender<Value>,
     store: SessionStore,
+    #[cfg(test)]
+    bridge_waiting: Arc<tokio::sync::Notify>,
 }
 
 struct PendingPermission {
@@ -92,6 +94,8 @@ impl PermissionRequests {
             saved: SavedPermissions::new(store.clone()),
             events,
             store,
+            #[cfg(test)]
+            bridge_waiting: Arc::default(),
         }
     }
 
@@ -105,6 +109,8 @@ impl PermissionRequests {
         let requests = Self::new(store.clone());
         let inner = requests.inner.clone();
         let events = requests.events.clone();
+        #[cfg(test)]
+        let bridge_waiting = requests.bridge_waiting.clone();
         crate::runtime_tasks::spawn_cancellable(&tasks.tasks, &tasks.stop, async move {
             while let Some(req) = rx.recv().await {
                 let (message_id, call_id) = tool_correlation(&store, &req).await;
@@ -126,6 +132,8 @@ impl PermissionRequests {
                 // Decide under the pending lock: `allow_tree_once` runs after
                 // the mode event is durable and takes the same lock, so an ask
                 // racing a switch to `yolo` is either swept or allowed here.
+                #[cfg(test)]
+                bridge_waiting.notify_one();
                 let mut pending = inner.lock().await;
                 if let Some(session) = entry.session
                     && tree_is_yolo(&store, session).await
@@ -148,6 +156,11 @@ impl PermissionRequests {
     #[allow(dead_code)]
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<Value> {
         self.events.subscribe()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn receiver_count(&self) -> usize {
+        self.events.receiver_count()
     }
 
     fn publish_replied(&self, session: Option<SessionId>, id: &str, reply: PermissionReply) {
@@ -759,5 +772,186 @@ mod tests {
         assert!(pending.contains_key("other"));
         assert!(pending.contains_key("legacy"));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/support/mod.rs"]
+mod shutdown_test_support;
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod shutdown_order_tests {
+    use super::*;
+    use axum::{body::Body, http::Request};
+    use hya_core::{AgentSpec, CreateSession, EventBus, SessionEngine};
+    use hya_proto::{AgentName, FinishCause, FinishReason, ModelRef, Role};
+    use hya_provider::{Capabilities, CompletionRequest, EventStream, Provider, ProviderError};
+    use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
+    use hya_tool::{Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    use tower::ServiceExt;
+
+    struct CountingProvider {
+        inner: FakeProvider,
+        rounds: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for CountingProvider {
+        fn id(&self) -> &str {
+            self.inner.id()
+        }
+        fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+            self.inner.capabilities(model)
+        }
+        async fn stream(
+            &self,
+            request: CompletionRequest,
+            session: SessionId,
+            message: MessageId,
+        ) -> Result<EventStream, ProviderError> {
+            self.rounds.fetch_add(1, Ordering::SeqCst);
+            self.inner.stream(request, session, message).await
+        }
+    }
+
+    #[tokio::test]
+    async fn restart_cancels_permission_wait_before_stopping_bridge() {
+        for restart in [true, false] {
+            let (permission, asks) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+                Action::Bash,
+                "*",
+                Mode::Ask,
+            )]));
+            let provider = FakeProvider::scripted_turns(vec![
+                vec![
+                    FakeStep::ToolCall {
+                        name: "bash".into(),
+                        input: json!({"command":"true"}),
+                    },
+                    FakeStep::Finish(FinishReason::ToolCalls),
+                ],
+                vec![
+                    FakeStep::Text("unexpected next provider round".into()),
+                    FakeStep::Finish(FinishReason::Stop),
+                ],
+            ]);
+            let provider = Arc::new(CountingProvider {
+                inner: provider,
+                rounds: AtomicUsize::new(0),
+            });
+            let engine = Arc::new(SessionEngine::new(
+                SessionStore::connect_memory().await.unwrap(),
+                Arc::new(ProviderRouter::new().with(provider.clone())),
+                super::shutdown_test_support::test_runtime(Arc::new(ToolRegistry::builtins())),
+                permission,
+                EventBus::default(),
+            ));
+            let agent = Arc::new(AgentSpec {
+                name: AgentName::new("build"),
+                model: ModelRef::new("fake"),
+                system_prompt: String::new(),
+                workdir: std::env::temp_dir(),
+                reasoning: None,
+            });
+            let session = engine
+                .create(CreateSession {
+                    parent: None,
+                    project: None,
+                    kind: hya_proto::SessionKind::Project,
+                    agent: agent.name.clone(),
+                    model: agent.model.clone(),
+                    workdir: agent.workdir.to_string_lossy().into_owned(),
+                })
+                .await
+                .unwrap();
+            let app = crate::AppState::new(engine.clone(), agent).with_permission_requests(asks);
+            let router = crate::router(app.clone());
+            let st = app.server_state();
+            // Hold the bridge at its pending-map await, with the ask reply still
+            // owned by the bridge future rather than inserted into the map.
+            let pending = st.permission_requests.inner.lock().await;
+            let mut events = engine.bus().subscribe();
+            let response = router
+                .oneshot(
+                    Request::post(format!("/v1/sessions/{session}/turns"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"prompt":{"text":"run"}}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert!(response.status().is_success());
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if matches!(
+                        events.recv().await.unwrap().event,
+                        Event::ToolCallRequested { .. }
+                    ) {
+                        break;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            // All work is on this runtime thread: let the tool submit its ask and
+            // the bridge reach the held lock before starting the stop.
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                st.permission_requests.bridge_waiting.notified(),
+            )
+            .await
+            .unwrap();
+            let tracked = st.tasks.token();
+            let stopping = tokio::spawn(async move {
+                if restart {
+                    app.stop_for_restart(Duration::from_secs(5)).await.unwrap();
+                } else {
+                    app.shutdown().await;
+                }
+            });
+            // Model another server service that joins only after the turn ends.
+            // This exposes bridge failure before the old shutdown reaches drain.
+            let finish = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let event = events.recv().await.unwrap().event;
+                    if let Event::MessageFinished {
+                        role: Role::Assistant,
+                        finish,
+                        cause,
+                        ..
+                    } = event
+                    {
+                        break (finish, cause);
+                    }
+                }
+            })
+            .await;
+            drop(tracked);
+            drop(pending);
+            stopping.await.unwrap();
+            assert_eq!(
+                finish.unwrap(),
+                (FinishReason::Cancelled, Some(FinishCause::Shutdown))
+            );
+            assert_eq!(
+                provider.rounds.load(Ordering::SeqCst),
+                1,
+                "provider reopened during stop"
+            );
+            let log = engine.store().replay(session).await.unwrap();
+            assert!(
+                !log.iter()
+                    .any(|e| matches!(&e.event, Event::ToolError { message_text, .. }
+                if message_text.contains("unavailable")))
+            );
+            assert!(
+                !log.iter()
+                    .any(|e| matches!(&e.event, Event::TextDelta { delta, .. }
+                if delta.contains("unexpected next provider round")))
+            );
+        }
     }
 }

@@ -2468,10 +2468,12 @@ impl HyaRuntime {
         })
     }
 
-    /// Stop server services, then join composition intake and drain residents.
+    /// Fence server admission, drain composition and residents, then join server services.
     pub async fn shutdown(&mut self) -> Result<(), CoreError> {
+        self.app_state.begin_shutdown();
+        let result = self._built.shutdown().await;
         self.app_state.shutdown().await;
-        self._built.shutdown().await
+        result
     }
 
     /// Axum router with native and Compat routes (from [`hya_server::router`]).

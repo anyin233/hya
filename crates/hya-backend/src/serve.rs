@@ -332,10 +332,11 @@ pub(crate) async fn serve_until(
                 .and_then(|path| db_lock::take_stop_request(path, std::process::id()))
                 .map_or(hya_server::ShutdownReason::Signal, |notice| notice.reason);
             streams.close(reason);
+            state.begin_shutdown();
             stopping.cancel();
+            drain_runtime.await;
             let result = state.stop_for_restart(hya_core::DRAIN_DEADLINE).await;
             let _ = drained.send(result);
-            drain_runtime.await;
         })
         .await;
     if let Some(task) = extra_served {
