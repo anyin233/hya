@@ -1007,6 +1007,7 @@ fn is_allowed_metadata_key(key: &str, include_diff: bool) -> bool {
             | "durationMs"
             | "timeoutSeconds"
             | "timeoutClamped"
+            | "deadlineCapped"
             | "pty"
             | "cwd"
             | "entries"
@@ -1907,6 +1908,7 @@ fn is_adapter_metadata_flag(key: &str) -> bool {
             | "durationMs"
             | "timeoutSeconds"
             | "timeoutClamped"
+            | "deadlineCapped"
             | "pty"
             | "cwd"
             | "lineStart"
@@ -2210,6 +2212,7 @@ mod tests {
                 "durationMs": 12,
                 "timeoutSeconds": 300,
                 "timeoutClamped": false,
+                "deadlineCapped": true,
                 "pty": true,
                 "cwd": "/workspace"
             }
@@ -2230,6 +2233,7 @@ mod tests {
         assert_eq!(metadata["durationMs"], 12);
         assert_eq!(metadata["timeoutSeconds"], 300);
         assert_eq!(metadata["timeoutClamped"], false);
+        assert_eq!(metadata["deadlineCapped"], true);
         assert_eq!(metadata["pty"], true);
         assert_eq!(metadata["cwd"], "/workspace");
     }

@@ -103,6 +103,7 @@ fn assert_result_shape(result: &Value, command: &str) {
         "pty",
         "timedOut",
         "timeoutClamped",
+        "deadlineCapped",
         "timeoutSeconds",
         "truncated",
     ]);
@@ -1310,4 +1311,64 @@ async fn bash_timeout_near_inline_cap_spills_complete_output_after_notices() {
     let artifact = tokio::fs::read(output_path).await.unwrap();
     assert_eq!(artifact.len(), 51150);
     assert!(artifact.iter().all(|byte| *byte == b'N'));
+}
+
+/// Isolate the process-wide deadline from the unbudgeted shell regressions.
+#[cfg(unix)]
+#[test]
+fn deadline_caps_shell_timeouts_across_native_library() {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "deadline_capped_shell_child", "--nocapture"])
+        .env("HYA_SHELL_DEADLINE_TEST", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn deadline_capped_shell_child() {
+    if std::env::var_os("HYA_SHELL_DEADLINE_TEST").is_none() {
+        return;
+    }
+    let registry = ToolRegistry::from_tool_families(&["hya/base-tools"]);
+    hya_tool::deadline::install(Duration::from_secs(30));
+    let tool = registry.resolve("bash").unwrap();
+    let workdir = tempdir();
+    let ctx = ctx_with(vec![allow(Action::Bash, "*")], workdir.clone());
+    for pty in [false, true] {
+        for requested in [None, Some(0), Some(300), Some(1)] {
+            let mut input = json!({"command":"printf budget-ok", "pty":pty});
+            if let Some(timeout) = requested {
+                input["timeout"] = json!(timeout);
+            }
+            let result = execute_with_guard(tool.tool.as_ref(), &ctx, input)
+                .await
+                .unwrap();
+            assert_result_shape(&result, "printf budget-ok");
+            let capped = requested != Some(1);
+            assert_eq!(
+                result["metadata"]["timeoutSeconds"],
+                if capped { 5.0 } else { 1.0 }
+            );
+            assert_eq!(
+                result["metadata"]["deadlineCapped"],
+                if capped { json!(true) } else { Value::Null }
+            );
+            assert_eq!(
+                result["output"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Timeout shortened to 5 seconds"),
+                capped
+            );
+            assert!(result["output"].as_str().unwrap().contains("budget-ok"));
+        }
+    }
+    std::fs::remove_dir_all(workdir).unwrap();
 }
