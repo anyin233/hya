@@ -4164,3 +4164,34 @@ fn agent_catalog(bundle: Bundle) -> Result<AgentCatalog, hya_bundle::BundleError
     let bundles = [bundle];
     AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(&bundles)?))
 }
+
+#[tokio::test]
+async fn review_r7_run_residents_rejects_a_failed_child_turn() {
+    let provider = Arc::new(FakeProvider::scripted(vec![FakeStep::Finish(
+        FinishReason::Error,
+    )]));
+    let (engine, agent) = governed_engine(SubagentLimits::default(), provider).await;
+    let root = engine
+        .create(CreateSession {
+            parent: None,
+            agent: agent.name.clone(),
+            model: agent.model.clone(),
+            workdir: agent.workdir.display().to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    let turn = member(&engine, &agent, "must finish normally");
+    let result = tokio::spawn(run_residents(
+        engine,
+        root,
+        vec![turn],
+        CancellationToken::new(),
+    ))
+    .await;
+    assert!(
+        result.is_err_and(|error| error.is_panic()),
+        "resident fixture accepted a failed child as completed work"
+    );
+}

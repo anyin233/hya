@@ -6,7 +6,7 @@ use hya_core::{
     AgentResourcePolicy, AgentSpec, BoundSidecarFactory, ResidentSupervisor, SessionEngine,
     TaskSpawnOrigin, TurnBinding,
 };
-use hya_proto::{Role, RosterStatus, SessionId, ToolCallId};
+use hya_proto::{FinishReason, Role, RosterStatus, SessionId, ToolCallId};
 use hya_tool::AgentDef;
 use tokio_util::sync::CancellationToken;
 
@@ -37,6 +37,7 @@ pub async fn run_residents(
         .await
         .expect("root driver");
     let (root, _) = engine.session_lineage(parent).await.expect("lineage");
+    let mut events = engine.bus().subscribe();
     let mut members = Vec::new();
     for turn in turns {
         let resources = turn.resources.unwrap_or_else(|| {
@@ -88,16 +89,31 @@ pub async fn run_residents(
                 }
                 tokio::select! {
                     _ = cancel.cancelled() => break,
-                    _ = tokio::time::sleep(Duration::from_millis(5)) => {}
+                    event = events.recv() => { event.expect("resident lifecycle event"); }
                 }
             }
         })
         .await
         .expect("resident settlement");
+        let child_projection = engine
+            .read_projection(*child)
+            .await
+            .expect("child projection");
+        let finish = child_projection
+            .session
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == Role::Assistant)
+            .and_then(|message| message.finish);
         supervisor
             .end_member(root, handle)
             .await
             .expect("archive resident");
+        assert!(
+            matches!(finish, Some(FinishReason::Stop | FinishReason::Length)),
+            "resident {handle} did not finish a normal turn: {finish:?}"
+        );
     }
     members.into_iter().map(|(session, _)| session).collect()
 }
