@@ -99,13 +99,6 @@ fn invalid_loop_and_actor_contracts_fail_compilation() {
         ),
         (
             base.replace(
-                "  plan --> implement\n  implement --> refine",
-                "  plan\n  refine\n  implement",
-            ),
-            "same actor key `planner` in one level",
-        ),
-        (
-            base.replace(
                 "  refine:\n    agent: resident-planner",
                 "  refine:\n    agent: another-resident",
             ),
@@ -281,4 +274,18 @@ fn canonical_revision_covers_every_model_route_field() {
         .unwrap()
         .revision();
     assert_eq!(base, reformatted_revision);
+}
+
+#[test]
+fn ready_stages_may_share_an_actor_at_the_same_display_level() {
+    let source = SEMANTIC_WORKFLOW.replace(
+        "  plan --> implement\n  implement --> refine",
+        "  plan\n  refine\n  implement",
+    );
+    let compiled = compile(WorkflowSource::new("shared-ready.hya.md", &source)).unwrap();
+    let stages = compiled.plan().stages();
+    assert_eq!(stages[0].id(), "plan");
+    assert_eq!(stages[1].id(), "refine");
+    assert_eq!(stages[0].actor(), stages[1].actor());
+    assert_eq!(stages[0].level(), stages[1].level());
 }

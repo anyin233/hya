@@ -1,16 +1,16 @@
 # ADR 0013: Compiled user-authored Agent Workflows
 
 Date: 2026-08-26
-Status: Accepted (revised 2026-08-28)
+Status: Accepted (revised 2026-11-13)
 
 Execution substrate superseded by [ADR-0017](0017-workflow-on-unified-substrate.md):
-all workers and verifiers now use resident episode activations. Compilation,
-control-plane contracts and level-by-level scheduling below still apply.
+all workers and verifiers now use resident episode activations. Compilation
+and control-plane contracts below still apply; ready scheduling replaces level barriers.
 
 ## Context
 
-hya has bounded transient Teams, persistent resident Agents, durable mailbox
-delivery, a shared loop driver, and one event-sourced Projection. Users need to
+hya has persistent resident Agents, durable mailbox delivery, a shared loop
+driver, and one event-sourced Projection. Users need to
 compose these primitives into reusable graphs. Direct execution of a loose
 Stage-list format duplicated validation, left join data flow in prompt
 placeholders, and could admit work before the complete run cost was known.
@@ -26,16 +26,26 @@ placeholders, and could admit work before the complete run cost was known.
 3. Edges carry bounded predecessor evidence automatically. Public directives
    can reference only declared inputs through `{{input.<name>}}`; they cannot
    address arbitrary Stage outputs.
-4. An optional actor key binds sequential Stages to one resident Session.
-   Transient Stages continue through the governed Team path. Loops continue
-   through `IterationDriver` with an independent verifier.
+4. Every Stage uses a resident activation. An optional actor key shares one
+   resident Session across Stages; ready uses of that actor serialize in
+   compiled Stage order. Loops use `IterationDriver` and a fresh resident
+   verifier per judgment. Verification starts when its worker completes,
+   without waiting for unrelated Stages.
 5. The runtime resolves all workers and verifiers through the caller's frozen
-   binding, validates resident semantics, and reserves the complete worst-case
-   run budget before the first child or mail side effect.
-6. Completion and cancellation are Projection-driven. Resident completion
-   requires consumed inbox boundaries, no active resident work, and terminal
-   idle or failed state. Run cancellation stops new admissions and waits for
-   admitted transient and run-owned resident boundaries.
+   binding and preflight-checks worst-case activations against live capacity
+   before the first child or mail effect. Registration/revival rechecks capacity
+   transactionally; preflight reserves no slots.
+6. The scheduler counts unfinished direct predecessors. Reaching zero makes a
+   Stage ready; it activates when every predecessor succeeded and its actor is
+   free. Levels remain graph/display metadata, never execution barriers.
+   Evidence is rendered from indexed results in compiled predecessor order,
+   regardless of completion order.
+7. `fail_fast` finishes already activated Stages and admits no new Stage after
+   observing failure. `collect_all` continues independent eligible branches;
+   successors of failed or skipped Stages are skipped under either policy.
+   Cancellation stops admission, awaits active Stage controllers, and ends every
+   run-owned actor and its descendants, including parked actors, before releasing
+   root-driver activity. Activation waiters own completion; Events persist it.
 
 ## Consequences
 

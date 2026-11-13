@@ -177,8 +177,8 @@ mid-run refusals use the same code (HTTP 503, gRPC `ResourceExhausted`,
 preflight and then be refused if a concurrent `task` occupies one slot.
 
 On an error, cancellation, or failed run, the controller waits for the normal
-ending of every actor it registered, including parked actors in a partially
-registered level. Claims belonging to concurrent tasks are untouched. Successful
+ending of every actor it registered, including parked actors awaiting
+activation. Claims belonging to concurrent tasks are untouched. Successful
 runs retain their parked actors for subsequent activation.
 
 Loop continuations reactivate the same worker through `activate` / its
@@ -245,3 +245,19 @@ when the `report` schema is offered; otherwise it receives the normal turn
 completion notice. For example, a core Workflow without a governor hides
 report at depth zero and completes through `Settled.final_text`. No new
 configuration, tool or wire contract is required.
+
+### Ready scheduling
+
+Execution uses unfinished-predecessor counts, not topological levels. On a
+successful Stage result, ready successors can activate immediately; that Stage's
+verifier runs without waiting for unrelated workers. Results occupy compiled
+Stage indices, and `render_stage` visits compiled predecessor indices, so join
+evidence order never depends on completion time. Ready uses of the same actor
+serialize in compiled Stage order until its activation reaches true rest.
+
+`fail_fast` drains activated Stages and stops new admission after failure is
+observed. `collect_all` continues independent branches. Both skip successors of
+failed/skipped Stages. Cancellation stops admission and drains Stage futures
+before ending all registered run-owned actors under `RootDriverActivity`.
+Public plan/state `level: usize` fields remain topological display metadata;
+no wire schema or configuration changes.

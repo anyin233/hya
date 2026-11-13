@@ -1785,7 +1785,6 @@ async fn m410_reported_loop_worker_revives_and_verifiers_can_report() {
 }
 
 #[tokio::test]
-#[ignore = "M4-14: I20"]
 async fn i20_ready_successor_does_not_wait_for_independent_stage() {
     let mut h = Harness::new().await;
     let slow = Arc::new(Gate::default());
@@ -1803,7 +1802,7 @@ async fn i20_ready_successor_does_not_wait_for_independent_stage() {
         .script(vec![Round::text("C finished").gated(successor.clone())]);
     let directory = h.dir.join(".hya/workflows");
     std::fs::create_dir_all(&directory).unwrap();
-    let nodes = [("a", a), ("b", b), ("c", c)].into_iter().map(|(name, marker)| format!("  {name}:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {marker}\n")).collect::<String>();
+    let nodes = [("a", a), ("b", b), ("c", c.clone())].into_iter().map(|(name, marker)| format!("  {name}:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {marker}\n")).collect::<String>();
     std::fs::write(directory.join("frontier.hya.md"), format!("---\nkind: Workflow\nname: frontier\ndescription: Ready successors\nnodes:\n{nodes}---\nflowchart TD\n  a --> c\n  b\n")).unwrap();
     let running = tokio::spawn({
         let control = h.built.workflow_control();
@@ -1846,8 +1845,40 @@ async fn i20_ready_successor_does_not_wait_for_independent_stage() {
     let ready_before_b = tokio::time::timeout(support::lifecycle::BOUND, successor.reached())
         .await
         .is_ok();
-    slow.release();
     successor.release();
+    let c_done_before_b = if ready_before_b {
+        let c_session = h
+            .provider
+            .captured
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|request| {
+                serde_json::to_string(&request.completion.messages)
+                    .unwrap()
+                    .contains(&c)
+            })
+            .unwrap()
+            .session;
+        h.until(c_session, |p| p.session.messages.iter().any(|m| m.finish.is_some() && m.parts.iter().any(|part| matches!(part, hya_proto::PartProjection::Text { text, .. } if text == "C finished")))).await;
+        h.until(h.root, |p| {
+            p.session
+                .workflow
+                .as_ref()
+                .and_then(|workflow| workflow.run.as_ref())
+                .is_some_and(|run| {
+                    run.stages.iter().any(|stage| {
+                        stage.plan.id == "c"
+                            && stage.status == hya_proto::WorkflowStageStatus::Completed
+                    })
+                })
+        })
+        .await;
+        true
+    } else {
+        false
+    };
+    slow.release();
     tokio::time::timeout(support::lifecycle::BOUND, running)
         .await
         .unwrap()
@@ -1855,7 +1886,7 @@ async fn i20_ready_successor_does_not_wait_for_independent_stage() {
         .unwrap();
     h.shutdown().await;
     assert!(
-        ready_before_b,
+        ready_before_b && c_done_before_b,
         "C waited for independent B after its only predecessor A finished"
     );
 }
@@ -3661,4 +3692,411 @@ async fn m46_review_s6_promptless_catalog_agent_keeps_host_base_after_revive() {
     h.shutdown().await;
     assert!(first.contains(BASE), "spawn lost host base: {first}");
     assert!(revived.contains(BASE), "revive lost host base: {revived}");
+}
+
+// Run the same public Workflow entry point for the ready-scheduling cases.
+async fn m414_run(
+    control: hya_app::WorkflowControl,
+    root: hya_proto::SessionId,
+    cancel: tokio_util::sync::CancellationToken,
+) -> hya_proto::WorkflowCommandResult {
+    control
+        .execute(
+            root,
+            hya_app::WorkflowInvocation::default(),
+            hya_proto::WorkflowCommand::Run {
+                name: Some("ready".into()),
+                expected_revision: None,
+                inputs: Default::default(),
+                run: None,
+            },
+            cancel,
+        )
+        .await
+        .unwrap()
+}
+
+fn m414_source(h: &Harness, nodes: &str, graph: &str, policy: &str) {
+    let directory = h.dir.join(".hya/workflows");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("ready.hya.md"), format!("---\nkind: Workflow\nname: ready\ndescription: Ready scheduling regression\non_failure: {policy}\nnodes:\n{nodes}---\nflowchart TD\n{graph}\n")).unwrap();
+}
+
+#[tokio::test]
+async fn m414_join_evidence_uses_compiled_order_after_reverse_completion() {
+    let mut h = Harness::new().await;
+    let a_gate = Arc::new(Gate::default());
+    let b_gate = Arc::new(Gate::default());
+    let a = h.provider.script(vec![
+        Round::text("FIRST_EVIDENCE").stream_gated(a_gate.clone()),
+    ]);
+    let b = h.provider.script(vec![
+        Round::text("SECOND_EVIDENCE").stream_gated(b_gate.clone()),
+    ]);
+    let c = h.provider.script(vec![Round::text("JOINED")]);
+    m414_source(
+        &h,
+        &format!(
+            "  a:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {a}\n  b:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {b}\n  c:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {c}\n"
+        ),
+        "  b\n  a & b --> c",
+        "collect_all",
+    );
+    let running = tokio::spawn(m414_run(
+        h.built.workflow_control(),
+        h.root,
+        tokio_util::sync::CancellationToken::new(),
+    ));
+    a_gate.arrived().await;
+    b_gate.arrived().await;
+    b_gate.release();
+    let b_session = h
+        .provider
+        .captured
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|r| {
+            serde_json::to_string(&r.completion.messages)
+                .unwrap()
+                .contains(&b)
+        })
+        .unwrap()
+        .session;
+    h.until(b_session, |p| p.session.messages.iter().any(|m| m.finish.is_some() && m.parts.iter().any(|p| matches!(p, hya_proto::PartProjection::Text { text, .. } if text == "SECOND_EVIDENCE")))).await;
+    a_gate.release();
+    tokio::time::timeout(support::lifecycle::BOUND, running)
+        .await
+        .unwrap()
+        .unwrap();
+    let requests = h.provider.captured.lock().unwrap().clone();
+    let join = requests
+        .iter()
+        .find(|r| {
+            serde_json::to_string(&r.completion.messages)
+                .unwrap()
+                .contains(&c)
+        })
+        .unwrap();
+    let text = serde_json::to_string(&join.completion.messages).unwrap();
+    assert!(
+        text.find("FIRST_EVIDENCE").unwrap() < text.find("SECOND_EVIDENCE").unwrap(),
+        "{text}"
+    );
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn m414_verifier_starts_before_independent_worker_finishes() {
+    let mut h = Harness::new().await;
+    let slow = Arc::new(Gate::default());
+    let judgment = Arc::new(Gate::default());
+    let a = h.provider.script(vec![Round::text("worker finished")]);
+    let b = h
+        .provider
+        .script(vec![Round::text("slow finished").gated(slow.clone())]);
+    let verify = h.provider.script(vec![
+        Round::text(r#"{"met":true,"reason":"done"}"#).gated(judgment.clone()),
+    ]);
+    m414_source(
+        &h,
+        &format!(
+            "  a:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {a}\n    mode: loop\n    verify:\n      agent: hya-reviewer\n      model: {{ id: fake }}\n      until: {verify}\n      max_iterations: 1\n  b:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {b}\n"
+        ),
+        "  a\n  b",
+        "collect_all",
+    );
+    let running = tokio::spawn(m414_run(
+        h.built.workflow_control(),
+        h.root,
+        tokio_util::sync::CancellationToken::new(),
+    ));
+    slow.arrived().await;
+    let early = tokio::time::timeout(support::lifecycle::BOUND, judgment.reached())
+        .await
+        .is_ok();
+    judgment.release();
+    slow.release();
+    tokio::time::timeout(support::lifecycle::BOUND, running)
+        .await
+        .unwrap()
+        .unwrap();
+    h.shutdown().await;
+    assert!(early, "verifier waited for the independent worker");
+}
+
+#[tokio::test]
+async fn m414_ready_stages_sharing_an_actor_run_in_compiled_order() {
+    let mut h = Harness::new().await;
+    let first = Arc::new(Gate::default());
+    let a = h.provider.script(vec![
+        Round::text("first finished").stream_gated(first.clone()),
+    ]);
+    let b = h.provider.script(vec![Round::text("second finished")]);
+    m414_source(
+        &h,
+        &format!(
+            "  a:\n    agent: hya-task\n    actor: shared\n    model: {{ id: fake }}\n    directive: {a}\n  b:\n    agent: hya-task\n    actor: shared\n    model: {{ id: fake }}\n    directive: {b}\n"
+        ),
+        "  a\n  b",
+        "collect_all",
+    );
+    let running = tokio::spawn(m414_run(
+        h.built.workflow_control(),
+        h.root,
+        tokio_util::sync::CancellationToken::new(),
+    ));
+    first.arrived().await;
+    assert_eq!(
+        h.provider
+            .captured
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| serde_json::to_string(&r.completion.messages)
+                .unwrap()
+                .contains(&b))
+            .count(),
+        0
+    );
+    first.release();
+    tokio::time::timeout(support::lifecycle::BOUND, running)
+        .await
+        .unwrap()
+        .unwrap();
+    let requests = h.provider.captured.lock().unwrap().clone();
+    let a_session = requests
+        .iter()
+        .find(|r| {
+            serde_json::to_string(&r.completion.messages)
+                .unwrap()
+                .contains(&a)
+        })
+        .unwrap()
+        .session;
+    let second = requests
+        .iter()
+        .find(|r| {
+            serde_json::to_string(&r.completion.messages)
+                .unwrap()
+                .contains(&b)
+        })
+        .unwrap();
+    assert_eq!(second.session, a_session);
+    let p = h.engine.read_projection(a_session).await.unwrap();
+    assert!(p.session.messages.iter().any(|m| m.finish.is_some() && m.parts.iter().any(|p| matches!(p, hya_proto::PartProjection::Text{text,..} if text == "first finished"))));
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn m414_failure_policy_only_continues_independent_branches() {
+    for policy in ["fail_fast", "collect_all"] {
+        let mut h = Harness::new().await;
+        let failure = Arc::new(Gate::default());
+        let independent = Arc::new(Gate::default());
+        let a = h.provider.script(vec![
+            Round::failure("ready stage failed").gated(failure.clone()),
+        ]);
+        let b = h.provider.script(vec![
+            Round::text("independent finished").stream_gated(independent.clone()),
+        ]);
+        let blocked = h.provider.script(vec![Round::text("must not run")]);
+        let continued = h
+            .provider
+            .script(vec![Round::text("independent successor finished")]);
+        m414_source(
+            &h,
+            &format!(
+                "  a:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {a}\n  b:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {b}\n  blocked:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {blocked}\n  continued:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {continued}\n"
+            ),
+            "  a --> blocked\n  b --> continued",
+            policy,
+        );
+        let running = tokio::spawn(m414_run(
+            h.built.workflow_control(),
+            h.root,
+            tokio_util::sync::CancellationToken::new(),
+        ));
+        failure.arrived().await;
+        independent.arrived().await;
+        failure.release();
+        // Wait for the scheduler's durable failure, rather than racing its observation.
+        let failure_observed_early = tokio::time::timeout(support::lifecycle::BOUND, async {
+            let mut updates = h.engine.bus().subscribe();
+            loop {
+                let p = h.engine.read_projection(h.root).await.unwrap();
+                if p.session
+                    .workflow
+                    .as_ref()
+                    .and_then(|workflow| workflow.run.as_ref())
+                    .is_some_and(|run| {
+                        run.stages.iter().any(|s| {
+                            s.plan.id == "a" && s.status == hya_proto::WorkflowStageStatus::Failed
+                        })
+                    })
+                {
+                    break;
+                }
+                updates.recv().await.unwrap();
+            }
+        })
+        .await
+        .is_ok();
+        independent.release();
+        let result = tokio::time::timeout(support::lifecycle::BOUND, running)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(result, hya_proto::WorkflowCommandResult::Run { result } if result.run.status == hya_proto::WorkflowRunStatus::Failed)
+        );
+        let requests = h.provider.captured.lock().unwrap().clone();
+        assert!(!requests.iter().any(|r| {
+            serde_json::to_string(&r.completion.messages)
+                .unwrap()
+                .contains(&blocked)
+        }));
+        assert_eq!(
+            requests
+                .iter()
+                .any(|r| serde_json::to_string(&r.completion.messages)
+                    .unwrap()
+                    .contains(&continued)),
+            policy == "collect_all"
+        );
+        assert_eq!(h.engine.store().live_member_count(h.root).await.unwrap(), 0);
+        h.shutdown().await;
+        assert!(
+            failure_observed_early,
+            "Stage failure waited on independent work under {policy}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn m414_cancellation_ends_activated_and_parked_actors_without_successors() {
+    let plugin = support::lifecycle::BlockingPlugin::new().await;
+    let mut h = Harness::with_plugins(vec![plugin.spec.clone()]).await;
+    let first = Arc::new(Gate::default());
+    let a = h.provider.script(vec![
+        Round::text("active partial").stream_gated(first.clone()),
+    ]);
+    let active_gate = Arc::new(Gate::default());
+    let parked = h.provider.script(vec![
+        Round::text("active peer partial").stream_gated(active_gate.clone()),
+    ]);
+    let successor = h
+        .provider
+        .script(vec![Round::text("successor must not run")]);
+    // Registration returns parked identities while session.start is blocked.
+    plugin.arm();
+    m414_source(
+        &h,
+        &format!(
+            "  a:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {a}\n  parked:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {parked}\n  successor:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {successor}\n"
+        ),
+        "  a --> successor\n  parked",
+        "collect_all",
+    );
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let running = tokio::spawn(m414_run(h.built.workflow_control(), h.root, cancel.clone()));
+    plugin.gate.arrived().await;
+    // One initializer is held, while the other ready Stage is activated.
+    active_gate.arrived().await;
+    h.until(h.root, |p| {
+        p.team
+            .roster
+            .values()
+            .filter(|entry| entry.session != h.root)
+            .count()
+            == 2
+    })
+    .await;
+    cancel.cancel();
+    tokio::time::timeout(support::lifecycle::BOUND, running)
+        .await
+        .unwrap()
+        .unwrap();
+    plugin.gate.release();
+    first.release();
+    active_gate.release();
+    assert_eq!(h.engine.store().live_member_count(h.root).await.unwrap(), 0);
+    let requests = h.provider.captured.lock().unwrap().clone();
+    assert!(!requests.iter().any(|r| {
+        serde_json::to_string(&r.completion.messages)
+            .unwrap()
+            .contains(&successor)
+    }));
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn m414_shared_actor_waits_for_its_busy_earlier_stage_across_levels() {
+    let mut h = Harness::new().await;
+    let busy = Arc::new(Gate::default());
+    let root = Arc::new(Gate::default());
+    let a = h.provider.script(vec![
+        Round::text("predecessor finished").stream_gated(root.clone()),
+    ]);
+    let b = h.provider.script(vec![
+        Round::text("earlier actor finished").stream_gated(busy.clone()),
+    ]);
+    let c = h.provider.script(vec![Round::text("later actor finished")]);
+    m414_source(
+        &h,
+        &format!(
+            "  a:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {a}\n  b:\n    agent: hya-task\n    actor: shared\n    model: {{ id: fake }}\n    directive: {b}\n  c:\n    agent: hya-task\n    actor: shared\n    model: {{ id: fake }}\n    directive: {c}\n"
+        ),
+        "  a --> c\n  b",
+        "collect_all",
+    );
+    let running = tokio::spawn(m414_run(
+        h.built.workflow_control(),
+        h.root,
+        tokio_util::sync::CancellationToken::new(),
+    ));
+    root.arrived().await;
+    busy.arrived().await;
+    root.release();
+    let a_session = h
+        .provider
+        .captured
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|r| {
+            serde_json::to_string(&r.completion.messages)
+                .unwrap()
+                .contains(&a)
+        })
+        .unwrap()
+        .session;
+    h.until(a_session, |p| p.session.messages.iter().any(|m| m.finish.is_some() && m.parts.iter().any(|p| matches!(p, hya_proto::PartProjection::Text { text, .. } if text == "predecessor finished")))).await;
+    busy.release();
+    let result = tokio::time::timeout(support::lifecycle::BOUND, running)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(result, hya_proto::WorkflowCommandResult::Run { result } if result.run.status == hya_proto::WorkflowRunStatus::Completed)
+    );
+    let requests = h.provider.captured.lock().unwrap().clone();
+    let earlier = requests
+        .iter()
+        .find(|r| {
+            serde_json::to_string(&r.completion.messages)
+                .unwrap()
+                .contains(&b)
+        })
+        .unwrap();
+    let later = requests
+        .iter()
+        .find(|r| {
+            serde_json::to_string(&r.completion.messages)
+                .unwrap()
+                .contains(&c)
+        })
+        .unwrap();
+    assert_eq!(earlier.session, later.session);
+    h.shutdown().await;
 }
