@@ -2929,7 +2929,7 @@ can answer in either view. Asks of unrelated sessions stay in the
 
 A permission request or question can come from a session this TUI does not
 have open: a session of another TUI or WebUI tab on the same server, or a
-headless run (`hya run`, the HTTP API). The TUI shows it the moment it is
+headless run (`hya exec --db`, the HTTP API). The TUI shows it the moment it is
 raised, names the session it belongs to, and never answers it by accident:
 its prompt only appears once you open that session.
 

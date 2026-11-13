@@ -32,7 +32,7 @@ Without options this installs the latest backend and the latest frontend into
 `--tui-only`; pass flags through `sh -s --`:
 
 ```sh
-# Headless server: hya serve, hya exec, hya run, … without TUI/WebUI.
+# Headless server: hya serve, hya exec, hya loop, … without TUI/WebUI.
 curl -fsSL https://hya.ed-aisys.com/install.sh | sh -s -- --backend-only
 # Add the frontend beside an installed backend.
 curl -fsSL https://hya.ed-aisys.com/install.sh | sh -s -- --tui-only

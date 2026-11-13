@@ -67,8 +67,9 @@ tail -n 50 "${XDG_STATE_HOME:-$HOME/.local/state}/hya/hya.log"
 ## Run the TUI Without Bare `hya`
 
 For development, a shared server, or custom `serve` flags, run the OpenTUI
-frontend from a checkout; it starts (and stops) its own `hya serve`, found
-through `--hya <path>`, `HYA_BIN`, or `PATH`, or it connects to one you run:
+frontend from a checkout; it attaches to (or auto-starts) the persistent backend
+daemon found through `--hya <path>`, `HYA_BIN`, or `PATH`, or connects to an
+explicit server you run:
 
 ```sh
 # From the repository root
@@ -326,7 +327,7 @@ refused:
   the lock for its whole run; wait for it to finish. Otherwise stop it (`hya
   serve stop --force --db <db>`, or kill that pid).
 - `hya exec: database <db> is in use by pid <pid> and it does not serve HTTP
-  yet; try again or stop it` (also `hya run`, `hya workflow`, `hya sessions`;
+  yet; try again or stop it` (also `hya workflow`, `hya sessions`;
   exit status 75): a daemon is still starting, or another headless command
   holds the database. Try again in a moment, or pass another `--db`.
 - `hya exec: database <db> is in use by hya server pid <pid> at <url>, and
@@ -374,7 +375,7 @@ Host`. A gRPC call gets the same check on its `:authority` and answers
 `PERMISSION_DENIED`.
 
 You see this when you reach the server by another name on purpose — a LAN
-address with `--bind 0.0.0.0:8080` or `--mdns`, a name in `/etc/hosts`, a
+address with `--bind 0.0.0.0:8080`, a name in `/etc/hosts`, or a
 reverse proxy that forwards its own `Host`. Name it:
 
 ```sh

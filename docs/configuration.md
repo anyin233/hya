@@ -18,6 +18,67 @@ If no configured or discovered live model row resolves, hya publishes exactly
 any live row exists. The same config file also drives tools, MCP servers,
 plugins, permissions, subagent limits, model categories, and formatter status.
 
+## Configuration Overview (`config.yaml` Map)
+
+All top-level sections in `~/.config/hya/config.yaml` are optional; omitted keys
+use built-in defaults:
+
+| Top-level key | Purpose | Reference |
+| --- | --- | --- |
+| `default_model` | Fallback `provider/model` (with optional `#effort`) when no agent or CLI flag selects one. | [Providers](#providers) |
+| `default_agent` | Root Session default Agent ID (defaults to `hya-main`). | [Agent Selection](#agent-selection) |
+| `reasoning` | Global default reasoning effort (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). | [Reasoning Effort](#reasoning-effort) |
+| `providers` | Named model routes (`openai-compatible`, `openai-responses`, `openai-codex`, `grok-build`, `anthropic`, `google`), base URLs, keys, and model overrides. | [Providers](#providers) |
+| `agents` | Pinned per-Agent `model` and default `reasoning` effort (`agents.<id>.{model, reasoning}`). | [Remembered Agent Models](#remembered-agent-models) |
+| `categories` | Logical model categories mapped to ordered failover `provider/model` candidate lists. | [Model Categories](#model-categories) |
+| `permission` | Static invocation rules (`allow` / `ask` / `deny`) and default permission model. | [Permissions](#permissions) |
+| `mcp` | Local stdio and remote HTTP MCP servers (`mcp.<server>`). | [MCP Servers](#mcp-servers) |
+| `plugins` | Out-of-process stdio JSON-RPC plugins (`rust`, `bun`, `claude`). | [Plugins](#plugins) |
+| `tools` | Tool-plane settings such as `tools.websearch` (`exa` or `parallel`). | [Web Search](#web-search) |
+| `subagents` | Concurrency permits and per-team resident turn/mail/spawn governor budgets. | [Subagent Limits](#subagent-limits) |
+| `compaction` | Context-reduction thresholds, token accounting mode, and 5-stage method order. | [Compaction](compaction.md) |
+| `goal` | Independent evaluator model (`goal.evaluator_model`) for `-p` Goal mode and `loop`. | [Goal and Loop Authoring](goal-loop-authoring.md) |
+| `provider_retry` | Global HTTP/stream retry budget (overridable per provider and via `HYA_PROVIDER_RETRY_*`). | [Provider Retry](#provider-retry) |
+| `formatter`, `lsp` | Post-edit code formatters and language-server selections. | [Formatter](#formatter), [LSP](#lsp) |
+| `catalog_scopes` | LRU size (`max`) and idle TTL (`idle_ttl_secs`) for per-Project catalog overlays. | [Per-Project Catalog Scope](adr/0027-per-project-catalog-tier.md) |
+
+Minimal live example:
+
+```yaml
+default_model: anthropic/claude-sonnet-4-6
+default_agent: hya-main
+reasoning: medium
+
+providers:
+  anthropic:
+    kind: anthropic
+    base_url: https://api.anthropic.com/v1
+    api_key: "{env:ANTHROPIC_API_KEY}"
+    models: [claude-sonnet-4-6, claude-opus-4-6]
+
+  openai:
+    kind: openai-responses
+    base_url: https://api.openai.com/v1
+    api_key: "{env:OPENAI_API_KEY}"
+    models: [gpt-5, gpt-5-mini]
+
+categories:
+  deep: [anthropic/claude-opus-4-6, openai/gpt-5]
+  fast: [openai/gpt-5-mini, anthropic/claude-sonnet-4-6]
+
+agents:
+  hya-main:
+    model: anthropic/claude-sonnet-4-6
+    reasoning: high
+
+permission:
+  model: default
+  rules:
+    - action: bash
+      pattern: "cargo test*"
+      decision: allow
+```
+
 ## First-Run / Offline Behavior
 
 On startup, hya tries to load `config.yaml` (see
@@ -175,6 +236,7 @@ agents:
   hya-main:
     model: anthropic/claude-sonnet-4-6
     reasoning: high
+```
 
 The TUI's `/agent` view changes a pinned model without editing the file by hand:
 `m` on a pinned Agent calls `PUT /v1/agent-models/{agent}/configuration`, which

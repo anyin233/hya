@@ -2,7 +2,7 @@
 
 `hya-extra/*` are optional bundles shipped alongside hya, under
 `bundles/extra/`. They are not installed by default and are not part of the
-`twelve trusted [first-party bundles](bundle-runtime.md#first-party-bundles);
+twelve trusted [first-party bundles](bundle-runtime.md#first-party-bundles);
 each one is an ordinary public `.hyabundle` package that you build and
 install like any other bundle described in
 [Bundle Authoring](agent-bundle-authoring.md). They exist for two
@@ -13,9 +13,9 @@ the `crates/hya-e2e` process suite (`T2.26`–`T2.28` and `T2.30` in the
 
 Every `hya-extra/*` bundle follows the same identity rule as the first-party
 bundles: `identity.id` starts with `hya-extra/`, `identity.publisher` is
-`hya-extra`, and `identity.version` equals hya's own
-`[workspace.package].version` (currently `0.41.0`). They are bumped together
-with a release, the same way first-party bundles are.
+`hya-extra`, and source manifests use `version: 0.0.0` with
+`version_ref: backend`, which preparation resolves to `[backend].version` in
+`versions.toml`.
 
 ## `hya-extra/zvec-grep`
 
