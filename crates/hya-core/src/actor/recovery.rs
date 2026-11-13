@@ -77,9 +77,13 @@ impl ResidentSupervisor {
                 .map_err(|error| {
                     ResidentRecoveryError::new("terminalize recovered resident work", error)
                 })?;
-            let actor_projection = engine.read_projection_shared(actor_id).await.map_err(|error| {
-                ResidentRecoveryError::new("replay recovered resident session", error)
-            })?;
+            let actor_projection =
+                engine
+                    .read_projection_shared(actor_id)
+                    .await
+                    .map_err(|error| {
+                        ResidentRecoveryError::new("replay recovered resident session", error)
+                    })?;
             let workdir = actor_projection
                 .session
                 .workdir
