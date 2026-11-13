@@ -985,8 +985,15 @@ impl SessionEngine {
 
     /// Notify the turn-boundary observer that this turn consumed its mail up
     /// to the snapshot taken after `mark` ([`mail_mark`](Self::mail_mark)).
-    pub(crate) fn notify_mail_consumed(&self, session: SessionId, mark: Option<u64>) {
-        if let Some(mark) = mark
+    /// Outgoing-only cursor cleanup never acknowledges team work.
+    pub(crate) fn notify_mail_consumed(
+        &self,
+        session: SessionId,
+        mark: Option<u64>,
+        incoming: bool,
+    ) {
+        if incoming
+            && let Some(mark) = mark
             && let Some(observer) = self.turn_gate.observer()
         {
             observer.mail_consumed(session, mark);

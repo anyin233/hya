@@ -128,7 +128,8 @@ For example, spawn reviewers, call `wait` to collect their reports, and use
 review. Those consumed results do not require a second final answer.
 
 Cursor cleanup for outgoing DM history does not acknowledge completed team work.
-Only an acknowledgement covering incoming mail advances the supervisor's consumed-work
+In steering, `wait` (including a zero timeout) and `read channel://`, only an
+acknowledgement covering incoming mail advances the supervisor's consumed-work
 mark; otherwise an unrelated new task could lose its owed quiescence synthesis.
 The cursor and tool result still commit together, including when only outgoing
 copies or policy-filtered messages are being consumed.
