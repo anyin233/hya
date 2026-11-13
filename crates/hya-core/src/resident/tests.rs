@@ -1578,3 +1578,130 @@ async fn review_r2_concurrent_roster_orphan_rejects_activation_before_mail() {
         "rejected activation committed mail to a roster orphan"
     );
 }
+
+#[tokio::test]
+async fn review_r1_ending_fences_parent_and_sweeps_a_racing_spawn() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let _driver = supervisor.root_driver_activity(root).await.unwrap();
+    let (stage, handle) = parked(&supervisor, root).await;
+    let lease = engine.try_begin_turn(stage).unwrap();
+    let cancel = lease.bind_cancel(&CancellationToken::new());
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    *supervisor.ending_pause.lock().unwrap() = Some((entered.clone(), release.clone()));
+    let ending = tokio::spawn({
+        let supervisor = supervisor.clone();
+        let handle = handle.clone();
+        async move { supervisor.end_member(root, &handle).await }
+    });
+    entered.notified().await;
+    let cancelled_before_sweep = cancel.is_cancelled();
+    // A task already in flight can still commit before its parent's claim ends.
+    let (agent, runtime, claim) = {
+        let team = supervisor.team_with_resident(stage).unwrap();
+        let state = team.lock();
+        let slot = &state.residents[&stage];
+        (
+            slot.agent.clone(),
+            (
+                slot.binding.clone(),
+                slot.agents.clone().unwrap(),
+                slot.resources.clone().unwrap(),
+                slot.sidecar_factory.clone(),
+            ),
+            slot.claim.unwrap(),
+        )
+    };
+    let (late, late_handle, _) = supervisor
+        .spawn_resident_parked(
+            stage,
+            agent,
+            runtime,
+            "racing task".into(),
+            Some(&claim),
+            None,
+        )
+        .await
+        .unwrap();
+    drop(lease);
+    release.notify_one();
+    ending.await.unwrap().unwrap();
+    let live = engine.store().active_actor_ids().await.unwrap();
+    supervisor.end_member(root, &late_handle).await.unwrap();
+    supervisor
+        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
+        .await;
+    assert!(
+        cancelled_before_sweep,
+        "parent's active turn was not cancelled before subtree cleanup"
+    );
+    assert!(
+        !live.contains(&late),
+        "a child committed during cleanup survived its parent"
+    );
+}
+
+#[tokio::test]
+async fn review_r1_ending_takes_over_a_roster_orphan_descendant() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    engine
+        .store()
+        .claim_runtime_owner(supervisor.owner_run_id)
+        .unwrap();
+    let _driver = supervisor.root_driver_activity(root).await.unwrap();
+    let (stage, handle) = parked(&supervisor, root).await;
+    let (orphan, orphan_handle) = parked(&supervisor, stage).await;
+    supervisor.end_member(root, &orphan_handle).await.unwrap();
+    let projection = engine.read_projection(root).await.unwrap();
+    let dm = crate::engine::dm_channel_between(&projection, &handle, &orphan_handle).unwrap();
+    engine
+        .store()
+        .revive_episode(
+            root,
+            supervisor.owner_run_id,
+            u64::MAX,
+            None,
+            orphan,
+            handle.clone(),
+            MailEndpoint::Channel(dm),
+            MailKind::Message,
+            "orphan".into(),
+            hya_provider::COMPACT_CONTEXT_MARKER,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(supervisor.team_with_resident(orphan).is_none());
+    supervisor.end_member(root, &handle).await.unwrap();
+    let live = engine.store().active_actor_ids().await.unwrap();
+    let order = engine
+        .replay(root)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| {
+            if let Event::AgentArchived { handle, .. } = e.event {
+                Some(handle)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    supervisor.end_member(root, &orphan_handle).await.unwrap();
+    supervisor
+        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
+        .await;
+    assert!(
+        !live.contains(&orphan),
+        "roster orphan retained its active claim"
+    );
+    assert_eq!(
+        &order[1..],
+        &[orphan_handle, handle],
+        "orphan must end before its ancestor"
+    );
+}
