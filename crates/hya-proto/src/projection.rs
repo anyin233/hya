@@ -413,8 +413,22 @@ pub struct ChannelProjection {
     pub log: Vec<MailMessage>,
 }
 
+#[cfg(feature = "lifecycle-bench")]
+impl Clone for MailMessage {
+    fn clone(&self) -> Self {
+        crate::bench::mail_clone(self.body.len() as u64);
+        Self {
+            from: self.from.clone(),
+            to: self.to.clone(),
+            kind: self.kind,
+            body: self.body.clone(),
+        }
+    }
+}
+
 /// A single delivered message as folded into an inbox / channel log.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(not(feature = "lifecycle-bench"), derive(Clone))]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct MailMessage {
     /// Sender handle.
     pub from: String,
@@ -594,8 +608,21 @@ struct SnapshotOwned {
     workflow_seen_runs: BTreeSet<WorkflowRunId>,
 }
 
+#[cfg(feature = "lifecycle-bench")]
+impl Clone for Projection {
+    fn clone(&self) -> Self {
+        crate::bench::projection_clone(self);
+        Self {
+            session: self.session.clone(),
+            team: self.team.clone(),
+            last_seq: self.last_seq,
+        }
+    }
+}
+
 /// Full folded view: one session transcript plus optional team mailbox/roster state.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(not(feature = "lifecycle-bench"), derive(Clone))]
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Projection {
     /// Session transcript and metadata.
     pub session: SessionProjection,

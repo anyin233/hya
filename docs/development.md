@@ -490,7 +490,15 @@ Prompt admission completes before that gate and belongs to `spawn`/`revive`;
 Live mail wake coalescing is covered by the resident lifecycle regressions.
 
 Output rows contain `scenario` (`A` initial episode, `B` revived episode), `n`,
-`phase`, `wall_ms`, and `counts` (`statements`, `transactions`, `events`, `bytes`).
+`phase`, `wall_ms`, and `counts` (`statements`, `transactions`, `events`, `bytes`,
+`projection_clones`, `projection_clone_bytes`, `mail_clone_bytes`). The copy counters
+are benchmark-only: whole-projection clone count, JSON-length payload proxy for
+those clones (not heap allocation size), and UTF-8 body bytes copied by mail-record
+clones, including fan-out and projection clones. The last metric overlaps the
+projection proxy and must not be added to it. They expose work per phase; divide
+by N for work per activation. For example, use `lifecycle-bench --json` to compare
+copy work at N=64. `--check` checks only metrics present in the baseline, so an
+existing baseline remains usable when new counters are introduced.
 `scenario` and `phase` are strings, `n` is an unsigned integer, `wall_ms` is a
 floating-point number, and each count is an unsigned integer. Phases are `spawn`,
 `work`, `report+archive`, and `revive`; A has no revive row and B has no spawn row.

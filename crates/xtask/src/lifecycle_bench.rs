@@ -131,6 +131,18 @@ fn row(scenario: &str, n: usize, phase: &str, start: Instant, before: Counts) ->
             ),
             ("events".into(), after.events - before.events),
             ("bytes".into(), after.bytes - before.bytes),
+            (
+                "projection_clones".into(),
+                after.projection_clones - before.projection_clones,
+            ),
+            (
+                "projection_clone_bytes".into(),
+                after.projection_clone_bytes - before.projection_clone_bytes,
+            ),
+            (
+                "mail_clone_bytes".into(),
+                after.mail_clone_bytes - before.mail_clone_bytes,
+            ),
         ]),
     }
 }
@@ -355,10 +367,12 @@ pub fn run(args: Vec<String>) -> anyhow::Result<()> {
     if json_output {
         println!("{}", serde_json::to_string_pretty(&rows)?);
     } else {
-        println!("scenario N phase wall_ms statements transactions events bytes");
+        println!(
+            "scenario N phase wall_ms statements transactions events bytes projection_clones projection_clone_bytes mail_clone_bytes"
+        );
         for r in rows {
             println!(
-                "{} {} {} {:.3} {} {} {} {}",
+                "{} {} {} {:.3} {} {} {} {} {} {} {}",
                 r.scenario,
                 r.n,
                 r.phase,
@@ -366,7 +380,10 @@ pub fn run(args: Vec<String>) -> anyhow::Result<()> {
                 r.counts["statements"],
                 r.counts["transactions"],
                 r.counts["events"],
-                r.counts["bytes"]
+                r.counts["bytes"],
+                r.counts["projection_clones"],
+                r.counts["projection_clone_bytes"],
+                r.counts["mail_clone_bytes"]
             );
         }
     }
@@ -393,25 +410,25 @@ fn check_row(actual: &Row, expected: &Row) -> anyhow::Result<()> {
             == (expected.n, &expected.scenario, &expected.phase),
         "baseline row identity differs"
     );
-    anyhow::ensure!(
-        actual.counts.keys().eq(expected.counts.keys()),
-        "baseline metric names differ"
-    );
-    for (metric, value) in &actual.counts {
+    for (metric, expected_value) in &expected.counts {
+        let value = actual
+            .counts
+            .get(metric)
+            .with_context(|| format!("missing metric {metric}"))?;
         let tolerance = match metric.as_str() {
             "statements" => 2 + actual.n as u64 / 16,
             "bytes" => 3 * (actual.n as u64 + 1),
             _ => 0,
         };
         anyhow::ensure!(
-            value.abs_diff(expected.counts[metric]) <= tolerance,
+            value.abs_diff(*expected_value) <= tolerance,
             "count regression: {} N={} {} {}={} baseline={} tolerance={}",
             actual.scenario,
             actual.n,
             actual.phase,
             metric,
             value,
-            expected.counts[metric],
+            *expected_value,
             tolerance
         );
     }
@@ -440,6 +457,7 @@ mod tests {
         actual.wall_ms = 999999.0;
         actual.counts.insert("statements".into(), 12);
         actual.counts.insert("bytes".into(), 106);
+        actual.counts.insert("projection_clones".into(), 10);
         check_row(&actual, &expected)?;
         for (metric, value) in [
             ("bytes", 107),

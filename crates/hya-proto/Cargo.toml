@@ -10,6 +10,9 @@ version-reference = "backend"
 [lints]
 workspace = true
 
+[features]
+lifecycle-bench = []
+
 [dependencies]
 rand_core = { workspace = true }
 serde = { workspace = true }

@@ -15,19 +15,36 @@ pub struct Counts {
     pub events: u64,
     /// UTF-8 bytes of committed event JSON payloads.
     pub bytes: u64,
+    /// Number of whole-projection clones.
+    pub projection_clones: u64,
+    /// JSON-length proxy for payload copied by whole-projection clones.
+    pub projection_clone_bytes: u64,
+    /// Mail body UTF-8 bytes copied by MailMessage clones (including fan-out).
+    pub mail_clone_bytes: u64,
 }
 static TOTAL: Mutex<Counts> = Mutex::new(Counts {
     statements: 0,
     transactions: 0,
     events: 0,
     bytes: 0,
+    projection_clones: 0,
+    projection_clone_bytes: 0,
+    mail_clone_bytes: 0,
 });
 
 /// Snapshot without querying SQLite (observer reads do not affect counts).
 pub fn snapshot() -> Counts {
-    *TOTAL
+    let total = *TOTAL
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (projection_clones, projection_clone_bytes, mail_clone_bytes) =
+        hya_proto::bench::snapshot();
+    Counts {
+        projection_clones,
+        projection_clone_bytes,
+        mail_clone_bytes,
+        ..total
+    }
 }
 
 #[derive(Default)]
