@@ -385,7 +385,7 @@ async fn handshake_with_fixture_reports_hooks_and_tools() {
 }
 
 #[tokio::test]
-async fn child_guard_sends_shutdown_before_terminating_child() {
+async fn explicit_child_shutdown_sends_rpc_before_terminating_child() {
     let dir = std::env::temp_dir().join(format!(
         "hya-plugin-shutdown-{}-{}",
         std::process::id(),
@@ -406,7 +406,7 @@ async fn child_guard_sends_shutdown_before_terminating_child() {
         "-c".to_string(),
         SHUTDOWN_FIXTURE.to_string(),
     ];
-    let (client, guard) = PluginClient::spawn(&command, Some(&env)).unwrap();
+    let (client, mut guard) = PluginClient::spawn(&command, Some(&env)).unwrap();
     client
         .initialize(HostInfo {
             name: "hya".to_string(),
@@ -415,15 +415,7 @@ async fn child_guard_sends_shutdown_before_terminating_child() {
         .await
         .unwrap();
 
-    drop(guard);
-
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while !sentinel.exists() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .unwrap();
+    assert!(guard.shutdown().await.unwrap().success());
     assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), "shutdown");
     let _ = std::fs::remove_dir_all(dir);
 }
