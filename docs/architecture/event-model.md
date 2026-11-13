@@ -663,7 +663,7 @@ its retained body by subscriber count. Replay appends a `MailMessage` to
 `Vec<usize>` indices into that table; `team.channels[id].log` stores the same
 indices in channel order. `MailMessage` retains `from: String`, `to: MailEndpoint`,
 `kind: MailKind`, and `body: String`. These indices are projection-local positions,
-not event sequence numbers, and work for live events with sequence zero too.
+not event sequence numbers, and work for live events with sequence zero too. Snapshot decoding rejects any inbox or channel-log index greater than or equal to `team.mail.len()`. The store ignores that corrupt cache row and replays the event log; reducer accesses continue to rely on this invariant.
 
 Use `team.unread_incoming_mail(handle, through)` to iterate incoming records after
 an inbox cursor, or resolve a channel index as `&team.mail[index]`. For example,

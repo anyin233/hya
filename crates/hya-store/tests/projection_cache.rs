@@ -376,3 +376,75 @@ async fn shared_snapshots_are_isolated_while_unique_cache_advances_in_place() {
     assert_eq!(later.session.title.as_deref(), Some("three"));
     assert_eq!(*later, full_replay(&store, session).await);
 }
+
+#[tokio::test]
+async fn corrupt_mail_index_snapshot_row_is_ignored() {
+    let db = TempDb::new();
+    let store = SessionStore::connect(&db.0)
+        .await
+        .unwrap()
+        .with_projection_snapshot_interval(1);
+    let session = SessionId::new();
+    store
+        .append_event(
+            session,
+            &Event::SessionCreated {
+                session,
+                parent: None,
+                project: None,
+                kind: hya_proto::SessionKind::Project,
+                agent: hya_proto::AgentName::new("test"),
+                model: hya_proto::ModelRef::new("test/model"),
+                workdir: "/tmp".into(),
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .append_event(
+            session,
+            &Event::ChannelCreated {
+                session,
+                channel: "DM-test".into(),
+                kind: hya_proto::ChannelKind::Dm,
+                unit: None,
+                members: vec!["main".into()],
+            },
+        )
+        .await
+        .unwrap();
+    let truth = store.read_projection(session).await.unwrap();
+    let pool = raw_pool(&db.0).await;
+    for corrupt_inbox in [true, false] {
+        let mut corrupt = truth.clone();
+        if corrupt_inbox {
+            corrupt
+                .team
+                .inboxes
+                .insert("main".into(), vec![corrupt.team.mail.len()]);
+        } else {
+            corrupt
+                .team
+                .channels
+                .get_mut("DM-test")
+                .unwrap()
+                .log
+                .push(corrupt.team.mail.len());
+        }
+        let updated =
+            sqlx::query("UPDATE projection_snapshot SET payload = ? WHERE session_id = ?")
+                .bind(corrupt.encode_snapshot().unwrap())
+                .bind(session.storage_key())
+                .execute(&pool)
+                .await
+                .unwrap();
+        assert_eq!(updated.rows_affected(), 1);
+        let restarted = SessionStore::connect(&db.0).await.unwrap();
+        assert_eq!(
+            restarted.read_projection(session).await.unwrap(),
+            truth,
+            "corrupt_inbox={corrupt_inbox}: reject the row and replay the event log"
+        );
+    }
+    pool.close().await;
+}
