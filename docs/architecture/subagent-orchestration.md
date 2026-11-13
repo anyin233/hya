@@ -627,7 +627,7 @@ The transient executor, member evidence envelopes and their exports are deleted.
 ## 11. Deletions (exhaustive)
 
 - `run_team`, `run_pre_admitted_team*` variants, blocking joins
-  (`crates/hya-core/src/subagent.rs` is deleted; `resident.rs` owns episodes).
+  (`crates/hya-core/src/subagent.rs` is deleted; `actor/` owns episodes).
 - `TeamEvidenceEnvelope`, `project_envelope*`, evidence system messages.
 - `uses_durable_admission_owner` routing and
   `ForegroundTransientAdmissionOwner` foreground/background reply modes (the

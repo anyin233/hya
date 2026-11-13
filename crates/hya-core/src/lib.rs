@@ -67,6 +67,7 @@ pub mod permission_mode;
 /// System prompt construction and context file discovery.
 pub mod prompt;
 /// Long-lived resident actors and recovery.
+#[path = "actor/mod.rs"]
 pub mod resident;
 /// Immutable runtime snapshots, sources, and turn bindings.
 pub mod runtime_registry;
