@@ -302,6 +302,7 @@ impl ChildGuard {
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {
+        self.stop_now();
         let child = self.take_child();
         let stderr_task = self.take_stderr_task();
         match child {
@@ -310,16 +311,12 @@ impl Drop for ChildGuard {
                 match tokio::runtime::Handle::try_current() {
                     Ok(_) => {
                         hya_mcp::io_tasks::spawn_in(self.io_tasks.clone(), async move {
-                            let _ = client
-                                .call(METHOD_SHUTDOWN, json!({}), SHUTDOWN_TIMEOUT)
-                                .await;
-                            let _ = terminate_child(&mut child).await;
+                            let _ = child.wait().await;
                             client.shutdown().await;
                             let _ = await_stderr_task(stderr_task).await;
                         });
                     }
                     Err(_) => {
-                        let _ = child.start_kill();
                         if let Some(task) = stderr_task {
                             task.abort();
                         }
@@ -1141,7 +1138,7 @@ mod tests {
         // Drop outside the scoped future: cleanup must use the captured tracker.
         drop(guard);
         tasks.close();
-        tokio::time::timeout(std::time::Duration::from_secs(5), tasks.wait())
+        tokio::time::timeout(std::time::Duration::from_secs(1), tasks.wait())
             .await
             .unwrap();
         assert!(reader.is_finished());

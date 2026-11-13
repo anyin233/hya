@@ -48,3 +48,11 @@ existing sidecar-stop deadline can cancel that join; a bare JoinHandle would
 detach the reader indefinitely. AbortOnDropHandle stops it on cancellation,
 and the same runtime completion tracker waits for actual exit. Normal stderr
 tail collection and the sidecar deadline/diagnostic remain unchanged.
+
+# Does dropping an unpublished plugin attempt graceful shutdown?
+
+No. `ChildGuard::drop` closes the client and kills the child synchronously;
+the captured I/O tracker only reaps and joins its readers. Graceful RPC and
+exit grace periods belong to explicit `shutdown().await`. The unpublished
+connection regression bounds completion at one second, so it cannot hide the
+former two-second RPC plus two-second exit wait.
