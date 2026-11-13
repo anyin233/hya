@@ -49,7 +49,7 @@ or active-active/HA claim.
 Startup stays closed to spawn/send/wait while it:
 
 1. increments every active resident epoch, invalidating old capabilities;
-2. aborts old-epoch running work and resident-bound nonterminal admissions;
+2. aborts old-epoch running work;
 3. replays the canonical roster, inbox, and session projections;
 4. recreates the existing resident tasks and schedules only committed work that
    had not crossed `ResidentWorkStarted`.
@@ -59,7 +59,7 @@ turn that may dispatch a provider, tool, or child. A completed turn advances
 the projected inbox cursor. A crash after that marker aborts the running work
 without retry; mail committed after the marker remains queued for the new
 epoch. Repeating startup recovery may advance the epoch again, but does not
-duplicate terminal events or admission refunds.
+duplicate terminal events.
 
 ### Explicit stop and inbox cursor
 
@@ -91,21 +91,14 @@ Clients can key off the `STALE_ACTOR_CLAIM` code to distinguish takeover/stop
 cleanup from a genuine tool failure. The same helper is used for both recovery
 (`reason = "aborted by resident recovery"`) and explicit stop/failure paths.
 
-### `finalize_resident_stop` / `finalize_resident_failure`
+### Atomic terminal cleanup
 
-Both live on `SessionStore` (`hya-store` mailbox module):
-
-1. Fence the actor claim (`BEGIN IMMEDIATE`).
-2. **Idempotent early return:** if the claim is already stale **and** a matching
-   `released` claim already exists with the roster entry in `Failed`, return
-   empty envelopes and admissions (no duplicate terminalization).
-3. Append the terminal cleanup events above for the actor session.
-4. Abort `accepted`/`started` admissions for that actor/epoch (`state = aborted`);
-   rows that were `started` set `logical_released = 1` for exactly-once governor
-   refund.
-5. Append root `AgentActivityChanged { status: Failed, current_task: Some(reason) }`
-   (`reason` is `"resident stopped"` for explicit stop).
-6. Flip `resident_actor_claim` to `released` for the full claim tuple.
+The original stop/failure helpers have been replaced by
+`SessionStore::finalize_resident_archive`. It fences the claim, appends terminal
+cleanup, handoff and archive events, then releases the active claim in the same
+transaction. A matching repeated finalization returns no duplicate events.
+The active claim is also the live-member capacity lease; no admission journal
+or governor refund remains. See the [current store contract](../spec/backend/task-tool.md#atomic-resident-termination).
 
 ### `RecoveredResidentWork` / `RecoveredResidentOutcome`
 
@@ -115,7 +108,6 @@ Both live on `SessionStore` (`hya-store` mailbox module):
 | --- | --- |
 | `work` | Classification of what the new process should do next |
 | `envelopes` | Envelopes to publish **after** commit |
-| `admissions` | Aborted admission rows (refund when `logical_released`) |
 
 `RecoveredResidentWork`:
 
@@ -125,14 +117,14 @@ Both live on `SessionStore` (`hya-store` mailbox module):
 | `Queued { inbox_cursor }` | Committed mail (or pending user turn while idle) remains after the cursor |
 | `AbortedRunning { inbox_cursor, queued_after }` | Crossed `ResidentWorkStarted`; running work aborted; `queued_after` if inbox grew past the marker |
 
-Resident event appends, mailbox mutations, child transitions, spawn admission,
+Resident event appends, mailbox mutations, child registration,
 and tool-result commits validate the full actor claim in the same SQLite
 transaction as their canonical mutation. Event-bus publication happens only
 after commit. An old process may finish local computation, but its late result
 returns typed `StaleActorClaim` and cannot advance replay/projection state.
-Releasing a claim atomically aborts nonterminal admissions bound to that exact
-actor/epoch before the tuple becomes reusable, so a budget kill cannot strand
-an operation outside startup recovery.
+Releasing a claim atomically frees live-member capacity before the tuple
+becomes reusable. Recovery preserves each active claim and its root, so
+restarting the process cannot reset capacity.
 Transient work keeps its existing event shapes and performs no actor-claim
 lookup.
 

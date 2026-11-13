@@ -7,16 +7,15 @@ mod support;
 use std::path::Path;
 use std::sync::Arc;
 
-use hya_core::{CoreError, EventBus, ResidentRecovery, SessionEngine, SpawnAdmissionOutcome};
+use hya_core::{CoreError, EventBus, ResidentRecovery, SessionEngine};
 use hya_proto::{
-    AgentName, Event, MailEndpoint, MailKind, MemberId, MemberRunStatus, MessageId, OperationId,
-    PartId, RosterStatus, SessionId, SubagentMode, ToolCallId, ToolName, ToolPartState,
+    AgentName, Event, MailEndpoint, MailKind, MemberId, MemberRunStatus, MessageId, PartId,
+    RosterStatus, SessionId, SubagentMode, ToolCallId, ToolName, ToolPartState,
 };
 use hya_provider::ProviderRouter;
-use hya_store::{AdmissionState, AdmissionTerminal, OwnerRunId, SessionStore, StoreError};
+use hya_store::{OwnerRunId, SessionStore, StoreError};
 use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 use sqlx::{Connection, SqliteConnection};
-use tokio_util::sync::CancellationToken;
 
 async fn engine(store: SessionStore) -> SessionEngine {
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
@@ -35,7 +34,10 @@ async fn stale_tool_or_child_completion_cannot_append_or_advance_projection() {
     let engine = engine(store.clone()).await;
     let root = SessionId::new();
     let old_binding = engine.runtime_registry().bind_turn(Path::new(".")).unwrap();
-    let old_claim = store.try_claim_new(root, OwnerRunId::new()).await.unwrap();
+    let old_claim = store
+        .try_claim_new(root, root, OwnerRunId::new())
+        .await
+        .unwrap();
     let recovered = store.recover_claim(root, OwnerRunId::new()).await.unwrap();
     let before = store.read_projection(root).await.unwrap();
 
@@ -109,7 +111,7 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
     let queued_root = SessionId::new();
     let queued_actor = SessionId::new();
     let queued_claim = store
-        .try_claim_new(queued_actor, OwnerRunId::new())
+        .try_claim_new(queued_root, queued_actor, OwnerRunId::new())
         .await
         .unwrap();
     store
@@ -157,7 +159,7 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
     let running_root = SessionId::new();
     let running_actor = SessionId::new();
     let running_claim = store
-        .try_claim_new(running_actor, OwnerRunId::new())
+        .try_claim_new(running_root, running_actor, OwnerRunId::new())
         .await
         .unwrap();
     let running_message = MessageId::new();
@@ -299,7 +301,7 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
 }
 
 #[tokio::test]
-async fn resident_recovery_rolls_back_actor_admission_and_root_failure_atomically() {
+async fn resident_recovery_rolls_back_actor_and_root_failure_atomically() {
     let db_dir = support::TestDir::new("resident-recovery-atomic");
     let db_path = db_dir.path().join("sessions.db");
     let db_path = db_path.to_string_lossy().into_owned();
@@ -309,7 +311,10 @@ async fn resident_recovery_rolls_back_actor_admission_and_root_failure_atomicall
     let actor = SessionId::new();
     let handle = "main/recovery-atomic-1";
 
-    let old_claim = store.try_claim_new(actor, OwnerRunId::new()).await.unwrap();
+    let old_claim = store
+        .try_claim_new(root, actor, OwnerRunId::new())
+        .await
+        .unwrap();
     store
         .append_event(
             root,
@@ -373,23 +378,6 @@ async fn resident_recovery_rolls_back_actor_admission_and_root_failure_atomicall
         .await
         .unwrap();
 
-    let source = ToolCallId::new();
-    let operation = OperationId::from_tool_call(source);
-    assert_eq!(
-        engine
-            .begin_spawn_admission(
-                actor,
-                hya_tool::ToolOperation::from_tool_call(source),
-                [117; 32],
-                1,
-                Some(old_claim),
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap(),
-        SpawnAdmissionOutcome::Started
-    );
-
     let recovered = store.recover_claim(actor, OwnerRunId::new()).await.unwrap();
     let root_before = store.replay(root).await.unwrap();
     let actor_before = store.replay(actor).await.unwrap();
@@ -416,9 +404,6 @@ async fn resident_recovery_rolls_back_actor_admission_and_root_failure_atomicall
     assert!(result.is_err());
     assert_eq!(store.replay(root).await.unwrap(), root_before);
     assert_eq!(store.replay(actor).await.unwrap(), actor_before);
-    let admission = store.admission(operation).await.unwrap().unwrap();
-    assert_eq!(admission.state, AdmissionState::Started);
-    assert!(!admission.logical_released);
     assert!(store.validate_actor_claim(&recovered.claim).await.is_ok());
     assert!(store.active_actor_ids().await.unwrap().contains(&actor));
 }
@@ -430,7 +415,10 @@ async fn repeated_startup_recovery_produces_identical_projection_and_no_duplicat
     let engine = engine(store.clone()).await;
     let root = SessionId::new();
     let actor = SessionId::new();
-    let old_claim = store.try_claim_new(actor, OwnerRunId::new()).await.unwrap();
+    let old_claim = store
+        .try_claim_new(root, actor, OwnerRunId::new())
+        .await
+        .unwrap();
     store
         .append_event(
             root,
@@ -496,21 +484,6 @@ async fn repeated_startup_recovery_produces_identical_projection_and_no_duplicat
         )
         .await
         .unwrap();
-    let source = ToolCallId::new();
-    assert_eq!(
-        engine
-            .begin_spawn_admission(
-                actor,
-                hya_tool::ToolOperation::from_tool_call(source),
-                [61; 32],
-                1,
-                Some(old_claim),
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap(),
-        SpawnAdmissionOutcome::Started
-    );
 
     let _first_claim = store.recover_claim(actor, OwnerRunId::new()).await.unwrap();
     let second_claim = store.recover_claim(actor, OwnerRunId::new()).await.unwrap();
@@ -525,7 +498,6 @@ async fn repeated_startup_recovery_produces_identical_projection_and_no_duplicat
             queued_after: false,
         }
     );
-    assert_eq!(first.aborted_operations, 1);
     let projection_after_first = store.read_projection(root).await.unwrap();
 
     let third_claim = store.recover_claim(actor, OwnerRunId::new()).await.unwrap();
@@ -534,7 +506,6 @@ async fn repeated_startup_recovery_produces_identical_projection_and_no_duplicat
         .await
         .unwrap();
     assert_eq!(second.work, ResidentRecovery::Idle);
-    assert_eq!(second.aborted_operations, 0);
     assert_eq!(
         store.read_projection(root).await.unwrap(),
         projection_after_first
@@ -555,125 +526,4 @@ async fn repeated_startup_recovery_produces_identical_projection_and_no_duplicat
         })
         .count();
     assert_eq!(terminal_events, 1);
-}
-
-#[tokio::test]
-async fn transient_non_resident_paths_do_not_require_actor_claim_or_change_events() {
-    let store = SessionStore::connect_memory().await.unwrap();
-    let engine = engine(store.clone()).await;
-    let root = SessionId::new();
-    let source = ToolCallId::new();
-    let operation = OperationId::from_tool_call(source);
-
-    assert_eq!(
-        engine
-            .begin_spawn_admission(
-                root,
-                hya_tool::ToolOperation::from_tool_call(source),
-                [72; 32],
-                1,
-                None,
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap(),
-        SpawnAdmissionOutcome::Started
-    );
-    engine
-        .finalize_spawn_admission(
-            operation,
-            AdmissionTerminal::Completed,
-            "transient complete",
-            None,
-        )
-        .await
-        .unwrap();
-
-    assert!(store.active_actor_ids().await.unwrap().is_empty());
-    assert!(
-        store
-            .admission(operation)
-            .await
-            .unwrap()
-            .unwrap()
-            .actor
-            .is_none()
-    );
-    assert!(store.replay(root).await.unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn actor_bound_admission_cannot_be_finalized_without_its_claim() {
-    let store = SessionStore::connect_memory().await.unwrap();
-    let engine = engine(store.clone()).await;
-    let root = SessionId::new();
-    let actor = SessionId::new();
-    store
-        .append_event(
-            root,
-            &Event::SessionCreated {
-                session: root,
-                parent: None,
-                agent: AgentName::new("main"),
-                model: hya_proto::ModelRef::new("fake/fake"),
-                workdir: ".".to_string(),
-                project: None,
-                kind: hya_proto::SessionKind::Project,
-            },
-        )
-        .await
-        .unwrap();
-    store
-        .append_event(
-            actor,
-            &Event::SessionCreated {
-                session: actor,
-                parent: Some(root),
-                agent: AgentName::new("resident"),
-                model: hya_proto::ModelRef::new("fake/fake"),
-                workdir: ".".to_string(),
-                project: None,
-                kind: hya_proto::SessionKind::Project,
-            },
-        )
-        .await
-        .unwrap();
-    let claim = store.try_claim_new(actor, OwnerRunId::new()).await.unwrap();
-    let source = ToolCallId::new();
-    let operation = OperationId::from_tool_call(source);
-    assert_eq!(
-        engine
-            .begin_spawn_admission(
-                actor,
-                hya_tool::ToolOperation::from_tool_call(source),
-                [93; 32],
-                1,
-                Some(claim),
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap(),
-        SpawnAdmissionOutcome::Started
-    );
-
-    assert!(
-        engine
-            .finalize_spawn_admission(
-                operation,
-                AdmissionTerminal::Cancelled,
-                "claim omitted",
-                None,
-            )
-            .await
-            .is_err()
-    );
-    assert_eq!(
-        store.admission(operation).await.unwrap().unwrap().state,
-        AdmissionState::Started
-    );
-    engine.finalize_root_spawn_admissions(root).await.unwrap();
-    assert_eq!(
-        store.admission(operation).await.unwrap().unwrap().state,
-        AdmissionState::Started
-    );
 }

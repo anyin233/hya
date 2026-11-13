@@ -22,10 +22,10 @@
   every spawn is non-blocking and follow-up uses mail.
 - Validate all prompts and all permissions before one `SpawnerPlane` request.
   Runtime roster/model preflight and admission govern the entire batch.
-- Runtime registers members concurrently with ordered `join_all` outcomes.
-  Batch response stays a batch even for one task. Running members must never
-  be rendered as completed; include individual handles, sessions and errors in
-  model-visible output. Partial registration failure does not erase siblings.
+- Runtime resolves the whole batch, registers all members in one store
+  transaction, then installs every episode before awaiting initialization.
+  Batch response stays a batch even for one task; registered members are running.
+  Any registration failure rolls back all siblings and lazy root registration.
 
 ### 3. Verification
 
@@ -35,328 +35,27 @@ validation, legacy inputs, permission and typed errors, and result shapes.
 before either is released. Track P `p08_subagent_task` proves the batched tool
 creates distinct child sessions and produces independent child outputs.
 
-## Scenario: Durable Spawn Admission
+## Scenario: Atomic Spawn Admission
 
-### 1. Scope / Trigger
+Resolve all members and root context before effects. `register_episodes` fences
+the parent and checks active claims under one SQLite writer reservation, then
+commits the complete batch. `per_run_budget` limits live members per root, across
+turns and restart. Archive frees a claim; revival consumes one. Root turns never
+reset capacity. See [the exact store contracts and worked example](../../architecture/admission-and-governor.md).
 
-- Trigger: changes to `ToolCtx`, `SpawnerPlane`, task dispatch, subagent
-  governor reservation, the admission journal, startup, or resident/transient
-  spawn supervision.
-- This is the `0.34.4` control-plane contract. It is not a durable runnable
-  queue and does not promise external-effect replay.
+The bounded `SpawnerPlane` transport still fails fast with `Overloaded` when
+full and `Unavailable` when closed. Its capacity derives from `per_run_budget`,
+clamped to `1..=tokio::sync::Semaphore::MAX_PERMITS`. Capacity/depth rejection
+creates no child, roster entry, or provider call. `ToolOperation` retains source
+call and actor identity, but task dispatch has no journal or replay API.
 
-### 2. Signatures
+Regression coverage: `hya-app/tests/resident_lifecycle.rs` I13/I14 exercise real
+task/archive/mail and process crash; `spawn_admission.rs` covers batch rollback,
+intake pressure, authorization and concurrent child initialization. Store
+registration tests check rollback of the entire batch. Tests that require an
+inactive lead hold a real root turn lease with `engine.try_begin_turn(root)`.
 
-- Every persisted `ToolCallId` deterministically derives one domain-separated
-  `OperationId`. `ToolCtx` and `SpawnRequest` carry the immutable pair through
-  `ToolOperation`; no independent operation UUID is minted.
-- `SpawnerPlane::with_capacity(capacity: usize)` returns a bounded Tokio
-  channel-backed plane and receiver.
-- Foreground and background spawn use non-blocking `try_send`.
-- Full transport returns `SpawnError::Overloaded`; closed transport returns
-  `SpawnError::Unavailable`.
-- A reused operation with a different immutable request returns
-  `OPERATION_ID_CONFLICT`; an identical already-started or terminal request
-  returns `OperationAlreadyHandled` and never dispatches again.
-- The store journal owns `accepted -> started ->
-  completed|cancelled|aborted`; the governor owns only the current process's
-  in-memory debit and cancellation token.
-
-### 3. Contracts
-
-- Runtime queue capacity derives from the existing resolved
-  `SubagentLimits::per_run_budget`, clamped to
-  `1..=tokio::sync::Semaphore::MAX_PERMITS` before constructing the channel.
-  Do not introduce `100`, `128`, or `256` as queue defaults.
-- Queue full fails immediately. The rejected request never enters the
-  supervisor, so it cannot create a request-owned task, child Session, or child
-  event.
-- The first durable write records operation ID, source tool-call ID, root
-  session, SHA-256 request fingerprint, admission units, and `accepted` before
-  any governor debit, child/session creation, resident registration, or
-  dispatch.
-- `accepted` means no capacity was charged. Only the request that atomically
-  debits the governor may transition to `started`; all transient/resident and
-  foreground/background continuations then use the pre-admitted execution
-  path and must not reserve again.
-- Same operation plus the same immutable request observes existing state
-  without another debit. A changed parent/background/member request fails
-  closed without mutation.
-- Terminal states are irreversible. Replaying the same terminal is idempotent;
-  attempting a different terminal returns a typed transition conflict.
-- Finalization marks a logical release only when the row was `started`.
-  Governor release is keyed by operation and removes/credits at most one
-  recorded debit. An `accepted` overload/cancel never credits capacity.
-- Explicit cancellation, normal completion, spawn failure, and root-turn
-  cleanup call the same store-first finalizer. Root cleanup cancels current
-  operation tokens before finalizing them.
-- Before building any spawn/resident supervisor, startup atomically moves all
-  `accepted`/`started` rows to `aborted`. A recovered `started` row records a
-  logical release for audit only; it never credits the fresh governor.
-- The journal emits no public `Event`; session replay/projection remains
-  exclusively event-log based.
-- A rejected child may still produce the normal parent Turn's typed tool-error
-  event. “No event” applies to rejected child/session/member/roster state.
-
-### 4. Validation & Error Matrix
-
-- Queue has capacity -> request enters the supervisor.
-- Queue is full -> typed overload, immediate return, no enqueued request.
-- Queue receiver is closed -> typed unavailable.
-- Request exceeds depth or exact remaining run budget -> durable `aborted`,
-  typed
-  overload before child allocation.
-- Identical duplicate -> existing state, no debit, task, session, event, or
-  dispatch.
-- Different request fingerprint -> `OPERATION_ID_CONFLICT`, no mutation.
-- Cancel before debit -> `cancelled`, `logical_released = false`.
-- Complete/cancel/abort after `started` -> one logical release and at most one
-  governor release.
-- Restart with nonterminal rows -> all become `aborted` before spawn readiness;
-  repeated recovery changes zero rows.
-
-### 5. Good / Base / Bad Cases
-
-- Good: one queued request occupies a capacity-one transport; a second
-  background task immediately returns typed overload and never reaches the
-  receiver.
-- Base: one operation claims, debits, starts, creates once, completes, and
-  releases its exact debit; a serial or concurrent retry observes existing
-  state.
-- Bad: enqueue on an unbounded channel and create a Tokio task/child Session
-  before checking the governor.
-- Bad: derive an operation ID from randomness/process state, insert the journal
-  row after child creation, use a terminal replay to credit twice, or resume a
-  nonterminal operation after restart.
-
-### 6. Tests Required
-
-- `hya-tool` unit: fill a capacity-one `SpawnerPlane`; assert the next request
-  fails fast with `SpawnError::Overloaded` and receiver length stays one.
-- `hya-tool` unit: assert an explicitly bound plane whose receiver is closed
-  returns `SpawnError::Unavailable`, and an extreme requested capacity is
-  clamped without panicking.
-- `hya-tool/tests/task.rs`: assert `TaskTool` returns
-  `ToolError::Overloaded`, preserves the persisted tool-call operation pair,
-  and exposes typed operation conflict/already-handled failures.
-- `hya-store/tests/admission.rs`: serial/concurrent claim/start idempotency,
-  fingerprint conflict, terminal immutability, release marker semantics,
-  repeatable startup recovery, and event-log independence.
-- `hya-core` unit: exactly-once operation debit/release, cancellation before
-  debit, and repeated root cleanup.
-- `hya-app/tests/spawn_admission.rs`: transient/resident overload creates no
-  child or lifecycle state; duplicate and concurrent retries dispatch once;
-  changed request conflicts; foreground/background completion releases once.
-- Keep queue saturation, nested spawn, event replay, and projection suites
-  green.
-
-### 7. Wrong vs Correct
-
-#### Wrong
-
-```rust
-let child = engine.create(create).await?;
-store.claim(operation, fingerprint).await?;
-governor.reserve(root, units);
-```
-
-#### Correct
-
-```rust
-match store.claim_admission(&claim).await? {
-    Claimed(_) => {
-        governor.try_reserve_operation(root, operation, units, cancel)?;
-        store.start_admission(operation).await?;
-        run_pre_admitted_team(...).await;
-        finalize(operation, Completed).await?;
-    }
-    Existing(_) => return Err(OperationAlreadyHandled),
-}
-```
-
----
-
-## Scenario: Test Fixtures That Route Through Durable Spawn Admission
-
-### 1. Scope / Trigger
-
-Any test whose spawn reaches durable spawn admission. Since ADR-0015 every
-`task` spawn is a resident actor and goes through one unified admission path
-(`begin_spawn_admission`), so this applies to every spawn test. (Before 0.41.0
-the route depended on the removed `spawn_lifecycle` key and the
-`uses_durable_admission_owner` split; learned 2026-08-05 from three
-`nested_spawn_tree.rs` tests that failed with an opaque
-`SpawnError::Unavailable`.)
-
-### 2. Contracts
-
-Durable admission journals a runtime fingerprint, and the fingerprint is only
-defined when **both** preconditions hold. Each fails closed, and each surfaces
-as the same generic `SpawnError::Unavailable`, so they are hard to tell apart:
-
-1. **The bundle catalog must carry verified provenance.**
-   `BundleCatalog::from_prepared` hard-sets `semantic_identity_v1: None`; only
-   `from_verified_catalogs` / `with_verified_catalogs` populate it. Without it,
-   `TurnBinding::semantic_fingerprint_v1` returns `None` →
-   `SpawnError::Unavailable`. Production always uses the verified constructors.
-2. **Every provider in the router must report a configured identity.**
-   `ProviderRouter::configured_identities_v1()` returns `None` if *any* provider
-   leaves the `configured_identity_v1` trait default, which is `None` by design
-   ("providers without a complete identity fail closed"). A bare `FakeProvider`
-   leaves that default.
-
-Fixing only (1) moves the failure to `ProviderIdentityUnavailable` — the two are
-independent and both are required.
-
-### 3. Wrong vs Correct
-
-#### Wrong
-
-```rust
-// Fails closed at the fingerprint, then again at provider identity.
-let catalog = BundleCatalog::from_prepared(&[bundle]);
-let router = ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![])));
-```
-
-#### Correct
-
-In `hya-app`, both halves already live in `crates/hya-app/tests/support/mod.rs`.
-Use them; do not re-derive either one locally.
-
-```rust
-mod support;
-
-// (1) verified catalog — `test_runtime` goes through `prepare_builtins` +
-//     `BundleCatalog::from_verified_catalogs`, so the fingerprint is defined.
-let runtime = support::test_runtime(
-    Arc::new(ToolRegistry::builtins()),
-    &[("build", AgentRole::Main, &["quick"]), ("quick", AgentRole::Subagent, &[])],
-);
-
-// (2) provider identity — wrap the fake; do NOT implement
-//     `configured_identity_v1` on `FakeProvider` itself. `runtime.rs` asserts a
-//     bare FakeProvider router must fail closed, and other crates depend on that.
-let router = ProviderRouter::new().with(Arc::new(
-    support::IdentityFakeProvider::new(FakeProvider::scripted(vec![])),
-));
-```
-
-Outside `hya-app`, mirror the same shape rather than reaching for
-`BundleCatalog::from_prepared`.
-
-### 4. Common Mistakes
-
-- Adding `configured_identity_v1` to `FakeProvider` to "fix it once" — this
-  breaks the fail-closed assertion in `crates/hya-app/src/runtime.rs` and
-  perturbs admission fingerprints across every crate that uses the fake.
-- Asserting a governor budget with a bare `assert_eq!` right after completion.
-  The journal row (`Completed + logical_released`) and the in-memory governor
-  debit are written by **different tasks**; background owners reply at
-  registration, so there is no ordering guarantee. Use a bounded poll.
-- Assuming `remaining_budget` can prove an *exact* debit. It cannot, for two
-  reasons: `release_operation` clamps with `.min(per_run_budget)`, so at
-  `per_run_budget = 1` a second credit is invisible; and `remaining_budget`
-  falls back to `per_run_budget` when the root has *no* entry, so a full budget
-  is also what a never-debited or wholly-dropped root reads. Use the debit entry
-  instead — see "Proving an exact governor release" below.
-- Copying a verified-runtime helper into one test file instead of the shared
-  `crates/hya-app/tests/support/`. That exact drift is what left
-  `nested_spawn_tree.rs` broken while `spawn_admission.rs` passed.
-
----
-
-## Scenario: Governor Release Accounting
-
-### 1. Scope / Trigger
-
-Applies when reasoning about *when* a spawn operation's governor debit is
-returned, or when writing a test that asserts a release happened. Records
-decisions reached in `08-06-governor-release-accounting`.
-
-### 2. Proving an exact governor release
-
-`SubagentGovernor::release_operation` removes the operation from its debit map
-**before** any arithmetic and returns `false` when the entry is already gone:
-
-```rust
-let Some(debit) = budgets.operations.remove(&operation) else {
-    return false;
-};
-```
-
-Two consequences, both verified by mutation testing:
-
-- A repeated release is a **no-op**, not a silent double-credit. The
-  `.min(per_run_budget)` clamp is a belt-and-braces guard; the `remove` is what
-  actually prevents corruption. Firing the owner's release twice on purpose
-  changes no observable.
-- The **boolean return is a precise observable**. After the owner has released,
-  a test calling `release_operation(op)` must get `false`. Getting `true` means
-  the budget was restored while the debit stayed outstanding — the real
-  corruption mode, and one that `remaining_budget` alone cannot see. Mutating
-  `release_operation` to leave the entry in the map is caught by this assertion
-  and *not* by a `remaining_budget` check.
-
-So assert release exactness with the boolean, not with the budget number. Unit
-coverage: `operation_debit_and_release_are_exactly_once`
-(`crates/hya-core/src/orchestrator.rs`). Integration coverage:
-`admitted_background_transient_releases_its_exact_debit_on_completion`
-(`crates/hya-app/tests/spawn_admission.rs`).
-
-### 3. Reconciled journal-finalize / governor-release window
-
-A member task finalizes its admission row to `Completed + logical_released` via
-`store().finalize_admission_members(...)`. The owning foreground transient task
-can return the process-local governor debit later, after it drains completions,
-quiesces handles, and projects the evidence envelope. Durable state can
-therefore become visible before the in-memory refund.
-
-`SessionEngine::try_reserve_spawn_operation` closes this user-visible race at
-the admission boundary. Its first reservation attempt remains allocation-free.
-Only when that attempt reports `Overloaded` does it load
-`SessionStore::terminal_released_operations_for_root`, idempotently release
-those operation debits, and retry the exact reservation once. The store query
-returns an operation only when every declared batch member exists and is
-terminal and at least one started row carries `logical_released`.
-
-Do not release unconditionally at member-finalize time. The governor records
-the batch `cardinality` as one operation debit, so releasing after one member
-would hand back capacity while sibling members still run. Whole-operation
-reconciliation keeps that invariant and makes already-released durable
-capacity available to a concurrent same-root spawn without a false
-`Overloaded` result.
-
-Regression coverage:
-
-- `terminal_release_reconciliation_waits_for_the_whole_batch`
-  (`crates/hya-store/tests/admission.rs`) proves one terminal member cannot
-  expose a two-member operation for reconciliation.
-- `released_capacity_is_visible_to_a_concurrent_spawn_on_the_same_root`
-  (`crates/hya-app/tests/spawn_admission.rs`) runs unignored and proves a
-  capacity-one concurrent spawn succeeds once the journal reports the prior
-  operation terminal and logically released.
-
-### 4. Invariant: spawn-intake liveness
-
-The team supervisor's drain branch — entered when `rx.recv()` yields `None` —
-waits for in-flight foreground handlers **without** watching `stop_child`. That
-is safe only while this holds:
-
-> `SessionEngine` owns the `BoundSpawnSender` in a plain field that is only ever
-> set by the builder and never taken back out, and the supervisor task holds an
-> `Arc<SessionEngine>` for as long as it runs. The last sender therefore cannot
-> drop while the receiver-owning task is alive, so a closed intake is
-> unreachable in production.
-
-Today the closed-intake path is reached only from the `spawn_team_supervisor`
-test helper, which hands the receiver to a supervisor that does not own the
-sender. Severity is **entirely contingent on that ownership**: if the engine ever
-holds a `Weak`, the sender moves out of the engine, or the supervisor stops
-holding the engine, then a `shutdown()` with handlers in flight would block
-instead of aborting — `fail_after_claim` can park on
-`std::future::pending::<()>()` — and the drain loop must be made stop-aware in
-the same change. The invariant is also recorded at the `with_spawn_sender` call
-site in `crates/hya-app/src/runtime.rs`, which is where it would be broken.
+## Supervisor shutdown
 
 ### 5. Invariant: Workflow-intake shutdown
 
@@ -381,7 +80,7 @@ the supervisor and tool reply to become terminal. Replacing the in-flight
 
 ## Scenario: Atomic Resident Registration and Arming
 
-A successful `task` spawn commits the child `SessionCreated`, parent's
+A successful `task` batch commits every child `SessionCreated`, parent's
 `MemberSpawned`, root roster/channel events, actor claim and initial user message
 in one SQLite transaction. The raw initial prompt is committed before plugin
 calls. There is no volatile initial-directive queue. For example, spawning a
@@ -389,9 +88,9 @@ worker with prompt `inspect the parser` persists that user message before the
 spawn returns; takeover before its first turn sees queued work and executes it.
 Parked registrations omit the initial message and await durable mail as before.
 
-After commit, registration installs the slot and an owned task without awaiting
-a plugin. That task sends global and scoped `session.start` before publishing
-the registration envelopes, then runs `message.user.before`; any rewrite is
+After commit, registration installs every episode under claim-write serialization
+without awaiting a plugin. Each episode sends global and scoped `session.start`,
+publishes its registration envelopes, then runs `message.user.before`; any rewrite is
 persisted with `TextReplace` before the first turn. Finally it notifies the
 parent's `agent.spawn` hook and starts the resident loop. Dropping the spawning
 future during a hook does not drop this task. A failed registration transaction
@@ -422,13 +121,10 @@ then reviving with `inspect the tests instead` retains the old task as cancelled
 history rather than an open directive. This uses existing message events; it
 does not introduce an episode model or change the revive transaction.
 
-Store contract: `commit_resident_registration(actor_id: SessionId,
-owner_run_id: OwnerRunId, parent_claim: Option<&ActorClaim>, events: Vec<Event>)`
-returns `(ActorClaim, Vec<Envelope>)` after commit. A supplied parent claim is
-fenced inside that same transaction. Events may target child, parent or root;
-they use `append_event_in_transaction`. The caller publishes the returned
-envelopes once, after commit. `try_claim_new_in_transaction(&mut Transaction,
-SessionId, OwnerRunId)` allows claim rows in that caller-owned transaction.
+Store contract: [`register_episodes`](../../architecture/admission-and-governor.md#store-interface)
+returns one claim and committed envelope group per member, in input order. A
+supplied parent claim is fenced inside the same transaction. Publication uses
+only those committed envelopes, once per episode, after its session-start hooks.
 
 `registered_initial_task_survives_supervisor_loss` covers recovery after
 registration and before the first worker turn. This does not promise replay of
@@ -463,23 +159,22 @@ old outcome or text.
 
 `finalize_resident_archive(owner: ResidentArchiveOwner<'_>, root: SessionId,
 handle: &str, archive: ResidentArchive, cause: FinishCause)` returns
-`Result<(ResidentArchiveOutcome, Vec<Envelope>, Vec<AdmissionRecord>), StoreError>`.
+`Result<(ResidentArchiveOutcome, Vec<Envelope>), StoreError>`.
 `ResidentArchiveOwner::Claim(&ActorClaim)` fences the episode's capability;
 `Takeover` ends an orphan whose caller guarantees has no in-memory episode.
-Takeover increments the active claim's epoch, replaces its owner, aborts its
-previous epoch's admissions and releases the claim in this same transaction.
+Takeover increments the active claim's epoch, replaces its owner and releases
+the claim in this same transaction.
 A failed transaction rolls back the takeover too.
 `ResidentArchiveOutcome::Committed` carries terminal effects (or empty effects
-for a matching repeated finalization). `Refused` carries only the harness notice
-and no admission refunds. A store error is a failed write, not a refusal.
+for a matching repeated finalization). `Refused` carries only the harness notice. A store error is a failed write, not a refusal.
 `ResidentArchive` carries `actor: SessionId`, `generation: u32`,
 `doc: String`, `degraded: bool`, `reason: ArchiveReason`, `note: String`,
 `member_status: MemberRunStatus`,
 `report: Option<(ReportOutcome, String)>`, `check_gate: bool`, and
 `expected_work: Option<(u64, Option<ResidentWorkProjection>)>`. Handoff, optional
 parent report/mail, cancellation cleanup, terminal activity, archive marker and
-claim release commit together. `publish_resident_finalization` publishes and
-refunds only after commit. Stop/failure entry points choose terminal reasons and
+claim release commit together. `publish_resident_finalization` publishes only
+after commit. Stop/failure entry points choose terminal reasons and
 use this same transaction, including cancellation of unstarted directives. The
 caller supplies the archive reason, member status and handoff document; the
 store never synthesizes a handoff or derives a reason from the member status.

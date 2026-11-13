@@ -4,10 +4,10 @@
 
 use hya_proto::{
     AgentName, Envelope, Event, FinishReason, MailEndpoint, MailKind, MemberId, MemberRunStatus,
-    MessageId, OperationId, PartId, PartProjection, Role, RosterStatus, SessionId, SubagentMode,
-    ToolCallId, ToolName, ToolPartState,
+    MessageId, PartId, PartProjection, Role, RosterStatus, SessionId, SubagentMode, ToolCallId,
+    ToolName, ToolPartState,
 };
-use hya_store::{ActorClaim, AdmissionClaim, AdmissionState, OwnerRunId, SessionStore, StoreError};
+use hya_store::{ActorClaim, OwnerRunId, SessionStore, StoreError};
 use sqlx::{Connection, SqliteConnection};
 
 async fn finalize_resident(
@@ -17,9 +17,9 @@ async fn finalize_resident(
     handle: &str,
     status: MemberRunStatus,
     note: &str,
-) -> Result<(Vec<Envelope>, Vec<hya_store::AdmissionRecord>), StoreError> {
+) -> Result<Vec<Envelope>, StoreError> {
     let projection = store.read_projection(claim.actor_id).await?;
-    let (outcome, envelopes, admissions) = store.finalize_resident_archive(hya_store::ResidentArchiveOwner::Claim(claim), root, handle, hya_store::ResidentArchive {
+    let (outcome, envelopes) = store.finalize_resident_archive(hya_store::ResidentArchiveOwner::Claim(claim), root, handle, hya_store::ResidentArchive {
         actor: claim.actor_id,
         generation: projection.session.handoff.as_ref().map_or(1, |handoff| handoff.generation + 1),
         doc: "1. Goal - test task\n2. Current state - stopped\n3. Files and code - none\n4. Decisions - none\n5. Pending tasks - none\n6. Next step - none".into(),
@@ -27,7 +27,7 @@ async fn finalize_resident(
         report: None, check_gate: false, expected_work: None,
     }, if status == MemberRunStatus::Failed { hya_proto::FinishCause::Other } else { hya_proto::FinishCause::UserCancel }).await?;
     assert_eq!(outcome, hya_store::ResidentArchiveOutcome::Committed);
-    Ok((envelopes, admissions))
+    Ok(envelopes)
 }
 
 struct StopFixture {
@@ -36,7 +36,6 @@ struct StopFixture {
     actor: SessionId,
     handle: String,
     claim: ActorClaim,
-    operation: OperationId,
     before_root: Vec<Envelope>,
     before_actor: Vec<Envelope>,
 }
@@ -105,23 +104,10 @@ async fn stop_fixture(path: &str) -> StopFixture {
         .await
         .unwrap();
 
-    let claim = store.try_claim_new(actor, OwnerRunId::new()).await.unwrap();
-    let source_tool_call_id = ToolCallId::new();
-    let operation = OperationId::from_tool_call(source_tool_call_id);
-    let admission = AdmissionClaim {
-        operation_id: operation,
-        source_tool_call_id,
-        root_session: root,
-        request_fingerprint: [7; 32],
-        admission_units: 1,
-        actor_claim: Some(claim),
-    };
-    store.claim_admission(&admission).await.unwrap();
-    store
-        .start_admission(operation, Some(&claim))
+    let claim = store
+        .try_claim_new(root, actor, OwnerRunId::new())
         .await
         .unwrap();
-
     let running_message = MessageId::new();
     let running_part = PartId::new();
     let running_call = ToolCallId::new();
@@ -170,7 +156,6 @@ async fn stop_fixture(path: &str) -> StopFixture {
         actor,
         handle: path,
         claim,
-        operation,
     }
 }
 
@@ -212,7 +197,7 @@ async fn terminal_takeover_is_idempotent_after_claim_or_takeover_archive() {
             .unwrap();
         let before_root = fixture.store.replay(fixture.root).await.unwrap();
         let before_actor = fixture.store.replay(fixture.actor).await.unwrap();
-        let (outcome, events, admissions) = fixture
+        let (outcome, events) = fixture
             .store
             .finalize_resident_archive(
                 hya_store::ResidentArchiveOwner::Takeover,
@@ -225,7 +210,6 @@ async fn terminal_takeover_is_idempotent_after_claim_or_takeover_archive() {
             .unwrap();
         assert_eq!(outcome, hya_store::ResidentArchiveOutcome::Committed);
         assert!(events.is_empty());
-        assert!(admissions.is_empty());
         assert_eq!(
             fixture.store.replay(fixture.root).await.unwrap(),
             before_root
@@ -280,7 +264,7 @@ async fn terminal_takeover_requires_a_released_claim_and_matching_archive_for_re
             let other = SessionId::new();
             let claim = fixture
                 .store
-                .try_claim_new(other, OwnerRunId::new())
+                .try_claim_new(other, other, OwnerRunId::new())
                 .await
                 .unwrap();
             fixture.store.release_claim(&claim).await.unwrap();
@@ -336,85 +320,6 @@ async fn terminal_takeover_requires_a_released_claim_and_matching_archive_for_re
 }
 
 #[tokio::test]
-async fn terminal_archive_aborts_admissions_from_all_prior_epochs() {
-    for takeover in [false, true] {
-        let temp_db = TempDb::new("old-admissions");
-        let fixture = stop_fixture(temp_db.path()).await;
-        let accepted_call = ToolCallId::new();
-        let accepted = OperationId::from_tool_call(accepted_call);
-        fixture
-            .store
-            .claim_admission(&AdmissionClaim {
-                operation_id: accepted,
-                source_tool_call_id: accepted_call,
-                root_session: fixture.root,
-                request_fingerprint: [8; 32],
-                admission_units: 1,
-                actor_claim: Some(fixture.claim),
-            })
-            .await
-            .unwrap();
-        fixture
-            .store
-            .recover_claim(fixture.actor, OwnerRunId::new())
-            .await
-            .unwrap();
-        let recovered = fixture
-            .store
-            .recover_claim(fixture.actor, OwnerRunId::new())
-            .await
-            .unwrap();
-        let current_call = ToolCallId::new();
-        let current = OperationId::from_tool_call(current_call);
-        fixture
-            .store
-            .claim_admission(&AdmissionClaim {
-                operation_id: current,
-                source_tool_call_id: current_call,
-                root_session: fixture.root,
-                request_fingerprint: [9; 32],
-                admission_units: 1,
-                actor_claim: Some(recovered.claim),
-            })
-            .await
-            .unwrap();
-        fixture
-            .store
-            .start_admission(current, Some(&recovered.claim))
-            .await
-            .unwrap();
-        let owner = if takeover {
-            hya_store::ResidentArchiveOwner::Takeover
-        } else {
-            hya_store::ResidentArchiveOwner::Claim(&recovered.claim)
-        };
-        let (outcome, _, admissions) = fixture
-            .store
-            .finalize_resident_archive(
-                owner,
-                fixture.root,
-                &fixture.handle,
-                orphan_archive(fixture.actor),
-                hya_proto::FinishCause::Archived,
-            )
-            .await
-            .unwrap();
-        assert_eq!(outcome, hya_store::ResidentArchiveOutcome::Committed);
-        assert_eq!(admissions.len(), 3, "takeover={takeover}");
-        for operation in [fixture.operation, accepted, current] {
-            let row = fixture.store.admission(operation).await.unwrap().unwrap();
-            assert_eq!(row.state, AdmissionState::Aborted);
-            assert_eq!(row.logical_released, operation != accepted);
-            assert!(
-                admissions
-                    .iter()
-                    .any(|returned| returned.operation_id == operation)
-            );
-        }
-    }
-}
-
-#[tokio::test]
 async fn terminal_takeover_requires_the_owning_store_handle() {
     let temp_db = TempDb::new("takeover-owner");
     let fixture = stop_fixture(temp_db.path()).await;
@@ -445,16 +350,6 @@ async fn terminal_takeover_requires_the_owning_store_handle() {
     assert_eq!(
         fixture.store.replay(fixture.actor).await.unwrap(),
         fixture.before_actor
-    );
-    assert_eq!(
-        fixture
-            .store
-            .admission(fixture.operation)
-            .await
-            .unwrap()
-            .unwrap()
-            .state,
-        AdmissionState::Started
     );
 }
 
@@ -490,16 +385,6 @@ async fn terminal_takeover_rejects_a_voluntary_report_gate_without_changing_the_
     assert_eq!(
         fixture.store.replay(fixture.actor).await.unwrap(),
         fixture.before_actor
-    );
-    assert_eq!(
-        fixture
-            .store
-            .admission(fixture.operation)
-            .await
-            .unwrap()
-            .unwrap()
-            .state,
-        AdmissionState::Started
     );
 }
 
@@ -554,21 +439,11 @@ async fn terminal_takeover_archives_an_active_claim() {
         fixture.store.replay(fixture.actor).await.unwrap(),
         fixture.before_actor
     );
-    assert_eq!(
-        fixture
-            .store
-            .admission(fixture.operation)
-            .await
-            .unwrap()
-            .unwrap()
-            .state,
-        AdmissionState::Started
-    );
     sqlx::query("DROP TRIGGER fail_takeover_archive")
         .execute(&mut connection)
         .await
         .unwrap();
-    let (outcome, events, admissions) = fixture
+    let (outcome, events) = fixture
         .store
         .finalize_resident_archive(
             hya_store::ResidentArchiveOwner::Takeover,
@@ -585,10 +460,6 @@ async fn terminal_takeover_archives_an_active_claim() {
         Event::AgentArchived { child, reason: hya_proto::ArchiveReason::ArchivedByParent, .. }
             if *child == fixture.actor
     )));
-    assert_eq!(admissions.len(), 1);
-    assert_eq!(admissions[0].operation_id, fixture.operation);
-    assert_eq!(admissions[0].state, AdmissionState::Aborted);
-    assert!(admissions[0].logical_released);
     assert!(fixture.store.active_actor_ids().await.unwrap().is_empty());
     let projection = fixture.store.read_projection(fixture.root).await.unwrap();
     assert!(!projection.team.roster.contains_key(&fixture.handle));
@@ -706,7 +577,7 @@ async fn refused_report_commits_only_a_harness_notice() {
             .execute(&mut connection)
             .await
             .unwrap();
-        let (outcome, events, admissions) = fixture
+        let (outcome, events) = fixture
             .store
             .finalize_resident_archive(
                 hya_store::ResidentArchiveOwner::Claim(&fixture.claim),
@@ -718,7 +589,6 @@ async fn refused_report_commits_only_a_harness_notice() {
             .await
             .unwrap();
         assert_eq!(outcome, hya_store::ResidentArchiveOutcome::Refused);
-        assert!(admissions.is_empty());
         assert_eq!(events.len(), 1);
         assert!(
             matches!(&events[0].event,
@@ -742,16 +612,6 @@ async fn refused_report_commits_only_a_harness_notice() {
             .validate_actor_claim(&fixture.claim)
             .await
             .unwrap();
-        assert_eq!(
-            fixture
-                .store
-                .admission(fixture.operation)
-                .await
-                .unwrap()
-                .unwrap()
-                .state,
-            AdmissionState::Started
-        );
         let projection = fixture.store.read_projection(fixture.root).await.unwrap();
         assert!(projection.team.roster.contains_key(&fixture.handle));
         assert!(!projection.team.archived.contains_key(&fixture.handle));
@@ -771,8 +631,8 @@ async fn concurrent_claims_allow_exactly_one_owner() {
     let owner_b = OwnerRunId::new();
 
     let (left, right) = tokio::join!(
-        store.try_claim_new(actor_id, owner_a),
-        store.try_claim_new(actor_id, owner_b),
+        store.try_claim_new(actor_id, actor_id, owner_a),
+        store.try_claim_new(actor_id, actor_id, owner_b),
     );
 
     let outcomes = [left, right];
@@ -795,7 +655,7 @@ async fn restart_recovery_increments_epoch_and_invalidates_old_claim() {
     let store = SessionStore::connect_memory().await.unwrap();
     let actor_id = SessionId::new();
     let old = store
-        .try_claim_new(actor_id, OwnerRunId::new())
+        .try_claim_new(actor_id, actor_id, OwnerRunId::new())
         .await
         .unwrap();
 
@@ -818,14 +678,14 @@ async fn release_requires_full_tuple_and_is_idempotent() {
     let store = SessionStore::connect_memory().await.unwrap();
     let actor_id = SessionId::new();
     let first = store
-        .try_claim_new(actor_id, OwnerRunId::new())
+        .try_claim_new(actor_id, actor_id, OwnerRunId::new())
         .await
         .unwrap();
 
     store.release_claim(&first).await.unwrap();
     store.release_claim(&first).await.unwrap();
     let second = store
-        .try_claim_new(actor_id, OwnerRunId::new())
+        .try_claim_new(actor_id, actor_id, OwnerRunId::new())
         .await
         .unwrap();
 
@@ -838,7 +698,7 @@ async fn release_requires_full_tuple_and_is_idempotent() {
 }
 
 #[tokio::test]
-async fn resident_stop_finalization_commits_mail_admission_and_claim_release_together() {
+async fn resident_stop_finalization_commits_mail_and_claim_release_together() {
     let store = SessionStore::connect_memory().await.unwrap();
     let root = SessionId::new();
     let actor = SessionId::new();
@@ -874,19 +734,8 @@ async fn resident_stop_finalization_commits_mail_admission_and_claim_release_tog
         .await
         .unwrap();
 
-    let actor_claim = store.try_claim_new(actor, OwnerRunId::new()).await.unwrap();
-    let source_tool_call_id = ToolCallId::new();
-    let admission = AdmissionClaim {
-        operation_id: OperationId::from_tool_call(source_tool_call_id),
-        source_tool_call_id,
-        root_session: root,
-        request_fingerprint: [7; 32],
-        admission_units: 1,
-        actor_claim: Some(actor_claim),
-    };
-    store.claim_admission(&admission).await.unwrap();
-    store
-        .start_admission(admission.operation_id, Some(&actor_claim))
+    let actor_claim = store
+        .try_claim_new(root, actor, OwnerRunId::new())
         .await
         .unwrap();
 
@@ -930,7 +779,7 @@ async fn resident_stop_finalization_commits_mail_admission_and_claim_release_tog
         store.append_event(actor, &event).await.unwrap();
     }
 
-    let (events, admissions) = finalize_resident(
+    let events = finalize_resident(
         &store,
         &actor_claim,
         root,
@@ -1008,9 +857,6 @@ async fn resident_stop_finalization_commits_mail_admission_and_claim_release_tog
         })
         .count();
     assert_eq!(failed_events, 1);
-    assert_eq!(admissions.len(), 1);
-    assert_eq!(admissions[0].state, AdmissionState::Aborted);
-    assert!(admissions[0].logical_released);
 
     let projection = store.read_projection(root).await.unwrap();
     assert!(!projection.team.roster.contains_key(path));
@@ -1095,7 +941,10 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
         .await
         .unwrap();
 
-    let old_claim = store.try_claim_new(actor, OwnerRunId::new()).await.unwrap();
+    let old_claim = store
+        .try_claim_new(root, actor, OwnerRunId::new())
+        .await
+        .unwrap();
     let mail = store
         .append_direct_mail(
             root,
@@ -1134,7 +983,7 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
     assert_eq!(projection.team.inboxes.get(path).unwrap().len(), 1);
     assert_eq!(projection.team.roster.get(path).unwrap().resident_cursor, 0);
 
-    let (events, admissions) = finalize_resident(
+    let events = finalize_resident(
         &store,
         &recovered.claim,
         root,
@@ -1144,7 +993,6 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
     )
     .await
     .unwrap();
-    assert!(admissions.is_empty());
     assert_eq!(
         events
             .iter()
@@ -1173,7 +1021,7 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
     assert!(!projection.team.roster.contains_key(path));
     assert_eq!(projection.team.archived[path].session, actor);
 
-    let (events, admissions) = finalize_resident(
+    let events = finalize_resident(
         &store,
         &recovered.claim,
         root,
@@ -1184,7 +1032,6 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
     .await
     .unwrap();
     assert!(events.is_empty());
-    assert!(admissions.is_empty());
 
     let replay = store.replay(root).await.unwrap();
     assert_eq!(
@@ -1223,10 +1070,6 @@ async fn resident_stop_finalizer_rolls_back_at_each_write_boundary_and_is_exactl
             "message_finished",
             r#"BEFORE INSERT ON event_log
                WHEN instr(NEW.payload, '"type":"message_finished"') > 0"#,
-        ),
-        (
-            "admission_abort",
-            "BEFORE UPDATE OF state ON admission_journal\n               WHEN NEW.state = 'aborted' AND OLD.state = 'started'",
         ),
         (
             "root_activity",
@@ -1283,14 +1126,6 @@ async fn resident_stop_finalizer_rolls_back_at_each_write_boundary_and_is_exactl
             fixture.before_actor,
             "{boundary} must roll back actor events"
         );
-        let admission = fixture
-            .store
-            .admission(fixture.operation)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(admission.state, AdmissionState::Started);
-        assert!(!admission.logical_released);
         assert!(
             fixture
                 .store
@@ -1311,7 +1146,7 @@ async fn resident_stop_finalizer_rolls_back_at_each_write_boundary_and_is_exactl
             .execute(&mut connection)
             .await
             .unwrap();
-        let (events, admissions) = finalize_resident(
+        let events = finalize_resident(
             &fixture.store,
             &fixture.claim,
             fixture.root,
@@ -1322,7 +1157,6 @@ async fn resident_stop_finalizer_rolls_back_at_each_write_boundary_and_is_exactl
         .await
         .unwrap();
         assert_eq!(events.len(), 6, "{boundary} retry terminalizes once");
-        assert_eq!(admissions.len(), 1);
         assert_eq!(
             events
                 .iter()
@@ -1340,21 +1174,11 @@ async fn resident_stop_finalizer_rolls_back_at_each_write_boundary_and_is_exactl
                 .count(),
             1
         );
-        assert_eq!(admissions[0].state, AdmissionState::Aborted);
-        assert!(admissions[0].logical_released);
         assert!(matches!(
             fixture.store.validate_actor_claim(&fixture.claim).await,
             Err(StoreError::StaleActorClaim { actor_id }) if actor_id == fixture.actor
         ));
 
-        let admission = fixture
-            .store
-            .admission(fixture.operation)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(admission.state, AdmissionState::Aborted);
-        assert!(admission.logical_released);
         let replay_after_retry = fixture.store.replay(fixture.root).await.unwrap();
         assert_eq!(
             replay_after_retry
@@ -1374,7 +1198,7 @@ async fn resident_stop_finalizer_rolls_back_at_each_write_boundary_and_is_exactl
             1
         );
 
-        let (events, admissions) = finalize_resident(
+        let events = finalize_resident(
             &fixture.store,
             &fixture.claim,
             fixture.root,
@@ -1385,7 +1209,6 @@ async fn resident_stop_finalizer_rolls_back_at_each_write_boundary_and_is_exactl
         .await
         .unwrap();
         assert!(events.is_empty());
-        assert!(admissions.is_empty());
         assert_eq!(
             fixture.store.replay(fixture.root).await.unwrap(),
             replay_after_retry
@@ -1475,9 +1298,12 @@ async fn resident_finalization_closes_its_member_row_on_the_parent_log() {
         ] {
             store.append_event(root, &event).await.unwrap();
         }
-        let claim = store.try_claim_new(actor, OwnerRunId::new()).await.unwrap();
+        let claim = store
+            .try_claim_new(root, actor, OwnerRunId::new())
+            .await
+            .unwrap();
 
-        let (events, _) = if stop {
+        let events = if stop {
             finalize_resident(
                 &store,
                 &claim,
@@ -1531,66 +1357,70 @@ async fn resident_finalization_closes_its_member_row_on_the_parent_log() {
 async fn registration_rolls_back_claim_and_all_sessions_on_prompt_failure() {
     let db = TempDb::new("registration");
     let store = SessionStore::connect(db.path()).await.unwrap();
+    let root = SessionId::new();
+    store
+        .append_event(
+            root,
+            &Event::SessionCreated {
+                session: root,
+                parent: None,
+                agent: AgentName::new("main"),
+                model: hya_proto::ModelRef::new("fake"),
+                workdir: "/tmp".into(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
+            },
+        )
+        .await
+        .unwrap();
+    let before = store.replay(root).await.unwrap();
     let mut conn = SqliteConnection::connect(&format!("sqlite://{}", db.path()))
         .await
         .unwrap();
     sqlx::query("CREATE TRIGGER reject_initial_prompt BEFORE INSERT ON event_log WHEN instr(NEW.payload, 'reject_initial_prompt') > 0 BEGIN SELECT RAISE(ABORT, 'prompt failure'); END")
         .execute(&mut conn).await.unwrap();
-    let child = SessionId::new();
-    let root = SessionId::new();
+    let registrations = ["first", "reject_initial_prompt"]
+        .into_iter()
+        .map(|directive| {
+            let child = SessionId::new();
+            hya_store::EpisodeRegistration {
+                actor: child,
+                events: vec![
+                    Event::SessionCreated {
+                        session: child,
+                        parent: Some(root),
+                        agent: AgentName::new("worker"),
+                        model: hya_proto::ModelRef::new("fake"),
+                        workdir: "/tmp".into(),
+                        project: None,
+                        kind: hya_proto::SessionKind::Project,
+                    },
+                    Event::AgentRegistered {
+                        session: root,
+                        agent_session: child,
+                        handle: directive.into(),
+                        parent: Some("main".into()),
+                        agent_type: AgentName::new("worker"),
+                        mode: SubagentMode::Resident,
+                    },
+                    Event::TextDelta {
+                        session: child,
+                        message: MessageId::new(),
+                        part: PartId::new(),
+                        delta: directive.into(),
+                    },
+                ],
+            }
+        })
+        .collect();
     let result = store
-        .commit_resident_registration(
-            child,
-            OwnerRunId::new(),
-            None,
-            vec![
-                Event::SessionCreated {
-                    session: root,
-                    parent: None,
-                    agent: AgentName::new("main"),
-                    model: hya_proto::ModelRef::new("fake"),
-                    workdir: "/tmp".into(),
-                    project: None,
-                    kind: hya_proto::SessionKind::Project,
-                },
-                Event::SessionCreated {
-                    session: child,
-                    parent: Some(root),
-                    agent: AgentName::new("worker"),
-                    model: hya_proto::ModelRef::new("fake"),
-                    workdir: "/tmp".into(),
-                    project: None,
-                    kind: hya_proto::SessionKind::Project,
-                },
-                Event::AgentRegistered {
-                    session: root,
-                    agent_session: child,
-                    handle: "worker-1".into(),
-                    parent: Some("main".into()),
-                    agent_type: AgentName::new("worker"),
-                    mode: SubagentMode::Resident,
-                },
-                Event::TextDelta {
-                    session: child,
-                    message: MessageId::new(),
-                    part: PartId::new(),
-                    delta: "reject_initial_prompt".into(),
-                },
-            ],
-        )
+        .register_episodes(root, OwnerRunId::new(), None, 2, registrations)
         .await;
     assert!(result.unwrap_err().to_string().contains("prompt failure"));
+    assert_eq!(store.replay(root).await.unwrap(), before);
+    assert_eq!(store.list_sessions().await.unwrap().len(), 1);
+    assert_eq!(store.live_member_count(root).await.unwrap(), 0);
     assert!(store.active_actor_ids().await.unwrap().is_empty());
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM event_log")
-        .fetch_one(&mut conn)
-        .await
-        .unwrap();
-    assert_eq!(count, 0);
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM session")
-        .fetch_one(&mut conn)
-        .await
-        .unwrap();
-    assert_eq!(count, 0);
 }
 
 #[tokio::test]
@@ -1669,7 +1499,10 @@ async fn work_fixture(store: &SessionStore) -> (SessionId, ActorClaim) {
             .await
             .unwrap();
     }
-    let claim = store.try_claim_new(actor, OwnerRunId::new()).await.unwrap();
+    let claim = store
+        .try_claim_new(root, actor, OwnerRunId::new())
+        .await
+        .unwrap();
     (root, claim)
 }
 
@@ -2043,6 +1876,7 @@ async fn revive_mail(
         .revive_episode(
             root,
             OwnerRunId::new(),
+            u64::MAX,
             None,
             actor,
             "main".into(),
@@ -2206,6 +2040,7 @@ async fn revive_episode_rechecks_policy_and_parent_claim_without_any_writes() {
         .revive_episode(
             root,
             OwnerRunId::new(),
+            u64::MAX,
             None,
             old.actor_id,
             "main".into(),
@@ -2227,6 +2062,7 @@ async fn revive_episode_rechecks_policy_and_parent_claim_without_any_writes() {
         .revive_episode(
             root,
             OwnerRunId::new(),
+            u64::MAX,
             Some(&old),
             old.actor_id,
             "main".into(),
@@ -2240,4 +2076,91 @@ async fn revive_episode_rechecks_policy_and_parent_claim_without_any_writes() {
     assert!(matches!(stale, Err(StoreError::StaleActorClaim { .. })));
     assert_eq!(store.replay(root).await.unwrap(), before);
     assert!(store.active_actor_ids().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn concurrent_registration_batches_share_the_roots_durable_capacity() {
+    let db = TempDb::new("batch-capacity");
+    let store = SessionStore::connect(db.path()).await.unwrap();
+    let root = SessionId::new();
+    store
+        .append_event(
+            root,
+            &Event::SessionCreated {
+                session: root,
+                parent: None,
+                agent: AgentName::new("main"),
+                model: hya_proto::ModelRef::new("fake"),
+                workdir: "/tmp".into(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
+            },
+        )
+        .await
+        .unwrap();
+    let batch = || {
+        (0..2)
+            .map(|_| {
+                let actor = SessionId::new();
+                hya_store::EpisodeRegistration {
+                    actor,
+                    events: vec![
+                        Event::SessionCreated {
+                            session: actor,
+                            parent: Some(root),
+                            agent: AgentName::new("worker"),
+                            model: hya_proto::ModelRef::new("fake"),
+                            workdir: "/tmp".into(),
+                            project: None,
+                            kind: hya_proto::SessionKind::Project,
+                        },
+                        Event::AgentRegistered {
+                            session: root,
+                            agent_session: actor,
+                            handle: actor.to_string(),
+                            parent: Some("main".into()),
+                            agent_type: AgentName::new("worker"),
+                            mode: SubagentMode::Resident,
+                        },
+                    ],
+                }
+            })
+            .collect()
+    };
+    let (left, right) = tokio::join!(
+        store.register_episodes(root, OwnerRunId::new(), None, 2, batch()),
+        store.register_episodes(root, OwnerRunId::new(), None, 2, batch()),
+    );
+    assert_eq!(usize::from(left.is_ok()) + usize::from(right.is_ok()), 1);
+    let error = if let Err(error) = left {
+        error
+    } else {
+        right.unwrap_err()
+    };
+    assert!(matches!(
+        error,
+        StoreError::CapacityExceeded {
+            live: 2,
+            requested: 2,
+            limit: 2,
+            ..
+        }
+    ));
+    assert_eq!(store.live_member_count(root).await.unwrap(), 2);
+    assert_eq!(store.list_sessions().await.unwrap().len(), 3);
+    assert_eq!(
+        store.read_projection(root).await.unwrap().team.roster.len(),
+        3
+    );
+    assert_eq!(
+        store
+            .replay(root)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|envelope| matches!(envelope.event,
+        Event::AgentRegistered { agent_session, .. } if agent_session == root))
+            .count(),
+        1
+    );
 }

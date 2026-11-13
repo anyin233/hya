@@ -120,9 +120,10 @@ fn validate_agent(agent: &AgentName) -> Result<(), StoreError> {
 
 fn validate_text(value: &str, field: &'static str, maximum: usize) -> Result<(), StoreError> {
     if value.is_empty() || value.chars().count() > maximum {
-        return Err(StoreError::AdmissionData(format!(
-            "agent model preference {field} must be non-empty and at most {maximum} characters",
-        )));
+        return Err(StoreError::InvalidPreferenceData {
+            field,
+            detail: format!("must be non-empty and at most {maximum} characters"),
+        });
     }
     Ok(())
 }
@@ -141,9 +142,9 @@ fn decode_preference(row: sqlx::sqlite::SqliteRow) -> Result<AgentModelPreferenc
 }
 
 fn decode_text(row: &sqlx::sqlite::SqliteRow, field: &'static str) -> Result<String, StoreError> {
-    row.try_get::<String, _>(field).map_err(|error| {
-        StoreError::AdmissionData(format!(
-            "agent model preference row has invalid {field}: {error}",
-        ))
-    })
+    row.try_get::<String, _>(field)
+        .map_err(|error| StoreError::InvalidPreferenceData {
+            field,
+            detail: error.to_string(),
+        })
 }

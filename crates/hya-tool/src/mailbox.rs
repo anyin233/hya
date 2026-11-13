@@ -48,8 +48,8 @@ pub struct ChannelInfo {
 }
 
 /// A request from a comms tool to the mailbox service. `reply` carries either the
-/// typed result or a human-readable rejection string (the service maps its typed
-/// errors to strings so this enum stays free of `hya-core` types).
+/// typed result or rejection. Send replies preserve capacity overload; other
+/// replies carry human-readable errors, without depending on `hya-core`.
 pub enum MailboxRequest {
     /// Deliver private mail to a vertical peer (parent or direct child).
     Send {
@@ -66,7 +66,7 @@ pub enum MailboxRequest {
         /// Body text.
         body: String,
         /// Host reply with receipt or rejection.
-        reply: oneshot::Sender<Result<MailReceipt, String>>,
+        reply: oneshot::Sender<Result<MailReceipt, MailboxError>>,
     },
     /// Send on the acting agent's default channel: the unit group pipe the
     /// sender leads (broadcast), else the parent DM pair. Routed engine-side.
@@ -80,7 +80,7 @@ pub enum MailboxRequest {
         /// Body text.
         body: String,
         /// Host reply with receipt or rejection.
-        reply: oneshot::Sender<Result<MailReceipt, String>>,
+        reply: oneshot::Sender<Result<MailReceipt, MailboxError>>,
     },
     /// List the acting agent's channels (group pipes + live-peer DMs).
     ListChannels {
@@ -172,6 +172,9 @@ pub enum MailboxError {
     /// Plane disconnected or no session bound.
     #[error("mailbox service unavailable")]
     Unavailable,
+    /// Revival would exceed the team root's live-member capacity.
+    #[error("{0}")]
+    Overloaded(String),
     /// Service rejected the request with a message.
     #[error("{0}")]
     Rejected(String),
@@ -267,7 +270,6 @@ impl MailboxPlane {
             reply,
         })
         .await?
-        .map_err(MailboxError::Rejected)
     }
 
     /// Send on the acting agent's default channel (unit group pipe when the
@@ -282,7 +284,6 @@ impl MailboxPlane {
             reply,
         })
         .await?
-        .map_err(MailboxError::Rejected)
     }
 
     /// The acting agent's channels: group pipes plus live-peer DMs.

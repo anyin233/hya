@@ -857,7 +857,7 @@ async fn a_refused_revival_leaves_the_child_transcript_unchanged() {
     .unwrap();
     let other = engine
         .store()
-        .try_claim_new(child, hya_proto::OwnerRunId::new())
+        .try_claim_new(root, child, hya_proto::OwnerRunId::new())
         .await
         .unwrap();
     let before = engine.replay(child).await.unwrap();

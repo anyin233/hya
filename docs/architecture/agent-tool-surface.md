@@ -1060,8 +1060,6 @@ these wire `type` strings:
 | `Json` | `json` |
 | `Cancelled` | `cancelled` |
 | `Overloaded` | `overloaded` |
-| `OperationIdConflict` | `operation_id_conflict` |
-| `OperationAlreadyHandled` | `operation_already_handled` |
 | `WorkflowControl { code, message }` | the control `code` itself (e.g. `WORKFLOW_BUSY`) |
 | `UnknownAgentId` | `unknown_agent_id` |
 | `AgentSpawnNotAllowed` | `agent_spawn_not_allowed` |

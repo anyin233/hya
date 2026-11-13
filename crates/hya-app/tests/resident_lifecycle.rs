@@ -1346,7 +1346,6 @@ async fn i19_shutdown_drop_releases_engine_ownership() {
 }
 
 #[tokio::test]
-#[ignore = "M4-7: I13"]
 async fn i13_capacity_is_a_live_member_lease_across_root_turns() {
     if support::lifecycle::isolated_config(
         "i13_capacity_is_a_live_member_lease_across_root_turns",
@@ -1369,14 +1368,31 @@ async fn i13_capacity_is_a_live_member_lease_across_root_turns() {
         let (c, third) = h.spawn(vec![Round::text("C")]).await;
         h.idle(c, &third).await;
         let revive = h.mail(&first, "must consume capacity".into()).await;
-        assert!(revive.is_err(), "revive exceeded the two live-member lease");
+        assert!(
+            matches!(
+                revive,
+                Err(hya_core::CoreError::Store(
+                    hya_store::StoreError::CapacityExceeded { .. }
+                ))
+            ),
+            "{revive:?}"
+        );
+        let rejected_send = h
+            .tool(
+                "send",
+                json!({"channel": first, "body": "must consume capacity"}),
+            )
+            .await;
+        assert!(
+            matches!(&rejected_send, ToolPartState::Error { value: Some(value), .. } if value["error"]["type"] == "overloaded"),
+            "{rejected_send:?}"
+        );
     }
     h.shutdown().await;
     assert!(overloaded, "third task exceeded live capacity: {third:?}");
 }
 
 #[tokio::test]
-#[ignore = "M4-7: I14"]
 async fn i14_live_capacity_survives_real_process_crash() {
     let test = "i14_live_capacity_survives_real_process_crash";
     support::lifecycle::crash_seed_if_requested(test, false).await;

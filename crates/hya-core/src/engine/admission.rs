@@ -1,9 +1,5 @@
-use hya_proto::{Envelope, Event, FinishReason, MessageId, OperationId, PartId, Role, SessionId};
-use hya_store::{
-    ActorClaim, AdmissionClaim, AdmissionClaimOutcome, AdmissionRecord, AdmissionStartOutcome,
-    AdmissionState, AdmissionTerminal, RecoveredActorClaim,
-};
-use tokio_util::sync::CancellationToken;
+use hya_proto::{Envelope, Event, FinishReason, MessageId, PartId, Role, SessionId};
+use hya_store::{ActorClaim, RecoveredActorClaim};
 
 use super::SessionEngine;
 use crate::TurnBinding;
@@ -12,22 +8,6 @@ use crate::hooks::{
     CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, HookDispatcher, MessageUserBeforeInput,
     MessageUserBeforeOutcome,
 };
-use crate::orchestrator::OperationReservation;
-
-/// Result of beginning a spawn admission against governor + durable claims.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SpawnAdmissionOutcome {
-    /// Fresh admission started for this operation.
-    Started,
-    /// Operation already admitted; returns durable state.
-    Existing(AdmissionState),
-    /// Per-run budget or concurrency overloaded.
-    Overloaded,
-    /// Subagent recursion depth exceeded.
-    MaxDepth,
-    /// Cancelled before admission completed.
-    Cancelled,
-}
 
 impl SessionEngine {
     async fn admission_binding(
@@ -90,182 +70,12 @@ impl SessionEngine {
             dispatcher.command_execute_before(input).await;
         text
     }
-    /// Reserve one durable operation, reconciling terminal journal releases on overload.
-    ///
-    /// `root` selects the run budget, `operation` identifies the exact debit,
-    /// `units` is the all-or-nothing member count, and `cancel` controls the
-    /// operation. `None` means this engine has no governor.
-    pub async fn try_reserve_spawn_operation(
-        &self,
-        root: SessionId,
-        operation: OperationId,
-        units: u64,
-        cancel: CancellationToken,
-    ) -> Result<Option<OperationReservation>, CoreError> {
-        let Some(governor) = self.governor.clone() else {
-            return Ok(None);
-        };
-        let reservation = governor.try_reserve_operation(root, operation, units, cancel.clone());
-        if reservation != OperationReservation::Overloaded {
-            return Ok(Some(reservation));
-        }
-        for released in self
-            .store
-            .terminal_released_operations_for_root(root)
-            .await?
-        {
-            governor.release_operation(released);
-        }
-        Ok(Some(
-            governor.try_reserve_operation(root, operation, units, cancel),
-        ))
-    }
-    /// Start admission for a spawn request; reserves budget and validates roster.
-    pub async fn begin_spawn_admission(
-        &self,
-        parent: SessionId,
-        operation: hya_tool::ToolOperation,
-        request_fingerprint: [u8; 32],
-        admission_units: u32,
-        actor_claim: Option<ActorClaim>,
-        cancel: CancellationToken,
-    ) -> Result<SpawnAdmissionOutcome, CoreError> {
-        let operation_id = operation.operation_id();
-        let source_tool_call_id = operation.source_tool_call_id();
-        let (root, depth) = self.session_lineage(parent).await?;
-        let claim = AdmissionClaim {
-            operation_id,
-            source_tool_call_id,
-            root_session: root,
-            request_fingerprint,
-            admission_units,
-            actor_claim,
-        };
-        match self.store.claim_admission(&claim).await? {
-            AdmissionClaimOutcome::Existing(record) => {
-                return Ok(SpawnAdmissionOutcome::Existing(record.state));
-            }
-            AdmissionClaimOutcome::Claimed(_) => {}
-        }
-
-        if cancel.is_cancelled() {
-            self.finalize_spawn_admission(
-                operation_id,
-                AdmissionTerminal::Cancelled,
-                "cancelled before debit",
-                actor_claim.as_ref(),
-            )
-            .await?;
-            return Ok(SpawnAdmissionOutcome::Cancelled);
-        }
-        if let Some(governor) = &self.governor
-            && depth.saturating_add(1) > governor.max_depth()
-        {
-            self.finalize_spawn_admission(
-                operation_id,
-                AdmissionTerminal::Aborted,
-                "maximum subagent depth exceeded",
-                actor_claim.as_ref(),
-            )
-            .await?;
-            return Ok(SpawnAdmissionOutcome::MaxDepth);
-        }
-        match self
-            .try_reserve_spawn_operation(root, operation_id, u64::from(admission_units), cancel)
-            .await?
-        {
-            Some(OperationReservation::Overloaded) => {
-                self.finalize_spawn_admission(
-                    operation_id,
-                    AdmissionTerminal::Aborted,
-                    "spawn admission overloaded",
-                    actor_claim.as_ref(),
-                )
-                .await?;
-                return Ok(SpawnAdmissionOutcome::Overloaded);
-            }
-            Some(OperationReservation::Existing | OperationReservation::Conflict) => {
-                return Ok(SpawnAdmissionOutcome::Existing(AdmissionState::Accepted));
-            }
-            Some(OperationReservation::Acquired) | None => {}
-        }
-
-        match self
-            .store
-            .start_admission(operation_id, actor_claim.as_ref())
-            .await
-        {
-            Ok(AdmissionStartOutcome::Started(_)) => Ok(SpawnAdmissionOutcome::Started),
-            Ok(AdmissionStartOutcome::Existing(record)) => {
-                if let Some(governor) = &self.governor {
-                    governor.release_operation(operation_id);
-                }
-                Ok(SpawnAdmissionOutcome::Existing(record.state))
-            }
-            Err(error) => {
-                if let Some(governor) = &self.governor {
-                    governor.release_operation(operation_id);
-                }
-                let _ = self
-                    .store
-                    .finalize_admission(
-                        operation_id,
-                        AdmissionTerminal::Aborted,
-                        "failed to persist started state",
-                        actor_claim.as_ref(),
-                    )
-                    .await;
-                Err(error.into())
-            }
-        }
-    }
-
-    /// Commit a successful spawn admission after the child session exists.
-    pub async fn finalize_spawn_admission(
-        &self,
-        operation_id: OperationId,
-        terminal: AdmissionTerminal,
-        reason: &str,
-        actor_claim: Option<&ActorClaim>,
-    ) -> Result<(), CoreError> {
-        let outcome = self
-            .store
-            .finalize_admission(operation_id, terminal, reason, actor_claim)
-            .await?;
-        if outcome.release_required
-            && let Some(governor) = &self.governor
-        {
-            governor.release_operation(operation_id);
-        }
-        Ok(())
-    }
-
-    /// Finalize all pending admissions under a root session.
-    pub async fn finalize_root_spawn_admissions(&self, root: SessionId) -> Result<(), CoreError> {
-        if let Some(governor) = &self.governor {
-            governor.cancel_operations(root);
-        }
-        for record in self.store.nonterminal_admissions_for_root(root).await? {
-            self.finalize_spawn_admission(
-                record.operation_id,
-                AdmissionTerminal::Cancelled,
-                "root turn cleanup",
-                None,
-            )
-            .await?;
-        }
-        if let Some(governor) = &self.governor {
-            governor.release(root);
-        }
-        Ok(())
-    }
-
     pub(crate) async fn recover_resident_actor_durable(
         &self,
         recovered: &RecoveredActorClaim,
         root: SessionId,
         handle: &str,
-    ) -> Result<(hya_store::RecoveredResidentWork, usize), CoreError> {
+    ) -> Result<hya_store::RecoveredResidentWork, CoreError> {
         let outcome = self
             .store
             .recover_resident_actor(recovered, root, handle)
@@ -273,15 +83,7 @@ impl SessionEngine {
         for envelope in outcome.envelopes {
             self.publish_envelope(envelope);
         }
-        if let Some(governor) = &self.governor {
-            for record in &outcome.admissions {
-                if record.logical_released {
-                    governor.release_operation(record.operation_id);
-                }
-            }
-        }
-        let aborted_operations = outcome.admissions.len();
-        Ok((outcome.work, aborted_operations))
+        Ok(outcome.work)
     }
 
     /// Root teardown requests episode-owned endings, then reconciles orphans.
@@ -302,7 +104,7 @@ impl SessionEngine {
         members.sort_by_key(|(path, _)| std::cmp::Reverse(path.len()));
         for (handle, member) in members {
             let handoff = self.degraded_terminal_handoff(member.session).await;
-            let (_, envelopes, admissions) = self
+            let (_, envelopes) = self
                 .store
                 .finalize_resident_archive(
                     hya_store::ResidentArchiveOwner::Takeover,
@@ -323,24 +125,14 @@ impl SessionEngine {
                     hya_proto::FinishCause::Archived,
                 )
                 .await?;
-            self.publish_resident_finalization((envelopes, admissions));
+            self.publish_resident_finalization(envelopes);
         }
         Ok(())
     }
 
-    pub(crate) fn publish_resident_finalization(
-        &self,
-        (envelopes, admissions): (Vec<Envelope>, Vec<AdmissionRecord>),
-    ) {
+    pub(crate) fn publish_resident_finalization(&self, envelopes: Vec<Envelope>) {
         for envelope in envelopes {
             self.publish_envelope(envelope);
-        }
-        if let Some(governor) = &self.governor {
-            for record in admissions {
-                if record.logical_released {
-                    governor.release_operation(record.operation_id);
-                }
-            }
         }
     }
 
@@ -926,12 +718,12 @@ mod tests {
 
     use std::sync::Arc;
 
-    use hya_proto::{AgentName, ModelRef, OwnerRunId, ToolCallId};
+    use hya_proto::{AgentName, ModelRef};
     use hya_provider::ProviderRouter;
     use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 
     use super::*;
-    use crate::{CreateSession, EventBus, SubagentGovernor, SubagentLimits};
+    use crate::{CreateSession, EventBus};
 
     #[tokio::test]
     async fn ordinary_user_message_commits_once() {
@@ -988,171 +780,5 @@ mod tests {
                 ..
             }
         ));
-    }
-
-    #[tokio::test]
-    async fn root_cleanup_cancels_and_finalizes_started_operation_once() {
-        let store = hya_store::SessionStore::connect_memory().await.unwrap();
-        let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
-        let governor = SubagentGovernor::new(SubagentLimits {
-            per_run_budget: 2,
-            ..SubagentLimits::default()
-        });
-        let engine = SessionEngine::new(
-            store.clone(),
-            Arc::new(ProviderRouter::new()),
-            crate::test_support::runtime(ToolRegistry::builtins()),
-            permission,
-            EventBus::default(),
-        )
-        .with_governor(governor.clone());
-        let root = engine
-            .create(CreateSession {
-                parent: None,
-                agent: AgentName::new("build"),
-                model: ModelRef::new("fake"),
-                workdir: "/tmp".to_string(),
-                project: None,
-                kind: hya_proto::SessionKind::Project,
-            })
-            .await
-            .unwrap();
-        let source = ToolCallId::new();
-        let operation = OperationId::from_tool_call(source);
-        let cancel = CancellationToken::new();
-        assert_eq!(
-            engine
-                .begin_spawn_admission(
-                    root,
-                    hya_tool::ToolOperation::from_tool_call(source),
-                    [23; 32],
-                    1,
-                    None,
-                    cancel.clone(),
-                )
-                .await
-                .unwrap(),
-            SpawnAdmissionOutcome::Started
-        );
-        assert_eq!(governor.remaining_budget(root), 1);
-
-        engine.finalize_root_spawn_admissions(root).await.unwrap();
-        engine.finalize_root_spawn_admissions(root).await.unwrap();
-
-        assert!(cancel.is_cancelled());
-        let record = store.admission(operation).await.unwrap().unwrap();
-        assert_eq!(record.state, AdmissionState::Cancelled);
-        assert!(record.logical_released);
-        assert_eq!(governor.remaining_budget(root), 2);
-    }
-
-    #[tokio::test]
-    async fn cancelled_before_debit_terminalizes_without_release_or_budget_change() {
-        let store = hya_store::SessionStore::connect_memory().await.unwrap();
-        let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
-        let governor = SubagentGovernor::new(SubagentLimits {
-            per_run_budget: 1,
-            ..SubagentLimits::default()
-        });
-        let engine = SessionEngine::new(
-            store.clone(),
-            Arc::new(ProviderRouter::new()),
-            crate::test_support::runtime(ToolRegistry::builtins()),
-            permission,
-            EventBus::default(),
-        )
-        .with_governor(governor.clone());
-        let root = engine
-            .create(CreateSession {
-                parent: None,
-                agent: AgentName::new("build"),
-                model: ModelRef::new("fake"),
-                workdir: "/tmp".to_string(),
-                project: None,
-                kind: hya_proto::SessionKind::Project,
-            })
-            .await
-            .unwrap();
-        let source = ToolCallId::new();
-        let operation = OperationId::from_tool_call(source);
-        let cancel = CancellationToken::new();
-        cancel.cancel();
-
-        assert_eq!(
-            engine
-                .begin_spawn_admission(
-                    root,
-                    hya_tool::ToolOperation::from_tool_call(source),
-                    [24; 32],
-                    1,
-                    None,
-                    cancel,
-                )
-                .await
-                .unwrap(),
-            SpawnAdmissionOutcome::Cancelled
-        );
-        let record = store.admission(operation).await.unwrap().unwrap();
-        assert_eq!(record.state, AdmissionState::Cancelled);
-        assert!(!record.logical_released);
-        assert_eq!(governor.remaining_budget(root), 1);
-    }
-
-    #[tokio::test]
-    async fn actor_release_aborts_and_refunds_bound_operation_exactly_once() {
-        let store = hya_store::SessionStore::connect_memory().await.unwrap();
-        let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
-        let governor = SubagentGovernor::new(SubagentLimits {
-            per_run_budget: 1,
-            ..SubagentLimits::default()
-        });
-        let engine = SessionEngine::new(
-            store.clone(),
-            Arc::new(ProviderRouter::new()),
-            crate::test_support::runtime(ToolRegistry::builtins()),
-            permission,
-            EventBus::default(),
-        )
-        .with_governor(governor.clone());
-        let actor = engine
-            .create(CreateSession {
-                parent: None,
-                agent: AgentName::new("resident"),
-                model: ModelRef::new("fake"),
-                workdir: "/tmp".to_string(),
-                project: None,
-                kind: hya_proto::SessionKind::Project,
-            })
-            .await
-            .unwrap();
-        let claim = store.try_claim_new(actor, OwnerRunId::new()).await.unwrap();
-        let source = ToolCallId::new();
-        let operation = OperationId::from_tool_call(source);
-        assert_eq!(
-            engine
-                .begin_spawn_admission(
-                    actor,
-                    hya_tool::ToolOperation::from_tool_call(source),
-                    [25; 32],
-                    1,
-                    Some(claim),
-                    CancellationToken::new(),
-                )
-                .await
-                .unwrap(),
-            SpawnAdmissionOutcome::Started
-        );
-        assert_eq!(governor.remaining_budget(actor), 0);
-
-        for _ in 0..2 {
-            let admissions = store.release_claim(&claim).await.unwrap();
-            engine.publish_resident_finalization((Vec::new(), admissions));
-        }
-
-        assert_eq!(governor.remaining_budget(actor), 1);
-        assert_eq!(
-            store.admission(operation).await.unwrap().unwrap().state,
-            AdmissionState::Aborted
-        );
     }
 }

@@ -1231,7 +1231,7 @@ config key; a legacy `max_depth` entry in the block parses but is ignored.
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `max_concurrency` | usize | `100` | Ceiling on concurrently streaming general members (`1..=100`); excess members park rather than fail. |
-| `per_run_budget` | u64 | `1024` | Maximum total members spawned under one top-level run. |
+| `per_run_budget` | u64 | `1024` | Maximum live members per team root at once, including idle and parked Workflow actors. Archive releases capacity; revive consumes it. Survives root turn completion and restart. |
 | `per_team_turn_budget` | u64 | `1024` | Total resident turns one team may run; tripping it **kills the team** (runaway re-wake backstop). |
 | `per_team_message_budget` | u64 | `1024` | Total `MailSent` events one team may emit; tripping it **kills the team** (A↔B message-loop backstop). |
 

@@ -431,27 +431,33 @@ async fn message_budget_kill_cancels_the_team() {
 }
 
 #[tokio::test]
-async fn registered_initial_task_survives_supervisor_loss() {
+async fn registered_initial_task_survives_claim_takeover_before_first_turn() {
     let (engine, agent) = engine_with(SubagentLimits::default()).await;
     let root = make_root(&engine).await;
+    let root_turn = engine.try_begin_turn(root).unwrap();
+    let child = make_child(&engine, root).await;
+    let child_turn = engine.try_begin_turn(child).unwrap();
+    let handle = "main/worker-1".to_string();
     let supervisor = ResidentSupervisor::start(engine.clone());
-    let binding = engine.bind_runtime(&agent.workdir).unwrap();
-    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
-    let (child, handle) = supervisor
-        .spawn_resident(
+    supervisor
+        .register_existing_resident(
             root,
+            child,
+            "worker-1".into(),
             agent.clone(),
-            (binding, Arc::from([]), resources, None),
-            "durable initial task".into(),
-            None,
-            None,
+            Some("durable initial task".into()),
         )
         .await
         .unwrap();
-    // Registration spawns the driver only at its end. Cancel before yielding to it.
-    supervisor.team_cancel(root).unwrap().cancel();
-    drop(supervisor);
+    let previous_cancel = supervisor.team_cancel(root).unwrap();
     assert_eq!(assistant_turns(&engine, child).await, 0);
+    assert!(
+        engine.read_projection(root).await.unwrap().team.roster[&handle]
+            .resident_work
+            .is_none()
+    );
+    // Fence the old episode while real turn leases keep its directive queued.
+    // Cancelling first is a graceful ending, not a process-loss simulation.
     let recovered = engine
         .store()
         .recover_claim(child, hya_proto::OwnerRunId::new())
@@ -461,10 +467,13 @@ async fn registered_initial_task_survives_supervisor_loss() {
         .recover_resident_actor(&recovered, root, &handle)
         .await
         .unwrap();
-    assert!(matches!(
-        disposition.work,
-        hya_core::ResidentRecovery::Queued { .. }
-    ));
+    assert!(
+        matches!(disposition.work, hya_core::ResidentRecovery::Queued { .. }),
+        "initial task recovery after cancellation: {:?}",
+        disposition.work
+    );
+    previous_cancel.cancel();
+    drop(supervisor);
     let supervisor = ResidentSupervisor::start(engine.clone());
     let binding = engine.bind_runtime(&agent.workdir).unwrap();
     let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
@@ -479,6 +488,7 @@ async fn registered_initial_task_survives_supervisor_loss() {
         )
         .await
         .unwrap();
+    drop(child_turn);
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let projection = engine.read_projection(child).await.unwrap();
@@ -497,5 +507,8 @@ async fn registered_initial_task_survives_supervisor_loss() {
     })
     .await
     .unwrap();
-    supervisor.team_cancel(root).unwrap().cancel();
+    drop(root_turn);
+    supervisor
+        .drain(hya_proto::FinishCause::Shutdown, Duration::from_secs(5))
+        .await;
 }

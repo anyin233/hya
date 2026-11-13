@@ -473,33 +473,13 @@ For each `ToolCallRequested` collected in the round, in order:
 Formatter/LSP post-edit work for file mutations runs through the tool planes
 when configured (inside tool execution, not as a separate round step).
 
-### Root-turn admission cleanup
+### Live-member capacity across turns
 
-A completed depth-0 turn on a **governor-backed** engine calls
-`finalize_root_spawn_admissions(root)`. The call site is guarded
-([`turn.rs`](../../crates/hya-core/src/engine/turn.rs)):
-
-```text
-if self.governor.is_some()
-    && let Ok((root, 0)) = self.session_lineage(session).await
-{
-    self.finalize_root_spawn_admissions(root).await?;
-}
-```
-
-So cleanup runs only when a `SubagentGovernor` is installed **and** the finishing
-session is depth-0. When the governor is `None`, this cleanup is **skipped
-entirely**, even though durable admission rows may still have been written
-(`claim_admission` / `start_admission` still run without a governor).
-
-When it does run, `finalize_root_spawn_admissions(root)`:
-
-- cancels every live governor operation for that root
-- cancel-finalizes every nonterminal admission journal row
-- releases the root's per-run subagent budget entry
-
-Without this cleanup on a governor-backed engine, a long-lived root session
-leaks budget and never recovers spawn capacity.
+Root turn completion leaves member capacity unchanged. Each active claim is a
+live-member lease for its recorded root. Registration and revival enforce
+`subagents.per_run_budget` in their store transactions; terminal archive releases
+the claim and capacity together. Startup recovery preserves these leases.
+See [admission and governor](admission-and-governor.md).
 
 ### Runtime registry publication
 
@@ -895,10 +875,9 @@ or remove the new slot. Initialization, turn bookkeeping and cleanup recheck
 the claim after asynchronous work; stale cleanup quietly exits. The existing
 `archive` and downward-mail revival interfaces need no extra options.
 
-Before runtime readiness, `hya-app` advances all active resident claims, aborts
-non-actor admissions through the existing startup seam, folds the canonical
-projections, terminalizes each old epoch's actor-bound admissions and running
-work through the recovered claim, and recreates the existing
+Before runtime readiness, `hya-app` advances all active resident claims, folds
+the canonical projections, terminalizes old-epoch running work through the
+recovered claim, and recreates the existing
 `ResidentSupervisor` slots.
 Committed queued mail resumes under the new epoch; work that crossed the
 durable start marker is aborted and never automatically retried.
@@ -906,10 +885,10 @@ durable start marker is aborted and never automatically retried.
 The single fencing write seam is **`emit_for_actor`**: with `Some(claim)` it
 routes to `commit_resident_mutation` (fenced, publish-after-commit); with
 `None` it falls through to plain `emit`. Provider/tool events, mailbox writes,
-spawn admissions, and child transitions use that claim-aware path. A stale
+child registration and child transitions use claim-aware store mutations. A stale
 claim returns `StaleActorClaim` without appending or waking successful work.
-Full-tuple claim release atomically aborts any still-bound admission before the
-claim becomes reusable; only the first logical release refunds a live governor.
+Full-tuple claim release atomically frees live-member capacity in the terminal
+transaction before the claim becomes reusable.
 
 The claim is TTL-free and local to one harness process incarnation. There is no
 heartbeat, wall-clock expiry, lease daemon, distributed coordination, HA, or

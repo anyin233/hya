@@ -120,8 +120,8 @@ pub use engine::{
     BoundWorkflowSender, BundleRefresh, CatalogScopeCacheConfig, CreateSession, DRAIN_DEADLINE,
     ForkAt, ForkError, MAX_DIRTY_BYTES, MAX_DIRTY_FILES, MAX_FILE_BYTES, MAX_SESSION_BLOB_BYTES,
     MODEL_PROBE_PROMPT, ModelProbeReply, RevertError, RevertOutcome, RevertTarget,
-    RuntimeCatalogRefresh, SessionEngine, SpawnAdmissionOutcome, TurnBoundaryObserver,
-    TurnDrainReport, TurnLease, advertise_tool, fork_cut,
+    RuntimeCatalogRefresh, SessionEngine, TurnBoundaryObserver, TurnDrainReport, TurnLease,
+    advertise_tool, fork_cut,
 };
 pub use error::CoreError;
 pub use hooks::{
@@ -140,7 +140,7 @@ pub use loop_mode::{
     VerifierVerdict, drive_loop, run_loop, validate_budget,
 };
 pub use mailbox::run_mailbox_service;
-pub use orchestrator::{OperationReservation, SubagentGovernor, SubagentLimits};
+pub use orchestrator::{SubagentGovernor, SubagentLimits};
 pub use permission_mode::{PublishedPermissionMode, RuntimePermissionMode, SessionPermissionMode};
 pub use prompt::{
     PromptEnv, build_system_prompt, context_file_reads, discover_context_files,

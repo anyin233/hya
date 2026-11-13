@@ -17,13 +17,12 @@ use hya_core::{
     BoundWorkflowRequest, BoundWorkflowSender, CategoryRegistry, CoreError, DRAIN_DEADLINE,
     EventBus, ModelSummarizer, PromptEnv, ResidentSupervisor, RuntimeRegistry, RuntimeSourceKind,
     SessionEngine, SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart,
-    SpawnAdmissionOutcome, SubagentGovernor, Summarizer, TaskSpawnOrigin, TokenAccounting,
-    TurnBinding, TurnDrainReport, apply_agent_model_preference, apply_spawn_model_policy,
-    build_system_prompt, resolve_dispatch_model, run_lifecycle_service, run_mailbox_service,
+    SubagentGovernor, Summarizer, TaskSpawnOrigin, TokenAccounting, TurnBinding, TurnDrainReport,
+    apply_agent_model_preference, apply_spawn_model_policy, build_system_prompt,
+    resolve_dispatch_model, run_lifecycle_service, run_mailbox_service,
 };
 
 // Single discovery/date implementation lives in hya-core; re-export for callers.
-use futures::future::join_all;
 pub use hya_core::{discover_context_files, today};
 use hya_mcp::McpServerConfig;
 use hya_plugin::config::{PluginSpec, ProcessLaunch};
@@ -35,14 +34,14 @@ use hya_proto::{
     AgentName, FinishCause, ModelRef, OwnerRunId, SessionId, SubagentMode, WorkflowDelivery,
 };
 use hya_provider::{DevProvider, ProviderCatalogSnapshot, ProviderRouter, ReasoningEffort};
-use hya_store::{AdmissionTerminal, SessionStore, StoreError};
+use hya_store::{SessionStore, StoreError};
 use hya_tool::{
     Action, AskRequest, InteractionPlane, InvocationPolicy, LifecyclePlane, MailboxPlane,
     MemberOutcome, Mode, PermissionModel, PermissionPlane, PermissionRules, QuestionRequest,
-    ResolvedTool, Rule, SpawnError, SpawnMember, SpawnRequest, ToolPermission, ToolRegistry,
-    WebSearchConfig, WebSearchPlane,
+    ResolvedTool, Rule, SpawnError, SpawnMember, ToolPermission, ToolRegistry, WebSearchConfig,
+    WebSearchPlane,
 };
-use serde::Serialize;
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::OpenOptions;
@@ -1113,22 +1112,6 @@ pub async fn open_store(db: &str) -> anyhow::Result<SessionStore> {
     }
 }
 
-#[derive(Serialize)]
-struct SpawnRequestFingerprint<'a> {
-    domain: &'static str,
-    parent: SessionId,
-    members: &'a [SpawnMember],
-}
-
-fn spawn_request_fingerprint(req: &SpawnRequest) -> Result<[u8; 32], serde_json::Error> {
-    let canonical = serde_json::to_vec(&SpawnRequestFingerprint {
-        domain: "hya.spawn-admission.v1",
-        parent: req.parent,
-        members: &req.members,
-    })?;
-    Ok(Sha256::digest(canonical).into())
-}
-
 struct ResolvedSpawnMember {
     request: SpawnMember,
     authorized_target: AgentName,
@@ -1146,7 +1129,6 @@ struct ResolvedSpawnMember {
 /// Bound from the spawn TurnBinding + root projection stable AgentName — never from
 /// a nested caller's roster/resource policy.
 struct MainActivationContext {
-    root: SessionId,
     agent: AgentSpec,
     binding: TurnBinding,
     agents: Arc<[hya_tool::AgentDef]>,
@@ -1206,7 +1188,6 @@ async fn resolve_main_activation_context(
             _ => SpawnError::Unavailable,
         })?;
     Ok(MainActivationContext {
-        root,
         agent,
         binding: binding.clone(),
         agents,
@@ -1815,194 +1796,94 @@ fn spawn_team_supervisor_with_environment(
                 )
                 .await
                 {
-                    Ok(context) => Some(context),
+                    Ok(context) => context,
                     Err(error) => {
                         let _ = req.reply.send(Err(error));
                         continue;
                     }
                 }
             };
-            let fingerprint = match spawn_request_fingerprint(&req) {
-                Ok(fingerprint) => fingerprint,
-                Err(error) => {
-                    eprintln!("hya: failed to fingerprint spawn request ({error})");
-                    let _ = req.reply.send(Err(SpawnError::Unavailable));
-                    continue;
-                }
-            };
-            let admission_units = u32::try_from(req.members.len()).unwrap_or(u32::MAX);
-            let operation_id = req.operation.operation_id();
-            let actor_claim = req.operation.actor_claim();
-            // Anchors every spawn edge to the `task` call that produced it, so an
-            // offline call graph does not have to infer it from event ordering
-            // and a client links the member row to its tool card.
-            let source_tool_call = req.operation.source_tool_call_id();
-            let admission = engine
-                .begin_spawn_admission(
-                    req.parent,
-                    req.operation,
-                    fingerprint,
-                    admission_units,
-                    actor_claim,
-                    req.cancel.clone(),
-                )
-                .await;
-            match admission {
-                Ok(SpawnAdmissionOutcome::Started) => {}
-                Ok(SpawnAdmissionOutcome::Overloaded | SpawnAdmissionOutcome::MaxDepth) => {
+            match engine.session_lineage(req.parent).await {
+                Ok((_, depth)) if depth.saturating_add(1) > hya_core::MAX_SUBAGENT_DEPTH => {
                     let _ = req.reply.send(Err(SpawnError::Overloaded));
                     continue;
                 }
-                Ok(SpawnAdmissionOutcome::Existing(_) | SpawnAdmissionOutcome::Cancelled) => {
-                    let _ = req.reply.send(Err(SpawnError::OperationAlreadyHandled));
-                    continue;
-                }
-                Err(CoreError::Store(StoreError::OperationIdConflict { .. })) => {
-                    let _ = req.reply.send(Err(SpawnError::OperationIdConflict));
-                    continue;
-                }
                 Err(error) => {
-                    eprintln!("hya: durable spawn admission failed ({error})");
+                    eprintln!("hya: failed to resolve spawn lineage ({error})");
                     let _ = req.reply.send(Err(SpawnError::Unavailable));
                     continue;
                 }
+                Ok(_) => {}
             }
-            let engine = engine.clone();
+            if req.cancel.is_cancelled() {
+                let _ = req.reply.send(Err(SpawnError::Cancelled));
+                continue;
+            }
+            let actor_claim = req.operation.actor_claim();
+            let source_tool_call = req.operation.source_tool_call_id();
             let resident_supervisor = resident_supervisor.clone();
             let stop = stop_child.clone();
             tasks.spawn(async move {
                 let cancel = req.cancel.clone();
                 let execution = async move {
-                    let parent = req.parent;
-                    let operation_cancel = req.cancel;
-                    let mut reply = Some(req.reply);
-                    let mut spawn_failed = false;
-
-                    // Unified path (ADR-0015): every member is a resident actor.
-                    // Register the team root as the main actor so child mail,
-                    // reports, and quiescence wake it.
-                    let main_activation_result = if let Some(MainActivationContext {
-                        root,
-                        agent: main_agent,
-                        binding: main_binding,
-                        agents: main_agents,
-                        resources: main_resources,
-                        guidance: main_guidance,
-                    }) = main_activation
-                    {
-                        resident_supervisor
-                            .ensure_main(
-                                root,
-                                main_agent,
-                                (main_binding, main_agents, main_resources),
-                                actor_claim.as_ref(),
-                                main_guidance,
-                            )
-                            .await
-                    } else {
-                        Ok(())
+                    let main = main_activation;
+                    let main = hya_core::resident::MainActivation {
+                        agent: main.agent,
+                        binding: main.binding,
+                        agents: main.agents,
+                        resources: main.resources,
+                        guidance: main.guidance,
                     };
-                    let mut outcomes = Vec::new();
-                    if let Err(err) = main_activation_result {
-                        let summary = err.to_string();
-                        eprintln!("hya: ensure_main failed ({summary})");
-                        spawn_failed = true;
-                        for _ in 0..resolved.len() {
-                            outcomes.push(MemberOutcome {
-                                member: "-".to_string(),
-                                session: "-".to_string(),
-                                status: "failed".to_string(),
-                                summary: summary.clone(),
-                                model: None,
-                            });
+                    let models = resolved
+                        .iter()
+                        .map(|member| member.agent.model.to_string())
+                        .collect::<Vec<_>>();
+                    let members = resolved
+                        .into_iter()
+                        .map(|resolved| hya_core::resident::TaskResidentSpawn {
+                            agent: resolved.agent,
+                            runtime: (
+                                resolved.binding,
+                                resolved.agents,
+                                resolved.resources,
+                                resolved.sidecar_factory,
+                            ),
+                            directive: resolved.request.prompt,
+                            task: TaskSpawnOrigin {
+                                subagent_type: resolved.authorized_target.as_str().into(),
+                                description: resolved.request.description,
+                                tool_call: Some(source_tool_call),
+                            },
+                            guidance: resolved.guidance,
+                        })
+                        .collect();
+                    let result = resident_supervisor
+                        .spawn_residents_typed(req.parent, members, main, actor_claim.as_ref())
+                        .await;
+                    let outcome = match result {
+                        Ok(identities) => Ok(identities
+                            .into_iter()
+                            .zip(models)
+                            .map(|((session, handle), model)| MemberOutcome {
+                                member: handle.clone(),
+                                session: session.to_string(),
+                                status: "running".into(),
+                                summary: format!(
+                                    "Resident {handle} is live; results arrive as its report."
+                                ),
+                                model: Some(model),
+                            })
+                            .collect()),
+                        Err(CoreError::Store(StoreError::CapacityExceeded { .. })) => {
+                            Err(SpawnError::Overloaded)
                         }
-                    } else {
-                        // Register members concurrently: one slow child must not delay the
-                        // other residents in the same task batch.
-                        let spawn_futures = resolved.into_iter().map(|resolved| {
-                            let resident_supervisor = resident_supervisor.clone();
-                            async move {
-                                let ResolvedSpawnMember {
-                                    request: member,
-                                    authorized_target,
-                                    agent,
-                                    binding,
-                                    agents,
-                                    resources,
-                                    guidance,
-                                    sidecar_factory,
-                                    ..
-                                } = resolved;
-                                let model = agent.model.to_string();
-                                let result = resident_supervisor
-                                    .spawn_resident_typed(
-                                        parent,
-                                        agent,
-                                        (binding, agents, resources, sidecar_factory),
-                                        member.prompt,
-                                        TaskSpawnOrigin {
-                                            subagent_type: authorized_target.as_str().to_string(),
-                                            description: member.description,
-                                            tool_call: Some(source_tool_call),
-                                        },
-                                        actor_claim.as_ref(),
-                                        guidance,
-                                    )
-                                    .await;
-                                (result, model)
-                            }
-                        });
-                        for (result, model) in join_all(spawn_futures).await {
-                            match result {
-                                Ok((session, handle)) => outcomes.push(MemberOutcome {
-                                    member: handle.clone(),
-                                    session: session.to_string(),
-                                    status: "running".to_string(),
-                                    summary: format!(
-                                        "Resident {handle} is live; results arrive as its report."
-                                    ),
-                                    model: Some(model),
-                                }),
-                                Err(err) => {
-                                    spawn_failed = true;
-                                    outcomes.push(MemberOutcome {
-                                        member: "-".to_string(),
-                                        session: "-".to_string(),
-                                        status: "failed".to_string(),
-                                        summary: err.to_string(),
-                                        model: None,
-                                    });
-                                }
-                            }
+                        Err(CoreError::Cancelled) => Err(SpawnError::Cancelled),
+                        Err(error) => {
+                            eprintln!("hya: atomic spawn registration failed ({error})");
+                            Err(SpawnError::Unavailable)
                         }
-                    }
-
-                    // The spawn operation completes at registration (ADR-0015 §2):
-                    // the admission journal covers spawn idempotency, not task
-                    // completion, which now travels as the child's report.
-                    let (terminal, reason) = if operation_cancel.is_cancelled() {
-                        (AdmissionTerminal::Cancelled, "spawn operation cancelled")
-                    } else if spawn_failed {
-                        (AdmissionTerminal::Aborted, "spawn operation failed")
-                    } else {
-                        (AdmissionTerminal::Completed, "spawn operation completed")
                     };
-                    if let Err(error) = engine
-                        .finalize_spawn_admission(
-                            operation_id,
-                            terminal,
-                            reason,
-                            actor_claim.as_ref(),
-                        )
-                        .await
-                    {
-                        eprintln!("hya: failed to finalize spawn admission ({error})");
-                        let _ = reply.take();
-                        return;
-                    }
-                    if let Some(reply) = reply.take() {
-                        let _ = reply.send(Ok(outcomes));
-                    }
+                    let _ = req.reply.send(outcome);
                 };
                 tokio::pin!(execution);
                 tokio::select! {
@@ -2158,10 +2039,6 @@ async fn build_session_engine_with_mcp_defer(
                 .context("fence resident actor before startup recovery")?,
         );
     }
-    store
-        .recover_nonterminal_admissions("startup recovery")
-        .await
-        .context("recover nonterminal admissions before spawn readiness")?;
     crate::startup_trace::mark("store_recovery", None);
     let (websearch, invocation_policy, settings) = tool_config;
     let router = Arc::new(router);
@@ -3998,56 +3875,6 @@ You are the runtime-installed agent.
     }
 
     #[tokio::test]
-    async fn engine_build_aborts_nonterminal_admissions_before_spawn_readiness() {
-        let _env = StableEnvGuard::new();
-        let database = tempdir().join("admission-recovery.db");
-        let store = SessionStore::connect(database.to_str().unwrap())
-            .await
-            .unwrap();
-        let source_tool_call_id = hya_proto::ToolCallId::new();
-        let operation_id = hya_proto::OperationId::from_tool_call(source_tool_call_id);
-        let root_session = SessionId::new();
-        store
-            .claim_admission(&hya_store::AdmissionClaim {
-                operation_id,
-                source_tool_call_id,
-                root_session,
-                request_fingerprint: [17; 32],
-                admission_units: 1,
-                actor_claim: None,
-            })
-            .await
-            .unwrap();
-        store.start_admission(operation_id, None).await.unwrap();
-        drop(store);
-        let store = SessionStore::connect(database.to_str().unwrap())
-            .await
-            .unwrap();
-        let (router, model) = offline_router(None);
-        let agent = agent_with_model(&model, None);
-
-        let _built = build_session_engine(
-            store.clone(),
-            router,
-            &agent,
-            BTreeMap::new(),
-            Vec::new(),
-            (
-                WebSearchConfig::default(),
-                InvocationPolicy::default(),
-                config::EngineSettings::default(),
-            ),
-        )
-        .await
-        .unwrap();
-
-        let recovered = store.admission(operation_id).await.unwrap().unwrap();
-        assert_eq!(recovered.state, hya_store::AdmissionState::Aborted);
-        assert!(recovered.logical_released);
-        assert!(store.replay(root_session).await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
     async fn engine_build_fences_running_resident_and_resumes_queued_mail_before_readiness() {
         let _env = StableEnvGuard::new();
         let database = tempdir().join("resident-recovery.db");
@@ -4095,7 +3922,7 @@ You are the runtime-installed agent.
         }
 
         let queued_claim = store
-            .try_claim_new(queued_actor, OwnerRunId::new())
+            .try_claim_new(queued_root, queued_actor, OwnerRunId::new())
             .await
             .unwrap();
         store
@@ -4128,7 +3955,7 @@ You are the runtime-installed agent.
             .unwrap();
 
         let running_claim = store
-            .try_claim_new(running_actor, OwnerRunId::new())
+            .try_claim_new(running_root, running_actor, OwnerRunId::new())
             .await
             .unwrap();
         store
@@ -4318,7 +4145,10 @@ You are the installed resident agent.
             )
             .await
             .unwrap();
-        let claim = store.try_claim_new(actor, OwnerRunId::new()).await.unwrap();
+        let claim = store
+            .try_claim_new(root, actor, OwnerRunId::new())
+            .await
+            .unwrap();
         store
             .commit_resident_mutation(
                 &claim,

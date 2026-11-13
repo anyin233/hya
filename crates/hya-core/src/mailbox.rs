@@ -9,16 +9,15 @@
 
 use std::sync::Arc;
 
-use hya_tool::MailboxRequest;
+use hya_tool::{MailboxError, MailboxRequest};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::engine::SessionEngine;
 
 /// Run the mailbox service until cancellation or the request channel closes; joins all handlers.
 ///
-/// Typed engine errors are flattened to strings on the reply channel so the tool
-/// plane — which lives in `hya-tool` and cannot see `CoreError` — can surface a
-/// clean message. A dropped reply receiver (caller gone) is ignored.
+/// Send replies preserve typed capacity overload; other failures carry a clean
+/// message without exposing `CoreError`. Dropped reply receivers are ignored.
 pub async fn run_mailbox_service(
     engine: Arc<SessionEngine>,
     mut rx: UnboundedReceiver<MailboxRequest>,
@@ -100,7 +99,9 @@ pub async fn run_mailbox_service(
                     reply,
                 } => {
                     let result = if channel_policy.is_none() {
-                        Err("channel policy snapshot missing for admitted send".to_string())
+                        Err(MailboxError::Rejected(
+                            "channel policy snapshot missing for admitted send".into(),
+                        ))
                     } else {
                         engine
                             .mail_send_for_actor_with_policy(
@@ -112,7 +113,7 @@ pub async fn run_mailbox_service(
                                 channel_policy,
                             )
                             .await
-                            .map_err(|e| e.to_string())
+                            .map_err(send_error)
                     };
                     let _ = reply.send(result);
                 }
@@ -124,7 +125,9 @@ pub async fn run_mailbox_service(
                     reply,
                 } => {
                     let result = if channel_policy.is_none() {
-                        Err("channel policy snapshot missing for admitted send".to_string())
+                        Err(MailboxError::Rejected(
+                            "channel policy snapshot missing for admitted send".into(),
+                        ))
                     } else {
                         engine
                             .mail_send_default_for_actor_with_policy(
@@ -134,7 +137,7 @@ pub async fn run_mailbox_service(
                                 channel_policy,
                             )
                             .await
-                            .map_err(|e| e.to_string())
+                            .map_err(send_error)
                     };
                     let _ = reply.send(result);
                 }
@@ -148,5 +151,14 @@ pub async fn run_mailbox_service(
         {
             tracing::error!(%error, "request task failed during shutdown");
         }
+    }
+}
+
+fn send_error(error: crate::CoreError) -> MailboxError {
+    match error {
+        error @ crate::CoreError::Store(hya_store::StoreError::CapacityExceeded { .. }) => {
+            MailboxError::Overloaded(error.to_string())
+        }
+        error => MailboxError::Rejected(error.to_string()),
     }
 }

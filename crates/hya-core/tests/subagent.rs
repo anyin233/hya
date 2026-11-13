@@ -1618,14 +1618,6 @@ async fn provider_streams_partition_100_general_28_reserved_and_root_progresses(
         .expect("root provider stream must progress under general saturation");
     assert_eq!(governor.available_general_stream_permits(), 0);
     assert_eq!(governor.available_reserved_stream_permits(), 27);
-    assert!(
-        engine
-            .store()
-            .nonterminal_admissions_for_root(root)
-            .await
-            .unwrap()
-            .is_empty()
-    );
 
     release.notify_one();
     assert_eq!(run.await.unwrap().unwrap(), FinishReason::Stop);
@@ -1665,15 +1657,6 @@ async fn provider_streams_partition_100_general_28_reserved_and_root_progresses(
     drop(reserved);
     assert_eq!(governor.available_general_stream_permits(), 100);
     assert_eq!(governor.available_reserved_stream_permits(), 28);
-
-    assert!(
-        engine
-            .store()
-            .nonterminal_admissions_for_root(root)
-            .await
-            .unwrap()
-            .is_empty()
-    );
 }
 
 fn member(engine: &SessionEngine, agent: &AgentSpec, directive: &str) -> MemberSpec {

@@ -262,8 +262,10 @@ resident work is absent, and the actor is idle or failed.
 
 The executor resolves every worker and verifier through the caller's immutable
 runtime binding. Each target keeps its own roster, resource policy, and
-sidecar. The complete worst-case run budget is reserved before the
-first child or mail effect. Same-level one-shot Stages (no `actor`) run as one
+sidecar. Before any child or mail effect, the executor checks the complete
+worst-case activation count against the root's remaining live capacity. This
+reserves nothing: concurrent tasks can consume slots, so later registration or
+revival can fail with overload. Same-level one-shot Stages (no `actor`) run as one
 governed Team batch. Loop and resident work continue to use the existing iteration and
 resident supervisors.
 

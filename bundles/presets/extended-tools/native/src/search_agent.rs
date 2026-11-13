@@ -82,6 +82,7 @@ impl Tool for SearchAgentTool {
 fn map_err(err: MailboxError) -> ToolError {
     match err {
         MailboxError::Unavailable => ToolError::Other("mailbox service unavailable".to_string()),
+        MailboxError::Overloaded(message) => ToolError::Overloaded(message),
         MailboxError::Rejected(message) => ToolError::Input(message),
     }
 }

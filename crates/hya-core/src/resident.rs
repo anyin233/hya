@@ -103,8 +103,6 @@ pub enum ResidentRecovery {
 pub struct ResidentRecoveryReport {
     /// Work disposition for the supervisor.
     pub work: ResidentRecovery,
-    /// How many in-flight operations were aborted.
-    pub aborted_operations: usize,
 }
 
 impl SessionEngine {
@@ -118,12 +116,11 @@ impl SessionEngine {
         root: SessionId,
         handle: &str,
     ) -> Result<ResidentRecoveryReport, CoreError> {
-        let (work, aborted_operations) = self
+        let work = self
             .recover_resident_actor_durable(recovered, root, handle)
             .await?;
         Ok(ResidentRecoveryReport {
             work: map_recovered_resident_work(work),
-            aborted_operations,
         })
     }
 }
@@ -341,13 +338,42 @@ struct TeamState {
     lead_failed: bool,
 }
 
+/// Resolved root context for installing a team after batch registration.
 #[derive(Clone)]
-struct MainActivation {
+pub struct MainActivation {
+    /// Resolved team-root agent, from the triggering binding.
+    pub agent: AgentSpec,
+    /// Captured root runtime binding.
+    pub binding: TurnBinding,
+    /// Root's authorized spawn roster.
+    pub agents: Arc<[AgentDef]>,
+    /// Root's resource policy.
+    pub resources: AgentResourcePolicy,
+    /// In-process triggering-turn guidance.
+    pub guidance: Option<Arc<str>>,
+}
+
+/// One fully resolved member of an atomic `task` batch.
+pub struct TaskResidentSpawn {
+    /// Resolved member specification.
+    pub agent: AgentSpec,
+    /// Captured binding, roster, policy and executable sidecar factory.
+    pub runtime: ResolvedResidentRuntime,
+    /// Initial directive owned by the new episode.
+    pub directive: String,
+    /// Source task call and display label.
+    pub task: TaskSpawnOrigin,
+    /// In-process triggering-turn guidance.
+    pub guidance: Option<Arc<str>>,
+}
+
+struct PreparedResident {
+    session: SessionId,
+    parent_path: String,
+    leaf: String,
     agent: AgentSpec,
-    binding: TurnBinding,
-    agents: Arc<[AgentDef]>,
-    resources: AgentResourcePolicy,
-    guidance: Option<Arc<str>>,
+    runtime: ResidentRuntimeContext,
+    activation: ResidentActivation,
 }
 
 /// Everything one turn needs, snapshotted atomically under the team lock so the
@@ -2463,7 +2489,7 @@ pub struct ResidentSupervisor {
     wait_stalls: Mutex<HashMap<(SessionId, SessionId), Option<hya_proto::MessageId>>>,
 }
 
-type EpisodeFinalization = (Vec<hya_proto::Envelope>, Vec<hya_store::AdmissionRecord>);
+type EpisodeFinalization = Vec<hya_proto::Envelope>;
 
 async fn commit_episode_ending(
     team: &TeamActor,
@@ -2525,7 +2551,7 @@ async fn commit_episode_ending(
             report.clone_from(&note);
         }
     }
-    let (outcome, envelopes, admissions) = team
+    let (outcome, envelopes) = team
         .engine
         .store()
         .finalize_resident_archive(
@@ -2548,11 +2574,10 @@ async fn commit_episode_ending(
         )
         .await?;
     if outcome == hya_store::ResidentArchiveOutcome::Refused {
-        team.engine
-            .publish_resident_finalization((envelopes, admissions));
-        Ok((outcome, (Vec::new(), Vec::new())))
+        team.engine.publish_resident_finalization(envelopes);
+        Ok((outcome, Vec::new()))
     } else {
-        Ok((outcome, (envelopes, admissions)))
+        Ok((outcome, envelopes))
     }
 }
 
@@ -2598,7 +2623,7 @@ async fn finish_episode(
         Some(supervisor) => Some(supervisor.claim_writes.lock().await),
         None => None,
     };
-    if let Ok((envelopes, _)) = &result {
+    if let Ok(envelopes) = &result {
         team.lock()
             .routing_mail
             .extend(envelopes.iter().filter_map(|envelope| {
@@ -2936,7 +2961,7 @@ impl ArchiveReviver for ResidentSupervisor {
                 "a live episode owns this archive; request its ending".into(),
             ));
         }
-        let (outcome, envelopes, admissions) = self
+        let (outcome, envelopes) = self
             .engine
             .store()
             .finalize_resident_archive(
@@ -2947,8 +2972,7 @@ impl ArchiveReviver for ResidentSupervisor {
                 cause,
             )
             .await?;
-        self.engine
-            .publish_resident_finalization((envelopes, admissions));
+        self.engine.publish_resident_finalization(envelopes);
         Ok(outcome)
     }
 
@@ -3303,7 +3327,7 @@ impl ResidentSupervisor {
         }
         let handoff = self.engine.degraded_terminal_handoff(actor).await;
         let (reason, status, note) = ending.forced_fields();
-        let (_, envelopes, admissions) = self
+        let (_, envelopes) = self
             .engine
             .store()
             .finalize_resident_archive(
@@ -3325,8 +3349,7 @@ impl ResidentSupervisor {
                 ending.cause(),
             )
             .await?;
-        self.engine
-            .publish_resident_finalization((envelopes, admissions));
+        self.engine.publish_resident_finalization(envelopes);
         Ok(())
     }
 
@@ -3363,7 +3386,6 @@ impl ResidentSupervisor {
         let resources = self
             .engine
             .agent_resource_policy_for_binding(&binding, base.name.as_str())?;
-        self.engine.ensure_root_registered(root).await?;
         Ok(MainActivation {
             agent,
             binding,
@@ -3783,7 +3805,7 @@ impl ResidentSupervisor {
             return await_episode(done).await.map(|()| cancelled);
         }
         let handoff = self.engine.degraded_terminal_handoff(child).await;
-        let (_, envelopes, admissions) = self
+        let (_, envelopes) = self
             .engine
             .store()
             .finalize_resident_archive(
@@ -3805,8 +3827,7 @@ impl ResidentSupervisor {
                 FinishCause::Archived,
             )
             .await?;
-        self.engine
-            .publish_resident_finalization((envelopes, admissions));
+        self.engine.publish_resident_finalization(envelopes);
         Ok(false)
     }
 
@@ -3909,6 +3930,7 @@ impl ResidentSupervisor {
             .revive_episode(
                 root,
                 self.owner_run_id,
+                self.capacity(),
                 parent_claim,
                 child,
                 parent.into(),
@@ -4129,6 +4151,58 @@ impl ResidentSupervisor {
         resolved: ResolvedResidentRuntime,
         context: ResidentSpawnContext,
     ) -> Result<(SessionId, String, MemberId), CoreError> {
+        let (root, prepared, member) = self
+            .prepare_resident(parent, agent, resolved, context)
+            .await?;
+        let session = prepared.session;
+        let handle = scope::join_path(&prepared.parent_path, &prepared.leaf);
+        self.register_episodes(root, vec![prepared], None).await?;
+        Ok((session, handle, member))
+    }
+
+    /// Register all resolved task members or none, then install every committed
+    /// episode under the claim-write boundary before awaiting initialization.
+    pub async fn spawn_residents_typed(
+        &self,
+        parent: SessionId,
+        members: Vec<TaskResidentSpawn>,
+        main: MainActivation,
+        parent_claim: Option<&ActorClaim>,
+    ) -> Result<Vec<(SessionId, String)>, CoreError> {
+        let (root, _) = self.engine.session_lineage(parent).await?;
+        let mut prepared = Vec::with_capacity(members.len());
+        let mut identities = Vec::with_capacity(members.len());
+        for member in members {
+            let (_, registration, _) = self
+                .prepare_resident(
+                    parent,
+                    member.agent,
+                    member.runtime,
+                    ResidentSpawnContext::new(
+                        ResidentRegistration::Armed(member.directive),
+                        parent_claim,
+                        member.guidance,
+                    )
+                    .with_task(member.task),
+                )
+                .await?;
+            identities.push((
+                registration.session,
+                scope::join_path(&registration.parent_path, &registration.leaf),
+            ));
+            prepared.push(registration);
+        }
+        self.register_episodes(root, prepared, Some(main)).await?;
+        Ok(identities)
+    }
+
+    async fn prepare_resident(
+        &self,
+        parent: SessionId,
+        agent: AgentSpec,
+        resolved: ResolvedResidentRuntime,
+        context: ResidentSpawnContext,
+    ) -> Result<(SessionId, PreparedResident, MemberId), CoreError> {
         let ResidentSpawnContext {
             registration,
             parent_claim,
@@ -4156,13 +4230,24 @@ impl ResidentSupervisor {
             project: parent_projection.session.project,
             kind: parent_projection.session.kind,
         }];
-        let parent_path = self
-            .engine
-            .resolve_handle(root, parent)
-            .await
-            .unwrap_or_else(|_| scope::ROOT_HANDLE.to_string());
+        if parent_depth.saturating_add(1) > crate::MAX_SUBAGENT_DEPTH {
+            return Err(CoreError::Invalid("maximum subagent depth exceeded".into()));
+        }
+        let parent_path = if parent == root {
+            scope::ROOT_HANDLE.into()
+        } else {
+            // Legacy transient Workflow parents have no roster entry; their
+            // children still belong to the root unit until that runner retires.
+            self.engine
+                .read_projection(root)
+                .await?
+                .team
+                .roster
+                .values()
+                .find(|entry| entry.session == parent)
+                .map_or_else(|| scope::ROOT_HANDLE.into(), |entry| entry.handle.clone())
+        };
         let leaf = self.engine.mint_member_leaf(root, &prefix).await;
-        let handle = scope::join_path(&parent_path, &leaf);
         let member = MemberId::new();
         let description = task
             .as_ref()
@@ -4183,28 +4268,29 @@ impl ResidentSupervisor {
             directive: registration_directive,
             tool_call,
         });
-        self.register_episode(
+        Ok((
             root,
-            session,
-            parent_path,
-            leaf,
-            agent,
-            ResidentRuntimeContext::Resolved {
-                binding,
-                agents,
-                resources,
+            PreparedResident {
+                session,
+                parent_path,
+                leaf,
+                agent,
+                runtime: ResidentRuntimeContext::Resolved {
+                    binding,
+                    agents,
+                    resources,
+                },
+                activation: ResidentActivation {
+                    events,
+                    parent_claim,
+                    initial,
+                    guidance,
+                    route: None,
+                    sidecar_factory,
+                },
             },
-            ResidentActivation {
-                events,
-                parent_claim,
-                initial,
-                guidance,
-                route: None,
-                sidecar_factory,
-            },
-        )
-        .await?;
-        Ok((session, handle, member))
+            member,
+        ))
     }
 
     /// Replace one idle resident's in-process guidance and request-local route
@@ -4304,9 +4390,6 @@ impl ResidentSupervisor {
         .await
     }
 
-    /// Register a resident at an **explicit** canonical path (ADR-0015 revive):
-    /// lineage-derived parents disappear from the roster once archived, so
-    /// revival must pass the archived entry's own parent path and leaf.
     #[allow(clippy::too_many_arguments)]
     async fn register_episode(
         &self,
@@ -4318,65 +4401,161 @@ impl ResidentSupervisor {
         runtime: ResidentRuntimeContext,
         activation: ResidentActivation,
     ) -> Result<(), CoreError> {
-        let ResidentActivation {
-            mut events,
-            parent_claim,
-            initial,
-            guidance,
-            route,
-            sidecar_factory,
-        } = activation;
-        let (binding, agents, resources) = match runtime {
-            ResidentRuntimeContext::Bound(binding) => (binding, None, None),
-            ResidentRuntimeContext::Resolved {
+        self.register_episodes(
+            root,
+            vec![PreparedResident {
+                session,
+                parent_path,
+                leaf,
+                agent,
+                runtime,
+                activation,
+            }],
+            None,
+        )
+        .await
+    }
+
+    fn capacity(&self) -> u64 {
+        self.engine
+            .governor()
+            .map_or(u64::MAX, |governor| governor.limits().per_run_budget)
+    }
+
+    async fn register_episodes(
+        &self,
+        root: SessionId,
+        members: Vec<PreparedResident>,
+        main: Option<MainActivation>,
+    ) -> Result<(), CoreError> {
+        let projection = self.engine.read_projection(root).await?;
+        let parent_claim = members
+            .first()
+            .and_then(|member| member.activation.parent_claim);
+        let mut registrations = Vec::with_capacity(members.len());
+        let mut installs = Vec::with_capacity(members.len());
+        for member in members {
+            let PreparedResident {
+                session,
+                parent_path,
+                leaf,
+                agent,
+                runtime,
+                activation,
+            } = member;
+            let ResidentActivation {
+                mut events,
+                parent_claim: _,
+                initial,
+                guidance,
+                route,
+                sidecar_factory,
+            } = activation;
+            let (binding, agents, resources) = match runtime {
+                ResidentRuntimeContext::Bound(binding) => (binding, None, None),
+                ResidentRuntimeContext::Resolved {
+                    binding,
+                    agents,
+                    resources,
+                } => (binding, Some(agents), Some(resources)),
+            };
+            let handle = scope::join_path(&parent_path, &leaf);
+            // The store resolves the unit's group channel under the writer lock;
+            // simultaneous first siblings must join the same broadcast channel.
+            let group_channel = hya_proto::mint_channel_id(ChannelKind::Group);
+            let dm_channel = hya_proto::mint_channel_id(ChannelKind::Dm);
+            events.extend([
+                Event::AgentRegistered {
+                    session: root,
+                    agent_session: session,
+                    handle: leaf,
+                    parent: Some(parent_path.clone()),
+                    agent_type: agent.name.clone(),
+                    mode: SubagentMode::Resident,
+                },
+                // The unit's leader-only broadcast channel: minted with the
+                // leader as founding member on first registration, joined
+                // by every child thereafter.
+                Event::ChannelCreated {
+                    session: root,
+                    channel: group_channel,
+                    kind: ChannelKind::Group,
+                    unit: Some(parent_path.clone()),
+                    members: vec![parent_path.clone(), handle.clone()],
+                },
+                // The persistent parent-child DM pair: the revival address
+                // that outlives archive cycles.
+                Event::ChannelCreated {
+                    session: root,
+                    channel: dm_channel,
+                    kind: ChannelKind::Dm,
+                    unit: None,
+                    members: vec![parent_path.clone(), handle.clone()],
+                },
+            ]);
+            let initial = initial.filter(|text| !text.trim().is_empty());
+            let has_initial = initial.is_some();
+            if let Some(text) = initial {
+                events.extend(self.engine.prepare_initial_resident_prompt(session, text));
+            }
+            let channel_policy =
+                ChannelPolicy::from_binding(&binding)?.snapshot_for(agent.name.as_str());
+
+            let parent_session = projection
+                .team
+                .roster
+                .get(&parent_path)
+                .map_or(root, |entry| entry.session);
+            let initial_prompt = events.iter().find_map(|event| match event {
+                Event::MessageStarted {
+                    session: id,
+                    message,
+                    role: hya_proto::Role::User,
+                    ..
+                } if *id == session => Some(*message),
+                _ => None,
+            });
+            registrations.push(hya_store::EpisodeRegistration {
+                actor: session,
+                events,
+            });
+            let episode = Episode {
+                handle,
+                agent,
                 binding,
                 agents,
                 resources,
-            } => (binding, Some(agents), Some(resources)),
-        };
-        let handle = scope::join_path(&parent_path, &leaf);
-        // The store resolves the unit's group channel under the writer lock;
-        // simultaneous first siblings must join the same broadcast channel.
-        let projection = self.engine.read_projection(root).await?;
-        let group_channel = hya_proto::mint_channel_id(ChannelKind::Group);
-        let dm_channel = hya_proto::mint_channel_id(ChannelKind::Dm);
-        events.extend([
-            Event::AgentRegistered {
-                session: root,
-                agent_session: session,
-                handle: leaf,
-                parent: Some(parent_path.clone()),
-                agent_type: agent.name.clone(),
-                mode: SubagentMode::Resident,
-            },
-            // The unit's leader-only broadcast channel: minted with the
-            // leader as founding member on first registration, joined
-            // by every child thereafter.
-            Event::ChannelCreated {
-                session: root,
-                channel: group_channel,
-                kind: ChannelKind::Group,
-                unit: Some(parent_path.clone()),
-                members: vec![parent_path.clone(), handle.clone()],
-            },
-            // The persistent parent-child DM pair: the revival address
-            // that outlives archive cycles.
-            Event::ChannelCreated {
-                session: root,
-                channel: dm_channel,
-                kind: ChannelKind::Dm,
-                unit: None,
-                members: vec![parent_path.clone(), handle.clone()],
-            },
-        ]);
-        let initial = initial.filter(|text| !text.trim().is_empty());
-        let has_initial = initial.is_some();
-        if let Some(text) = initial {
-            events.extend(self.engine.prepare_initial_resident_prompt(session, text));
+                guidance,
+                route,
+                sidecar_factory,
+                is_main: false,
+                status: SlotStatus::Idle,
+                pending: has_initial,
+                report: None,
+                user_stopped: false,
+                synth_pending: false,
+                claim: None,
+                cancel: CancellationToken::new(),
+                ending: None,
+                done: watch::channel(None).0,
+                initial_prompt,
+                cursor: 0,
+                last_activity: None,
+                last_heartbeat_emit: None,
+                notify: Arc::new(Notify::new()),
+            };
+            installs.push((session, parent_session, episode, channel_policy));
         }
-        let channel_policy =
-            ChannelPolicy::from_binding(&binding)?.snapshot_for(agent.name.as_str());
-        let mut team = self.team_for(root).await?;
+        let mut team = if let Some(main) = main {
+            let mut teams = self.teams();
+            let team = teams
+                .entry(root)
+                .or_insert_with(|| self.new_team(root, main));
+            team.lock().main_autonomous = true;
+            TeamRegistration::new(team.clone())
+        } else {
+            self.team_for(root).await?
+        };
         #[cfg(test)]
         {
             let pause = self
@@ -4391,91 +4570,69 @@ impl ResidentSupervisor {
         }
         let mut write = self.claim_writes.lock().await;
         loop {
-            let previous = self.team_with_resident(session).and_then(|team| {
-                team.lock()
-                    .residents
-                    .get(&session)
-                    .map(|slot| slot.done.subscribe())
+            let previous = registrations.iter().find_map(|registration| {
+                self.team_with_resident(registration.actor)
+                    .and_then(|team| {
+                        team.lock()
+                            .residents
+                            .get(&registration.actor)
+                            .map(|slot| (registration.actor, slot.done.subscribe()))
+                    })
             });
-            let Some(done) = previous else {
-                break;
-            };
-            if !projection.team.archived.contains_key(&handle) {
+            let Some((actor, done)) = previous else { break };
+            if !projection
+                .team
+                .archived
+                .values()
+                .any(|entry| entry.session == actor)
+            {
                 return Err(CoreError::Invalid(
                     "resident already has a live episode".into(),
                 ));
             }
             drop(write);
-            // A failed old write still leaves an orphan; the registration's
-            // existing store fence determines whether it can be revived.
             let _ = await_episode(done).await;
             team = self.team_for(root).await?;
             write = self.claim_writes.lock().await;
         }
-        let (claim, envelopes) = self
+        let registered = self
             .engine
             .store()
-            .commit_resident_registration(session, self.owner_run_id, parent_claim.as_ref(), events)
+            .register_episodes(
+                root,
+                self.owner_run_id,
+                parent_claim.as_ref(),
+                self.capacity(),
+                registrations,
+            )
             .await?;
-        self.engine
-            .update_session_channel_policy(session, channel_policy);
-        let parent_session = projection
-            .team
-            .roster
-            .get(&parent_path)
-            .map_or(root, |entry| entry.session);
-        let notify = Arc::new(Notify::new());
-        let initial_prompt = envelopes.iter().find_map(|envelope| match envelope.event {
-            Event::MessageStarted {
-                session: id,
-                message,
-                role: hya_proto::Role::User,
-                ..
-            } if id == session => Some(message),
-            _ => None,
-        });
-        let (ready, initialized) = oneshot::channel();
-        let init = EpisodeInit {
-            binding: binding.clone(),
-            agent: agent.name.clone(),
-            parent: parent_session,
-            envelopes,
-            initial_prompt,
-            ready,
-        };
-        team.install_episode(
-            session,
-            Episode {
-                handle: handle.clone(),
-                agent,
-                binding,
-                agents,
-                resources,
-                guidance,
-                route,
-                sidecar_factory,
-                is_main: false,
-                status: SlotStatus::Idle,
-                pending: has_initial,
-                report: None,
-                user_stopped: false,
-                synth_pending: false,
-                claim: Some(claim),
-                cancel: team.cancel.child_token(),
-                ending: None,
-                done: watch::channel(None).0,
-                initial_prompt,
-                cursor: 0,
-                last_activity: None,
-                last_heartbeat_emit: None,
-                notify: notify.clone(),
-            },
-            Some(init),
-        );
+        let mut initialized_members = Vec::with_capacity(installs.len());
+        for ((claim, envelopes), (session, parent, mut episode, channel_policy)) in
+            registered.into_iter().zip(installs)
+        {
+            self.engine
+                .update_session_channel_policy(session, channel_policy);
+            let (ready, initialized) = oneshot::channel();
+            let init = EpisodeInit {
+                binding: episode.binding.clone(),
+                agent: episode.agent.name.clone(),
+                parent,
+                envelopes,
+                initial_prompt: episode.initial_prompt,
+                ready,
+            };
+            episode.claim = Some(claim);
+            episode.cancel = team.cancel.child_token();
+            team.install_episode(session, episode, Some(init));
+            initialized_members.push(initialized);
+        }
         drop(write);
-        initialized
-            .await
-            .map_err(|_| CoreError::Invalid("resident initialization task exited".into()))??;
+        // Every committed member is already installed, even if one initializer fails.
+        let results = futures::future::join_all(initialized_members).await;
+        for result in results {
+            result
+                .map_err(|_| CoreError::Invalid("resident initialization task exited".into()))??;
+        }
         Ok(())
     }
 

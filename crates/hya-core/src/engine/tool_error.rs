@@ -25,8 +25,6 @@ fn tool_error_type(error: &ToolError) -> &str {
         ToolError::Json(_) => "json",
         ToolError::Cancelled => "cancelled",
         ToolError::Overloaded(_) => "overloaded",
-        ToolError::OperationIdConflict => "operation_id_conflict",
-        ToolError::OperationAlreadyHandled => "operation_already_handled",
         ToolError::WorkflowControl { code, .. } => code,
         ToolError::UnknownAgentId { .. } => "unknown_agent_id",
         ToolError::AgentSpawnNotAllowed { .. } => "agent_spawn_not_allowed",
@@ -74,11 +72,6 @@ mod tests {
             ("json", ToolError::Json(json_error)),
             ("cancelled", ToolError::Cancelled),
             ("overloaded", ToolError::Overloaded("capacity".to_string())),
-            ("operation_id_conflict", ToolError::OperationIdConflict),
-            (
-                "operation_already_handled",
-                ToolError::OperationAlreadyHandled,
-            ),
             (
                 "WORKFLOW_BUSY",
                 ToolError::WorkflowControl {

@@ -126,7 +126,6 @@ async fn fresh_schema_reopens_and_contains_only_current_tables() {
         tables,
         vec![
             "_sqlx_migrations",
-            "admission_journal",
             "agent_effort_preference",
             "agent_model_preference",
             "event_log",
@@ -148,25 +147,18 @@ async fn fresh_schema_reopens_and_contains_only_current_tables() {
         .unwrap();
     assert_eq!(versions, vec![1]);
     let columns: Vec<String> =
-        sqlx::query_scalar("SELECT name FROM pragma_table_info('admission_journal')")
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('resident_actor_claim')")
             .fetch_all(&pool)
             .await
             .unwrap();
     assert_eq!(
         columns,
         vec![
-            "operation_id",
-            "source_tool_call_id",
-            "root_session_id",
-            "request_fingerprint",
-            "state",
-            "admission_units",
-            "logical_released",
-            "terminal_reason",
-            "created_at",
-            "updated_at",
             "actor_id",
-            "actor_epoch"
+            "root_session_id",
+            "epoch",
+            "owner_run_id",
+            "state"
         ]
     );
     pool.close().await;

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use hya_proto::{OperationId, ProjectId, SessionId};
+use hya_proto::{ProjectId, SessionId};
 
 /// All errors returned by [`crate::SessionStore`] and [`crate::BundleRegistry`].
 #[derive(Clone, Error, Debug)]
@@ -104,31 +104,20 @@ pub enum StoreError {
         /// Reserved built-in agent id.
         agent_id: String,
     },
-    /// Reclaim of an admission `operation_id` with a different request fingerprint.
-    #[error("OPERATION_ID_CONFLICT: immutable request differs for {operation_id}")]
-    OperationIdConflict {
-        /// Operation whose durable claim does not match the new request.
-        operation_id: OperationId,
+    /// Registering or reviving members would exceed the root's live capacity.
+    #[error(
+        "spawn admission overloaded for root {root}: live {live} + requested {requested} exceeds {limit}"
+    )]
+    CapacityExceeded {
+        /// Team root whose capacity is exhausted.
+        root: SessionId,
+        /// Active claims before registration.
+        live: u64,
+        /// New claims requested by this transaction.
+        requested: u64,
+        /// Configured live-member limit.
+        limit: u64,
     },
-    /// No admission journal row for the given operation.
-    #[error("admission operation not found: {operation_id}")]
-    AdmissionNotFound {
-        /// Missing operation id.
-        operation_id: OperationId,
-    },
-    /// Illegal lifecycle transition (wrong `from` state for the requested `to`).
-    #[error("admission transition conflict for {operation_id}: {from} -> {to}")]
-    AdmissionTransitionConflict {
-        /// Operation that failed to transition.
-        operation_id: OperationId,
-        /// Current wire state string.
-        from: &'static str,
-        /// Requested wire state string.
-        to: &'static str,
-    },
-    /// Generic admission journal invariant or input validation failure.
-    #[error("admission journal: {0}")]
-    AdmissionData(String),
     /// Ordinary claim lost because another process already holds the actor.
     #[error("resident actor is already claimed: {actor_id}")]
     ActorAlreadyClaimed {

@@ -118,7 +118,6 @@ history and SQLite's sequence table):
 | `session` | Placement/parent index: `id BLOB PK`, `parent_id BLOB` FK → `session(id)`, `agent`, `model`, `workdir` TEXT NOT NULL, nullable `title TEXT`, `permission TEXT NOT NULL DEFAULT '{}'`, `created_at`/`updated_at INTEGER NOT NULL`, nullable `project_id TEXT`, `kind TEXT NOT NULL DEFAULT 'project'` (`project` or `temporary`). Indexed by parent and Project. Only `session_created` inserts rows. |
 | `event_log` | Canonical Events; see [Event log](#event-log). |
 | `saved_permission` | `id TEXT PK`, `project_id`, `action`, `resource` TEXT NOT NULL, nullable `time_created INTEGER` (unix ms); unique `(project_id, action, resource)`, indexed by Project. |
-| `admission_journal` | One operation per row; see [Admission and governor](admission-and-governor.md). |
 | `resident_actor_claim` | Actor/epoch/owner fence; see [Resident actor claims](#resident-actor-claims). |
 | `agent_model_preference` | Per-Agent model identities; see below. |
 | `model_effort_preference` | `(provider_id TEXT, model_id TEXT)` PK, `effort TEXT NOT NULL`, `updated_at INTEGER NOT NULL`. |
@@ -266,25 +265,24 @@ Coordination table `resident_actor_claim`:
 | Column | Constraint |
 | --- | --- |
 | `actor_id` | BLOB PK (stable resident session identity) |
+| `root_session_id` | BLOB NOT NULL (owning team root; active claim is its capacity lease) |
 | `epoch` | INTEGER NOT NULL, `> 0` |
 | `owner_run_id` | BLOB NOT NULL, length 16 |
 | `state` | `active` \| `released` |
 
 Index `resident_actor_claim_state` on `(state, actor_id)`.
 
-Claim acquisition, takeover, release, resident event append, and actor-bound
-admission transitions use indexed point checks inside SQLite transactions.
-Terminal archive finalization aborts the actor's nonterminal admissions through
-the final epoch, including earlier epochs left by recovery, before releasing the
-claim. Ordinary `release_claim` terminalizes only its exact actor/epoch. Startup
-enumerates active resident claims once, advances their epochs before runtime
-readiness, runs the existing global abort only for non-actor rows, then aborts
-old actor rows through each recovered claim. A logical release recorded during
-restart never credits the new process's empty in-memory governor.
+Claim acquisition, takeover, release and resident event append use indexed
+checks inside SQLite writer transactions. The active claims for a root are its
+live capacity leases, indexed by `(root_session_id, state)`. Terminal archive
+releases a lease with its canonical events. Startup advances active claims'
+epochs without changing their roots or capacity; root turns do not reset it.
 
-`commit_resident_registration` commits child creation, member/roster/channel
-events, the actor claim and the raw initial user message in one writer
-transaction. `begin_transaction()` uses `BEGIN IMMEDIATE`; group-channel
+`register_episodes` commits the whole batch's child creation, member/roster/channel
+events, claims and raw initial prompts together, including main registration if
+absent. It checks live capacity under the writer reservation, as does revival.
+See [capacity and exact store signatures](admission-and-governor.md).
+`begin_transaction()` uses `BEGIN IMMEDIATE`; group-channel
 lookup-or-create for a unit is performed under that reservation. Hooks and
 envelope publication run after commit. Stop/failure finalization closes an
 unanswered initial directive with a nonempty cancelled assistant answer in the
@@ -386,7 +384,6 @@ session and every descendant in the `session.parent_id` tree in one transaction:
 
 - `event_log` (including mailbox, channel, and Workflow state),
 - `open_assistant_message`, `pending_resume`, `projection_snapshot`, `file_blob`,
-- `admission_journal` rows whose root **or actor** belongs to the tree,
 - `resident_actor_claim` rows for tree members,
 - the materialized `session` rows themselves.
 
@@ -659,10 +656,6 @@ SQLite or migration error.
 | `BundleNotFound` | Uninstall/lookup of missing bundle |
 | `BundleContentConflict` | Same version, different content on install |
 | `BundleAgentIdReserved` | Bundle declares a reserved built-in agent id |
-| `OperationIdConflict` | Immutable admission claim fields differ for the same operation id |
-| `AdmissionNotFound` | No journal row for the operation |
-| `AdmissionTransitionConflict` | Illegal state transition |
-| `AdmissionData` | Journal invariant / units / unknown state |
 | `ActorAlreadyClaimed` | Resident actor claim held by another owner |
 | `StaleActorClaim` | Epoch/owner no longer current |
 | `ActorClaimUnavailable` | No recoverable active claim |

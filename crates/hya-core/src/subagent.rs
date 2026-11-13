@@ -118,8 +118,11 @@ pub struct TeamEvidenceEnvelope {
 }
 
 /// Failure admitting a multi-member team before any child runs.
-#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+#[derive(Clone, Debug, Error)]
 pub enum TeamAdmissionError {
+    /// Store could not read live capacity.
+    #[error(transparent)]
+    Store(#[from] hya_store::StoreError),
     /// Nested depth would exceed the governor max.
     #[error("max recursion depth reached")]
     MaxDepth,
@@ -204,7 +207,7 @@ struct TeamRunContext {
     engine: Arc<SessionEngine>,
     lead: SessionId,
     cancel: CancellationToken,
-    reserve_admission: bool,
+    preflight_admission: bool,
     actor_claim: Option<ActorClaim>,
     admission: Option<AdmissionMemberIdentity>,
     workflow_routes: Option<BTreeMap<MemberId, WorkflowTurnRoute>>,
@@ -214,7 +217,7 @@ impl TeamRunContext {
         engine: Arc<SessionEngine>,
         lead: SessionId,
         cancel: CancellationToken,
-        reserve_admission: bool,
+        preflight_admission: bool,
         actor_claim: Option<ActorClaim>,
         admission: Option<AdmissionMemberIdentity>,
         workflow_routes: Option<BTreeMap<MemberId, WorkflowTurnRoute>>,
@@ -223,7 +226,7 @@ impl TeamRunContext {
             engine,
             lead,
             cancel,
-            reserve_admission,
+            preflight_admission,
             actor_claim,
             admission,
             workflow_routes,
@@ -525,7 +528,7 @@ fn rejected_evidence(id: MemberId, reason: &str) -> MemberEvidence {
     }
 }
 
-/// Reserve an entire team before any child session or request-owned task exists.
+/// Preflight an entire team before any child session or request-owned task exists.
 ///
 /// Background spawns need an all-or-nothing decision because their caller gets
 /// one request-level typed result. Foreground batches retain [`run_team`]'s
@@ -543,7 +546,12 @@ pub async fn pre_admit_team(
         return Err(TeamAdmissionError::MaxDepth);
     }
     let want = u64::try_from(members).unwrap_or(u64::MAX);
-    if governor.try_reserve_exact(root, want) {
+    if want
+        <= governor
+            .limits()
+            .per_run_budget
+            .saturating_sub(engine.store().live_member_count(root).await?)
+    {
         Ok(())
     } else {
         Err(TeamAdmissionError::BudgetExhausted)
@@ -556,8 +564,8 @@ pub async fn pre_admit_team(
 ///
 /// When the engine has a [`SubagentGovernor`](crate::orchestrator::SubagentGovernor),
 /// two bounds are enforced before spawning: a member that would exceed
-/// `max_depth` is rejected, and members beyond the top-level run's remaining
-/// budget are rejected. Rejected members surface as `Failed` evidence (in input
+/// `max_depth` is rejected, and members beyond the root's remaining live
+/// capacity are rejected. Rejected members surface as `Failed` evidence (in input
 /// order) so the calling model gets a clean error instead of an unbounded fan-out.
 /// The per-round streaming-concurrency cap is applied inside the turn loop.
 pub async fn run_team(
@@ -573,10 +581,10 @@ pub async fn run_team(
     .await
 }
 
-/// Run a team whose complete member set was reserved by [`pre_admit_team`].
+/// Run a team whose complete member set passed [`pre_admit_team`].
 ///
 /// This is the background continuation path; using it without a successful
-/// pre-admission would bypass the governor.
+/// preflight would bypass the capacity check.
 pub async fn run_pre_admitted_team(
     engine: Arc<SessionEngine>,
     lead: SessionId,
@@ -653,14 +661,14 @@ async fn run_team_inner(context: TeamRunContext, specs: Vec<MemberSpec>) -> Vec<
         engine,
         lead,
         cancel,
-        reserve_admission,
+        preflight_admission,
         actor_claim,
         admission,
         workflow_routes,
     } = context;
     let mut workflow_routes = workflow_routes.unwrap_or_default();
     let mut rejected: Vec<MemberEvidence> = Vec::new();
-    let specs: Vec<MemberSpec> = if !reserve_admission {
+    let specs: Vec<MemberSpec> = if !preflight_admission {
         specs
     } else if let Some(gov) = engine.governor() {
         let (root, lead_depth) = engine.session_lineage(lead).await.unwrap_or((lead, 0));
@@ -681,7 +689,17 @@ async fn run_team_inner(context: TeamRunContext, specs: Vec<MemberSpec>) -> Vec<
             return out;
         }
         let want = u64::try_from(specs.len()).unwrap_or(u64::MAX);
-        let granted = usize::try_from(gov.reserve(root, want)).unwrap_or(usize::MAX);
+        let live = match engine.store().live_member_count(root).await {
+            Ok(live) => live,
+            Err(error) => {
+                return specs
+                    .into_iter()
+                    .map(|spec| rejected_evidence(spec.id, &error.to_string()))
+                    .collect();
+            }
+        };
+        let remaining = gov.limits().per_run_budget.saturating_sub(live);
+        let granted = usize::try_from(want.min(remaining)).unwrap_or(usize::MAX);
         let mut iter = specs.into_iter();
         let granted_specs: Vec<MemberSpec> = iter.by_ref().take(granted).collect();
         for s in iter {
