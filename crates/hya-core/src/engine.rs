@@ -1243,15 +1243,15 @@ impl SessionEngine {
         let scope = self
             .scope_for_projection(session, &projection, workdir)
             .await;
+        let overrides = root_projection.session.agent_model_overrides.clone();
+        drop(root_projection);
+        drop(projection);
         let binding = self
             .bind_scope_runtime_for(&scope, workdir, Some(session))
             .await?;
-        let overrides = root_projection
-            .session
-            .agent_model_overrides
-            .iter()
+        let overrides = overrides
+            .into_iter()
             .filter(|(_, model)| self.provider_router().resolve(model).is_some())
-            .map(|(agent, model)| (agent.clone(), model.clone()))
             .collect::<BTreeMap<_, _>>();
         Ok(binding.with_session_agent_models(overrides))
     }
@@ -1275,6 +1275,7 @@ impl SessionEngine {
         if projection.session.id != Some(session) {
             return Err(CoreError::Invalid(format!("session not found: {session}")));
         }
+        drop(projection);
         let (root, _) = self.session_lineage(session).await?;
         let root_projection = self.read_projection_shared(root).await?;
         if root_projection.session.id != Some(root) {
@@ -1282,6 +1283,7 @@ impl SessionEngine {
                 "session root not found: {root}"
             )));
         }
+        drop(root_projection);
         self.emit(
             root,
             Event::SessionAgentModelOverrideSet {

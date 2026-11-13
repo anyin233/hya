@@ -460,7 +460,7 @@ impl ResidentSupervisor {
         &self,
         root: SessionId,
     ) -> Result<MainActivation, CoreError> {
-        let mut projection = self.engine.read_projection_shared(root).await?;
+        let projection = self.engine.read_projection_shared(root).await?;
         let session = &projection.session;
         let invalid =
             || CoreError::Invalid(format!("root session {root} lacks activation context"));
@@ -471,16 +471,17 @@ impl ResidentSupervisor {
             system_prompt: self.engine.base_system_prompt().into(),
             reasoning: None,
         };
+        drop(projection);
         let binding = self
             .engine
             .bind_session_runtime(root, &base.workdir)
             .await?;
         if self
             .engine
-            .fall_back_from_missing_agent(root, &projection, &binding)
+            .fall_back_from_missing_agent(root, Some(&base.name), &binding)
             .await?
         {
-            projection = self.engine.read_projection_shared(root).await?;
+            let projection = self.engine.read_projection_shared(root).await?;
             base.name = projection.session.agent.clone().ok_or_else(invalid)?;
         }
         let agent = self
@@ -780,13 +781,19 @@ impl ResidentSupervisor {
                     .map(|entry| entry.session)
             })
             .ok_or_else(|| CoreError::Invalid(format!("resident not found: {target}")))?;
+        let parent_session = projection
+            .team
+            .roster
+            .get(parent)
+            .map_or(root, |entry| entry.session);
+        drop(projection);
         let (agent, (binding, agents, resources, sidecar_factory)) =
             if let Some(activation) = &activation {
                 activation.resolved.clone()
             } else {
                 let child_projection = self.engine.read_projection_shared(child).await?;
                 let stable =
-                    child_projection.session.agent.as_ref().ok_or_else(|| {
+                    child_projection.session.agent.clone().ok_or_else(|| {
                         CoreError::Invalid("resident has no recorded agent".into())
                     })?;
                 let workdir = child_projection
@@ -795,7 +802,6 @@ impl ResidentSupervisor {
                     .as_ref()
                     .map(std::path::PathBuf::from)
                     .ok_or_else(|| CoreError::Invalid(format!("session not found: {child}")))?;
-                let binding = self.engine.bind_session_runtime(child, &workdir).await?;
                 let base = AgentSpec {
                     name: stable.clone(),
                     model: child_projection
@@ -807,8 +813,13 @@ impl ResidentSupervisor {
                     workdir,
                     reasoning: None,
                 };
+                drop(child_projection);
+                let binding = self
+                    .engine
+                    .bind_session_runtime(child, &base.workdir)
+                    .await?;
                 self.engine
-                    .resolve_resident_runtime(binding, &base, stable)?
+                    .resolve_resident_runtime(binding, &base, &stable)?
             };
         let channel_policy =
             ChannelPolicy::from_binding(&binding)?.snapshot_for(agent.name.as_str());
@@ -826,11 +837,11 @@ impl ResidentSupervisor {
             }
         }
         let mut write = self.claim_writes.lock().await;
-        let current = loop {
+        let live = loop {
             let current = self.engine.read_projection_shared(root).await?;
             // A live roster wins: never wait for a concurrent revival's episode.
             if current.team.roster.contains_key(target) {
-                break current;
+                break true;
             }
             let previous = self.team_with_resident(child).and_then(|previous| {
                 previous
@@ -840,8 +851,9 @@ impl ResidentSupervisor {
                     .map(|slot| slot.done.subscribe())
             });
             let Some(done) = previous else {
-                break current;
+                break false;
             };
+            drop(current);
             drop(write);
             let _ = await_episode(done).await;
             team = self.team_for(root).await?;
@@ -867,7 +879,7 @@ impl ResidentSupervisor {
                         "resident Workflow activation requires an idle episode".into(),
                     ));
                 }
-            } else if current.team.roster.contains_key(target) {
+            } else if live {
                 return Err(CoreError::Invalid(
                     "resident session is not registered".into(),
                 ));
@@ -930,11 +942,6 @@ impl ResidentSupervisor {
         };
         self.engine
             .update_session_channel_policy(child, channel_policy);
-        let parent_session = projection
-            .team
-            .roster
-            .get(parent)
-            .map_or(root, |entry| entry.session);
         let (ready, initialized) = oneshot::channel();
         let (publication, published) = oneshot::channel();
         let (child_envelopes, parent_envelopes): (Vec<_>, Vec<_>) = envelopes
@@ -1229,6 +1236,7 @@ impl ResidentSupervisor {
             project: parent_projection.session.project,
             kind: parent_projection.session.kind,
         }];
+        drop(parent_projection);
         if parent_depth.saturating_add(1) > crate::MAX_SUBAGENT_DEPTH {
             return Err(CoreError::Invalid("maximum subagent depth exceeded".into()));
         }
@@ -1340,7 +1348,9 @@ impl ResidentSupervisor {
         let dm = crate::engine::dm_channel_between(&projection, &from, &target)
             .ok_or_else(|| CoreError::Invalid("resident member has no parent DM channel".into()))?;
         let (done, receiver) = oneshot::channel();
-        if projection.team.roster.contains_key(&target) {
+        let live = projection.team.roster.contains_key(&target);
+        drop(projection);
+        if live {
             let lease = self.engine.try_begin_turn(member)?;
             let team = self
                 .team_with_resident(member)
@@ -1608,6 +1618,13 @@ impl ResidentSupervisor {
             };
             installs.push((session, parent_session, episode, channel_policy));
         }
+        let archived: std::collections::HashSet<_> = projection
+            .team
+            .archived
+            .values()
+            .map(|entry| entry.session)
+            .collect();
+        drop(projection);
         let mut team = if let Some(main) = main {
             let mut teams = self.teams();
             let team = teams
@@ -1647,12 +1664,7 @@ impl ResidentSupervisor {
                     })
             });
             let Some((actor, done)) = previous else { break };
-            if !projection
-                .team
-                .archived
-                .values()
-                .any(|entry| entry.session == actor)
-            {
+            if !archived.contains(&actor) {
                 return Err(CoreError::Invalid(
                     "resident already has a live episode".into(),
                 ));

@@ -21,6 +21,7 @@ pub(super) async fn commit_episode_ending(
         .roster
         .get(&handle)
         .map(|entry| (entry.resident_cursor, entry.resident_work));
+    drop(projection);
     let handoff = match ending {
         Ending::Reported(_) => {
             tokio::select! {
@@ -521,11 +522,12 @@ impl ResidentSupervisor {
             .roster
             .iter()
             .filter(|(path, _)| path.as_str() != scope::ROOT_HANDLE)
+            .map(|(path, entry)| (path.clone(), entry.session))
             .collect::<Vec<_>>();
+        drop(projection);
         members.sort_by_key(|(path, _)| std::cmp::Reverse(path.len()));
         for (handle, member) in members {
-            self.end_orphan(root, handle, member.session, &ending)
-                .await?;
+            self.end_orphan(root, &handle, member, &ending).await?;
         }
         Ok(())
     }
@@ -615,6 +617,8 @@ impl ResidentSupervisor {
             .filter(|(path, _)| path.starts_with(&prefix))
             .map(|(path, entry)| (path.clone(), entry.session))
             .collect();
+        let archived = projection.team.archived.contains_key(handle);
+        drop(projection);
         descendants.extend(
             captured
                 .iter()
@@ -656,7 +660,7 @@ impl ResidentSupervisor {
                 captured.remove(handle).map(|(_, done)| done),
             )
             .await?;
-        } else if !projection.team.archived.contains_key(handle) {
+        } else if !archived {
             return Err(CoreError::Invalid(format!("unknown resident `{handle}`")));
         }
         // Parent claim release fences new direct children. Sweep anything that
@@ -670,6 +674,7 @@ impl ResidentSupervisor {
                 .filter(|(path, _)| path.starts_with(&prefix))
                 .map(|(path, entry)| (path.clone(), entry.session))
                 .collect();
+            drop(projection);
             if descendants.is_empty() {
                 break;
             }
@@ -788,6 +793,7 @@ impl ResidentSupervisor {
         descendants.sort_by_key(|(path, _)| {
             std::cmp::Reverse(path.matches(scope::PATH_SEPARATOR).count())
         });
+        drop(projection);
         for (handle, session) in &descendants {
             self.stop_and_archive_live(root, handle, *session, &note, None)
                 .await?;
