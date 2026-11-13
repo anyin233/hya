@@ -88,7 +88,22 @@ pub struct PreparedMcpServer {
     resources: ResourceMap,
 }
 
+impl Drop for PreparedMcpServer {
+    fn drop(&mut self) {
+        self._client.stop_now();
+    }
+}
+
 impl PreparedMcpServer {
+    /// Stop connection I/O and reap its stdio process before returning.
+    pub async fn shutdown(&self) {
+        if let Some(guard) = &self._guard {
+            guard.shutdown().await;
+        } else {
+            self._client.shutdown().await;
+        }
+    }
+
     /// Config key / display name for this server.
     #[must_use]
     pub fn name(&self) -> &str {
@@ -185,7 +200,10 @@ impl McpManager {
                 continue;
             }
             let status_name = name.clone();
-            set.spawn(async move { (status_name, connect_server(name, config, None).await) });
+            set.spawn(crate::io_tasks::scope(
+                crate::io_tasks::current(),
+                async move { (status_name, connect_server(name, config, None).await) },
+            ));
         }
         while let Some(joined) = set.join_next().await {
             match joined {
@@ -205,6 +223,14 @@ impl McpManager {
                 }
                 Err(error) => tracing::warn!(%error, "mcp server task failed"),
             }
+        }
+    }
+
+    /// Stop and join every server connection retained by this manager.
+    pub async fn shutdown(&self) {
+        let servers = self.read().servers.clone();
+        for server in servers {
+            server.shutdown().await;
         }
     }
 
@@ -426,6 +452,28 @@ for line in sys.stdin:
             roots: vec![std::path::PathBuf::from(".")],
             cancel: CancellationToken::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn shutdown_closes_servers_even_with_retained_clients() {
+        let manager = McpManager::connect_all(BTreeMap::from([(
+            "owned".into(),
+            server_config(server_command()),
+        )]))
+        .await;
+        let client = manager.read().servers[0]._client.clone();
+        tokio::time::timeout(std::time::Duration::from_secs(5), manager.shutdown())
+            .await
+            .unwrap();
+        assert!(matches!(
+            client
+                .call("tools/list", json!({}), Duration::from_secs(1))
+                .await,
+            Err(McpError::Closed)
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(5), manager.shutdown())
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

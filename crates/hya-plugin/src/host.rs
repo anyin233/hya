@@ -56,6 +56,17 @@ pub struct PreparedPlugin {
 }
 
 impl PreparedPlugin {
+    /// The same connection owner retained by tool adapters and hook dispatch.
+    #[must_use]
+    pub fn runtime_owner(&self) -> Arc<dyn hya_core::RuntimeSourceOwner> {
+        self.conn.clone()
+    }
+
+    /// Stop this connection and join its I/O even while tools retain it.
+    pub async fn shutdown(&self) -> Result<(), PluginError> {
+        self.conn.shutdown(false).await
+    }
+
     /// Transport-loss signal for a session-private activation. Shared sources respawn instead.
     #[must_use]
     pub fn loss_token(&self) -> Option<tokio_util::sync::CancellationToken> {
@@ -109,12 +120,23 @@ impl PreparedPlugin {
     }
 }
 
+impl hya_core::RuntimeSourceOwner for PluginConn {
+    fn shutdown(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            if let Err(error) = PluginConn::shutdown(self, true).await {
+                tracing::warn!(%error, "stop plugin connection");
+            }
+        })
+    }
+}
+
 struct LiveClient {
     client: PluginClient,
     guard: ChildGuard,
 }
 
 pub(crate) struct PluginConn {
+    io_tasks: Option<tokio_util::task::TaskTracker>,
     pub(crate) id: String,
     pub(crate) hooks: HashSet<HookName>,
     pub(crate) contributions: PluginContributionSet,
@@ -131,12 +153,56 @@ pub(crate) struct PluginConn {
     declaration_drift: AtomicBool,
     event_tx: mpsc::Sender<Envelope>,
     event_drops: AtomicU64,
+    event_task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Read-only host services behind bundle capabilities (bundle processes
     /// only; `None` for configured plugins and hosts without a store).
     host_reads: Option<Arc<dyn hya_core::HostSessionReads>>,
 }
 
+impl Drop for PluginConn {
+    fn drop(&mut self) {
+        if let Some(task) = self
+            .event_task
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            task.abort();
+        }
+        if let Some(live) = self
+            .live
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+        {
+            live.guard.stop_now();
+        }
+    }
+}
+
 impl PluginConn {
+    async fn shutdown(&self, force: bool) -> Result<(), PluginError> {
+        self.stopped.store(true, Ordering::Relaxed);
+        let _connecting = self.connecting.lock().await;
+        let task = self
+            .event_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(task) = task {
+            task.abort();
+            let _ = task.await;
+        }
+        if let Some(mut live) = self.stop() {
+            if force || live.client.is_closed() {
+                live.guard.terminate().await?;
+            } else {
+                live.guard.shutdown().await?;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn is_activation(&self) -> bool {
         self.spec.is_activation()
     }
@@ -162,7 +228,7 @@ impl PluginConn {
         match client.call(&hook.method(), params, self.timeout).await {
             Ok(value) => Ok(value),
             Err(error) => {
-                self.invalidate_client(&client);
+                self.invalidate_client(&client).await;
                 Err(error)
             }
         }
@@ -198,7 +264,7 @@ impl PluginConn {
         match reply {
             Ok(reply) => Ok(reply),
             Err(error) => {
-                self.invalidate_client(&client);
+                self.invalidate_client(&client).await;
                 Err(error)
             }
         }
@@ -236,7 +302,7 @@ impl PluginConn {
         match client.request_api(params, capability, self.timeout).await {
             Ok(result) => Ok(result),
             Err(error) => {
-                self.invalidate_client(&client);
+                self.invalidate_client(&client).await;
                 Err(error)
             }
         }
@@ -264,15 +330,26 @@ impl PluginConn {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn invalidate_client(&self, used: &PluginClient) {
-        if used.is_closed() {
+    async fn invalidate_client(&self, used: &PluginClient) {
+        if !used.is_closed() {
+            return;
+        }
+        let _connecting = self.connecting.lock().await;
+        let previous = {
             let mut live = self.lock_live();
             if live
                 .as_ref()
                 .is_some_and(|current| current.client.same_connection(used))
             {
-                live.take();
+                live.take()
+            } else {
+                None
             }
+        };
+        if let Some(mut previous) = previous
+            && let Err(error) = previous.guard.terminate().await
+        {
+            tracing::warn!(%error, "reap closed plugin connection");
         }
     }
 
@@ -291,7 +368,7 @@ impl PluginConn {
                 plugin: self.id.clone(),
             });
         }
-        {
+        let previous = {
             let mut live = self.lock_live();
             if self.stopped.load(Ordering::Relaxed) {
                 return Err(PluginError::Closed);
@@ -301,7 +378,12 @@ impl PluginConn {
             {
                 return Ok(current.client.clone());
             }
-            live.take();
+            live.take()
+        };
+        if let Some(mut previous) = previous
+            && let Err(error) = previous.guard.terminate().await
+        {
+            tracing::warn!(%error, "reap previous plugin connection");
         }
         // Session-private state must be recovered by the session supervisor.
         if self.spec.is_activation() {
@@ -312,19 +394,24 @@ impl PluginConn {
             tracing::warn!(plugin = %self.id, "plugin disabled after exceeding restart budget");
             return Err(PluginError::Disabled);
         }
-        let (started, init) = connection::start_client(&self.spec, &self.host_info).await?;
+        let (mut started, init) = hya_mcp::io_tasks::scope(
+            self.io_tasks.clone(),
+            connection::start_client(&self.spec, &self.host_info),
+        )
+        .await?;
         if canonical_initialize(&init)?.as_slice() != self.canonical_declaration.as_ref() {
             self.declaration_drift.store(true, Ordering::Relaxed);
+            let _ = started.guard.shutdown().await;
             return Err(PluginError::DeclarationDrift {
                 plugin: self.id.clone(),
             });
         }
-        let client = started.client.clone();
-        let mut live = self.lock_live();
         if self.stopped.load(Ordering::Relaxed) {
+            let _ = started.guard.terminate().await;
             return Err(PluginError::Closed);
         }
-        *live = Some(started);
+        let client = started.client.clone();
+        *self.lock_live() = Some(started);
         tracing::info!(plugin = %self.id, "plugin respawned");
         Ok(client)
     }
@@ -349,15 +436,12 @@ impl PluginConn {
         }
     }
 
-    async fn notify_event(&self, envelope: Envelope) {
-        let client = self.lock_live().as_ref().map(|live| live.client.clone());
-        if let Some(client) = client {
-            match serde_json::to_value(EventNotificationParams { envelope }) {
-                Ok(params) => {
-                    let _ = client.notify(METHOD_EVENT, params).await;
-                }
-                Err(error) => tracing::warn!(%error, "event notification serialize failed"),
+    async fn notify_event(client: PluginClient, envelope: Envelope) {
+        match serde_json::to_value(EventNotificationParams { envelope }) {
+            Ok(params) => {
+                let _ = client.notify(METHOD_EVENT, params).await;
             }
+            Err(error) => tracing::warn!(%error, "event notification serialize failed"),
         }
     }
 }
@@ -447,11 +531,20 @@ fn canonical_json(value: &Value) -> Value {
 }
 
 impl PluginHost {
-    /// Stop connections and take their child guards synchronously, even when views survive.
-    /// Kills immediately and reaps asynchronously when a runtime is available.
+    /// Signal connections and kill synchronously, even when views survive.
+    /// Retain handles so explicit shutdown can join the I/O and reap processes.
     pub fn stop_now(&self) {
         for conn in &self.plugins {
-            if let Some(mut live) = conn.stop() {
+            conn.stopped.store(true, Ordering::Relaxed);
+            if let Some(task) = conn
+                .event_task
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+            {
+                task.abort();
+            }
+            if let Some(live) = conn.lock_live().as_mut() {
                 live.guard.stop_now();
             }
         }
@@ -468,16 +561,13 @@ impl PluginHost {
     }
 
     async fn stop(&self, force: bool) -> Result<(), PluginError> {
+        let mut first_error = None;
         for conn in &self.plugins {
-            if let Some(mut live) = conn.stop() {
-                if force {
-                    live.guard.terminate().await?;
-                } else {
-                    live.guard.shutdown().await?;
-                }
+            if let Err(error) = conn.shutdown(force).await {
+                first_error.get_or_insert(error);
             }
         }
-        Ok(())
+        first_error.map_or(Ok(()), Err)
     }
 
     pub(crate) fn is_healthy(&self) -> bool {
@@ -530,7 +620,10 @@ impl PluginHost {
         for (index, spec) in specs.into_iter().enumerate() {
             let host = host.clone();
             let id = spec.id.clone();
-            set.spawn(async move { (index, id, connection::connect_one(spec, host, None).await) });
+            set.spawn(hya_mcp::io_tasks::scope(
+                hya_mcp::io_tasks::current(),
+                async move { (index, id, connection::connect_one(spec, host, None).await) },
+            ));
         }
         let mut collected: Vec<(usize, Arc<PluginConn>)> = Vec::new();
         let mut failures = BTreeMap::new();
@@ -730,6 +823,60 @@ for line in sys.stdin:
             control(&listener, "hold"),
         );
         (conn.unwrap(), listener, control)
+    }
+
+    #[tokio::test]
+    async fn stopping_connection_joins_event_worker_with_retained_plugin() {
+        let spec = crate::config::PluginSpec {
+            id: "events".into(), kind: PluginKindWire::Rust,
+            command: vec!["python3".into(), "-c".into(), r#"
+import json,sys
+for line in sys.stdin:
+ r=json.loads(line)
+ if 'id' not in r: continue
+ if r['method']=='initialize':
+  result={'protocol_version':1,'plugin':{'id':'events','version':'1','kind':'rust'},'hooks':[{'name':'event'}]}
+ else: result={}
+ print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':result}),flush=True)
+"#.into()],
+            timeout_ms: Some(1000), env: Default::default(), plugin_dir: None, launch: Default::default(),
+        };
+        let conn = super::connection::connect_one(
+            spec,
+            crate::messages::HostInfo {
+                name: "test".into(),
+                version: "1".into(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+        let event = conn
+            .event_task
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .abort_handle();
+        let retained = super::PreparedPlugin { conn: conn.clone() };
+        let host = super::PluginHost {
+            plugins: vec![conn.clone()],
+        };
+        host.stop_now();
+        tokio::time::timeout(std::time::Duration::from_secs(5), host.shutdown())
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), retained.shutdown())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(event.is_finished());
+        assert!(conn.lock_live().is_none());
+        tokio::time::timeout(std::time::Duration::from_secs(5), retained.shutdown())
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test]

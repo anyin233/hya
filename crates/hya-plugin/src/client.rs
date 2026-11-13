@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, oneshot};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 
 use crate::codec::read_bounded_line;
@@ -135,6 +135,13 @@ struct ClientInner {
     closed: Arc<std::sync::atomic::AtomicBool>,
     closed_token: CancellationToken,
     timeout_taints_closed: bool,
+    reader_task: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl Drop for ClientInner {
+    fn drop(&mut self) {
+        self.closed_token.cancel();
+    }
 }
 
 /// Owns a spawned plugin process and its paired [`PluginClient`].
@@ -142,6 +149,7 @@ struct ClientInner {
 /// Drop schedules shutdown and reaping on the current runtime; without one it kills.
 /// Prefer explicit shutdown to await reaping.
 pub struct ChildGuard {
+    io_tasks: Option<tokio_util::task::TaskTracker>,
     child: StdMutex<Option<Child>>,
     client: PluginClient,
     stderr_tail: Option<StderrTail>,
@@ -149,7 +157,7 @@ pub struct ChildGuard {
 }
 
 type StderrTail = Arc<StdMutex<Vec<u8>>>;
-type StderrTask = JoinHandle<Result<(), std::io::Error>>;
+type StderrTask = tokio_util::task::AbortOnDropHandle<Result<(), std::io::Error>>;
 
 #[derive(Clone, Copy)]
 enum SpawnMode {
@@ -195,7 +203,7 @@ impl ChildGuard {
         let child = self.take_child();
         let stderr_task = self.take_stderr_task();
         let Some(mut child) = child else {
-            self.client.mark_closed(PluginError::Closed);
+            self.client.shutdown().await;
             let _ = await_stderr_task(stderr_task).await;
             return Err(PluginError::Closed);
         };
@@ -204,7 +212,7 @@ impl ChildGuard {
             .call(METHOD_SHUTDOWN, json!({}), SHUTDOWN_TIMEOUT)
             .await;
         let status_result = terminate_child(&mut child).await;
-        self.client.mark_closed(PluginError::Closed);
+        self.client.shutdown().await;
         let stderr_result = await_stderr_task(stderr_task).await;
 
         let status = status_result?;
@@ -220,7 +228,7 @@ impl ChildGuard {
         let child = self.take_child();
         let stderr_task = self.take_stderr_task();
         let Some(mut child) = child else {
-            self.client.mark_closed(PluginError::Closed);
+            self.client.shutdown().await;
             let _ = await_stderr_task(stderr_task).await;
             return Err(PluginError::Closed);
         };
@@ -232,7 +240,7 @@ impl ChildGuard {
             .wait()
             .await
             .map_err(|error| PluginError::Io(error.to_string()));
-        self.client.mark_closed(PluginError::Closed);
+        self.client.shutdown().await;
         let stderr_result = await_stderr_task(stderr_task).await;
 
         kill_result?;
@@ -248,7 +256,7 @@ impl ChildGuard {
         let child = self.take_child();
         let stderr_task = self.take_stderr_task();
         let Some(mut child) = child else {
-            self.client.mark_closed(PluginError::Closed);
+            self.client.shutdown().await;
             let _ = await_stderr_task(stderr_task).await;
             return Err(PluginError::Closed);
         };
@@ -257,7 +265,7 @@ impl ChildGuard {
             .wait()
             .await
             .map_err(|error| PluginError::Io(error.to_string()));
-        self.client.mark_closed(PluginError::Closed);
+        self.client.shutdown().await;
         let stderr_result = await_stderr_task(stderr_task).await;
 
         let status = status_result?;
@@ -265,30 +273,18 @@ impl ChildGuard {
         Ok(status)
     }
 
-    /// Close and kill synchronously; reap on the current runtime.
+    /// Signal closure and kill synchronously; retain handles for shutdown or drop to join.
     pub(crate) fn stop_now(&mut self) {
         self.client.mark_closed(PluginError::Closed);
-        let child = self.take_child();
-        let stderr_task = self.take_stderr_task();
-        if let Some(mut child) = child {
+        let mut child = self
+            .child
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(child) = child.as_mut() {
             let _ = child.start_kill();
-            match tokio::runtime::Handle::try_current() {
-                Ok(handle) => {
-                    handle.spawn(async move {
-                        let _ = child.wait().await;
-                        let _ = await_stderr_task(stderr_task).await;
-                    });
-                }
-                Err(_) => {
-                    if let Some(task) = stderr_task {
-                        task.abort();
-                    }
-                }
-            }
-        } else if let Some(task) = stderr_task {
-            task.abort();
         }
     }
+
     fn take_child(&self) -> Option<Child> {
         match self.child.lock() {
             Ok(mut guard) => guard.take(),
@@ -312,13 +308,13 @@ impl Drop for ChildGuard {
             Some(mut child) => {
                 let client = self.client.clone();
                 match tokio::runtime::Handle::try_current() {
-                    Ok(handle) => {
-                        handle.spawn(async move {
+                    Ok(_) => {
+                        hya_mcp::io_tasks::spawn_in(self.io_tasks.clone(), async move {
                             let _ = client
                                 .call(METHOD_SHUTDOWN, json!({}), SHUTDOWN_TIMEOUT)
                                 .await;
                             let _ = terminate_child(&mut child).await;
-                            client.mark_closed(PluginError::Closed);
+                            client.shutdown().await;
                             let _ = await_stderr_task(stderr_task).await;
                         });
                     }
@@ -334,9 +330,9 @@ impl Drop for ChildGuard {
                 if let Some(task) = stderr_task {
                     let client = self.client.clone();
                     match tokio::runtime::Handle::try_current() {
-                        Ok(handle) => {
-                            handle.spawn(async move {
-                                client.mark_closed(PluginError::Closed);
+                        Ok(_) => {
+                            hya_mcp::io_tasks::spawn_in(self.io_tasks.clone(), async move {
+                                client.shutdown().await;
                                 let _ = await_stderr_task(Some(task)).await;
                             });
                         }
@@ -394,7 +390,7 @@ impl PluginClient {
         let writer: Writer = Arc::new(Mutex::new(Box::new(writer)));
         let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let closed_token = CancellationToken::new();
-        spawn_reader(
+        let reader_task = spawn_reader(
             reader,
             writer.clone(),
             pending.clone(),
@@ -412,8 +408,19 @@ impl PluginClient {
                 closed,
                 closed_token,
                 timeout_taints_closed,
+                reader_task: Mutex::new(Some(reader_task)),
             }),
         }
+    }
+
+    /// Close the transport and join its stdout and host-capability tasks.
+    pub async fn shutdown(&self) {
+        self.mark_closed(PluginError::Closed);
+        let mut task = self.inner.reader_task.lock().await;
+        if let Some(task) = task.as_mut() {
+            let _ = task.await;
+        }
+        task.take();
     }
 
     /// # Errors
@@ -512,6 +519,7 @@ impl PluginClient {
             None => (None, None),
         };
         let guard = ChildGuard {
+            io_tasks: hya_mcp::io_tasks::current(),
             child: StdMutex::new(Some(child)),
             client: client.clone(),
             stderr_tail,
@@ -818,19 +826,26 @@ fn spawn_reader<R>(
     closed: Arc<std::sync::atomic::AtomicBool>,
     closed_token: CancellationToken,
     strict_protocol: bool,
-) where
+) -> JoinHandle<()>
+where
     R: AsyncRead + Send + Unpin + 'static,
 {
-    tokio::spawn(async move {
+    hya_mcp::io_tasks::spawn(async move {
+        let mut requests = JoinSet::new();
         let mut reader = BufReader::new(reader);
         let mut buf = Vec::new();
         loop {
-            match read_bounded_line(&mut reader, &mut buf).await {
+            while requests.try_join_next().is_some() {}
+            let next = tokio::select! {
+                _ = closed_token.cancelled() => break,
+                next = read_bounded_line(&mut reader, &mut buf) => next,
+            };
+            match next {
                 Ok(0) => break,
                 Ok(_) => {}
                 Err(error) => {
                     close_transport(&closed, &closed_token, &pending, error).await;
-                    return;
+                    break;
                 }
             }
             let line = match std::str::from_utf8(buf.trim_ascii_end()) {
@@ -843,7 +858,7 @@ fn spawn_reader<R>(
                         PluginError::Json(e.to_string()),
                     )
                     .await;
-                    return;
+                    break;
                 }
             };
             if line.is_empty() {
@@ -855,7 +870,7 @@ fn spawn_reader<R>(
                         PluginError::Json("blank child stdout".to_string()),
                     )
                     .await;
-                    return;
+                    break;
                 }
                 continue;
             }
@@ -881,7 +896,7 @@ fn spawn_reader<R>(
                         PluginError::Json("unexpected child notification".to_string()),
                     )
                     .await;
-                    return;
+                    break;
                 }
                 Ok(Frame::Request(request)) => {
                     if request.method != METHOD_HOST_CAPABILITY {
@@ -892,14 +907,14 @@ fn spawn_reader<R>(
                             PluginError::Json("unexpected child request".to_string()),
                         )
                         .await;
-                        return;
+                        break;
                     }
                     let writer = writer.clone();
                     let pending = pending.clone();
                     let capabilities = capabilities.clone();
                     let closed = closed.clone();
                     let closed_token = closed_token.clone();
-                    tokio::spawn(async move {
+                    requests.spawn(async move {
                         let response =
                             dispatch_host_capability(request, &capabilities, &closed_token).await;
                         if let Err(error) = write_host_response(&writer, response).await {
@@ -909,12 +924,14 @@ fn spawn_reader<R>(
                 }
                 Err(e) => {
                     close_transport(&closed, &closed_token, &pending, PluginError::Json(e)).await;
-                    return;
+                    break;
                 }
             }
         }
         close_transport(&closed, &closed_token, &pending, PluginError::Closed).await;
-    });
+        requests.abort_all();
+        while requests.join_next().await.is_some() {}
+    })
 }
 
 async fn dispatch_host_capability(
@@ -978,7 +995,7 @@ fn spawn_stderr_reader<R>(mut reader: R, tail: StderrTail) -> StderrTask
 where
     R: AsyncRead + Send + Unpin + 'static,
 {
-    tokio::spawn(async move {
+    tokio_util::task::AbortOnDropHandle::new(hya_mcp::io_tasks::spawn(async move {
         let mut buf = [0_u8; 8192];
         loop {
             let read = reader.read(&mut buf).await?;
@@ -987,7 +1004,7 @@ where
             }
             append_stderr_tail(&tail, &buf[..read]);
         }
-    })
+    }))
 }
 
 fn append_stderr_tail(tail: &StderrTail, chunk: &[u8]) {
@@ -1037,6 +1054,159 @@ mod tests {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, duplex};
 
     use super::{PluginClient, lock_pending};
+
+    struct PendingReader(Option<tokio::sync::oneshot::Sender<()>>);
+
+    impl tokio::io::AsyncRead for PendingReader {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            _buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Pending
+        }
+    }
+
+    impl Drop for PendingReader {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+
+    struct BlockingCapability {
+        entered: tokio::sync::Notify,
+        dropped: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl super::HostCapabilityHandler for BlockingCapability {
+        async fn handle(
+            &self,
+            _method: &str,
+            _params: serde_json::Value,
+        ) -> Result<serde_json::Value, super::JsonRpcError> {
+            let _probe = PendingReader(self.dropped.lock().unwrap().take());
+            self.entered.notify_one();
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn canceled_stderr_join_stops_its_reader() {
+        let tasks = tokio_util::task::TaskTracker::new();
+        let (dropped, mut observed) = tokio::sync::oneshot::channel();
+        let reader = hya_mcp::io_tasks::scope(Some(tasks.clone()), async {
+            let task = super::spawn_stderr_reader(
+                PendingReader(Some(dropped)),
+                std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            );
+            let reader = task.abort_handle();
+            let mut join = Box::pin(super::await_stderr_task(Some(task)));
+            tokio::select! {
+                biased;
+                result = &mut join => panic!("stderr reader must still be pending: {result:?}"),
+                () = std::future::ready(()) => {}
+            }
+            drop(join);
+            reader
+        })
+        .await;
+        tasks.close();
+        tokio::time::timeout(std::time::Duration::from_secs(2), tasks.wait())
+            .await
+            .unwrap();
+        assert!(reader.is_finished());
+        assert!(observed.try_recv().is_ok());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn completion_tracker_joins_dropped_unpublished_connection() {
+        let tasks = tokio_util::task::TaskTracker::new();
+        let (client, guard) = hya_mcp::io_tasks::scope(Some(tasks.clone()), async {
+            PluginClient::spawn(&["sh".into(), "-c".into(), "exec sleep 60".into()], None).unwrap()
+        })
+        .await;
+        assert!(!tasks.is_empty());
+        let reader = client
+            .inner
+            .reader_task
+            .lock()
+            .await
+            .as_ref()
+            .unwrap()
+            .abort_handle();
+        // Drop outside the scoped future: cleanup must use the captured tracker.
+        drop(guard);
+        tasks.close();
+        tokio::time::timeout(std::time::Duration::from_secs(5), tasks.wait())
+            .await
+            .unwrap();
+        assert!(reader.is_finished());
+        assert!(client.is_closed());
+    }
+
+    #[tokio::test]
+    async fn shutdown_joins_child_host_capability_requests() {
+        let (reader, mut server) = duplex(4096);
+        let client = PluginClient::new(reader, tokio::io::sink());
+        let (dropped, mut observed) = tokio::sync::oneshot::channel();
+        let capability = std::sync::Arc::new(BlockingCapability {
+            entered: tokio::sync::Notify::new(),
+            dropped: std::sync::Mutex::new(Some(dropped)),
+        });
+        let session = hya_proto::SessionId::new();
+        let call = hya_proto::ToolCallId::new();
+        let _lease = client
+            .register_capability(Some(session), call, capability.clone())
+            .unwrap();
+        let request = json!({
+            "jsonrpc":"2.0", "id":7, "method":"host/capability",
+            "params": {"capability":_lease.token,"session":session,"call":call,"method":"context.describe","params":{}}
+        });
+        server
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            capability.entered.notified(),
+        )
+        .await
+        .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), client.shutdown())
+            .await
+            .unwrap();
+        assert!(
+            observed.try_recv().is_ok(),
+            "host request task must be destroyed before shutdown returns"
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_joins_idle_reader_while_client_clones_survive() {
+        let (dropped, mut observed) = tokio::sync::oneshot::channel();
+        let client = PluginClient::new(PendingReader(Some(dropped)), tokio::io::sink());
+        let retained = client.clone();
+        tokio::time::timeout(std::time::Duration::from_secs(2), client.shutdown())
+            .await
+            .unwrap();
+        assert!(
+            observed.try_recv().is_ok(),
+            "reader must be destroyed before shutdown returns"
+        );
+        assert!(matches!(
+            retained
+                .call("after-stop", json!({}), std::time::Duration::from_secs(1))
+                .await,
+            Err(PluginError::Closed)
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(2), client.shutdown())
+            .await
+            .unwrap();
+    }
 
     #[tokio::test]
     async fn dropping_inflight_call_removes_pending_entry() {

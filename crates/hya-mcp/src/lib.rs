@@ -20,6 +20,8 @@ pub mod client;
 pub mod codec;
 /// Streamable HTTP and classic HTTP+SSE transports.
 mod http;
+/// Composition completion tracking for connection I/O.
+pub mod io_tasks;
 /// Multi-server manager, config, prepare entry, and status snapshots.
 pub mod manager;
 /// Wire types for JSON-RPC and MCP tools/list / tools/call payloads.
