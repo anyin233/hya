@@ -2343,3 +2343,36 @@ async fn o5_late_stall_from_an_ended_episode_does_not_mark_its_revival() {
     supervisor.drain(FinishCause::Shutdown, Duration::from_secs(5)).await;
     assert!(!inherited, "revived episode inherited an old wait snapshot");
 }
+
+
+#[tokio::test]
+async fn o7_blocked_team_queue_retains_only_routing_fields_in_order() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let (events, mut queue) = tokio::sync::mpsc::unbounded_channel();
+    let team = Arc::new(TeamActor::new(root, engine.clone(), Arc::downgrade(&supervisor),
+        Arc::new(RootDriverState { runs: AtomicUsize::new(0), autonomous: AtomicBool::new(true) }),
+        supervisor.tasks.clone(), events));
+    supervisor.teams().insert(root, team.clone());
+    // Retain the receiver without a worker, deterministically blocking consumption.
+    for (seq, event) in [
+        Event::TextDelta { session: root, message: hya_proto::MessageId::new(),
+            part: hya_proto::PartId::new(), delta: "LARGE_ACTIVITY_PAYLOAD".repeat(100_000) },
+        Event::MailSent { session: root, from: "harness".into(),
+            to: MailEndpoint::Handle("main".into()), kind: MailKind::Message,
+            body: "LARGE_MAIL_PAYLOAD".repeat(100_000) },
+    ].into_iter().enumerate() {
+        supervisor.route_envelope(hya_proto::Envelope { seq: hya_proto::EventSeq(seq as u64), ts_millis: 0, event });
+    }
+    let first = format!("{:?}", queue.try_recv().unwrap());
+    let second = format!("{:?}", queue.try_recv().unwrap());
+    assert!(!first.contains("LARGE_ACTIVITY_PAYLOAD"), "activity queue retained its payload");
+    assert!(!second.contains("LARGE_MAIL_PAYLOAD"), "mail queue retained its body");
+    assert!(first.contains(&format!("{root:?}")));
+    assert!(second.contains("main"));
+    assert_eq!(team.lock().queued_wakes, 1);
+    assert!(queue.try_recv().is_err());
+    supervisor.teams().remove(&root);
+    supervisor.drain(FinishCause::Shutdown, Duration::from_secs(5)).await;
+}
