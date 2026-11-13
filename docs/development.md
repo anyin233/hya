@@ -576,23 +576,26 @@ in `hya_server`; `stop: CancellationToken` and `tasks: TaskTracker` track servic
 cancellation and completion. Explicit shutdown joins; drop only cancels.
 Resident bus listeners and plugin/MCP connection I/O have separate owners.
 
-Actor-owned turns monitor their durable claim every 100 ms, independently of
-provider deltas. This stops a superseded turn even when another runtime owner
-recovers or ends its claim while the provider is silent. Monitoring is automatic
-for turns with an `ActorClaim { actor_id: SessionId, epoch: ActorEpoch,
-owner_run_id: OwnerRunId }`; root turns have no claim monitor and there is no
-configuration or protocol change.
+Actor-owned streaming deltas execute no claim-check SQL. Durable text/reasoning
+boundaries, tool results, work completion and endings retain their transactional
+claim fences. Tool dispatch keeps its checks after permission and hook awaits.
+Local archive, kill, root deletion and shutdown cancel the turn directly through
+its engine/episode cancellation tokens before releasing its claim.
 
-For example, `SessionStore::recover_claim(actor, new_owner)` immediately fences
-the previous claim. Its turn cancels on the next check: at most 100 ms plus
-store-query and scheduler latency. Live-only deltas can continue until that
-check, but no durable write under the old claim can commit after takeover.
-Text/reasoning boundaries, tool results, work completion and endings retain
-their existing transactional claim fences; tool dispatch keeps its boundary
-checks after permission and hook awaits. Local archive, kill, root deletion and
-shutdown request episode endings and cancel immediately. The monitor is polled
-alongside the turn, cancels its effective token on claim loss, and ends with the
-turn; it owns no detached task or connection across a non-store await.
+A file-backed runtime takes the canonical database's exclusive kernel owner lock
+before opening SQLite and recovering claims. The next runtime cannot take over
+while that descriptor remains held; stalled threads and a stopped process keep
+it held. Graceful release follows cancellation and joining of the old runtime;
+process exit closes the descriptor and also ends its turns. Persistent database
+URI spellings are rejected at this boundary (see the [CLI ownership contract](cli.md#database-lock-and-the-backend-daemon)).
+
+There is no timer or liveness guarantee for a silent stream whose claim is
+superseded through an unowned store pool or a caller that releases ownership
+without first quiescing writes. That two-live-owner case bypasses the runtime
+ownership contract and cannot occur through normal runtime startup. Low-level
+`recover_claim` tests still exercise the stronger durability guarantee: no event
+under the superseded claim can commit, even if its buffered stream later reaches
+a durable boundary.
 
 Member handle allocation propagates projection/store errors before reserving a name;
 a failed read cannot be interpreted as an empty team.

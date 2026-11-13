@@ -789,34 +789,11 @@ impl SessionEngine {
         if let Some(observer) = observer.as_ref() {
             observer.turn_started(session);
         }
-        let mut turn = std::pin::pin!(scope_held_turn(
+        let mut outcome = scope_held_turn(
             session,
             self.run_claimed_turn(session, message, agent, activation, request),
-        ));
-        let mut outcome = if let Some(claim) = actor_claim {
-            // Other owners cannot request a local ending. Check independently
-            // of stream traffic; durable writes retain their transaction fences.
-            let claim_lost = async {
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    if let Err(error) = self.store.validate_actor_claim(claim).await {
-                        break error;
-                    }
-                }
-            };
-            tokio::select! {
-                biased;
-                error = claim_lost => {
-                    cancel.cancel();
-                    // Poll the turn through cancellation and sidecar cleanup.
-                    let _ = turn.await;
-                    Err(CoreError::Store(error))
-                }
-                outcome = &mut turn => outcome,
-            }
-        } else {
-            turn.await
-        };
+        )
+        .await;
         let cause = self.turn_gate.cancel_cause(session).or_else(|| {
             caller_cancel
                 .is_cancelled()

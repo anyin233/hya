@@ -2504,11 +2504,11 @@ async fn stopped_resident_member_row_is_cancelled_once() {
 #[tokio::test]
 async fn failed_shutdown_archive_has_no_second_terminal_write_path() {
     let dir = support::TestDir::new("failed-terminal-transition");
-    let database = format!(
-        "sqlite://{}?mode=rwc",
-        dir.path().join("session.db").display()
-    );
-    let store = SessionStore::connect(&database).await.unwrap();
+    let path = dir.path().join("session.db");
+    let database = format!("sqlite://{}?mode=rwc", path.display());
+    let store = SessionStore::connect_runtime(path.to_str().unwrap())
+        .await
+        .unwrap();
     store
         .claim_runtime_owner(hya_proto::OwnerRunId::new())
         .unwrap();
