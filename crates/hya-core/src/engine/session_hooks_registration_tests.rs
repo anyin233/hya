@@ -278,7 +278,11 @@ async fn stale_parent_registration_has_no_child_hooks_or_memory() {
         .unwrap();
     engine
         .store()
-        .recover_claim(root, OwnerRunId::new())
+        .claim_runtime_owner(engine.runtime_owner())
+        .unwrap();
+    engine
+        .store()
+        .recover_claim(root, engine.runtime_owner())
         .await
         .unwrap();
     hooks.seen.lock().unwrap().clear();

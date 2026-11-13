@@ -63,7 +63,7 @@ impl TempDb {
 
 impl Drop for TempDb {
     fn drop(&mut self) {
-        for suffix in ["", "-wal", "-shm", ".lock"] {
+        for suffix in ["", "-wal", "-shm", ".runtime-owner.lock"] {
             let _ = std::fs::remove_file(format!("{}{suffix}", self.path));
         }
     }
@@ -656,16 +656,15 @@ async fn concurrent_claims_allow_exactly_one_owner() {
 #[tokio::test]
 async fn restart_recovery_increments_epoch_and_invalidates_old_claim() {
     let store = SessionStore::connect_memory().await.unwrap();
+    let recovery_owner = OwnerRunId::new();
+    store.claim_runtime_owner(recovery_owner).unwrap();
     let actor_id = SessionId::new();
     let old = store
         .try_claim_new(actor_id, actor_id, OwnerRunId::new())
         .await
         .unwrap();
 
-    let recovered = store
-        .recover_claim(actor_id, OwnerRunId::new())
-        .await
-        .unwrap();
+    let recovered = store.recover_claim(actor_id, recovery_owner).await.unwrap();
 
     assert_eq!(recovered.previous_epoch, old.epoch);
     assert_eq!(recovered.claim.epoch.get(), old.epoch.get() + 1);
@@ -937,6 +936,8 @@ async fn resident_stop_finalization_commits_mail_and_claim_release_together() {
 #[tokio::test]
 async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
     let store = SessionStore::connect_memory().await.unwrap();
+    let recovery_owner = OwnerRunId::new();
+    store.claim_runtime_owner(recovery_owner).unwrap();
     let root = SessionId::new();
     let actor = SessionId::new();
     let handle = "resident-1";
@@ -1000,7 +1001,7 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
             && body == "epoch independent"
     ));
 
-    let recovered = store.recover_claim(actor, OwnerRunId::new()).await.unwrap();
+    let recovered = store.recover_claim(actor, recovery_owner).await.unwrap();
     assert_eq!(recovered.previous_epoch, old_claim.epoch);
     assert!(matches!(
         store.validate_actor_claim(&old_claim).await,
@@ -1604,9 +1605,11 @@ async fn begin_work_commits_one_prompt_and_its_work_boundary() {
 #[tokio::test]
 async fn begin_work_rejects_a_stale_claim_without_writes() {
     let store = SessionStore::connect_memory().await.unwrap();
+    let recovery_owner = OwnerRunId::new();
+    store.claim_runtime_owner(recovery_owner).unwrap();
     let (root, claim) = work_fixture(&store).await;
     store
-        .recover_claim(claim.actor_id, OwnerRunId::new())
+        .recover_claim(claim.actor_id, recovery_owner)
         .await
         .unwrap();
     let before_root = store.replay(root).await.unwrap();
@@ -1819,6 +1822,8 @@ async fn begin_work_resumes_unanswered_prompt_and_rolls_back_its_mail_append() {
 #[tokio::test]
 async fn user_cancelled_work_recovers_its_prompt_even_after_mail_was_acknowledged() {
     let store = SessionStore::connect_memory().await.unwrap();
+    let recovery_owner = OwnerRunId::new();
+    store.claim_runtime_owner(recovery_owner).unwrap();
     let (root, claim) = work_fixture(&store).await;
     let (prompt, _) = store
         .begin_work(
@@ -1854,7 +1859,7 @@ async fn user_cancelled_work_recovers_its_prompt_even_after_mail_was_acknowledge
             .is_some()
     );
     let recovered = store
-        .recover_claim(claim.actor_id, OwnerRunId::new())
+        .recover_claim(claim.actor_id, recovery_owner)
         .await
         .unwrap();
     let result = store
@@ -2349,6 +2354,8 @@ async fn concurrent_registration_batches_share_the_roots_durable_capacity() {
 async fn aborted_first_wake_closes_unanswered_prompt_before_the_next_wake() {
     for assistant in [None, Some(""), Some("partial answer")] {
         let store = SessionStore::connect_memory().await.unwrap();
+        let recovery_owner = OwnerRunId::new();
+        store.claim_runtime_owner(recovery_owner).unwrap();
         let (root, claim) = work_fixture(&store).await;
         let (prompt, _) = store
             .begin_work(
@@ -2404,7 +2411,7 @@ async fn aborted_first_wake_closes_unanswered_prompt_before_the_next_wake() {
             }
         }
         let recovered = store
-            .recover_claim(claim.actor_id, OwnerRunId::new())
+            .recover_claim(claim.actor_id, recovery_owner)
             .await
             .unwrap();
         let result = store
@@ -2460,6 +2467,8 @@ async fn aborted_first_wake_closes_unanswered_prompt_before_the_next_wake() {
 #[tokio::test]
 async fn review_b1_reasoning_only_crash_closes_the_unanswered_wake() {
     let store = SessionStore::connect_memory().await.unwrap();
+    let recovery_owner = OwnerRunId::new();
+    store.claim_runtime_owner(recovery_owner).unwrap();
     let (root, claim) = work_fixture(&store).await;
     store
         .begin_work(
@@ -2504,7 +2513,7 @@ async fn review_b1_reasoning_only_crash_closes_the_unanswered_wake() {
         store.append_event(claim.actor_id, &event).await.unwrap();
     }
     let recovered = store
-        .recover_claim(claim.actor_id, OwnerRunId::new())
+        .recover_claim(claim.actor_id, recovery_owner)
         .await
         .unwrap();
     store
@@ -2546,6 +2555,8 @@ async fn review_b1_reasoning_only_crash_closes_the_unanswered_wake() {
 #[tokio::test]
 async fn recovery_does_not_queue_an_outgoing_dm_copy() {
     let store = SessionStore::connect_memory().await.unwrap();
+    let recovery_owner = OwnerRunId::new();
+    store.claim_runtime_owner(recovery_owner).unwrap();
     let (root, claim) = work_fixture(&store).await;
     store
         .append_event(
@@ -2571,7 +2582,7 @@ async fn recovery_does_not_queue_an_outgoing_dm_copy() {
         .await
         .unwrap();
     let recovered = store
-        .recover_claim(claim.actor_id, OwnerRunId::new())
+        .recover_claim(claim.actor_id, recovery_owner)
         .await
         .unwrap();
     let result = store
@@ -2584,6 +2595,8 @@ async fn recovery_does_not_queue_an_outgoing_dm_copy() {
 #[tokio::test]
 async fn recovery_does_not_queue_an_outgoing_dm_copy_after_interrupted_work() {
     let store = SessionStore::connect_memory().await.unwrap();
+    let recovery_owner = OwnerRunId::new();
+    store.claim_runtime_owner(recovery_owner).unwrap();
     let (root, claim) = work_fixture(&store).await;
     store
         .begin_work(
@@ -2609,7 +2622,7 @@ async fn recovery_does_not_queue_an_outgoing_dm_copy_after_interrupted_work() {
         .await
         .unwrap();
     let recovered = store
-        .recover_claim(claim.actor_id, OwnerRunId::new())
+        .recover_claim(claim.actor_id, recovery_owner)
         .await
         .unwrap();
     let result = store
@@ -2622,5 +2635,36 @@ async fn recovery_does_not_queue_an_outgoing_dm_copy_after_interrupted_work() {
             inbox_cursor: 2,
             queued_after: false,
         }
+    );
+}
+
+#[tokio::test]
+async fn non_owner_connection_cannot_take_over_a_claim() {
+    let db = TempDb::new("non-owner-takeover");
+    let store = SessionStore::connect_runtime(db.path()).await.unwrap();
+    let owner = OwnerRunId::new();
+    store.claim_runtime_owner(owner).unwrap();
+    let actor = SessionId::new();
+    let claim = store.try_claim_new(actor, actor, owner).await.unwrap();
+    let other = SessionStore::connect(db.path()).await.unwrap();
+    for requested_owner in [owner, OwnerRunId::new()] {
+        assert!(matches!(
+            other.recover_claim(actor, requested_owner).await,
+            Err(StoreError::RuntimeOwnerClaimRequired)
+        ));
+        store.validate_actor_claim(&claim).await.unwrap();
+    }
+    assert!(matches!(
+        store.recover_claim(actor, OwnerRunId::new()).await,
+        Err(StoreError::RuntimeOwnerClaimRequired)
+    ));
+    store.validate_actor_claim(&claim).await.unwrap();
+    assert_eq!(
+        store
+            .recover_claim(actor, owner)
+            .await
+            .unwrap()
+            .previous_epoch,
+        claim.epoch
     );
 }

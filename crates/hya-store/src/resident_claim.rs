@@ -496,6 +496,8 @@ impl SessionStore {
         actor_id: SessionId,
         owner_run_id: OwnerRunId,
     ) -> Result<RecoveredActorClaim, StoreError> {
+        let mut tx = self.begin_transaction().await?;
+        self.require_runtime_owner(owner_run_id)?;
         let row = sqlx::query(
             "UPDATE resident_actor_claim SET \
                  epoch = epoch + 1, owner_run_id = ? \
@@ -505,13 +507,14 @@ impl SessionStore {
         )
         .bind(owner_run_id.as_uuid().as_bytes().as_slice())
         .bind(actor_id.storage_key())
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await?;
         let Some(row) = row else {
             return Err(StoreError::ActorClaimUnavailable { actor_id });
         };
         let claim = decode_claim(row)?;
         let previous_epoch = ActorEpoch::from_storage(claim.epoch.get() - 1);
+        tx.commit().await?;
         Ok(RecoveredActorClaim {
             claim,
             previous_epoch,

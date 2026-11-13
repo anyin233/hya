@@ -449,6 +449,8 @@ async fn workflow_admission_is_atomic_across_store_handles() {
 #[tokio::test]
 async fn workflow_admission_rejects_stale_actor_claim_without_event() {
     let store = SessionStore::connect_memory().await.expect("memory store");
+    let recovery_owner = OwnerRunId::new();
+    store.claim_runtime_owner(recovery_owner).unwrap();
     let actor = SessionId::new();
     let session = SessionId::new();
     let stale = store
@@ -456,7 +458,7 @@ async fn workflow_admission_rejects_stale_actor_claim_without_event() {
         .await
         .expect("initial actor claim");
     let _current = store
-        .recover_claim(actor, OwnerRunId::new())
+        .recover_claim(actor, recovery_owner)
         .await
         .expect("fence initial claim");
     let result = store
