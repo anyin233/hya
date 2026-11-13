@@ -736,8 +736,10 @@ returns `RuntimeOwnerBusy`; CLI writers route to the owner's published server
 or exit 75 before touching SQLite.
 
 `database_paths(db: &str) -> std::io::Result<Option<DatabasePaths>>` is the shared
-path contract for the store and CLI. `None` denotes an empty/in-memory path or
-SQLite URI. `DatabasePaths` contains `PathBuf` fields `database`, `lock`,
+path contract for the store and CLI. `None` denotes only `""` or `":memory:"`;
+all `sqlite:` and `file:` URI spellings return `InvalidInput`, including
+in-memory URIs. Plain filenames preserve `?`, `#`, and `%` literally.
+`DatabasePaths` contains `PathBuf` fields `database`, `lock`,
 `discovery`, `log`, `stop`, and `relay_identity`. It resolves relative paths,
 parent symlinks, and database symlinks (including dangling targets), so creation
 of the target does not change the ownership identity. Filesystem errors surface

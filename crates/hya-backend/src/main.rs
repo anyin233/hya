@@ -612,6 +612,17 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn run(cli: Cli) -> anyhow::Result<()> {
+    // Validate before path absolutization or best-effort daemon discovery can
+    // obscure an invalid database argument, including command-local overrides.
+    let database = match &cli.command {
+        Some(
+            Command::Serve { db: Some(db), .. }
+            | Command::TailSession { db: Some(db), .. }
+            | Command::Sessions { db: Some(db), .. },
+        ) => db,
+        _ => &cli.db,
+    };
+    hya_store::database_paths(database)?;
     let web_port = cli_args::bare_web_port(&cli)?;
     let backend = cli_args::bare_backend(&cli)?;
     let resume = cli_args::bare_resume(&cli)?;
