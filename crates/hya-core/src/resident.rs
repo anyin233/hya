@@ -2589,9 +2589,7 @@ async fn episode_task(
 /// Drives resident (long-lived actor) subagents for every team that has one.
 ///
 /// Constructed once per runtime via [`ResidentSupervisor::start`], which spawns a
-/// single bus listener. Teams are created lazily as residents/main are registered;
-/// transient-only teams are never tracked, so the default `run_team` path is
-/// completely unaffected.
+/// single bus listener. Teams are created lazily as residents/main are registered.
 pub struct ResidentSupervisor {
     engine: Arc<SessionEngine>,
     owner_run_id: OwnerRunId,
@@ -4402,7 +4400,8 @@ impl ResidentSupervisor {
     ///
     /// The caller must deliver work through durable mail after this returns.
     /// `registration_directive` is provenance only and must not contain the work
-    /// payload or input values. Returns the Session, handle, and actual member id.
+    /// payload or input values. Returns the committed Session, handle and member
+    /// id before initializer hooks complete; the episode runs those before work.
     pub async fn spawn_resident_parked(
         &self,
         parent: SessionId,
@@ -4412,13 +4411,20 @@ impl ResidentSupervisor {
         parent_claim: Option<&ActorClaim>,
         guidance: Option<Arc<str>>,
     ) -> Result<(SessionId, String, MemberId), CoreError> {
-        self.spawn_resident_inner(
-            parent,
-            agent,
-            resolved,
-            ResidentSpawnContext::new(registration_directive, None, parent_claim, guidance),
-        )
-        .await
+        let (root, prepared, member) = self
+            .prepare_resident(
+                parent,
+                agent,
+                resolved,
+                ResidentSpawnContext::new(registration_directive, None, parent_claim, guidance),
+            )
+            .await?;
+        let session = prepared.session;
+        let handle = scope::join_path(&prepared.parent_path, &prepared.leaf);
+        // Return the committed identity before initialization can wait on a
+        // plugin. Activation and cancellation then belong to the controller.
+        self.register_episodes(root, vec![prepared], None).await?;
+        Ok((session, handle, member))
     }
 
     async fn spawn_resident_inner(
@@ -4433,7 +4439,8 @@ impl ResidentSupervisor {
             .await?;
         let session = prepared.session;
         let handle = scope::join_path(&prepared.parent_path, &prepared.leaf);
-        self.register_episodes(root, vec![prepared], None).await?;
+        let initialized = self.register_episodes(root, vec![prepared], None).await?;
+        let _ = futures::future::join_all(initialized).await;
         Ok((session, handle, member))
     }
 
@@ -4470,7 +4477,8 @@ impl ResidentSupervisor {
             ));
             prepared.push(registration);
         }
-        self.register_episodes(root, prepared, Some(main)).await?;
+        let initialized = self.register_episodes(root, prepared, Some(main)).await?;
+        let _ = futures::future::join_all(initialized).await;
         Ok(identities)
     }
 
@@ -4511,16 +4519,7 @@ impl ResidentSupervisor {
         let parent_path = if parent == root {
             scope::ROOT_HANDLE.into()
         } else {
-            // Legacy transient Workflow parents have no roster entry; their
-            // children still belong to the root unit until that runner retires.
-            self.engine
-                .read_projection(root)
-                .await?
-                .team
-                .roster
-                .values()
-                .find(|entry| entry.session == parent)
-                .map_or_else(|| scope::ROOT_HANDLE.into(), |entry| entry.handle.clone())
+            self.engine.resolve_handle(root, parent).await?
         };
         let leaf = self.engine.mint_member_leaf(root, &prefix).await;
         let member = MemberId::new();
@@ -4734,19 +4733,22 @@ impl ResidentSupervisor {
         runtime: ResidentRuntimeContext,
         activation: ResidentActivation,
     ) -> Result<(), CoreError> {
-        self.register_episodes(
-            root,
-            vec![PreparedResident {
-                session,
-                parent_path,
-                leaf,
-                agent,
-                runtime,
-                activation,
-            }],
-            None,
-        )
-        .await
+        let initialized = self
+            .register_episodes(
+                root,
+                vec![PreparedResident {
+                    session,
+                    parent_path,
+                    leaf,
+                    agent,
+                    runtime,
+                    activation,
+                }],
+                None,
+            )
+            .await?;
+        let _ = futures::future::join_all(initialized).await;
+        Ok(())
     }
 
     fn capacity(&self) -> u64 {
@@ -4760,7 +4762,7 @@ impl ResidentSupervisor {
         root: SessionId,
         members: Vec<PreparedResident>,
         main: Option<MainActivation>,
-    ) -> Result<(), CoreError> {
+    ) -> Result<Vec<oneshot::Receiver<Result<(), CoreError>>>, CoreError> {
         let projection = self.engine.read_projection(root).await?;
         let parent_claim = members
             .first()
@@ -4958,8 +4960,7 @@ impl ResidentSupervisor {
         drop(write);
         // Commit is the batch's success boundary. Each episode owns initializer
         // errors and its ending; none can retract these committed identities.
-        let _ = futures::future::join_all(initialized_members).await;
-        Ok(())
+        Ok(initialized_members)
     }
 
     /// Re-register a recovered resident into the live supervisor map.

@@ -1601,7 +1601,6 @@ async fn i22_restore_prompt_precedes_queued_recovered_main_work() {
 }
 
 #[tokio::test]
-#[ignore = "M4-10: I20"]
 async fn i20_workflow_stage_loop_worker_and_verifier_are_residents() {
     let mut h = Harness::new().await;
     let stage = h
@@ -1632,6 +1631,149 @@ async fn i20_workflow_stage_loop_worker_and_verifier_are_residents() {
         registrations.iter().all(|(_, mode)| mode.is_resident()),
         "Workflow still uses transient execution: {registrations:?}"
     );
+}
+
+#[tokio::test]
+async fn m410_cancellation_ends_a_verifier_held_in_session_start() {
+    let plugin = support::lifecycle::BlockingPlugin::new().await;
+    let mut h = Harness::with_plugins(vec![plugin.spec.clone()]).await;
+    let worker_gate = Arc::new(Gate::default());
+    let marker = h.provider.script(vec![
+        Round::text("first worker output").gated(worker_gate.clone()),
+    ]);
+    let directory = h.dir.join(".hya/workflows");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("cancel-verifier.hya.md"), format!("---\nkind: Workflow\nname: cancel-verifier\ndescription: Verifier initialization cancellation\nnodes:\n  loop:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {marker}\n    mode: loop\n    verify:\n      agent: hya-reviewer\n      model: {{ id: fake }}\n      until: Finished.\n      max_iterations: 2\n---\nflowchart TD\n  loop\n")).unwrap();
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let mut running = tokio::spawn({
+        let control = h.built.workflow_control();
+        let root = h.root;
+        let cancel = cancel.clone();
+        async move {
+            control
+                .execute(
+                    root,
+                    Default::default(),
+                    hya_proto::WorkflowCommand::Run {
+                        name: Some("cancel-verifier".into()),
+                        expected_revision: None,
+                        inputs: Default::default(),
+                        run: None,
+                    },
+                    cancel,
+                )
+                .await
+        }
+    });
+    worker_gate.arrived().await;
+    plugin.arm();
+    worker_gate.release();
+    plugin.gate.arrived().await;
+    cancel.cancel();
+    let cancelled = tokio::time::timeout(support::lifecycle::BOUND, &mut running).await;
+    let ended_before_hook_returned = cancelled.is_ok();
+    plugin.gate.release();
+    match cancelled {
+        Ok(result) => {
+            result.unwrap().unwrap();
+        }
+        Err(_) => {
+            running.await.unwrap().unwrap();
+        }
+    }
+    assert_eq!(h.engine.store().live_member_count(h.root).await.unwrap(), 0);
+    h.shutdown().await;
+    plugin.shutdown().await;
+    assert!(
+        ended_before_hook_returned,
+        "Workflow cancellation waited on verifier initialization"
+    );
+}
+
+#[tokio::test]
+async fn m410_reported_loop_worker_revives_and_verifiers_can_report() {
+    let mut h = Harness::new().await;
+    let final_verdict = h
+        .provider
+        .script(vec![report(r#"{"met":true,"reason":"complete"}"#)]);
+    let second_worker = h
+        .provider
+        .script(vec![report(&format!("finished {final_verdict}"))]);
+    let first_verdict = h.provider.script(vec![report(&format!(
+        r#"{{"met":false,"reason":"{second_worker}"}}"#
+    ))]);
+    let first_worker = h
+        .provider
+        .script(vec![report(&format!("first pass {first_verdict}"))]);
+    let result = h.workflow(&format!("  loop:\n    agent: hya-task\n    model: {{ id: fake }}\n    directive: {first_worker}\n    mode: loop\n    verify:\n      agent: hya-reviewer\n      model: {{ id: fake }}\n      until: Work is complete.\n      max_iterations: 4\n"), "  loop").await;
+    let events = h.engine.replay(h.root).await.unwrap();
+    let projection = h.engine.read_projection(h.root).await.unwrap();
+    let worker = projection
+        .session
+        .members
+        .iter()
+        .find(|m| m.subagent_type.as_str() == "hya-task")
+        .unwrap()
+        .child
+        .unwrap();
+    assert_eq!(
+        h.engine.store().live_member_count(h.root).await.unwrap(),
+        0,
+        "reports release every worker and verifier claim: {result:?}"
+    );
+    let requests = h.provider.captured.lock().unwrap().clone();
+    let actor_requests = requests
+        .iter()
+        .filter(|r| r.session != h.root && !r.completion.tools.is_empty())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actor_requests.len(),
+        4,
+        "two worker activations and two judgments: {result:?}"
+    );
+    assert!(
+        actor_requests.iter().all(|r| r
+            .completion
+            .tools
+            .iter()
+            .any(|t| t.name.as_str() == "report")),
+        "T2: deadline report notices must name an available tool"
+    );
+    let worker_requests = actor_requests
+        .iter()
+        .filter(|r| r.session == worker)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        worker_requests.len(),
+        2,
+        "continuation reuses the actor identity"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e.event, Event::AgentRestarted { child, .. } if child == worker))
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(
+                e.event,
+                Event::SubagentReported {
+                    outcome: hya_proto::ReportOutcome::Done,
+                    ..
+                }
+            ))
+            .count(),
+        4,
+        "worker and verifier report tools really completed"
+    );
+    assert!(
+        matches!(result, hya_proto::WorkflowCommandResult::Run { result }
+        if result.run.status == hya_proto::WorkflowRunStatus::Completed)
+    );
+    h.shutdown().await;
 }
 
 #[tokio::test]

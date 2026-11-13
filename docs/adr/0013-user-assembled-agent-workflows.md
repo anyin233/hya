@@ -3,6 +3,10 @@
 Date: 2026-08-26
 Status: Accepted (revised 2026-08-28)
 
+Execution substrate superseded by [ADR-0017](0017-workflow-on-unified-substrate.md):
+all workers and verifiers now use resident episode activations. Compilation,
+control-plane contracts and level-by-level scheduling below still apply.
+
 ## Context
 
 hya has bounded transient Teams, persistent resident Agents, durable mailbox

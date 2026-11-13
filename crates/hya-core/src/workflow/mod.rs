@@ -293,9 +293,9 @@ pub enum WorkflowError {
         /// Human-readable rule violation.
         detail: String,
     },
-    /// Governed team admission rejected a batch (depth or run budget).
-    #[error("workflow admission: {0}")]
-    Admission(#[from] crate::subagent::TeamAdmissionError),
+    /// A Workflow member would exceed the team depth limit.
+    #[error("workflow admission: max recursion depth reached")]
+    MaxDepth,
     /// The workflow's stage agent id is unknown or outside the caller's
     /// `can_spawn` roster.
     #[error("workflow stage agent `{agent_id}` not spawnable by `{caller}`: {detail}")]

@@ -1766,8 +1766,8 @@ for line in sys.stdin:
     }
 
     async fn assert_global_events_with_child_sidecar(resident: bool) -> anyhow::Result<()> {
-        use hya_core::{AgentSpec, CreateSession, MemberSpec, ResidentSupervisor, SessionEngine};
-        use hya_proto::{Event, FinishCause, MemberId, ModelRef, Role, SessionKind};
+        use hya_core::{AgentSpec, CreateSession, ResidentSupervisor, SessionEngine};
+        use hya_proto::{Event, FinishCause, ModelRef, Role, SessionKind};
         use std::time::Duration;
         use tokio_util::sync::CancellationToken;
 
@@ -1904,11 +1904,10 @@ for line in sys.stdin:
                 .await;
             child
         } else {
-            let results = hya_core::run_team(
+            crate::resident_fixture::run_residents(
                 engine.clone(),
                 root,
-                vec![MemberSpec {
-                    id: MemberId::new(),
+                vec![crate::resident_fixture::ResidentTurn {
                     agent: child_agent,
                     binding,
                     agents,
@@ -1917,18 +1916,11 @@ for line in sys.stdin:
                     directive: "child prompt".into(),
                     tool_call: None,
                     description: String::new(),
-                    session: None,
                     sidecar_factory: Some(Arc::new(HookedSidecar)),
                 }],
                 CancellationToken::new(),
             )
-            .await;
-            assert_eq!(
-                results[0].status,
-                hya_core::MemberStatus::Done,
-                "{results:?}"
-            );
-            results[0].session.parse()?
+            .await[0]
         };
         // A final notification is a queue barrier for this plugin's event worker.
         engine.set_title(root, "event barrier".into()).await?;

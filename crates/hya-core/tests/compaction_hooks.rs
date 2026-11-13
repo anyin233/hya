@@ -6,6 +6,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod support;
+use support::resident::{ResidentTurn, run_residents};
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -13,10 +14,9 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use hya_core::{
     AgentSpec, CompactionAfterInput, CompactionBeforeInput, CompactionConfig, CompactionDecision,
-    CreateSession, EventBus, HookDispatcher, MemberSpec, SessionEngine, SummarizeOptions,
-    Summarizer, run_team,
+    CreateSession, EventBus, HookDispatcher, SessionEngine, SummarizeOptions, Summarizer,
 };
-use hya_proto::{AgentName, Event, FinishReason, MemberId, MessageId, ModelRef, SessionId};
+use hya_proto::{AgentName, Event, FinishReason, MessageId, ModelRef, SessionId};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
@@ -409,7 +409,8 @@ async fn agent_spawn_hook_fires_on_member_registration() {
         .with_hooks(hooks.clone()),
     );
     let dir = tempdir();
-    let agent_spec = agent(&dir);
+    let mut agent_spec = agent(&dir);
+    agent_spec.name = AgentName::new("hya-task");
     let lead = engine
         .create(CreateSession {
             parent: None,
@@ -421,8 +422,7 @@ async fn agent_spawn_hook_fires_on_member_registration() {
         })
         .await
         .unwrap();
-    let spec = MemberSpec {
-        id: MemberId::new(),
+    let spec = ResidentTurn {
         agent: agent_spec.clone(),
         binding: engine.bind_runtime(&agent_spec.workdir).unwrap(),
         agents: Arc::from([]),
@@ -430,11 +430,11 @@ async fn agent_spawn_hook_fires_on_member_registration() {
         guidance: None,
         directive: "small task".to_string(),
         description: String::new(),
-        session: None,
+
         sidecar_factory: None,
         tool_call: None,
     };
-    run_team(engine.clone(), lead, vec![spec], CancellationToken::new()).await;
+    run_residents(engine.clone(), lead, vec![spec], CancellationToken::new()).await;
 
     let spawns: Vec<String> = hooks
         .calls()

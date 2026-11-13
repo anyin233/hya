@@ -166,3 +166,5 @@ impl Tool for MarkerTool {
         Ok(json!({ "ok": true }))
     }
 }
+
+pub mod resident;

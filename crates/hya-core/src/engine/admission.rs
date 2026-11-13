@@ -262,55 +262,6 @@ impl SessionEngine {
         Ok(message)
     }
 
-    pub(crate) async fn inject_system_message_for_actor(
-        &self,
-        claim: &ActorClaim,
-        session: SessionId,
-        content: String,
-    ) -> Result<MessageId, CoreError> {
-        let message = MessageId::new();
-        let part = PartId::new();
-        self.commit_resident_mutation(
-            claim,
-            session,
-            vec![
-                Event::MessageStarted {
-                    session,
-                    message,
-                    role: Role::System,
-                    agent: None,
-                    model: None,
-                },
-                Event::TextStart {
-                    session,
-                    message,
-                    part,
-                },
-                Event::TextDelta {
-                    session,
-                    message,
-                    part,
-                    delta: content,
-                },
-                Event::TextEnd {
-                    session,
-                    message,
-                    part,
-                },
-                Event::MessageFinished {
-                    session,
-                    message,
-                    role: Role::System,
-                    finish: FinishReason::Stop,
-                    tokens: None,
-                    cause: None,
-                },
-            ],
-        )
-        .await?;
-        Ok(message)
-    }
-
     /// Admit a user prompt message and return its id.
     pub async fn admit_user_prompt(
         &self,
@@ -483,62 +434,6 @@ impl SessionEngine {
         let part = PartId::new();
         self.emit_batch_for_actor(
             None,
-            session,
-            vec![
-                Event::MessageStarted {
-                    session,
-                    message,
-                    role: Role::User,
-                    agent: None,
-                    model: None,
-                },
-                Event::TextStart {
-                    session,
-                    message,
-                    part,
-                },
-                Event::TextDelta {
-                    session,
-                    message,
-                    part,
-                    delta: text,
-                },
-                Event::TextEnd {
-                    session,
-                    message,
-                    part,
-                },
-                Event::MessageFinished {
-                    session,
-                    message,
-                    role: Role::User,
-                    finish: FinishReason::Stop,
-                    tokens: None,
-                    cause: None,
-                },
-            ],
-        )
-        .await?;
-        self.update_session_channel_policy(session, channel_policy);
-        Ok(message)
-    }
-
-    pub(crate) async fn admit_user_prompt_for_actor_with_binding(
-        &self,
-        claim: &ActorClaim,
-        session: SessionId,
-        text: String,
-        binding: &TurnBinding,
-        stable_id: &str,
-    ) -> Result<MessageId, CoreError> {
-        let channel_policy = crate::ChannelPolicy::from_binding(binding)?.snapshot_for(stable_id);
-        let text = self
-            .user_text_after_hooks(binding, stable_id, session, text)
-            .await;
-        let message = MessageId::new();
-        let part = PartId::new();
-        self.commit_resident_mutation(
-            claim,
             session,
             vec![
                 Event::MessageStarted {

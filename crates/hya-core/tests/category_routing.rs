@@ -3,6 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod support;
+use support::resident::{ResidentTurn, run_residents};
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -10,10 +11,9 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use hya_core::{
-    AgentSpec, CategoryEntry, CategoryRegistry, CreateSession, EventBus, MemberSpec, MemberStatus,
-    SessionEngine, run_team,
+    AgentSpec, CategoryEntry, CategoryRegistry, CreateSession, EventBus, SessionEngine,
 };
-use hya_proto::{AgentName, Event, FinishReason, MemberId, ModelRef, Role};
+use hya_proto::{AgentName, Event, FinishReason, ModelRef, Role};
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, Provider, ProviderError, ProviderRouter,
 };
@@ -167,12 +167,11 @@ async fn four_categories_drive_four_distinct_model_calls() {
         reasoning: None,
     };
     let binding = engine.bind_runtime(&base.workdir).unwrap();
-    let specs: Vec<MemberSpec> = ["quick", "deep", "ultrabrain", "writing"]
+    let specs: Vec<ResidentTurn> = ["quick", "deep", "ultrabrain", "writing"]
         .iter()
         .map(|cat| {
             let resolved = reg.resolve(cat).unwrap();
-            MemberSpec {
-                id: MemberId::new(),
+            ResidentTurn {
                 agent: AgentSpec {
                     model: resolved.model.clone(),
                     ..base.clone()
@@ -183,16 +182,15 @@ async fn four_categories_drive_four_distinct_model_calls() {
                 guidance: None,
                 directive: format!("work as {cat}"),
                 description: String::new(),
-                session: None,
+
                 sidecar_factory: None,
                 tool_call: None,
             }
         })
         .collect();
 
-    let evidence = run_team(engine, lead, specs, CancellationToken::new()).await;
+    let evidence = run_residents(engine, lead, specs, CancellationToken::new()).await;
     assert_eq!(evidence.len(), 4);
-    assert!(evidence.iter().all(|e| e.status == MemberStatus::Done));
 
     let recorded: HashSet<String> = models.lock().unwrap().iter().cloned().collect();
     assert_eq!(

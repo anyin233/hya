@@ -607,20 +607,26 @@ recovery — leaves rows whose `task` call already returned open.
 
 ## 10. Workflow integration
 
-Per [ADR-0017](../adr/0017-workflow-on-unified-substrate.md): control plane
-unchanged; execution rides §2. Stage completion is `SubagentReported`
-consumption (bus subscription in `WorkflowControl`, store-tail fallback for
-recovery). Outcome+reason maps to the existing failure classes; a retry edge
-is a revive (§4) whose DM body is the retry prompt and whose arming context is
-the stage's handoff. `run_pre_admitted_team_with_workflow` and the transient
-member admission variants are deleted. Verifier gating and engine-owned stop
-decisions are unchanged.
+Per [ADR-0017](../adr/0017-workflow-on-unified-substrate.md), the control plane
+uses the same resident episode substrate as `task`. Stage, loop worker and
+verifier completion is an episode-owned `ActivationWaiter`, with explicit
+`Settled { final_text }`, `Reported { outcome, text }` and
+`Ended { reason, status, note }` results. The controller accepts settlement and
+Done reports; it adds no Stage bus subscription or per-envelope projection poll.
+
+Loop continuation reactivates the same member. Settlement keeps its live claim
+and installed runtime; reporting releases the claim, and the next activation
+revives the actor through the ordinary fenced capacity check and handoff.
+Verifiers use a fresh parked resident per judgment and end it after consuming
+the result, including errors and cancellation. All live workers and verifiers
+count against team capacity. Run-owned actors are ended on unsuccessful exit;
+root driver activity remains held through cleanup. Scheduling stays level-based.
+The transient executor, member evidence envelopes and their exports are deleted.
 
 ## 11. Deletions (exhaustive)
 
 - `run_team`, `run_pre_admitted_team*` variants, blocking joins
-  (`crates/hya-core/src/subagent.rs` resident-execution half survives as the
-  only member-run path).
+  (`crates/hya-core/src/subagent.rs` is deleted; `resident.rs` owns episodes).
 - `TeamEvidenceEnvelope`, `project_envelope*`, evidence system messages.
 - `uses_durable_admission_owner` routing and
   `ForegroundTransientAdmissionOwner` foreground/background reply modes (the

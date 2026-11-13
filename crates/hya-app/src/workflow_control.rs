@@ -1436,7 +1436,7 @@ fn map_workflow_preflight_error(error: WorkflowError) -> WorkflowControlError {
         | WorkflowError::Compile(_)
         | WorkflowError::Invalid { .. } => WorkflowControlError::InvalidSource(detail),
         WorkflowError::Engine(error) => WorkflowControlError::Core(error),
-        WorkflowError::Admission(_) => WorkflowControlError::Execution(detail),
+        WorkflowError::MaxDepth => WorkflowControlError::Execution(detail),
     }
 }
 
@@ -1446,10 +1446,10 @@ fn map_workflow_error_with_detail(error: WorkflowError, detail: String) -> Workf
         WorkflowError::Unauthorized { .. } => WorkflowControlError::Unauthorized(detail),
         WorkflowError::Render(_) => WorkflowControlError::InvalidInput(detail),
         WorkflowError::Engine(error) => WorkflowControlError::Core(error),
+        WorkflowError::MaxDepth => WorkflowControlError::Execution(detail),
         WorkflowError::Source { .. }
         | WorkflowError::Compile(_)
-        | WorkflowError::Invalid { .. }
-        | WorkflowError::Admission(_) => WorkflowControlError::Execution(detail),
+        | WorkflowError::Invalid { .. } => WorkflowControlError::Execution(detail),
     }
 }
 

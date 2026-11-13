@@ -2518,9 +2518,8 @@ impl HyaRuntime {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+    use crate::resident_fixture::{ResidentTurn, run_residents};
     use hya_core::CreateSession;
-    use hya_core::{MemberSpec, MemberStatus};
-    use hya_proto::MemberId;
 
     /// Test shim: wrap an installed-bundle catalog as an [`AgentCatalog`] over
     /// the compiled-in built-ins.
@@ -2539,11 +2538,11 @@ mod tests {
         AgentRole, Bundle, BundleIdentity, BundleSource, ModelPolicy, PreparedAgent,
         PreparedResource, ResourceView, SourceFile, prepare_package,
     };
+    use hya_core::CategoryEntry;
     use hya_core::hooks::{
         ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
         ToolExecuteBeforeOutcome, ToolOutcomeNative,
     };
-    use hya_core::{CategoryEntry, run_team};
     use hya_plugin::messages::{METHOD_TOOL_CALL, ToolCallParams, ToolInfo};
     use hya_plugin::protocol::Frame;
     use hya_proto::{
@@ -7028,8 +7027,7 @@ export default {
             sidecar_factory,
             ..
         } = resolved;
-        let spec = MemberSpec {
-            id: MemberId::new(),
+        let spec = ResidentTurn {
             agent,
             binding,
             agents,
@@ -7037,15 +7035,12 @@ export default {
             guidance,
             directive: request.prompt,
             description: request.description,
-            session: None,
             sidecar_factory,
             tool_call: None,
         };
 
-        let evidence = run_team(engine.clone(), lead, vec![spec], Default::default()).await;
-        assert_eq!(evidence.len(), 1);
-        assert_eq!(evidence[0].status, MemberStatus::Done);
-        assert_eq!(evidence[0].summary, "bundle complete");
+        let children = run_residents(engine.clone(), lead, vec![spec], Default::default()).await;
+        assert_eq!(children.len(), 1);
 
         let lead_projection = engine
             .read_projection(lead)
@@ -7061,7 +7056,7 @@ export default {
                 matches!(
                     &envelope.event,
                     Event::MemberFinished {
-                        status: MemberRunStatus::Done,
+                        status: MemberRunStatus::Cancelled,
                         child: Some(event_child),
                         ..
                     } if *event_child == child
@@ -7075,6 +7070,9 @@ export default {
             .replay(child)
             .await
             .expect("replay E2E child");
+        assert!(child_events.iter().any(
+            |e| matches!(&e.event, Event::TextReplace { text, .. } if text == "bundle complete")
+        ));
         assert!(child_events.iter().any(|envelope| {
             matches!(
                 &envelope.event,
@@ -7092,7 +7090,7 @@ export default {
                 .expect("read E2E staging root")
                 .next()
                 .is_none(),
-            "transient sidecar shutdown must remove its activation directory"
+            "resident ending must remove its activation directory"
         );
 
         std::fs::remove_dir_all(staging_root).expect("cleanup E2E staging root");

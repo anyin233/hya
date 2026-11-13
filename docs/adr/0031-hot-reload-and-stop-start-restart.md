@@ -98,7 +98,7 @@ that already ran. A partial answer is therefore retained in replay. Use the
 normal turn cancellation operation (or `hya serve stop` for shutdown); no
 additional configuration is needed.
 
-Resident and transient subagent activations follow the same rule: sidecar loss
+All subagent episode activations follow the same rule: sidecar loss
 cancels the turn token and awaits its cancelled result, including flushing and
 message closure, before recovery or sidecar termination. The caller never drops
 the running turn future to stop it.

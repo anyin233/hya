@@ -43,7 +43,8 @@ three write/publish seams:
    `Some(&ActorClaim)` it routes through `commit_resident_mutation` (fenced
    SQLite commit, publish only after commit); when `None` it falls through to
    plain `emit`. Every resident-originated event goes through this method;
-   transient turns pass `None` and never look up an actor claim.
+   root turns pass `None`. Every Workflow worker and verifier runs under its
+   resident episode claim.
 
 All three eventually call **`publish_envelope`**, the single publish seam: it
 dispatches to global hooks (`HookDispatcher::dispatch_event`), then activation
@@ -284,8 +285,8 @@ route outcomes carry model/effort/failure metadata, not prompts or responses.
 `hya-app::WorkflowControl` is the one orchestration adapter for the CLI, Agent
 tool, native `/workflow` command, HTTP routes, SDK, and in-process transport. It
 builds a catalog from the pinned `TurnBinding`, preflights the complete graph,
-and delegates transient, loop, and resident work to existing core execution
-paths. The server and SDK decorate replayed state with runtime-only source
+and drives every Stage, loop worker and verifier through resident episode
+activations. The server and SDK decorate replayed state with runtime-only source
 availability and Agent activity; neither owns another reducer or scheduler.
 
 Run admission and Workflow selection use actor-fenced store transactions. A
@@ -934,7 +935,7 @@ Each step is checked against the projection, so a part or message that already
 reached a terminal state is never closed twice. Shell turns (`run_shell`) bind
 the same cancel token and close their message the same way on error.
 
-Sidecar loss cancels the resident or transient subagent's turn token and awaits
+Sidecar loss cancels the resident subagent's turn token and awaits
 the turn, so buffered text/reasoning and tool file changes are flushed before
 the message closes. A completed tool result stays a `ToolResult` if cancellation
 arrives just after it; cancellation stops the turn after recording it. Cancelled
@@ -1539,7 +1540,7 @@ The current CLI exposes both goal mode (`hya -p`) and loop mode (`hya loop --tar
 
 Team-related code is split across:
 
-- [`subagent.rs`](../../crates/hya-core/src/subagent.rs) and [`resident.rs`](../../crates/hya-core/src/resident.rs)
+- [`resident.rs`](../../crates/hya-core/src/resident.rs) (all member episodes)
 - [`mailbox.rs`](../../crates/hya-core/src/mailbox.rs) and [`engine/mailbox.rs`](../../crates/hya-core/src/engine/mailbox.rs)
 - [`workspace.rs`](../../crates/hya-core/src/workspace.rs)
 - [`category.rs`](../../crates/hya-core/src/category.rs)

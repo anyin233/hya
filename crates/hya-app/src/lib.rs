@@ -72,3 +72,7 @@ pub use workflow_control::{
     FIRST_PARTY_BUNDLE_ID, ResolvedWorkflow, WorkflowCatalog, WorkflowCatalogOwner,
     WorkflowCatalogRoots, WorkflowControl, WorkflowControlError, WorkflowInvocation,
 };
+
+#[cfg(test)]
+#[path = "../../hya-core/tests/support/resident.rs"]
+mod resident_fixture;

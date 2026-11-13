@@ -10,6 +10,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 mod support;
+use support::resident::{ResidentTurn, run_residents};
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -21,10 +22,10 @@ use hya_bundle::{
     AgentRole, Bundle, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, ResourceView,
 };
 use hya_core::{
-    AgentCatalog, AgentSpec, CoreError, CreateSession, EventBus, MemberSpec, MemberStatus,
-    RuntimeCatalogRefresh, RuntimeRegistry, SessionEngine, run_team,
+    AgentCatalog, AgentSpec, CoreError, CreateSession, EventBus, RuntimeCatalogRefresh,
+    RuntimeRegistry, SessionEngine,
 };
-use hya_proto::{AgentName, FinishReason, MemberId, MessageId, ModelRef, SessionId, ToolCallId};
+use hya_proto::{AgentName, FinishReason, MessageId, ModelRef, SessionId, ToolCallId};
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
     ProviderRouter,
@@ -397,8 +398,7 @@ async fn bound_member_rounds_do_not_rebind() {
             .clone()
             .with_catalog_refresh(refresh.clone()),
     );
-    let spec = MemberSpec {
-        id: MemberId::new(),
+    let spec = ResidentTurn {
         agent: base_spec(&workdir),
         binding: engine.bind_runtime(workdir.path()).unwrap(),
         agents: Arc::from([]),
@@ -406,18 +406,17 @@ async fn bound_member_rounds_do_not_rebind() {
         guidance: None,
         directive: "two rounds".to_string(),
         description: String::new(),
-        session: None,
+
         sidecar_factory: None,
         tool_call: Some(ToolCallId::new()),
     };
 
-    let evidence = run_team(engine.clone(), lead, vec![spec], CancellationToken::new()).await;
+    let evidence = run_residents(engine.clone(), lead, vec![spec], CancellationToken::new()).await;
 
     assert_eq!(evidence.len(), 1);
-    assert_eq!(evidence[0].status, MemberStatus::Done);
-    // The member ran two rounds without a single runtime refresh: bound
-    // activations never rebind.
-    assert_eq!(refresh.calls.load(Ordering::SeqCst), 0);
+    // Root driver setup resolves the main activation once. The member's two
+    // bound rounds do not cause another runtime refresh.
+    assert_eq!(refresh.calls.load(Ordering::SeqCst), 1);
     assert_eq!(provider.requests().len(), 2);
 }
 
