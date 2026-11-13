@@ -706,10 +706,13 @@ impl SessionStore {
             }
         }
         for tree_key in &tree_keys {
-            sqlx::query("DELETE FROM resident_actor_claim WHERE actor_id = ?")
-                .bind(tree_key.as_slice())
-                .execute(&mut *tx)
-                .await?;
+            sqlx::query(
+                "DELETE FROM resident_actor_claim WHERE actor_id = ? OR root_session_id = ?",
+            )
+            .bind(tree_key.as_slice())
+            .bind(tree_key.as_slice())
+            .execute(&mut *tx)
+            .await?;
         }
         // Remove the complete tree in one statement to satisfy the self FK.
         sqlx::query(
@@ -1144,6 +1147,48 @@ mod event_contract_tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn deletion_removes_claims_owned_by_the_root_even_without_actor_sessions() {
+        let store = SessionStore::connect_memory().await.unwrap();
+        let root = SessionId::new();
+        let other = SessionId::new();
+        for session in [root, other] {
+            store
+                .append_event(
+                    session,
+                    &Event::SessionCreated {
+                        session,
+                        parent: None,
+                        agent: "build".into(),
+                        model: "fake".into(),
+                        workdir: "/tmp".into(),
+                        project: None,
+                        kind: hya_proto::SessionKind::Project,
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        let missing_actor = SessionId::new();
+        let unrelated_actor = SessionId::new();
+        for (actor, owner) in [(missing_actor, root), (unrelated_actor, other)] {
+            sqlx::query("INSERT INTO resident_actor_claim (actor_id, root_session_id, epoch, owner_run_id, state) VALUES (?, ?, 1, randomblob(16), 'active')")
+                .bind(actor.storage_key()).bind(owner.storage_key()).execute(&store.pool).await.unwrap();
+        }
+        let seq = store.replay(root).await.unwrap().last().unwrap().seq;
+        assert!(
+            !store
+                .delete_session_at(root, EventSeq(seq.0 + 1))
+                .await
+                .unwrap()
+        );
+        assert_eq!(store.live_member_count(root).await.unwrap(), 1);
+        assert!(store.delete_session_at(root, seq).await.unwrap());
+        assert_eq!(store.live_member_count(root).await.unwrap(), 0);
+        assert_eq!(store.live_member_count(other).await.unwrap(), 1);
+        assert!(store.replay(other).await.is_ok());
     }
 
     #[tokio::test]
