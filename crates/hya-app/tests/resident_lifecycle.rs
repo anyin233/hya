@@ -2688,7 +2688,7 @@ async fn a6_archive_bus_observation_implies_episode_gone() {
 #[tokio::test]
 async fn a5_kill_during_init_publishes_registration_first_and_keeps_spawn_identity() {
     let test = "a5_kill_during_init_publishes_registration_first_and_keeps_spawn_identity";
-    if support::lifecycle::isolated_config(test, &[("HYA_SUBAGENT_MESSAGE_BUDGET", "1")]) {
+    if support::lifecycle::isolated_config(test, &[("HYA_SUBAGENT_MESSAGE_BUDGET", "3")]) {
         return;
     }
     let plugin = support::lifecycle::BlockingPlugin::new().await;
@@ -2713,6 +2713,8 @@ async fn a5_kill_during_init_publishes_registration_first_and_keeps_spawn_identi
                 result = &mut spawning => panic!("initializer was not gated: {result:?}"),
                 () = plugin.gate.arrived() => {},
             }
+            // Both registration directives are already published and count
+            // toward the budget; the second extra message crosses three.
             h.mail(&sibling_handle, "first budget message".into())
                 .await
                 .unwrap();
