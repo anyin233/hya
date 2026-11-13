@@ -102,11 +102,11 @@ pub async fn run_lifecycle_service(
     }
 }
 
+pub(crate) fn report_allowed(policy: hya_tool::ChannelPolicySnapshot) -> bool {
+    policy.dm_child & (1 << 1) != 0
+}
+
 /// Resolve the acting session to its team handle, then submit the report.
-#[expect(
-    clippy::nonminimal_bool,
-    reason = "preserve the upstream policy predicate"
-)]
 async fn submit_report_for_session(
     engine: &SessionEngine,
     supervisor: &ResidentSupervisor,
@@ -117,7 +117,7 @@ async fn submit_report_for_session(
 ) -> Result<(), crate::CoreError> {
     let (root, _) = engine.session_lineage(session).await?;
     let handle = engine.resolve_handle(root, session).await?;
-    if !channel_policy.is_some_and(|policy| policy.dm_child & (1 << 1) != 0) {
+    if !channel_policy.is_some_and(report_allowed) {
         return Err(crate::CoreError::Invalid(
             "channel policy denies report for this agent".to_string(),
         ));
