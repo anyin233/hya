@@ -88,6 +88,16 @@ return the owned `JoinHandle<F::Output>`. These helpers track completion without
 owning cancellation. The runtime waits for this barrier after stopping source
 owners, including cleanup from canceled deferred initialization.
 
+For an embedded headless root driver, hold
+`ResidentSupervisor::root_driver_activity(session: SessionId) -> Result<RootDriverActivity, CoreError>`
+for the entire run. The guard reuses the Workflow activity counter: while held,
+the supervisor neither starts root mail turns nor admits quiescence synthesis
+prompts. Member turns still run. For example, `exec` holds this guard while its
+lead loop checks live members, unread root mail, todos and final-step output;
+only that loop injects continuation system notices. A cold root stays
+non-autonomous when the guard drops; a later externally started root turn
+restores normal resident supervision.
+
 ## Build and Quality Gate
 
 Local verification is **per component**: run the checks for the crates and

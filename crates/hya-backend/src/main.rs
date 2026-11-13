@@ -225,12 +225,18 @@ async fn cmd_exec(
             let (turn, stop) = run_until_stopped(
                 built,
                 &cancel,
-                lead_wrapup::run_lead(&engine, session, agent, cancel.clone(), prompt),
+                lead_wrapup::run_lead(
+                    &engine,
+                    &built.resident_supervisor(),
+                    session,
+                    agent,
+                    cancel.clone(),
+                    prompt,
+                ),
             )
             .await?;
             // End of the run: nothing may keep streaming after `exec` returns. Every
-            // other in-flight turn (members, a deferred synthesis turn on the lead)
-            // is drained before the trajectory is flushed, so stdout and the log end
+            // other in-flight member turn is drained before the trajectory is flushed, so stdout and the log end
             // on terminal events.
             if stop.is_none() {
                 built
