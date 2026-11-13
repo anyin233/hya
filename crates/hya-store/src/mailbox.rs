@@ -1,7 +1,7 @@
 use hya_proto::{
-    ActorClaim, ActorEpoch, ArchiveReason, Envelope, Event, FinishCause, FinishReason,
-    MailEndpoint, MailKind, MemberId, MemberRunStatus, MessageId, PartId, Projection,
-    ReportOutcome, Role, RosterEntry, RosterStatus, SessionId, SubagentMode, scope,
+    ActorClaim, ActorEpoch, ArchiveReason, Envelope, Event, MailEndpoint, MailKind, MemberId,
+    MemberRunStatus, Projection, ReportOutcome, RosterEntry, RosterStatus, SessionId, SubagentMode,
+    scope,
 };
 
 use crate::{
@@ -257,7 +257,6 @@ impl SessionStore {
                         &mut tx,
                         recovered.claim.actor_id,
                         recovery_reason,
-                        FinishCause::Interrupted,
                     )
                     .await?,
                 );
@@ -292,23 +291,12 @@ impl SessionStore {
                     queued_after: inbox_len > resident_work.inbox_through,
                 }
             }
-        } else {
-            let actor_projection =
-                replay_projection(&self.projections, &mut tx, recovered.claim.actor_id).await?;
-            let pending_user_turn = actor_projection
-                .session
-                .messages
-                .last()
-                .is_some_and(|message| message.role == Role::User);
-            if inbox_len > entry.resident_cursor
-                || (pending_user_turn && entry.status == RosterStatus::Idle)
-            {
-                RecoveredResidentWork::Queued {
-                    inbox_cursor: entry.resident_cursor,
-                }
-            } else {
-                RecoveredResidentWork::Idle
+        } else if inbox_len > entry.resident_cursor {
+            RecoveredResidentWork::Queued {
+                inbox_cursor: entry.resident_cursor,
             }
+        } else {
+            RecoveredResidentWork::Idle
         };
 
         tx.commit().await?;
@@ -323,7 +311,6 @@ impl SessionStore {
         root: SessionId,
         handle: &str,
         archive: ResidentArchive,
-        cause: FinishCause,
     ) -> Result<(ResidentArchiveOutcome, Vec<Envelope>), StoreError> {
         let actor_id = archive.actor;
         let reason = archive.note.as_str();
@@ -437,13 +424,16 @@ impl SessionStore {
             let read_through = entry.resident_work.map_or(entry.resident_cursor, |work| {
                 entry.resident_cursor.max(work.inbox_through)
             });
-            let inbox_len = projection
+            let unread: Vec<_> = projection
                 .team
                 .inboxes
                 .get(handle)
-                .map_or(0, |inbox| inbox.len() as u64);
-            if read_through < inbox_len {
-                let unread = &projection.team.inboxes[handle][read_through as usize..];
+                .into_iter()
+                .flatten()
+                .skip(usize::try_from(read_through).unwrap_or(usize::MAX))
+                .filter(|mail| mail.from != handle)
+                .collect();
+            if !unread.is_empty() {
                 let channels: std::collections::BTreeSet<_> = unread
                     .iter()
                     .map(|mail| match &mail.to {
@@ -453,7 +443,7 @@ impl SessionStore {
                     .collect();
                 refusal = Some(format!(
                     "{} unread mail on {}",
-                    inbox_len - read_through,
+                    unread.len(),
                     channels.into_iter().collect::<Vec<_>>().join(", ")
                 ));
             } else if let Some(child) = projection
@@ -494,7 +484,6 @@ impl SessionStore {
             &mut tx,
             claim.actor_id,
             reason,
-            cause,
         )
         .await?;
         if archive.report.is_none() {
@@ -648,56 +637,9 @@ async fn append_resident_effects_in_transaction(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     actor: SessionId,
     reason: &str,
-    cause: FinishCause,
 ) -> Result<Vec<Envelope>, StoreError> {
     let projection = replay_projection(cache, tx, actor).await?;
-    let mut events = resident_effect_terminal_events(actor, &projection, reason);
-    if projection
-        .session
-        .messages
-        .last()
-        .is_some_and(|message| message.role == Role::User)
-    {
-        let message = MessageId::new();
-        let part = PartId::new();
-        // Empty assistant messages are omitted from model requests. Keep an
-        // explicit cancellation answer so the old directive is visibly closed.
-        events.extend([
-            Event::MessageStarted {
-                session: actor,
-                message,
-                role: Role::Assistant,
-                agent: None,
-                model: None,
-            },
-            Event::TextStart {
-                session: actor,
-                message,
-                part,
-            },
-            Event::TextDelta {
-                session: actor,
-                message,
-                part,
-                delta: format!(
-                    "Task cancelled before execution: {reason}. Do not execute the preceding task."
-                ),
-            },
-            Event::TextEnd {
-                session: actor,
-                message,
-                part,
-            },
-            Event::MessageFinished {
-                session: actor,
-                message,
-                role: Role::Assistant,
-                finish: FinishReason::Cancelled,
-                tokens: None,
-                cause: Some(cause),
-            },
-        ]);
-    }
+    let events = resident_effect_terminal_events(actor, &projection, reason);
     let mut envelopes = Vec::with_capacity(events.len());
     for event in events {
         envelopes.push(append_event_in_transaction(tx, actor, event).await?);

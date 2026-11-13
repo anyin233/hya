@@ -1940,7 +1940,7 @@ async fn steer_resyncs_mail_from_the_log_after_the_bus_lagged() {
     assert!(notice.contains("LAGGED_MAIL_BODY"), "{notice}");
     let projection = engine.read_projection(root).await.unwrap();
     assert_eq!(
-        projection.team.roster["main"].resident_cursor, 0,
+        projection.team.roster["main"].resident_cursor, 1,
         "preparing a notice alone must not consume mail"
     );
 }
@@ -1973,13 +1973,13 @@ async fn report_gate_counts_mail_the_current_wake_delivered_as_read() {
                 actor_session: child,
                 handle: handle.clone(),
                 epoch: hya_proto::ActorEpoch::INITIAL,
-                inbox_through: 1,
+                inbox_through: 2,
             },
         )
         .await
         .unwrap();
     let projection = engine.read_projection(root).await.unwrap();
-    assert!(projection.team.roster[&handle].resident_cursor < 1);
+    assert!(projection.team.roster[&handle].resident_cursor < 2);
     supervisor
         .report_gate(root, &handle)
         .await
@@ -2042,9 +2042,9 @@ async fn report_policy_denial_rejects_the_real_lifecycle_request() {
 }
 
 #[tokio::test]
-async fn resident_mail_policy_denial_does_not_wake_an_idle_resident() {
+async fn unit_resident_mail_policy_denial_does_not_wake_an_idle_resident() {
     let engine = engine_with_channel_restriction(
-        "  - { id: dm, kind: parent_dm, participants: [{kind: role, role: child}], capabilities: [send, report, steer, follow_up], scope: vertical, retention: team_session }",
+        "  - { id: dm, kind: unit, participants: [{kind: role, role: direct_reports}], capabilities: [send, report, steer, follow_up], scope: unit, retention: team_session }",
     )
     .await;
     let root = root_team(&engine).await;
@@ -2060,12 +2060,7 @@ async fn resident_mail_policy_denial_does_not_wake_an_idle_resident() {
         .len();
 
     engine
-        .mail_send(
-            root,
-            MailEndpoint::Handle(handle.clone()),
-            MailKind::Message,
-            "do not wake".to_string(),
-        )
+        .mail_announce(root, "do not wake".to_string())
         .await
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -2091,15 +2086,26 @@ async fn resident_mail_policy_denial_does_not_wake_an_idle_resident() {
 /// Both commits are visible before the listener handles either envelope. This
 /// reproduces the batched-mail boundary without relying on task scheduling.
 #[tokio::test]
-async fn two_policy_denied_mails_committed_together_are_consumed() {
+async fn unit_two_policy_denied_mails_committed_together_are_consumed() {
     let engine = engine_with_channel_restriction(
-        "  - { id: dm, kind: parent_dm, participants: [{kind: role, role: child}], capabilities: [send, report, steer, follow_up], scope: vertical, retention: team_session }",
+        "  - { id: dm, kind: unit, participants: [{kind: role, role: direct_reports}], capabilities: [send, report, steer, follow_up], scope: unit, retention: team_session }",
     ).await;
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
     let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "hya-scout").await;
     let before = engine.replay(child).await.unwrap();
+    let group = engine
+        .read_projection(root)
+        .await
+        .unwrap()
+        .team
+        .channels
+        .iter()
+        .find(|(_, channel)| channel.kind == hya_proto::ChannelKind::Group)
+        .unwrap()
+        .0
+        .clone();
     let mut events = engine.bus().subscribe();
     let batch = engine
         .store()
@@ -2110,7 +2116,7 @@ async fn two_policy_denied_mails_committed_together_are_consumed() {
                 .map(|body| Event::MailSent {
                     session: root,
                     from: "main".into(),
-                    to: MailEndpoint::Handle(handle.clone()),
+                    to: MailEndpoint::Channel(group.clone()),
                     kind: MailKind::Message,
                     body: body.into(),
                 })
@@ -2124,7 +2130,7 @@ async fn two_policy_denied_mails_committed_together_are_consumed() {
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             let projection = engine.read_projection(root).await.unwrap();
-            if projection.team.roster[&handle].resident_cursor == 2 {
+            if projection.team.roster[&handle].resident_cursor == 3 {
                 break;
             }
             events.recv().await.unwrap();
@@ -2197,9 +2203,9 @@ async fn public_mail_send_uses_the_session_captured_channel_policy() {
 }
 
 #[tokio::test]
-async fn follow_up_policy_denial_does_not_queue_a_second_resident_turn() {
+async fn unit_follow_up_policy_denial_does_not_queue_a_second_resident_turn() {
     let engine = engine_with_channel_restriction(
-        "  - { id: dm, kind: parent_dm, participants: [{kind: role, role: child}], capabilities: [send, report, steer, resident_mail], scope: vertical, retention: team_session }",
+        "  - { id: dm, kind: unit, participants: [{kind: role, role: direct_reports}], capabilities: [send, report, steer, resident_mail], scope: unit, retention: team_session }",
     )
     .await;
     let root = root_team(&engine).await;
@@ -2234,12 +2240,7 @@ async fn follow_up_policy_denial_does_not_queue_a_second_resident_turn() {
         tokio::task::yield_now().await;
     }
     engine
-        .mail_send(
-            root,
-            MailEndpoint::Handle(handle.clone()),
-            MailKind::Message,
-            "denied follow-up".to_string(),
-        )
+        .mail_announce(root, "denied follow-up".to_string())
         .await
         .unwrap();
     wait_idle(&engine, root, &handle, child).await;
@@ -2258,9 +2259,9 @@ async fn follow_up_policy_denial_does_not_queue_a_second_resident_turn() {
 }
 
 #[tokio::test]
-async fn resident_mail_without_follow_up_is_not_delivered_after_idle_recovery() {
+async fn unit_resident_mail_without_follow_up_is_not_delivered_after_idle_recovery() {
     let engine = engine_with_channel_restriction(
-        "  - { id: dm, kind: parent_dm, participants: [{kind: role, role: child}], capabilities: [send, report, steer, resident_mail], scope: vertical, retention: team_session }",
+        "  - { id: dm, kind: unit, participants: [{kind: role, role: direct_reports}], capabilities: [send, report, steer, resident_mail], scope: unit, retention: team_session }",
     )
     .await;
     let root = root_team(&engine).await;
@@ -2276,12 +2277,7 @@ async fn resident_mail_without_follow_up_is_not_delivered_after_idle_recovery() 
         .len();
 
     engine
-        .mail_send(
-            root,
-            MailEndpoint::Handle(handle.clone()),
-            MailKind::Message,
-            "resident-only must stay hidden".to_string(),
-        )
+        .mail_announce(root, "resident-only must stay hidden".to_string())
         .await
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;

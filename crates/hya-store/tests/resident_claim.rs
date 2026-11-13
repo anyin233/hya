@@ -25,7 +25,7 @@ async fn finalize_resident(
         doc: "1. Goal - test task\n2. Current state - stopped\n3. Files and code - none\n4. Decisions - none\n5. Pending tasks - none\n6. Next step - none".into(),
         degraded: true, reason: hya_proto::ArchiveReason::Killed, note: note.into(), member_status: status,
         report: None, check_gate: false, expected_work: None,
-    }, if status == MemberRunStatus::Failed { hya_proto::FinishCause::Other } else { hya_proto::FinishCause::UserCancel }).await?;
+    },).await?;
     assert_eq!(outcome, hya_store::ResidentArchiveOutcome::Committed);
     Ok(envelopes)
 }
@@ -191,7 +191,6 @@ async fn terminal_takeover_is_idempotent_after_claim_or_takeover_archive() {
                 fixture.root,
                 &fixture.handle,
                 orphan_archive(fixture.actor),
-                hya_proto::FinishCause::Archived,
             )
             .await
             .unwrap();
@@ -204,7 +203,6 @@ async fn terminal_takeover_is_idempotent_after_claim_or_takeover_archive() {
                 fixture.root,
                 &fixture.handle,
                 orphan_archive(fixture.actor),
-                hya_proto::FinishCause::Archived,
             )
             .await
             .unwrap();
@@ -254,7 +252,6 @@ async fn terminal_takeover_requires_a_released_claim_and_matching_archive_for_re
                         fixture.root,
                         &fixture.handle,
                         orphan_archive(fixture.actor),
-                        hya_proto::FinishCause::Archived,
                     )
                     .await
                     .unwrap();
@@ -296,7 +293,6 @@ async fn terminal_takeover_requires_a_released_claim_and_matching_archive_for_re
                     &fixture.handle
                 },
                 orphan_archive(actor),
-                hya_proto::FinishCause::Archived,
             )
             .await;
         assert!(
@@ -334,7 +330,6 @@ async fn terminal_takeover_requires_the_owning_store_handle() {
             fixture.root,
             &fixture.handle,
             orphan_archive(fixture.actor),
-            hya_proto::FinishCause::Archived,
         )
         .await;
     assert!(matches!(result, Err(StoreError::RuntimeOwnerClaimRequired)));
@@ -367,7 +362,6 @@ async fn terminal_takeover_rejects_a_voluntary_report_gate_without_changing_the_
             fixture.root,
             &fixture.handle,
             archive,
-            hya_proto::FinishCause::Archived,
         )
         .await;
     assert!(
@@ -422,7 +416,6 @@ async fn terminal_takeover_archives_an_active_claim() {
             fixture.root,
             &fixture.handle,
             archive(),
-            hya_proto::FinishCause::Archived,
         )
         .await;
     assert!(matches!(failed, Err(StoreError::Sqlite(_))));
@@ -450,7 +443,6 @@ async fn terminal_takeover_archives_an_active_claim() {
             fixture.root,
             &fixture.handle,
             archive(),
-            hya_proto::FinishCause::Archived,
         )
         .await
         .unwrap();
@@ -556,7 +548,6 @@ async fn refused_report_commits_only_a_harness_notice() {
                 fixture.root,
                 &fixture.handle,
                 archive(),
-                hya_proto::FinishCause::UserCancel,
             )
             .await;
         assert!(matches!(failed, Err(StoreError::Sqlite(_))));
@@ -584,7 +575,6 @@ async fn refused_report_commits_only_a_harness_notice() {
                 fixture.root,
                 &fixture.handle,
                 archive(),
-                hya_proto::FinishCause::UserCancel,
             )
             .await
             .unwrap();
@@ -1354,7 +1344,7 @@ async fn resident_finalization_closes_its_member_row_on_the_parent_log() {
 }
 
 #[tokio::test]
-async fn registration_rolls_back_claim_and_all_sessions_on_prompt_failure() {
+async fn registration_rolls_back_claim_and_all_sessions_on_directive_mail_failure() {
     let db = TempDb::new("registration");
     let store = SessionStore::connect(db.path()).await.unwrap();
     let root = SessionId::new();
@@ -1377,12 +1367,13 @@ async fn registration_rolls_back_claim_and_all_sessions_on_prompt_failure() {
     let mut conn = SqliteConnection::connect(&format!("sqlite://{}", db.path()))
         .await
         .unwrap();
-    sqlx::query("CREATE TRIGGER reject_initial_prompt BEFORE INSERT ON event_log WHEN instr(NEW.payload, 'reject_initial_prompt') > 0 BEGIN SELECT RAISE(ABORT, 'prompt failure'); END")
+    sqlx::query("CREATE TRIGGER reject_directive_mail BEFORE INSERT ON event_log WHEN instr(NEW.payload, 'reject_directive_mail') > 0 BEGIN SELECT RAISE(ABORT, 'prompt failure'); END")
         .execute(&mut conn).await.unwrap();
-    let registrations = ["first", "reject_initial_prompt"]
+    let registrations = ["first", "reject_directive_mail"]
         .into_iter()
         .map(|directive| {
             let child = SessionId::new();
+            let dm = hya_proto::mint_channel_id(hya_proto::ChannelKind::Dm);
             hya_store::EpisodeRegistration {
                 actor: child,
                 events: vec![
@@ -1398,16 +1389,24 @@ async fn registration_rolls_back_claim_and_all_sessions_on_prompt_failure() {
                     Event::AgentRegistered {
                         session: root,
                         agent_session: child,
-                        handle: directive.into(),
+                        handle: child.to_string(),
                         parent: Some("main".into()),
                         agent_type: AgentName::new("worker"),
                         mode: SubagentMode::Resident,
                     },
-                    Event::TextDelta {
-                        session: child,
-                        message: MessageId::new(),
-                        part: PartId::new(),
-                        delta: directive.into(),
+                    Event::ChannelCreated {
+                        session: root,
+                        channel: dm.clone(),
+                        kind: hya_proto::ChannelKind::Dm,
+                        unit: None,
+                        members: vec!["main".into(), format!("main/{child}")],
+                    },
+                    Event::MailSent {
+                        session: root,
+                        from: "main".into(),
+                        to: MailEndpoint::Channel(dm),
+                        kind: MailKind::Message,
+                        body: directive.into(),
                     },
                 ],
             }
@@ -1669,7 +1668,7 @@ async fn lead_begin_work_consumption_rolls_back_with_the_prompt() {
 }
 
 #[tokio::test]
-async fn begin_work_reuses_registered_prompt_and_rolls_back_its_mail_append() {
+async fn begin_work_resumes_unanswered_prompt_and_rolls_back_its_mail_append() {
     let db = TempDb::new("registered-work");
     let store = SessionStore::connect(db.path()).await.unwrap();
     let (root, claim) = work_fixture(&store).await;
@@ -1696,7 +1695,7 @@ async fn begin_work_reuses_registered_prompt_and_rolls_back_its_mail_append() {
                     session,
                     message,
                     part,
-                    delta: "registered directive".into(),
+                    delta: "unfinished wake".into(),
                 },
                 Event::TextEnd {
                     session,
@@ -1728,7 +1727,7 @@ async fn begin_work_reuses_registered_prompt_and_rolls_back_its_mail_append() {
                 root,
                 "main/worker",
                 2,
-                hya_store::ResidentWorkPrompt::Admitted {
+                hya_store::ResidentWorkPrompt::Resume {
                     message,
                     append: "first\n\nsecond".into()
                 },
@@ -1749,7 +1748,7 @@ async fn begin_work_reuses_registered_prompt_and_rolls_back_its_mail_append() {
             root,
             "main/worker",
             2,
-            hya_store::ResidentWorkPrompt::Admitted {
+            hya_store::ResidentWorkPrompt::Resume {
                 message,
                 append: "first\n\nsecond".into(),
             },
@@ -1761,7 +1760,7 @@ async fn begin_work_reuses_registered_prompt_and_rolls_back_its_mail_append() {
     let projection = store.read_projection(session).await.unwrap();
     assert_eq!(projection.session.messages.len(), 1);
     assert!(
-        matches!(&projection.session.messages[0].parts[0], PartProjection::Text { text, .. } if text == "registered directive\n\nfirst\n\nsecond")
+        matches!(&projection.session.messages[0].parts[0], PartProjection::Text { text, .. } if text == "unfinished wake\n\nfirst\n\nsecond")
     );
 }
 
