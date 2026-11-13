@@ -181,9 +181,21 @@ ending of every actor it registered, including parked actors in a partially
 registered level. Claims belonging to concurrent tasks are untouched. Successful
 runs retain their parked actors for subsequent activation.
 
-Loop continuations still use the transient executor. The controller ends their
-first resident episode before that executor reuses the child Session; M4-10
-will replace this handoff with repeated episode activations.
+Loop continuations reactivate the same worker through `activate` / its
+`ActivationWaiter`. Settlement retains its identity, runtime and capacity claim;
+a report releases the claim, so continuation revives it with the fenced,
+capacity-checked `revive_episode` transaction. Each verifier judgment registers
+a fresh parked resident, activates it, consumes successful settlement or a Done
+report, then awaits `end_member` on every result path. Loop and verifier capacity
+refusals keep `WORKFLOW_OVERLOADED`.
+
+Parked registration returns the committed identity after episode installation,
+before initializer hooks finish. Its episode still completes initialization
+before any turn. This lets the controller cancel an activation while a hook is
+blocked. Ordinary task registration retains its initialization wait. The
+iteration driver does not race and drop a pending Workflow judgment: worker and
+verifier activation controllers observe the run token and finish their owned
+cleanup before returning. No extra executor task or wire API is introduced.
 
 ### Episode activation contract (core-internal)
 

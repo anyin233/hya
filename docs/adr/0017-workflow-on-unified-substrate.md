@@ -1,10 +1,8 @@
 # Workflow execution on the unified agent substrate
 
-ADR-0013 and ADR-0014 built user-assembled workflows on a dedicated durable
-executor whose stages run as transient teams with per-member workflow routes
-(`run_pre_admitted_team_with_workflow`). After ADR-0015 deletes the transient
-path, that executor is the last surviving second spawn path — exactly the
-duplication the redesign removes.
+ADR-0013 and ADR-0014 originally used a dedicated transient team executor.
+Workflow now uses resident episodes for every worker turn and verifier judgment;
+the transient executor and its evidence envelope are deleted.
 
 ## Decision
 
@@ -33,9 +31,14 @@ substrate**:
 
 ## Consequences
 
-- First Stage activations share the `task` episode substrate. Loop
-  continuations and verifiers still use the transient executor; their move
-  onto episodes and deletion of that executor remain the next packet.
+- First Stage activations, loop continuations and verifiers share the `task`
+  episode substrate and count against live team capacity. A settled worker
+  retains its claim and runtime; a reported worker is revived under the same
+  identity through the fenced capacity check. Each judgment gets a fresh
+  parked verifier, activated through the same waiter and ended after its result.
+- Verifier cancellation waits for its episode's ending, including cancellation
+  during initialization. Root driver activity covers the whole run and cleanup.
+  Scheduling remains level-by-level.
 - The TUI presents workflow agents in the same tree and channels as ordinary
   subagents; there is no parallel workflow presentation surface.
 - Workflow retry cost and context behavior follow the handoff model: a retried

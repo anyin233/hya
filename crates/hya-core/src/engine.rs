@@ -1,12 +1,11 @@
 use std::collections::{BTreeMap, HashMap};
-use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
 use async_trait::async_trait;
 use hya_proto::{
-    AgentName, Envelope, Event, EventSeq, MessageId, ModelRef, OperationId, ProjectId, Projection,
-    SessionId, SessionKind, ToolCallId, ToolSchema, now_millis,
+    AgentName, Envelope, Event, EventSeq, MessageId, ModelRef, ProjectId, Projection, SessionId,
+    SessionKind, ToolCallId, ToolSchema, now_millis,
 };
 use hya_provider::{ProviderCatalogSnapshot, ProviderModel, ProviderRouter, ReasoningEffort};
 use hya_store::{ActorClaim, SessionStore};
@@ -141,33 +140,6 @@ pub struct AgentSpec {
     pub workdir: PathBuf,
     /// Optional reasoning effort for capable models.
     pub reasoning: Option<ReasoningEffort>,
-}
-
-/// Process-local identity for one admitted member in a parent orchestration turn.
-///
-/// This value is only an in-process binding between admission and nested spawn
-/// observation. It is never persisted, serialized onto the wire, or used as
-/// session or event authority.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AdmissionMemberIdentity {
-    /// Operation id of the parent tool call that admitted the member.
-    pub operation_id: OperationId,
-    /// Zero-based ordinal within that admission batch.
-    pub member_ordinal: u32,
-}
-
-tokio::task_local! {
-    static CURRENT_ADMISSION_MEMBER: Option<AdmissionMemberIdentity>;
-}
-
-pub(crate) async fn scope_admission_member<F, T>(
-    admission: Option<AdmissionMemberIdentity>,
-    future: F,
-) -> T
-where
-    F: Future<Output = T>,
-{
-    CURRENT_ADMISSION_MEMBER.scope(admission, future).await
 }
 
 #[cfg(test)]
@@ -1834,41 +1806,6 @@ impl SessionEngine {
     ///
     /// # Errors
     /// Returns claim validation or store failures.
-    #[doc(hidden)]
-    pub async fn create_for_actor(
-        &self,
-        claim: &ActorClaim,
-        spec: CreateSession,
-    ) -> Result<SessionId, CoreError> {
-        let id = SessionId::new();
-        let (project, kind) = self.session_project(&spec).await?;
-        self.commit_resident_mutation(
-            claim,
-            id,
-            vec![Event::SessionCreated {
-                session: id,
-                parent: spec.parent,
-                agent: spec.agent,
-                model: spec.model,
-                workdir: spec.workdir,
-                project,
-                kind,
-            }],
-        )
-        .await?;
-        for hooks in self
-            .hooks
-            .iter()
-            .cloned()
-            .chain(self.runtime.global_plugin_hooks())
-        {
-            hooks
-                .session_start(SessionLifecycleInput { session: id })
-                .await;
-        }
-        Ok(id)
-    }
-
     /// Create or re-open a session with an optional fixed id (idempotent if log non-empty).
     ///
     /// # Errors

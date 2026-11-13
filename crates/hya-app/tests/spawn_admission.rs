@@ -1116,7 +1116,7 @@ async fn guidance_spawn_fixture(
 }
 
 #[tokio::test]
-async fn transient_child_uses_triggering_turn_guidance_once_without_child_scan() {
+async fn task_child_uses_triggering_turn_guidance_once_without_child_scan() {
     // Two provider rounds on the child: guidance must appear once per system
     // string (composed once) and never include child-workdir scan content.
     let fixture = guidance_spawn_fixture(
@@ -1171,7 +1171,7 @@ async fn transient_child_uses_triggering_turn_guidance_once_without_child_scan()
             Default::default(),
         )
         .await
-        .expect("transient spawn");
+        .expect("task spawn");
     assert_eq!(outcomes[0].status, "running", "{outcomes:?}");
     wait_member_turn_done(&fixture.engine, &outcomes[0].session).await;
 
@@ -1791,11 +1791,11 @@ fn nested_root_divergence_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegist
     ))
 }
 
-/// Nested caller is first to produce a resident: main quiescence synthesis must
+/// Nested resident task calls must preserve main quiescence synthesis using the
 /// bind the team root stable AgentName definition, root roster/resource policy,
 /// and inherited guidance — never the nested caller's.
 #[tokio::test]
-async fn nested_first_resident_main_synthesis_uses_root_definition_not_caller() {
+async fn nested_resident_main_synthesis_keeps_root_definition_and_guidance() {
     let systems = Arc::new(Mutex::new(Vec::new()));
     let by_session = Arc::new(Mutex::new(Vec::new()));
     let tools_by_session = Arc::new(Mutex::new(Vec::new()));
@@ -1839,7 +1839,7 @@ async fn nested_first_resident_main_synthesis_uses_root_definition_not_caller() 
         engine.clone(),
         base.clone(),
         Arc::new(CategoryRegistry::default()),
-        resident,
+        resident.clone(),
     );
 
     let root = engine
@@ -1853,21 +1853,29 @@ async fn nested_first_resident_main_synthesis_uses_root_definition_not_caller() 
         })
         .await
         .unwrap();
-    // Nested subagent is the spawn parent (first resident-producing spawn).
-    let nested = engine
-        .create(CreateSession {
-            parent: Some(root),
-            agent: AgentName::new("planner"),
-            model: ModelRef::new("fake"),
-            workdir: workdir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-
+    // Create the parent through the real task admission path. A transient or
+    // otherwise unregistered nested caller is no longer a runtime state.
     let binding = engine.bind_runtime(&workdir).unwrap();
     let spawner = spawn_sender.for_binding(&binding);
+    let root_roster = engine
+        .agent_roster_for_binding(&binding, "root-main")
+        .unwrap();
+    let outcomes = spawner
+        .for_session_with_agents_and_guidance(root, root_roster, Some(Arc::from(TRIGGER_GUIDANCE)))
+        .spawn(
+            operation(),
+            vec![SpawnMember {
+                description: "parent planner".into(),
+                prompt: "prepare nested work".into(),
+                subagent_type: "planner".into(),
+                ..SpawnMember::default()
+            }],
+            Default::default(),
+        )
+        .await
+        .unwrap();
+    let nested = outcomes[0].session.parse::<SessionId>().unwrap();
+
     let nested_roster = engine
         .agent_roster_for_binding(&binding, "planner")
         .unwrap();

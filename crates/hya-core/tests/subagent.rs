@@ -3,6 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod support;
+use support::resident::{ResidentTurn, run_residents};
 
 use async_trait::async_trait;
 use futures::stream;
@@ -11,18 +12,17 @@ use hya_bundle::{
     ResourceView,
 };
 use hya_core::{
-    AdmissionMemberIdentity, AgentCatalog, AgentSpec, BoundSidecarFactory, BoundSpawnSender,
-    ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome,
-    CoreError, CreateSession, EventBus, HookDispatcher, MemberSpec, MemberStatus,
-    MessageUserBeforeInput, MessageUserBeforeOutcome, ResidentSupervisor, RuntimeRegistry,
-    SessionEngine, SidecarHandle, SidecarLifecycle, SidecarStart, SubagentGovernor, SubagentLimits,
-    TeamEvidenceEnvelope, TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput,
-    ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, project_envelope,
-    run_pre_admitted_member, run_team,
+    AgentCatalog, AgentSpec, BoundSidecarFactory, BoundSpawnSender, ChatParamsInput,
+    ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, CoreError,
+    CreateSession, EventBus, HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome,
+    ResidentSupervisor, RuntimeRegistry, SessionEngine, SidecarHandle, SidecarLifecycle,
+    SidecarStart, SubagentGovernor, SubagentLimits, TextCompleteInput, TextCompleteOutcome,
+    ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
+    ToolExecuteBeforeOutcome,
 };
 use hya_proto::{
-    AgentName, Event, FinishReason, MailEndpoint, MailKind, MemberId, MemberRunStatus, MessageId,
-    ModelRef, PartProjection, Role, RosterStatus, SessionId, ToolCallId, ToolName, ToolSchema,
+    AgentName, Event, FinishReason, MailEndpoint, MailKind, MemberRunStatus, MessageId, ModelRef,
+    PartProjection, Role, RosterStatus, SessionId, ToolCallId, ToolName, ToolSchema,
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
@@ -31,7 +31,7 @@ use hya_provider::{
 use hya_store::SessionStore;
 use hya_tool::{
     Action, MemberOutcome, Mode, PermissionPlane, PermissionRules, ResolvedTool, Resource, Rule,
-    Tool, ToolCtx, ToolError, ToolOperation, ToolPermission, ToolRegistry,
+    Tool, ToolCtx, ToolError, ToolPermission, ToolRegistry,
 };
 use serde_json::{Value, json};
 use sqlx::{Connection, SqliteConnection};
@@ -209,60 +209,6 @@ impl Provider for TransientLossProvider {
                 cause: None,
             })
         })))
-    }
-}
-
-struct TransientLossFactory {
-    healthy: Arc<AtomicBool>,
-    loss: CancellationToken,
-    terminated: Arc<Notify>,
-    terminates: Arc<AtomicUsize>,
-}
-
-struct TransientLossHandle {
-    healthy: Arc<AtomicBool>,
-    loss: CancellationToken,
-    terminated: Arc<Notify>,
-    terminates: Arc<AtomicUsize>,
-}
-
-#[async_trait]
-impl BoundSidecarFactory for TransientLossFactory {
-    async fn start(&self, _start: SidecarStart) -> Result<Box<dyn SidecarHandle>, CoreError> {
-        Ok(Box::new(TransientLossHandle {
-            healthy: self.healthy.clone(),
-            loss: self.loss.clone(),
-            terminated: self.terminated.clone(),
-            terminates: self.terminates.clone(),
-        }))
-    }
-}
-
-#[async_trait]
-impl SidecarHandle for TransientLossHandle {
-    async fn ready(&mut self) -> Result<(), CoreError> {
-        self.healthy.store(true, Ordering::SeqCst);
-        Ok(())
-    }
-
-    async fn shutdown(&mut self) -> Result<(), CoreError> {
-        self.healthy.store(false, Ordering::SeqCst);
-        Ok(())
-    }
-
-    fn is_healthy(&self) -> bool {
-        self.healthy.load(Ordering::SeqCst)
-    }
-
-    fn loss_token(&self) -> Option<CancellationToken> {
-        Some(self.loss.clone())
-    }
-
-    async fn terminate(&mut self) -> Result<(), CoreError> {
-        self.terminates.fetch_add(1, Ordering::SeqCst);
-        self.healthy.store(false, Ordering::SeqCst);
-        self.terminated.notify_one();
-        Ok(())
     }
 }
 
@@ -935,56 +881,6 @@ impl SidecarHandle for HookLossHandle {
     }
 }
 
-struct ShutdownProbeFactory {
-    engine: Arc<SessionEngine>,
-    lead: SessionId,
-    member: MemberId,
-    calls: Arc<AtomicUsize>,
-    member_finished_at_shutdown: Arc<AtomicBool>,
-}
-
-struct ShutdownProbeHandle {
-    engine: Arc<SessionEngine>,
-    lead: SessionId,
-    member: MemberId,
-    calls: Arc<AtomicUsize>,
-    member_finished_at_shutdown: Arc<AtomicBool>,
-}
-
-#[async_trait]
-impl BoundSidecarFactory for ShutdownProbeFactory {
-    async fn start(&self, _start: SidecarStart) -> Result<Box<dyn SidecarHandle>, CoreError> {
-        Ok(Box::new(ShutdownProbeHandle {
-            engine: self.engine.clone(),
-            lead: self.lead,
-            member: self.member,
-            calls: self.calls.clone(),
-            member_finished_at_shutdown: self.member_finished_at_shutdown.clone(),
-        }))
-    }
-}
-
-#[async_trait]
-impl SidecarHandle for ShutdownProbeHandle {
-    async fn ready(&mut self) -> Result<(), CoreError> {
-        Ok(())
-    }
-
-    async fn shutdown(&mut self) -> Result<(), CoreError> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        let events = self.engine.replay(self.lead).await?;
-        let member_finished = events.iter().any(|envelope| {
-            matches!(
-                &envelope.event,
-                Event::MemberFinished { member, .. } if member == &self.member
-            )
-        });
-        self.member_finished_at_shutdown
-            .store(member_finished, Ordering::SeqCst);
-        Ok(())
-    }
-}
-
 struct HookProbeTool {
     name: String,
     inputs: Arc<Mutex<Vec<Value>>>,
@@ -1223,7 +1119,7 @@ async fn recorded_observability_never_enters_the_parent_model_input() {
     );
     let mut spec = member(&engine, &agent, &directive);
     spec.tool_call = Some(ToolCallId::new());
-    let evidence = run_team(engine.clone(), lead, vec![spec], CancellationToken::new()).await;
+    let evidence = run_residents(engine.clone(), lead, vec![spec], CancellationToken::new()).await;
     assert_eq!(evidence.len(), 1);
 
     // The child really did compact, otherwise this test proves nothing.
@@ -1286,7 +1182,7 @@ impl hya_core::Summarizer for LeakProbeSummarizer {
 }
 
 /// AC5 + AC6: the spawn edge must carry the member's purpose verbatim and the
-/// tool call that produced it, for a fresh spawn and for a resumed session.
+/// tool call that produced it.
 #[tokio::test]
 async fn member_spawn_records_directive_verbatim_and_originating_tool_call() {
     let workdir = support::TestDir::new("spawn-records-directive");
@@ -1315,7 +1211,7 @@ async fn member_spawn_records_directive_verbatim_and_originating_tool_call() {
     spec.description = "audit retries".to_string();
     spec.tool_call = Some(call);
 
-    let evidence = run_team(engine.clone(), lead, vec![spec], CancellationToken::new()).await;
+    let evidence = run_residents(engine.clone(), lead, vec![spec], CancellationToken::new()).await;
     assert_eq!(evidence.len(), 1);
 
     let projection = engine.read_projection(lead).await.unwrap();
@@ -1331,45 +1227,10 @@ async fn member_spawn_records_directive_verbatim_and_originating_tool_call() {
     );
     // The short UI label stays separate from the full purpose.
     assert_eq!(member.description, "audit retries");
-
-    // A resume re-emits MemberSpawned for the same member; the purpose recorded
-    // by the original spawn must not be blanked by a thinner re-emit.
-    let child = member.child.unwrap();
-    let mut resumed = member_spec_for_resume(&engine, &agent, child);
-    resumed.id = member.member;
-    let _ = run_team(
-        engine.clone(),
-        lead,
-        vec![resumed],
-        CancellationToken::new(),
-    )
-    .await;
-    let after = engine.read_projection(lead).await.unwrap();
-    let member = after
-        .session
-        .members
-        .iter()
-        .find(|m| m.child == Some(child))
-        .expect("resumed member row");
-    assert_eq!(
-        member.directive, directive,
-        "a resume must not erase the original purpose"
-    );
-}
-
-/// A resume spec: same child session, empty directive (the child already has it).
-fn member_spec_for_resume(
-    engine: &SessionEngine,
-    agent: &AgentSpec,
-    child: SessionId,
-) -> MemberSpec {
-    let mut spec = member(engine, agent, "");
-    spec.session = Some(child);
-    spec
 }
 
 #[tokio::test]
-async fn pre_admitted_member_nested_spawn_completes() {
+async fn resident_member_nested_spawn_completes() {
     let workdir = support::TestDir::new("pre-admitted-nested-spawn");
     let provider = Arc::new(FakeProvider::scripted_turns(vec![
         vec![
@@ -1432,8 +1293,7 @@ async fn pre_admitted_member_nested_spawn_completes() {
         .agent_roster_for_binding(&binding, "hya-task")
         .unwrap();
     let resources = binding.agent_resource_policy("hya-task").unwrap();
-    let member = MemberSpec {
-        id: MemberId::new(),
+    let member = ResidentTurn {
         agent,
         binding,
         agents,
@@ -1441,21 +1301,15 @@ async fn pre_admitted_member_nested_spawn_completes() {
         guidance: None,
         directive: "member directive".to_string(),
         description: "member task".to_string(),
-        session: None,
+
         sidecar_factory: None,
         tool_call: None,
     };
-    let operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
-    let admission = AdmissionMemberIdentity {
-        operation_id: operation.operation_id(),
-        member_ordinal: 0,
-    };
-    let run = tokio::spawn(run_pre_admitted_member(
+    let run = tokio::spawn(run_residents(
         engine,
         root,
-        member,
+        vec![member],
         CancellationToken::new(),
-        admission,
     ));
 
     let bound = tokio::time::timeout(std::time::Duration::from_secs(5), spawn_rx.recv())
@@ -1480,11 +1334,7 @@ async fn pre_admitted_member_nested_spawn_completes() {
         .expect("pre-admitted member must complete")
         .expect("pre-admitted member task must not panic");
     assert_eq!(evidence.len(), 1);
-    assert_eq!(evidence[0].status, MemberStatus::Done);
-    let admitted_child = evidence[0]
-        .session
-        .parse::<SessionId>()
-        .expect("member evidence must expose the admitted child session");
+    let admitted_child = evidence[0];
     assert_eq!(nested_parent, admitted_child);
 }
 
@@ -1659,9 +1509,8 @@ async fn provider_streams_partition_100_general_28_reserved_and_root_progresses(
     assert_eq!(governor.available_reserved_stream_permits(), 28);
 }
 
-fn member(engine: &SessionEngine, agent: &AgentSpec, directive: &str) -> MemberSpec {
-    MemberSpec {
-        id: MemberId::new(),
+fn member(engine: &SessionEngine, agent: &AgentSpec, directive: &str) -> ResidentTurn {
+    ResidentTurn {
         agent: agent.clone(),
         binding: engine.bind_runtime(&agent.workdir).unwrap(),
         agents: Arc::from([]),
@@ -1669,7 +1518,7 @@ fn member(engine: &SessionEngine, agent: &AgentSpec, directive: &str) -> MemberS
         guidance: None,
         directive: directive.to_string(),
         description: String::new(),
-        session: None,
+
         sidecar_factory: None,
         tool_call: None,
     }
@@ -1705,7 +1554,7 @@ async fn sidecar_ack_precedes_running_state_provider_poll_and_task_admission() {
     let mut spec = member(&engine, &agent, "harness-owned task");
     spec.sidecar_factory = Some(factory);
 
-    let run = tokio::spawn(run_team(
+    let run = tokio::spawn(run_residents(
         engine.clone(),
         lead,
         vec![spec],
@@ -1717,7 +1566,7 @@ async fn sidecar_ack_precedes_running_state_provider_poll_and_task_admission() {
         lifecycle,
     } = start;
     assert!(!activation_id.is_empty());
-    assert!(matches!(lifecycle, SidecarLifecycle::Transient));
+    assert!(matches!(lifecycle, SidecarLifecycle::Resident));
     assert_eq!(polls.load(Ordering::SeqCst), 0);
 
     let lead_projection = engine.read_projection(lead).await.unwrap();
@@ -1740,18 +1589,16 @@ async fn sidecar_ack_precedes_running_state_provider_poll_and_task_admission() {
     ready.notify_one();
     let evidence = run.await.unwrap();
     assert_eq!(evidence.len(), 1);
-    assert_eq!(evidence[0].status, MemberStatus::Done);
     assert_eq!(polls.load(Ordering::SeqCst), 1);
 
     let child_projection = engine.read_projection(child).await.unwrap();
     assert!(child_projection.session.messages.iter().any(|message| {
-        matches!(message.role, Role::User)
-            && message.parts.iter().any(|part| {
-                matches!(
-                    part,
-                    PartProjection::Text { text, .. } if text == "harness-owned task"
-                )
-            })
+        matches!(message.role, Role::User) && message.parts.iter().any(|part| {
+            matches!(
+                part,
+                PartProjection::Text { text, .. } if text == "[mail from main] harness-owned task"
+            )
+        })
     }));
     assert!(child_projection.session.messages.iter().any(|message| {
         matches!(message.role, Role::Assistant)
@@ -1818,8 +1665,7 @@ async fn bundle_sidecar_tool_permission_denial_prevents_dispatch() {
         .unwrap();
     let binding = engine.bind_runtime(&agent.workdir).unwrap();
     let resources = Some(binding.agent_resource_policy("sidecar-agent").unwrap());
-    let spec = MemberSpec {
-        id: MemberId::new(),
+    let spec = ResidentTurn {
         agent,
         binding,
         agents: Arc::from([]),
@@ -1827,14 +1673,13 @@ async fn bundle_sidecar_tool_permission_denial_prevents_dispatch() {
         guidance: None,
         directive: "exercise denied sidecar tool".to_string(),
         description: "sidecar permission".to_string(),
-        session: None,
+
         sidecar_factory: Some(factory),
         tool_call: None,
     };
 
-    let evidence = run_team(engine.clone(), lead, vec![spec], CancellationToken::new()).await;
+    let evidence = run_residents(engine.clone(), lead, vec![spec], CancellationToken::new()).await;
     assert_eq!(evidence.len(), 1);
-    assert_eq!(evidence[0].status, MemberStatus::Done);
     {
         let requests = provider.requests.lock().unwrap();
         assert!(
@@ -1915,8 +1760,7 @@ async fn activation_bound_sidecar_hooks_mutate_tool_and_observe_only_child_event
         .unwrap();
     let binding = engine.bind_runtime(&agent.workdir).unwrap();
     let resources = Some(binding.agent_resource_policy("sidecar-agent").unwrap());
-    let spec = MemberSpec {
-        id: MemberId::new(),
+    let spec = ResidentTurn {
         agent,
         binding,
         agents: Arc::from([]),
@@ -1924,14 +1768,13 @@ async fn activation_bound_sidecar_hooks_mutate_tool_and_observe_only_child_event
         guidance: None,
         directive: "exercise activation hooks".to_string(),
         description: "activation hooks".to_string(),
-        session: None,
+
         sidecar_factory: Some(factory),
         tool_call: None,
     };
 
-    let evidence = run_team(engine.clone(), lead, vec![spec], CancellationToken::new()).await;
+    let evidence = run_residents(engine.clone(), lead, vec![spec], CancellationToken::new()).await;
     assert_eq!(evidence.len(), 1);
-    assert_eq!(evidence[0].status, MemberStatus::Done);
 
     let lead_projection = engine.read_projection(lead).await.unwrap();
     let child = lead_projection.session.members[0].child.unwrap();
@@ -2090,8 +1933,7 @@ async fn plugin_hooks_reach_bundle_subagent_alongside_its_sidecar_hooks() {
         .unwrap();
     let binding = engine.bind_runtime(&agent.workdir).unwrap();
     let resources = Some(binding.agent_resource_policy("sidecar-agent").unwrap());
-    let spec = MemberSpec {
-        id: MemberId::new(),
+    let spec = ResidentTurn {
         agent,
         binding,
         agents: Arc::from([]),
@@ -2099,14 +1941,13 @@ async fn plugin_hooks_reach_bundle_subagent_alongside_its_sidecar_hooks() {
         guidance: None,
         directive: "exercise plugin and sidecar hooks".to_string(),
         description: "plugin hooks".to_string(),
-        session: None,
+
         sidecar_factory: Some(factory),
         tool_call: None,
     };
 
-    let evidence = run_team(engine.clone(), lead, vec![spec], CancellationToken::new()).await;
+    let evidence = run_residents(engine.clone(), lead, vec![spec], CancellationToken::new()).await;
     assert_eq!(evidence.len(), 1);
-    assert_eq!(evidence[0].status, MemberStatus::Done);
     assert_eq!(
         plugin_hooks.chat_params.load(Ordering::SeqCst),
         2,
@@ -3303,81 +3144,6 @@ async fn resident_mailbox_message_waits_for_sidecar_ack_before_running() {
 }
 
 #[tokio::test]
-async fn transient_sidecar_loss_interrupts_running_member_before_provider_release() {
-    let entered = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    let provider = Arc::new(TransientLossProvider {
-        entered: entered.clone(),
-        release: release.clone(),
-    });
-    let (engine, agent) = governed_engine(SubagentLimits::default(), provider).await;
-    let lead = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("hya-main"),
-            model: ModelRef::new("fake"),
-            workdir: "/tmp".to_string(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let healthy = Arc::new(AtomicBool::new(false));
-    let loss = CancellationToken::new();
-    let terminated = Arc::new(Notify::new());
-    let terminates = Arc::new(AtomicUsize::new(0));
-    let factory: Arc<dyn BoundSidecarFactory> = Arc::new(TransientLossFactory {
-        healthy: healthy.clone(),
-        loss: loss.clone(),
-        terminated: terminated.clone(),
-        terminates: terminates.clone(),
-    });
-    let mut spec = member(&engine, &agent, "blocked provider turn");
-    let member_id = spec.id;
-    spec.sidecar_factory = Some(factory);
-
-    let mut events = engine.bus().subscribe();
-    let run = tokio::spawn(run_team(engine, lead, vec![spec], CancellationToken::new()));
-    entered.notified().await;
-    healthy.store(false, Ordering::SeqCst);
-    loss.cancel();
-
-    let observed = tokio::time::timeout(std::time::Duration::from_millis(250), async {
-        let mut finished = false;
-        let mut terminated_seen = false;
-        while !(finished && terminated_seen) {
-            tokio::select! {
-                _ = terminated.notified(), if !terminated_seen => terminated_seen = true,
-                envelope = events.recv(), if !finished => {
-                    let envelope = envelope.unwrap();
-                    if matches!(
-                        &envelope.event,
-                        Event::MemberFinished {
-                            member,
-                            status: MemberRunStatus::Failed | MemberRunStatus::Cancelled,
-                            ..
-                        } if *member == member_id
-                    ) {
-                        finished = true;
-                    }
-                }
-            }
-        }
-    })
-    .await;
-
-    release.notify_one();
-    let evidence = run.await.unwrap();
-    assert!(
-        observed.is_ok(),
-        "sidecar loss must terminate the member before provider release"
-    );
-    assert_eq!(terminates.load(Ordering::SeqCst), 1);
-    assert_eq!(evidence.len(), 1);
-    assert_eq!(evidence[0].status, MemberStatus::Failed);
-}
-
-#[tokio::test]
 async fn resident_sidecar_ready_failure_terminates_handle_once_and_removes_slot() {
     let (engine, agent) =
         governed_engine(SubagentLimits::default(), Arc::new(SelectiveFakeProvider)).await;
@@ -4317,63 +4083,16 @@ async fn governor_caps_streaming_concurrency() {
         })
         .await
         .unwrap();
-    let specs: Vec<MemberSpec> = (0..6)
+    let specs: Vec<ResidentTurn> = (0..6)
         .map(|i| member(&engine, &agent, &format!("m{i}")))
         .collect();
-    let evidence = run_team(engine.clone(), lead, specs, CancellationToken::new()).await;
+    let evidence = run_residents(engine.clone(), lead, specs, CancellationToken::new()).await;
     assert_eq!(evidence.len(), 6);
-    assert!(evidence.iter().all(|e| e.status == MemberStatus::Done));
+
     assert!(
         peak.load(Ordering::SeqCst) <= 2,
         "peak concurrent streams {} exceeded max_concurrency 2",
         peak.load(Ordering::SeqCst)
-    );
-}
-
-#[tokio::test]
-async fn governor_rejects_members_beyond_budget() {
-    let (engine, agent) = governed_engine(
-        SubagentLimits {
-            max_concurrency: 8,
-            per_run_budget: 1,
-            ..SubagentLimits::default()
-        },
-        Arc::new(SelectiveFakeProvider),
-    )
-    .await;
-    let lead = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("hya-main"),
-            model: ModelRef::new("fake"),
-            workdir: "/tmp".to_string(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let specs = vec![
-        member(&engine, &agent, "a"),
-        member(&engine, &agent, "b"),
-        member(&engine, &agent, "c"),
-    ];
-    let evidence = run_team(engine.clone(), lead, specs, CancellationToken::new()).await;
-    assert_eq!(evidence.len(), 3);
-    let done = evidence
-        .iter()
-        .filter(|e| e.status == MemberStatus::Done)
-        .count();
-    let failed = evidence
-        .iter()
-        .filter(|e| e.status == MemberStatus::Failed)
-        .count();
-    assert_eq!(done, 1, "only the budgeted member runs");
-    assert_eq!(failed, 2, "the rest are rejected");
-    assert!(
-        evidence
-            .iter()
-            .any(|e| e.summary.contains("budget exhausted")),
-        "rejected members explain the budget"
     );
 }
 
@@ -4423,647 +4142,21 @@ async fn governor_rejects_spawn_beyond_max_depth() {
         })
         .await
         .unwrap();
-    let evidence = run_team(
-        engine.clone(),
-        grandchild,
-        vec![member(&engine, &agent, "too deep")],
-        CancellationToken::new(),
-    )
-    .await;
-    assert_eq!(evidence.len(), 1);
-    assert_eq!(evidence[0].status, MemberStatus::Failed);
-    assert!(evidence[0].summary.contains("depth"));
-}
-
-#[tokio::test]
-async fn run_team_records_member_lifecycle_on_lead() {
-    let (engine, agent) = engine().await;
-    let lead = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("hya-main"),
-            model: ModelRef::new("fake"),
-            workdir: "/tmp".to_string(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let evidence = run_team(
-        engine.clone(),
-        lead,
-        vec![
-            member(&engine, &agent, "member one"),
-            member(&engine, &agent, "member two"),
-        ],
-        CancellationToken::new(),
-    )
-    .await;
-    assert_eq!(evidence.len(), 2);
-
-    // The lead projection now carries observable member lifecycle entries.
-    let proj = engine.read_projection(lead).await.unwrap();
-    assert_eq!(proj.session.members.len(), 2, "both members are tracked");
-    assert!(
-        proj.session
-            .members
-            .iter()
-            .all(|m| matches!(m.status, hya_proto::MemberRunStatus::Done)),
-        "members finished Done"
-    );
-    assert!(
-        proj.session.members.iter().all(|m| m.child.is_some()),
-        "each member links to its child session"
-    );
-}
-
-#[tokio::test]
-async fn transient_sidecar_shutdown_follows_member_finished() {
-    let (engine, agent) = engine().await;
-    let lead = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("hya-main"),
-            model: ModelRef::new("fake"),
-            workdir: "/tmp".to_string(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let member_id = MemberId::new();
-    let calls = Arc::new(AtomicUsize::new(0));
-    let member_finished_at_shutdown = Arc::new(AtomicBool::new(false));
-    let factory: Arc<dyn BoundSidecarFactory> = Arc::new(ShutdownProbeFactory {
-        engine: engine.clone(),
-        lead,
-        member: member_id,
-        calls: calls.clone(),
-        member_finished_at_shutdown: member_finished_at_shutdown.clone(),
-    });
-    let mut spec = member(&engine, &agent, "shutdown probe");
-    spec.id = member_id;
-    spec.sidecar_factory = Some(factory);
-
-    let evidence = run_team(engine, lead, vec![spec], CancellationToken::new()).await;
-    assert_eq!(evidence.len(), 1);
-    assert_eq!(evidence[0].status, MemberStatus::Done);
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert!(member_finished_at_shutdown.load(Ordering::SeqCst));
-}
-
-#[tokio::test]
-async fn transient_sidecar_failure_terminates_opaque_handle_once() {
-    let (engine, agent) = engine().await;
-    let lead = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("hya-main"),
-            model: ModelRef::new("fake"),
-            workdir: "/tmp".to_string(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let ready = Arc::new(AtomicUsize::new(0));
-    let healthy = Arc::new(AtomicBool::new(false));
-    let shutdowns = Arc::new(AtomicUsize::new(0));
-    let terminates = Arc::new(AtomicUsize::new(0));
-    let factory: Arc<dyn BoundSidecarFactory> = Arc::new(ResidentStopProbeFactory {
-        ready: ready.clone(),
-        healthy,
-        shutdowns: shutdowns.clone(),
-        terminates: terminates.clone(),
-        terminated: None,
-        loss: None,
-    });
-    let mut failing_agent = agent;
-    failing_agent.model = ModelRef::new("no-such-model");
-    let mut spec = member(&engine, &failing_agent, "provider failure");
-    spec.sidecar_factory = Some(factory);
-
-    let evidence = run_team(engine, lead, vec![spec], CancellationToken::new()).await;
-    assert_eq!(evidence.len(), 1);
-    assert_eq!(evidence[0].status, MemberStatus::Failed);
-    assert_eq!(ready.load(Ordering::SeqCst), 1);
-    assert_eq!(terminates.load(Ordering::SeqCst), 1);
-    assert_eq!(shutdowns.load(Ordering::SeqCst), 0);
-}
-
-#[tokio::test]
-async fn transient_sidecar_parent_cancellation_marks_member_cancelled_and_terminates_once() {
-    let (engine, agent) = engine().await;
-    let lead = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("hya-main"),
-            model: ModelRef::new("fake"),
-            workdir: "/tmp".to_string(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let ready = Arc::new(AtomicUsize::new(0));
-    let healthy = Arc::new(AtomicBool::new(false));
-    let shutdowns = Arc::new(AtomicUsize::new(0));
-    let terminates = Arc::new(AtomicUsize::new(0));
-    let factory: Arc<dyn BoundSidecarFactory> = Arc::new(ResidentStopProbeFactory {
-        ready: ready.clone(),
-        healthy,
-        shutdowns: shutdowns.clone(),
-        terminates: terminates.clone(),
-        terminated: None,
-        loss: None,
-    });
-    let mut spec = member(&engine, &agent, "cancelled before turn");
-    let member_id = spec.id;
-    spec.sidecar_factory = Some(factory);
-
-    let cancel = CancellationToken::new();
-    cancel.cancel();
-    let evidence = run_team(engine.clone(), lead, vec![spec], cancel).await;
-
-    assert_eq!(evidence.len(), 1);
-    assert_eq!(evidence[0].status, MemberStatus::Failed);
-    let events = engine.replay(lead).await.unwrap();
-    let member_finished = events
-        .iter()
-        .filter_map(|envelope| match &envelope.event {
-            Event::MemberFinished { member, status, .. } if *member == member_id => Some(status),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(member_finished.len(), 1);
-    assert!(matches!(member_finished[0], MemberRunStatus::Cancelled));
-    assert!(
-        !member_finished
-            .iter()
-            .any(|status| matches!(status, MemberRunStatus::Done))
-    );
-    assert_eq!(ready.load(Ordering::SeqCst), 1);
-    assert_eq!(terminates.load(Ordering::SeqCst), 1);
-    assert_eq!(shutdowns.load(Ordering::SeqCst), 0);
-}
-
-#[tokio::test]
-async fn transient_sidecar_ack_failure_terminates_opaque_handle_once() {
-    let polls = Arc::new(AtomicUsize::new(0));
-    let provider = Arc::new(AckProbeProvider {
-        polls: polls.clone(),
-        polled: Arc::new(Notify::new()),
-    });
-    let (engine, agent) = governed_engine(SubagentLimits::default(), provider).await;
-    let lead = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("hya-main"),
-            model: ModelRef::new("fake"),
-            workdir: "/tmp".to_string(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let ready = Arc::new(AtomicUsize::new(0));
-    let terminates = Arc::new(AtomicUsize::new(0));
-    let shutdowns = Arc::new(AtomicUsize::new(0));
-    let factory: Arc<dyn BoundSidecarFactory> = Arc::new(AckFailureFactory {
-        ready: ready.clone(),
-        terminates: terminates.clone(),
-        shutdowns: shutdowns.clone(),
-    });
-    let mut spec = member(&engine, &agent, "ACK failure");
-    spec.sidecar_factory = Some(factory);
-
-    let evidence = run_team(engine, lead, vec![spec], CancellationToken::new()).await;
-    assert_eq!(evidence.len(), 1);
-    assert_eq!(evidence[0].status, MemberStatus::Failed);
-    assert_eq!(ready.load(Ordering::SeqCst), 1);
-    assert_eq!(terminates.load(Ordering::SeqCst), 1);
-    assert_eq!(shutdowns.load(Ordering::SeqCst), 0);
-    assert_eq!(polls.load(Ordering::SeqCst), 0);
-}
-
-#[tokio::test]
-async fn team_evidence_envelope_has_no_transcript_leak() {
-    let (engine, agent) = engine().await;
-    let lead = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("hya-main"),
-            model: ModelRef::new("fake"),
-            workdir: "/tmp".to_string(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-
-    let specs = vec![
-        MemberSpec {
-            id: MemberId::new(),
-            agent: agent.clone(),
-            binding: engine.bind_runtime(&agent.workdir).unwrap(),
-            agents: Arc::from([]),
-            resources: None,
-            guidance: None,
-            directive: "do A".to_string(),
-            description: String::new(),
-            session: None,
-            sidecar_factory: None,
-            tool_call: None,
-        },
-        MemberSpec {
-            id: MemberId::new(),
-            agent: agent.clone(),
-            binding: engine.bind_runtime(&agent.workdir).unwrap(),
-            agents: Arc::from([]),
-            resources: None,
-            guidance: None,
-            directive: "do B".to_string(),
-            description: String::new(),
-            session: None,
-            sidecar_factory: None,
-            tool_call: None,
-        },
-    ];
-    let evidence = run_team(engine.clone(), lead, specs, CancellationToken::new()).await;
-    assert_eq!(evidence.len(), 2);
-    assert!(evidence.iter().all(|e| e.status == MemberStatus::Done));
-
-    project_envelope(&engine, lead, &TeamEvidenceEnvelope { members: evidence })
-        .await
-        .unwrap();
-
-    let lead_proj = engine.read_projection(lead).await.unwrap();
-    let has_envelope = lead_proj.session.messages.iter().any(|m| {
-        matches!(m.role, Role::System)
-            && m.parts.iter().any(|p| matches!(p, PartProjection::Text { text, .. } if text.contains("TEAM EVIDENCE ENVELOPE")))
-    });
-    assert!(has_envelope, "lead must contain the evidence envelope");
-
-    // The members ran in CHILD sessions: the lead transcript holds no replayed
-    // assistant turns (no full-transcript leak into the lead context).
-    let assistant_count = lead_proj
-        .session
-        .messages
-        .iter()
-        .filter(|m| matches!(m.role, Role::Assistant))
-        .count();
-    assert_eq!(assistant_count, 0);
-}
-
-#[tokio::test]
-async fn run_team_can_resume_existing_member_session() {
-    let (engine, agent) = engine().await;
-    let lead = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("hya-main"),
-            model: ModelRef::new("fake"),
-            workdir: "/tmp".to_string(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let child = engine
-        .create(CreateSession {
-            parent: Some(lead),
-            agent: AgentName::new("hya-main"),
-            model: ModelRef::new("fake"),
-            workdir: "/tmp".to_string(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-
-    let evidence = run_team(
-        engine.clone(),
-        lead,
-        vec![MemberSpec {
-            id: MemberId::new(),
-            binding: engine.bind_runtime(&agent.workdir).unwrap(),
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
+    let error = supervisor
+        .spawn_resident(
+            grandchild,
             agent,
-            agents: Arc::from([]),
-            resources: None,
-            guidance: None,
-            directive: "continue prior work".to_string(),
-            description: String::new(),
-            session: Some(child),
-            sidecar_factory: None,
-            tool_call: None,
-        }],
-        CancellationToken::new(),
-    )
-    .await;
-
-    assert_eq!(evidence.len(), 1);
-    assert_eq!(evidence[0].session, child.to_string());
-    assert_eq!(evidence[0].status, MemberStatus::Done);
-}
-
-/// Restarting a failed/finished subagent via the same child session must not
-/// grow the lead's member list or team roster. Duplicate members share one
-/// session id and make the TUI roster multi-highlight on select.
-#[tokio::test]
-async fn run_team_resume_reuses_member_and_roster_handle() {
-    let (engine, agent) = engine().await;
-    let lead = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("hya-main"),
-            model: ModelRef::new("fake"),
-            workdir: "/tmp".to_string(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
+            (binding, Arc::from([]), resources, None),
+            "too deep".into(),
+            None,
+            None,
+        )
         .await
-        .unwrap();
-    let child = engine
-        .create(CreateSession {
-            parent: Some(lead),
-            agent: AgentName::new("hya-main"),
-            model: ModelRef::new("fake"),
-            workdir: "/tmp".to_string(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-
-    let first = run_team(
-        engine.clone(),
-        lead,
-        vec![MemberSpec {
-            id: MemberId::new(),
-            agent: agent.clone(),
-            binding: engine.bind_runtime(&agent.workdir).unwrap(),
-            agents: Arc::from([]),
-            resources: None,
-            guidance: None,
-            directive: "first attempt".to_string(),
-            description: String::new(),
-            session: Some(child),
-            sidecar_factory: None,
-            tool_call: None,
-        }],
-        CancellationToken::new(),
-    )
-    .await;
-    assert_eq!(first.len(), 1);
-    assert_eq!(first[0].status, MemberStatus::Done);
-
-    let after_first = engine.read_projection(lead).await.unwrap();
-    let first_members: Vec<_> = after_first
-        .session
-        .members
-        .iter()
-        .filter(|m| m.child == Some(child))
-        .collect();
-    assert_eq!(first_members.len(), 1, "first spawn creates one member");
-    let first_member_id = first_members[0].member;
-    let first_handles: Vec<_> = after_first
-        .team
-        .roster
-        .values()
-        .filter(|e| e.session == child)
-        .map(|e| e.handle.clone())
-        .collect();
-    assert_eq!(
-        first_handles.len(),
-        1,
-        "first spawn creates one roster handle"
-    );
-    let first_handle = first_handles[0].clone();
-
-    // Resume with a fresh MemberId (what the task tool does via task_id).
-    let second = run_team(
-        engine.clone(),
-        lead,
-        vec![MemberSpec {
-            id: MemberId::new(),
-            binding: engine.bind_runtime(&agent.workdir).unwrap(),
-            agent,
-            agents: Arc::from([]),
-            resources: None,
-            guidance: None,
-            directive: "restart after failure".to_string(),
-            description: String::new(),
-            session: Some(child),
-            sidecar_factory: None,
-            tool_call: None,
-        }],
-        CancellationToken::new(),
-    )
-    .await;
-    assert_eq!(second.len(), 1);
-    assert_eq!(second[0].status, MemberStatus::Done);
-    assert_eq!(second[0].session, child.to_string());
-
-    let after_resume = engine.read_projection(lead).await.unwrap();
-    let resume_members: Vec<_> = after_resume
-        .session
-        .members
-        .iter()
-        .filter(|m| m.child == Some(child))
-        .collect();
-    assert_eq!(
-        resume_members.len(),
-        1,
-        "resume must not add a second member row for the same child session"
-    );
-    assert_eq!(
-        resume_members[0].member, first_member_id,
-        "resume should upsert the original member id"
-    );
-
-    let resume_handles: Vec<_> = after_resume
-        .team
-        .roster
-        .values()
-        .filter(|e| e.session == child)
-        .map(|e| e.handle.clone())
-        .collect();
-    assert_eq!(
-        resume_handles.len(),
-        1,
-        "resume must not allocate a second roster handle for the same session"
-    );
-    assert_eq!(resume_handles[0], first_handle);
-}
-
-#[tokio::test]
-async fn panic_in_one_member_is_isolated() {
-    let panicker = tokio::spawn(async { panic!("member exploded") });
-    let peer = tokio::spawn(async { 7u32 });
-
-    let joined = panicker.await;
-    assert!(joined.is_err());
-    assert!(joined.unwrap_err().is_panic());
-
-    // the supervisor and peers survive a member panic
-    assert_eq!(peer.await.unwrap(), 7);
-}
-
-#[tokio::test]
-async fn run_team_marks_failed_member_without_session_on_engine_error() {
-    let (engine, agent) = engine().await;
-    let lead = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("hya-main"),
-            model: ModelRef::new("fake"),
-            workdir: "/tmp".to_string(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-
-    let healthy_id = MemberId::new();
-    let failed_id = MemberId::new();
-    let mut failing_agent = agent.clone();
-    failing_agent.model = ModelRef::new("no-such-model");
-
-    let evidence = run_team(
-        engine.clone(),
-        lead,
-        vec![
-            MemberSpec {
-                id: healthy_id,
-                agent: agent.clone(),
-                binding: engine.bind_runtime(&agent.workdir).unwrap(),
-                agents: Arc::from([]),
-                resources: None,
-                guidance: None,
-                directive: "do healthy work".to_string(),
-                description: String::new(),
-                session: None,
-                sidecar_factory: None,
-                tool_call: None,
-            },
-            MemberSpec {
-                id: failed_id,
-                binding: engine.bind_runtime(&failing_agent.workdir).unwrap(),
-                agent: failing_agent,
-                agents: Arc::from([]),
-                resources: None,
-                guidance: None,
-                directive: "do failing work".to_string(),
-                description: String::new(),
-                session: None,
-                sidecar_factory: None,
-                tool_call: None,
-            },
-        ],
-        CancellationToken::new(),
-    )
-    .await;
-
-    assert_eq!(evidence.len(), 2);
-
-    let healthy = evidence
-        .iter()
-        .find(|entry| entry.member == healthy_id.to_string())
-        .unwrap();
-    assert_eq!(healthy.status, MemberStatus::Done);
-
-    let failed = evidence
-        .iter()
-        .find(|entry| entry.member == failed_id.to_string())
-        .unwrap();
-    assert_eq!(failed.status, MemberStatus::Failed);
-    assert_eq!(failed.session, "-");
-    assert!(!failed.summary.is_empty());
-}
-
-#[tokio::test]
-async fn run_team_preserves_input_member_order_with_mixed_outcomes() {
-    let (engine, agent) = engine().await;
-    let lead = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("hya-main"),
-            model: ModelRef::new("fake"),
-            workdir: "/tmp".to_string(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-
-    let first = MemberId::new();
-    let second = MemberId::new();
-    let third = MemberId::new();
-    let mut failing_agent = agent.clone();
-    failing_agent.model = ModelRef::new("no-such-model");
-
-    let evidence = run_team(
-        engine.clone(),
-        lead,
-        vec![
-            MemberSpec {
-                id: first,
-                agent: agent.clone(),
-                binding: engine.bind_runtime(&agent.workdir).unwrap(),
-                agents: Arc::from([]),
-                resources: None,
-                guidance: None,
-                directive: "first member".to_string(),
-                description: String::new(),
-                session: None,
-                sidecar_factory: None,
-                tool_call: None,
-            },
-            MemberSpec {
-                id: second,
-                binding: engine.bind_runtime(&failing_agent.workdir).unwrap(),
-                agent: failing_agent,
-                agents: Arc::from([]),
-                resources: None,
-                guidance: None,
-                directive: "second member fails".to_string(),
-                description: String::new(),
-                session: None,
-                sidecar_factory: None,
-                tool_call: None,
-            },
-            MemberSpec {
-                id: third,
-                binding: engine.bind_runtime(&agent.workdir).unwrap(),
-                agent,
-                agents: Arc::from([]),
-                resources: None,
-                guidance: None,
-                directive: "third member".to_string(),
-                description: String::new(),
-                session: None,
-                sidecar_factory: None,
-                tool_call: None,
-            },
-        ],
-        CancellationToken::new(),
-    )
-    .await;
-
-    assert_eq!(
-        evidence
-            .iter()
-            .map(|entry| entry.member.clone())
-            .collect::<Vec<_>>(),
-        vec![first.to_string(), second.to_string(), third.to_string()]
-    );
-    assert_eq!(
-        evidence
-            .iter()
-            .map(|entry| entry.status)
-            .collect::<Vec<_>>(),
-        vec![MemberStatus::Done, MemberStatus::Failed, MemberStatus::Done]
-    );
+        .unwrap_err();
+    assert!(error.to_string().contains("depth"));
 }
 
 /// Wrap one prepared AgentBundle as an agent catalog over the compiled-in built-ins.

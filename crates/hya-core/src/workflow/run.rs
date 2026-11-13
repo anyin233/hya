@@ -2,8 +2,8 @@
 //!
 //! Each topological level registers parked resident actors, then activates
 //! them through the episode API. The controller accepts at-rest settlement or
-//! a terminal report as Stage evidence. Loop continuations and independent
-//! verifiers still use the transient executor and shared IterationDriver.
+//! a terminal report as Stage evidence. Loop continuations reactivate the same
+//! actor; each independent verifier runs a fresh, capacity-counted episode.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -30,7 +30,6 @@ use crate::engine::{AgentSpec, SessionEngine};
 use crate::error::CoreError;
 use crate::resident::{ActivationResult, ResidentSupervisor};
 use crate::sidecar::BoundSidecarFactory;
-use crate::subagent::{MemberSpec, MemberStatus, run_pre_admitted_team_with_workflow};
 
 use super::{
     WorkflowError, WorkflowModelRoute, WorkflowRouteRecord, WorkflowRouteRecorder,
@@ -640,12 +639,12 @@ impl PreparedWorkflowRun {
                                 )
                                 .await;
                             let (session, handle, member) = spawn_result?;
-                            registered.push((session, handle.clone()));
                             let actor = ResidentActor {
                                 session,
                                 handle,
                                 member,
                             };
+                            registered.push(actor.clone());
                             actors.insert(actor_key.to_string(), actor.clone());
                             actor
                         };
@@ -711,12 +710,12 @@ impl PreparedWorkflowRun {
                             )
                             .await;
                         let (session, handle, member) = spawn_result?;
-                        registered.push((session, handle.clone()));
                         let actor = ResidentActor {
                             session,
                             handle,
                             member,
                         };
+                        registered.push(actor.clone());
                         if let Some(run) = durable_run {
                             engine
                                 .record_workflow_event_for_actor(
@@ -754,6 +753,10 @@ impl PreparedWorkflowRun {
                         });
                     }
                 }
+                let stage_actors = resident_activations
+                    .iter()
+                    .map(|activation| (activation.prepared.index, activation.actor.clone()))
+                    .collect::<BTreeMap<_, _>>();
                 let resident_run =
                     futures::future::join_all(resident_activations.into_iter().map(|activation| {
                         let engine = engine.clone();
@@ -799,18 +802,6 @@ impl PreparedWorkflowRun {
                         .verification_condition()
                         .unwrap_or_else(|| verify.until());
                     let mut report = reports[index].clone();
-                    // Until M4-10 moves continuations onto episodes, relinquish
-                    // the first episode before the transient executor reuses it.
-                    if let Some(position) = registered.iter().position(|(session, _)| {
-                        report.session.as_deref() == Some(session.to_string().as_str())
-                    }) {
-                        let (session, handle) = &registered[position];
-                        let (root, _) = engine.session_lineage(*session).await?;
-                        if let Some(supervisor) = context.resident_supervisor.as_ref() {
-                            supervisor.end_member(root, handle).await?;
-                        }
-                        registered.remove(position);
-                    }
                     match drive_loop_stage(
                         engine.clone(),
                         lead,
@@ -821,6 +812,7 @@ impl PreparedWorkflowRun {
                         rendered.directive(),
                         rendered.system_context(),
                         verification_condition,
+                        stage_actors[&index].clone(),
                         &resolved[index],
                         verifier.clone(),
                         report.clone(),
@@ -832,6 +824,11 @@ impl PreparedWorkflowRun {
                     .await
                     {
                         Ok(completed) => reports[index] = completed,
+                        Err(WorkflowError::Engine(CoreError::Store(
+                            error @ hya_store::StoreError::CapacityExceeded { .. },
+                        ))) => {
+                            return Err(CoreError::Store(error).into());
+                        }
                         Err(error) => {
                             report.status = if cancel.is_cancelled() {
                                 StageStatus::Cancelled
@@ -904,7 +901,7 @@ impl PreparedWorkflowRun {
             let endings = futures::future::join_all(
                 registered
                     .iter()
-                    .map(|(_, handle)| supervisor.end_member(root, handle)),
+                    .map(|actor| supervisor.end_member(root, &actor.handle)),
             )
             .await;
             for ending in endings {
@@ -949,9 +946,7 @@ async fn preflight_workflow_capacity(
     };
     let (root, depth) = engine.session_lineage(lead).await?;
     if depth.saturating_add(1) > governor.max_depth() {
-        return Err(WorkflowError::Admission(
-            crate::subagent::TeamAdmissionError::MaxDepth,
-        ));
+        return Err(WorkflowError::MaxDepth);
     }
     let limit = governor.limits().per_run_budget;
     if wanted > limit {
@@ -1059,23 +1054,6 @@ fn level_failed(reports: &[StageReport], level: &[usize]) -> bool {
         .iter()
         .any(|&index| reports[index].status == StageStatus::Failed)
 }
-/// Last assistant text, UTF-8 safely bounded for downstream evidence.
-fn final_assistant_text(projection: &hya_proto::Projection) -> String {
-    for message in projection.session.messages.iter().rev() {
-        if !matches!(message.role, hya_proto::Role::Assistant) {
-            continue;
-        }
-        let mut text = String::new();
-        for part in &message.parts {
-            if let hya_proto::PartProjection::Text { text: t, .. } = part {
-                text.push_str(t);
-            }
-        }
-        return clamp(text);
-    }
-    String::new()
-}
-
 /// The controller accepts both at-rest settlement and a terminal report.
 async fn activate_resident_stage(
     engine: Arc<SessionEngine>,
@@ -1091,48 +1069,83 @@ async fn activate_resident_stage(
         actor_claim,
         route,
     } = activation;
-    let mut waiter = supervisor
-        .activate(
-            lead,
-            actor.session,
-            prepared.directive,
-            prepared.system_context,
-            route,
-            actor_claim.as_ref(),
-        )
-        .await?;
-    let (result, cancelled) = tokio::select! {
-        biased;
-        _ = cancel.cancelled() => {
-            let (root, _) = engine.session_lineage(lead).await?;
-            supervisor.end_member(root, &actor.handle).await?;
-            (waiter.wait().await?, true)
-        }
-        result = waiter.wait() => (result?, false),
-    };
+    let result = activate_actor(
+        &engine,
+        &supervisor,
+        lead,
+        &actor,
+        prepared.directive,
+        prepared.system_context,
+        route,
+        actor_claim.as_ref(),
+        &cancel,
+    )
+    .await;
     let (status, output) = match result {
-        ActivationResult::Settled { final_text } => (StageStatus::Done, final_text),
-        ActivationResult::Reported { outcome, text } => (
-            if outcome == ReportOutcome::Done {
-                StageStatus::Done
-            } else {
-                StageStatus::Failed
-            },
-            text,
+        Ok(text) => (StageStatus::Done, text),
+        Err(CoreError::Cancelled) => (
+            StageStatus::Cancelled,
+            "Workflow activation cancelled".into(),
         ),
-        ActivationResult::Ended { note, .. } => (StageStatus::Failed, note),
+        Err(error @ CoreError::Store(hya_store::StoreError::CapacityExceeded { .. })) => {
+            return Err(error.into());
+        }
+        Err(error) => (StageStatus::Failed, error.to_string()),
     };
     Ok(StageReport {
         stage: stage.id().to_string(),
         agent: stage.agent().to_string(),
-        status: if cancelled {
-            StageStatus::Cancelled
-        } else {
-            status
-        },
+        status,
         session: Some(actor.session.to_string()),
         output: clamp(output),
     })
+}
+
+/// Settlement retains an episode; a report has already released its claim.
+#[allow(clippy::too_many_arguments)]
+async fn activate_actor(
+    engine: &SessionEngine,
+    supervisor: &ResidentSupervisor,
+    parent: SessionId,
+    actor: &ResidentActor,
+    directive: String,
+    guidance: Arc<str>,
+    route: Option<WorkflowTurnRoute>,
+    parent_claim: Option<&ActorClaim>,
+    cancel: &CancellationToken,
+) -> Result<String, CoreError> {
+    if cancel.is_cancelled() {
+        return Err(CoreError::Cancelled);
+    }
+    let mut waiter = supervisor
+        .activate(
+            parent,
+            actor.session,
+            directive,
+            guidance,
+            route,
+            parent_claim,
+        )
+        .await?;
+    let result = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => {
+            let (root, _) = engine.session_lineage(parent).await?;
+            supervisor.end_member(root, &actor.handle).await?;
+            waiter.wait().await?;
+            return Err(CoreError::Cancelled);
+        }
+        result = waiter.wait() => result?,
+    };
+    match result {
+        ActivationResult::Settled { final_text } => Ok(final_text),
+        ActivationResult::Reported {
+            outcome: ReportOutcome::Done,
+            text,
+        } => Ok(text),
+        ActivationResult::Reported { text, .. } => Err(CoreError::Invalid(text)),
+        ActivationResult::Ended { note, .. } => Err(CoreError::Invalid(note)),
+    }
 }
 
 fn clamp(mut text: String) -> String {
@@ -1165,6 +1178,7 @@ async fn drive_loop_stage(
     directive: &str,
     system_context: &str,
     verification_condition: &str,
+    worker: ResidentActor,
     resolved_worker: &ResolvedAgent,
     resolved_verifier: ResolvedAgent,
     first_report: StageReport,
@@ -1173,35 +1187,34 @@ async fn drive_loop_stage(
     durable_run: Option<WorkflowRunId>,
     route_recorder: Option<WorkflowRouteRecorder>,
 ) -> Result<StageReport, WorkflowError> {
-    let worker_session = first_report
-        .session
-        .as_deref()
-        .and_then(|s| s.parse::<SessionId>().ok());
-
-    let executor = LoopWorkerExecutor {
-        engine: engine.clone(),
-        lead,
-        ctx: ctx.clone(),
-        worker: resolved_worker.clone(),
-        session: tokio::sync::Mutex::new(worker_session),
-        first: tokio::sync::Mutex::new(Some(first_report.output.clone())),
-        latest_output: tokio::sync::Mutex::new(first_report.output.clone()),
-        label: format!("Workflow {workflow_name} / {}", stage.id()),
-        guidance: Arc::from(system_context.to_string()),
-        actor_claim,
-        durable_run,
-        route_recorder: route_recorder.clone(),
-        stage_id: stage.id().to_string(),
-        next_iteration: tokio::sync::Mutex::new(1),
-    };
+    let executor =
+        LoopWorkerExecutor {
+            engine: engine.clone(),
+            lead,
+            supervisor: ctx.resident_supervisor.as_ref().cloned().ok_or_else(|| {
+                CoreError::Invalid("Workflow requires a resident supervisor".into())
+            })?,
+            worker,
+            route: resolved_worker.route.clone(),
+            cancel: cancel.clone(),
+            first: tokio::sync::Mutex::new(Some(first_report.output.clone())),
+            latest_output: tokio::sync::Mutex::new(first_report.output.clone()),
+            guidance: Arc::from(system_context.to_string()),
+            actor_claim,
+            durable_run,
+            route_recorder: route_recorder.clone(),
+            stage_id: stage.id().to_string(),
+            next_iteration: tokio::sync::Mutex::new(1),
+        };
 
     let gate = VerifierGate {
         engine,
         lead,
         ctx: ctx.clone(),
+        supervisor: executor.supervisor.clone(),
         verifier: resolved_verifier,
         until: verification_condition.to_string(),
-        label: executor.label.clone(),
+        label: format!("Workflow {workflow_name} / {}", stage.id()),
         cancel: cancel.clone(),
         guidance: Arc::from(system_context.to_string()),
         actor_claim,
@@ -1219,7 +1232,9 @@ async fn drive_loop_stage(
             &executor,
             &gate,
             format!("{directive}\nContinue working toward the verified condition."),
-            cancel.child_token(),
+            // Activations own cancellation and cleanup. The driver's select
+            // would drop a judgment during registration or its ending await.
+            CancellationToken::new(),
         )
         .await?;
 
@@ -1261,12 +1276,12 @@ async fn drive_loop_stage(
 struct LoopWorkerExecutor {
     engine: Arc<SessionEngine>,
     lead: SessionId,
-    ctx: WorkflowRunContext,
-    worker: ResolvedAgent,
-    session: tokio::sync::Mutex<Option<SessionId>>,
+    supervisor: Arc<ResidentSupervisor>,
+    worker: ResidentActor,
+    route: Option<WorkflowModelRoute>,
+    cancel: CancellationToken,
     first: tokio::sync::Mutex<Option<String>>,
     latest_output: tokio::sync::Mutex<String>,
-    label: String,
     guidance: Arc<str>,
     actor_claim: Option<ActorClaim>,
     durable_run: Option<WorkflowRunId>,
@@ -1286,26 +1301,15 @@ impl IterationExecutor for LoopWorkerExecutor {
     async fn run_iteration(
         &self,
         directive: &str,
-        cancel: &CancellationToken,
+        _cancel: &CancellationToken,
     ) -> Result<String, CoreError> {
+        if self.cancel.is_cancelled() {
+            return Err(CoreError::Cancelled);
+        }
         if let Some(first) = self.first.lock().await.take() {
             return Ok(first);
         }
-        let resumed = *self.session.lock().await;
-        let member = MemberId::new();
-        let spec = MemberSpec {
-            id: member,
-            resources: Some(self.worker.resources.clone()),
-            agent: self.worker.spec.clone(),
-            binding: self.ctx.binding.clone(),
-            agents: self.worker.agents.clone(),
-            guidance: Some(self.guidance.clone()),
-            directive: directive.to_string(),
-            tool_call: None,
-            description: format!("{} (iteration)", self.label),
-            session: resumed,
-            sidecar_factory: self.worker.sidecar_factory.clone(),
-        };
+        let member = self.worker.member;
         let mut next = self.next_iteration.lock().await;
         let iteration = *next;
         *next = next.saturating_add(1);
@@ -1327,7 +1331,7 @@ impl IterationExecutor for LoopWorkerExecutor {
                 .await
                 .map_err(|error| CoreError::Invalid(error.to_string()))?;
         }
-        let route = self.worker.route.clone().map(|route| {
+        let route = self.route.clone().map(|route| {
             WorkflowTurnRoute::new(WorkflowTurnRouteSpec {
                 route,
                 session: self.lead,
@@ -1339,35 +1343,18 @@ impl IterationExecutor for LoopWorkerExecutor {
                 recorder: self.route_recorder.clone(),
             })
         });
-        let evidence = run_pre_admitted_team_with_workflow(
-            self.engine.clone(),
+        let text = activate_actor(
+            &self.engine,
+            &self.supervisor,
             self.lead,
-            vec![(spec, route)],
-            cancel.child_token(),
-            self.actor_claim,
+            &self.worker,
+            directive.to_string(),
+            self.guidance.clone(),
+            route,
+            self.actor_claim.as_ref(),
+            &self.cancel,
         )
-        .await;
-        let Some(entry) = evidence.first() else {
-            return Err(CoreError::Invalid(
-                "workflow worker produced no evidence".to_string(),
-            ));
-        };
-        if entry.status != MemberStatus::Done {
-            return Err(CoreError::Cancelled);
-        }
-        if let Ok(session) = entry.session.parse::<SessionId>() {
-            *self.session.lock().await = Some(session);
-        }
-        let projection = self
-            .engine
-            .read_projection(
-                entry
-                    .session
-                    .parse::<SessionId>()
-                    .map_err(|_| CoreError::Invalid("unparsable member session".to_string()))?,
-            )
-            .await?;
-        let text = final_assistant_text(&projection);
+        .await?;
         *self.latest_output.lock().await = text.clone();
         Ok(text)
     }
@@ -1379,6 +1366,7 @@ struct VerifierGate {
     engine: Arc<SessionEngine>,
     lead: SessionId,
     ctx: WorkflowRunContext,
+    supervisor: Arc<ResidentSupervisor>,
     verifier: ResolvedAgent,
     until: String,
     label: String,
@@ -1403,73 +1391,82 @@ impl IterationGate for VerifierGate {
             self.until,
             render_transcript_bounded(transcript)
         );
-        let member = MemberId::new();
-        let spec = MemberSpec {
-            id: member,
-            resources: Some(self.verifier.resources.clone()),
-            agent: self.verifier.spec.clone(),
-            binding: self.ctx.binding.clone(),
-            agents: self.verifier.agents.clone(),
-            guidance: Some(self.guidance.clone()),
-            directive,
-            tool_call: None,
-            description: format!("{} verify", self.label),
-            session: None,
-            sidecar_factory: self.verifier.sidecar_factory.clone(),
-        };
-        let mut next = self.next_iteration.lock().await;
-        let iteration = *next;
-        *next = next.saturating_add(1);
-        drop(next);
-        if let Some(run) = self.durable_run {
-            self.engine
-                .record_workflow_event_for_actor(
-                    self.actor_claim.as_ref(),
-                    self.lead,
-                    Event::WorkflowStageMemberLinked {
-                        session: self.lead,
-                        run,
-                        stage: self.stage_id.clone(),
-                        member,
-                        role: WorkflowMemberRole::Verifier,
-                        iteration,
-                    },
-                )
-                .await?;
-        }
-        let route = self.verifier.route.clone().map(|route| {
-            WorkflowTurnRoute::new(WorkflowTurnRouteSpec {
-                route,
-                session: self.lead,
-                run: self.durable_run,
-                stage: self.stage_id.clone(),
-                member,
-                role: WorkflowMemberRole::Verifier,
-                iteration,
-                recorder: self.route_recorder.clone(),
-            })
-        });
-        let evidence = run_pre_admitted_team_with_workflow(
-            self.engine.clone(),
-            self.lead,
-            vec![(spec, route)],
-            self.cancel.child_token(),
-            self.actor_claim,
-        )
-        .await;
-        let Some(entry) = evidence.first() else {
-            return Err(CoreError::Invalid(
-                "verifier produced no evidence".to_string(),
-            ));
-        };
-        if entry.status != MemberStatus::Done {
+        if self.cancel.is_cancelled() {
             return Err(CoreError::Cancelled);
         }
-        let verdict_text = if let Ok(session) = entry.session.parse::<SessionId>() {
-            final_assistant_text(&self.engine.read_projection(session).await?)
-        } else {
-            entry.summary.clone()
+        let (session, handle, member) = self
+            .supervisor
+            .spawn_resident_parked(
+                self.lead,
+                self.verifier.spec.clone(),
+                (
+                    self.ctx.binding.clone(),
+                    self.verifier.agents.clone(),
+                    self.verifier.resources.clone(),
+                    self.verifier.sidecar_factory.clone(),
+                ),
+                format!("{} verify", self.label),
+                self.actor_claim.as_ref(),
+                Some(self.guidance.clone()),
+            )
+            .await?;
+        let actor = ResidentActor {
+            session,
+            handle,
+            member,
         };
+        let result = async {
+            let mut next = self.next_iteration.lock().await;
+            let iteration = *next;
+            *next = next.saturating_add(1);
+            drop(next);
+            if let Some(run) = self.durable_run {
+                self.engine
+                    .record_workflow_event_for_actor(
+                        self.actor_claim.as_ref(),
+                        self.lead,
+                        Event::WorkflowStageMemberLinked {
+                            session: self.lead,
+                            run,
+                            stage: self.stage_id.clone(),
+                            member,
+                            role: WorkflowMemberRole::Verifier,
+                            iteration,
+                        },
+                    )
+                    .await?;
+            }
+            let route = self.verifier.route.clone().map(|route| {
+                WorkflowTurnRoute::new(WorkflowTurnRouteSpec {
+                    route,
+                    session: self.lead,
+                    run: self.durable_run,
+                    stage: self.stage_id.clone(),
+                    member,
+                    role: WorkflowMemberRole::Verifier,
+                    iteration,
+                    recorder: self.route_recorder.clone(),
+                })
+            });
+            activate_actor(
+                &self.engine,
+                &self.supervisor,
+                self.lead,
+                &actor,
+                directive,
+                self.guidance.clone(),
+                route,
+                self.actor_claim.as_ref(),
+                &self.cancel,
+            )
+            .await
+        }
+        .await;
+        // A judgment never retains a capacity claim, including link/route errors
+        // and cancellation. Reported episodes are already ended here.
+        let (root, _) = self.engine.session_lineage(self.lead).await?;
+        self.supervisor.end_member(root, &actor.handle).await?;
+        let verdict_text = result?;
         let verdict = parse_verdict(&verdict_text);
         if verdict.met {
             Ok(GateOutcome::Stop {

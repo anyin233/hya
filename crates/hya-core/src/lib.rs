@@ -72,8 +72,6 @@ pub mod resident;
 pub mod runtime_registry;
 /// Bundle sidecar lifecycle for executable public packages.
 pub mod sidecar;
-/// Multi-member team admission and fan-out execution.
-pub mod subagent;
 /// Session title generation helpers.
 pub mod title;
 /// Token accounting: local estimation and provider-usage reliability.
@@ -116,12 +114,11 @@ pub use completion::{
 };
 pub use effort::{AgentEffortSource, EffectiveEffort, EffortSource, agent_effort, resolve_effort};
 pub use engine::{
-    AdmissionMemberIdentity, AgentSpec, BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest,
-    BoundWorkflowSender, BundleRefresh, CatalogScopeCacheConfig, CreateSession, DRAIN_DEADLINE,
-    ForkAt, ForkError, MAX_DIRTY_BYTES, MAX_DIRTY_FILES, MAX_FILE_BYTES, MAX_SESSION_BLOB_BYTES,
-    MODEL_PROBE_PROMPT, ModelProbeReply, RevertError, RevertOutcome, RevertTarget,
-    RuntimeCatalogRefresh, SessionEngine, TurnBoundaryObserver, TurnDrainReport, TurnLease,
-    advertise_tool, fork_cut,
+    AgentSpec, BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest, BoundWorkflowSender,
+    BundleRefresh, CatalogScopeCacheConfig, CreateSession, DRAIN_DEADLINE, ForkAt, ForkError,
+    MAX_DIRTY_BYTES, MAX_DIRTY_FILES, MAX_FILE_BYTES, MAX_SESSION_BLOB_BYTES, MODEL_PROBE_PROMPT,
+    ModelProbeReply, RevertError, RevertOutcome, RevertTarget, RuntimeCatalogRefresh,
+    SessionEngine, TurnBoundaryObserver, TurnDrainReport, TurnLease, advertise_tool, fork_cut,
 };
 pub use error::CoreError;
 pub use hooks::{
@@ -154,11 +151,6 @@ pub use runtime_registry::{
 };
 pub use sidecar::{
     BoundSidecarFactory, SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart,
-};
-pub use subagent::{
-    MemberEvidence, MemberSpec, MemberStatus, TeamAdmissionError, TeamEvidenceEnvelope,
-    pre_admit_team, project_envelope, project_envelope_for_actor, run_pre_admitted_member,
-    run_pre_admitted_team, run_pre_admitted_team_for_actor, run_team,
 };
 pub use tokens::{
     CalibratedTokenizer, TokenAccounting, TokenAccountingMode, TokenCount, TokenSource, Tokenizer,
