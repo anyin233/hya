@@ -126,7 +126,7 @@ history and SQLite's sequence table):
 | `projection_snapshot` | Derived reducer cache; see below. |
 | `file_blob` | Per-session content-addressed bytes; see below. |
 | `project`, `project_root` | Mutable Project configuration; see below. |
-| `pending_resume` | Event-derived restore index: `session_id BLOB PRIMARY KEY`, `message_id TEXT NOT NULL` (interrupted assistant), nullable `prompt_message_id BLOB` (injected user message UUID), `created_at INTEGER NOT NULL`. A shutdown finish and its row commit together for non-archived roots. Prompt injection records its message id atomically; any assistant start deletes the row. |
+| `pending_resume` | Event-derived restore index: `session_id BLOB PRIMARY KEY`, `message_id TEXT NOT NULL` (interrupted assistant), nullable `prompt_message_id BLOB` (injected user message UUID), `created_at INTEGER NOT NULL`. A shutdown finish and its row commit together for non-archived roots. Archive eligibility includes every event after a persisted snapshot. Prompt injection records its message id atomically; any assistant start deletes the row. |
 
 The single `append_event_in_transaction` writer upserts this index only for
 `MessageFinished { role: Assistant, finish: Cancelled, cause: Some(Shutdown) }`

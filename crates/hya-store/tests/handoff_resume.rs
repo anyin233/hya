@@ -364,3 +364,66 @@ async fn restore_lists_children_interrupted_before_the_root_message_started() {
     assert!(!prompt.iter().any(|e| matches!(&e.event,
         Event::TextDelta { delta, .. } if delta.contains("Interrupted subagents:"))));
 }
+
+#[tokio::test]
+async fn shutdown_resume_uses_unarchived_tail_after_archived_snapshot() {
+    shutdown_resume_after_snapshot_archive_change(true).await;
+}
+
+#[tokio::test]
+async fn shutdown_resume_uses_archived_tail_after_unarchived_snapshot() {
+    shutdown_resume_after_snapshot_archive_change(false).await;
+}
+
+async fn shutdown_resume_after_snapshot_archive_change(snapshot_archived: bool) {
+    let store = SessionStore::connect_memory()
+        .await
+        .unwrap()
+        .with_projection_snapshot_interval(1);
+    let session = SessionId::new();
+    create(&store, session).await;
+    if snapshot_archived {
+        store
+            .append_event(
+                session,
+                &Event::SessionArchived {
+                    session,
+                    archived: 123.into(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let snapshot = store.read_projection_shared(session).await.unwrap();
+    assert_eq!(snapshot.session.is_archived(), snapshot_archived);
+    drop(snapshot);
+    let archive_change = if snapshot_archived {
+        Event::SessionUnarchived { session }
+    } else {
+        Event::SessionArchived {
+            session,
+            archived: 456.into(),
+        }
+    };
+    store.append_event(session, &archive_change).await.unwrap();
+    let message = open_turn(&store, session).await;
+    store
+        .append_event(
+            session,
+            &Event::MessageFinished {
+                session,
+                message,
+                role: Role::Assistant,
+                finish: FinishReason::Cancelled,
+                tokens: None,
+                cause: Some(FinishCause::Shutdown),
+            },
+        )
+        .await
+        .unwrap();
+    let resumes = store.list_pending_resumes().await.unwrap();
+    assert_eq!(resumes.len(), usize::from(snapshot_archived));
+    if snapshot_archived {
+        assert_eq!(resumes[0].message, message);
+    }
+}
