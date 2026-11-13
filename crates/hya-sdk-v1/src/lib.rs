@@ -748,7 +748,8 @@ impl V1Sdk {
 /// In-memory transcript mirror folded from curated stream frames.
 ///
 /// Start empty and apply [`apply`](Self::apply) to every live frame; on
-/// `resync`, re-read the projection and build a fresh mirror from live events.
+/// `resync`, re-read the projection and use [`from_messages`](Self::from_messages)
+/// to seed it, or replay durable events while continuing to apply live frames.
 /// Folding rules (the v1 stream contract):
 /// - Parts are keyed by id: a `partStarted` for a known part id (the durable
 ///   record of a part first seen live) does not add a second part.
@@ -757,12 +758,16 @@ impl V1Sdk {
 ///   `partReplaced` was applied); after that they are stale and ignored.
 /// - Tool argument deltas remain live after the durable tool `partStarted`;
 ///   `toolStateChanged` supplies the full input and supersedes those deltas.
+/// - On `resync`, incomplete parts become live-lost: clear partial tool input
+///   and ignore later live appends until a durable replacement or full input.
+/// - A seeded pending tool with empty input is also live-lost: its prefix is
+///   unknown, so fragments cannot reconstruct it.
 /// - `partReplaced` sets the part's whole text, superseding live deltas.
 /// - `sessionReverted` (a revert or its undo) hides or restores whole
 ///   messages: [`apply`](Self::apply) returns `true` (re-seed).
 /// - Durable frames at or below [`last_seq`](Self::last_seq) are ignored.
-///   A seed does not know its watermark: set `last_seq` to the seq the seed
-///   read reflects, or durable deltas it already contains apply again.
+///   Seed with the watermark the read reflects; otherwise durable deltas it
+///   already contains can apply again.
 /// - `memberLifecycleChanged` patches known members by child session, retaining
 ///   task outcome and clearing archival on revival. These events belong to the
 ///   team-root stream. A mirror follows one session's sequence: consumers viewing
@@ -773,6 +778,8 @@ pub struct V1SessionMirror {
     messages: BTreeMap<String, pb::MessageInfo>,
     /// Part ids whose text is durable (seeded or confirmed by the log).
     durable_parts: std::collections::BTreeSet<String>,
+    /// Parts whose live prefix was lost before their durable content arrived.
+    live_lost_parts: std::collections::BTreeSet<String>,
     /// Spawned subagents by member id.
     members: BTreeMap<String, pb::MemberInfo>,
     /// Highest applied sequence number.
@@ -780,10 +787,45 @@ pub struct V1SessionMirror {
 }
 
 impl V1SessionMirror {
+    /// Seed a transcript from `ListMessages` at the supplied durable watermark.
+    /// Pending tool calls with unknown input wait for full input instead of
+    /// displaying argument suffixes received after the read.
+    #[must_use]
+    pub fn from_messages(messages: Vec<pb::MessageInfo>, last_seq: u64) -> Self {
+        let mut mirror = Self {
+            last_seq,
+            ..Self::default()
+        };
+        for message in messages {
+            for part in &message.parts {
+                if matches!(&part.kind, Some(pb::part_info::Kind::ToolCall(tool))
+                    if tool.state == pb::ToolExecutionState::Pending as i32
+                        && tool.input_json.is_empty())
+                {
+                    mirror.live_lost_parts.insert(part.id.clone());
+                } else {
+                    mirror.durable_parts.insert(part.id.clone());
+                }
+            }
+            mirror.messages.insert(message.id.clone(), message);
+        }
+        mirror
+    }
+
     /// Apply one live frame; returns `true` when a resync is required.
     pub fn apply(&mut self, frame: &pb::StreamFrame) -> bool {
         match &frame.frame {
             Some(pb::stream_frame::Frame::Resync(resync)) => {
+                for message in self.messages.values_mut() {
+                    for part in &mut message.parts {
+                        if !self.durable_parts.contains(&part.id) {
+                            self.live_lost_parts.insert(part.id.clone());
+                            if let Some(pb::part_info::Kind::ToolCall(tool)) = &mut part.kind {
+                                tool.input_json.clear();
+                            }
+                        }
+                    }
+                }
                 self.last_seq = resync.last_seq;
                 true
             }
@@ -858,7 +900,10 @@ impl V1SessionMirror {
                 }
             }
             Some(P::PartAppended(appended)) => {
-                if !durable && self.durable_parts.contains(&appended.part) {
+                if !durable
+                    && (self.durable_parts.contains(&appended.part)
+                        || self.live_lost_parts.contains(&appended.part))
+                {
                     return;
                 }
                 if let Some(text) = self.part_text_mut(&appended.message, &appended.part) {
@@ -868,6 +913,7 @@ impl V1SessionMirror {
             Some(P::PartReplaced(replaced)) => {
                 if durable {
                     self.durable_parts.insert(replaced.part.clone());
+                    self.live_lost_parts.remove(&replaced.part);
                 }
                 if let Some(text) = self.part_text_mut(&replaced.message, &replaced.part) {
                     text.clone_from(&replaced.text);
@@ -885,6 +931,7 @@ impl V1SessionMirror {
             Some(P::ToolStateChanged(changed)) => {
                 if durable && !changed.input_json.is_empty() {
                     self.durable_parts.insert(changed.part.clone());
+                    self.live_lost_parts.remove(&changed.part);
                 }
                 if let Some(tool) = self.tool_part_mut(&changed.message, &changed.part) {
                     fold_tool_state(tool, changed);
@@ -917,7 +964,7 @@ impl V1SessionMirror {
         }
     }
 
-    /// The text buffer of a text or reasoning part.
+    /// The text buffer of a text/reasoning part or streaming tool input.
     fn part_text_mut(&mut self, message: &str, part: &str) -> Option<&mut String> {
         let part = self
             .messages
@@ -1320,6 +1367,124 @@ mod tests {
         );
         assert_eq!(message.time_created, at(10));
         assert_eq!(message.time_updated, at(12));
+    }
+
+    #[test]
+    fn resync_discards_tool_argument_fragments_until_full_input() {
+        tool_argument_resync(false);
+    }
+
+    #[test]
+    fn resync_then_cancel_keeps_tool_input_empty() {
+        tool_argument_resync(true);
+    }
+
+    fn tool_argument_resync(cancel: bool) {
+        let mut mirror = V1SessionMirror::default();
+        mirror.apply(&frame(
+            1,
+            P::MessageStarted(pb::MessageStarted {
+                message: "m".into(),
+                role: pb::Role::Assistant as i32,
+                ..Default::default()
+            }),
+        ));
+        mirror.apply(&frame(
+            2,
+            P::PartStarted(pb::PartStarted {
+                message: "m".into(),
+                part: "t".into(),
+                kind: "tool_call".into(),
+                tool: "read".into(),
+                call_id: "c".into(),
+            }),
+        ));
+        mirror.apply(&frame(0, appended("t", r#"{"path":"pre"#)));
+        assert!(mirror.apply(&pb::StreamFrame {
+            frame: Some(pb::stream_frame::Frame::Resync(pb::ResyncFrame {
+                last_seq: 2,
+            })),
+        }));
+        mirror.apply(&frame(0, appended("t", r#"fix"}"#)));
+        if cancel {
+            mirror.apply(&frame(
+                3,
+                P::ToolStateChanged(pb::ToolStateChanged {
+                    message: "m".into(),
+                    part: "t".into(),
+                    state: pb::ToolExecutionState::Error as i32,
+                    error_code: "cancelled".into(),
+                    error_message: "cancelled".into(),
+                    ..Default::default()
+                }),
+            ));
+            mirror.apply(&frame(
+                4,
+                P::MessageFinished(pb::MessageFinished {
+                    message: "m".into(),
+                    finish: pb::FinishReason::Cancelled as i32,
+                    ..Default::default()
+                }),
+            ));
+        }
+        let input = |mirror: &V1SessionMirror| match &mirror.messages()[0].parts[0].kind {
+            Some(pb::part_info::Kind::ToolCall(tool)) => tool.input_json.clone(),
+            _ => panic!("tool part"),
+        };
+        assert_eq!(input(&mirror), "");
+        if !cancel {
+            mirror.apply(&frame(
+                3,
+                P::ToolStateChanged(pb::ToolStateChanged {
+                    message: "m".into(),
+                    part: "t".into(),
+                    state: pb::ToolExecutionState::Running as i32,
+                    input_json: r#"{"path":"prefix"}"#.into(),
+                    ..Default::default()
+                }),
+            ));
+            mirror.apply(&frame(0, appended("t", "stale")));
+            assert_eq!(input(&mirror), r#"{"path":"prefix"}"#);
+        }
+    }
+
+    #[test]
+    fn seeded_pending_tool_ignores_argument_suffix_until_full_input() {
+        let mut mirror = V1SessionMirror::from_messages(
+            vec![pb::MessageInfo {
+                id: "m".into(),
+                parts: vec![pb::PartInfo {
+                    id: "t".into(),
+                    kind: Some(pb::part_info::Kind::ToolCall(pb::ToolCallPart {
+                        tool: "read".into(),
+                        call_id: "c".into(),
+                        state: pb::ToolExecutionState::Pending as i32,
+                        ..Default::default()
+                    })),
+                }],
+                ..Default::default()
+            }],
+            2,
+        );
+        mirror.apply(&frame(0, appended("t", r#"suffix"}"#)));
+        let tool = |mirror: &V1SessionMirror| match &mirror.messages()[0].parts[0].kind {
+            Some(pb::part_info::Kind::ToolCall(tool)) => tool.clone(),
+            _ => panic!("tool part"),
+        };
+        assert_eq!(tool(&mirror).input_json, "");
+        mirror.apply(&frame(
+            3,
+            P::ToolStateChanged(pb::ToolStateChanged {
+                message: "m".into(),
+                part: "t".into(),
+                state: pb::ToolExecutionState::Running as i32,
+                input_json: r#"{"path":"prefixsuffix"}"#.into(),
+                ..Default::default()
+            }),
+        ));
+        mirror.apply(&frame(0, appended("t", "stale")));
+        assert_eq!(tool(&mirror).input_json, r#"{"path":"prefixsuffix"}"#);
+        assert_eq!(tool(&mirror).call_id, "c");
     }
 
     #[test]

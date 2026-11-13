@@ -390,9 +390,10 @@ Each round runs **in this order** (see `run_turn_rounds` in
    declared route instead). The opener returns the stream together with the
    model that serves it.
 8. Emit `StepStarted`.
-9. Stream the provider round (`collect_stream_round`) — live **text** via
-   `publish_live` (then durable text triple at round end); reasoning, tool
-   calls, and other events via durable `emit_for_actor` immediately. When the
+9. Stream the provider round (`collect_stream_round`) — live **text and
+   tool-argument fragments** via `publish_live` (text gets a durable triple at round end; tool arguments
+   get durable full input when complete); reasoning, tool starts/state
+   changes, and other events via durable `emit_for_actor` immediately. When the
    round reported usage, append `UsageRecorded { purpose: turn }` with the
    serving model — also when the stream then failed (see
    [Usage attribution](#usage-attribution)).

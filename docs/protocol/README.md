@@ -856,7 +856,20 @@ mid-stream connection or reconnect, replay the durable start (or re-read the
 projection) and keep following the stream. `toolStateChanged` RUNNING replaces
 any partial or missed fragments with the complete `inputJson`; replay alone
 therefore recovers the same final tool input. After `resync`, discard incomplete
-fragments until that full input arrives.
+fragments until that full input arrives. This also applies when seeding from
+`ListMessages` mid-stream: a pending tool with empty `inputJson` has an unknown
+prefix, so ignore its live fragments until a full input replaces them. A cancel
+or error without full input leaves that input empty.
+
+Rust clients can seed with
+`V1SessionMirror::from_messages(messages: Vec<pb::MessageInfo>, last_seq: u64)
+-> V1SessionMirror`, using the durable watermark reflected by the read, then
+call `apply(&pb::StreamFrame) -> bool` for each frame. For example,
+`let mut mirror = V1SessionMirror::from_messages(read.messages, watermark);`
+retains complete transcript parts and waits for full input on pending tools.
+A `true` return asks the client to re-read/replay. On `Resync`, the mirror marks
+incomplete parts live-lost, clears partial tool input, and blocks live appends
+to those parts until durable replacement or full input arrives.
 
 Fields a frame does not carry are empty; fold them into the part by
 `part` id without clearing what you already have. A direct part
