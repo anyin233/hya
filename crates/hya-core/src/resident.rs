@@ -156,6 +156,47 @@ enum SlotStatus {
     Busy,
 }
 
+/// Completion of one explicitly armed resident activation.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ActivationResult {
+    Settled {
+        final_text: String,
+    },
+    Reported {
+        outcome: ReportOutcome,
+        text: String,
+    },
+    Ended {
+        reason: ArchiveReason,
+        status: MemberRunStatus,
+        note: String,
+    },
+}
+
+/// A single activation's completion; cancelling a wait leaves the episode owned.
+pub(crate) struct ActivationWaiter {
+    done: oneshot::Receiver<Result<ActivationResult, CoreError>>,
+}
+
+impl ActivationWaiter {
+    pub(crate) async fn wait(&mut self) -> Result<ActivationResult, CoreError> {
+        (&mut self.done).await.map_err(|_| {
+            CoreError::Invalid("episode exited without its activation result".into())
+        })?
+    }
+}
+
+struct ActivationCompletion {
+    boundary: usize,
+    done: oneshot::Sender<Result<ActivationResult, CoreError>>,
+}
+
+struct WorkflowActivation {
+    guidance: Arc<str>,
+    route: Option<WorkflowTurnRoute>,
+    done: oneshot::Sender<Result<ActivationResult, CoreError>>,
+}
+
 /// A report accepted from the `report` tool, executed once the actor is at
 /// rest (ADR-0015): the gate was checked at call time; the archive runs after
 /// the current turn ends and re-checks.
@@ -178,6 +219,7 @@ struct Episode {
     guidance: Option<Arc<str>>,
     /// Fixed request-local route for Workflow resident activations.
     route: Option<WorkflowTurnRoute>,
+    activation: Option<ActivationCompletion>,
     /// Opaque request-scoped sidecar factory, retained only in memory.
     sidecar_factory: Option<Arc<dyn BoundSidecarFactory>>,
     is_main: bool,
@@ -588,6 +630,7 @@ impl TeamActor {
                     resources: Some(context.resources),
                     guidance: context.guidance,
                     route: None,
+                    activation: None,
                     sidecar_factory: None,
                     is_main: true,
                     status: SlotStatus::Idle,
@@ -916,6 +959,58 @@ impl TeamActor {
         if let Some(supervisor) = self.supervisor.upgrade() {
             supervisor.retire_team(self);
         }
+    }
+
+    async fn settle_activation(
+        &self,
+        session: SessionId,
+        claim: Option<&ActorClaim>,
+    ) -> Result<(), CoreError> {
+        let eligible = |slot: &Episode| {
+            slot.claim.as_ref() == claim
+                && slot.status == SlotStatus::Idle
+                && slot.ending.is_none()
+                && slot.report.is_none()
+                && slot
+                    .activation
+                    .as_ref()
+                    .is_some_and(|activation| slot.cursor >= activation.boundary)
+        };
+        if !self.lock().residents.get(&session).is_some_and(eligible) {
+            return Ok(());
+        }
+        let projection = self.engine.read_projection(session).await?;
+        let final_text = projection
+            .session
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == hya_proto::Role::Assistant)
+            .map(|message| {
+                message
+                    .parts
+                    .iter()
+                    .filter_map(|part| match part {
+                        hya_proto::PartProjection::Text { text, .. } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<String>()
+            })
+            .unwrap_or_default();
+        let mut state = self.lock();
+        if let Some(slot) = state
+            .residents
+            .get_mut(&session)
+            .filter(|slot| eligible(slot))
+        {
+            slot.route = None;
+            if let Some(activation) = slot.activation.take() {
+                let _ = activation
+                    .done
+                    .send(Ok(ActivationResult::Settled { final_text }));
+            }
+        }
+        Ok(())
     }
 
     fn forget_episode(&self, session: SessionId, claim: Option<&ActorClaim>) {
@@ -1615,11 +1710,7 @@ impl TeamActor {
             .and_then(|slot| slot.report.clone())
     }
 
-    fn take_episode(
-        &self,
-        session: SessionId,
-        claim: Option<&ActorClaim>,
-    ) -> Option<EpisodeCompletion> {
+    fn take_episode(&self, session: SessionId, claim: Option<&ActorClaim>) -> Option<Episode> {
         let done = {
             let mut state = self.lock();
             let std::collections::hash_map::Entry::Occupied(entry) = state.residents.entry(session)
@@ -1637,7 +1728,7 @@ impl TeamActor {
                 state.main_session = None;
             }
             self.maybe_fire_quiescence(&mut state);
-            slot.done
+            slot
         };
         self.forget_episode(session, claim);
         Some(done)
@@ -1649,8 +1740,8 @@ impl TeamActor {
         claim: Option<&ActorClaim>,
         result: Result<(), CoreError>,
     ) {
-        if let Some(done) = self.take_episode(session, claim) {
-            done.send_replace(Some(result));
+        if let Some(slot) = self.take_episode(session, claim) {
+            slot.done.send_replace(Some(result));
         }
     }
 
@@ -2352,6 +2443,22 @@ async fn episode_task(
                                     .record_activity(None, handle, RosterStatus::Idle, None)
                                     .await;
                             }
+                            if let Err(error) =
+                                team.settle_activation(session, task_claim.as_ref()).await
+                            {
+                                let Some(claim) = claim.as_ref() else {
+                                    return;
+                                };
+                                finish_episode(
+                                    &team,
+                                    claim,
+                                    Ending::Failed(format!("activation completion error: {error}")),
+                                    &mut sidecar_handle,
+                                    None,
+                                )
+                                .await;
+                                return;
+                            }
                         }
                         Ok(TurnOutcome::Cancelled { .. }) | Err(CoreError::Cancelled) => {
                             // A user-stopped episode stays live and durably idle;
@@ -2609,10 +2716,54 @@ async fn finish_episode(
                 matches!(envelope.event, Event::MailSent { .. }).then_some(envelope.seq.0)
             }));
     }
-    if let Some(done) = team.take_episode(claim.actor_id, Some(claim)) {
+    if let Some(slot) = team.take_episode(claim.actor_id, Some(claim)) {
+        let activation = slot.activation.map(|activation| {
+            let activation_result = result
+                .as_ref()
+                .map(|envelopes| {
+                    if let Some((outcome, text)) =
+                        envelopes.iter().find_map(|envelope| match &envelope.event {
+                            Event::SubagentReported {
+                                child,
+                                outcome,
+                                report,
+                                ..
+                            } if *child == claim.actor_id => Some((*outcome, report.clone())),
+                            _ => None,
+                        })
+                    {
+                        ActivationResult::Reported { outcome, text }
+                    } else {
+                        let (reason, status, mut note) = ending.forced_fields();
+                        if let Some(summary) =
+                            envelopes.iter().find_map(|envelope| match &envelope.event {
+                                Event::MemberFinished {
+                                    child: Some(child),
+                                    summary,
+                                    ..
+                                } if *child == claim.actor_id => Some(summary),
+                                _ => None,
+                            })
+                        {
+                            note.clone_from(summary);
+                        }
+                        ActivationResult::Ended {
+                            reason,
+                            status,
+                            note,
+                        }
+                    }
+                })
+                .map_err(Clone::clone);
+            (activation, activation_result)
+        });
+        drop(slot.route);
         let result =
             result.map(|finalization| team.engine.publish_resident_finalization(finalization));
-        done.send_replace(Some(result));
+        if let Some((activation, activation_result)) = activation {
+            let _ = activation.done.send(activation_result);
+        }
+        slot.done.send_replace(Some(result));
     }
 }
 
@@ -3825,6 +3976,33 @@ impl ResidentSupervisor {
         parent_claim: Option<&ActorClaim>,
         policy: Option<hya_proto::mail::ChannelPolicySnapshot>,
     ) -> Result<(), CoreError> {
+        self.revive_episode_with_activation(
+            root,
+            parent,
+            target,
+            to,
+            kind,
+            body,
+            parent_claim,
+            policy,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn revive_episode_with_activation(
+        &self,
+        root: SessionId,
+        parent: &str,
+        target: &str,
+        to: MailEndpoint,
+        kind: hya_proto::MailKind,
+        body: String,
+        parent_claim: Option<&ActorClaim>,
+        policy: Option<hya_proto::mail::ChannelPolicySnapshot>,
+        activation: Option<WorkflowActivation>,
+    ) -> Result<(), CoreError> {
         let projection = self.engine.read_projection(root).await?;
         // A concurrent sender may already have installed the new episode.
         let child = projection
@@ -3904,6 +4082,32 @@ impl ResidentSupervisor {
             team = self.team_for(root).await?;
             write = self.claim_writes.lock().await;
         }
+        // Reserve the existing turn seam before checking idle: unrelated mail
+        // cannot start work until guidance, route and completion are installed.
+        let activation_lease = activation
+            .as_ref()
+            .map(|_| self.engine.try_begin_turn(child))
+            .transpose()?;
+        if activation.is_some() {
+            let state = team.lock();
+            if let Some(slot) = state.residents.get(&child) {
+                if slot.status != SlotStatus::Idle
+                    || slot.has_work()
+                    || slot.activation.is_some()
+                    || slot.ending.is_some()
+                    || slot.report.is_some()
+                    || slot.user_stopped
+                {
+                    return Err(CoreError::Invalid(
+                        "resident Workflow activation requires an idle episode".into(),
+                    ));
+                }
+            } else if projection.team.roster.contains_key(target) {
+                return Err(CoreError::Invalid(
+                    "resident session is not registered".into(),
+                ));
+            }
+        }
         let (claim, envelopes) = self
             .engine
             .store()
@@ -3921,11 +4125,42 @@ impl ResidentSupervisor {
                 policy,
             )
             .await?;
+        let activation = if let Some(activation) = activation {
+            let projection = self.engine.read_projection(root).await?;
+            let boundary = projection.team.inboxes[target].len();
+            Some((activation, boundary))
+        } else {
+            None
+        };
         let Some((claim, cursor)) = claim else {
+            if let Some((activation, boundary)) = activation {
+                let mut state = team.lock();
+                let slot = state.residents.get_mut(&child).ok_or_else(|| {
+                    CoreError::Invalid("resident episode disappeared during activation".into())
+                })?;
+                slot.guidance = Some(activation.guidance);
+                slot.route = activation.route;
+                slot.activation = Some(ActivationCompletion {
+                    boundary,
+                    done: activation.done,
+                });
+            }
             for envelope in envelopes {
                 self.engine.publish_envelope(envelope);
             }
             return Ok(());
+        };
+        let activated = activation.is_some();
+        let (guidance, route, completion) = match activation {
+            Some((activation, boundary)) => (
+                Some(activation.guidance),
+                activation.route,
+                Some(ActivationCompletion {
+                    boundary,
+                    done: activation.done,
+                }),
+            ),
+            None => (None, None, None),
         };
         self.engine
             .update_session_channel_policy(child, channel_policy);
@@ -3950,8 +4185,9 @@ impl ResidentSupervisor {
                 binding,
                 agents: Some(agents),
                 resources: Some(resources),
-                guidance: None,
-                route: None,
+                guidance,
+                route,
+                activation: completion,
                 sidecar_factory,
                 is_main: false,
                 status: SlotStatus::Idle,
@@ -3971,6 +4207,10 @@ impl ResidentSupervisor {
             Some(init),
         );
         drop(write);
+        drop(activation_lease);
+        if activated {
+            return Ok(());
+        }
         initialized
             .await
             .map_err(|_| CoreError::Invalid("resident initialization task exited".into()))??;
@@ -4264,65 +4504,104 @@ impl ResidentSupervisor {
         ))
     }
 
-    /// Replace one idle resident's in-process guidance and request-local route
-    /// before its next durable mail activation.
-    ///
-    /// # Errors
-    /// Returns [`CoreError::Invalid`] when the resident is unregistered or busy.
-    pub(crate) async fn set_resident_workflow_activation(
+    /// Arm an idle member (or revive an archived one) with durable parent mail.
+    /// Guidance, route and the post-mail inbox boundary are installed before
+    /// the turn reservation is released. The episode alone resolves completion.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn activate(
         &self,
-        session: SessionId,
+        parent: SessionId,
+        member: SessionId,
+        directive: String,
         guidance: Arc<str>,
         route: Option<WorkflowTurnRoute>,
-    ) -> Result<(), CoreError> {
-        let (root, _) = self.engine.session_lineage(session).await?;
-        let team = self
-            .teams()
-            .get(&root)
-            .cloned()
-            .ok_or_else(|| CoreError::Invalid("resident team is not registered".to_string()))?;
-        let mut state = team.lock();
-        let slot = state
-            .residents
-            .get_mut(&session)
-            .ok_or_else(|| CoreError::Invalid("resident session is not registered".to_string()))?;
-        if slot.status != SlotStatus::Idle || slot.has_work() {
-            return Err(CoreError::Invalid(
-                "resident Workflow activation cannot change during active work".to_string(),
-            ));
+        parent_claim: Option<&ActorClaim>,
+    ) -> Result<ActivationWaiter, CoreError> {
+        let (root, _) = self.engine.session_lineage(parent).await?;
+        let from = self.engine.resolve_handle(root, parent).await?;
+        let projection = self.engine.read_projection(root).await?;
+        let target = projection
+            .team
+            .roster
+            .values()
+            .find(|entry| entry.session == member)
+            .map(|entry| entry.handle.clone())
+            .or_else(|| {
+                projection
+                    .team
+                    .archived
+                    .values()
+                    .find(|entry| entry.session == member)
+                    .map(|entry| entry.handle.clone())
+            })
+            .ok_or_else(|| CoreError::Invalid("resident member is not registered".into()))?;
+        let (done, receiver) = oneshot::channel();
+        if projection.team.roster.contains_key(&target) {
+            let write = self.claim_writes.lock().await;
+            let lease = self.engine.try_begin_turn(member)?;
+            let team = self
+                .team_with_resident(member)
+                .ok_or_else(|| CoreError::Invalid("resident session is not registered".into()))?;
+            {
+                let state = team.lock();
+                let slot = &state.residents[&member];
+                if slot.status != SlotStatus::Idle
+                    || slot.has_work()
+                    || slot.activation.is_some()
+                    || slot.ending.is_some()
+                    || slot.report.is_some()
+                    || slot.user_stopped
+                {
+                    return Err(CoreError::Invalid(
+                        "resident Workflow activation requires an idle episode".into(),
+                    ));
+                }
+            }
+            let envelope = self
+                .engine
+                .store()
+                .append_direct_mail(
+                    root,
+                    from,
+                    target.clone(),
+                    hya_proto::MailKind::Message,
+                    directive,
+                    parent_claim,
+                    None,
+                )
+                .await?;
+            let boundary = self.engine.read_projection(root).await?.team.inboxes[&target].len();
+            {
+                let mut state = team.lock();
+                let slot = state.residents.get_mut(&member).ok_or_else(|| {
+                    CoreError::Invalid("resident episode disappeared during activation".into())
+                })?;
+                slot.guidance = Some(guidance);
+                slot.route = route;
+                slot.activation = Some(ActivationCompletion { boundary, done });
+            }
+            self.engine.publish_envelope(envelope);
+            drop(write);
+            drop(lease);
+            return Ok(ActivationWaiter { done: receiver });
         }
-        slot.guidance = Some(guidance);
-        slot.route = route;
-        Ok(())
-    }
-
-    /// Clear one idle resident's request-local workflow route (ADR-0017).
-    ///
-    /// Stage routes hold a route-recorder sender clone; the parked actor keeps
-    /// living after the Stage settles, so the route MUST be dropped here or the
-    /// owning run's route-persistence task waits on an open channel forever.
-    pub(crate) async fn clear_resident_workflow_route(
-        &self,
-        session: SessionId,
-    ) -> Result<(), CoreError> {
-        let (root, _) = self.engine.session_lineage(session).await?;
-        let team = self
-            .teams()
-            .get(&root)
-            .cloned()
-            .ok_or_else(|| CoreError::Invalid("resident team is not registered".to_string()))?;
-        let mut state = team.lock();
-        let slot = state
-            .residents
-            .get_mut(&session)
-            .ok_or_else(|| CoreError::Invalid("resident session is not registered".to_string()))?;
-        if slot.status != SlotStatus::Idle || slot.has_work() {
-            return Err(CoreError::Invalid(
-                "resident Workflow route cannot clear during active work".to_string(),
-            ));
-        }
-        slot.route = None;
-        Ok(())
+        self.revive_episode_with_activation(
+            root,
+            &from,
+            &target,
+            MailEndpoint::Handle(target.clone()),
+            hya_proto::MailKind::Message,
+            directive,
+            parent_claim,
+            None,
+            Some(WorkflowActivation {
+                guidance,
+                route,
+                done,
+            }),
+        )
+        .await?;
+        Ok(ActivationWaiter { done: receiver })
     }
 
     /// Register an already-created `session` as a resident of team `root`, arm it,
@@ -4495,6 +4774,7 @@ impl ResidentSupervisor {
                 resources,
                 guidance,
                 route,
+                activation: None,
                 sidecar_factory,
                 is_main: false,
                 status: SlotStatus::Idle,
@@ -4654,6 +4934,7 @@ impl ResidentSupervisor {
                 // Ephemeral guidance is not durable; recovery invents nothing.
                 guidance: None,
                 route: None,
+                activation: None,
                 sidecar_factory,
                 is_main: false,
                 status: SlotStatus::Idle,

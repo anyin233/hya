@@ -1,21 +1,17 @@
 //! Workflow execution over the governed subagent team primitives.
 //!
-//! Each topological level is executed as ONE batch through
-//! [`pre_admit_team`](crate::subagent::pre_admit_team) /
-//! [`run_pre_admitted_team`](crate::subagent::run_pre_admitted_team), so the
-//! [`SubagentGovernor`](crate::SubagentGovernor) still bounds depth, per-run
-//! spawn budget, and streaming concurrency for user-authored DAGs exactly as it
-//! does for model-decided `task` batches. Loop stages iterate through
-//! [`IterationDriver`](crate::completion::IterationDriver) with an independent
-//! verifier member — never a second loop implementation.
+//! Each topological level registers parked resident actors, then activates
+//! them through the episode API. The controller accepts at-rest settlement or
+//! a terminal report as Stage evidence. Loop continuations and independent
+//! verifiers still use the transient executor and shared IterationDriver.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use hya_proto::{
-    ActorClaim, ArchiveReason, Event, MailEndpoint, MailKind, MemberId, MemberRunStatus, ModelRef,
-    RosterStatus, SessionId, WorkflowMemberRole, WorkflowRunId, WorkflowStageStatus,
+    ActorClaim, Event, MemberId, ModelRef, ReportOutcome, SessionId, WorkflowMemberRole,
+    WorkflowRunId, WorkflowStageStatus,
 };
 use hya_provider::ReasoningEffort;
 use hya_tool::AgentDef;
@@ -32,7 +28,7 @@ use crate::completion::{
 };
 use crate::engine::{AgentSpec, SessionEngine};
 use crate::error::CoreError;
-use crate::resident::ResidentSupervisor;
+use crate::resident::{ActivationResult, ResidentSupervisor};
 use crate::sidecar::BoundSidecarFactory;
 use crate::subagent::{MemberSpec, MemberStatus, run_pre_admitted_team_with_workflow};
 
@@ -1080,8 +1076,7 @@ fn final_assistant_text(projection: &hya_proto::Projection) -> String {
     String::new()
 }
 
-/// Deliver one resident Stage as durable mail and wait until Projection proves
-/// that exact inbox boundary reached idle or the actor terminated.
+/// The controller accepts both at-rest settlement and a terminal report.
 async fn activate_resident_stage(
     engine: Arc<SessionEngine>,
     lead: SessionId,
@@ -1096,140 +1091,48 @@ async fn activate_resident_stage(
         actor_claim,
         route,
     } = activation;
-    let PreparedActivation {
-        directive,
-        system_context,
-        ..
-    } = prepared;
-    supervisor
-        .set_resident_workflow_activation(actor.session, system_context, route)
-        .await?;
-    let mut events = engine.bus().subscribe();
-    engine
-        .mail_send_for_actor(
+    let mut waiter = supervisor
+        .activate(
             lead,
-            MailEndpoint::Handle(actor.handle.clone()),
-            MailKind::Message,
-            directive,
+            actor.session,
+            prepared.directive,
+            prepared.system_context,
+            route,
             actor_claim.as_ref(),
         )
         .await?;
-    let (root, _) = engine.session_lineage(lead).await?;
-    let boundary = engine
-        .read_projection(root)
-        .await?
-        .team
-        .inboxes
-        .get(&actor.handle)
-        .map(Vec::len)
-        .and_then(|length| u64::try_from(length).ok())
-        .unwrap_or(u64::MAX);
-    let mut stop_requested = false;
-    // The parked actor outlives the Stage, but its request-local route does
-    // not: clear it on every exit or the run's route-persistence task waits
-    // on the recorder's open channel forever.
-    let actor_session = actor.session;
-    let report = async {
-        loop {
-            let projection = engine.read_projection(root).await?;
-            if let Some(archived) = projection
-                .team
-                .archived
-                .get(&actor.handle)
-                .filter(|entry| entry.session == actor.session)
-            {
-                let parent = engine.read_projection(lead).await?;
-                let member = parent
-                    .session
-                    .members
-                    .iter()
-                    .find(|row| row.member == actor.member)
-                    .ok_or_else(|| {
-                        CoreError::Invalid(
-                            "archived Workflow actor has no parent member row".into(),
-                        )
-                    })?;
-                return Ok(StageReport {
-                    stage: stage.id().to_string(),
-                    agent: stage.agent().to_string(),
-                    status: if stop_requested {
-                        StageStatus::Cancelled
-                    } else if archived.reason == ArchiveReason::Reported
-                        && member.status == MemberRunStatus::Done
-                    {
-                        StageStatus::Done
-                    } else {
-                        StageStatus::Failed
-                    },
-                    session: Some(actor.session.to_string()),
-                    output: clamp(member.summary.clone()),
-                });
-            }
-            if let Some(entry) = projection.team.roster.get(&actor.handle)
-                && entry.resident_cursor >= boundary
-                && entry.resident_work.is_none()
-            {
-                match entry.status {
-                    RosterStatus::Idle => {
-                        let output =
-                            final_assistant_text(&engine.read_projection(actor.session).await?);
-                        return Ok(StageReport {
-                            stage: stage.id().to_string(),
-                            agent: stage.agent().to_string(),
-                            status: StageStatus::Done,
-                            session: Some(actor.session.to_string()),
-                            output,
-                        });
-                    }
-                    RosterStatus::Failed | RosterStatus::Done => {
-                        return Ok(StageReport {
-                            stage: stage.id().to_string(),
-                            agent: stage.agent().to_string(),
-                            status: if stop_requested {
-                                StageStatus::Cancelled
-                            } else {
-                                StageStatus::Failed
-                            },
-                            session: Some(actor.session.to_string()),
-                            output: clamp(
-                                entry
-                                    .current_task
-                                    .clone()
-                                    .unwrap_or_else(|| "resident actor failed".to_string()),
-                            ),
-                        });
-                    }
-                    RosterStatus::Busy => {}
-                }
-            }
-            let event = if stop_requested {
-                Some(events.recv().await)
-            } else {
-                tokio::select! {
-                    _ = cancel.cancelled() => None,
-                    event = events.recv() => Some(event),
-                }
-            };
-            let Some(event) = event else {
-                supervisor.end_member(root, &actor.handle).await?;
-                stop_requested = true;
-                continue;
-            };
-            match event {
-                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    return Err(WorkflowError::Engine(CoreError::Invalid(
-                        "event bus closed before resident Stage settled".to_string(),
-                    )));
-                }
-            }
+    let (result, cancelled) = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => {
+            let (root, _) = engine.session_lineage(lead).await?;
+            supervisor.end_member(root, &actor.handle).await?;
+            (waiter.wait().await?, true)
         }
-    }
-    .await;
-    let _ = supervisor
-        .clear_resident_workflow_route(actor_session)
-        .await;
-    report
+        result = waiter.wait() => (result?, false),
+    };
+    let (status, output) = match result {
+        ActivationResult::Settled { final_text } => (StageStatus::Done, final_text),
+        ActivationResult::Reported { outcome, text } => (
+            if outcome == ReportOutcome::Done {
+                StageStatus::Done
+            } else {
+                StageStatus::Failed
+            },
+            text,
+        ),
+        ActivationResult::Ended { note, .. } => (StageStatus::Failed, note),
+    };
+    Ok(StageReport {
+        stage: stage.id().to_string(),
+        agent: stage.agent().to_string(),
+        status: if cancelled {
+            StageStatus::Cancelled
+        } else {
+            status
+        },
+        session: Some(actor.session.to_string()),
+        output: clamp(output),
+    })
 }
 
 fn clamp(mut text: String) -> String {
