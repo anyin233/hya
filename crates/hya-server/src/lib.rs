@@ -109,6 +109,7 @@ pub fn router(state: AppState) -> Router {
 /// catalog-scope notice relay. Called exactly once per server state
 /// ([`AppState::server_state`]), so HTTP and gRPC share one of each.
 pub(crate) fn spawn_background_drivers(state: &ServerState) {
+    v1::events::spawn_frame_hub(state);
     spawn_catalog_scope_notices(state);
     spawn_project_busy_watcher(state.clone());
     session_list::spawn_busy_tracker(state.clone());

@@ -130,227 +130,188 @@ impl StreamScope {
     }
 }
 
-/// Build the SSE stream shared by both scopes.
+/// A converted frame and its SSE encoding, shared by every subscriber.
+pub(crate) struct SharedFrame {
+    pub(crate) frame: pb::StreamFrame,
+    sse: SseEvent,
+}
+
+impl SharedFrame {
+    fn new(frame: pb::StreamFrame) -> std::sync::Arc<Self> {
+        let sse = SseEvent::default()
+            .json_data(&frame)
+            .unwrap_or_else(|error| SseEvent::default().event("error").data(error.to_string()));
+        std::sync::Arc::new(Self { frame, sse })
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct FrameHub {
+    frames: tokio::sync::broadcast::Sender<std::sync::Arc<PublishedFrame>>,
+}
+
+impl FrameHub {
+    pub(crate) fn new(capacity: usize) -> Self {
+        Self {
+            frames: tokio::sync::broadcast::channel(capacity).0,
+        }
+    }
+}
+
+struct PublishedFrame {
+    audience: Audience,
+    encoded: std::sync::Arc<SharedFrame>,
+}
+
+enum Audience {
+    Engine {
+        session: Option<SessionId>,
+        seq: u64,
+        list: bool,
+    },
+    Interaction,
+    All,
+    Global,
+    Resync {
+        global_only: bool,
+    },
+}
+
+/// Subscribe to the source channels synchronously, before returning the router.
+/// Conversion and JSON encoding happen here, before the shared broadcast.
+pub(crate) fn spawn_frame_hub(st: &ServerState) {
+    use tokio::sync::broadcast::error::RecvError;
+    let mut bus = st.engine.bus().subscribe();
+    let mut permissions = st.permission_requests.subscribe();
+    let mut questions = st.question_requests.subscribe();
+    let mut catalogs = st.catalog_updates.subscribe();
+    let mut projects = st.projects_updates.subscribe();
+    let mut sessions = st.session_list.subscribe();
+    let st = st.clone();
+    tokio::spawn(async move {
+        loop {
+            let (audience, frame) = tokio::select! {
+                _ = st.streams.closed() => break,
+                received = bus.recv() => match received {
+                    Ok(envelope) => {
+                        if st.frames.frames.receiver_count() == 0 { continue; }
+                        let Some(event) = counted_stream_event(&st, &envelope) else { continue };
+                        let list = is_session_list_event(&st, &envelope.event).await;
+                        (Audience::Engine { session: envelope.event.session(), seq: envelope.seq.0, list },
+                            pb::StreamFrame { frame: Some(pb::stream_frame::Frame::Event(event)) })
+                    }
+                    Err(RecvError::Lagged(_)) => (Audience::Resync { global_only: false }, resync_frame(0)),
+                    Err(RecvError::Closed) => break,
+                },
+                received = permissions.recv() => {
+                    let Ok(value) = received else { continue };
+                    let Some(frame) = interaction_frame(&value) else { continue };
+                    (Audience::Interaction, pb::StreamFrame { frame: Some(frame) })
+                },
+                received = questions.recv() => {
+                    let Ok(value) = received else { continue };
+                    let Some(frame) = interaction_frame(&value) else { continue };
+                    (Audience::Interaction, pb::StreamFrame { frame: Some(frame) })
+                },
+                received = catalogs.recv() => {
+                    let Ok(notice) = received else { continue };
+                    (Audience::All, catalog_updated_frame(&notice))
+                },
+                received = projects.recv() => {
+                    let Ok(()) = received else { continue };
+                    (Audience::Global, projects_updated_frame())
+                },
+                received = sessions.recv() => match received {
+                    Ok(notice) => (Audience::Global, session_list_frame(notice)),
+                    Err(RecvError::Lagged(_)) => (Audience::Resync { global_only: true }, resync_frame(0)),
+                    Err(RecvError::Closed) => break,
+                },
+            };
+            let _ = st.frames.frames.send(std::sync::Arc::new(PublishedFrame {
+                audience,
+                encoded: SharedFrame::new(frame),
+            }));
+        }
+    });
+}
+
+async fn is_session_list_event(st: &ServerState, event: &hya_proto::Event) -> bool {
+    match event {
+        hya_proto::Event::SessionCreated { parent, .. } => parent.is_none(),
+        hya_proto::Event::AgentArchived { .. } | hya_proto::Event::AgentRestarted { .. } => true,
+        hya_proto::Event::SessionTitled { session, .. }
+        | hya_proto::Event::AgentSwitched { session, .. }
+        | hya_proto::Event::ModelSwitched { session, .. }
+        | hya_proto::Event::SessionPermissionModeSet { session, .. }
+        | hya_proto::Event::SessionArchived { session, .. }
+        | hya_proto::Event::SessionUnarchived { session, .. } => {
+            crate::session_list::is_root(st, *session).await
+        }
+        _ => false,
+    }
+}
+
 fn session_stream(
     st: ServerState,
     scope: StreamScope,
     since_seq: u64,
     interactions_only: bool,
 ) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
-    let events = frame_stream(st, scope, since_seq, interactions_only).map(|frame| {
-        let event = match frame {
-            Ok(frame) => SseEvent::default().json_data(frame).unwrap_or_default(),
-            Err(status) => SseEvent::default().event("error").data(status.message()),
-        };
-        Ok(event)
-    });
+    let events =
+        frame_stream(st, scope, since_seq, interactions_only).map(|frame| Ok(frame.sse.clone()));
     Sse::new(events).keep_alive(KeepAlive::default())
 }
 
-/// The shared live frame producer backing both SSE and gRPC streams.
-///
-/// Merges the engine event bus, the pending permission plane, the pending
-/// question plane, provider-catalog notices (a live-only, process-wide
-/// `catalogUpdated` frame on every scope), and — on the global scope only —
-/// Project-list notices (a live-only `projectsUpdated` frame) and the live
-/// root-session list notices (`sessionUpdated {busy}`, `sessionDeleted`; see
-/// `crate::session_list`). With `interactions_only` the engine bus is
-/// narrowed to the durable list frames of root sessions (`sessionStarted`,
-/// `sessionUpdated`) and team-root `memberLifecycleChanged` frames; its lag
-/// still yields `resync`.
-/// Permission and question frames are
-/// live-only (`seq == 0`): the pending queues are the authoritative
-/// listing, the streams are delivery. A session scope with `descendants`
-/// also passes interaction frames whose session lies below the streamed one
-/// (walked up the parent chain), each still naming the asking session.
-///
-/// The bus carries durable envelopes (`seq > 0`, filtered by `since_seq`)
-/// and live-only ones (`seq == 0`: assistant text deltas of an in-flight
-/// provider round), which always pass: they are never persisted, so no
-/// watermark can have covered them. A subscriber that falls more than the
-/// bus capacity behind gets one `resync` frame per lag and loses the
-/// frames in the gap, live deltas included; the durable log (and so the
-/// projection) is unaffected.
-///
-/// Every stream ends when the server starts shutting down
-/// (`StreamShutdown::close`), so connected clients never hold the graceful
-/// shutdown open; its last frame is a live `serverStopping {reason}`.
+/// SSE and gRPC share conversion, scope filtering, lag and shutdown handling.
+/// Durable frames respect the watermark; live frames (`seq == 0`) always pass.
+/// Descendant scopes include only descendants' interactions. Global list-only
+/// streams include durable root-session list events and all live notices.
 pub(crate) fn frame_stream(
     st: ServerState,
     scope: StreamScope,
     since_seq: u64,
     interactions_only: bool,
-) -> impl Stream<Item = Result<pb::StreamFrame, tonic::Status>> {
+) -> impl Stream<Item = std::sync::Arc<SharedFrame>> {
     let closed = st.streams.closed();
-    let session = scope.session_id();
-    // A session stream watches its session while it lives: an unused
-    // ephemeral session is dropped only once nobody watches it
-    // (`crate::ephemeral`).
-    let watching = session.map(|session| st.watchers.watch(session));
-    let lineage = st.engine.clone();
-    let engine =
-        BroadcastStream::new(st.engine.bus().subscribe()).filter_map(move |result| async move {
-            match result {
-                Ok(envelope) => {
-                    if let Some(session) = session
-                        && envelope.event.session() != Some(session)
-                    {
-                        return None;
-                    }
-                    if !is_live(&envelope) && envelope.seq.0 <= since_seq {
-                        return None;
-                    }
-                    let frame = match stream_event(&envelope) {
-                        Some(event) => pb::stream_frame::Frame::Event(event),
-                        None => return None,
-                    };
-                    Some(Ok(pb::StreamFrame { frame: Some(frame) }))
-                }
-                Err(_lagged) => Some(Ok(pb::StreamFrame {
-                    frame: Some(pb::stream_frame::Frame::Resync(pb::ResyncFrame {
-                        last_seq: since_seq,
-                    })),
-                })),
-            }
-        });
-    // Pending planes never error; the Result wrapper matches the merged
-    // engine-stream item type (tonic::Status is large but never constructed
-    // on these branches).
-    let permission_lineage = lineage.clone();
-    #[allow(clippy::result_large_err)]
-    let permission =
-        BroadcastStream::new(st.permission_requests.subscribe()).filter_map(move |result| {
-            let lineage = permission_lineage.clone();
-            async move {
-                let Ok(value) = result else { return None };
-                scoped_interaction_frame(&lineage, &value, scope)
-                    .await
-                    .map(|frame| Ok(pb::StreamFrame { frame: Some(frame) }))
-            }
-        });
-    #[allow(clippy::result_large_err)]
-    let question =
-        BroadcastStream::new(st.question_requests.subscribe()).filter_map(move |result| {
-            let lineage = lineage.clone();
-            async move {
-                let Ok(value) = result else { return None };
-                scoped_interaction_frame(&lineage, &value, scope)
-                    .await
-                    .map(|frame| Ok(pb::StreamFrame { frame: Some(frame) }))
-            }
-        });
-    let engine: std::pin::Pin<
-        Box<dyn Stream<Item = Result<pb::StreamFrame, tonic::Status>> + Send>,
-    > = Box::pin(engine);
-    let permission: std::pin::Pin<
-        Box<dyn Stream<Item = Result<pb::StreamFrame, tonic::Status>> + Send>,
-    > = Box::pin(permission);
-    let question: std::pin::Pin<
-        Box<dyn Stream<Item = Result<pb::StreamFrame, tonic::Status>> + Send>,
-    > = Box::pin(question);
-    #[allow(clippy::result_large_err)]
-    let catalog = BroadcastStream::new(st.catalog_updates.subscribe()).filter_map(|result| async {
-        result.ok().map(|notice| Ok(catalog_updated_frame(&notice)))
-    });
-    let catalog: std::pin::Pin<
-        Box<dyn Stream<Item = Result<pb::StreamFrame, tonic::Status>> + Send>,
-    > = Box::pin(catalog);
-    let mut feeds = vec![permission, question, catalog];
-    if matches!(scope, StreamScope::Global) {
-        #[allow(clippy::result_large_err)]
-        let projects = BroadcastStream::new(st.projects_updates.subscribe())
-            .filter_map(|result| async { result.ok().map(|()| Ok(projects_updated_frame())) });
-        feeds.push(Box::pin(projects));
-    }
-    if interactions_only {
-        feeds.push(Box::pin(session_list_engine_feed(&st, since_seq)));
-    } else {
-        feeds.push(engine);
-    }
-    if session.is_none() {
-        feeds.push(Box::pin(session_list_notice_feed(&st, since_seq)));
-    }
-    // The last frame says why the server goes away (only when it does: the
-    // feeds never end on their own while the state lives).
+    let watching = scope.session_id().map(|session| st.watchers.watch(session));
     let shutdown = st.streams.clone();
-    // Never an error; the Result matches the merged item type (as above).
-    #[allow(clippy::result_large_err)]
+    let frames = BroadcastStream::new(st.frames.frames.subscribe()).filter_map(move |result| {
+        let st = st.clone();
+        async move {
+            let published = match result {
+                Ok(frame) => frame,
+                Err(_) => return Some(SharedFrame::new(resync_frame(since_seq))),
+            };
+            let visible = match published.audience {
+                Audience::Engine { session, seq, list } => {
+                    (seq == 0 || seq > since_seq)
+                        && scope
+                            .session_id()
+                            .is_none_or(|wanted| Some(wanted) == session)
+                        && (!interactions_only || (seq > 0 && list))
+                }
+                Audience::Interaction => {
+                    interaction_in_scope(&st.engine, &published.encoded.frame, scope).await
+                }
+                Audience::All => true,
+                Audience::Global => matches!(scope, StreamScope::Global),
+                Audience::Resync { global_only } => {
+                    return (!global_only || matches!(scope, StreamScope::Global))
+                        .then(|| SharedFrame::new(resync_frame(since_seq)));
+                }
+            };
+            visible.then(|| published.encoded.clone())
+        }
+    });
     let stopping = futures::stream::once(async move {
         shutdown
             .reason()
-            .map(|reason| Ok(server_stopping_frame(reason)))
+            .map(|reason| SharedFrame::new(server_stopping_frame(reason)))
     })
     .filter_map(futures::future::ready);
-    // Holds the watch until the stream is dropped (the item type as above).
-    #[allow(clippy::result_large_err)]
-    let frames = futures::stream::select_all(feeds)
-        .take_until(closed)
-        .chain(stopping)
-        .map(move |frame| {
-            let _watching = &watching;
-            frame
-        });
-    frames
-}
-
-/// The durable session-list frames of root sessions from the engine bus
-/// (the `interactions_only` global stream's share of it): `sessionStarted`
-/// and `sessionUpdated` (title, agent, model, permission mode, archived),
-/// plus team-root `memberLifecycleChanged` frames for clients of nested parents.
-/// A lag yields one `resync` frame: list frames were lost.
-#[allow(clippy::result_large_err)]
-fn session_list_engine_feed(
-    st: &ServerState,
-    since_seq: u64,
-) -> impl Stream<Item = Result<pb::StreamFrame, tonic::Status>> + Send + use<> {
-    let state = st.clone();
-    BroadcastStream::new(st.engine.bus().subscribe()).filter_map(move |result| {
-        let state = state.clone();
-        async move {
-            let envelope = match result {
-                Ok(envelope) => envelope,
-                Err(_lagged) => return Some(Ok(resync_frame(since_seq))),
-            };
-            if is_live(&envelope) || envelope.seq.0 <= since_seq {
-                return None;
-            }
-            let root = match &envelope.event {
-                hya_proto::Event::SessionCreated { parent, .. } => parent.is_none(),
-                hya_proto::Event::AgentArchived { .. }
-                | hya_proto::Event::AgentRestarted { .. } => true,
-                hya_proto::Event::SessionTitled { session, .. }
-                | hya_proto::Event::AgentSwitched { session, .. }
-                | hya_proto::Event::ModelSwitched { session, .. }
-                | hya_proto::Event::SessionPermissionModeSet { session, .. }
-                | hya_proto::Event::SessionArchived { session, .. }
-                | hya_proto::Event::SessionUnarchived { session, .. } => {
-                    crate::session_list::is_root(&state, *session).await
-                }
-                _ => return None,
-            };
-            if !root {
-                return None;
-            }
-            let event = stream_event(&envelope)?;
-            Some(Ok(pb::StreamFrame {
-                frame: Some(pb::stream_frame::Frame::Event(event)),
-            }))
-        }
-    })
-}
-
-/// The live session-list notices of root sessions (global scope only):
-/// `sessionUpdated {busy}` and `sessionDeleted`. A lag yields one `resync`.
-#[allow(clippy::result_large_err)]
-fn session_list_notice_feed(
-    st: &ServerState,
-    since_seq: u64,
-) -> impl Stream<Item = Result<pb::StreamFrame, tonic::Status>> + Send + use<> {
-    BroadcastStream::new(st.session_list.subscribe()).map(move |result| {
-        Ok(match result {
-            Ok(notice) => session_list_frame(notice),
-            Err(_lagged) => resync_frame(since_seq),
-        })
+    frames.take_until(closed).chain(stopping).map(move |frame| {
+        let _watching = &watching;
+        frame
     })
 }
 
@@ -448,11 +409,6 @@ fn process_notice_frame(payload: pb::stream_event::Payload) -> pb::StreamFrame {
     }
 }
 
-/// Live-only envelopes are published with `seq == 0` and never persisted.
-fn is_live(envelope: &hya_proto::Envelope) -> bool {
-    envelope.seq.0 == 0
-}
-
 /// Wire view of one pending permission ask from its `permission.asked`
 /// properties (the same view the listing serializes). The payload names the
 /// decision (`action`, `resource`, `always`) and, when the ask is correlated
@@ -509,35 +465,32 @@ pub(crate) fn permission_interaction(properties: &Value) -> pb::Interaction {
 /// trees are far shallower (two layers below the lead).
 const MAX_LINEAGE_HOPS: usize = 32;
 
-/// `interaction_frame` under a stream scope: a session scope keeps its own
-/// session's frames (and frames with no session), plus — with `descendants`
-/// — frames of sessions whose parent chain reaches the streamed session.
-async fn scoped_interaction_frame(
+/// Match interaction sessions after conversion, without rebuilding the frame.
+async fn interaction_in_scope(
     engine: &hya_core::SessionEngine,
-    value: &Value,
+    frame: &pb::StreamFrame,
     scope: StreamScope,
-) -> Option<pb::stream_frame::Frame> {
-    let frame = interaction_frame(value)?;
+) -> bool {
     let StreamScope::Session {
         session,
         descendants,
     } = scope
     else {
-        return Some(frame);
+        return true;
     };
-    let pb::stream_frame::Frame::Event(event) = &frame else {
-        return Some(frame);
+    let Some(pb::stream_frame::Frame::Event(event)) = &frame.frame else {
+        return true;
     };
     if event.session.is_empty() || event.session == session.to_string() {
-        return Some(frame);
+        return true;
     }
     if !descendants {
-        return None;
+        return false;
     }
-    let asking = event.session.parse::<SessionId>().ok()?;
-    is_descendant(engine, asking, session)
-        .await
-        .then_some(frame)
+    let Ok(asking) = event.session.parse::<SessionId>() else {
+        return false;
+    };
+    is_descendant(engine, asking, session).await
 }
 
 /// Whether `ancestor` is on `session`'s parent chain.
@@ -649,4 +602,83 @@ fn now_millis() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn counted_stream_event(
+    st: &ServerState,
+    envelope: &hya_proto::Envelope,
+) -> Option<pb::StreamEvent> {
+    #[cfg(test)]
+    st.stream_conversions
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(not(test))]
+    let _ = st;
+    stream_event(envelope)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod fanout_tests {
+    use super::*;
+    use hya_core::{AgentCatalog, AgentSpec, EventBus, RuntimeRegistry, SessionEngine};
+    use hya_proto::{AgentName, Event, ModelRef};
+    use hya_provider::ProviderRouter;
+    use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+    use std::sync::{Arc, atomic::Ordering};
+
+    async fn state() -> crate::AppState {
+        let catalog = hya_bundle::BundleCatalog::from_prepared(&[]).unwrap();
+        let runtime = RuntimeRegistry::from_snapshot(
+            ToolRegistry::from_tool_families(&[]).snapshot(),
+            Arc::new(AgentCatalog::new(Arc::new(catalog)).unwrap()),
+        );
+        let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
+        let engine = SessionEngine::new(
+            hya_store::SessionStore::connect_memory().await.unwrap(),
+            Arc::new(ProviderRouter::new()),
+            Arc::new(runtime),
+            permission,
+            EventBus::default(),
+        );
+        crate::AppState::new(
+            Arc::new(engine),
+            Arc::new(AgentSpec {
+                name: AgentName::new("test"),
+                model: ModelRef::new("fake"),
+                system_prompt: String::new(),
+                workdir: std::env::temp_dir(),
+                reasoning: None,
+            }),
+        )
+    }
+
+    #[tokio::test]
+    async fn one_conversion_per_event_independent_of_subscriber_count() {
+        for subscribers in [1, 8] {
+            let app = state().await;
+            let st = app.server_state();
+            let mut streams = (0..subscribers)
+                .map(|_| Box::pin(frame_stream(st.clone(), StreamScope::Global, 0, false)))
+                .collect::<Vec<_>>();
+            st.engine.bus().publish(hya_proto::Envelope {
+                seq: hya_proto::EventSeq(0),
+                ts_millis: 0,
+                event: Event::SessionTitled {
+                    session: SessionId::new(),
+                    title: "shared".into(),
+                },
+            });
+            for stream in &mut streams {
+                tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+            assert_eq!(
+                st.stream_conversions.load(Ordering::Relaxed),
+                1,
+                "conversion count with {subscribers} subscribers"
+            );
+        }
+    }
 }

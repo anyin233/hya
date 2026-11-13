@@ -11,7 +11,7 @@ mod auth;
 mod bundle_api;
 mod catalog;
 mod convert;
-mod events;
+pub(crate) mod events;
 mod fs;
 mod grpc;
 mod interaction;
