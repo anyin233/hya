@@ -72,22 +72,35 @@ impl AppState {
         &self,
         deadline: std::time::Duration,
     ) -> Result<hya_core::TurnDrainReport, hya_core::CoreError> {
-        let until = tokio::time::Instant::now() + deadline;
         self.streams.close(crate::ShutdownReason::Restart);
-        self.shutdown().await;
-        let report = self.engine.stop_for_restart(deadline).await?;
+        Ok(self.drain_server(deadline).await)
+    }
+
+    /// End live streams and fence server admission before draining composition.
+    /// Interaction bridges remain available until [`Self::shutdown`] joins them.
+    pub fn begin_shutdown(&self) {
+        self.streams.close(crate::ShutdownReason::Stop);
+        self.runs.begin_drain();
+    }
+
+    /// Drain turns and reserved runs before cancelling and joining server
+    /// services. Embedders drain their composition/resident owner first.
+    pub async fn shutdown(&self) {
+        self.drain_server(hya_core::DRAIN_DEADLINE).await;
+    }
+
+    async fn drain_server(&self, deadline: std::time::Duration) -> hya_core::TurnDrainReport {
+        let until = tokio::time::Instant::now() + deadline;
+        self.begin_shutdown();
+        let report = self
+            .engine
+            .drain_turns(hya_proto::FinishCause::Shutdown, deadline)
+            .await;
         if !self.runs.wait_idle(until).await {
             tracing::warn!("server runs did not settle before the drain deadline");
         }
-        Ok(report)
-    }
-
-    /// End live streams and cancel/join server services, including reaper children
-    /// and interaction bridges. Engine/composition shutdown follows separately.
-    pub async fn shutdown(&self) {
-        self.streams.close(crate::ShutdownReason::Stop);
-        self.runs.begin_drain();
         self.tasks.shutdown().await;
+        report
     }
 
     /// Pause a reserved run before its turn task spawns (nothing admitted
