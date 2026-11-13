@@ -1097,16 +1097,6 @@ impl SessionEngine {
             terminate_sidecar(&mut sidecar_handle).await;
             Ok(())
         };
-        // A completed top-level (depth-0) turn ends the "run": release its per-run
-        // subagent budget so long-lived root sessions do not leak budget entries.
-        // Descendant force-archive happens on terminal quiescence instead
-        // (resident supervisor), so engine-driven synthesis turns on the root
-        // session do not tear down a still-running team.
-        if self.governor.is_some()
-            && let Ok((root, 0)) = self.session_lineage(session).await
-        {
-            self.finalize_root_spawn_admissions(root).await?;
-        }
         cleanup_result?;
         outcome
     }

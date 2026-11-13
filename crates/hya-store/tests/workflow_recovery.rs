@@ -452,7 +452,7 @@ async fn workflow_admission_rejects_stale_actor_claim_without_event() {
     let actor = SessionId::new();
     let session = SessionId::new();
     let stale = store
-        .try_claim_new(actor, OwnerRunId::new())
+        .try_claim_new(session, actor, OwnerRunId::new())
         .await
         .expect("initial actor claim");
     let _current = store

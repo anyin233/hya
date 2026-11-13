@@ -11,6 +11,7 @@ fn map_err(err: MailboxError) -> ToolError {
         MailboxError::Unavailable => {
             ToolError::Other("mailbox is only available inside a running team".to_string())
         }
+        MailboxError::Overloaded(message) => ToolError::Overloaded(message),
         MailboxError::Rejected(message) => ToolError::Input(message),
     }
 }

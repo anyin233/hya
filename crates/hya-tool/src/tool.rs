@@ -45,12 +45,6 @@ pub enum ToolError {
     /// Transient capacity pressure (for example spawn admission overloaded).
     #[error("overloaded: {0}")]
     Overloaded(String),
-    /// The same operation id is already in flight under a conflicting claim.
-    #[error("OPERATION_ID_CONFLICT")]
-    OperationIdConflict,
-    /// The operation id was already completed; a second handle is rejected.
-    #[error("operation already handled")]
-    OperationAlreadyHandled,
     /// App-owned Workflow control rejected a structured command.
     #[error("{code}: {message}")]
     WorkflowControl {

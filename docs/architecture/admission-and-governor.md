@@ -1,183 +1,86 @@
-# Admission journal and spawn governor
+# Episode admission and capacity
 
-This document is the paired contract for **durable spawn admission**
-(SQLite `admission_journal` in `hya-store`) and the **in-memory
-`SubagentGovernor`** budget used by `SessionEngine` when spawning subagents.
+Each active `resident_actor_claim` is one capacity lease. This makes the live
+member limit durable across root turns and process crashes, and releases it in
+the same transaction that ends the episode. Idle workers, parked Workflow actors
+and resident verifiers all count. The main/root agent does not hold a lease.
 
-The journal persists operation deduplication, lifecycle, actor fencing, and
-refund evidence. The process-local governor enforces the spawn budget.
+## Usage
 
-Related storage overview: [storage.md](storage.md).
+Configure `subagents.per_run_budget: 2` (or `HYA_SUBAGENT_BUDGET=2`) to allow two
+live members per root. Two `task` spawns may register; a third returns a typed
+`overloaded` tool error. Archive one member to admit another. Mailing an archived
+member consumes a lease when it revives and fails with overload if none is free.
+A completed root turn does not release members' leases.
 
-## Why this exists
+A `task` batch registers every member or none. Resolution of agents, models,
+resources and sidecar factories precedes the store call. A write failure in any
+member rolls back the entire batch, including lazy root registration. Once the
+transaction commits, the supervisor installs all episodes under its claim-write
+serialization before awaiting initialization hooks. Each episode publishes its
+registration envelopes after session-start hooks and before it can publish its
+archive.
 
-Nested fan-out must not:
+Workflow admission reads live capacity and checks its compiled worst-case
+activation count against the remaining limit. This is a preflight check, not a
+reservation: concurrent `task` calls can take capacity, and a later Workflow
+registration or revival can fail with overload. There is no budget refund guard.
 
-- double-debit the per-root spawn budget under concurrent finalizers
-- lose track of in-flight admissions across process restart / actor takeover
+## Store interface
 
-The journal is the durable truth for operation lifecycle. The governor is a
-process-local reservation of units against that truth.
+`resident_actor_claim` has these columns:
 
-## Schema: `admission_journal`
-
-The table is created by the session store's single `0001_init.sql` baseline.
-Each operation owns exactly one row. The journal is not a runnable queue.
-
-| Column | Constraint / notes |
+| Column | Type and contract |
 | --- | --- |
-| `operation_id` | BLOB PK, length 16 |
-| `source_tool_call_id` | BLOB NOT NULL UNIQUE, length 16 |
-| `root_session_id` | BLOB NOT NULL (team-root storage key for the spawn budget) |
-| `request_fingerprint` | BLOB NOT NULL, length **32** |
-| `state` | TEXT NOT NULL CHECK IN (`accepted`, `started`, `completed`, `cancelled`, `aborted`) |
-| `admission_units` | INTEGER NOT NULL `> 0` |
-| `logical_released` | INTEGER NOT NULL DEFAULT 0, CHECK 0/1; marks a started debit's release |
-| `terminal_reason` | TEXT, nullable |
-| `created_at` / `updated_at` | INTEGER NOT NULL, unix millis |
-| `actor_id` | BLOB, nullable |
-| `actor_epoch` | INTEGER, nullable, `> 0` if present |
+| `actor_id` | BLOB primary key, member SessionId storage key |
+| `root_session_id` | BLOB NOT NULL, owning team root |
+| `epoch` | INTEGER NOT NULL, positive and monotonically increasing |
+| `owner_run_id` | BLOB NOT NULL, 16-byte runtime owner ID |
+| `state` | TEXT NOT NULL, `active` or `released` |
 
-Indexes: `admission_journal_root_state(root_session_id, state)` and
-`admission_journal_actor_state(actor_id, actor_epoch, state)`.
+`resident_actor_claim_root_state(root_session_id, state)` supports capacity
+counts. The existing `(state, actor_id)` index supports startup recovery.
 
-## Store types
+- `register_episodes(root: SessionId, owner: OwnerRunId,
+  parent_claim: Option<&ActorClaim>, capacity: u64,
+  registrations: Vec<EpisodeRegistration>) -> Vec<(ActorClaim, Vec<Envelope>)>`:
+  one `BEGIN IMMEDIATE` transaction fences the parent, checks
+  `live + registrations.len() <= capacity`, registers main if absent, and writes
+  each claim plus canonical session/member/roster/channel/prompt events.
+  `EpisodeRegistration { actor: SessionId, events: Vec<Event> }` is prepared by
+  the supervisor; results retain input order, with lazy-main registration in
+  the first member's envelope group. Group-channel lookup-or-create runs
+  under the same writer reservation.
+- `revive_episode(root, owner, capacity: u64, parent_claim, actor, from, to, kind,
+  body, context_marker, policy)` checks one additional lease inside its existing
+  fenced revival transaction. Already-live targets append mail without another
+  lease. The remaining parameters/results are documented in
+  [resident revival](subagent-orchestration.md#4-revival).
+- `live_member_count(root: SessionId) -> u64` is a read-only count of active
+  claims, used for Workflow preflight.
+- `try_claim_new(root: SessionId, actor: SessionId, owner: OwnerRunId)` records
+  the root on a standalone claim; runtime creation goes through registration or
+  revival so the capacity check shares the transaction.
+- `release_claim(claim: &ActorClaim) -> ()` fences and releases exactly that
+  claim. Normal endings use `finalize_resident_archive`, which releases the claim
+  with the terminal events. Repeated exact releases are harmless.
 
-### `AdmissionState`
+All store methods return `Result<_, StoreError>`. A capacity refusal is
+`CapacityExceeded { root: SessionId, live: u64, requested: u64, limit: u64 }`;
+the `task` boundary maps it to `SpawnError::Overloaded` / `ToolError::Overloaded`.
+Mailbox send replies carry `MailboxError::Overloaded(String)`, which the `send`
+tool also maps to `ToolError::Overloaded` (`error.type: "overloaded"`).
+No registration events or claims commit on refusal.
 
-| Variant | Wire string | Terminal? |
-| --- | --- | --- |
-| `Accepted` | `accepted` | no |
-| `Started` | `started` | no |
-| `Completed` | `completed` | **yes** |
-| `Cancelled` | `cancelled` | **yes** |
-| `Aborted` | `aborted` | **yes** |
+## Governor and identity
 
-`is_terminal()` is true for `Completed` \| `Cancelled` \| `Aborted`.
+`SubagentGovernor` retains the two provider-stream semaphores and the hardcoded
+maximum depth. Team turn/message runaway counters live on `Team`. There is no
+in-memory spawn ledger, admission journal, operation finalizer, or root-turn
+budget reset. Startup fences existing active claims without changing capacity.
 
-### Input / record types
-
-| Type | Fields |
-| --- | --- |
-| `AdmissionClaim` | `operation_id`, `source_tool_call_id`, `root_session`, `request_fingerprint: [u8; 32]`, `admission_units`, `actor_claim: Option<ActorClaim>` |
-| `AdmissionActorBinding` | `actor_id: SessionId`, `actor_epoch: ActorEpoch` |
-| `AdmissionRecord` | `operation_id`, `source_tool_call_id`, `root_session`, `request_fingerprint`, `state`, `admission_units`, `actor: Option<AdmissionActorBinding>`, `logical_released`, `terminal_reason`, `created_at`, `updated_at` |
-
-### Outcome enums
-
-| Enum | Variants |
-| --- | --- |
-| `AdmissionClaimOutcome` | `Claimed(AdmissionRecord)`, `Existing(AdmissionRecord)` |
-| `AdmissionStartOutcome` | `Started(AdmissionRecord)`, `Existing(AdmissionRecord)` |
-| `AdmissionTerminal` | `Completed`, `Cancelled`, `Aborted` → map to matching `AdmissionState` |
-| `AdmissionFinalizeOutcome` | `record`, `release_required: bool` — **true only for the process that terminalized a started/debited operation** (see `logical_released`) |
-
-## Store API
-
-| Method | Role |
-| --- | --- |
-| `claim_admission` | Insert operation as `accepted`; idempotent conflict → `Existing` or `OperationIdConflict` if fingerprints disagree |
-| `admission` | Load one operation's record |
-| `start_admission` | `accepted` → `started` for a claim |
-| `finalize_admission` | Terminalize operation; sets `logical_released` when previous state was `started` |
-| `recover_nonterminal_admissions` | Abort non-actor accepted/started rows at startup; only started rows mark a released debit |
-| `abort_recovered_actor_admissions` | Abort nonterminal rows for a recovered actor claim; rows that were started get `logical_released` for governor refund |
-| `terminal_released_operations_for_root` | List terminal operation IDs with `logical_released = 1` for a root budget |
-| `nonterminal_admissions_for_root` | List nonterminal rows for a root session (root-turn cleanup) |
-
-For example, claim an `AdmissionClaim` with `admission_units: 2` and a stable
-operation/tool-call identity, reserve two governor units, then call
-`start_admission(operation_id, actor_claim)`. On completion call
-`finalize_admission(operation_id, AdmissionTerminal::Completed, "completed", actor_claim)`;
-refund only when the returned `release_required` is true. Repeating the same
-claim returns `Existing`; changing its immutable request returns
-`StoreError::OperationIdConflict`.
-
-`claim_admission` inserts state `'accepted'` immediately — durable claim happens
-before any governor debit.
-
-## Engine: spawn admission lifecycle
-
-Source: [`crates/hya-core/src/engine/admission.rs`](../../crates/hya-core/src/engine/admission.rs).
-
-### `SpawnAdmissionOutcome`
-
-| Variant | Meaning |
-| --- | --- |
-| `Started` | Journal moved to `started`; governor units reserved (if a governor is installed) |
-| `Existing(AdmissionState)` | Operation already claimed / reserved |
-| `Overloaded` | Governor `try_reserve_operation` returned overloaded |
-| `MaxDepth` | `depth + 1 > max_depth` |
-| `Cancelled` | Cancel token fired after durable claim, before debit |
-
-### `begin_spawn_admission` order (fixed)
-
-1. **Durable claim first** — `store.claim_admission` → on `Existing`, return
-   `Existing(state)` without touching the governor.
-2. **Cancel check** — if cancelled, `finalize_spawn_admission(..., Cancelled, "cancelled before debit")` → `Cancelled`.
-3. **Depth check** (only when a governor is present) — if
-   `depth.saturating_add(1) > max_depth`, finalize `Aborted` with reason
-   `"maximum subagent depth exceeded"` → `MaxDepth`.
-4. **Governor reservation** — `try_reserve_operation`:
-   - `Overloaded` → finalize `Aborted` `"spawn admission overloaded"` → `Overloaded`
-   - `Existing` / `Conflict` → `Existing(Accepted)` (no second debit)
-   - `Acquired` → continue
-5. **`start_admission`** — on success `Started`; on `Existing` release governor
-   operation and return `Existing`; on store error release governor, attempt
-   finalize `Aborted` with `"failed to persist started state"`, propagate error.
-
-Without a governor, steps 3–4 are skipped; start still runs after cancel check.
-
-### `finalize_spawn_admission`
-
-1. `store.finalize_admission(operation_id, terminal, reason, actor_claim)`
-2. If `outcome.release_required` **and** a governor is present →
-   `governor.release_operation(operation_id)`
-
-`release_required` tracks `logical_released` on the journal row: only the
-finalizer that first terminalizes a **started** row may refund the governor.
-That is what makes refund **exactly once** under concurrent finalizers.
-
-### `finalize_root_spawn_admissions(root)`
-
-Root-turn cleanup (depth-0 turn completion):
-
-1. `governor.cancel_operations(root)` if present
-2. For each `nonterminal_admissions_for_root(root)`,
-   `finalize_spawn_admission(..., Cancelled, "root turn cleanup", None)`
-3. `governor.release(root)` if present
-
-Without this, a long-lived root session leaks per-run budget entries.
-
-### `abort_recovered_actor_operations(recovered)`
-
-Post-takeover path:
-
-1. `store.abort_recovered_actor_admissions(recovered, "resident actor takeover")`
-2. For each returned record with `logical_released == true`,
-   `governor.release_operation(operation_id)`
-
-Only rows that were started (and thus marked logically released on abort)
-refund the process-local governor.
-
-## Governor (process-local)
-
-`SubagentGovernor` / `SubagentLimits` live in
-[`orchestrator.rs`](../../crates/hya-core/src/orchestrator.rs). They are
-**not** durable. Defaults and stream-permit classes (general vs reserved) are
-documented in [runtime.md](runtime.md). This page only requires:
-
-- reservation is attempted **after** a durable journal claim exists
-- refund is gated by journal `release_required` / `logical_released`
-- root cleanup cancels operations and releases the root budget entry
-
-A logical release recorded during restart must not credit a new process's empty
-governor (session-store resident recovery already encodes that rule).
-
-## Invariants (checklist)
-
-1. Durable claim before governor debit.
-2. Distinct terminal reason strings for each early-exit path listed above.
-3. Exactly-once governor refund via `logical_released` / `release_required`.
-4. One row per operation; tool-call identity is unique.
-5. Startup aborts non-actor accepted/started operations; actor recovery remains fenced.
+`ToolOperation` still carries the source call and actor capability; Workflow uses
+its derived operation ID to name durable runs. Task calls are dispatched once:
+provider retries happen only before any tool call or text, and startup closes
+interrupted calls rather than dispatching their stored IDs. There is no spawn
+operation deduplication API or conflict/already-handled error surface.

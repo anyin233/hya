@@ -999,6 +999,84 @@ flowchart TD
     );
 }
 
+#[tokio::test]
+async fn workflow_preflight_does_not_reserve_capacity_and_counts_parked_members() {
+    let def = compile_workflow(
+        "capacity.hya.md",
+        r#"---
+kind: Workflow
+name: capacity-flow
+description: One parked member uses the only live slot.
+nodes:
+  run:
+    agent: builder
+    directive: Run.
+---
+flowchart TD
+  run
+"#,
+    );
+    let provider = RecordingProvider::new();
+    let engine = engine_with_limits(
+        provider.clone(),
+        SubagentLimits {
+            per_run_budget: 1,
+            ..SubagentLimits::default()
+        },
+    )
+    .await;
+    let lead = start_lead(&engine).await;
+    let root_turn = engine.try_begin_turn(lead).unwrap();
+    let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
+    let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
+    let base = engine
+        .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
+        .unwrap();
+    let context = || hya_core::WorkflowRunContext {
+        binding: binding.clone(),
+        caller: "hya-main".into(),
+        base_agent: base.clone(),
+        inputs: BTreeMap::new(),
+        resident_supervisor: Some(supervisor.clone()),
+        routing: None,
+    };
+    let first = hya_core::prepare_workflow_run(engine.clone(), lead, &def, context(), None)
+        .await
+        .unwrap();
+    let second = hya_core::prepare_workflow_run(engine.clone(), lead, &def, context(), None)
+        .await
+        .unwrap();
+    assert_eq!(engine.store().list_sessions().await.unwrap().len(), 1);
+    let child = engine
+        .create(CreateSession {
+            parent: Some(lead),
+            agent: AgentName::new("builder"),
+            model: base.model.clone(),
+            workdir: base.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    let agent = engine
+        .agent_spec_for_binding(&binding, &base, "builder")
+        .unwrap();
+    supervisor
+        .register_existing_resident(lead, child, "builder-parked".into(), agent, None)
+        .await
+        .unwrap();
+    let refused = hya_core::prepare_workflow_run(engine.clone(), lead, &def, context(), None).await;
+    assert!(refused.is_err(), "parked member must consume the only slot");
+    assert!(
+        provider.prompts().is_empty(),
+        "preflight and parking must not run a turn"
+    );
+    drop((first, second, root_turn));
+    supervisor
+        .drain(hya_proto::FinishCause::Shutdown, hya_core::DRAIN_DEADLINE)
+        .await;
+}
+
 /// Fail-fast: when a level member fails, downstream levels never start and the
 /// report marks the run Failed while keeping the failed level's evidence.
 #[tokio::test]

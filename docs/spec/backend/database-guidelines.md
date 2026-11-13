@@ -11,8 +11,9 @@
 - The append-only `event_log` plus `hya_proto::Projection` is canonical for
   session behavior. Auxiliary tables must not become a second session
   projection or emit parallel public events.
-- The `admission_journal` is a narrow idempotency/admission control plane, not a
-  runnable queue, effect log, or child-session source of truth.
+- Active `resident_actor_claim` rows are the live-member capacity leases.
+  Registration and revival check the root's indexed count in their writer
+  transaction; terminal archive releases its claim in the same transaction.
 - Exception: `BundleRegistry` owns the separate
   `<data_root>/bundles/registry.sqlite3` installed-package control-plane DB;
   builtins are not rows, and it is not a session projection.
@@ -35,24 +36,14 @@
 
 - Prefer conditional single-statement transitions (`UPDATE ... WHERE state =
   ... RETURNING`) for compare-and-set state changes.
-- Decode rows through one shared helper and reject corrupt enum/ID/fingerprint
-  data with `StoreError::AdmissionData`.
-- Durable admission claims compare every immutable field after
-  `INSERT OR IGNORE`; an existing operation with any mismatch returns
-  `OPERATION_ID_CONFLICT`.
-- Startup recovery changes all non-actor nonterminal admission rows with one
-  atomic `UPDATE ... RETURNING` statement. Actor-bound rows remain for the
-  recovered claim's fenced transaction; neither path reads or dispatches a row
-  first.
 - Resident actors use one indexed `resident_actor_claim` row keyed by their
   persisted agent-session `SessionId`. Claim/recover/release are transactional
   compare-and-set operations over the full actor/epoch/owner tuple.
 - Resident canonical mutations validate the current claim in the same SQLite
-  transaction as event append or admission transition. Event-bus publication
+  transaction as event append. Event-bus publication
   occurs only after commit.
-- Full-tuple claim release terminalizes that exact actor/epoch's nonterminal
-  admissions in the same writer transaction before making the claim reusable;
-  only returned first-release rows may refund an in-memory governor.
+- Root turns do not reset live capacity; startup fences active claims without
+  releasing them. No connection or transaction spans a hook/model await.
 
 ---
 
@@ -64,8 +55,8 @@
 - `BundleRegistry` embeds its separate migrations from
   `crates/hya-store/bundle_migrations`; migration tests use a `BundleRegistry`
   temp DB.
-- Keep `session` as the placement/parent index; admission belongs only in
-  `admission_journal`. Retired team/mail/task/transcript tables are absent.
+- Keep `session` as the placement/parent index. Capacity belongs to active
+  claims, indexed by `(root_session_id, state)`.
 - Keep CHECK/UNIQUE constraints aligned with Rust invariants; exercise
   `SessionStore` migrations through `SessionStore::connect_memory` tests and
   `BundleRegistry` migrations through its temp-DB tests.
@@ -115,26 +106,15 @@
 - Use snake_case table, column, and index names.
 - UUID-backed operation/tool-call keys are 16-byte BLOBs; `SessionId` uses
   `SessionId::storage_key()` because new session IDs are not UUID-only.
-- Request fingerprints are fixed 32-byte BLOBs. Admission states are explicit
-  lowercase strings: `accepted`, `started`, `completed`, `cancelled`,
-  `aborted`.
 
 ---
 
 ## Common Mistakes
 
-- Never credit a fresh in-memory governor from a recovered row; old process
-  permits disappeared on restart.
-- Never write a public `Event` for admission-only state.
-- Never let a terminal transition mutate to a different terminal.
-- Never add generic lease/owner/resource columns without a current
-  source-proven invariant and test.
-- Never let claim-less root cleanup/finalization mutate an actor-bound
-  admission. Startup has a separate fail-closed recovery transition; ordinary
-  actor transitions require the matching claim.
-- Never credit a new process governor for a recovered old-process debit, retry
-  work that crossed `ResidentWorkStarted`, or conflate actor epoch with runtime
-  configuration generation.
+- Never reset capacity at root turn end or maintain a parallel in-memory ledger.
+- Never retry work that crossed `ResidentWorkStarted` or conflate actor epoch
+  with runtime configuration generation.
+- Actor transitions require the matching claim, except explicit orphan takeover.
 
 ---
 
@@ -262,9 +242,10 @@ runtime.publish_agent_model_preferences(map.clone());
 Commit precedes one infallible publication, while the request keeps its original
 binding for validation and response projection.
 
-Resident creation and arming use `commit_resident_registration`: child session,
-parent member relation, roster/channels, actor claim, and initial user message
-commit together. Failed registration leaves none of these rows/events behind.
+Resident creation and arming use `register_episodes`: the whole batch's child
+sessions, parent member relations, roster/channels, claims and initial user
+messages commit with lazy root registration and a live-capacity check. Failed
+registration leaves none of these rows/events behind.
 Publication uses only the returned committed envelopes; recovery identifies the
 persisted user message as queued work before `ResidentWorkStarted`.
 
@@ -282,14 +263,14 @@ turn cleanup remains unchanged.
 
 `finalize_resident_archive(owner: ResidentArchiveOwner<'_>, root: SessionId,
 handle: &str, archive: ResidentArchive, cause: FinishCause)` returns
-`Result<(ResidentArchiveOutcome, Vec<Envelope>, Vec<AdmissionRecord>), StoreError>`.
+`Result<(ResidentArchiveOutcome, Vec<Envelope>), StoreError>`.
 `Claim(&ActorClaim)` fences the episode; `Takeover` requires the store's registered
 runtime owner and bumps an orphan's active claim epoch under that owner inside
 the terminal transaction. The caller guarantees no in-memory episode exists.
 For example, after an archive write fails, retry the orphan with `Takeover` and
 `check_gate: false`; if another ending already released and archived the same
-actor under the same root/handle, the retry returns `Committed` with empty event
-and admission lists. A missing claim, or a released claim without the matching
+actor under the same root/handle, the retry returns `Committed` with an empty
+event list. A missing claim, or a released claim without the matching
 root/handle/actor archive, returns `ActorClaimUnavailable`. A store that has not
 claimed runtime ownership returns `RuntimeOwnerClaimRequired`.
 `Takeover` with `check_gate: true` returns `ActorClaimData` ("voluntary report
@@ -297,9 +278,6 @@ requires an episode claim"): voluntary report gates belong to live episodes.
 Claim-based gate refusals commit only a harness notice and return `Refused`;
 terminal effects return `Committed`. Refused or failed transitions leave the
 claim tuple unchanged. A store error rolls back everything, including takeover.
-Successful terminal finalization aborts every nonterminal admission for that
-actor through the final claim epoch, including admissions left by earlier
-recovery attempts; only previously started rows set `logical_released`.
 The engine supplies
 the prepared handoff, archive reason, terminal note and `member_status` explicitly
 (see [Task Tool](task-tool.md#atomic-resident-termination)); the store never

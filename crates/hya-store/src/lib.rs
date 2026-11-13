@@ -10,7 +10,6 @@
 #[cfg(feature = "lifecycle-bench")]
 pub mod bench;
 
-mod admission;
 mod agent_effort_preference;
 mod agent_model_preference;
 mod bundle_registry;
@@ -44,10 +43,6 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, S
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
-pub use admission::{
-    AdmissionActorBinding, AdmissionClaim, AdmissionClaimOutcome, AdmissionFinalizeOutcome,
-    AdmissionRecord, AdmissionStartOutcome, AdmissionState, AdmissionTerminal,
-};
 pub use agent_effort_preference::AgentEffortPreference;
 pub use agent_model_preference::AgentModelPreference;
 pub use bundle_registry::{
@@ -67,7 +62,7 @@ pub use paths::user_cache_dir;
 pub use permission::SavedPermission;
 pub use project::{Project, ProjectSummary, normalize_project_path};
 pub use recovery::{INTERRUPTED_REASON, InterruptedTurnRecovery};
-pub use resident_claim::{RecoveredActorClaim, ResidentWorkPrompt};
+pub use resident_claim::{EpisodeRegistration, RecoveredActorClaim, ResidentWorkPrompt};
 pub use workflow::{WorkflowAdmissionOutcome, WorkflowSelectionOutcome};
 
 struct RuntimeOwnerState {
@@ -324,7 +319,7 @@ fn acquire_runtime_owner_lock(paths: &DatabasePaths) -> Result<RuntimeOwnerLock,
     }
 }
 
-/// SQLite-backed session event log, admission journal, and related tables.
+/// SQLite-backed session event log, resident claims, and related tables.
 ///
 /// Construct with [`SessionStore::connect`] (file) or [`SessionStore::connect_memory`].
 /// Projection is folded on read via `hya_proto::Projection` — there is no separate
@@ -711,11 +706,6 @@ impl SessionStore {
             }
         }
         for tree_key in &tree_keys {
-            sqlx::query("DELETE FROM admission_journal WHERE root_session_id = ? OR actor_id = ?")
-                .bind(tree_key.as_slice())
-                .bind(tree_key.as_slice())
-                .execute(&mut *tx)
-                .await?;
             sqlx::query("DELETE FROM resident_actor_claim WHERE actor_id = ?")
                 .bind(tree_key.as_slice())
                 .execute(&mut *tx)
@@ -1196,8 +1186,6 @@ mod event_contract_tests {
             for sql in [
                 "INSERT INTO projection_snapshot VALUES (?, 1, 1, X'01')",
                 "INSERT INTO pending_resume VALUES (?, 'message', NULL, 1)",
-                "INSERT INTO resident_actor_claim VALUES (?, 1, randomblob(16), 'active')",
-                "INSERT INTO admission_journal (operation_id, source_tool_call_id, root_session_id, request_fingerprint, state, admission_units, created_at, updated_at) VALUES (randomblob(16), randomblob(16), ?, randomblob(32), 'accepted', 1, 1, 1)",
             ] {
                 sqlx::query(sql)
                     .bind(session.storage_key())
@@ -1205,10 +1193,11 @@ mod event_contract_tests {
                     .await
                     .unwrap();
             }
+            sqlx::query("INSERT INTO resident_actor_claim (actor_id, root_session_id, epoch, owner_run_id, state) VALUES (?, ?, 1, randomblob(16), 'active')")
+                .bind(session.storage_key())
+                .bind(parent.unwrap_or(session).storage_key())
+                .execute(&store.pool).await.unwrap();
         }
-        // An actor-bound admission can belong to a different root.
-        sqlx::query("INSERT INTO admission_journal (operation_id, source_tool_call_id, root_session_id, actor_id, actor_epoch, request_fingerprint, state, admission_units, created_at, updated_at) VALUES (randomblob(16), randomblob(16), ?, ?, 1, randomblob(32), 'accepted', 1, 1, 1)")
-            .bind(other.storage_key()).bind(child.storage_key()).execute(&store.pool).await.unwrap();
         for sql in [
             "INSERT INTO project VALUES ('project', 'Project', 1, 1, 0)",
             "INSERT INTO project_root VALUES ('project', '/tmp', 0)",
@@ -1239,7 +1228,6 @@ mod event_contract_tests {
             ("projection_snapshot", "session_id"),
             ("file_blob", "session_id"),
             ("resident_actor_claim", "actor_id"),
-            ("admission_journal", "root_session_id"),
         ] {
             for session in [root, child] {
                 let count: i64 =
@@ -1276,13 +1264,6 @@ mod event_contract_tests {
                 "{table}"
             );
         }
-        let actors: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM admission_journal WHERE actor_id = ?")
-                .bind(child.storage_key())
-                .fetch_one(&store.pool)
-                .await
-                .unwrap();
-        assert_eq!(actors, 0);
     }
 
     #[tokio::test]
