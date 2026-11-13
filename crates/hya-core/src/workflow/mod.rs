@@ -1,8 +1,8 @@
 //! Governed execution and filesystem discovery for compiled Workflows.
 //!
 //! [`hya_workflow::compile`] owns author parsing and graph normalization. This
-//! module accepts only [`CompiledWorkflow`] and applies its immutable levels to
-//! the existing Team, iteration, and resident scheduling primitives.
+//! module accepts only [`CompiledWorkflow`] and schedules ready Stages from
+//! direct predecessor counts over resident activations and the iteration driver.
 
 mod run;
 mod source;
