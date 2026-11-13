@@ -544,7 +544,7 @@ struct TeamActor {
 enum TeamEvent {
     #[cfg(test)]
     Flush(oneshot::Sender<()>),
-    Envelope(hya_proto::Envelope),
+    Envelope(Box<hya_proto::Envelope>),
     Recover,
 }
 
@@ -1330,6 +1330,27 @@ impl TeamActor {
 
     /// Request every ending before publishing any terminal activity. The team
     /// leaves the live map immediately; episode owners remain indexed until done.
+    fn request_end(&self, ending: Ending) -> (bool, Vec<EpisodeDone>) {
+        let mut state = self.lock();
+        let first = !state.phase.killed();
+        if first {
+            state.phase = TeamPhase::Killed(ending.clone());
+        }
+        let TeamPhase::Killed(ending) = state.phase.clone() else {
+            unreachable!()
+        };
+        if matches!(ending, Ending::Teardown | Ending::Shutdown(_)) {
+            self.engine.cancel_turn(self.root, ending.cause());
+        }
+        let done = state
+            .residents
+            .iter_mut()
+            .map(|(session, slot)| slot.request_end(&self.engine, *session, ending.clone()))
+            .collect();
+        self.cancel.cancel();
+        (first, done)
+    }
+
     async fn kill(&self, ending: Ending) -> Vec<EpisodeDone> {
         let Some(supervisor) = self.supervisor.upgrade() else {
             return Vec::new();
@@ -2692,6 +2713,9 @@ async fn episode_task(
     }
 }
 
+#[cfg(test)]
+type MailRoutingPause = (SessionId, Arc<Notify>, Arc<Notify>);
+
 /// Drives resident (long-lived actor) subagents for every team that has one.
 ///
 /// Constructed once per runtime via [`ResidentSupervisor::start`], which spawns a
@@ -2716,7 +2740,7 @@ pub struct ResidentSupervisor {
     #[cfg(test)]
     revive_ready_pause: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
     #[cfg(test)]
-    mail_pause: Mutex<Option<(SessionId, Arc<Notify>, Arc<Notify>)>>,
+    mail_pause: Mutex<Option<MailRoutingPause>>,
     self_ref: Weak<ResidentSupervisor>,
     tasks: TaskTracker,
     listener_stop: CancellationToken,
@@ -2730,21 +2754,18 @@ pub struct ResidentSupervisor {
 impl Drop for ResidentSupervisor {
     fn drop(&mut self) {
         self.listener_stop.cancel();
-        for team in self
+        let teams = self
             .teams
             .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .values()
-        {
-            team.cancel.cancel();
-        }
-        for team in self
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let episodes = self
             .episodes
             .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .values()
-        {
-            team.cancel.cancel();
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for team in teams.values().chain(episodes.values()) {
+            if !team.lock().phase.killed() {
+                team.request_end(Ending::Shutdown(FinishCause::Shutdown));
+            }
         }
     }
 }
@@ -3437,13 +3458,13 @@ impl ResidentSupervisor {
         if let Event::MailSent { session: root, .. } = &envelope.event {
             // Select and enqueue under the map lock, excluding retirement.
             if let Some(team) = self.teams().get(root) {
-                team.enqueue(TeamEvent::Envelope(envelope));
+                team.enqueue(TeamEvent::Envelope(Box::new(envelope)));
             }
         } else if !matches!(envelope.event, Event::AgentHeartbeat { .. })
             && let Some(actor) = envelope.event.session()
             && let Some(team) = self.team_with_resident(actor)
         {
-            team.enqueue(TeamEvent::Envelope(envelope));
+            team.enqueue(TeamEvent::Envelope(Box::new(envelope)));
         }
     }
 
@@ -3541,24 +3562,7 @@ impl ResidentSupervisor {
         {
             teams.remove(&team.root);
         }
-        let mut state = team.lock();
-        let first = !state.phase.killed();
-        if first {
-            state.phase = TeamPhase::Killed(ending.clone());
-        }
-        let TeamPhase::Killed(ending) = state.phase.clone() else {
-            unreachable!()
-        };
-        if matches!(ending, Ending::Teardown | Ending::Shutdown(_)) {
-            self.engine.cancel_turn(team.root, ending.cause());
-        }
-        let done = state
-            .residents
-            .iter_mut()
-            .map(|(session, slot)| slot.request_end(&self.engine, *session, ending.clone()))
-            .collect();
-        team.cancel.cancel();
-        (first, done)
+        team.request_end(ending)
     }
 
     fn retire_team(&self, team: &TeamActor) {
