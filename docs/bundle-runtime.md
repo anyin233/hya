@@ -210,7 +210,7 @@ unknown id `not_found` (404), an immutable bundle or a conflict that
 
 Hya's own tools, agents, Skills, commands, channel policy and workflows are
 bundles that the backend loads when it starts. None of their content is
-compiled into the binary. `hya_bundle::FIRST_PARTY_BUNDLES` lists the twelve
+compiled into the binary. `hya_bundle::FIRST_PARTY_BUNDLES` lists the thirteen
 trusted identities:
 
 | Identity | Source | Supplies |
@@ -222,6 +222,7 @@ trusted identities:
 | `hya/agent-channels` | `bundles/presets/agent-channels` | Default channel capabilities |
 | `hya/goal-loop`, `hya/plan-impl-review` | `bundles/first-party/<name>` | First-party AgentSet and Workflow bundles |
 | `hya/basic-tui-components` | `bundles/first-party/basic-tui-components` | Built-in TUI Sessions, Todos, Projects and Context surfaces |
+| `hya/code-mode` | `bundles/first-party/code-mode` | The `code-mode__run` tool. Shipped disabled; `tools.code.mode` enables it ([Code mode](code-mode.md)) |
 
 The former `hya/subagents` bundle and `hya-release` agent have been removed.
 
@@ -251,7 +252,7 @@ A release builds each supported target natively: `x86_64-unknown-linux-gnu`,
 
 - Two side-specific archives per target, `hya-backend-<version>-<target>.tar.gz`
   and `hya-frontend-<version>-<target>.tar.gz`. The backend archive holds
-  `bin/hya`, `bundles/hya-<name>.hyabundle` for all twelve bundles, the Argus
+  `bin/hya`, `bundles/hya-<name>.hyabundle` for all thirteen bundles, the Argus
   example bundle, and Bun with the Bun adapter under `lib/hya/`; it holds no
   TUI. The frontend archive holds Bun, `lib/hya/tui` (the OpenTUI terminal UI
   bare `hya` starts, including the target's `@opentui/core-<platform>` native
@@ -260,7 +261,7 @@ A release builds each supported target natively: `x86_64-unknown-linux-gnu`,
   setup, and running the TUI and WebUI needs Bun on `PATH`.
 - One standalone asset per bundle, byte-identical to the archived copy:
   `hya-<name>-<version>-<target>.hyabundle` for the five native tool families
-  on each target, and `hya-<name>-<version>.hyabundle` once for the seven
+  on each target, and `hya-<name>-<version>.hyabundle` once for the eight
   platform-independent bundles. The release fails if two targets built a
   platform-independent bundle with different bytes. To replace a bundle in an
   installed layout, save the asset as `<prefix>/bundles/hya-<name>.hyabundle`.
