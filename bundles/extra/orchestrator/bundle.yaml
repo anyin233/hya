@@ -7,7 +7,7 @@ identity:
 extensions:
   process:
     kind: bun
-    command: [bun, run, '${BUNDLE_ROOT}/runtime.ts']
+    command: [bun, run, '${BUNDLE_ROOT}/runtime.ts', workflow]
     timeout_ms: 3600000
   files:
     - id: runtime
