@@ -343,3 +343,103 @@ for line in sys.stdin:
         hya_plugin::protocol::codes::PERMISSION_DENIED
     );
 }
+
+/// Nested tools for the capability test: `echo` returns its input, `denied`
+/// is refused by permission, `fail` fails, and `big` returns 800 KiB.
+struct FakeNested;
+
+#[async_trait::async_trait]
+impl hya_tool::NestedTools for FakeNested {
+    fn list(&self) -> Vec<hya_proto::ToolSchema> {
+        vec![hya_proto::ToolSchema {
+            name: hya_proto::ToolName::new("echo"),
+            description: "echo input".to_string(),
+            input_schema: json!({"type": "object"}),
+            output_schema: Some(json!({"type": "object"})),
+        }]
+    }
+
+    async fn call(
+        &self,
+        name: &str,
+        input: serde_json::Value,
+    ) -> Result<serde_json::Value, hya_tool::ToolError> {
+        match name {
+            "echo" => Ok(json!({"echo": input})),
+            "denied" => Err(hya_tool::ToolError::Permission(
+                hya_tool::PermissionError::Unavailable,
+            )),
+            "big" => Ok(json!("x".repeat(800 * 1024))),
+            _ => Err(hya_tool::ToolError::Other(format!("unknown tool: {name}"))),
+        }
+    }
+}
+
+#[tokio::test]
+async fn bundle_tool_lists_and_calls_nested_tools_over_its_lease() {
+    let script = r#"import json,sys
+for line in sys.stdin:
+ request=json.loads(line)
+ method=request.get('method')
+ if method=='initialize':
+  result={'protocol_version':1,'plugin':{'id':'toolbox','version':'0.1.0','kind':'rust'},'hooks':[],'tools':[{'name':'native','description':'native test','inputSchema':{'type':'object'}}]}
+ elif method=='tool/call':
+  p=request['params']; token=p['host_capability']; seq=[60]
+  def capability(operation, params):
+   seq[0]+=1
+   outbound={'jsonrpc':'2.0','id':seq[0],'method':'host/capability','params':{'capability':token,'session':p['session'],'call':p['call'],'method':operation,'params':params}}
+   print(json.dumps(outbound),flush=True)
+   return json.loads(sys.stdin.readline())
+  out={
+   'listed':capability('tools.list',{}),
+   'list_params':capability('tools.list',{'x':1}),
+   'echo':capability('tool.call',{'name':'echo','input':{'a':1}}),
+   'not_object':capability('tool.call',{'name':'echo','input':[1]}),
+   'denied':capability('tool.call',{'name':'denied','input':{}}),
+   'failed':capability('tool.call',{'name':'nope','input':{}}),
+   'big':capability('tool.call',{'name':'big','input':{}}),
+  }
+  result={'ok':True,'output':out}
+ else: result={}
+ if 'id' in request: print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':result}),flush=True)
+"#;
+    let mut bundle_spec = spec();
+    bundle_spec.command = vec!["python3".into(), "-c".into(), script.into()];
+    bundle_spec
+        .env
+        .insert("PATH".into(), std::env::var("PATH").unwrap());
+    let host = PluginHost::connect(
+        bundle_spec.in_bundle(std::env::temp_dir()),
+        host_info(),
+        None,
+    )
+    .await
+    .unwrap();
+    let mut ctx = ctx_with(SessionId::new());
+    ctx.nested = hya_tool::NestedToolPlane::new(std::sync::Arc::new(FakeNested));
+    let output = host.tools()[0].execute(&ctx, json!({})).await.unwrap();
+    use hya_plugin::protocol::codes;
+
+    assert_eq!(
+        output["listed"]["result"],
+        json!({"tools": [{"name": "echo", "description": "echo input", "input_schema": {"type": "object"}}]})
+    );
+    assert_eq!(
+        output["list_params"]["error"]["code"],
+        codes::INVALID_PARAMS
+    );
+    assert_eq!(
+        output["echo"]["result"],
+        json!({"output": {"echo": {"a": 1}}})
+    );
+    assert_eq!(output["not_object"]["error"]["code"], codes::INVALID_PARAMS);
+    assert_eq!(output["denied"]["error"]["code"], codes::PERMISSION_DENIED);
+    assert_eq!(output["failed"]["error"]["code"], codes::TOOL_FAILED);
+    assert_eq!(output["failed"]["error"]["message"], "unknown tool: nope");
+    assert_eq!(output["big"]["error"]["code"], codes::TOOL_FAILED);
+    let message = output["big"]["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("too large") && message.contains("narrow"),
+        "{message}"
+    );
+}
