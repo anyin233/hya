@@ -1,16 +1,11 @@
 // Self-contained hya plugin protocol v1 process; stdout is NDJSON only.
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createInterface } from "node:readline";
 import vm from "node:vm";
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
 
-export interface ToolSchema {
-  name: string;
-  description: string;
-  input_schema: Record<string, unknown>;
-}
 export type Host = (method: string, params: Record<string, unknown>, signal: AbortSignal) => Promise<any>;
 export interface Options {
   timeout_ms: number;
@@ -31,9 +26,10 @@ export interface ClassifyInput {
   questions: Record<string, Question>;
 }
 export interface AgentInput {
-  agent?: string;
+  agent: string;
   prompt: string;
   description?: string;
+  result?: Record<string, string>;
   model?: string;
   effort?: string;
   timeout_secs?: number;
@@ -43,11 +39,12 @@ export interface AgentResult {
   session: string;
   status: "done" | "failed" | "cancelled" | "timeout";
   report: string;
+  result: Record<string, unknown> | null;
 }
 export interface TraceEntry {
   seq: number;
   line: number;
-  kind: "tool" | "agent" | "classify";
+  kind: "agent" | "classify";
   name: string;
   input: string;
   ok: boolean;
@@ -57,12 +54,13 @@ export interface TraceEntry {
   ms: number;
   handle?: string;
   session?: string;
+  result?: Record<string, unknown> | null;
   abandoned?: boolean;
   archived?: boolean;
   archive_error?: string;
 }
 const SCRIPT_FILE = "orchestrator-script.js";
-export const DEFAULT_OPTIONS: Options = { timeout_ms: 600_000, max_output_chars: 3000 };
+export const DEFAULT_OPTIONS: Options = { timeout_ms: 1_800_000, max_output_chars: 3000 };
 const MAX_RESULT_CHARS = 4799;
 
 function record(value: unknown): value is Record<string, any> {
@@ -207,29 +205,57 @@ export async function classify(config: JudgeConfig | null, input: ClassifyInput,
   return parseJevAnswers(await response.json(), input.questions);
 }
 
+const WORKER_AGENTS = ["orchestrator-scout", "orchestrator-runner", "orchestrator-editor"];
+
+export async function callHostTool(host: Host, name: string, input: Record<string, unknown>, signal: AbortSignal): Promise<any> {
+  if (!["task", "wait", "archive", "read"].includes(name)
+    || (name === "read" && (typeof input.path !== "string" || !input.path.startsWith("channel://")))) {
+    throw new Error("A workflow can only call agents.run and models.classify; host calls are limited to worker coordination and channel reads");
+  }
+  return (await host("tool.call", { name, input }, signal)).output;
+}
+
+function parseAgentResult(report: string, requested?: Record<string, string>): Record<string, unknown> | null {
+  const last = report.split("\n").map((line) => line.replace(/^\[[^\]\r\n]+\]\s*/, "")).filter((line) => line.startsWith("RESULT:")).at(-1);
+  if (last === undefined) return null;
+  let value: unknown;
+  try { value = JSON.parse(last.slice("RESULT:".length).trim()); }
+  catch { return null; }
+  return record(value) && Object.keys(requested ?? {}).every((key) => Object.hasOwn(value, key)) ? value : null;
+}
+
 export async function runAgent(input: AgentInput, host: Host, signal: AbortSignal, onStarted?: (result: AgentResult) => void, startSignal = signal): Promise<AgentResult> {
   if (!record(input)) throw new Error("agents.run requires an argument object");
   string(input.prompt, "agents.run prompt");
-  const agent = string(input.agent === undefined ? "orchestrator-worker" : input.agent, "agents.run agent");
+  const agent = string(input.agent, "agents.run agent");
+  if (!WORKER_AGENTS.includes(agent)) throw new Error(`agents.run agent must be one of: ${WORKER_AGENTS.join(", ")}`);
+  let prompt = input.prompt;
+  if (input.result !== undefined) {
+    if (!record(input.result)) throw new Error("agents.run result must map field names to descriptions");
+    for (const description of Object.values(input.result)) string(description, "agents.run result description");
+    prompt += "\n\nEnd your report with one final line of the form RESULT: {...} — a single-line JSON object with exactly these fields:"
+      + Object.entries(input.result).map(([field, description]) => `\n- ${field}: ${description}`).join("");
+  }
   const timeout = input.timeout_secs === undefined ? 1800 : input.timeout_secs;
   if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout < 0 || timeout > 1800) {
     throw new Error("agents.run timeout_secs must be in 0..=1800");
   }
-  const call = async (name: string, args: Record<string, unknown>) => (await host("tool.call", { name, input: args }, signal)).output;
-  const task = (await host("tool.call", { name: "task", input: { tasks: [{
+  const call = (name: string, args: Record<string, unknown>) => callHostTool(host, name, args, signal);
+  const task = await callHostTool(host, "task", { tasks: [{
     subagent_type: agent,
-    prompt: input.prompt,
+    prompt,
     description: input.description ?? input.prompt.slice(0, 80),
     ...(input.model === undefined ? {} : { model: input.model }),
     ...(input.effort === undefined ? {} : { effort: input.effort }),
-  }] } }, startSignal)).output;
+  }] }, startSignal);
   startSignal.throwIfAborted();
   const member = task.metadata.members[0];
-  const result: AgentResult = { handle: member.member, session: member.session, status: "timeout", report: "" };
+  const result: AgentResult = { handle: member.member, session: member.session, status: "timeout", report: "", result: null };
   onStarted?.(result);
   if (member.status !== "running") {
     result.status = member.status === "done" || member.status === "completed" ? "done" : member.status === "cancelled" ? "cancelled" : "failed";
     result.report = member.summary;
+    result.result = parseAgentResult(result.report, input.result);
     return result;
   }
   const deadline = Date.now() + timeout * 1000;
@@ -243,6 +269,7 @@ export async function runAgent(input: AgentInput, host: Host, signal: AbortSigna
       const read = await call("read", { path: `channel://${terminal.channel ?? result.handle}` });
       // Channel reads expose rendered text, not a structured report body.
       result.report = read.output;
+      result.result = parseAgentResult(result.report, input.result);
       return result;
     }
     if (metadata.running.some((entry) => entry.handle === result.handle && entry.state === "stopped_by_user")) {
@@ -252,10 +279,6 @@ export async function runAgent(input: AgentInput, host: Host, signal: AbortSigna
     if (metadata.woke_by === "timeout" || Date.now() >= deadline) return result;
     // Mail/stall wakes are not terminal; wait again within the same deadline.
   }
-}
-
-function toolIdentifier(name: string): string {
-  return name.replace(/[^\p{ID_Continue}$\u200C\u200D]/gu, "_").replace(/^[^\p{ID_Start}_$]/u, "_");
 }
 
 function scriptLine(): number {
@@ -268,14 +291,10 @@ function traceLine(entry: TraceEntry): string {
   let call: string;
   let result: string;
   switch (entry.kind) {
-    case "tool":
-      call = `tools.${toolIdentifier(entry.name)} ${truncate(entry.input, 180).replaceAll("\n", " ")}`;
-      result = entry.ok ? `ok, ${entry.output?.length ?? 0} chars` : `error: ${entry.error}`;
-      break;
     case "agent": {
       const input = JSON.parse(entry.input);
       call = record(input)
-        ? `agents.run ${input.agent ?? "orchestrator-worker"} ${json(input.description ?? input.prompt)}`
+        ? `agents.run ${input.agent} ${json(input.description ?? input.prompt)}`
         : `agents.run ${entry.input}`;
       const output = entry.output ? JSON.parse(entry.output) : undefined;
       result = entry.abandoned
@@ -311,12 +330,59 @@ export interface RunContext {
   judge?: JudgeConfig | null;
   judgeError?: string;
   fetchImpl?: typeof fetch;
+  args?: Record<string, unknown>;
+  stored?: string | null;
+  saveAs?: string;
 }
 export interface ScriptResult {
   ok: boolean;
   output: string;
   traceFile: string;
   trace: TraceEntry[];
+}
+interface WorkflowMetadata {
+  name: string;
+  description: string;
+  saved_ms: number;
+  runs: number;
+  last_run_ms: number;
+  last_status: "completed" | "failed";
+}
+const INPUT_FORMS = '{script: string, args?: object, save_as?: string}, {run: string, args?: object}, or {list: true}';
+class WorkflowInputError extends Error {}
+function workflowDirectory(context: RunContext): string {
+  return resolve(context.configDir!, "workflows");
+}
+function storedWorkflows(context: RunContext): WorkflowMetadata[] {
+  const directory = workflowDirectory(context);
+  if (!existsSync(directory)) return [];
+  return readdirSync(directory).filter((name) => name.endsWith(".json")).sort()
+    .map((name) => JSON.parse(readFileSync(join(directory, name), "utf8")));
+}
+export async function executeWorkflow(input: unknown, context: RunContext): Promise<{ ok: boolean; output: string }> {
+  const invalid = () => new WorkflowInputError(`workflow input must be exactly one of ${INPUT_FORMS}`);
+  if (!record(input)) throw invalid();
+  const keys = Object.keys(input);
+  const inline = typeof input.script === "string" && keys.every((key) => ["script", "args", "save_as"].includes(key));
+  const stored = typeof input.run === "string" && keys.every((key) => ["run", "args"].includes(key));
+  const list = input.list === true && keys.length === 1;
+  if (!inline && !stored && !list) throw invalid();
+  if (Object.hasOwn(input, "args") && !record(input.args)) throw invalid();
+  for (const key of ["save_as", "run"]) {
+    if (Object.hasOwn(input, key) && (typeof input[key] !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(input[key]))) {
+      throw new WorkflowInputError(`${key} must match ^[a-z0-9][a-z0-9-]{0,63}$; forms: ${INPUT_FORMS}`);
+    }
+  }
+  if (list) {
+    return { ok: true, output: `Stored workflows:\n${json(storedWorkflows(context).map(({ name, description, saved_ms, runs }) => ({ name, description, saved_ms, runs })))}` };
+  }
+  let script = input.script;
+  if (stored) {
+    const names = storedWorkflows(context).map((workflow) => workflow.name);
+    if (!names.includes(input.run)) throw new Error(`Unknown workflow: ${input.run}. Stored workflows: ${names.join(", ") || "(none)"}`);
+    script = readFileSync(join(workflowDirectory(context), `${input.run}.js`), "utf8");
+  }
+  return executeScript(script, { ...context, args: input.args ?? {}, stored: stored ? input.run : null, saveAs: input.save_as });
 }
 export async function executeScript(script: string, context: RunContext): Promise<ScriptResult> {
   const started = Date.now();
@@ -340,7 +406,7 @@ export async function executeScript(script: string, context: RunContext): Promis
     ensureActive();
     // Snapshot input before crossing the host boundary or awaiting another call.
     const rawInput = json(input);
-    const entry: TraceEntry = { seq: trace.length + 1, line, kind, name, input: truncate(rawInput, 4000), ok: false, started_ms: Date.now(), ms: 0 };
+    const entry: TraceEntry = { seq: trace.length + 1, line, kind, name, input: truncate(rawInput, 4000), ok: false, started_ms: Date.now(), ms: 0, ...(kind === "agent" ? { result: null } : {}) };
     trace.push(entry);
     const index = entry.seq - 1;
     const pending = (async () => {
@@ -353,6 +419,7 @@ export async function executeScript(script: string, context: RunContext): Promis
         if (kind === "agent") {
           entry.handle = output.handle;
           entry.session = output.session;
+          entry.result = output.result;
         }
         entry.ms = Date.now() - entry.started_ms;
         // Render before cutting JSON; large outputs need not be parseable after truncation.
@@ -377,12 +444,10 @@ export async function executeScript(script: string, context: RunContext): Promis
       timer = setTimeout(() => reject(new Error(`Script timed out after ${options.timeout_ms} ms`)), options.timeout_ms);
     });
     const run = async () => {
-      const { tools: schemas }: { tools: ToolSchema[] } = await context.host("tools.list", {}, controller.signal);
-      ensureActive();
       await new Promise<void>((resolveRun, rejectRun) => {
         // A worker lets the parent enforce the deadline even for a CPU loop
         // resumed after an await, outside vm.Script's synchronous timeout.
-        worker = new Worker(new URL(import.meta.url), { workerData: { script, schemas, options } });
+        worker = new Worker(new URL(import.meta.url), { workerData: { script, args: context.args ?? {}, options } });
         worker.on("error", rejectRun);
         worker.on("exit", (code) => { if (active) rejectRun(new Error(`Script worker exited with code ${code}`)); });
         worker.on("message", (event) => {
@@ -395,9 +460,6 @@ export async function executeScript(script: string, context: RunContext): Promis
             case "call": {
               const invoke = tracked(event.kind, event.name, async (input, entry) => {
                 switch (event.kind) {
-                  case "tool":
-                    if (!record(input)) throw new Error(`tools.${event.name} expects an argument object`);
-                    return (await context.host("tool.call", { name: event.name, input }, controller.signal)).output;
                   case "agent": {
                     const start = Promise.withResolvers<void>();
                     const startController = new AbortController();
@@ -405,6 +467,7 @@ export async function executeScript(script: string, context: RunContext): Promis
                     return runAgent(input, context.host, controller.signal, (result) => {
                       entry.handle = result.handle;
                       entry.session = result.session;
+                      entry.result = result.result;
                       start.resolve();
                     }, startController.signal).finally(() => start.resolve());
                   }
@@ -447,9 +510,7 @@ export async function executeScript(script: string, context: RunContext): Promis
       entry.abandoned = true;
       if (entry.handle) {
         try {
-          await context.host("tool.call", {
-            name: "archive", input: { target: entry.handle, reason: "Code script ended while agents.run was pending" },
-          }, new AbortController().signal);
+          await callHostTool(context.host, "archive", { target: entry.handle, reason: "Workflow script ended while agents.run was pending" }, new AbortController().signal);
           entry.archived = true;
         } catch (error) {
           entry.archived = false;
@@ -465,27 +526,44 @@ export async function executeScript(script: string, context: RunContext): Promis
     if (entry.output === undefined && entry.error === undefined) {
       entry.error = "Abandoned when the script ended";
       entry.ms = Date.now() - entry.started_ms;
-      // Inputs may be cut JSON; the generic tool-style abandoned line needs no parsing.
-      lines[entry.seq - 1] = `#${entry.seq} L${entry.line} ${entry.kind === "tool" ? `tools.${toolIdentifier(entry.name)}` : entry.name} -> abandoned, ${(entry.ms / 1000).toFixed(1)} s`;
+      // Inputs may be cut JSON; abandoned lines need no parsing.
+      lines[entry.seq - 1] = `#${entry.seq} L${entry.line} ${entry.name} -> abandoned, ${(entry.ms / 1000).toFixed(1)} s`;
     }
   }
   const status = failure === undefined ? "completed" : "failed";
-  const header = `Script ${status} in ${((Date.now() - started) / 1000).toFixed(1)} s`;
+  if (context.stored) {
+    const path = join(workflowDirectory(context), `${context.stored}.json`);
+    const metadata: WorkflowMetadata = JSON.parse(readFileSync(path, "utf8"));
+    writeFileSync(path, json({ ...metadata, runs: metadata.runs + 1, last_run_ms: Date.now(), last_status: status }) + "\n");
+  }
+  if (context.saveAs && failure === undefined) {
+    const directory = workflowDirectory(context);
+    mkdirSync(directory, { recursive: true });
+    const now = Date.now();
+    const firstLine = script.split("\n")[0];
+    const description = /^\s*\/\//.test(firstLine) && !/^\s*\/\/\s*@options\s*:/.test(firstLine)
+      ? firstLine.replace(/^\s*\/\/\s?/, "").trim() : "";
+    writeFileSync(join(directory, `${context.saveAs}.js`), script);
+    const metadata: WorkflowMetadata = { name: context.saveAs, description, saved_ms: now, runs: 1, last_run_ms: now, last_status: status };
+    writeFileSync(join(directory, `${context.saveAs}.json`), json(metadata) + "\n");
+  }
+  const header = `Workflow${context.stored ? ` ${context.stored}` : ""} ${status} in ${((Date.now() - started) / 1000).toFixed(1)} s`;
+  const savedLine = context.saveAs && failure === undefined ? `\nsaved as ${context.saveAs}` : "";
   const fullBody = [...items, ...(logs.length ? [`<console_output>\n${logs.join("\n")}\n</console_output>`] : [])].join("\n");
   const errorLine = failure === undefined ? "" : `\nScript error: ${failure}`;
   const component = (value: string) => encodeURIComponent(value).replaceAll(".", "%2E");
   const traceDir = resolve(context.configDir ?? tmpdir(), "traces", component(context.session));
   const traceFile = join(traceDir, `${component(context.call)}.jsonl`);
-  const fullOutput = `${header}\n${fullBody}${errorLine}\n<trace>\n${lines.join("\n")}\n</trace>\ntrace file: ${traceFile}`;
+  const fullOutput = `${header}${savedLine}\n${fullBody}${errorLine}\n<trace>\n${lines.join("\n")}\n</trace>\ntrace file: ${traceFile}`;
   mkdirSync(traceDir, { recursive: true });
   writeFileSync(traceFile, [
-    { script, options },
+    { script, args: context.args ?? {}, stored: context.stored ?? (failure === undefined ? context.saveAs ?? null : null), options },
     ...trace,
     { status, output: fullOutput },
   ].map((value) => JSON.stringify(value)).join("\n") + "\n");
 
   const footer = `\n</trace>\ntrace file: ${traceFile}`;
-  let prefix = `${header}\n${truncate(fullBody, options.max_output_chars)}${truncate(errorLine, 400)}\n<trace>\n`;
+  let prefix = `${header}${savedLine}\n${truncate(fullBody, options.max_output_chars)}${truncate(errorLine, 400)}\n<trace>\n`;
   // Reserve trace space even if an unusually long config directory consumes the budget.
   prefix = truncate(prefix, Math.max(0, MAX_RESULT_CHARS - footer.length - 400));
   const available = Math.max(0, MAX_RESULT_CHARS - prefix.length - footer.length);
@@ -501,7 +579,7 @@ export async function executeScript(script: string, context: RunContext): Promis
 }
 
 async function runVMWorker(): Promise<void> {
-  const { script, schemas, options }: { script: string; schemas: ToolSchema[]; options: Options } = workerData;
+  const { script, args, options }: { script: string; args: Record<string, unknown>; options: Options } = workerData;
   const port = parentPort!;
   const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   let sequence = 0;
@@ -522,21 +600,15 @@ async function runVMWorker(): Promise<void> {
     void result.catch(() => {});
     return result;
   };
-  const tools = Object.create(null);
-  for (const schema of schemas) {
-    const name = toolIdentifier(schema.name);
-    if (Object.hasOwn(tools, name)) throw new Error(`tool identifier collision: ${name}`);
-    tools[name] = invoke("tool", schema.name);
-  }
-  const sandbox = vm.createContext({
-    tools,
-    ALL_TOOLS: schemas.map(({ name, description }) => ({ name, description })),
-    describeTool: (name: string) => schemas.find((schema) => schema.name === name),
+  const globals = {
+    get tools(): never { throw new Error("A workflow can only call agents.run and models.classify"); },
+    args,
     agents: { run: invoke("agent", "agents.run") },
     models: { classify: invoke("classify", "models.classify") },
     text: (value: unknown) => port.postMessage({ type: "text", value: typeof value === "string" ? value : json(value) }),
     console: { log: (...values: unknown[]) => port.postMessage({ type: "log", value: values.map((value) => typeof value === "string" ? value : json(value)).join(" ") }) },
-  });
+  };
+  const sandbox = vm.createContext(globals);
   const compiled = new vm.Script(`(async function() {${script}\n})()`, { filename: SCRIPT_FILE });
   const value = await compiled.runInContext(sandbox, { timeout: options.timeout_ms });
   if (value !== undefined) port.postMessage({ type: "text", value: typeof value === "string" ? value : json(value) });
@@ -549,9 +621,16 @@ export const INITIALIZE_RESULT = {
   hooks: [],
   skills: [],
   tools: [{
-    name: "code",
-    description: "Run a JavaScript async-function body with tools, ALL_TOOLS, describeTool, agents.run, models.classify, text, and console.log. Calls are traced. Only a first-line // @options: JSON comment may set timeout_ms (default 600000, max 3000000) and max_output_chars (default 3000, max 3600). No imports, process, fetch, Bun, or timers. Return a value or call text to show output; inspect tool schemas with describeTool.",
-    inputSchema: { type: "object", properties: { script: { type: "string" } }, required: ["script"], additionalProperties: false },
+    name: "workflow",
+    description: "Orchestrate specialised workers and an optional judge with a traced JavaScript async-function body. Use {script, args?, save_as?}, {run, args?}, or {list:true}. Globals: args, agents.run (agent required: orchestrator-scout, orchestrator-runner, orchestrator-editor), models.classify, text, console.log. No local tools, imports, process, fetch, Bun, or timers. A first-line // @options: JSON comment sets timeout_ms (default 1800000, max 3000000) and max_output_chars (default 3000, max 3600). Completed scripts can be saved and reused with new args.",
+    inputSchema: {
+      type: "object",
+      oneOf: [
+        { type: "object", properties: { script: { type: "string" }, args: { type: "object" }, save_as: { type: "string", pattern: "^[a-z0-9][a-z0-9-]{0,63}$" } }, required: ["script"], additionalProperties: false },
+        { type: "object", properties: { run: { type: "string", pattern: "^[a-z0-9][a-z0-9-]{0,63}$" }, args: { type: "object" } }, required: ["run"], additionalProperties: false },
+        { type: "object", properties: { list: { const: true } }, required: ["list"], additionalProperties: false },
+      ],
+    },
   }],
 };
 
@@ -615,16 +694,20 @@ async function main(): Promise<void> {
         return;
       case "tool/call": {
         const p = frame.params;
-        if (!record(p) || p.tool !== "code" || typeof p.session !== "string" || typeof p.call !== "string" || typeof p.host_capability !== "string" || !record(p.input) || typeof p.input.script !== "string" || Object.keys(p.input).some((key) => key !== "script")) {
-          error(-32602, "code requires {script: string}, session, call, and a host_capability");
+        if (!record(p) || p.tool !== "workflow" || typeof p.session !== "string" || typeof p.call !== "string" || typeof p.host_capability !== "string") {
+          error(-32602, `workflow requires ${INPUT_FORMS}, session, call, and a host_capability`);
           return;
         }
         const start = Date.now();
-        const result = await executeScript(p.input.script, {
-          session: p.session, call: p.call, configDir: process.env.HYA_BUNDLE_CONFIG_DIR, judge, judgeError,
-          host: (method, params, signal) => cap.call(p.host_capability, p.session, p.call, method, params, signal),
-        });
-        respond({ ok: result.ok, output: result.output, time_ms: Date.now() - start });
+        try {
+          const result = await executeWorkflow(p.input, {
+            session: p.session, call: p.call, configDir: process.env.HYA_BUNDLE_CONFIG_DIR, judge, judgeError,
+            host: (method, params, signal) => cap.call(p.host_capability, p.session, p.call, method, params, signal),
+          });
+          respond({ ok: result.ok, output: result.output, time_ms: Date.now() - start });
+        } catch (failure) {
+          error(failure instanceof WorkflowInputError ? -32602 : -32003, message(failure));
+        }
         return;
       }
       default: error(-32601, `Unknown method: ${frame.method}`);
