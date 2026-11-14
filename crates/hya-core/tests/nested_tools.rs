@@ -121,6 +121,7 @@ fn catalog() -> Arc<AgentCatalog> {
             },
             can_spawn: Vec::new(),
             hook_refs: Vec::new(),
+            advertise: Vec::new(),
         }],
         tools: Vec::new(),
         skills: Vec::new(),
