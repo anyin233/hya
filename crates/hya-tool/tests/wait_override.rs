@@ -18,6 +18,7 @@ const WITHOUT_CHANNELS: [&str; 4] = [
 
 fn ctx(lifecycle: LifecyclePlane) -> hya_tool::ToolCtx {
     hya_tool::ToolCtx {
+        nested: hya_tool::NestedToolPlane::disconnected(),
         permission: hya_tool::PermissionPlane::new(hya_tool::PermissionRules::default()).0,
         interaction: hya_tool::InteractionPlane::new().0,
         spawner: hya_tool::SpawnerPlane::new().0,

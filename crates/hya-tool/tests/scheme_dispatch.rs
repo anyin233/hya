@@ -37,6 +37,7 @@ fn ctx(workdir: PathBuf) -> ToolCtx {
     let (interaction, _irx) = InteractionPlane::new();
     let (spawner, _srx) = SpawnerPlane::new();
     ToolCtx {
+        nested: hya_tool::NestedToolPlane::disconnected(),
         workflows: WorkflowPlane::disconnected(),
         permission,
         interaction,

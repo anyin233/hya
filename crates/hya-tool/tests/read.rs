@@ -44,6 +44,7 @@ fn ctx_with_rules(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
     let (interaction, _irx) = InteractionPlane::new();
     let (spawner, _srx) = SpawnerPlane::new();
     ToolCtx {
+        nested: hya_tool::NestedToolPlane::disconnected(),
         workflows: hya_tool::WorkflowPlane::disconnected(),
         permission,
         interaction,
@@ -488,6 +489,7 @@ async fn read_authorizes_lexical_external_path_before_metadata_probe() {
     let (interaction, _interaction_rx) = InteractionPlane::new();
     let (spawner, _spawner_rx) = SpawnerPlane::new();
     let ctx = ToolCtx {
+        nested: hya_tool::NestedToolPlane::disconnected(),
         workflows: hya_tool::WorkflowPlane::disconnected(),
         permission,
         interaction,

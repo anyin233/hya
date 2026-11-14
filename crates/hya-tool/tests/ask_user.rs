@@ -18,6 +18,7 @@ fn ctx_with(interaction: InteractionPlane, session: SessionId) -> ToolCtx {
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
     let (spawner, _srx) = SpawnerPlane::new();
     ToolCtx {
+        nested: hya_tool::NestedToolPlane::disconnected(),
         workflows: hya_tool::WorkflowPlane::disconnected(),
         permission,
         interaction: interaction.for_session(session),

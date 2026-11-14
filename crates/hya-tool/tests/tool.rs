@@ -38,6 +38,7 @@ fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
     let (interaction, _irx) = InteractionPlane::new();
     let (spawner, _srx) = SpawnerPlane::new();
     ToolCtx {
+        nested: hya_tool::NestedToolPlane::disconnected(),
         workflows: hya_tool::WorkflowPlane::disconnected(),
         permission,
         interaction,
@@ -496,6 +497,7 @@ async fn bash_happy_and_cancelled() {
     assert_eq!(alias_out["metadata"]["exit"], 0);
 
     let cancelled = ToolCtx {
+        nested: hya_tool::NestedToolPlane::disconnected(),
         workflows: hya_tool::WorkflowPlane::disconnected(),
         permission: ctx.permission.clone(),
         interaction: ctx.interaction.clone(),
@@ -535,6 +537,7 @@ async fn task_tool_is_lead_only() {
     let (interaction, _irx) = InteractionPlane::new();
     let (spawner, _srx) = SpawnerPlane::new();
     let ctx = ToolCtx {
+        nested: hya_tool::NestedToolPlane::disconnected(),
         workflows: hya_tool::WorkflowPlane::disconnected(),
         permission,
         interaction,

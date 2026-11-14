@@ -154,6 +154,7 @@ mod tests {
         let (spawner, _srx) = SpawnerPlane::new();
         let (interaction, _irx) = InteractionPlane::new();
         ToolCtx {
+            nested: hya_tool::NestedToolPlane::disconnected(),
             workflows: hya_tool::WorkflowPlane::disconnected(),
             permission: permission.for_session(session),
             interaction: interaction.for_session(session),

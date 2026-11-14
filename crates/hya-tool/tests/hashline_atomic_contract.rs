@@ -99,6 +99,7 @@ fn ctx_with_formatter_session(
     let (interaction, _interaction_rx) = InteractionPlane::new();
     let (spawner, _spawner_rx) = SpawnerPlane::new();
     ToolCtx {
+        nested: hya_tool::NestedToolPlane::disconnected(),
         workflows: hya_tool::WorkflowPlane::disconnected(),
         permission,
         interaction,

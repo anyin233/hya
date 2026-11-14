@@ -1072,8 +1072,8 @@ Only `permission` is protected from rewriting by `tool.execute.after` hooks.
 
 All builtin schemas are registered before runtime capabilities are considered.
 `ToolCtx` carries permission, interaction, spawner, mailbox, todo, skills, web
-search, LSP, formatter, workdir, workspace roots, session, and cancellation
-planes/resources,
+search, LSP, formatter, nested-tool, workdir, workspace roots, session, and
+cancellation planes/resources,
 plus an immutable caller-reachable `AgentDef` roster derived from the bound
 agent's `can_spawn` reachability (not a mutable agent catalog plane). The
 single `BundleCatalog` authority lives on `RuntimeSnapshot` / `TurnBinding`;
@@ -1097,6 +1097,57 @@ reports when no server supports a file type.
 [`build_session_engine`](../../crates/hya-app/src/runtime.rs),
 [`MailboxError::Unavailable`](../../crates/hya-tool/src/mailbox.rs),
 [`LspTool`](../../bundles/presets/extended-tools/native/src/lsp.rs))
+
+### Nested tool plane
+
+`ToolCtx::nested` lets one tool call run the other tools of its agent's view
+as part of itself. It exists so a bundle tool (for example a script runner)
+can drive hya's tools while the calling tool call stays the single record of
+what happened; bundle processes reach it through the `tools.list` and
+`tool.call` host capabilities
+([plugin protocol](../plugin-protocol.md#request-scoped-host-capabilities)).
+
+The turn loop connects a plane for every model tool call:
+
+- `list()` returns the tool schemas of the agent's compiled resource view minus
+  the calling tool. This is the executable set, not only the advertised one.
+- `call(name, input)`:
+  - a name outside the view fails with `ToolError::Other("unknown tool: <name>")`;
+    the calling tool's own name fails with `ToolError::Input`;
+  - the call is authorized exactly like a model call of that tool (same
+    permission mode, rules, bundle permission interceptors, and asks, keyed to
+    the calling tool call); a denial is `ToolError::Permission`;
+  - files it may change are captured first, and `files_changed` is recorded on
+    the calling tool call's message and call id;
+  - the tool runs with the caller's context except for the permission plane
+    authorized for it and a disconnected `nested` plane, so nesting is one
+    level deep;
+  - it returns the tool's raw, uncapped output and stops with
+    `ToolError::Cancelled` when the caller is cancelled;
+  - it runs no `tool.execute.before`/`after` hooks and emits no
+    `tool_call_requested`, `tool_result`, or `tool_error` event.
+
+Outside the turn loop (tests, direct tool use) a context carries
+`NestedToolPlane::disconnected()`, which lists nothing and fails every call.
+
+```rust
+#[async_trait]
+pub trait NestedTools: Send + Sync {
+    fn list(&self) -> Vec<hya_proto::ToolSchema>;
+    async fn call(&self, name: &str, input: serde_json::Value) -> Result<serde_json::Value, ToolError>;
+}
+
+impl NestedToolPlane {
+    pub fn disconnected() -> Self;
+    pub fn new(tools: Arc<dyn NestedTools>) -> Self;
+    pub fn is_connected(&self) -> bool;
+    pub fn list(&self) -> Vec<hya_proto::ToolSchema>;                 // empty when disconnected
+    pub async fn call(&self, name: &str, input: Value) -> Result<Value, ToolError>;
+}
+```
+
+([`NestedToolPlane`](../../crates/hya-tool/src/nested.rs),
+[`TurnNestedTools`](../../crates/hya-core/src/engine/nested_tools.rs))
 
 ### MCP tools
 
