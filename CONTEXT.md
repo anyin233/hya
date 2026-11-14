@@ -142,6 +142,30 @@ unified resident subagent substrate by `hya-core`
 [ADR-0017](docs/adr/0017-workflow-on-unified-substrate.md)).
 _Avoid_: preset pipeline, macro, script
 
+**Workflow program**:
+A JavaScript async function body that the **Orchestrator agent** submits
+through the `workflow` tool of `hya-extra/orchestrator`. Its only effects are
+starting specialised workers (`agents.run`) and asking a judge model
+(`models.classify`); the bundle runtime executes it and writes one trace
+record per effect. Stored by name and reused with new `args`. Not a
+**Workflow**: it is not compiled, has no Stages, and is authored by an agent
+at run time ([ADR-0032](docs/adr/0032-workflow-programs-and-the-orchestrator-agent.md)).
+_Avoid_: workflow (unqualified), script, code-mode program
+
+**Observation**:
+The report of a worker that only read. An `orchestrator-scout` answer made on
+an unchanged **Workspace state** is remembered and reused for the same
+question; the reusing trace record names the session that made it.
+_Avoid_: cache entry, memo
+
+**Workspace state**:
+The value of the `workspace.state` host capability: a SHA-256 identity of the
+Git work tree containing a session's working directory (its location, HEAD
+tree, status, and the content of status-listed files; ignored files and
+top-level `.hya/` excluded). Equal values mean the same checkout with the same
+content.
+_Avoid_: snapshot, revision
+
 **Stage**:
 One node in a compiled Workflow DAG: target Agent, directive (`{{input.<name>}}`
 plus bounded predecessor evidence), optional `actor` key binding sequential
