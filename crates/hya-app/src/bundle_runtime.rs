@@ -375,6 +375,7 @@ pub(crate) async fn prepare_source(
                 Some(PreparedProcessExtension {
                     kind: PreparedProcessKind::Bun,
                     command,
+                    timeout_ms: None,
                 })
             }
         } else {
@@ -439,7 +440,7 @@ pub(crate) async fn prepare_source(
                 id: bundle.namespace().into(),
                 kind,
                 command,
-                timeout_ms: None,
+                timeout_ms: process.timeout_ms,
                 env,
                 plugin_dir: None,
                 launch: Default::default(),
@@ -863,12 +864,16 @@ for line in sys.stdin:
     async fn prepare_api_bundle(
         manifest_apis: &str,
         process_apis: &str,
+        process_options: &str,
     ) -> Result<CachedBundleSource, CoreError> {
         let script = format!(
-            r#"import json,sys
+            r#"import json,sys,time
 for line in sys.stdin:
  r=json.loads(line)
  result={{'protocol_version':1,'plugin':{{'id':'apis','version':'1.0.0','kind':'bun'}},'hooks':[],'tools':[],'apis':{process_apis}}} if r.get('method') == 'initialize' else {{}}
+ if r.get('method') == 'api/request':
+  time.sleep(2)
+  result={{'status':200,'body':{{'ok':True}}}}
  if 'id' in r: print(json.dumps({{'jsonrpc':'2.0','id':r['id'],'result':result}}),flush=True)
 "#
         );
@@ -877,7 +882,7 @@ for line in sys.stdin:
             vec![
                 SourceFile::new(
                     "bundle.yaml",
-                    format!("kind: Bundle\nidentity: {{ id: acme/apis, version: 1.0.0, publisher: acme }}\nextensions:\n  process: {{ kind: bun, command: [python3, '${{BUNDLE_ROOT}}/runtime.py'] }}\n  files: [{{ id: runtime, path: runtime.py }}, {{ id: usage-schema, path: usage.json }}]\n{manifest_apis}"),
+                    format!("kind: Bundle\nidentity: {{ id: acme/apis, version: 1.0.0, publisher: acme }}\nextensions:\n  process: {{ kind: bun, command: [python3, '${{BUNDLE_ROOT}}/runtime.py']{process_options} }}\n  files: [{{ id: runtime, path: runtime.py }}, {{ id: usage-schema, path: usage.json }}]\n{manifest_apis}"),
                 ),
                 SourceFile::new("runtime.py", script),
                 SourceFile::new("usage.json", r#"{"type":"object"}"#),
@@ -903,10 +908,60 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
+    async fn bundle_process_timeout_reaches_the_request_spec() {
+        let _env = StableEnvGuard::new();
+        let declared =
+            "apis: [{ id: usage, method: GET, scope: global, path: /usage, description: Usage }]\n";
+        for (options, times_out) in [
+            ("", false),
+            (", timeout_ms: 1000", true),
+            (", timeout_ms: 10000", false),
+        ] {
+            let cached = prepare_api_bundle(declared, "[{'name':'usage'}]", options)
+                .await
+                .unwrap();
+            let registry = hya_core::RuntimeRegistry::new(
+                hya_tool::ToolRegistry::builtins(),
+                Arc::new(
+                    hya_core::AgentCatalog::new(Arc::new(
+                        hya_bundle::BundleCatalog::from_prepared(&[]).unwrap(),
+                    ))
+                    .unwrap(),
+                ),
+            );
+            registry
+                .refresh(|candidate| candidate.upsert_sources(vec![cached.source.clone()]))
+                .unwrap();
+            let result = cached
+                .source
+                .apis()
+                .unwrap()
+                .invoke(hya_core::BundleApiCall {
+                    bundle: "acme/apis".into(),
+                    method: hya_core::ApiMethod::Get,
+                    session: None,
+                    path: "/usage".into(),
+                    query: BTreeMap::new(),
+                    body: serde_json::Value::Null,
+                })
+                .await;
+            registry.shutdown_sources().await;
+            if times_out {
+                assert!(
+                    matches!(result, Err(hya_core::BundleApiError::Failed { ref detail, .. }) if detail.contains("timed out")),
+                    "{result:?}"
+                );
+            } else {
+                assert_eq!(result.unwrap().body, serde_json::json!({"ok": true}));
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn bundle_process_apis_must_equal_the_declared_apis() {
         let _env = StableEnvGuard::new();
         let declared = "apis: [{ id: usage, method: GET, scope: session, path: /usage, description: Token usage, response_schema: usage.json }]\n";
-        let published = prepare_api_bundle(declared, "[{'name':'usage'}]")
+        let published = prepare_api_bundle(declared, "[{'name':'usage'}]", "")
             .await
             .unwrap();
         let Some(apis) = published.source.apis() else {
@@ -925,13 +980,13 @@ for line in sys.stdin:
             "[{'name':'usage'},{'name':'extra'}]",
             "[{'name':'other'}]",
         ] {
-            let result = prepare_api_bundle(declared, process_apis).await;
+            let result = prepare_api_bundle(declared, process_apis, "").await;
             assert!(
                 matches!(result, Err(CoreError::Invalid(ref detail)) if detail.contains("API endpoints differ")),
                 "{process_apis}: the process must declare exactly the manifest apis"
             );
         }
-        let result = prepare_api_bundle("", "[{'name':'usage'}]").await;
+        let result = prepare_api_bundle("", "[{'name':'usage'}]", "").await;
         assert!(
             matches!(result, Err(CoreError::Invalid(ref detail)) if detail.contains("API endpoints differ")),
             "a process may not serve undeclared endpoints"

@@ -2333,6 +2333,7 @@ fn catalog_with_agents(stable_ids: &[&str]) -> Arc<AgentCatalog> {
                     // Deliberately empty: recovery must not depend on can_spawn.
                     can_spawn: Vec::new(),
                     hook_refs: Vec::new(),
+                    advertise: Vec::new(),
                 }],
                 tools: Vec::new(),
                 skills: Vec::new(),
@@ -2479,6 +2480,7 @@ fn catalog_with_worker_policy(model_policy: ModelPolicy) -> Arc<AgentCatalog> {
             resource_view: ResourceView::default(),
             can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
             hook_refs: Vec::new(),
+            advertise: Vec::new(),
         };
         Bundle {
             check: None,
@@ -5939,6 +5941,7 @@ fn materialized_bundle(marker: &str) -> Bundle {
             resource_view,
             can_spawn: Vec::new(),
             hook_refs: vec!["bundle:hya/materialized/hook/event".to_string()],
+            advertise: Vec::new(),
         }],
         tools: vec![materialized_resource(
             marker,
@@ -6055,6 +6058,7 @@ fn disjoint_materialized_bundle(marker: &str) -> Bundle {
             },
             can_spawn: Vec::new(),
             hook_refs: vec![alpha_hook.stable_id.clone()],
+            advertise: Vec::new(),
         }],
         tools: vec![alpha_tool, beta_tool],
         skills: Vec::new(),
@@ -6750,6 +6754,7 @@ fn sidecar_factory_is_scoped_to_the_selected_agent_effective_capability() {
         resource_view: ResourceView::default(),
         can_spawn: vec![AgentName::new("worker")],
         hook_refs: Vec::new(),
+        advertise: Vec::new(),
     };
 
     let catalog = Arc::new(to_agent_catalog(

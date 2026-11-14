@@ -211,6 +211,7 @@ fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
                     .map(|id| AgentName::new(id.as_str()))
                     .collect(),
                 hook_refs: Vec::new(),
+                advertise: Vec::new(),
             }],
             tools: Vec::new(),
             skills: Vec::new(),

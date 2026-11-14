@@ -116,6 +116,9 @@ pub struct PreparedAgent {
     pub resource_view: ResourceView,
     /// Stable agent ids this agent is allowed to spawn.
     pub can_spawn: Vec<AgentName>,
+    /// Non-empty allowlist of model-facing tool names; dispatch remains unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub advertise: Vec<String>,
     /// Hook resource refs selected for this agent (exact-path join at activation).
     pub hook_refs: Vec<String>,
 }
@@ -527,6 +530,9 @@ pub struct PreparedProcessExtension {
     pub kind: PreparedProcessKind,
     /// Argv to spawn (`command[0]` is the program).
     pub command: Vec<String>,
+    /// Per-request timeout in milliseconds (1000..=3600000), or the host default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
 }
 
 /// Derived per-bundle process lookup row; never persisted.
