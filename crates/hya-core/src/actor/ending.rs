@@ -1,3 +1,5 @@
+use hya_bundle::HandoffPolicy;
+
 use super::*;
 
 pub(super) async fn commit_episode_ending(
@@ -6,14 +8,19 @@ pub(super) async fn commit_episode_ending(
     ending: &Ending,
     sidecar_error: Option<String>,
 ) -> Result<(hya_store::ResidentArchiveOutcome, EpisodeFinalization), CoreError> {
-    let (handle, child, cancel) = {
+    let (handle, child, cancel, handoff_policy) = {
         let state = team.lock();
         let slot = state
             .residents
             .get(&claim.actor_id)
             .filter(|slot| slot.claim == Some(*claim))
             .ok_or_else(|| CoreError::Invalid("episode ownership changed".into()))?;
-        (slot.handle.clone(), claim.actor_id, slot.cancel.clone())
+        (
+            slot.handle.clone(),
+            claim.actor_id,
+            slot.cancel.clone(),
+            slot.binding.handoff_policy(slot.agent.name.as_str())?,
+        )
     };
     let projection = team.engine.read_projection_shared(team.root).await?;
     let expected_work = projection
@@ -23,7 +30,7 @@ pub(super) async fn commit_episode_ending(
         .map(|entry| (entry.resident_cursor, entry.resident_work));
     drop(projection);
     let handoff = match ending {
-        Ending::Reported(_) => {
+        Ending::Reported(_) if handoff_policy == HandoffPolicy::Model => {
             tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Err(CoreError::Cancelled),

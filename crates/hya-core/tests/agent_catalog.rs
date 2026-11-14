@@ -40,6 +40,7 @@ fn installed(bundle_id: &str, agent_id: &str, can_spawn: &[&str]) -> Bundle {
             can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
             hook_refs: Vec::new(),
             advertise: Vec::new(),
+            handoff: hya_bundle::HandoffPolicy::Model,
         }],
         tools: Vec::new(),
         skills: Vec::new(),

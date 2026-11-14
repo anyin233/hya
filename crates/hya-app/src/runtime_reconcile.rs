@@ -2855,6 +2855,7 @@ for line in sys.stdin:
             can_spawn: Vec::new(),
             hook_refs: Vec::new(),
             advertise: Vec::new(),
+            handoff: hya_bundle::HandoffPolicy::Model,
         };
         let bundle = Bundle {
             check: None,

@@ -2184,6 +2184,7 @@ fn prepare_agent(
         can_spawn: source.can_spawn.into_iter().map(AgentName::new).collect(),
         hook_refs: source.hook_refs,
         advertise,
+        handoff: source.handoff,
     })
 }
 

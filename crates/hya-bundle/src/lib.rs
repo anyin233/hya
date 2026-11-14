@@ -25,11 +25,12 @@ pub use first_party::{
 };
 pub use model::{
     AgentRole, Bundle, BundleIdentity, ChannelCapability, ChannelParticipantRole, ChannelRetention,
-    ChannelScope, ChannelTemplateKind, ModelPolicy, PreparedAgent, PreparedApi, PreparedBundleApis,
-    PreparedBundleIndex, PreparedBundleKind, PreparedBundlePermissionModes, PreparedBundleProcess,
-    PreparedBundleSchemas, PreparedCatalog, PreparedChannelParticipant, PreparedChannelTemplate,
-    PreparedCheck, PreparedPermissionMode, PreparedProcessExtension, PreparedProcessKind,
-    PreparedResource, PreparedSchema, PreparedTuiExtension, PreparedWorkflow, ResourceView,
+    ChannelScope, ChannelTemplateKind, HandoffPolicy, ModelPolicy, PreparedAgent, PreparedApi,
+    PreparedBundleApis, PreparedBundleIndex, PreparedBundleKind, PreparedBundlePermissionModes,
+    PreparedBundleProcess, PreparedBundleSchemas, PreparedCatalog, PreparedChannelParticipant,
+    PreparedChannelTemplate, PreparedCheck, PreparedPermissionMode, PreparedProcessExtension,
+    PreparedProcessKind, PreparedResource, PreparedSchema, PreparedTuiExtension, PreparedWorkflow,
+    ResourceView,
 };
 pub use package::{
     PackageFormat, PublicPackageInspection, StagedPackage, cleanup_orphaned_staging,

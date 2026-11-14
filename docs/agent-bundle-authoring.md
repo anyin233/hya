@@ -606,6 +606,7 @@ line per mode.
 | `namespace` | no | Provider-facing namespace for the bundle's tools; defaults to the identity name segment (the part after `/`). Token rules: `[a-zA-Z0-9_-]`, no `__`, and the reserved tokens `mcp`, `harness`, `builtin`, `plugin` are rejected. |
 | `resource_view` | no | `allow`, `deny`, `aliases`, `namespace` (see below). |
 | `advertise` | no | `string[]`, default `[]`: a non-empty list limits model-facing tool schemas to the listed names in the compiled view. It does not remove executable tools. Unknown names fail view compilation with an error naming the agent and tool. |
+| `handoff` | no | `model` (default) or `deterministic`: who writes the terminal handoff when this agent ends an episode with an accepted `report`. Any other value fails prepare. See below. |
 | `can_spawn` | no | Allowlist of stable agent ids this agent may spawn. Targets are **not** resolved at prepare time — a bundle may name an agent from a bundle that is not installed yet. |
 | `hook_refs` | no | Bundle-local hook resource references only (not `harness:hook/*`). |
 
@@ -633,6 +634,30 @@ agents:
 
 Omitting `advertise` preserves the existing prepared bytes. Duplicate entries
 are collapsed and the prepared list is sorted.
+
+`handoff` chooses how a reported episode's handoff document is written. With
+`model` the configured summarizer writes it from the episode transcript: one
+model call per report, billed as `usage_recorded { purpose: compaction }`,
+that delays `handoff_committed` (and so the parent's report mail) by the length
+of that call. With `deterministic` hya commits the projection-derived
+document it already uses for forced endings and summarizer failures, without a
+model call; `handoff_committed` then carries `degraded: true`. The rest of the
+report is unchanged: `subagent_reported`, archive, claim release, budget refund
+and the report mail to the parent. Use `deterministic` for short-lived workers
+whose report is the whole result and that are not revived with work that needs
+a written summary of their earlier episode. The deterministic document keeps
+the episode's first request, last assistant text and pending mail, and carries
+files and decisions forward from the previous generation.
+
+```yaml
+agents:
+  - id: quick-check
+    role: subagent
+    handoff: deterministic
+```
+
+Omitting `handoff`, or writing `handoff: model`, preserves the existing
+prepared bytes. Built-in agents use `model`.
 
 Example agent with `model_policy`:
 

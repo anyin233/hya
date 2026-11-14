@@ -648,6 +648,25 @@ impl TurnBinding {
         }
     }
 
+    /// Handoff policy declared by `stable_id`; built-ins use their preset's.
+    pub fn handoff_policy(&self, stable_id: &str) -> Result<HandoffPolicy, BundleError> {
+        let definition = self.snapshot.catalog.require(stable_id)?;
+        match definition.origin.bundle_id() {
+            None => Ok(crate::builtin_agents::preset_agent(stable_id)
+                .map(|agent| agent.handoff)
+                .unwrap_or_default()),
+            Some(id) => self
+                .snapshot
+                .catalog
+                .bundles()
+                .resolve_agent_entry(stable_id)
+                .map(|(_, agent)| agent.handoff)
+                .ok_or_else(|| BundleError::UnknownAgentId {
+                    agent_id: format!("{id}/{stable_id}"),
+                }),
+        }
+    }
+
     /// Compile the agent resource/tool policy for `stable_id`.
     pub fn agent_resource_policy(
         &self,
