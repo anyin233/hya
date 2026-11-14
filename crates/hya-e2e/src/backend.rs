@@ -45,6 +45,8 @@ pub struct BackendSpec {
     pub permission_model: String,
     /// Optional MCP servers written into config.
     pub mcp: Vec<McpFixture>,
+    /// `tools.code.mode` in config.yaml; absent when `None`.
+    pub code_mode: Option<String>,
     /// Optional project-relative skill files written before boot (`path` under project, body).
     pub skill_files: Vec<(String, String)>,
     /// Optional files written into the project before boot.
@@ -69,6 +71,7 @@ impl BackendSpec {
             provider_id: "fake".into(),
             permission_model: "allow".into(),
             mcp: Vec::new(),
+            code_mode: None,
             skill_files: Vec::new(),
             project_files: Vec::new(),
             preinstall_bundles: Vec::new(),
@@ -161,6 +164,11 @@ impl BackendProcess {
             models.push_str(&format!("    - id: {model}\n"));
         }
         let mcp_yaml = render_mcp(&mcp);
+        let tools_yaml = spec
+            .code_mode
+            .as_ref()
+            .map(|mode| format!("tools:\n  code:\n    mode: {mode}\n"))
+            .unwrap_or_default();
         let config = format!(
             r#"default_model: {model_ref}
 providers:
@@ -174,13 +182,14 @@ plugins: {{}}
 permission:
   model: {perm}
   rules: []
-"#,
+{tools}"#,
             model_ref = model_ref,
             provider = spec.provider_id,
             base = spec.fake_base_url,
             models = models,
             mcp = mcp_yaml,
             perm = spec.permission_model,
+            tools = tools_yaml,
         );
         std::fs::write(hya_cfg.join("config.yaml"), config)?;
         std::fs::write(

@@ -34,7 +34,7 @@ use built-in defaults:
 | `permission` | Static invocation rules (`allow` / `ask` / `deny`) and default permission model. | [Permissions](#permissions) |
 | `mcp` | Local stdio and remote HTTP MCP servers (`mcp.<server>`). | [MCP Servers](#mcp-servers) |
 | `plugins` | Out-of-process stdio JSON-RPC plugins (`rust`, `bun`, `claude`). | [Plugins](#plugins) |
-| `tools` | Tool-plane settings such as `tools.websearch` (`exa` or `parallel`). | [Web Search](#web-search) |
+| `tools` | Tool-plane settings: `tools.websearch` (`exa` or `parallel`) and `tools.code.mode` (`normal`, `with_tools`, `only`). | [Web Search](#web-search), [Code Mode](#code-mode) |
 | `subagents` | Concurrency permits and per-team resident turn/mail/spawn governor budgets. | [Subagent Limits](#subagent-limits) |
 | `compaction` | Context-reduction thresholds, token accounting mode, and 5-stage method order. | [Compaction](compaction.md) |
 | `goal` | Independent evaluator model (`goal.evaluator_model`) for `-p` Goal mode and `loop`. | [Goal and Loop Authoring](goal-loop-authoring.md) |
@@ -1285,6 +1285,22 @@ parameter; Parallel sends it as a bearer token. Set `enabled: false` to remove
 the built-in `websearch` tool. When enabled, the tool is available to every
 model provider. Provider, endpoint, key, and enabled come **only** from this
 config block — there are no websearch-related environment variables.
+
+## Code Mode
+
+`tools.code.mode` decides whether the built-in agents get `code-mode__run`, a
+tool that runs a JavaScript program calling the agent's other tools:
+
+```yaml
+tools:
+  code:
+    mode: normal # normal (default), with_tools, or only
+```
+
+`normal` loads nothing. `with_tools` offers the tool next to the others.
+`only` offers it alone and leaves every other tool callable from a program.
+The value is read at backend start. See [Code mode](code-mode.md) for the
+tool, the script interface, and the limits.
 
 ## Permissions
 

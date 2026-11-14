@@ -1213,6 +1213,7 @@ async fn build_session_engine_with_mcp_defer(
     let catalog_refresh = Arc::new(RuntimeExtensionsRefresh::new(
         crate::ProjectScopeRefresh::new(Arc::new(
             InstalledBundleRefresh::new(bundle_registry_path())
+                .with_code_mode(settings.code_mode() != config::CodeMode::Normal)
                 .with_io_tasks(lifecycle.io_tasks.clone())
                 .with_host_reads(Arc::new(hya_core::StoreSessionReads::new(store.clone()))),
         ))
@@ -1263,6 +1264,10 @@ async fn build_session_engine_with_mcp_defer(
         .with_formatter(settings.formatter())
         .with_lsp(settings.lsp()?)
         .with_websearch(WebSearchPlane::configured(websearch))
+        .with_exclusive_tool(
+            (settings.code_mode() == config::CodeMode::Only)
+                .then(|| config::CodeMode::TOOL.to_string()),
+        )
         .with_interaction(interaction)
         // Explicit cancellation closes intake: the engine owns each sender while
         // its receiver service retains the engine.
