@@ -42,8 +42,15 @@ The script is an async function body in a `node:vm` context. The VM runs in a
 worker thread so the parent can enforce the deadline even after an `await`.
 Imports, process access, fetch, Bun, and timers are unavailable. This controls
 how effects are recorded; it is not a security boundary. Calls that already
-happened are not rolled back. Timed-out `agents.run` workers remain live and
-can be managed through the ordinary hya tools.
+happened are not rolled back. When a script completes, fails, or times out, pending `agents.run` workers
+are stopped with `archive({target: handle, reason})`. The trace records
+`handle` and `session` as soon as `task` returns, then marks leftover calls
+`abandoned:true` with `archived:true` on cleanup success or `archived:false`
+and `archive_error` on failure. Trace lines show `abandoned and archived, <handle>`
+or the archive error. Pending starts get up to five seconds to return;
+unresolved starts show `abandoned (start unknown)`. Workers whose own
+`agents.run` timeout already returned remain live and can be managed through
+ordinary hya tools.
 
 ## Files
 
