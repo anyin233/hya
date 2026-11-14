@@ -57,6 +57,9 @@ export interface TraceEntry {
   ms: number;
   handle?: string;
   session?: string;
+  abandoned?: boolean;
+  archived?: boolean;
+  archive_error?: string;
 }
 const SCRIPT_FILE = "orchestrator-script.js";
 export const DEFAULT_OPTIONS: Options = { timeout_ms: 600_000, max_output_chars: 3000 };
@@ -204,7 +207,7 @@ export async function classify(config: JudgeConfig | null, input: ClassifyInput,
   return parseJevAnswers(await response.json(), input.questions);
 }
 
-export async function runAgent(input: AgentInput, host: Host, signal: AbortSignal): Promise<AgentResult> {
+export async function runAgent(input: AgentInput, host: Host, signal: AbortSignal, onStarted?: (result: AgentResult) => void, startSignal = signal): Promise<AgentResult> {
   if (!record(input)) throw new Error("agents.run requires an argument object");
   string(input.prompt, "agents.run prompt");
   const agent = string(input.agent === undefined ? "orchestrator-worker" : input.agent, "agents.run agent");
@@ -213,15 +216,17 @@ export async function runAgent(input: AgentInput, host: Host, signal: AbortSigna
     throw new Error("agents.run timeout_secs must be in 0..=1800");
   }
   const call = async (name: string, args: Record<string, unknown>) => (await host("tool.call", { name, input: args }, signal)).output;
-  const task = await call("task", { tasks: [{
+  const task = (await host("tool.call", { name: "task", input: { tasks: [{
     subagent_type: agent,
     prompt: input.prompt,
     description: input.description ?? input.prompt.slice(0, 80),
     ...(input.model === undefined ? {} : { model: input.model }),
     ...(input.effort === undefined ? {} : { effort: input.effort }),
-  }] });
+  }] } }, startSignal)).output;
+  startSignal.throwIfAborted();
   const member = task.metadata.members[0];
   const result: AgentResult = { handle: member.member, session: member.session, status: "timeout", report: "" };
+  onStarted?.(result);
   if (member.status !== "running") {
     result.status = member.status === "done" || member.status === "completed" ? "done" : member.status === "cancelled" ? "cancelled" : "failed";
     result.report = member.summary;
@@ -230,7 +235,7 @@ export async function runAgent(input: AgentInput, host: Host, signal: AbortSigna
   const deadline = Date.now() + timeout * 1000;
   for (;;) {
     signal.throwIfAborted();
-    const wait = await call("wait", { targets: [result.handle], mode: "all", timeout_secs: Math.max(0, (deadline - Date.now()) / 1000) });
+    const wait = await call("wait", { targets: [result.handle], mode: "all", timeout_secs: Math.max(0, Math.ceil((deadline - Date.now()) / 1000)) });
     const metadata = wait.metadata;
     const terminal = [...metadata.finished, ...(metadata.already_finished ?? [])].find((entry) => entry.handle === result.handle);
     if (terminal) {
@@ -273,7 +278,11 @@ function traceLine(entry: TraceEntry): string {
         ? `agents.run ${input.agent ?? "orchestrator-worker"} ${json(input.description ?? input.prompt)}`
         : `agents.run ${entry.input}`;
       const output = entry.output ? JSON.parse(entry.output) : undefined;
-      result = entry.ok ? `${output.status}, ${entry.handle}` : `error: ${entry.error}`;
+      result = entry.abandoned
+        ? entry.handle
+          ? `abandoned and ${entry.archived ? "archived" : `archive failed: ${entry.archive_error}`}, ${entry.handle}`
+          : "abandoned (start unknown)"
+        : entry.ok ? `${output.status}, ${entry.handle}` : `error: ${entry.error}`;
       break;
     }
     case "classify": {
@@ -318,6 +327,7 @@ export async function executeScript(script: string, context: RunContext): Promis
   // Summaries use the complete values; trace record fields have their own 4000-char budget.
   const lines: string[] = [];
   const controller = new AbortController();
+  const agents = new Map<TraceEntry, { started: Promise<void>; controller: AbortController; input: string }>();
   let active = true;
   let failure: string | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -326,7 +336,7 @@ export async function executeScript(script: string, context: RunContext): Promis
     if (!active) throw new Error("Script has ended; outstanding calls were abandoned");
     controller.signal.throwIfAborted();
   };
-  const tracked = (kind: TraceEntry["kind"], name: string, run: (input: any) => Promise<any>) => (input: any, line: number) => {
+  const tracked = (kind: TraceEntry["kind"], name: string, run: (input: any, entry: TraceEntry) => Promise<any>) => (input: any, line: number) => {
     ensureActive();
     // Snapshot input before crossing the host boundary or awaiting another call.
     const rawInput = json(input);
@@ -335,7 +345,7 @@ export async function executeScript(script: string, context: RunContext): Promis
     const index = entry.seq - 1;
     const pending = (async () => {
       try {
-        const output = await run(JSON.parse(rawInput));
+        const output = await run(JSON.parse(rawInput), entry);
         ensureActive();
         entry.ok = true;
         const rawOutput = json(output);
@@ -383,12 +393,21 @@ export async function executeScript(script: string, context: RunContext): Promis
             case "done": resolveRun(); return;
             case "failed": rejectRun(new Error(event.error)); return;
             case "call": {
-              const invoke = tracked(event.kind, event.name, async (input) => {
+              const invoke = tracked(event.kind, event.name, async (input, entry) => {
                 switch (event.kind) {
                   case "tool":
                     if (!record(input)) throw new Error(`tools.${event.name} expects an argument object`);
                     return (await context.host("tool.call", { name: event.name, input }, controller.signal)).output;
-                  case "agent": return runAgent(input, context.host, controller.signal);
+                  case "agent": {
+                    const start = Promise.withResolvers<void>();
+                    const startController = new AbortController();
+                    agents.set(entry, { started: start.promise, controller: startController, input: json(input) });
+                    return runAgent(input, context.host, controller.signal, (result) => {
+                      entry.handle = result.handle;
+                      entry.session = result.session;
+                      start.resolve();
+                    }, startController.signal).finally(() => start.resolve());
+                  }
                   case "classify":
                     if (context.judgeError) throw new Error(context.judgeError);
                     return classify(context.judge ?? null, input, controller.signal, context.fetchImpl);
@@ -411,6 +430,36 @@ export async function executeScript(script: string, context: RunContext): Promis
     clearTimeout(timer);
     controller.abort(new Error(failure ?? "Script completed; outstanding calls abandoned"));
     await worker?.terminate();
+  }
+  const abandonedAgents = [...agents].filter(([entry]) => entry.output === undefined && entry.error === undefined);
+  if (abandonedAgents.length) {
+    let grace: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        Promise.all(abandonedAgents.map(([, state]) => state.started)),
+        new Promise<void>((resolve) => { grace = setTimeout(resolve, 5000); }),
+      ]);
+    } finally {
+      clearTimeout(grace);
+      for (const [, state] of abandonedAgents) state.controller.abort();
+    }
+    await Promise.all(abandonedAgents.map(async ([entry, state]) => {
+      entry.abandoned = true;
+      if (entry.handle) {
+        try {
+          await context.host("tool.call", {
+            name: "archive", input: { target: entry.handle, reason: "Code script ended while agents.run was pending" },
+          }, new AbortController().signal);
+          entry.archived = true;
+        } catch (error) {
+          entry.archived = false;
+          entry.archive_error = message(error);
+        }
+      }
+      entry.error = "Abandoned when the script ended";
+      entry.ms = Date.now() - entry.started_ms;
+      lines[entry.seq - 1] = traceLine({ ...entry, input: state.input });
+    }));
   }
   for (const entry of trace) {
     if (entry.output === undefined && entry.error === undefined) {

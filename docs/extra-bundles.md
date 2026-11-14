@@ -706,6 +706,14 @@ its start and end; trace overflow retains the first and last lines so the
 result stays below 4800 characters. Calls already made are not undone.
 When a script ends, remaining calls are abandoned and the VM worker ends;
 the host revokes outstanding capabilities when the tool reply finishes.
+On completion, failure, or script timeout, pending `agents.run` workers are
+stopped with `archive({target: handle, reason})` before returning the result.
+Worker `handle` and `session` are recorded as soon as `task` returns. Pending
+starts get up to five seconds to return an identity; unresolved starts show
+`abandoned (start unknown)`. Known workers show `abandoned and archived, <handle>`
+or `abandoned and archive failed: <error>, <handle>`.
+Workers whose own `agents.run` timeout already returned remain live and can
+be managed through ordinary hya tools.
 
 Full JSON Lines traces are written to
 `<HYA_BUNDLE_CONFIG_DIR>/traces/<session>/<call>.jsonl`, or to
@@ -717,10 +725,12 @@ are in call start order:
 2. One record per call: `{seq: number, line: number, kind: "tool" | "agent" |
    "classify", name: string, input: string, ok: boolean, output?: string,
    error?: string, started_ms: number, ms: number, handle?: string,
-   session?: string}`. `started_ms` is Unix epoch milliseconds; `ms` is the
+   session?: string, abandoned?: boolean, archived?: boolean, archive_error?: string}`. `started_ms` is Unix epoch milliseconds; `ms` is the
    duration. `input` and `output` are JSON-encoded strings, cut to 4000
-   characters each; cut JSON strings may no longer parse. Agent completions
-   also include `handle` and `session`. Abandoned entries have `ok:false`
+   characters each; cut JSON strings may no longer parse. Agent entries
+   include `handle` and `session` once started. Pending agent calls record
+   `abandoned:true`, with `archived` indicating cleanup success for known
+   workers and `archive_error` recording a cleanup failure. Abandoned entries have `ok:false`
    and an explanatory `error`.
 3. `{status: "completed" | "failed", output: string}`. This last output is
    complete, including all text, console lines, any script error, and all
