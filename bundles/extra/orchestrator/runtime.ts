@@ -1,5 +1,6 @@
 // Self-contained hya plugin protocol v1 process; stdout is NDJSON only.
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createInterface } from "node:readline";
@@ -33,6 +34,7 @@ export interface AgentInput {
   model?: string;
   effort?: string;
   timeout_secs?: number;
+  cache?: boolean;
 }
 export interface AgentResult {
   handle: string;
@@ -40,6 +42,7 @@ export interface AgentResult {
   status: "done" | "failed" | "cancelled" | "timeout";
   report: string;
   result: Record<string, unknown> | null;
+  cached?: true;
 }
 export interface TraceEntry {
   seq: number;
@@ -55,6 +58,10 @@ export interface TraceEntry {
   handle?: string;
   session?: string;
   result?: Record<string, unknown> | null;
+  state_before?: string | null;
+  state_after?: string | null;
+  cached?: true;
+  source?: { handle: string; session: string; trace: string; seq: number };
   abandoned?: boolean;
   archived?: boolean;
   archive_error?: string;
@@ -224,7 +231,7 @@ function parseAgentResult(report: string, requested?: Record<string, string>): R
   return record(value) && Object.keys(requested ?? {}).every((key) => Object.hasOwn(value, key)) ? value : null;
 }
 
-export async function runAgent(input: AgentInput, host: Host, signal: AbortSignal, onStarted?: (result: AgentResult) => void, startSignal = signal): Promise<AgentResult> {
+function prepareAgent(input: AgentInput) {
   if (!record(input)) throw new Error("agents.run requires an argument object");
   string(input.prompt, "agents.run prompt");
   const agent = string(input.agent, "agents.run agent");
@@ -240,14 +247,23 @@ export async function runAgent(input: AgentInput, host: Host, signal: AbortSigna
   if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout < 0 || timeout > 1800) {
     throw new Error("agents.run timeout_secs must be in 0..=1800");
   }
+  if (input.cache !== undefined && typeof input.cache !== "boolean") throw new Error("agents.run cache must be a boolean");
+  return {
+    timeout,
+    task: {
+      subagent_type: agent,
+      prompt,
+      description: input.description ?? input.prompt.slice(0, 80),
+      ...(input.model === undefined ? {} : { model: input.model }),
+      ...(input.effort === undefined ? {} : { effort: input.effort }),
+    },
+  };
+}
+
+export async function runAgent(input: AgentInput, host: Host, signal: AbortSignal, onStarted?: (result: AgentResult) => void, startSignal = signal): Promise<AgentResult> {
+  const prepared = prepareAgent(input);
   const call = (name: string, args: Record<string, unknown>) => callHostTool(host, name, args, signal);
-  const task = await callHostTool(host, "task", { tasks: [{
-    subagent_type: agent,
-    prompt,
-    description: input.description ?? input.prompt.slice(0, 80),
-    ...(input.model === undefined ? {} : { model: input.model }),
-    ...(input.effort === undefined ? {} : { effort: input.effort }),
-  }] }, startSignal);
+  const task = await callHostTool(host, "task", { tasks: [prepared.task] }, startSignal);
   startSignal.throwIfAborted();
   const member = task.metadata.members[0];
   const result: AgentResult = { handle: member.member, session: member.session, status: "timeout", report: "", result: null };
@@ -258,7 +274,7 @@ export async function runAgent(input: AgentInput, host: Host, signal: AbortSigna
     result.result = parseAgentResult(result.report, input.result);
     return result;
   }
-  const deadline = Date.now() + timeout * 1000;
+  const deadline = Date.now() + prepared.timeout * 1000;
   for (;;) {
     signal.throwIfAborted();
     const wait = await call("wait", { targets: [result.handle], mode: "all", timeout_secs: Math.max(0, Math.ceil((deadline - Date.now()) / 1000)) });
@@ -287,7 +303,7 @@ function scriptLine(): number {
   return Number(match[1]);
 }
 function traceLine(entry: TraceEntry): string {
-  const elapsed = `${(entry.ms / 1000).toFixed(1)} s`;
+  const elapsed = entry.cached ? "0.0 s" : `${(entry.ms / 1000).toFixed(1)} s`;
   let call: string;
   let result: string;
   switch (entry.kind) {
@@ -301,6 +317,7 @@ function traceLine(entry: TraceEntry): string {
         ? entry.handle
           ? `abandoned and ${entry.archived ? "archived" : `archive failed: ${entry.archive_error}`}, ${entry.handle}`
           : "abandoned (start unknown)"
+        : entry.cached ? `cached from ${entry.source!.handle}`
         : entry.ok ? `${output.status}, ${entry.handle}` : `error: ${entry.error}`;
       break;
     }
@@ -347,8 +364,19 @@ interface WorkflowMetadata {
   runs: number;
   last_run_ms: number;
   last_status: "completed" | "failed";
+  last_error: string;
 }
-const INPUT_FORMS = '{script: string, args?: object, save_as?: string}, {run: string, args?: object}, or {list: true}';
+interface Observation extends AgentResult {
+  key: string;
+  state: string;
+  agent: string;
+  description: string;
+  prompt: string;
+  trace: string;
+  seq: number;
+  stored_ms: number;
+}
+const INPUT_FORMS = '{script: string, args?: object, save_as?: string}, {run: string, args?: object}, {list: true}, or {show: string}';
 class WorkflowInputError extends Error {}
 function workflowDirectory(context: RunContext): string {
   return resolve(context.configDir!, "workflows");
@@ -366,26 +394,37 @@ export async function executeWorkflow(input: unknown, context: RunContext): Prom
   const inline = typeof input.script === "string" && keys.every((key) => ["script", "args", "save_as"].includes(key));
   const stored = typeof input.run === "string" && keys.every((key) => ["run", "args"].includes(key));
   const list = input.list === true && keys.length === 1;
-  if (!inline && !stored && !list) throw invalid();
+  const show = typeof input.show === "string" && keys.length === 1;
+  if (!inline && !stored && !list && !show) throw invalid();
   if (Object.hasOwn(input, "args") && !record(input.args)) throw invalid();
-  for (const key of ["save_as", "run"]) {
+  for (const key of ["save_as", "run", "show"]) {
     if (Object.hasOwn(input, key) && (typeof input[key] !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(input[key]))) {
       throw new WorkflowInputError(`${key} must match ^[a-z0-9][a-z0-9-]{0,63}$; forms: ${INPUT_FORMS}`);
     }
   }
   if (list) {
-    return { ok: true, output: `Stored workflows:\n${json(storedWorkflows(context).map(({ name, description, saved_ms, runs }) => ({ name, description, saved_ms, runs })))}` };
+    const workflows = storedWorkflows(context).map(({ name, description, saved_ms, runs, last_status, last_error = "" }) => ({
+      name, description, saved_ms, runs, last_status,
+      ...(last_status === "failed" ? { last_error: truncate(last_error, 200) } : {}),
+    }));
+    return { ok: true, output: `Stored workflows:\n${json(workflows)}` };
   }
   let script = input.script;
-  if (stored) {
-    const names = storedWorkflows(context).map((workflow) => workflow.name);
-    if (!names.includes(input.run)) throw new Error(`Unknown workflow: ${input.run}. Stored workflows: ${names.join(", ") || "(none)"}`);
-    script = readFileSync(join(workflowDirectory(context), `${input.run}.js`), "utf8");
+  if (stored || show) {
+    const workflows = storedWorkflows(context);
+    const name = stored ? input.run : input.show;
+    const metadata = workflows.find((workflow) => workflow.name === name);
+    if (!metadata) throw new Error(`Unknown workflow: ${name}. Stored workflows: ${workflows.map((workflow) => workflow.name).join(", ") || "(none)"}`);
+    script = readFileSync(join(workflowDirectory(context), `${name}.js`), "utf8");
+    if (show) return { ok: true, output: json({ script, metadata }) };
   }
   return executeScript(script, { ...context, args: input.args ?? {}, stored: stored ? input.run : null, saveAs: input.save_as });
 }
 export async function executeScript(script: string, context: RunContext): Promise<ScriptResult> {
   const started = Date.now();
+  const component = (value: string) => encodeURIComponent(value).replaceAll(".", "%2E");
+  const traceDir = resolve(context.configDir ?? tmpdir(), "traces", component(context.session));
+  const traceFile = join(traceDir, `${component(context.call)}.jsonl`);
   let options = { ...DEFAULT_OPTIONS };
   const items: string[] = [];
   const logs: string[] = [];
@@ -406,7 +445,7 @@ export async function executeScript(script: string, context: RunContext): Promis
     ensureActive();
     // Snapshot input before crossing the host boundary or awaiting another call.
     const rawInput = json(input);
-    const entry: TraceEntry = { seq: trace.length + 1, line, kind, name, input: truncate(rawInput, 4000), ok: false, started_ms: Date.now(), ms: 0, ...(kind === "agent" ? { result: null } : {}) };
+    const entry: TraceEntry = { seq: trace.length + 1, line, kind, name, input: truncate(rawInput, 4000), ok: false, started_ms: Date.now(), ms: 0, ...(kind === "agent" ? { result: null, state_before: null, state_after: null } : {}) };
     trace.push(entry);
     const index = entry.seq - 1;
     const pending = (async () => {
@@ -461,15 +500,44 @@ export async function executeScript(script: string, context: RunContext): Promis
               const invoke = tracked(event.kind, event.name, async (input, entry) => {
                 switch (event.kind) {
                   case "agent": {
+                    const prepared = prepareAgent(input);
                     const start = Promise.withResolvers<void>();
                     const startController = new AbortController();
                     agents.set(entry, { started: start.promise, controller: startController, input: json(input) });
-                    return runAgent(input, context.host, controller.signal, (result) => {
-                      entry.handle = result.handle;
-                      entry.session = result.session;
-                      entry.result = result.result;
+                    try {
+                      const before = (await context.host("workspace.state", {}, controller.signal)).state as string | null;
+                      ensureActive();
+                      entry.state_before = before;
+                      const key = createHash("sha256").update(json([before, input.agent, prepared.task.prompt, input.model ?? null, input.effort ?? null])).digest("hex");
+                      const memoDir = resolve(context.configDir ?? tmpdir(), "memo");
+                      const memoFile = join(memoDir, `${key}.json`);
+                      if (input.cache !== false && before !== null && existsSync(memoFile)) {
+                        const memo: Observation = JSON.parse(readFileSync(memoFile, "utf8"));
+                        if (memo.key === key && memo.state === before && memo.status === "done") {
+                          entry.cached = true;
+                          entry.source = { handle: memo.handle, session: memo.session, trace: memo.trace, seq: memo.seq };
+                          return { handle: memo.handle, session: memo.session, status: memo.status, report: memo.report, result: memo.result, cached: true };
+                        }
+                      }
+                      const result = await runAgent(input, context.host, controller.signal, (result) => {
+                        entry.handle = result.handle;
+                        entry.session = result.session;
+                        entry.result = result.result;
+                        start.resolve();
+                      }, startController.signal);
+                      ensureActive();
+                      const after = (await context.host("workspace.state", {}, controller.signal)).state as string | null;
+                      ensureActive();
+                      entry.state_after = after;
+                      if (input.cache !== false && before !== null && after === before && result.status === "done") {
+                        const memo: Observation = { key, state: before, agent: input.agent, description: prepared.task.description, prompt: prepared.task.prompt, ...result, trace: traceFile, seq: entry.seq, stored_ms: Date.now() };
+                        mkdirSync(memoDir, { recursive: true });
+                        writeFileSync(memoFile, json(memo) + "\n");
+                      }
+                      return result;
+                    } finally {
                       start.resolve();
-                    }, startController.signal).finally(() => start.resolve());
+                    }
                   }
                   case "classify":
                     if (context.judgeError) throw new Error(context.judgeError);
@@ -534,9 +602,9 @@ export async function executeScript(script: string, context: RunContext): Promis
   if (context.stored) {
     const path = join(workflowDirectory(context), `${context.stored}.json`);
     const metadata: WorkflowMetadata = JSON.parse(readFileSync(path, "utf8"));
-    writeFileSync(path, json({ ...metadata, runs: metadata.runs + 1, last_run_ms: Date.now(), last_status: status }) + "\n");
+    writeFileSync(path, json({ ...metadata, runs: metadata.runs + 1, last_run_ms: Date.now(), last_status: status, last_error: failure ?? "" }) + "\n");
   }
-  if (context.saveAs && failure === undefined) {
+  if (context.saveAs) {
     const directory = workflowDirectory(context);
     mkdirSync(directory, { recursive: true });
     const now = Date.now();
@@ -544,25 +612,24 @@ export async function executeScript(script: string, context: RunContext): Promis
     const description = /^\s*\/\//.test(firstLine) && !/^\s*\/\/\s*@options\s*:/.test(firstLine)
       ? firstLine.replace(/^\s*\/\/\s?/, "").trim() : "";
     writeFileSync(join(directory, `${context.saveAs}.js`), script);
-    const metadata: WorkflowMetadata = { name: context.saveAs, description, saved_ms: now, runs: 1, last_run_ms: now, last_status: status };
+    const metadata: WorkflowMetadata = { name: context.saveAs, description, saved_ms: now, runs: 1, last_run_ms: now, last_status: status, last_error: failure ?? "" };
     writeFileSync(join(directory, `${context.saveAs}.json`), json(metadata) + "\n");
   }
   const header = `Workflow${context.stored ? ` ${context.stored}` : ""} ${status} in ${((Date.now() - started) / 1000).toFixed(1)} s`;
-  const savedLine = context.saveAs && failure === undefined ? `\nsaved as ${context.saveAs}` : "";
+  const savedLine = context.saveAs ? `\nsaved as ${context.saveAs}` : "";
   const fullBody = [...items, ...(logs.length ? [`<console_output>\n${logs.join("\n")}\n</console_output>`] : [])].join("\n");
   const errorLine = failure === undefined ? "" : `\nScript error: ${failure}`;
-  const component = (value: string) => encodeURIComponent(value).replaceAll(".", "%2E");
-  const traceDir = resolve(context.configDir ?? tmpdir(), "traces", component(context.session));
-  const traceFile = join(traceDir, `${component(context.call)}.jsonl`);
-  const fullOutput = `${header}${savedLine}\n${fullBody}${errorLine}\n<trace>\n${lines.join("\n")}\n</trace>\ntrace file: ${traceFile}`;
+  const reused = trace.filter((entry) => entry.cached).length;
+  const reusedLine = reused ? `\nreused observations: ${reused}` : "";
+  const footer = `\n</trace>${reusedLine}\ntrace file: ${traceFile}`;
+  const fullOutput = `${header}${savedLine}\n${fullBody}${errorLine}\n<trace>\n${lines.join("\n")}${footer}`;
   mkdirSync(traceDir, { recursive: true });
   writeFileSync(traceFile, [
-    { script, args: context.args ?? {}, stored: context.stored ?? (failure === undefined ? context.saveAs ?? null : null), options },
+    { script, args: context.args ?? {}, stored: context.stored ?? context.saveAs ?? null, options },
     ...trace,
     { status, output: fullOutput },
   ].map((value) => JSON.stringify(value)).join("\n") + "\n");
 
-  const footer = `\n</trace>\ntrace file: ${traceFile}`;
   let prefix = `${header}${savedLine}\n${truncate(fullBody, options.max_output_chars)}${truncate(errorLine, 400)}\n<trace>\n`;
   // Reserve trace space even if an unusually long config directory consumes the budget.
   prefix = truncate(prefix, Math.max(0, MAX_RESULT_CHARS - footer.length - 400));
@@ -622,13 +689,14 @@ export const INITIALIZE_RESULT = {
   skills: [],
   tools: [{
     name: "workflow",
-    description: "Orchestrate specialised workers and an optional judge with a traced JavaScript async-function body. Use {script, args?, save_as?}, {run, args?}, or {list:true}. Globals: args, agents.run (agent required: orchestrator-scout, orchestrator-runner, orchestrator-editor), models.classify, text, console.log. No local tools, imports, process, fetch, Bun, or timers. A first-line // @options: JSON comment sets timeout_ms (default 1800000, max 3000000) and max_output_chars (default 3000, max 3600). Completed scripts can be saved and reused with new args.",
+    description: "Orchestrate specialised workers and an optional judge with a traced JavaScript async-function body. Use {script, args?, save_as?}, {run, args?}, {list:true}, or {show:name}. Globals: args, agents.run (agent required: orchestrator-scout, orchestrator-runner, orchestrator-editor; cache:false disables remembered observations), models.classify, text, console.log. No local tools, imports, process, fetch, Bun, or timers. A first-line // @options: JSON comment sets timeout_ms (default 1800000, max 3000000) and max_output_chars (default 3000, max 3600). Scripts are saved even on failure for inspection and repair with show.",
     inputSchema: {
       type: "object",
       oneOf: [
         { type: "object", properties: { script: { type: "string" }, args: { type: "object" }, save_as: { type: "string", pattern: "^[a-z0-9][a-z0-9-]{0,63}$" } }, required: ["script"], additionalProperties: false },
         { type: "object", properties: { run: { type: "string", pattern: "^[a-z0-9][a-z0-9-]{0,63}$" }, args: { type: "object" } }, required: ["run"], additionalProperties: false },
         { type: "object", properties: { list: { const: true } }, required: ["list"], additionalProperties: false },
+        { type: "object", properties: { show: { type: "string", pattern: "^[a-z0-9][a-z0-9-]{0,63}$" } }, required: ["show"], additionalProperties: false },
       ],
     },
   }],
