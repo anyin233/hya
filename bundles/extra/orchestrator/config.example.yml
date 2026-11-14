@@ -1,0 +1,23 @@
+# Copy to <hya config dir>/bundles/hya-extra%2Forchestrator/config.yml,
+# or .hya/bundles/orchestrator/config.yml for a project install.
+# This example is documentation only and is not packaged.
+# No judge block is needed for tools.* or agents.run; models.classify rejects
+# clearly until a judge is configured. The process has a cleared environment.
+judge:
+  endpoint: https://api.typesafe.ai/v1/systemone # default
+  model: jev-1.14.0                           # default
+  # Set exactly one key source. File paths must be absolute (no HOME expansion).
+  api_key_file: /Users/me/.config/typesafe/api-key
+  # api_key: ts-...
+  timeout_ms: 20000                           # default; 1..=3000000
+
+# Optional hya agent overrides, independent of the judge configuration:
+# agents:
+#   orchestrator:
+#     model: provider/model
+#   orchestrator-worker:
+#     model: provider/model
+#
+# hya restarts the process at the next root binding after config.yml changes.
+# Changing only the api_key_file target does not change that digest; restart
+# hya after rotating a key file.

@@ -1,0 +1,605 @@
+// Self-contained hya plugin protocol v1 process; stdout is NDJSON only.
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { createInterface } from "node:readline";
+import vm from "node:vm";
+import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
+
+export interface ToolSchema {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+}
+export type Host = (method: string, params: Record<string, unknown>, signal: AbortSignal) => Promise<any>;
+export interface Options {
+  timeout_ms: number;
+  max_output_chars: number;
+}
+export interface JudgeConfig {
+  endpoint: string;
+  model: string;
+  apiKey: string;
+  timeoutMs: number;
+}
+export type Question =
+  | { type: "bool"; instructions: string; criteria?: { true: string; false: string } }
+  | { type: "choice"; instructions: string; criteria: Record<string, string> }
+  | { type: "score"; instructions: string; criteria: string[] };
+export interface ClassifyInput {
+  state: unknown;
+  questions: Record<string, Question>;
+}
+export interface AgentInput {
+  agent?: string;
+  prompt: string;
+  description?: string;
+  model?: string;
+  effort?: string;
+  timeout_secs?: number;
+}
+export interface AgentResult {
+  handle: string;
+  session: string;
+  status: "done" | "failed" | "cancelled" | "timeout";
+  report: string;
+}
+export interface TraceEntry {
+  seq: number;
+  line: number;
+  kind: "tool" | "agent" | "classify";
+  name: string;
+  input: string;
+  ok: boolean;
+  output?: string;
+  error?: string;
+  started_ms: number;
+  ms: number;
+  handle?: string;
+  session?: string;
+}
+const SCRIPT_FILE = "orchestrator-script.js";
+export const DEFAULT_OPTIONS: Options = { timeout_ms: 600_000, max_output_chars: 3000 };
+const MAX_RESULT_CHARS = 4799;
+
+function record(value: unknown): value is Record<string, any> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function message(error: unknown): string {
+  // Errors thrown inside the VM belong to a different realm.
+  return record(error) && typeof error.message === "string" ? error.message : String(error);
+}
+function string(value: unknown, field: string): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${field} must be a non-empty string`);
+  return value;
+}
+function integer(value: unknown, max: number, field: string): number {
+  if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > max) {
+    throw new Error(`${field} must be an integer in 1..=${max}`);
+  }
+  return value as number;
+}
+function json(value: unknown): string {
+  return JSON.stringify(value) ?? "undefined";
+}
+export function truncate(value: string, max: number): string {
+  if (value.length <= max) return value;
+  const marker = "\n… [truncated] …\n";
+  if (max <= marker.length) return marker.slice(0, max);
+  const head = Math.ceil((max - marker.length) / 2);
+  const tail = max - marker.length - head;
+  return value.slice(0, head) + marker + (tail ? value.slice(-tail) : "");
+}
+
+export function parseOptions(script: string): Options {
+  const lines = script.split("\n");
+  const matches = lines.map((line, index) => /^\s*\/\/\s*@options\s*:/.test(line) ? index : -1).filter((i) => i >= 0);
+  if (matches.some((i) => i !== 0)) throw new Error("@options must appear only on the first line");
+  if (!matches.length) return { ...DEFAULT_OPTIONS };
+  const raw = JSON.parse(lines[0].replace(/^\s*\/\/\s*@options\s*:/, ""));
+  if (!record(raw)) throw new Error("@options must be a JSON object");
+  for (const key of Object.keys(raw)) {
+    if (key !== "timeout_ms" && key !== "max_output_chars") throw new Error(`unknown @options key: ${key}`);
+  }
+  return {
+    timeout_ms: integer(raw.timeout_ms === undefined ? DEFAULT_OPTIONS.timeout_ms : raw.timeout_ms, 3_000_000, "timeout_ms"),
+    max_output_chars: integer(raw.max_output_chars === undefined ? DEFAULT_OPTIONS.max_output_chars : raw.max_output_chars, 3600, "max_output_chars"),
+  };
+}
+
+export function parseJudgeConfig(raw: unknown, readFile = (path: string) => readFileSync(path, "utf8")): JudgeConfig | null {
+  if (!record(raw)) throw new Error("config must be a mapping");
+  if (raw.judge === undefined) return null;
+  const judge = raw.judge;
+  if (!record(judge)) throw new Error("judge must be a mapping");
+  for (const key of Object.keys(judge)) {
+    if (!["endpoint", "model", "api_key", "api_key_file", "timeout_ms"].includes(key)) {
+      throw new Error(`unknown judge key: ${key}`);
+    }
+  }
+  if ((judge.api_key !== undefined) === (judge.api_key_file !== undefined)) {
+    throw new Error("set exactly one of judge.api_key or judge.api_key_file");
+  }
+  let key = judge.api_key;
+  if (judge.api_key_file !== undefined) {
+    const path = string(judge.api_key_file, "judge.api_key_file");
+    if (!path.startsWith("/")) throw new Error("judge.api_key_file must be an absolute path");
+    key = readFile(path);
+  }
+  return {
+    endpoint: string(judge.endpoint === undefined ? "https://api.typesafe.ai/v1/systemone" : judge.endpoint, "judge.endpoint"),
+    model: string(judge.model === undefined ? "jev-1.14.0" : judge.model, "judge.model"),
+    apiKey: string(key, "judge.api_key").trim(),
+    timeoutMs: integer(judge.timeout_ms === undefined ? 20_000 : judge.timeout_ms, 3_000_000, "judge.timeout_ms"),
+  };
+}
+
+export function buildJevRequest(config: JudgeConfig, input: ClassifyInput): Record<string, unknown> {
+  if (!record(input) || !record(input.questions) || !Object.keys(input.questions).length || input.state === undefined) {
+    throw new Error("models.classify requires state and a non-empty questions mapping");
+  }
+  const questions = Object.fromEntries(Object.entries(input.questions).map(([id, question]) => {
+    if (!record(question)) throw new Error(`question ${id} must be an object`);
+    string(question.instructions, `question ${id}.instructions`);
+    switch (question.type) {
+      case "bool":
+        if (question.criteria !== undefined) {
+          if (!record(question.criteria)) throw new Error(`question ${id}.criteria must map true and false to descriptions`);
+          string(question.criteria.true, `question ${id}.criteria.true`);
+          string(question.criteria.false, `question ${id}.criteria.false`);
+        }
+        return [id, { ...question, type: "noul" }];
+      case "choice":
+        if (!record(question.criteria) || !Object.keys(question.criteria).length) throw new Error(`question ${id}.criteria must be a label mapping`);
+        for (const text of Object.values(question.criteria)) string(text, `question ${id}.criteria`);
+        return [id, question];
+      case "score":
+        if (!Array.isArray(question.criteria) || !question.criteria.length) throw new Error(`question ${id}.criteria must be a non-empty array`);
+        for (const text of question.criteria) string(text, `question ${id}.criteria`);
+        return [id, question];
+      default:
+        throw new Error(`question ${id}: unknown type ${question.type}`);
+    }
+  }));
+  return { model: config.model, state: input.state, questions };
+}
+
+function probability(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) throw new Error(`invalid Jev ${field}`);
+  return value;
+}
+export function parseJevAnswers(body: unknown, questions: Record<string, Question>): { answers: Record<string, unknown> } {
+  if (!record(body) || !record(body.answers)) throw new Error("Jev response has no answers mapping");
+  const answers = Object.fromEntries(Object.entries(questions).map(([id, question]) => {
+    const answer = body.answers[id];
+    if (!record(answer)) throw new Error(`Jev response has no answer for ${id}`);
+    switch (question.type) {
+      case "bool":
+        if (answer.type !== "noul") throw new Error(`Jev answer ${id} must be noul`);
+        return [id, { type: "bool", probability: probability(answer.noul, `${id}.noul`) }];
+      case "choice":
+        if (answer.type !== "choice" || typeof answer.choice !== "string" || !Object.hasOwn(question.criteria, answer.choice) || !record(answer.probabilities)) {
+          throw new Error(`invalid Jev choice answer ${id}`);
+        }
+        for (const value of Object.values(answer.probabilities)) probability(value, `${id}.probabilities`);
+        return [id, { type: "choice", choice: answer.choice, probabilities: answer.probabilities, confidence: probability(answer.confidence, `${id}.confidence`) }];
+      case "score":
+        if (answer.type !== "score" || typeof answer.score !== "number" || !Number.isFinite(answer.score) || answer.score < 0 || answer.score > question.criteria.length - 1) {
+          throw new Error(`invalid Jev score answer ${id}`);
+        }
+        return [id, { type: "score", score: answer.score, confidence: probability(answer.confidence, `${id}.confidence`) }];
+    }
+  }));
+  return { answers };
+}
+export async function classify(config: JudgeConfig | null, input: ClassifyInput, signal: AbortSignal, fetchImpl: typeof fetch = fetch) {
+  if (!config) throw new Error("No judge configured; set judge.api_key or judge.api_key_file in the bundle config.yml");
+  const response = await fetchImpl(config.endpoint, {
+    method: "POST",
+    headers: { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json" },
+    body: JSON.stringify(buildJevRequest(config, input)),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(config.timeoutMs)]),
+  });
+  if (!response.ok) throw new Error(`Jev request failed: HTTP ${response.status}`);
+  return parseJevAnswers(await response.json(), input.questions);
+}
+
+export async function runAgent(input: AgentInput, host: Host, signal: AbortSignal): Promise<AgentResult> {
+  if (!record(input)) throw new Error("agents.run requires an argument object");
+  string(input.prompt, "agents.run prompt");
+  const agent = string(input.agent === undefined ? "orchestrator-worker" : input.agent, "agents.run agent");
+  const timeout = input.timeout_secs === undefined ? 1800 : input.timeout_secs;
+  if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout < 0 || timeout > 1800) {
+    throw new Error("agents.run timeout_secs must be in 0..=1800");
+  }
+  const call = async (name: string, args: Record<string, unknown>) => (await host("tool.call", { name, input: args }, signal)).output;
+  const task = await call("task", { tasks: [{
+    subagent_type: agent,
+    prompt: input.prompt,
+    description: input.description ?? input.prompt.slice(0, 80),
+    ...(input.model === undefined ? {} : { model: input.model }),
+    ...(input.effort === undefined ? {} : { effort: input.effort }),
+  }] });
+  const member = task.metadata.members[0];
+  const result: AgentResult = { handle: member.member, session: member.session, status: "timeout", report: "" };
+  if (member.status !== "running") {
+    result.status = member.status === "done" || member.status === "completed" ? "done" : member.status === "cancelled" ? "cancelled" : "failed";
+    result.report = member.summary;
+    return result;
+  }
+  const deadline = Date.now() + timeout * 1000;
+  for (;;) {
+    signal.throwIfAborted();
+    const wait = await call("wait", { targets: [result.handle], mode: "all", timeout_secs: Math.max(0, (deadline - Date.now()) / 1000) });
+    const metadata = wait.metadata;
+    const terminal = [...metadata.finished, ...(metadata.already_finished ?? [])].find((entry) => entry.handle === result.handle);
+    if (terminal) {
+      result.status = terminal.outcome === "done" ? "done" : terminal.outcome === "failed" ? "failed" : "cancelled";
+      const read = await call("read", { path: `channel://${terminal.channel ?? result.handle}` });
+      // Channel reads expose rendered text, not a structured report body.
+      result.report = read.output;
+      return result;
+    }
+    if (metadata.running.some((entry) => entry.handle === result.handle && entry.state === "stopped_by_user")) {
+      result.status = "cancelled";
+      return result;
+    }
+    if (metadata.woke_by === "timeout" || Date.now() >= deadline) return result;
+    // Mail/stall wakes are not terminal; wait again within the same deadline.
+  }
+}
+
+function toolIdentifier(name: string): string {
+  return name.replace(/[^\p{ID_Continue}$\u200C\u200D]/gu, "_").replace(/^[^\p{ID_Start}_$]/u, "_");
+}
+
+function scriptLine(): number {
+  const match = new Error().stack?.match(/orchestrator-script\.js:(\d+):\d+/);
+  if (!match) throw new Error("could not locate the script call site");
+  return Number(match[1]);
+}
+function traceLine(entry: TraceEntry): string {
+  const elapsed = `${(entry.ms / 1000).toFixed(1)} s`;
+  let call: string;
+  let result: string;
+  switch (entry.kind) {
+    case "tool":
+      call = `tools.${toolIdentifier(entry.name)} ${truncate(entry.input, 180).replaceAll("\n", " ")}`;
+      result = entry.ok ? `ok, ${entry.output?.length ?? 0} chars` : `error: ${entry.error}`;
+      break;
+    case "agent": {
+      const input = JSON.parse(entry.input);
+      call = record(input)
+        ? `agents.run ${input.agent ?? "orchestrator-worker"} ${json(input.description ?? input.prompt)}`
+        : `agents.run ${entry.input}`;
+      const output = entry.output ? JSON.parse(entry.output) : undefined;
+      result = entry.ok ? `${output.status}, ${entry.handle}` : `error: ${entry.error}`;
+      break;
+    }
+    case "classify": {
+      call = "models.classify";
+      if (entry.ok && entry.output) {
+        const answers = Object.entries(JSON.parse(entry.output).answers);
+        if (answers.length === 1) call += ` ${answers[0][0]}`;
+        result = answers.map(([id, answer]: [string, any]) => {
+          const label = answers.length === 1 ? "" : `${id} -> `;
+          if (answer.type === "choice") return `${label}${answer.choice} (p=${answer.confidence})`;
+          if (answer.type === "bool") return `${label}${answer.probability}`;
+          return `${label}${answer.score} (p=${answer.confidence})`;
+        }).join(", ");
+      } else result = `error: ${entry.error}`;
+      break;
+    }
+  }
+  return `#${entry.seq} L${entry.line} ${call} -> ${result}, ${elapsed}`.replaceAll("\n", " ");
+}
+
+export interface RunContext {
+  host: Host;
+  session: string;
+  call: string;
+  configDir?: string;
+  judge?: JudgeConfig | null;
+  judgeError?: string;
+  fetchImpl?: typeof fetch;
+}
+export interface ScriptResult {
+  ok: boolean;
+  output: string;
+  traceFile: string;
+  trace: TraceEntry[];
+}
+export async function executeScript(script: string, context: RunContext): Promise<ScriptResult> {
+  const started = Date.now();
+  let options = { ...DEFAULT_OPTIONS };
+  const items: string[] = [];
+  const logs: string[] = [];
+  const trace: TraceEntry[] = [];
+  // Summaries use the complete values; trace record fields have their own 4000-char budget.
+  const lines: string[] = [];
+  const controller = new AbortController();
+  let active = true;
+  let failure: string | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let worker: Worker | undefined;
+  const ensureActive = () => {
+    if (!active) throw new Error("Script has ended; outstanding calls were abandoned");
+    controller.signal.throwIfAborted();
+  };
+  const tracked = (kind: TraceEntry["kind"], name: string, run: (input: any) => Promise<any>) => (input: any, line: number) => {
+    ensureActive();
+    // Snapshot input before crossing the host boundary or awaiting another call.
+    const rawInput = json(input);
+    const entry: TraceEntry = { seq: trace.length + 1, line, kind, name, input: truncate(rawInput, 4000), ok: false, started_ms: Date.now(), ms: 0 };
+    trace.push(entry);
+    const index = entry.seq - 1;
+    const pending = (async () => {
+      try {
+        const output = await run(JSON.parse(rawInput));
+        ensureActive();
+        entry.ok = true;
+        const rawOutput = json(output);
+        entry.output = truncate(rawOutput, 4000);
+        if (kind === "agent") {
+          entry.handle = output.handle;
+          entry.session = output.session;
+        }
+        entry.ms = Date.now() - entry.started_ms;
+        // Render before cutting JSON; large outputs need not be parseable after truncation.
+        lines[index] = traceLine({ ...entry, input: rawInput, output: rawOutput });
+        return output;
+      } catch (error) {
+        if (active) {
+          entry.error = message(error);
+          entry.ms = Date.now() - entry.started_ms;
+          lines[index] = traceLine({ ...entry, input: rawInput });
+        }
+        throw error;
+      }
+    })();
+    // Unawaited failures must not crash the plugin after the script has returned.
+    void pending.catch(() => {});
+    return pending;
+  };
+  try {
+    options = parseOptions(script);
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Script timed out after ${options.timeout_ms} ms`)), options.timeout_ms);
+    });
+    const run = async () => {
+      const { tools: schemas }: { tools: ToolSchema[] } = await context.host("tools.list", {}, controller.signal);
+      ensureActive();
+      await new Promise<void>((resolveRun, rejectRun) => {
+        // A worker lets the parent enforce the deadline even for a CPU loop
+        // resumed after an await, outside vm.Script's synchronous timeout.
+        worker = new Worker(new URL(import.meta.url), { workerData: { script, schemas, options } });
+        worker.on("error", rejectRun);
+        worker.on("exit", (code) => { if (active) rejectRun(new Error(`Script worker exited with code ${code}`)); });
+        worker.on("message", (event) => {
+          if (!active) return;
+          switch (event.type) {
+            case "text": items.push(event.value); return;
+            case "log": logs.push(event.value); return;
+            case "done": resolveRun(); return;
+            case "failed": rejectRun(new Error(event.error)); return;
+            case "call": {
+              const invoke = tracked(event.kind, event.name, async (input) => {
+                switch (event.kind) {
+                  case "tool":
+                    if (!record(input)) throw new Error(`tools.${event.name} expects an argument object`);
+                    return (await context.host("tool.call", { name: event.name, input }, controller.signal)).output;
+                  case "agent": return runAgent(input, context.host, controller.signal);
+                  case "classify":
+                    if (context.judgeError) throw new Error(context.judgeError);
+                    return classify(context.judge ?? null, input, controller.signal, context.fetchImpl);
+                }
+              });
+              void invoke(event.input, event.line).then(
+                (output) => { if (active) worker!.postMessage({ id: event.id, output }); },
+                (error) => { if (active) worker!.postMessage({ id: event.id, error: message(error) }); },
+              );
+            }
+          }
+        });
+      });
+    };
+    await Promise.race([run(), deadline]);
+  } catch (error) {
+    failure = message(error);
+  } finally {
+    active = false;
+    clearTimeout(timer);
+    controller.abort(new Error(failure ?? "Script completed; outstanding calls abandoned"));
+    await worker?.terminate();
+  }
+  for (const entry of trace) {
+    if (entry.output === undefined && entry.error === undefined) {
+      entry.error = "Abandoned when the script ended";
+      entry.ms = Date.now() - entry.started_ms;
+      // Inputs may be cut JSON; the generic tool-style abandoned line needs no parsing.
+      lines[entry.seq - 1] = `#${entry.seq} L${entry.line} ${entry.kind === "tool" ? `tools.${toolIdentifier(entry.name)}` : entry.name} -> abandoned, ${(entry.ms / 1000).toFixed(1)} s`;
+    }
+  }
+  const status = failure === undefined ? "completed" : "failed";
+  const header = `Script ${status} in ${((Date.now() - started) / 1000).toFixed(1)} s`;
+  const fullBody = [...items, ...(logs.length ? [`<console_output>\n${logs.join("\n")}\n</console_output>`] : [])].join("\n");
+  const errorLine = failure === undefined ? "" : `\nScript error: ${failure}`;
+  const component = (value: string) => encodeURIComponent(value).replaceAll(".", "%2E");
+  const traceDir = resolve(context.configDir ?? tmpdir(), "traces", component(context.session));
+  const traceFile = join(traceDir, `${component(context.call)}.jsonl`);
+  const fullOutput = `${header}\n${fullBody}${errorLine}\n<trace>\n${lines.join("\n")}\n</trace>\ntrace file: ${traceFile}`;
+  mkdirSync(traceDir, { recursive: true });
+  writeFileSync(traceFile, [
+    { script, options },
+    ...trace,
+    { status, output: fullOutput },
+  ].map((value) => JSON.stringify(value)).join("\n") + "\n");
+
+  const footer = `\n</trace>\ntrace file: ${traceFile}`;
+  let prefix = `${header}\n${truncate(fullBody, options.max_output_chars)}${truncate(errorLine, 400)}\n<trace>\n`;
+  // Reserve trace space even if an unusually long config directory consumes the budget.
+  prefix = truncate(prefix, Math.max(0, MAX_RESULT_CHARS - footer.length - 400));
+  const available = Math.max(0, MAX_RESULT_CHARS - prefix.length - footer.length);
+  let renderedTrace = lines.join("\n");
+  if (renderedTrace.length > available) {
+    const omitted = lines.length > 2 ? `\n… ${lines.length - 2} trace lines omitted …\n` : "\n…\n";
+    if (lines.length > 1) {
+      const half = Math.max(0, Math.floor((available - omitted.length) / 2));
+      renderedTrace = truncate(lines[0], half) + omitted + truncate(lines.at(-1)!, half);
+    } else renderedTrace = truncate(renderedTrace, available);
+  }
+  return { ok: failure === undefined, output: `${prefix}${renderedTrace}${footer}`, traceFile, trace };
+}
+
+async function runVMWorker(): Promise<void> {
+  const { script, schemas, options }: { script: string; schemas: ToolSchema[]; options: Options } = workerData;
+  const port = parentPort!;
+  const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+  let sequence = 0;
+  port.on("message", (event) => {
+    const call = pending.get(event.id)!;
+    pending.delete(event.id);
+    if (event.error !== undefined) call.reject(new Error(event.error));
+    else call.resolve(event.output);
+  });
+  const invoke = (kind: TraceEntry["kind"], name: string) => (input: unknown) => {
+    const id = ++sequence;
+    const line = scriptLine();
+    const snapshot = JSON.parse(json(input));
+    const result = new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+      port.postMessage({ type: "call", id, kind, name, line, input: snapshot });
+    });
+    void result.catch(() => {});
+    return result;
+  };
+  const tools = Object.create(null);
+  for (const schema of schemas) {
+    const name = toolIdentifier(schema.name);
+    if (Object.hasOwn(tools, name)) throw new Error(`tool identifier collision: ${name}`);
+    tools[name] = invoke("tool", schema.name);
+  }
+  const sandbox = vm.createContext({
+    tools,
+    ALL_TOOLS: schemas.map(({ name, description }) => ({ name, description })),
+    describeTool: (name: string) => schemas.find((schema) => schema.name === name),
+    agents: { run: invoke("agent", "agents.run") },
+    models: { classify: invoke("classify", "models.classify") },
+    text: (value: unknown) => port.postMessage({ type: "text", value: typeof value === "string" ? value : json(value) }),
+    console: { log: (...values: unknown[]) => port.postMessage({ type: "log", value: values.map((value) => typeof value === "string" ? value : json(value)).join(" ") }) },
+  });
+  const compiled = new vm.Script(`(async function() {${script}\n})()`, { filename: SCRIPT_FILE });
+  const value = await compiled.runInContext(sandbox, { timeout: options.timeout_ms });
+  if (value !== undefined) port.postMessage({ type: "text", value: typeof value === "string" ? value : json(value) });
+  port.postMessage({ type: "done" });
+}
+
+export const INITIALIZE_RESULT = {
+  protocol_version: 1,
+  plugin: { id: "orchestrator", version: "1.0.0", kind: "bun" },
+  hooks: [],
+  skills: [],
+  tools: [{
+    name: "code",
+    description: "Run a JavaScript async-function body with tools, ALL_TOOLS, describeTool, agents.run, models.classify, text, and console.log. Calls are traced. Only a first-line // @options: JSON comment may set timeout_ms (default 600000, max 3000000) and max_output_chars (default 3000, max 3600). No imports, process, fetch, Bun, or timers. Return a value or call text to show output; inspect tool schemas with describeTool.",
+    inputSchema: { type: "object", properties: { script: { type: "string" } }, required: ["script"], additionalProperties: false },
+  }],
+};
+
+interface Frame {
+  id?: number | string | null;
+  method?: string;
+  params?: any;
+  result?: any;
+  error?: { code: number; message: string };
+}
+export class CapabilityClient {
+  private sequence = 0;
+  private pending = new Map<number | string, { resolve: (value: any) => void; reject: (error: Error) => void; dispose: () => void }>();
+  constructor(private write: (frame: Record<string, unknown>) => void) {}
+  call(capability: string, session: string, call: string, method: string, params: Record<string, unknown>, signal: AbortSignal): Promise<any> {
+    signal.throwIfAborted();
+    const id = ++this.sequence;
+    return new Promise((resolve, reject) => {
+      const abort = () => { this.pending.delete(id); reject(signal.reason); };
+      signal.addEventListener("abort", abort, { once: true });
+      this.pending.set(id, { resolve, reject, dispose: () => signal.removeEventListener("abort", abort) });
+      this.write({ jsonrpc: "2.0", id, method: "host/capability", params: { capability, session, call, method, params } });
+    });
+  }
+  accept(frame: Frame): boolean {
+    if (frame.method !== undefined) return false;
+    const pending = frame.id === undefined || frame.id === null ? undefined : this.pending.get(frame.id);
+    if (pending) {
+      this.pending.delete(frame.id!);
+      pending.dispose();
+      if (frame.error) pending.reject(new Error(frame.error.message));
+      else pending.resolve(frame.result);
+    }
+    return true;
+  }
+}
+
+async function main(): Promise<void> {
+  let judge: JudgeConfig | null = null;
+  let judgeError: string | undefined;
+  try {
+    if (process.env.HYA_BUNDLE_CONFIG_FILE) judge = parseJudgeConfig(Bun.YAML.parse(readFileSync(process.env.HYA_BUNDLE_CONFIG_FILE, "utf8")));
+  } catch (error) {
+    judgeError = `Invalid judge config: ${message(error)}`;
+    process.stderr.write(`orchestrator: ${judgeError}\n`);
+  }
+  const write = (frame: Record<string, unknown>) => { process.stdout.write(JSON.stringify(frame) + "\n"); };
+  const cap = new CapabilityClient(write);
+  const active = new Set<Promise<void>>();
+  let closing = false;
+  const handle = async (frame: Frame) => {
+    const respond = (result: unknown) => write({ jsonrpc: "2.0", id: frame.id, result });
+    const error = (code: number, message: string) => write({ jsonrpc: "2.0", id: frame.id, error: { code, message } });
+    if (frame.id === undefined || frame.id === null) return;
+    switch (frame.method) {
+      case "initialize": respond(INITIALIZE_RESULT); return;
+      case "shutdown":
+        closing = true;
+        await Promise.all(active);
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: frame.id, result: {} }) + "\n", () => process.exit(0));
+        return;
+      case "tool/call": {
+        const p = frame.params;
+        if (!record(p) || p.tool !== "code" || typeof p.session !== "string" || typeof p.call !== "string" || typeof p.host_capability !== "string" || !record(p.input) || typeof p.input.script !== "string" || Object.keys(p.input).some((key) => key !== "script")) {
+          error(-32602, "code requires {script: string}, session, call, and a host_capability");
+          return;
+        }
+        const start = Date.now();
+        const result = await executeScript(p.input.script, {
+          session: p.session, call: p.call, configDir: process.env.HYA_BUNDLE_CONFIG_DIR, judge, judgeError,
+          host: (method, params, signal) => cap.call(p.host_capability, p.session, p.call, method, params, signal),
+        });
+        respond({ ok: result.ok, output: result.output, time_ms: Date.now() - start });
+        return;
+      }
+      default: error(-32601, `Unknown method: ${frame.method}`);
+    }
+  };
+  const reader = createInterface({ input: process.stdin, terminal: false });
+  for await (const line of reader) {
+    if (!line.trim()) continue;
+    let frame: Frame;
+    try { frame = JSON.parse(line); }
+    catch { process.stderr.write("orchestrator: ignoring a non-JSON line\n"); continue; }
+    if (!record(frame)) continue;
+    if (cap.accept(frame)) continue;
+    if (closing) continue;
+    const pending = handle(frame).catch((error) => {
+      process.stderr.write(`orchestrator: ${message(error)}\n`);
+      if (frame.id !== undefined && frame.id !== null) write({ jsonrpc: "2.0", id: frame.id, error: { code: -32603, message: message(error) } });
+    });
+    if (frame.method !== "shutdown") {
+      active.add(pending);
+      void pending.finally(() => active.delete(pending));
+    }
+  }
+  await Promise.all(active);
+}
+if (!isMainThread) void runVMWorker().catch((error) => parentPort!.postMessage({ type: "failed", error: message(error) }));
+else if (import.meta.main) void main().catch((error) => { process.stderr.write(`orchestrator: ${message(error)}\n`); process.exit(1); });
