@@ -6,8 +6,10 @@ use sha2::{Digest, Sha256};
 
 use super::file_snapshot::git_output;
 
-/// SHA-256 of the HEAD tree output, porcelain-v1 status, and status-listed
-/// regular-file paths and content digests, excluding top-level `.hya/`.
+/// SHA-256 of the work tree's top-level path, the HEAD tree output,
+/// porcelain-v1 status, and status-listed regular-file paths and content
+/// digests, excluding top-level `.hya/`. The path is part of the identity
+/// because an answer about one checkout can name absolute paths in it.
 /// Returns `None` outside a Git work tree, on Git failure/10-second timeout,
 /// or when a listed file cannot be read. Index changes can change the identity
 /// even when file bytes are unchanged.
@@ -19,6 +21,7 @@ pub async fn workspace_state(workdir: &Path) -> Option<String> {
     let root = git_path(top.stdout.strip_suffix(b"\n")?)?;
     let tree = git_output(&root, &["rev-parse", "--verify", "--quiet", "HEAD^{tree}"]).await?;
     let mut hash = Sha256::new();
+    hash.update(&top.stdout);
     if tree.status.success() {
         hash.update(&tree.stdout);
     } else {

@@ -51,7 +51,7 @@ Return a compact object: the status, what was established, what was changed, and
 
 Workers are the cost: each one takes about half a minute to a few minutes, and they add up when they run one after another. Start everything that does not depend on something else at the same time with `Promise.all`: the scouts, and a runner that records the starting state. Do not let two editors change the same files at the same time.
 
-A worker that changed nothing made an observation, and the runtime remembers it: the same question on an unchanged project is answered at once from the earlier report, and the trace says which worker made it. So ask precise, stable questions (the same wording gives the same remembered answer), keep what differs between instances in `args`, and do not avoid a question for fear of cost. Pass `cache: false` only when the answer depends on something outside the project files, such as the time or the network.
+A scout that finished made an observation, and the runtime remembers it: the same question to a scout on an unchanged project is answered at once from the earlier report, and the trace says which scout made it. So give discovery to scouts, ask precise, stable questions (the same wording gives the same remembered answer), keep what differs between instances in `args`, and do not avoid a question for fear of cost. Runner and editor calls always run again, because a command can give a different result on the same files. Pass `cache: false` to a scout only when its answer depends on files that git ignores, such as build output or logs.
 
 ## Example of the shape
 
