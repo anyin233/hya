@@ -97,6 +97,9 @@ cargo test -p hya-e2e -- --test-threads=1
 | T2.47 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec corrects a spurious internal summary and resumes work | e2e (Track P) |
 | T2.48 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec recovers a raw DSML tool-call leak through the structured tool interface | e2e (Track P) |
 | T2.49 | [p39_exec_live_subagents.rs](../../crates/hya-e2e/tests/p39_exec_live_subagents.rs) | idle residents produce stalled waits until archived; a quiescent server team wakes its lead with a User synthesis prompt | e2e (Track P) |
+| T2.50 | [p41_code_mode.rs](../../crates/hya-e2e/tests/p41_code_mode.rs) | `tools.code.mode: only`: the first request offers `code-mode__run` alone and its description carries a section per hidden tool (`### read`, `### bash`); a program `return await tools.read(...)` puts the file text and the trace line `#1 L1 tools.read` into the follow-up request; a direct `read` call is refused with `` `read` is not offered here: call it from a `code-mode__run` program `` | e2e (Track P) |
+| T2.51 | [p41_code_mode.rs](../../crates/hya-e2e/tests/p41_code_mode.rs) | `tools.code.mode: with_tools`: `code-mode__run` is offered next to `read`, `bash`, `edit`; its description lists no hidden tool; a program's nested `tools.read` and a direct `read` both deliver the file text | e2e (Track P) |
+| T2.52 | [p41_code_mode.rs](../../crates/hya-e2e/tests/p41_code_mode.rs) | default mode: no `code-mode__run` in the offered tools; `hya bundle list` shows `hya/code-mode` as `disabled` | e2e (Track P) |
 
 ### Built-in tool coverage
 

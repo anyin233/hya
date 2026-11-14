@@ -383,7 +383,7 @@ remaining argument is forwarded verbatim. The currently supported tasks are
 | `package-bundle` | Validates a source directory and atomically writes the canonical deterministic public `.hyabundle` package. |
 | `package-native-tool-bundle` | Adds a built target-specific Rust executable and exact policy tool declarations to one tool-family source, then writes a deterministic public package. |
 | `package-native-tool-library` | Adds a built tool-family dynamic library and exact policy tool declarations to one tool-family source, then writes a deterministic public package. |
-| `stage-first-party-bundles` | Packages the twelve trusted first-party bundles into a backend package's `<package-root>/bundles/` and fails if any bundle version differs from the backend release version. With `--target` and `--assets`, it also writes versioned standalone release assets. |
+| `stage-first-party-bundles` | Packages the thirteen trusted first-party bundles into a backend package's `<package-root>/bundles/` and fails if any bundle version differs from the backend release version. With `--target` and `--assets`, it also writes versioned standalone release assets. |
 | `release-rehearsal` | Runs the pinned, non-publishing release build/package/smoke rehearsal for one target of one release side. It checks the aggregate version contract, then builds, packages, and smokes; the release workflow's own text is `actionlint`'s and the workflow's business, not a Rust linter's. Backend rehearsals cover the binary, Bun adapter, first-party bundles, checksums, unified installer contract, and headless smoke; frontend rehearsals cover Bun, TUI/WebUI assets, production dependencies, checksums, unified installer contract, and frontend smoke. Run it on a host of that target (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`). |
 
 ```sh
@@ -457,6 +457,7 @@ When changing a boundary, update the nearest docs page:
 | Bundle authoring and execution | [AgentBundle Authoring](agent-bundle-authoring.md), [Bundle Runtime](bundle-runtime.md), [Claude import](claude-plugin-import.md) |
 | Trusted presets and multi-agent bundles | [Core agents](core-agents.md), [Tool-family presets](base-tools.md), [Subagent bundles](subagent-bundles.md), [Agent channels](agent-channels.md) |
 | Optional `hya-extra/*` distribution bundles | [Extra bundles](extra-bundles.md) |
+| Code mode (`tools.code.mode`, `hya/code-mode`) | [Code mode](code-mode.md) |
 | Goal/loop intelligence | [Goal and Loop Authoring](goal-loop-authoring.md) |
 | Agent process E2E / matrix | [Testing](testing/README.md), [Agent matrix](testing/agent-matrix.md) |
 | OpenTUI frontend | [OpenTUI frontend](tui.md) |

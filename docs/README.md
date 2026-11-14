@@ -18,7 +18,7 @@ event log, how crates and runtime planes fit together, and what invariants
 govern sessions, Projects, subagents, and Workflows:
 
 - **[Design Philosophy & Architecture Overview](architecture/overview.md)** — The seven core architectural pillars, layer boundaries, and end-to-end turn lifecycle.
-- **[Project Structure](project-structure.md)** — Repository layout, all 21 workspace crates + 5 native tool-family crates, 28 canonical builtin tools, 12 first-party bundles, and dependency direction.
+- **[Project Structure](project-structure.md)** — Repository layout, all 21 workspace crates + 5 native tool-family crates, 28 canonical builtin tools, 13 first-party bundles, and dependency direction.
 - **[Domain Glossary (`CONTEXT.md`)](../CONTEXT.md)** — Canonical domain terminology across `hya-proto`, `hya-core`, Projects, Relay, Workflows, and TUI.
 - **Core Subsystem Specifications:**
   - [Runtime (`hya-core`)](architecture/runtime.md) — `SessionEngine`, publish seams, `TurnBinding`, Goal/Loop drivers, file snapshots & revert, and workspace roots.
@@ -59,6 +59,7 @@ Everything needed to install, configure, operate, and extend `hya` day to day:
   - [Workflows](workflows.md) — Authoring `*.hya.md` Stage DAGs, stage model routing, CLI/TUI control, and WorkflowBundle packaging.
   - [Goal and Loop Authoring](goal-loop-authoring.md) — Independent evaluators, shell `--while`/`--until` predicates, and plugin hooks.
   - [Bundle Authoring](agent-bundle-authoring.md) & [Bundle Runtime](bundle-runtime.md) — Authoring, packaging, installing, and running `.hyabundle` (format v4) static and Bun/Rust sidecar bundles (examples under [`examples/`](examples/)).
+  - [Code Mode](code-mode.md) — The optional `code-mode__run` tool: a JavaScript program that calls the agent's other tools (`tools.code.mode`).
   - [Core Agents](core-agents.md), [Tool-Family Presets](base-tools.md), [Subagent Bundles](subagent-bundles.md), [Agent Channels](agent-channels.md), [Extra Bundles](extra-bundles.md), and [Claude Plugin Import](claude-plugin-import.md).
   - [Plugin Protocol](plugin-protocol.md), [Bundle-Owned TUI Extensions](tui-extensions.md), [TUI Extension SDK (`@hya/tui-sdk`)](tui-extension-sdk.md), and [Disk Inspector Plugin](disk-inspector.md).
 

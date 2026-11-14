@@ -130,6 +130,32 @@ Known limits, by decision:
   program called it. Branch conditions were computed from the typed `result`
   fields that workers return, which made a second classifier unnecessary on
   these tasks.
-- The base `glob` tool walks the whole tree under its path for a pattern
-  without `**` and has no bound of its own. The worker limit contains it; the
-  tool itself is unchanged.
+- The trial that lost six runs exposed the base `glob` tool: it walked the
+  whole tree under its path with no bound. `glob` and `find` now walk
+  breadth-first under a 30-second budget and mark a stopped walk as
+  incomplete; the worker limit stays as the second bound.
+
+## Addendum: the program runner as built-in code mode
+
+The orchestrator is one use of the runner. The same day it was made available
+to the built-in agents:
+
+8. **The runner ships as the first-party bundle `hya/code-mode`**, tool
+   `code-mode__run`, disabled by default and enabled by `tools.code.mode`
+   (`normal`, `with_tools`, `only`). There a program has every effect the
+   orchestrator's has, and additionally `tools.<name>(args)` for each tool of
+   the calling agent's own view, through the nested tool plane. `agents.run`
+   may start any agent the caller may spawn.
+9. **One implementation, two tools.** `workflow` and `run` are personalities
+   of one runtime file, selected by a process argument; the orchestrator's
+   copy is byte-identical and a test fails when it is not. `workflow` stays
+   the restricted form (no `tools`, three workers) that the trials measured.
+10. **`only` is an engine mechanism, not a prompt.** With an exclusive tool
+    set, an agent offered that tool is offered nothing else; the hidden tools
+    are described inside the exclusive tool's description, and a model call
+    naming a hidden tool is refused. The agent's view is unchanged, so the
+    restriction is on who may call a tool (a program, with a trace record),
+    not on which tools exist.
+
+Not measured: no trial compared the built-in agents with and without code
+mode. The numbers above are for the orchestrator and its workers only.

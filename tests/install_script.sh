@@ -20,7 +20,7 @@ not_contains() {
   [[ "$haystack" != *"$needle"* ]] || fail "expected output not to contain: $needle"
 }
 
-first_party=(base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review basic-tui-components)
+first_party=(base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review basic-tui-components code-mode)
 
 help=$(bash ./install.sh --help)
 [[ -x ./install.sh ]] || fail "install.sh must be executable"

@@ -165,6 +165,12 @@ impl EngineSettings {
     pub(crate) fn scopes(&self) -> hya_core::CatalogScopeCacheConfig {
         resolve_catalog_scope_cache(self.file.catalog_scopes.as_ref())
     }
+    pub(crate) fn code_mode(&self) -> CodeMode {
+        self.file
+            .tools
+            .as_ref()
+            .map_or_else(CodeMode::default, |tools| tools.code.mode)
+    }
     pub(crate) fn plugin_ids(&self) -> Vec<String> {
         self.file.plugins.keys().cloned().collect()
     }
@@ -195,6 +201,50 @@ struct CatalogScopesFile {
 struct ToolsConfig {
     #[serde(default)]
     websearch: WebSearchConfig,
+    #[serde(default)]
+    code: CodeToolConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CodeToolConfig {
+    #[serde(default)]
+    mode: CodeMode,
+}
+
+/// `tools.code.mode`: whether built-in agents get the code-mode tool, a tool
+/// that runs a JavaScript program calling the agent's other tools.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodeMode {
+    /// The tool is not loaded.
+    #[default]
+    Normal,
+    /// The tool is offered next to the agent's other tools.
+    WithTools,
+    /// The tool is the only one offered; the others are called from programs.
+    Only,
+}
+
+impl CodeMode {
+    /// First-party bundle that supplies the tool; it publishes nothing in
+    /// [`CodeMode::Normal`].
+    pub const BUNDLE: &'static str = "hya/code-mode";
+    /// The tool's name in a built-in agent's view.
+    pub const TOOL: &'static str = "code-mode__run";
+}
+
+/// `tools.code.mode` of the active config file, for surfaces that run
+/// without a composed runtime (bundle listings). An unreadable or invalid
+/// file reads as [`CodeMode::Normal`]; starting a runtime reports it.
+#[must_use]
+pub fn configured_code_mode() -> CodeMode {
+    config_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .filter(|yaml| !yaml.trim().is_empty())
+        .and_then(|yaml| parse_config(&yaml).ok())
+        .and_then(|file| file.tools)
+        .map_or_else(CodeMode::default, |tools| tools.code.mode)
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -2435,11 +2485,10 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     {
         anyhow::bail!("invalid global reasoning effort `{value}`");
     }
-    let mut file = file;
     let websearch = file
         .tools
-        .take()
-        .map_or_else(WebSearchConfig::default, |tools| tools.websearch);
+        .as_ref()
+        .map_or_else(WebSearchConfig::default, |tools| tools.websearch.clone());
     Ok(Some(ResolvedConfig {
         router,
         default_model: catalog.default_model().to_string(),
@@ -2970,6 +3019,31 @@ providers:
 
     fn parse_providers(yaml: &str) -> anyhow::Result<Vec<ParsedProvider>> {
         resolve_providers(&parse_config(yaml)?)
+    }
+
+    #[test]
+    fn code_mode_defaults_to_normal_and_parses_the_three_modes() {
+        let mode = |yaml: &str| {
+            parse_config(yaml).map(|file| {
+                file.tools
+                    .map_or_else(CodeMode::default, |tools| tools.code.mode)
+            })
+        };
+        assert_eq!(mode("default_model: a/b\n").unwrap(), CodeMode::Normal);
+        assert_eq!(
+            mode("tools:\n  websearch:\n    enabled: false\n").unwrap(),
+            CodeMode::Normal
+        );
+        for (text, expected) in [
+            ("normal", CodeMode::Normal),
+            ("with_tools", CodeMode::WithTools),
+            ("only", CodeMode::Only),
+        ] {
+            let yaml = format!("tools:\n  code:\n    mode: {text}\n");
+            assert_eq!(mode(&yaml).unwrap(), expected);
+        }
+        assert!(mode("tools:\n  code:\n    mode: always\n").is_err());
+        assert!(mode("tools:\n  code:\n    enabled: true\n").is_err());
     }
 
     #[test]

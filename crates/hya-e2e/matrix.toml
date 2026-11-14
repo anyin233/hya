@@ -419,6 +419,24 @@ title = "idle residents produce stalled waits until archived; a quiescent server
 track = "P"
 path = "crates/hya-e2e/tests/p39_exec_live_subagents.rs"
 
+[[scenario]]
+id = "T2.50"
+title = "tools.code.mode: only — the model is offered code-mode__run alone with the hidden tools described inside it; a program reads a project file through tools.read and its output and trace reach the follow-up request; a direct call of a hidden tool is refused with a message naming code-mode__run"
+track = "P"
+path = "crates/hya-e2e/tests/p41_code_mode.rs"
+
+[[scenario]]
+id = "T2.51"
+title = "tools.code.mode: with_tools — code-mode__run is offered next to the usual tools, a program calls them, and direct calls still work"
+track = "P"
+path = "crates/hya-e2e/tests/p41_code_mode.rs"
+
+[[scenario]]
+id = "T2.52"
+title = "default tools.code.mode (normal) — the first-party hya/code-mode bundle publishes no tool and hya bundle list shows it disabled"
+track = "P"
+path = "crates/hya-e2e/tests/p41_code_mode.rs"
+
 # Index-only deep engine coverage (not duplicated in Track P).
 [[scenario]]
 id = "I.nested"

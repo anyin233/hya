@@ -2,7 +2,7 @@
 
 `hya-extra/*` are optional bundles shipped alongside hya, under
 `bundles/extra/`. They are not installed by default and are not part of the
-twelve trusted [first-party bundles](bundle-runtime.md#first-party-bundles);
+thirteen trusted [first-party bundles](bundle-runtime.md#first-party-bundles);
 each one is an ordinary public `.hyabundle` package that you build and
 install like any other bundle described in
 [Bundle Authoring](agent-bundle-authoring.md). They exist for two
@@ -769,8 +769,11 @@ score answers retain their typed fields. Probabilities/confidence are in
 `0..1`; scores are criterion indices in `0..criteria.length-1`. Missing judge
 configuration, HTTP failures or malformed responses reject the call.
 
-The process is `bun run ${BUNDLE_ROOT}/runtime.ts`, speaking plugin protocol
-v1 over NDJSON stdio. Its `initialize` response declares only `workflow`, with
+The process is `bun run ${BUNDLE_ROOT}/runtime.ts workflow`, speaking plugin
+protocol v1 over NDJSON stdio. `runtime.ts` is a byte-identical copy of
+`bundles/first-party/code-mode/runtime.ts`, the one implementation behind this
+tool and the built-in [code mode](code-mode.md) tool; the argument selects
+which of the two the process serves. Its `initialize` response declares only `workflow`, with
 a JSON Schema `oneOf` for the four input forms (no additional fields). A
 `tool/call` request carries `{tool:"workflow", input, session:string,
 call:string, host_capability:string}`. Invalid input returns JSON-RPC
@@ -817,7 +820,9 @@ Unknown keys inside `judge` are rejected. Configuration is read at process
 start; hya restarts it at the next root binding after a config edit. Restart
 hya after changing only the key file.
 
-Run `bun test` in `bundles/extra/orchestrator/` for offline fake-host/fake-Jev
-and real-child stdio tests. Only `runtime.ts` and the four prompts are packaged;
-tests, the bundle README and `config.example.yml` are development files.
+Run `bun test` in `bundles/first-party/code-mode/` for offline
+fake-host/fake-Jev and real-child stdio tests of both tools; one of them
+checks that the two `runtime.ts` files are identical. Only `runtime.ts` and
+the four prompts are packaged; the bundle README and `config.example.yml` are
+development files.
 The source README and configuration example live in `bundles/extra/orchestrator/`.

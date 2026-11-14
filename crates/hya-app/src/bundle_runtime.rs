@@ -416,7 +416,15 @@ pub(crate) async fn prepare_source(
             let mut command = argv(&process.command, &root.0, bundle_config);
             let kind = match process.kind {
                 PreparedProcessKind::Rust => PluginKindWire::Rust,
-                PreparedProcessKind::Bun => PluginKindWire::Bun,
+                PreparedProcessKind::Bun => {
+                    // A release ships its own Bun, which need not be on `PATH`.
+                    if command.first().is_some_and(|program| program == "bun")
+                        && let Some(bun) = crate::plugins::find_bun()
+                    {
+                        command[0] = bun.to_string_lossy().into_owned();
+                    }
+                    PluginKindWire::Bun
+                }
                 PreparedProcessKind::Claude => {
                     let bun = crate::plugins::find_bun()
                         .ok_or_else(|| CoreError::Invalid("Claude bundle requires Bun".into()))?;

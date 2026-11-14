@@ -45,6 +45,7 @@ pub struct E2eEnvBuilder {
     agent: String,
     binary: Option<PathBuf>,
     permission_model: String,
+    code_mode: Option<String>,
     mcp: Vec<McpFixture>,
     skill_files: Vec<(String, String)>,
     project_files: Vec<(String, Vec<u8>)>,
@@ -63,6 +64,7 @@ impl Default for E2eEnvBuilder {
             agent: "hya-main".into(),
             binary: None,
             permission_model: "allow".into(),
+            code_mode: None,
             mcp: Vec::new(),
             skill_files: Vec::new(),
             project_files: Vec::new(),
@@ -110,6 +112,13 @@ impl E2eEnvBuilder {
     #[must_use]
     pub fn permission_model(mut self, model: impl Into<String>) -> Self {
         self.permission_model = model.into();
+        self
+    }
+
+    /// Set `tools.code.mode` in the temp config (`with_tools` | `only`).
+    #[must_use]
+    pub fn code_mode(mut self, mode: impl Into<String>) -> Self {
+        self.code_mode = Some(mode.into());
         self
     }
 
@@ -201,6 +210,7 @@ impl E2eEnvBuilder {
         );
         spec.yolo = self.yolo;
         spec.permission_model = self.permission_model;
+        spec.code_mode = self.code_mode;
         spec.additional_models = self.additional_models;
         spec.mcp = self.mcp;
         spec.skill_files = self.skill_files;
