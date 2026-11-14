@@ -1,0 +1,46 @@
+kind: Bundle
+version_ref: backend
+identity:
+  id: hya-extra/orchestrator
+  version: 0.0.0
+  publisher: hya-extra
+extensions:
+  process:
+    kind: bun
+    command: [bun, run, '${BUNDLE_ROOT}/runtime.ts']
+    timeout_ms: 3600000
+  files:
+    - id: runtime
+      path: runtime.ts
+resources:
+  tools:
+    - id: code
+      path: runtime.ts
+agents:
+  - id: orchestrator
+    description: Coordinates coding work through traced JavaScript programs.
+    role: main
+    prompt: prompts/orchestrator.md
+    advertise: [code]
+    can_spawn: [orchestrator-worker, hya-scout]
+    resource_view:
+      allow:
+        - code
+        - harness:tool/read
+        - harness:tool/grep
+        - harness:tool/glob
+        - harness:tool/bash
+        - harness:tool/write
+        - harness:tool/edit
+  - id: orchestrator-worker
+    description: Implements a focused coding task and reports its result.
+    role: subagent
+    prompt: prompts/worker.md
+    resource_view:
+      allow:
+        - harness:tool/read
+        - harness:tool/grep
+        - harness:tool/glob
+        - harness:tool/bash
+        - harness:tool/write
+        - harness:tool/edit
