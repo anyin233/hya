@@ -61,6 +61,7 @@ mod fork;
 mod handoff;
 mod mailbox;
 mod nested_tools;
+mod workspace_state;
 pub(crate) use mailbox::dm_channel_between;
 mod member_control;
 mod members;
@@ -108,6 +109,7 @@ pub use scope_binding::{BundleRefresh, CatalogScopeCacheConfig};
 pub use turn::advertise_tool;
 pub use turn_end::{DRAIN_DEADLINE, TurnDrainReport};
 pub use turn_gate::{TurnBoundaryObserver, TurnLease};
+pub use workspace_state::workspace_state;
 
 /// Parameters for creating a new session event log.
 pub struct CreateSession {

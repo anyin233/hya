@@ -146,6 +146,7 @@ Operations (`method` values):
 | `context.describe` | yes | yes | yes | `{}` | Tool call: `{ "request": "tool_call", "session", "parent_session" (nullable), "workdir", "source_tool_call_id", "operation_id" }`. API request: `{ "request": "api", "api", "scope": "session" \| "global", "session" (session scope only), "call" }` |
 | `permission.assert` | yes | no (`-32001`) | no (`-32001`) | `{ "action", "resource" }` | `{}`, or `-32002` on denial |
 | `session.usage` | yes | yes | no (`-32001`: no session) | `{ "scope"?: "session" \| "tree" \| "root" }` (default `tree`; `root` is tool-call only, `-32602` for an API request) | Usage report (below) |
+| `workspace.state` | yes | no (`-32001`) | no (`-32001`) | `{}` | `{ "state": "<64 lowercase hex>" }` or `{ "state": null }` |
 | `tools.list` | yes | no (`-32001`) | no (`-32001`) | `{}` | `{ "tools": [{ "name", "description", "input_schema" }] }` |
 | `tool.call` | yes | no (`-32001`) | no (`-32001`) | `{ "name": string, "input": object }` | `{ "output": <the tool's output value> }`; `-32002` on permission denial, `-32003` on any other failure |
 
@@ -154,6 +155,42 @@ Operations (`method` values):
 or `{ "kind": "any" }`. It returns `{}` on success, `-32002` on permission
 denial, and `-32602` for malformed params. An unsupported operation returns
 `-32601`. The host applies the active call's permission snapshot.
+
+`workspace.state` is a read-only identity of the Git work tree containing the
+calling session's working directory. A bundle can compare it before and after
+an observation, then reuse the answer while the identity stays equal. Send
+empty params on the tool call's lease:
+
+```json
+{"jsonrpc":"2.0","id":43,"method":"host/capability","params":{"capability":"<host_capability>","session":"<session-id>","call":"<call-id>","method":"workspace.state","params":{}}}
+{"jsonrpc":"2.0","id":43,"result":{"state":"<64 lowercase hex>"}}
+```
+
+The value is lowercase hexadecimal SHA-256 over these bytes, in order:
+
+1. The output of `git rev-parse HEAD^{tree}`, including its trailing newline,
+   or the literal bytes `none` on an unborn branch (no commit).
+2. The NUL-delimited output of
+   `git status --porcelain=v1 -z --untracked-files=all` from the work tree root,
+   excluding paths under top-level `.hya/`. Git's pathspec exclusion
+   `:(top,exclude).hya/**` applies before rename detection; a rename across
+   that boundary appears as an addition or deletion on the included side.
+3. For every status-listed path that currently names a regular file, in
+   status order: the raw path bytes, a NUL byte, and the 32-byte SHA-256 digest
+   of the file's bytes. A rename lists its destination before its source.
+
+Ignored untracked files and `.hya/` status entries/file hashes do not
+contribute. The HEAD tree remains the Git tree identity, independent of commit
+message, author, or date. Equal values imply the same tree, status, and listed
+regular-file contents (subject to SHA-256 collision resistance). States with
+the same file bytes can still differ when the Git index differs; such changes
+conservatively prevent reuse.
+
+The result is `{ "state": null }` outside a Git work tree, if any Git call
+fails or exceeds its 10-second limit, or if a listed file cannot be read.
+These cases do not return a JSON-RPC error; a null identity cannot validate a
+cached answer. Non-empty params return `-32602`. API-request grants return
+`-32001`, including session-scoped API requests.
 
 `tools.list` and `tool.call` reach the calling agent's other tools through the
 engine's nested tool plane
