@@ -1,0 +1,18 @@
+kind: Bundle
+version_ref: backend
+identity:
+  id: hya/code-mode
+  version: 0.0.0
+  publisher: hya
+extensions:
+  process:
+    kind: bun
+    command: [bun, run, '${BUNDLE_ROOT}/runtime.ts', run]
+    timeout_ms: 3600000
+  files:
+    - id: runtime
+      path: runtime.ts
+resources:
+  tools:
+    - id: run
+      path: runtime.ts
