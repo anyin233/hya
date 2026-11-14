@@ -38,7 +38,9 @@ use super::spill::ArtifactEvictionSink;
 use super::stream_round::RoundAttribution;
 use crate::agent_catalog::AgentDefinition;
 pub use messages::advertise_tool;
-use messages::{AttachmentData, attachment_blobs, projection_to_messages, request_from_messages};
+use messages::{
+    AttachmentData, attachment_blobs, hidden_behind, projection_to_messages, request_from_messages,
+};
 
 /// Range endpoints for a compaction that folded the entire input window.
 ///
@@ -1497,8 +1499,16 @@ impl SessionEngine {
                 usage_reporting,
                 reasoning_policy,
             );
-            let template =
-                request_from_messages(&live_agent, Vec::new(), resources, &model, depth, None);
+            let exclusive = self.exclusive_tool.as_deref();
+            let template = request_from_messages(
+                &live_agent,
+                Vec::new(),
+                resources,
+                &model,
+                depth,
+                None,
+                exclusive,
+            );
             let request_overhead = self
                 .token_accounting
                 .estimate_request(&template, reasoning_policy);
@@ -1865,8 +1875,15 @@ impl SessionEngine {
                 )
                 .await?
                 .effort;
-            let request =
-                request_from_messages(&live_agent, messages, resources, &model, depth, effort);
+            let request = request_from_messages(
+                &live_agent,
+                messages,
+                resources,
+                &model,
+                depth,
+                effort,
+                self.exclusive_tool.as_deref(),
+            );
             let request = if let Some(hooks) = self.active_hook_dispatcher(session) {
                 let root_session = self
                     .request_root_session(session, &mut root_session_cache)
@@ -2095,9 +2112,22 @@ impl SessionEngine {
                 }
                 let started = std::time::Instant::now();
                 let mut file_capture = super::file_snapshot::FileCapture::None;
+                let behind = hidden_behind(
+                    resources,
+                    depth,
+                    self.exclusive_tool.as_deref(),
+                    tc.name.as_str(),
+                );
                 let collect_tool = async {
-                    Ok::<_, CoreError>(match resources.resolve_tool(&tc.name) {
-                        Some(resolved) => {
+                    Ok::<_, CoreError>(match (behind, resources.resolve_tool(&tc.name)) {
+                        (Some(exclusive), Some(_)) => (
+                            Err(ToolError::Other(format!(
+                                "`{}` is not offered here: call it from a `{exclusive}` program",
+                                tc.name
+                            ))),
+                            hya_tool::ToolResultPolicy::Default,
+                        ),
+                        (_, Some(resolved)) => {
                             let result_policy = resolved.tool.result_policy();
                             let permission = self
                                 .tool_call_permission(
@@ -2198,7 +2228,7 @@ impl SessionEngine {
                             };
                             (result, result_policy)
                         }
-                        None => (
+                        (_, None) => (
                             Err(ToolError::Other(format!("unknown tool: {}", tc.name))),
                             hya_tool::ToolResultPolicy::Default,
                         ),
