@@ -1130,6 +1130,16 @@ The turn loop connects a plane for every model tool call:
 Outside the turn loop (tests, direct tool use) a context carries
 `NestedToolPlane::disconnected()`, which lists nothing and fails every call.
 
+`SessionEngine::with_exclusive_tool(Some(name))` makes such a tool the only
+one a model is offered: for every agent whose offered tools include `name`,
+each request carries `name` alone (plus `report` for a subagent), and the
+description of `name` gains one section per hidden tool with its name,
+description and argument schema. The hidden tools stay in the view, so the
+nested plane still runs them; a model call that names a hidden tool directly
+fails with the tool error "`<tool>` is not offered here: call it from a
+`<name>` program".
+An agent that is not offered `name` is unaffected. [Code mode](../code-mode.md) uses this for `tools.code.mode: only`.
+
 ```rust
 #[async_trait]
 pub trait NestedTools: Send + Sync {

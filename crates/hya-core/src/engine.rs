@@ -370,6 +370,9 @@ pub struct SessionEngine {
     model_fallbacks: HashMap<ModelRef, Vec<ModelRef>>,
     /// Process-wide reasoning fallback applied after model defaults.
     global_reasoning: Option<ReasoningEffort>,
+    /// A tool that, for an agent whose view holds it, is the only one offered
+    /// to the model; the agent's other tools stay executable.
+    exclusive_tool: Option<Arc<str>>,
     /// Configured Agent model categories used by fixed system-Agent calls.
     model_categories: Arc<CategoryRegistry>,
     runtime: Arc<RuntimeRegistry>,
@@ -437,6 +440,7 @@ impl Clone for SessionEngine {
                     .clone(),
             ),
             global_reasoning: self.global_reasoning,
+            exclusive_tool: self.exclusive_tool.clone(),
             model_fallbacks: self.model_fallbacks.clone(),
             model_categories: self.model_categories.clone(),
             runtime: self.runtime.clone(),
@@ -605,6 +609,7 @@ impl SessionEngine {
             base_system_prompt: String::new(),
             catalog: RwLock::new(catalog),
             global_reasoning: None,
+            exclusive_tool: None,
             model_fallbacks: HashMap::new(),
             model_categories: Arc::new(CategoryRegistry::default()),
             runtime,
@@ -710,6 +715,18 @@ impl SessionEngine {
     #[must_use]
     pub fn with_global_reasoning(mut self, reasoning: Option<ReasoningEffort>) -> Self {
         self.global_reasoning = reasoning;
+        self
+    }
+
+    /// Offer only `tool` to the model of every agent whose view holds it.
+    ///
+    /// The agent's other tools stay executable (a tool reaches them through
+    /// [`hya_tool::ToolCtx::nested`]) and are described inside `tool`'s
+    /// description. A subagent's `report` stays offered. An agent without
+    /// `tool` in its view is unaffected.
+    #[must_use]
+    pub fn with_exclusive_tool(mut self, tool: Option<String>) -> Self {
+        self.exclusive_tool = tool.map(Arc::from);
         self
     }
 
