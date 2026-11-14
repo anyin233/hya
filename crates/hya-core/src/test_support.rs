@@ -38,6 +38,7 @@ pub(crate) fn runtime(tools: ToolRegistry) -> Arc<RuntimeRegistry> {
                 resource_view: ResourceView::default(),
                 can_spawn: Vec::new(),
                 hook_refs: Vec::new(),
+                advertise: Vec::new(),
             }],
             tools: Vec::new(),
             skills: Vec::new(),

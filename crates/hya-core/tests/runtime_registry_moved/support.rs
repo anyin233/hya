@@ -156,6 +156,7 @@ pub(super) fn agent(stable_id: &str, resource_view: ResourceView) -> PreparedAge
         resource_view,
         can_spawn: Vec::new(),
         hook_refs: Vec::new(),
+        advertise: Vec::new(),
     }
 }
 

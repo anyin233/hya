@@ -2052,6 +2052,7 @@ fn sidecar_probe_catalog() -> Arc<hya_core::AgentCatalog> {
                     resource_view: hya_bundle::ResourceView::default(),
                     can_spawn: Vec::new(),
                     hook_refs: Vec::new(),
+                    advertise: Vec::new(),
                 }],
                 tools,
                 skills: Vec::new(),

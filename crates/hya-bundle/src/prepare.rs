@@ -270,6 +270,7 @@ fn prepared_bundle_is_canonical(bundle: &Bundle) -> bool {
 
 fn agent_is_canonical(agent: &PreparedAgent) -> bool {
     is_strictly_sorted(agent.can_spawn.iter().map(|target| target.as_str()))
+        && is_strictly_sorted(agent.advertise.iter().map(String::as_str))
         && is_strictly_sorted(agent.hook_refs.iter().map(String::as_str))
         && is_strictly_sorted(agent.resource_view.allow.iter().map(String::as_str))
         && is_strictly_sorted(agent.resource_view.deny.iter().map(String::as_str))
@@ -906,7 +907,7 @@ fn validate_prepared_process_rows(
         if !bundles
             .iter()
             .any(|bundle| bundle.identity().id == row.bundle_id)
-            || validate_process_command(&row.process.command).is_err()
+            || validate_process(&row.process.command, row.process.timeout_ms).is_err()
         {
             return Err(BundleError::NonCanonicalPreparedCatalog);
         }
@@ -954,14 +955,21 @@ fn validate_native_binary_bindings(
     Ok(())
 }
 
-/// Whether `command` is a usable argv: non-empty with no blank arguments.
-fn validate_process_command(command: &[String]) -> Result<(), String> {
+/// Validate process argv and the optional per-request timeout.
+fn validate_process(command: &[String], timeout_ms: Option<u64>) -> Result<(), String> {
     if command.is_empty() {
         return Err("extensions.process: command must not be empty".to_string());
     }
     if let Some(arg) = command.iter().find(|arg| arg.trim().is_empty()) {
         return Err(format!(
             "extensions.process: command arguments must not be blank (got {arg:?})"
+        ));
+    }
+    if let Some(timeout) = timeout_ms
+        && !(1000..=3_600_000).contains(&timeout)
+    {
+        return Err(format!(
+            "extensions.process.timeout_ms must be 1000..=3600000 (got {timeout})"
         ));
     }
     Ok(())
@@ -2043,7 +2051,7 @@ fn declared_process_extension(
     let Some(process) = &extensions.process else {
         return Ok(None);
     };
-    if let Err(detail) = validate_process_command(&process.command) {
+    if let Err(detail) = validate_process(&process.command, process.timeout_ms) {
         return Err(BundleError::InvalidManifest {
             source_name: bundle_id.to_string(),
             detail,
@@ -2056,6 +2064,7 @@ fn declared_process_extension(
             crate::source::SourceProcessKind::Claude => crate::model::PreparedProcessKind::Claude,
         },
         command: process.command.clone(),
+        timeout_ms: process.timeout_ms,
     }))
 }
 
@@ -2138,6 +2147,22 @@ fn prepare_agent(
         }
     };
     let prompt_digest = prompt.as_deref().map(|text| digest_bytes(text.as_bytes()));
+    let mut advertise = source
+        .advertise
+        .into_iter()
+        .map(|value| match value {
+            serde_json::Value::String(name) => Ok(name),
+            _ => Err(BundleError::InvalidManifest {
+                source_name: bundle_id.to_string(),
+                detail: format!(
+                    "agent `{}` advertise entries must be tool name strings",
+                    source.id
+                ),
+            }),
+        })
+        .collect::<Result<Vec<_>, BundleError>>()?;
+    advertise.sort();
+    advertise.dedup();
     source.can_spawn.sort();
     source.can_spawn.dedup();
     source.hook_refs.sort();
@@ -2158,6 +2183,7 @@ fn prepare_agent(
         resource_view: source.resource_view,
         can_spawn: source.can_spawn.into_iter().map(AgentName::new).collect(),
         hook_refs: source.hook_refs,
+        advertise,
     })
 }
 

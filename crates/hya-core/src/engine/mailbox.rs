@@ -837,6 +837,7 @@ mod tests {
                         resource_view: hya_bundle::ResourceView::default(),
                         can_spawn: Vec::new(),
                         hook_refs: Vec::new(),
+                        advertise: Vec::new(),
                     })
                     .collect(),
                 tools: Vec::new(),

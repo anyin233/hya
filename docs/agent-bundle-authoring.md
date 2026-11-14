@@ -343,7 +343,24 @@ Filesystem `SKILL.md` discovery (outside bundles) is documented in
 | `files` | Inert, explicitly packaged UTF-8 support files using the same `{id, path, aliases}` shape; no executable capability is inferred. |
 | `rust` | Raw executable files using `{id, path}`. Requires `process.kind: rust`; aliases are rejected. The first command argument must name one declared executable by its relative path or `${BUNDLE_ROOT}/<path>`. |
 | `libraries` | Raw dynamic-library bytes using `{id, path}`. No process declaration is required. First-party lockstep tool families load a single `runtime` library after package inspection and ABI validation; ordinary installed bundles do not execute these resources. |
-| `process` | The one optional out-of-process extension declaration: `{ kind, command }` where `kind` is `rust`, `bun`, or `claude` and `command` is the argv to spawn (non-empty, no blank arguments). Starts before runtime publication; `${BUNDLE_ROOT}` expands to the private materialized package root. |
+| `process` | The one optional out-of-process extension declaration: `{ kind, command, timeout_ms? }` where `kind` is `rust`, `bun`, or `claude`, `timeout_ms` is an optional integer in `1000..=3600000` milliseconds (default `30000`), and `command` is the argv to spawn (non-empty, no blank arguments). Starts before runtime publication; `${BUNDLE_ROOT}` expands to the private materialized package root. |
+
+A process that serves long-running tools can raise its per-request timeout:
+
+```yaml
+extensions:
+  process:
+    kind: bun
+    command: [bun, run, '${BUNDLE_ROOT}/runtime.ts']
+    timeout_ms: 3600000
+  files: [{ id: runtime, path: runtime.ts }]
+```
+
+The override applies to ordinary requests such as `tool/call`, hooks, and
+`api/request`; initialization and shutdown retain their own timeouts. Values
+outside the inclusive range and non-integer values fail preparation. Omitting
+`timeout_ms` preserves the existing prepared representation and 30-second
+request default.
 
 ### Bundle-owned TUI extension (`tui:`)
 
@@ -588,8 +605,34 @@ line per mode.
 | `resource_profile` | no | **Unsupported** if present — prepare fails. |
 | `namespace` | no | Provider-facing namespace for the bundle's tools; defaults to the identity name segment (the part after `/`). Token rules: `[a-zA-Z0-9_-]`, no `__`, and the reserved tokens `mcp`, `harness`, `builtin`, `plugin` are rejected. |
 | `resource_view` | no | `allow`, `deny`, `aliases`, `namespace` (see below). |
+| `advertise` | no | `string[]`, default `[]`: a non-empty list limits model-facing tool schemas to the listed names in the compiled view. It does not remove executable tools. Unknown names fail view compilation with an error naming the agent and tool. |
 | `can_spawn` | no | Allowlist of stable agent ids this agent may spawn. Targets are **not** resolved at prepare time — a bundle may name an agent from a bundle that is not installed yet. |
 | `hook_refs` | no | Bundle-local hook resource references only (not `harness:hook/*`). |
+
+Use `advertise` when a tool coordinates calls to other tools and the model
+should see only that entry point. List exact public tool names from the
+compiled view, including any `resource_view.aliases` spelling; this list is
+not a resource selector and does not accept patterns. An omitted or empty list
+keeps normal advertisement. Existing depth rules still apply: `report` is
+hidden from the main agent and always offered to subagents (depth >= 1), even
+when omitted from `advertise`; orchestration tools remain hidden at the depth
+cap. All tools in the view, including hidden harness coordination tools, still
+resolve and can be called through nested tools with their usual permissions.
+
+For example, this agent offers only `bash` to its model while keeping `read`
+and its harness coordination tools executable:
+
+```yaml
+agents:
+  - id: shell-driver
+    role: main
+    advertise: [bash]
+    resource_view:
+      allow: [harness:tool/bash, harness:tool/read]
+```
+
+Omitting `advertise` preserves the existing prepared bytes. Duplicate entries
+are collapsed and the prepared list is sorted.
 
 Example agent with `model_policy`:
 

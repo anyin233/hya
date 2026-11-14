@@ -262,8 +262,8 @@ answers the HTTP caller with that status and the body verbatim as
 `application/json`; a `null` body sends no content, and `204`, `205`, and
 `304` must not carry a body. A status outside `200..=599`, a body on those
 statuses, a JSON-RPC error, a malformed reply, a reply frame over the 1 MiB
-stdio cap, a crash, or the ordinary request timeout (30 s, the same as
-`tool/call`) becomes API error `bundle_api_failed` (502).
+stdio cap, a crash, or the ordinary request timeout (30 s by default, overridden by
+`extensions.process.timeout_ms`, the same as `tool/call`) becomes API error `bundle_api_failed` (502).
 
 The contract is JSON in, JSON out on purpose: no request headers (in
 particular no `Authorization`), no raw bytes, no response headers. That keeps
@@ -678,12 +678,12 @@ source of truth for plugin state.
 
 ## Limits and timeouts
 
-These apply to every plugin process (configured plugins and Bundle sidecars):
+These apply to every plugin process (configured plugins, bundle processes, and Bundle sidecars):
 
 | Limit | Value | Notes |
 | --- | --- | --- |
 | `MAX_LINE_BYTES` | **1 MiB** | Exceeding raises `PluginError::OversizedLine` and tears down the transport |
-| `DEFAULT_CALL_TIMEOUT` | **30 s** | Per request; overridable per plugin with config `timeout_ms` (milliseconds) |
+| `DEFAULT_CALL_TIMEOUT` | **30 s** | Per request; overridable per plugin with config `timeout_ms`, or per bundle process with manifest `extensions.process.timeout_ms` (integer milliseconds, `1000..=3600000`) |
 | `INITIALIZE_TIMEOUT` | **5 s** | Handshake only |
 | `SHUTDOWN_TIMEOUT` | **1 s** | After this, the host kills and reaps the child (`start_kill`) |
 | `STDERR_TAIL_BYTES` | **64 KiB** | Bundle-spawned children only — last stderr bytes kept for diagnostics |

@@ -299,6 +299,9 @@ pub(crate) struct SourceAgent {
     pub resource_view: ResourceView,
     #[serde(default)]
     pub can_spawn: Vec<String>,
+    // Validate strings during prepare: YAML otherwise coerces numeric scalars.
+    #[serde(default)]
+    pub advertise: Vec<Value>,
     #[serde(default)]
     pub hook_refs: Vec<String>,
     /// Removed with the single-agent format; the tool plane is host-controlled.
@@ -345,6 +348,7 @@ pub(crate) struct SourceExtensions {
 pub(crate) struct SourceProcessExtension {
     pub kind: SourceProcessKind,
     pub command: Vec<String>,
+    pub timeout_ms: Option<u64>,
 }
 
 /// Supported process-extension runtime kinds.

@@ -39,6 +39,7 @@ fn installed(bundle_id: &str, agent_id: &str, can_spawn: &[&str]) -> Bundle {
             resource_view: ResourceView::default(),
             can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
             hook_refs: Vec::new(),
+            advertise: Vec::new(),
         }],
         tools: Vec::new(),
         skills: Vec::new(),

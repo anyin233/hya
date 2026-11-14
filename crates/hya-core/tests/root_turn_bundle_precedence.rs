@@ -663,6 +663,7 @@ fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
                 resource_view: ResourceView::default(),
                 can_spawn: Vec::new(),
                 hook_refs: Vec::new(),
+                advertise: Vec::new(),
             }],
             tools: Vec::new(),
             skills: Vec::new(),

@@ -111,7 +111,11 @@ fn filtered_tool_schemas(
     resources
         .tool_schemas()
         .into_iter()
-        .filter(|schema| advertise_tool_at_depth(schema.name.as_str(), depth))
+        .filter(|schema| {
+            let name = schema.name.as_str();
+            advertise_tool_at_depth(name, depth)
+                && (resources.advertises(name) || (depth >= 1 && name == "report"))
+        })
         .collect()
 }
 
@@ -257,6 +261,122 @@ mod tests {
     use std::collections::BTreeSet;
 
     use hya_tool::ToolRegistry;
+
+    fn bundle_advertise_view(
+        fields: &str,
+    ) -> Result<std::sync::Arc<CompiledResourceView>, Box<dyn std::error::Error>> {
+        use crate::{AgentCatalog, RuntimeRegistry};
+        use hya_bundle::{BundleCatalog, BundleSource, SourceFile, prepare_package};
+
+        let prepared = prepare_package(BundleSource::new(
+            "advertise",
+            vec![SourceFile::new(
+                "bundle.yaml",
+                format!(
+                    "kind: Bundle\nidentity: {{ id: acme/advertise, version: 1.0.0, publisher: acme }}\nagents:\n  - id: selective-agent\n    role: main\n    can_spawn: [hya-scout]\n    {fields}\n"
+                ),
+            )],
+        ))?;
+        let catalog = AgentCatalog::new(std::sync::Arc::new(
+            BundleCatalog::from_verified_catalogs(&[&prepared])?,
+        ))?;
+        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), std::sync::Arc::new(catalog));
+        let binding = registry.bind_turn(std::path::Path::new("/tmp/hya-advertise"))?;
+        let policy = binding.agent_resource_policy("selective-agent")?;
+        Ok(binding.compile_agent_resources(&policy)?)
+    }
+
+    #[test]
+    fn advertise_limits_model_schemas_and_keeps_the_executable_view()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let resources = bundle_advertise_view(
+            "advertise: [bash]\n    resource_view: { allow: ['harness:tool/bash', 'harness:tool/read'] }",
+        )?;
+        for (depth, expected) in [
+            (0, vec!["bash"]),
+            (1, vec!["bash", "report"]),
+            (crate::MAX_SUBAGENT_DEPTH, vec!["bash", "report"]),
+        ] {
+            let mut names = filtered_tool_schemas(&resources, &ModelRef::new("fake"), depth)
+                .into_iter()
+                .map(|schema| schema.name.to_string())
+                .collect::<Vec<_>>();
+            names.sort();
+            assert_eq!(names, expected, "depth {depth}");
+        }
+        for name in ["bash", "read", "wait", "task", "archive", "report"] {
+            assert!(
+                resources.resolve_tool(name).is_some(),
+                "{name} stays executable"
+            );
+        }
+        for schema in resources.tool_schemas() {
+            assert!(resources.resolve_tool(schema.name.as_str()).is_some());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn advertise_uses_the_views_public_tool_names() -> Result<(), Box<dyn std::error::Error>> {
+        let resources = bundle_advertise_view(
+            "advertise: [run]\n    resource_view: { allow: ['harness:tool/bash'], aliases: { run: 'harness:tool/bash' } }",
+        )?;
+        let names = filtered_tool_schemas(&resources, &ModelRef::new("fake"), 0)
+            .into_iter()
+            .map(|schema| schema.name.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["run"]);
+        assert!(resources.resolve_tool("run").is_some());
+        assert!(resources.resolve_tool("wait").is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn missing_and_empty_advertise_preserve_depth_filtering()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for fields in ["", "advertise: []"] {
+            let resources = bundle_advertise_view(fields)?;
+            for depth in [0, 1, crate::MAX_SUBAGENT_DEPTH] {
+                let expected = resources
+                    .tool_schemas()
+                    .into_iter()
+                    .filter(|schema| advertise_tool_at_depth(schema.name.as_str(), depth))
+                    .map(|schema| schema.name.to_string())
+                    .collect::<BTreeSet<_>>();
+                let actual = filtered_tool_schemas(&resources, &ModelRef::new("fake"), depth)
+                    .into_iter()
+                    .map(|schema| schema.name.to_string())
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(actual, expected);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn advertise_rejects_unknown_or_excluded_tools() {
+        for name in ["missing-tool", "write"] {
+            let result = bundle_advertise_view(&format!(
+                "advertise: [{name}]\n    resource_view: {{ allow: ['harness:tool/bash'] }}"
+            ));
+            let Err(error) = result else {
+                panic!("{name} must not compile");
+            };
+            assert!(
+                error
+                    .downcast_ref::<hya_bundle::BundleError>()
+                    .is_some_and(|error| matches!(
+                        error,
+                        hya_bundle::BundleError::InvalidManifest { .. }
+                    ))
+            );
+            let message = error.to_string();
+            assert!(
+                message.contains("selective-agent") && message.contains(name),
+                "{message}"
+            );
+        }
+    }
 
     /// Pin explicit overrides, the unsuffixed default, and no silent
     /// inheritance for an invalid variant.

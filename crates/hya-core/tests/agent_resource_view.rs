@@ -200,6 +200,7 @@ fn catalog() -> (Arc<AgentCatalog>, Vec<RuntimeSource>) {
                 },
                 can_spawn: Vec::new(),
                 hook_refs: Vec::new(),
+                advertise: Vec::new(),
             }],
             tools: Vec::new(),
             skills: vec![PreparedResource {
@@ -464,6 +465,7 @@ async fn canonical_allow_deny_and_alias_share_schema_and_dispatch() {
             },
             can_spawn: Vec::new(),
             hook_refs: Vec::new(),
+            advertise: Vec::new(),
         }],
         tools: Vec::new(),
         skills: Vec::new(),
@@ -751,6 +753,7 @@ async fn a_bundle_agent_cannot_select_a_harness_mcp_export_or_skill() {
                 },
                 can_spawn: Vec::new(),
                 hook_refs: Vec::new(),
+                advertise: Vec::new(),
             }],
             tools: Vec::new(),
             skills: Vec::new(),
