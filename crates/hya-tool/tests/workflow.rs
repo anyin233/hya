@@ -68,6 +68,7 @@ fn context(sink: Arc<CaptureSink>, session: hya_proto::SessionId) -> ToolCtx {
     let (interaction, _interaction_rx) = InteractionPlane::new();
     let (spawner, _spawner_rx) = SpawnerPlane::new();
     ToolCtx {
+        nested: hya_tool::NestedToolPlane::disconnected(),
         workflows: WorkflowPlane::from_sink(sink).for_session(session),
         permission,
         interaction,

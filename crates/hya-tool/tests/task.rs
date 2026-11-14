@@ -37,6 +37,7 @@ fn ctx_with_session(rules: Vec<Rule>, spawner: SpawnerPlane, session: SessionId)
     let operation = ToolOperation::from_tool_call(ToolCallId::new());
     let workdir = tempdir();
     ToolCtx {
+        nested: hya_tool::NestedToolPlane::disconnected(),
         workflows: hya_tool::WorkflowPlane::disconnected(),
         permission,
         interaction,

@@ -431,6 +431,7 @@ for line in sys.stdin:
         let (interaction, _irx) = hya_tool::InteractionPlane::new();
         let (spawner, _srx) = hya_tool::SpawnerPlane::new();
         hya_tool::ToolCtx {
+            nested: hya_tool::NestedToolPlane::disconnected(),
             permission,
             interaction,
             spawner,

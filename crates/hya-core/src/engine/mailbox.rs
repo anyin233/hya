@@ -947,6 +947,7 @@ mod tests {
         ));
         let (permission, _) = PermissionPlane::new(PermissionRules::default());
         let ctx = hya_tool::ToolCtx {
+            nested: hya_tool::NestedToolPlane::disconnected(),
             permission,
             interaction: hya_tool::InteractionPlane::new().0,
             spawner: hya_tool::SpawnerPlane::new().0,

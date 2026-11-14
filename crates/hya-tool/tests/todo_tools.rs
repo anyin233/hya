@@ -27,6 +27,7 @@ fn ctx_with(rules: Vec<Rule>, session: SessionId, todo: TodoPlane) -> ToolCtx {
     let (interaction, _irx) = InteractionPlane::new();
     let (spawner, _srx) = SpawnerPlane::new();
     ToolCtx {
+        nested: hya_tool::NestedToolPlane::disconnected(),
         workflows: hya_tool::WorkflowPlane::disconnected(),
         permission: permission.for_session(session),
         interaction,

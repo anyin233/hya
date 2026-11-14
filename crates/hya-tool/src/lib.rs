@@ -43,6 +43,8 @@ pub mod mailbox;
 pub mod namespace;
 /// Lockstep native-library loading contract for first-party tool bundles.
 pub mod native_bundle;
+/// Nested tool calls from inside a tool call.
+pub mod nested;
 mod output_cap;
 /// Allow/ask/deny permission plane: invocation policy, resource rules, and asks.
 pub mod permission;
@@ -89,6 +91,7 @@ pub use mailbox::{
     MailboxPlane, MailboxRequest, MemberStatusRow,
 };
 pub use namespace::{InvalidNamespacedName, NAMESPACE_SEPARATOR, namespace_of, namespaced_name};
+pub use nested::{NestedToolPlane, NestedTools};
 pub use output_cap::{
     MAX_TOOL_OUTPUT_CHARS, cap_tool_output, cap_tool_output_spilling, cap_tool_output_with_policy,
 };

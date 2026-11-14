@@ -60,6 +60,7 @@ mod file_snapshot;
 mod fork;
 mod handoff;
 mod mailbox;
+mod nested_tools;
 pub(crate) use mailbox::dm_channel_between;
 mod member_control;
 mod members;

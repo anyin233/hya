@@ -943,6 +943,7 @@ flowchart TD
         .unwrap();
     let other_workflows = workflow_sender.for_binding(&binding).for_session(other);
     let ctx = ToolCtx {
+        nested: hya_tool::NestedToolPlane::disconnected(),
         workflows,
         permission: permission.for_session(lead),
         interaction: interaction.for_session(lead),
@@ -3903,6 +3904,7 @@ fn sidecar_test_ctx(root: &Path) -> ToolCtx {
     let (interaction, _interaction_rx) = InteractionPlane::new();
     let (spawner, _spawner_rx) = SpawnerPlane::new();
     ToolCtx {
+        nested: hya_tool::NestedToolPlane::disconnected(),
         workflows: hya_tool::WorkflowPlane::disconnected(),
         permission: permission.for_session(session),
         interaction: interaction.for_session(session),
@@ -6672,6 +6674,7 @@ for line in sys.stdin:
     let (interaction, _interaction_rx) = InteractionPlane::new();
     let (spawner, _spawner_rx) = SpawnerPlane::new();
     let ctx = ToolCtx {
+        nested: hya_tool::NestedToolPlane::disconnected(),
         workflows: hya_tool::WorkflowPlane::disconnected(),
         permission: permission.for_session(session),
         interaction: interaction.for_session(session),
