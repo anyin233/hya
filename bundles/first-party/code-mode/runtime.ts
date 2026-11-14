@@ -314,6 +314,300 @@ function scriptLine(): number {
   if (!match) throw new Error("could not locate the script call site");
   return Number(match[1]);
 }
+// The script starts on line 1 of the wrapper, so wrapper lines are script lines.
+const SCRIPT_PREFIX = "(async function() {";
+function wrapScript(script: string): string {
+  return `${SCRIPT_PREFIX}${script}\n})()`;
+}
+function located(error: unknown): string {
+  const line = record(error) && typeof error.stack === "string"
+    ? error.stack.match(/(?:orchestrator|code-mode)-script\.js:(\d+)/)?.[1] : undefined;
+  return line ? `${message(error)} (line ${line})` : message(error);
+}
+
+// Pre-run check: a script that would fail on syntax, an unknown tool, or a
+// wrong argument object is rejected before it makes any call.
+export interface Diagnostic { line: number; column: number | null; message: string }
+const transpiler = new Bun.Transpiler({ loader: "js" });
+function syntaxDiagnostics(script: string): Diagnostic[] {
+  const wrapped = wrapScript(script);
+  try {
+    new vm.Script(wrapped, { filename: "code-mode-script.js" });
+    return [];
+  } catch (error) {
+    // JSC runs the script, so it decides validity; Bun's parser locates and explains the error.
+    const line = record(error) && typeof error.stack === "string" ? error.stack.match(/code-mode-script\.js:(\d+)/)?.[1] : undefined;
+    const jsc: Diagnostic = { line: Number(line ?? 1), column: null, message: message(error) };
+    try {
+      transpiler.transformSync(wrapped);
+    } catch (explained) {
+      const errors: any[] = record(explained) && Array.isArray(explained.errors) ? explained.errors : [explained];
+      // Later errors are usually cascades of the first; Bun columns are 1-based.
+      const first = errors.find((entry) => record(entry?.position));
+      if (first) {
+        const { line, column } = first.position;
+        return [{ line, column: Math.max(0, column - 1 - (line === 1 ? SCRIPT_PREFIX.length : 0)), message: first.message }];
+      }
+    }
+    return [jsc];
+  }
+}
+
+interface Token { kind: "id" | "punct" | "string" | "other"; value: string; line: number; column: number }
+const idStart = (code: number) => (code >= 97 && code <= 122) || (code >= 65 && code <= 90) || code === 95 || code === 36 || code > 127;
+const idPart = (code: number) => idStart(code) || (code >= 48 && code <= 57);
+const REGEX_AFTER_WORD = new Set(["return", "typeof", "case", "do", "else", "in", "of", "new", "delete", "void", "throw", "await", "yield"]);
+// Tokens of a script that JSC has accepted: enough to see calls and the keys of object literals.
+function tokenize(source: string): Token[] {
+  const tokens: Token[] = [];
+  const templateBraces: number[] = [];
+  let index = 0, line = 1, lineStart = 0;
+  const push = (kind: Token["kind"], value: string, start: number, startLine = line, startLineStart = lineStart) =>
+    tokens.push({ kind, value, line: startLine, column: start - startLineStart });
+  const newline = (at: number) => { line++; lineStart = at + 1; };
+  const skipEscape = () => { if (source[index + 1] === "\n") newline(index + 1); index += 2; };
+  const template = (start: number) => {
+    const startLine = line, startLineStart = lineStart;
+    while (index < source.length) {
+      const char = source[index];
+      if (char === "\\") { skipEscape(); continue; }
+      if (char === "`") { index++; break; }
+      if (char === "$" && source[index + 1] === "{") { index += 2; templateBraces.push(0); break; }
+      if (char === "\n") newline(index);
+      index++;
+    }
+    push("other", "`", start, startLine, startLineStart);
+  };
+  while (index < source.length) {
+    const char = source[index], code = source.charCodeAt(index), start = index;
+    if (char === "\n") { newline(index); index++; continue; }
+    if (code <= 32) { index++; continue; }
+    const next = source[index + 1];
+    if (char === "/" && next === "/") { while (index < source.length && source[index] !== "\n") index++; continue; }
+    if (char === "/" && next === "*") {
+      index += 2;
+      while (index < source.length && !(source[index] === "*" && source[index + 1] === "/")) { if (source[index] === "\n") newline(index); index++; }
+      index += 2;
+      continue;
+    }
+    if (idStart(code)) {
+      while (index < source.length && idPart(source.charCodeAt(index))) index++;
+      push("id", source.slice(start, index), start);
+      continue;
+    }
+    if (code >= 48 && code <= 57) {
+      while (index < source.length && (idPart(source.charCodeAt(index)) || source[index] === ".")) index++;
+      push("other", "0", start);
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      index++;
+      while (index < source.length && source[index] !== char) { if (source[index] === "\\") skipEscape(); else index++; }
+      index++;
+      push("string", source.slice(start + 1, index - 1), start);
+      continue;
+    }
+    if (char === "`") { index++; template(start); continue; }
+    if (char === "/") {
+      const previous = tokens.at(-1);
+      const regex = !previous || (previous.kind === "punct" && !")]}".includes(previous.value)) || (previous.kind === "id" && REGEX_AFTER_WORD.has(previous.value));
+      if (regex) {
+        index++;
+        let inClass = false;
+        while (index < source.length && source[index] !== "\n" && (inClass || source[index] !== "/")) {
+          if (source[index] === "\\") index++;
+          else if (source[index] === "[") inClass = true;
+          else if (source[index] === "]") inClass = false;
+          index++;
+        }
+        index++;
+        while (index < source.length && idPart(source.charCodeAt(index))) index++;
+        push("other", "/", start);
+        continue;
+      }
+    }
+    if (templateBraces.length && char === "{") templateBraces[templateBraces.length - 1]++;
+    if (templateBraces.length && char === "}" && templateBraces[templateBraces.length - 1]-- === 0) {
+      templateBraces.pop();
+      index++;
+      template(start);
+      continue;
+    }
+    if (char === "." && next === "." && source[index + 2] === ".") { index += 3; push("punct", "...", start); continue; }
+    if (char === "=" && next === ">") { index += 2; push("punct", "=>", start); continue; }
+    index++;
+    push("punct", char, start);
+  }
+  return tokens;
+}
+
+const OPENERS: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
+function closing(tokens: Token[], open: number): number {
+  let depth = 0;
+  for (let index = open; index < tokens.length; index++) {
+    const { kind, value } = tokens[index];
+    if (kind !== "punct") continue;
+    if (OPENERS[value]) depth++;
+    else if (value === ")" || value === "]" || value === "}") { if (--depth === 0) return index; }
+  }
+  return tokens.length - 1;
+}
+function opening(tokens: Token[], close: number): number {
+  let depth = 0;
+  for (let index = close; index >= 0; index--) {
+    const { kind, value } = tokens[index];
+    if (kind !== "punct") continue;
+    if (value === ")" || value === "]" || value === "}") depth++;
+    else if (OPENERS[value] && --depth === 0) return index;
+  }
+  return 0;
+}
+// Every name the script binds anywhere; over-collecting only suppresses diagnostics.
+function boundNames(tokens: Token[]): Set<string> {
+  const names = new Set<string>();
+  const collect = (from: number, to: number) => {
+    for (let index = from; index <= to; index++) if (tokens[index].kind === "id") names.add(tokens[index].value);
+  };
+  tokens.forEach((token, index) => {
+    const next = tokens[index + 1];
+    if (token.kind === "id" && /^(const|let|var|function|class|catch)$/.test(token.value) && next) {
+      if (next.kind === "id") names.add(next.value);
+      if (next.kind === "punct" && OPENERS[next.value]) collect(index + 1, closing(tokens, index + 1));
+      if (token.value === "function") {
+        const params = next.kind === "id" ? index + 2 : index + 1;
+        if (tokens[params]?.value === "(") collect(params, closing(tokens, params));
+      }
+    }
+    if (token.kind === "punct" && token.value === "=>" && index > 0) {
+      const previous = tokens[index - 1];
+      if (previous.kind === "id") names.add(previous.value);
+      else if (previous.value === ")") collect(opening(tokens, index - 1), index - 1);
+    }
+  });
+  return names;
+}
+
+interface ObjectLiteral { keys: string[]; open: boolean; values: Map<string, Token> }
+// Top-level keys of the object literal at `start`; `open` when a spread or computed key hides some.
+function objectLiteral(tokens: Token[], start: number): ObjectLiteral {
+  const end = closing(tokens, start);
+  const literal: ObjectLiteral = { keys: [], open: false, values: new Map() };
+  let index = start + 1;
+  while (index < end) {
+    const token = tokens[index], after = tokens[index + 1];
+    if (token.value === "..." || token.value === "[") literal.open = true;
+    else if ((token.kind === "id" || token.kind === "string") && [":", ",", "}", "("].includes(after?.value ?? "")) {
+      literal.keys.push(token.value);
+      const value = tokens[index + 2];
+      if (after.value === ":" && value?.kind === "string" && [",", "}"].includes(tokens[index + 3]?.value ?? "")) literal.values.set(token.value, value);
+    }
+    // Skip to the next top-level comma.
+    while (index < end && tokens[index].value !== ",") index = OPENERS[tokens[index].value] && tokens[index].kind === "punct" ? closing(tokens, index) + 1 : index + 1;
+    index++;
+  }
+  return literal;
+}
+
+function distance(a: string, b: string): number {
+  const row = Array.from({ length: b.length + 1 }, (_, column) => column);
+  for (let i = 1; i <= a.length; i++) {
+    let diagonal = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const above = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, diagonal + (a[i - 1] === b[j - 1] ? 0 : 1));
+      diagonal = above;
+    }
+  }
+  return row[b.length];
+}
+function nearest(name: string, candidates: string[]): string[] {
+  return candidates.map((candidate) => [candidate, distance(name, candidate)] as const)
+    .sort((a, b) => a[1] - b[1]).slice(0, 3).map(([candidate]) => candidate);
+}
+
+const UNAVAILABLE = new Set(["require", "import", "process", "Bun", "fetch", "setTimeout", "setInterval", "setImmediate", "Buffer", "module", "exports", "__dirname", "__filename"]);
+const AGENT_KEYS = ["agent", "prompt", "description", "result", "model", "effort", "timeout_secs", "cache"];
+interface CallShape { keys: string[]; required: string[]; closed: boolean }
+function argumentDiagnostics(call: string, shape: CallShape, literal: ObjectLiteral, at: Token): Diagnostic[] {
+  const found: Diagnostic[] = [];
+  const unknown = literal.keys.filter((key) => !shape.keys.includes(key));
+  if (shape.closed) for (const key of unknown) {
+    found.push({ line: at.line, column: at.column, message: `${call}: unknown argument \`${key}\`; it takes ${shape.keys.join(", ") || "no arguments"}` });
+  }
+  if (!literal.open) for (const key of shape.required.filter((key) => !literal.keys.includes(key))) {
+    const given = !shape.closed && unknown.length ? ` (given: ${unknown.join(", ")})` : "";
+    found.push({ line: at.line, column: at.column, message: `${call}: missing required argument \`${key}\`${given}` });
+  }
+  return found;
+}
+
+export function checkScript(script: string, schemas: ToolSchema[], personality: Personality): Diagnostic[] {
+  const syntax = syntaxDiagnostics(script);
+  if (syntax.length) return syntax;
+  const tokens = tokenize(script);
+  const bound = boundNames(tokens);
+  const tools = new Map(schemas.map((schema) => [toolIdentifier(schema.name), schema]));
+  const found: Diagnostic[] = [];
+  const at = (token: Token, text: string) => found.push({ line: token.line, column: token.column, message: text });
+  const literalArgument = (index: number) => tokens[index]?.value === "(" && tokens[index + 1]?.value === "{" ? objectLiteral(tokens, index + 1) : null;
+  tokens.forEach((token, index) => {
+    if (token.kind !== "id") return;
+    const previous = tokens[index - 1], next = tokens[index + 1];
+    if (previous?.value === "." && previous.kind === "punct") return;
+    if (next?.value === ":" && (previous?.value === "{" || previous?.value === ",")) return;
+    if (UNAVAILABLE.has(token.value) && !bound.has(token.value) && previous?.value !== "typeof") {
+      at(token, `\`${token.value}\` is not available: a script has no modules, process, network or timers, and reaches the outside only through ${personality.tools ? "tools.*, " : ""}agents.run and models.classify`);
+      return;
+    }
+    if (token.value === "tools" && !bound.has("tools")) {
+      if (!personality.tools) { at(token, "A workflow can only call agents.run and models.classify; `tools` is not available"); return; }
+      const name = tokens[index + 2];
+      if (next?.value !== "." || name?.kind !== "id") return;
+      const schema = tools.get(name.value);
+      if (!schema) {
+        at(name, `tools.${name.value} does not exist; nearest callable tools: ${nearest(name.value, [...tools.keys()]).map((tool) => `tools.${tool}`).join(", ") || "(none)"}`);
+        return;
+      }
+      const literal = literalArgument(index + 3);
+      const inputSchema: Record<string, any> = schema.input_schema;
+      if (literal) found.push(...argumentDiagnostics(`tools.${name.value}`, {
+        keys: Object.keys(record(inputSchema.properties) ? inputSchema.properties : {}),
+        required: Array.isArray(inputSchema.required) ? inputSchema.required : [],
+        closed: inputSchema.additionalProperties === false,
+      }, literal, name));
+      return;
+    }
+    const method = tokens[index + 2];
+    if (next?.value !== "." || method?.kind !== "id") return;
+    const call = `${token.value}.${method.value}`;
+    if (call === "agents.run" && !bound.has("agents")) {
+      const literal = literalArgument(index + 3);
+      if (!literal) return;
+      found.push(...argumentDiagnostics(call, { keys: AGENT_KEYS, required: ["agent", "prompt"], closed: true }, literal, method));
+      const agent = literal.values.get("agent");
+      if (agent && !personality.tools && !WORKER_AGENTS.includes(agent.value)) at(agent, `agents.run agent must be one of: ${WORKER_AGENTS.join(", ")}`);
+    }
+    if (call === "models.classify" && !bound.has("models")) {
+      const literal = literalArgument(index + 3);
+      if (literal) found.push(...argumentDiagnostics(call, { keys: ["state", "questions"], required: ["state", "questions"], closed: true }, literal, method));
+    }
+  });
+  return found;
+}
+
+const SHOWN_DIAGNOSTICS = 5;
+export function renderDiagnostics(script: string, diagnostics: Diagnostic[]): string {
+  const lines = script.split("\n");
+  const shown = diagnostics.slice(0, SHOWN_DIAGNOSTICS).map(({ line, column, message: text }) => {
+    const source = lines[line - 1] ?? "";
+    return column === null
+      ? `L${line}: ${text}\n  ${source}`
+      : `L${line}:${column + 1}: ${text}\n  ${source}\n  ${" ".repeat(column)}^`;
+  });
+  const more = diagnostics.length > SHOWN_DIAGNOSTICS ? `\n… ${diagnostics.length - SHOWN_DIAGNOSTICS} more` : "";
+  return `the script was checked before running and made no call; fix it and send it again:\n${shown.join("\n")}${more}`;
+}
 function traceLine(entry: TraceEntry): string {
   const elapsed = entry.cached ? "0.0 s" : `${(entry.ms / 1000).toFixed(1)} s`;
   let call: string;
@@ -503,6 +797,8 @@ export async function executeScript(script: string, context: RunContext): Promis
     const run = async () => {
       const schemas: ToolSchema[] = personality.tools ? (await context.host("tools.list", {}, controller.signal)).tools : [];
       ensureActive();
+      const problems = checkScript(script, schemas, personality);
+      if (problems.length) throw new Error(renderDiagnostics(script, problems));
       await new Promise<void>((resolveRun, rejectRun) => {
         // A worker lets the parent enforce the deadline even for a CPU loop
         // resumed after an await, outside vm.Script's synchronous timeout.
@@ -655,7 +951,7 @@ export async function executeScript(script: string, context: RunContext): Promis
     { status, output: fullOutput },
   ].map((value) => JSON.stringify(value)).join("\n") + "\n");
 
-  let prefix = `${header}${savedLine}\n${truncate(fullBody, options.max_output_chars)}${truncate(errorLine, 400)}\n<trace>\n`;
+  let prefix = `${header}${savedLine}\n${truncate(fullBody, options.max_output_chars)}${truncate(errorLine, 1600)}\n<trace>\n`;
   // Reserve trace space even if an unusually long config directory consumes the budget.
   prefix = truncate(prefix, Math.max(0, MAX_RESULT_CHARS - footer.length - 400));
   const available = Math.max(0, MAX_RESULT_CHARS - prefix.length - footer.length);
@@ -714,7 +1010,7 @@ async function runVMWorker(): Promise<void> {
     });
   }
   const sandbox = vm.createContext(globals);
-  const compiled = new vm.Script(`(async function() {${script}\n})()`, { filename: personality.file });
+  const compiled = new vm.Script(wrapScript(script), { filename: personality.file });
   const value = await compiled.runInContext(sandbox, { timeout: options.timeout_ms });
   if (value !== undefined) port.postMessage({ type: "text", value: typeof value === "string" ? value : json(value) });
   port.postMessage({ type: "done" });
@@ -727,7 +1023,7 @@ export const INITIALIZE_RESULT = {
   skills: [],
   tools: [{
     name: "workflow",
-    description: "Orchestrate specialised workers and an optional judge with a traced JavaScript async-function body. Use {script, args?, save_as?}, {run, args?}, {list:true}, or {show:name}. Globals: args, agents.run (agent required: orchestrator-scout, orchestrator-runner, orchestrator-editor; a scout's answer on an unchanged workspace is remembered unless cache:false), models.classify, text, console.log. No local tools, imports, process, fetch, Bun, or timers. A first-line // @options: JSON comment sets timeout_ms (default 1800000, max 3000000) and max_output_chars (default 3000, max 3600). Scripts are saved even on failure for inspection and repair with show.",
+    description: "Orchestrate specialised workers and an optional judge with a traced JavaScript async-function body. Use {script, args?, save_as?}, {run, args?}, {list:true}, or {show:name}. Globals: args, agents.run (agent required: orchestrator-scout, orchestrator-runner, orchestrator-editor; a scout's answer on an unchanged workspace is remembered unless cache:false), models.classify, text, console.log. No local tools, imports, process, fetch, Bun, or timers. A first-line // @options: JSON comment sets timeout_ms (default 1800000, max 3000000) and max_output_chars (default 3000, max 3600). Scripts are saved even on failure for inspection and repair with show. Before anything runs, the script is checked for syntax errors and unavailable globals; one that fails the check makes no call, and the result names the line and column to fix.",
     inputSchema: {
       type: "object",
       oneOf: [
@@ -742,7 +1038,7 @@ export const INITIALIZE_RESULT = {
 
 export function initializeResult(personality: Personality) {
   return { ...INITIALIZE_RESULT, plugin: { ...INITIALIZE_RESULT.plugin, id: personality.plugin },
-    tools: [{ ...INITIALIZE_RESULT.tools[0], name: personality.name, description: personality.tools ? "Run a JavaScript program that calls your other tools and can start worker agents. Only what the program outputs comes back to you, so one call can run several tools, run them in parallel, branch on their results, and filter or combine them before you read them.\n\nInput is one of: `{script, args?, save_as?}` runs a program (`save_as` stores it under a name, also when it fails); `{run, args?}` runs a stored program with new `args`; `{list: true}` lists stored programs; `{show: name}` returns a stored program's source and last error so you can repair it.\n\n`script` is the body of an async function: top-level `await` and `return` work. It has no file, network, import, or timer access; it reaches the outside only through these globals:\n\n- `args`: the `args` object of the call, or `{}`.\n- `await tools.<name>(args)` calls a tool with the arguments you would pass it directly and resolves to the tool's result value. A character of the tool name that cannot be part of a JavaScript identifier becomes `_`. File and shell tools resolve to an object such as `{title, output, metadata}` whose `output` is the text you would see when calling the tool directly. A failed or denied call rejects with an `Error` carrying the tool's error text; use `Promise.allSettled` to keep the results of the calls that succeed.\n- `ALL_TOOLS` is `[{name, description}]` for every tool the program can call. `describeTool(name)` returns `{name, description, input_schema}` or `undefined`.\n- `await agents.run({agent, prompt, description?, result?, model?, effort?, timeout_secs?, cache?})` starts one worker agent you may spawn and waits for its report; it resolves to `{handle, session, status, report, result}`. `result` maps field names to descriptions: the worker must end its report with a `RESULT: {...}` line holding those fields, which comes back parsed as `result` (or `null`). A worker gets 600 seconds unless you pass `timeout_secs` (at most 1800); one that runs out is stopped. Start several with `Promise.all`.\n- `await models.classify({state, questions})` asks the configured judge model typed questions (`bool`, `choice`, `score`) about `state`; it rejects when no judge is configured.\n- `text(value)` adds an item to the output (a string as is, anything else as JSON); `return value` does the same. `console.log(...)` adds a line to a separate console block.\n- An optional first line sets limits: `// @options: {\"timeout_ms\": 1800000, \"max_output_chars\": 3000}` (at most 3000000 and 3600).\n\nOutput longer than `max_output_chars` keeps only its start and end, so select what you need inside the program: slice file text, filter matches, summarise command output. The result ends with one trace line per tool, agent, or judge call (source line, call, arguments, outcome, time). Calls are real: calls made before an error are not undone." : INITIALIZE_RESULT.tools[0].description }] };
+    tools: [{ ...INITIALIZE_RESULT.tools[0], name: personality.name, description: personality.tools ? "Run a JavaScript program that calls your other tools and can start worker agents. Only what the program outputs comes back to you, so one call can run several tools, run them in parallel, branch on their results, and filter or combine them before you read them.\n\nInput is one of: `{script, args?, save_as?}` runs a program (`save_as` stores it under a name, also when it fails); `{run, args?}` runs a stored program with new `args`; `{list: true}` lists stored programs; `{show: name}` returns a stored program's source and last error so you can repair it.\n\n`script` is the body of an async function: top-level `await` and `return` work. It has no file, network, import, or timer access; it reaches the outside only through these globals:\n\n- `args`: the `args` object of the call, or `{}`.\n- `await tools.<name>(args)` calls a tool with the arguments you would pass it directly and resolves to the tool's result value. A character of the tool name that cannot be part of a JavaScript identifier becomes `_`. File and shell tools resolve to an object such as `{title, output, metadata}` whose `output` is the text you would see when calling the tool directly. A failed or denied call rejects with an `Error` carrying the tool's error text; use `Promise.allSettled` to keep the results of the calls that succeed.\n- `ALL_TOOLS` is `[{name, description}]` for every tool the program can call. `describeTool(name)` returns `{name, description, input_schema}` or `undefined`.\n- `await agents.run({agent, prompt, description?, result?, model?, effort?, timeout_secs?, cache?})` starts one worker agent you may spawn and waits for its report; it resolves to `{handle, session, status, report, result}`. `result` maps field names to descriptions: the worker must end its report with a `RESULT: {...}` line holding those fields, which comes back parsed as `result` (or `null`). A worker gets 600 seconds unless you pass `timeout_secs` (at most 1800); one that runs out is stopped. Start several with `Promise.all`.\n- `await models.classify({state, questions})` asks the configured judge model typed questions (`bool`, `choice`, `score`) about `state`; it rejects when no judge is configured.\n- `text(value)` adds an item to the output (a string as is, anything else as JSON); `return value` does the same. `console.log(...)` adds a line to a separate console block.\n- An optional first line sets limits: `// @options: {\"timeout_ms\": 1800000, \"max_output_chars\": 3000}` (at most 3000000 and 3600).\n\nOutput longer than `max_output_chars` keeps only its start and end, so select what you need inside the program: slice file text, filter matches, summarise command output. The result ends with one trace line per tool, agent, or judge call (source line, call, arguments, outcome, time). Calls are real: calls made before an error are not undone. Before anything runs, the program is checked for syntax errors, unknown tools, missing required arguments, and unavailable globals; a program that fails the check makes no call, and the result names the line and column to fix." : INITIALIZE_RESULT.tools[0].description }] };
 }
 
 interface Frame {
@@ -847,5 +1143,5 @@ async function main(): Promise<void> {
   }
   await Promise.all(active);
 }
-if (!isMainThread) void runVMWorker().catch((error) => parentPort!.postMessage({ type: "failed", error: message(error) }));
+if (!isMainThread) void runVMWorker().catch((error) => parentPort!.postMessage({ type: "failed", error: located(error) }));
 else if (import.meta.main) void main().catch((error) => { process.stderr.write(`orchestrator: ${message(error)}\n`); process.exit(1); });
