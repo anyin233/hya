@@ -525,26 +525,16 @@ cd bundles/extra/token-summary && bun test
 
 ## `hya-extra/orchestrator`
 
-### Introduction
+An optional main agent whose only model-facing tool is `workflow`. JavaScript
+programs arrange specialised workers and an optional TypeSafe Jev judge. The
+orchestrator has no file, search, command or edit tools; every external effect
+comes from a worker or judge call with a source line and JSONL trace.
 
-An optional bundle whose `orchestrator` main agent offers only the `code`
-tool to its model. Each tool invocation runs a JavaScript async-function body
-that can compose hya tools, worker agents, and an optional TypeSafe Jev judge.
-Programs can filter large tool results before returning them, run independent
-calls concurrently, and inspect the source line behind each recorded effect.
-The `orchestrator-worker` subagent uses ordinary file and shell tools.
+### Package and use
 
-The bundle requires hya's nested `tools.list` / `tool.call` capabilities,
-agent `advertise` field, and `extensions.process.timeout_ms` support. Its
-explicit Bun process speaks plugin protocol v1 directly, with a one-hour
-host request timeout. The VM runs in a worker thread inside that process;
-the parent enforces the script deadline even for CPU loops after `await`.
-This is an effect-recording discipline, not a security boundary.
-
-### Usage
-
-With Bun 1.4.2 on `PATH` and the two agent prompts present, package, install,
-and select the agent:
+Requires Bun 1.4.2 on `PATH` and hya with nested `tool.call`, agent `advertise`
+and process `timeout_ms` support. The bundle packages a main-agent prompt
+and three specialised worker prompts.
 
 ```sh
 cargo run -p xtask -- package-bundle bundles/extra/orchestrator orchestrator.hyabundle
@@ -552,107 +542,130 @@ hya bundle install orchestrator.hyabundle
 hya
 ```
 
-In the TUI, enter `/agent orchestrator` to select it. For headless runs, set
+Select `/agent orchestrator` in the TUI. For headless runs, set
 `default_agent: orchestrator` in hya's `config.yaml` before `hya exec`.
 
-The judge is optional. To enable it, write
-`<hya config dir>/bundles/hya-extra%2Forchestrator/config.yml` for a user
-install, or `.hya/bundles/orchestrator/config.yml` for a project install:
+| Worker | Tools | Purpose |
+| --- | --- | --- |
+| `orchestrator-scout` | `read`, `grep`, `glob` | Find facts; cannot run commands or change files. |
+| `orchestrator-runner` | `bash`, `read` | Run commands and report outcomes; no edit tools, and its prompt prohibits shell edits. |
+| `orchestrator-editor` | `read`, `grep`, `glob`, `write`, `edit` | Make changes; cannot run commands or tests. |
 
-```yaml
-judge:
-  model: jev-1.14.0
-  api_key_file: /absolute/path/to/typesafe-key
-  timeout_ms: 20000
+Each worker also receives harness coordination tools, including `report`.
+An editor makes a change and a runner checks it. The runner's shell restriction
+is a prompt rule, not a filesystem sandbox.
+
+### Workflow interface
+
+The tool accepts exactly one of:
+
+```ts
+{script: string, args?: object, save_as?: string}
+{run: string, args?: object}
+{list: true}
 ```
 
-The process receives a cleared environment and reads
-`HYA_BUNDLE_CONFIG_FILE`; it does not read credentials from shell variables.
-Config is read at process start. hya restarts the process after the config
-file changes at the next root binding; changing only the key file requires
-a restart. Missing or invalid judge config affects only `models.classify`:
-that call rejects clearly while tool and worker calls remain usable.
+Start with `{"list":true}` to find reusable workflows. For example, run and save:
 
-A `code` tool input has exactly one field, `{"script": string}`. For example:
-
-```js
-// @options: {"timeout_ms":600000,"max_output_chars":3000}
-const matches = ALL_TOOLS.filter(t => t.name.includes("read"));
-text(matches);
-const files = await Promise.all([
-  tools.read({path: "README.md"}),
-  tools.read({path: "Cargo.toml"}),
-]);
-return files.map(file => file.output);
+```json
+{"script":"// Find files for a request\nreturn await agents.run({agent:'orchestrator-scout',prompt:args.request,result:{paths:'Relevant file paths'}});","args":{"request":"Find the exporter and its tests"},"save_as":"find-files"}
 ```
 
-Worker calls can also run concurrently:
+Reuse it with `{"run":"find-files","args":{"request":"Find the parser"}}`.
+Names match `^[a-z0-9][a-z0-9-]{0,63}$`. Unknown names produce a tool error
+listing stored names; malformed inputs describe the three accepted forms.
 
-```js
-const results = await Promise.all([
-  agents.run({agent: "hya-scout", prompt: "Locate the exporter", description: "Find exporter"}),
-  agents.run({prompt: "Inspect exporter tests", description: "Inspect tests"}),
-]);
-return results;
+The script is an async function body. Its globals are:
+
+- `args`: the supplied object, default `{}`.
+- `agents.run({agent, prompt, description?, result?, model?, effort?, timeout_secs?})`:
+  `agent` is required and must name one of the three workers above; `prompt` is
+  a non-empty string. `result?: Record<string,string>` describes requested report
+  fields. Timeout defaults to 1800 seconds and accepts `0..1800`. Resolves to
+  `{handle, session, status, report, result}`, where `status` is `done`, `failed`,
+  `cancelled` or `timeout`, `report` is rendered channel text, and `result` is an
+  object or `null`.
+- `models.classify({state, questions})`: typed judge questions; returns `{answers}`.
+  Question and answer schemas are defined below.
+- `text(value)`, `console.log(...values)`, and `return value`: collect output.
+
+Worker `result` fields append this instruction after a blank line:
+
+```text
+End your report with one final line of the form RESULT: {...} — a single-line JSON object with exactly these fields:
+- <field>: <description>
 ```
 
-With a judge configured:
+The last `RESULT:` line is parsed, including one following a `[sender]` prefix.
+Missing/invalid JSON, a non-object or a missing requested field yields `null`.
+A result is parsed even without requested fields. `Promise.all` supports
+independent concurrent calls.
 
-```js
-return await models.classify({
-  state: {test_output: "all exporter tests passed"},
-  questions: {
-    ready: {type: "bool", instructions: "Does this evidence support completion?"},
-    next: {type: "choice", instructions: "Choose the next step", criteria: {repair: "Tests failed", finish: "Tests passed"}},
-    quality: {type: "score", instructions: "Rate the evidence", criteria: ["Missing", "Partial", "Complete"]},
-  },
-});
+`tools`, `ALL_TOOLS` and `describeTool` are removed. Touching `tools` explains
+that a workflow can only call `agents.run` and `models.classify`. Imports,
+`require`, `process`, `Bun`, `fetch` and timers are unavailable. The VM runs in
+a worker thread so deadlines cover CPU loops after `await`. This is effect
+recording discipline, not a security boundary. The runtime's single host-call
+gate permits only `task`, `wait`, `archive` and `read` with a `channel://` path;
+it never discovers host tools.
+
+Only a first-line `// @options: {"timeout_ms":1800000,"max_output_chars":3000}`
+comment sets options. Both must be positive integers; maxima are 3000000 ms
+and 3600 characters respectively. The host process timeout is 3600000 ms.
+
+### Store, results and traces
+
+A completed `save_as` writes the exact source to
+`<HYA_BUNDLE_CONFIG_DIR>/workflows/<name>.js` and metadata to `<name>.json`:
+`{name, description, saved_ms, runs, last_run_ms, last_status}`. Names and
+descriptions are strings; times are Unix epoch milliseconds, `runs` is an
+integer, and status is `completed` or `failed`. Description comes from the
+first `//` line, excluding an options line. A new/replaced source starts with
+one run (the successful saving execution); subsequent stored runs increment
+it and update the last time/status, including failures. A failed save leaves
+any previous source and metadata untouched. The per-installation store
+survives sessions. Listing returns name, description, saved time and run count
+without executing. hya supplies the writable configuration directory for
+the bundle process.
+
+Plugin replies are `{ok: boolean, output: string, time_ms: number}`. Text starts
+with `Workflow completed in … s` or `Workflow failed in … s`; a stored run uses
+`Workflow <name> completed in … s` (or `failed`). Successful saves add
+`saved as <name>`. Output items and optional `<console_output>` precede the
+`<trace>` of `agents.run` and `models.classify` calls. Failures retain partial
+output and add `Script error: <message>`. Display output stays below 4800
+characters, retaining output start/end and the first/last trace lines.
+
+Full JSONL traces live at
+`<HYA_BUNDLE_CONFIG_DIR>/traces/<session>/<call>.jsonl` (system temp when unset;
+session/call components percent-encoded). The first record is
+`{script, args, stored, options}`; `stored` names the stored source or successful save,
+or is `null`. Call records have `seq`, `line`, `kind` (`agent` or `classify`),
+`name`, `input`, `ok`, `output?`, `error?`, `started_ms`, `ms`; agent records
+also carry `result`, and `handle`/`session` once started. Input/output are JSON
+strings cut to 4000 characters. The final record holds `{status, output}`
+with the complete untruncated output. Calls are recorded in start order.
+The call-record contract is:
+
+```ts
+type TraceCall = {
+  seq: number; line: number; kind: "agent" | "classify"; name: string;
+  input: string; ok: boolean; output?: string; error?: string;
+  started_ms: number; ms: number;
+  handle?: string; session?: string;
+  result?: Record<string, unknown> | null; // Always present for agent records.
+  abandoned?: boolean; archived?: boolean; archive_error?: string;
+};
 ```
 
-### Interface
+Effects are not undone. Pending worker calls are abandoned and known workers
+are archived before returning, with `abandoned`, `archived` and `archive_error`
+recorded. Pending starts get up to five seconds to return an identity;
+unresolved starts show `abandoned (start unknown)`. Workers whose own helper
+timeout already returned remain live and can be managed through hya's
+ordinary coordination tools.
 
-| Contract | Value |
-| --- | --- |
-| Agent ids | `orchestrator` (`main`), `orchestrator-worker` (`subagent`) |
-| Main model-facing tool | `code`; `advertise: [code]` |
-| Main executable domain tools | `code`, `read`, `grep`, `glob`, `bash`, `write`, `edit` |
-| Spawn roster | `orchestrator-worker`, `hya-scout` |
-| Worker domain tools | `read`, `grep`, `glob`, `bash`, `write`, `edit` |
-| Coordination | Harness-allocated `task`, `wait`, `archive`, `send`, `list_channel`, and channel reads; workers also receive `report` |
-| Process | `bun run ${BUNDLE_ROOT}/runtime.ts`; `timeout_ms: 3600000` |
-| Tool schema | `code({script: string})`; no additional input fields |
-| Tool reply | Plugin `{ok: boolean, output: string, time_ms: number}`; `output` is the formatted result text below |
-| Host operations | Once per script: `tools.list({}) → {tools: [{name, description, input_schema}]}`. Each nested call: `tool.call({name, input}) → {output: unknown}`. Both use the request-scoped `host/capability`, session, and call id. |
-
-The script has standard JavaScript globals plus exactly these effect and
-inspection globals. It has no imports, `require`, `process`, `Bun`, `fetch`,
-or timers.
-
-| Global | Contract |
-| --- | --- |
-| `tools.<name>(args)` | `args` is an object; returns the host's raw tool output. Non-identifier characters in tool names become `_` (for example `file-read` becomes `file_read`). A host tool error rejects with its original message. |
-| `ALL_TOOLS` | `{name: string, description: string}[]`, fetched once before execution. Names are original host names. |
-| `describeTool(name)` | Returns `{name, description, input_schema}` for the original name, or `undefined`. |
-| `agents.run(input)` | `{agent?: string, prompt: string, description?: string, model?: string, effort?: string, timeout_secs?: number}`. Default agent `orchestrator-worker`, default timeout `1800`, accepted timeout `0..1800` seconds. Returns `{handle: string, session: string, status: "done" \| "failed" \| "cancelled" \| "timeout", report: string}`. |
-| `models.classify(input)` | `{state: JSON, questions: Record<string, Question>}`; returns `{answers: Record<string, Answer>}`. Requires a configured judge and rejects on request or response errors. |
-| `text(value)` | Appends a string unchanged or another value as JSON. |
-| `console.log(...values)` | Joins strings/JSON with spaces; appends a console line after all text items. |
-| `return value` | Appends the returned value as with `text`; an absent/undefined return appends nothing. |
-
-`agents.run` submits one member in `task({tasks:[{subagent_type, prompt,
-description, model?, effort?}]})`, then calls
-`wait({targets:[handle], mode:"all", timeout_secs})` within its deadline.
-Mail and stalled wakes continue waiting; `finished` and `already_finished`
-provide terminal outcomes. `wait` metadata contains report sizes, not report
-bodies. The helper reads the latest message with `read({path:
-"channel://<DM id>"})`, or `channel://<handle>` when no channel id was
-returned. **`report` is the channel reader's rendered `output` string**,
-including the `[sender]` prefix and any normalization warning, rather than a
-structured report body. Spawn failures return the member's summary; timeout
-or user-stop cancellation without a report returns an empty string. A
-helper timeout leaves the worker alive; use the normal tools to manage it.
-
-`Question` and `Answer` types are:
+### Classification and host interfaces
 
 ```ts
 type Question =
@@ -665,89 +678,73 @@ type Answer =
   | {type: "score"; score: number; confidence: number};
 ```
 
-The judge request is `POST <judge.endpoint>` with bearer authorization and
-JSON `{model, state, questions}`. `state` may be any JSON value. Boolean
-questions use Jev's `type: "noul"` and map `answers[id].noul` to
-`{type:"bool", probability}`; choice and score answers preserve their typed
-fields. Score values are expected criterion indices from `0` to
-`criteria.length - 1`.
+`models.classify({state, questions})` accepts any JSON `state` and a non-empty
+`Record<string, Question>`. It returns `{answers: Record<string, Answer>}`.
+For example:
 
-Only a first-line `// @options: <JSON object>` comment can set options;
-a directive on any later line is rejected. Unknown option names and
-non-positive/non-integer values are rejected.
-
-| Option | Type | Default | Maximum |
-| --- | --- | --- | --- |
-| `timeout_ms` | positive integer | `600000` | `3000000` |
-| `max_output_chars` | positive integer | `3000` | `3600` |
-
-Result text has this shape:
-
-```text
-Script completed in 12.3 s
-<text items, followed by the returned value>
-<console_output>
-<console lines, only when used>
-</console_output>
-<trace>
-#1 L3 tools.bash {"command":"bun test"} -> ok, 5429 chars, 2.3 s
-#2 L5 models.classify kind -> repair (p=0.97), 0.4 s
-#3 L9 agents.run orchestrator-worker "repair the exporter" -> done, main/orchestrator-worker-amiya, 48.0 s
-</trace>
-trace file: <absolute path>
+```js
+return await models.classify({
+  state: {report: "All exporter tests passed"},
+  questions: {
+    ready: {type: "bool", instructions: "Does the report support completion?"},
+    next: {type: "choice", instructions: "Choose the next step", criteria: {repair: "Tests failed", finish: "Tests passed"}},
+    quality: {type: "score", instructions: "Rate the evidence", criteria: ["Missing", "Partial", "Complete"]},
+  },
+});
 ```
 
-Failures start with `Script failed in … s`, keep partial output, and add
-`Script error: <message>` before the trace. Each `tools`, `agents`, or
-`models` call gets one trace line in start order, with the 1-based script
-line, elapsed time, and result or error. Tool sizes count JSON characters
-before trace-record truncation. Text exceeding `max_output_chars` retains
-its start and end; trace overflow retains the first and last lines so the
-result stays below 4800 characters. Calls already made are not undone.
-When a script ends, remaining calls are abandoned and the VM worker ends;
-the host revokes outstanding capabilities when the tool reply finishes.
-On completion, failure, or script timeout, pending `agents.run` workers are
-stopped with `archive({target: handle, reason})` before returning the result.
-Worker `handle` and `session` are recorded as soon as `task` returns. Pending
-starts get up to five seconds to return an identity; unresolved starts show
-`abandoned (start unknown)`. Known workers show `abandoned and archived, <handle>`
-or `abandoned and archive failed: <error>, <handle>`.
-Workers whose own `agents.run` timeout already returned remain live and can
-be managed through ordinary hya tools.
+The judge request is `POST <judge.endpoint>` with bearer authorization and
+JSON `{model, state, questions}`. Boolean questions map to Jev `type:"noul"`
+and answers map `answers[id].noul` to `{type:"bool", probability}`. Choice and
+score answers retain their typed fields. Probabilities/confidence are in
+`0..1`; scores are criterion indices in `0..criteria.length-1`. Missing judge
+configuration, HTTP failures or malformed responses reject the call.
 
-Full JSON Lines traces are written to
-`<HYA_BUNDLE_CONFIG_DIR>/traces/<session>/<call>.jsonl`, or to
-`<system temp>/traces/<session>/<call>.jsonl` when the config directory
-variable is unset. Session/call path components are percent-encoded. Records
-are in call start order:
+The process is `bun run ${BUNDLE_ROOT}/runtime.ts`, speaking plugin protocol
+v1 over NDJSON stdio. Its `initialize` response declares only `workflow`, with
+a JSON Schema `oneOf` for the three input forms (no additional fields). A
+`tool/call` request carries `{tool:"workflow", input, session:string,
+call:string, host_capability:string}`. Invalid input returns JSON-RPC
+`-32602`; an unknown stored name or store error returns `-32003`. Script
+failures return the ordinary tool reply with `ok:false` and partial output.
 
-1. `{script: string, options: {timeout_ms, max_output_chars}}`.
-2. One record per call: `{seq: number, line: number, kind: "tool" | "agent" |
-   "classify", name: string, input: string, ok: boolean, output?: string,
-   error?: string, started_ms: number, ms: number, handle?: string,
-   session?: string, abandoned?: boolean, archived?: boolean, archive_error?: string}`. `started_ms` is Unix epoch milliseconds; `ms` is the
-   duration. `input` and `output` are JSON-encoded strings, cut to 4000
-   characters each; cut JSON strings may no longer parse. Agent entries
-   include `handle` and `session` once started. Pending agent calls record
-   `abandoned:true`, with `archived` indicating cleanup success for known
-   workers and `archive_error` recording a cleanup failure. Abandoned entries have `ok:false`
-   and an explanatory `error`.
-3. `{status: "completed" | "failed", output: string}`. This last output is
-   complete, including all text, console lines, any script error, and all
-   trace lines, before display truncation. The file preserves every call record and the full
-   script.
+Each host operation uses request-scoped `host/capability` with
+`{capability, session, call, method:"tool.call", params:{name,input}}`,
+receiving `{output:unknown}`. There is no tool discovery request.
+`agents.run` sends `task({tasks:[{subagent_type:agent, prompt, description,
+model?, effort?}]})`, waits using
+`wait({targets:[handle],mode:"all",timeout_secs})`, and reads rendered report
+text with `read({path:"channel://<DM id>"})` (or `channel://<handle>` if no DM
+id is returned). Mail/stall wakes keep waiting; `finished` and
+`already_finished` entries are terminal. Spawn failures use the returned
+member summary. A helper timeout or user-stop cancellation without a report
+returns an empty report and `result:null`. The main agent's resource view
+contains only `workflow` plus harness coordination (`archive`, `list_channel`,
+`report`, `send`, `task`, `wait`, mail-only `read`); only `workflow` is advertised.
+Worker tool views are the explicit domain tools above plus harness coordination.
 
-Judge config fields (`config.yml`; hya's `agents:` leaf and other top-level
-keys are ignored, unknown keys inside `judge` are rejected):
+### Configuration and checks
 
-| Field | Type | Default | Meaning |
-| --- | --- | --- | --- |
-| `judge.endpoint` | non-empty string | `https://api.typesafe.ai/v1/systemone` | Jev endpoint. |
-| `judge.model` | non-empty string | `jev-1.14.0` | Judge model id. |
-| `judge.api_key` | non-empty string | — | Bearer key; set exactly one key source. |
-| `judge.api_key_file` | absolute path string | — | Read and trim the bearer key from this file. |
-| `judge.timeout_ms` | integer `1..3000000` | `20000` | HTTP deadline per judge call, also bounded by the script deadline. |
+The optional judge reads `HYA_BUNDLE_CONFIG_FILE`, normally
+`<hya config dir>/bundles/hya-extra%2Forchestrator/config.yml`, or
+`.hya/bundles/orchestrator/config.yml` for a project install. See the bundle’s
+`config.example.yml`. Workers and stored scripts work without a judge;
+`models.classify` rejects clearly until configured.
 
-Run the offline fake-host, fake-Jev, and real-child protocol tests with
-`cd bundles/extra/orchestrator && bun test`. `runtime.test.ts`, this README,
-and `config.example.yml` are not declared as bundle payloads.
+| Key | Type | Default |
+| --- | --- | --- |
+| `judge.endpoint` | non-empty string | `https://api.typesafe.ai/v1/systemone` |
+| `judge.model` | non-empty string | `jev-1.14.0` |
+| `judge.api_key` | non-empty string | Set exactly one key source. |
+| `judge.api_key_file` | absolute path string | Read and trim the key from this file. |
+| `judge.timeout_ms` | integer `1..3000000` | `20000` |
+
+hya's optional `agents.<agent-id>.model` overrides are independent of the judge.
+Unknown keys inside `judge` are rejected. Configuration is read at process
+start; hya restarts it at the next root binding after a config edit. Restart
+hya after changing only the key file.
+
+Run `bun test` in `bundles/extra/orchestrator/` for offline fake-host/fake-Jev
+and real-child stdio tests. Only `runtime.ts` and the four prompts are packaged;
+tests, the bundle README and `config.example.yml` are development files.
+The source README and configuration example live in `bundles/extra/orchestrator/`.

@@ -1,7 +1,7 @@
 # Copy to <hya config dir>/bundles/hya-extra%2Forchestrator/config.yml,
 # or .hya/bundles/orchestrator/config.yml for a project install.
 # This example is documentation only and is not packaged.
-# No judge block is needed for tools.* or agents.run; models.classify rejects
+# No judge block is needed for agents.run or saved workflows; models.classify rejects
 # clearly until a judge is configured. The process has a cleared environment.
 judge:
   endpoint: https://api.typesafe.ai/v1/systemone # default
@@ -15,7 +15,11 @@ judge:
 # agents:
 #   orchestrator:
 #     model: provider/model
-#   orchestrator-worker:
+#   orchestrator-scout:
+#     model: provider/model
+#   orchestrator-runner:
+#     model: provider/model
+#   orchestrator-editor:
 #     model: provider/model
 #
 # hya restarts the process at the next root binding after config.yml changes.
