@@ -129,13 +129,14 @@ explicit (or implicit JavaScript) `extensions.process` receives one on every
 `tool/call` — whatever its kind (`rust`, `bun`, or `claude`) — and on every
 `api/request`. Configured plugins (`plugins:` / `plugin.toml`) never do. This
 is safe to extend beyond Rust because every operation is read-only or
-permission-checked through the calling tool's own permission snapshot, the
-token is bound to one connection + session + call, and it dies with the reply;
-the bundle process already runs with the user's OS privileges, so the lease
-grants no authority beyond reading data about the session that invoked it.
-This holds for write methods too: a `POST`/`PUT`/`PATCH`/`DELETE` API request
-gets the same read-only operations, so whatever it changes is the bundle's own
-state, never hya's.
+permission-checked, the token is bound to one connection + session + call, and
+it dies with the reply; the bundle process already runs with the user's OS
+privileges. An API request gets only read-only operations, so the lease grants
+it no authority beyond reading data about its session; this holds for write
+methods too: whatever a `POST`/`PUT`/`PATCH`/`DELETE` API request changes is
+the bundle's own state, never hya's. A tool call can additionally run the
+calling agent's other tools (`tool.call`), each authorized exactly as if the
+model had called it, so it gains no authority the agent does not already have.
 Adapters that do not use the field (the Bun extension adapter) ignore it.
 
 Operations (`method` values):
@@ -145,12 +146,39 @@ Operations (`method` values):
 | `context.describe` | yes | yes | yes | `{}` | Tool call: `{ "request": "tool_call", "session", "parent_session" (nullable), "workdir", "source_tool_call_id", "operation_id" }`. API request: `{ "request": "api", "api", "scope": "session" \| "global", "session" (session scope only), "call" }` |
 | `permission.assert` | yes | no (`-32001`) | no (`-32001`) | `{ "action", "resource" }` | `{}`, or `-32002` on denial |
 | `session.usage` | yes | yes | no (`-32001`: no session) | `{ "scope"?: "session" \| "tree" \| "root" }` (default `tree`; `root` is tool-call only, `-32602` for an API request) | Usage report (below) |
+| `tools.list` | yes | no (`-32001`) | no (`-32001`) | `{}` | `{ "tools": [{ "name", "description", "input_schema" }] }` |
+| `tool.call` | yes | no (`-32001`) | no (`-32001`) | `{ "name": string, "input": object }` | `{ "output": <the tool's output value> }`; `-32002` on permission denial, `-32003` on any other failure |
 
 `permission.assert` accepts lowercase `Action` names and a tagged resource
 `{ "kind": "tool|path|glob|command|subagent|url|web_search|skill", "value": string }`
 or `{ "kind": "any" }`. It returns `{}` on success, `-32002` on permission
 denial, and `-32602` for malformed params. An unsupported operation returns
 `-32601`. The host applies the active call's permission snapshot.
+
+`tools.list` and `tool.call` reach the calling agent's other tools through the
+engine's nested tool plane
+([Agent tool surface](architecture/agent-tool-surface.md#nested-tool-plane)).
+`tools.list` returns every tool of the agent's compiled resource view except
+the calling tool, including tools the model is not offered. `tool.call` runs
+one of them as part of the calling tool call: it is authorized like a model
+call of that tool (the same permission mode, rules, and asks), its file
+changes are recorded on the calling tool call, it runs no
+`tool.execute.before`/`after` hooks, and it records no tool events of its own;
+the calling tool's result is the record. The called tool cannot call further
+tools. `output` is the tool's raw value, not capped to the model-facing
+result size. Errors:
+
+- `-32602`: malformed params (`input` must be an object).
+- `-32002` (`PERMISSION_DENIED`): the permission plane denied the call.
+- `-32003` (`TOOL_FAILED`): any other failure, with the tool's error text as
+  `message` (`unknown tool: <name>` for a name outside the view; calling the
+  calling tool itself is an input error); also a result whose JSON exceeds
+  768 KiB, with a message saying it is too large and to narrow the call.
+
+```json
+{"jsonrpc":"2.0","id":42,"method":"host/capability","params":{"capability":"<host_capability>","session":"<session-id>","call":"<call-id>","method":"tool.call","params":{"name":"read","input":{"path":"README.md"}}}}
+{"jsonrpc":"2.0","id":42,"result":{"output":{"...":"the read tool's output"}}}
+```
 
 `session.usage` reads billed token usage folded from the session event logs
 (the same `UsageRecorded` projection fold as the rest of the API; nothing is
@@ -257,6 +285,7 @@ not serve them.
 | `1` | `VETO` | App-defined: a guard refused the action |
 | `-32001` | `CAPABILITY_DENIED` | Host capability is absent, expired, bound to another request, or the operation is unavailable to this request kind |
 | `-32002` | `PERMISSION_DENIED` | The active permission plane denied the requested resource operation |
+| `-32003` | `TOOL_FAILED` | A `tool.call` nested tool failed (the message is the tool's error text), or its result exceeds 768 KiB |
 
 Guard refusal on the wire is normally a **successful** result with
 `"outcome": "veto"` (see `tool.execute.before`). A JSON-RPC error from a

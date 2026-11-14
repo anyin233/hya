@@ -21,6 +21,8 @@ pub mod codes {
     pub const CAPABILITY_DENIED: i64 = -32001;
     /// Host permission plane denied a native tool's resource operation.
     pub const PERMISSION_DENIED: i64 = -32002;
+    /// A nested tool call (`tool.call`) failed, or its result is too large.
+    pub const TOOL_FAILED: i64 = -32003;
 }
 
 /// Host→plugin (or plugin→host) JSON-RPC request expecting a response.

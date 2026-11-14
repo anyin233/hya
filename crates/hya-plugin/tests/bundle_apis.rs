@@ -25,7 +25,8 @@ use tokio_util::sync::CancellationToken;
 /// A bundle process fixture: one tool `usage_tool` and the API endpoints
 /// `APIS`. Tool calls and API requests answer by calling `context.describe`
 /// then `session.usage` (scope from the input/query) on their lease; API
-/// requests also try `permission.assert` and echo the routed request.
+/// requests also try `permission.assert`, `tools.list`, and `tool.call` and
+/// echo the routed request.
 /// Endpoint `malformed` answers an unknown result field; `plain` omits
 /// `status`; every other endpoint answers status 201.
 const FIXTURE: &str = r#"import json,sys
@@ -57,7 +58,9 @@ for line in sys.stdin:
     context=capability(token,session,p['call'],'context.describe',{})
     usage=capability(token,session,p['call'],'session.usage',{'scope':p['query'].get('scope','tree')})
     denied=capability(token,session,p['call'],'permission.assert',{'action':'read','resource':{'kind':'path','value':'/x'}})
-    body={'request':p,'context':context.get('result'),'usage':usage.get('result'),'usage_error':usage.get('error'),'denied':denied.get('error')}
+    listed=capability(token,session,p['call'],'tools.list',{})
+    called=capability(token,session,p['call'],'tool.call',{'name':'read','input':{}})
+    body={'request':p,'context':context.get('result'),'usage':usage.get('result'),'usage_error':usage.get('error'),'denied':denied.get('error'),'tools_list':listed.get('error'),'tool_call':called.get('error')}
     if p['api']=='malformed':
       result={'body':body,'headers':{}}
     elif p['api']=='plain':
@@ -254,6 +257,13 @@ async fn session_api_request_gets_a_session_bound_read_only_capability() {
         hya_plugin::protocol::codes::CAPABILITY_DENIED,
         "API requests cannot assert permissions"
     );
+    for operation in ["tools_list", "tool_call"] {
+        assert_eq!(
+            body[operation]["code"],
+            hya_plugin::protocol::codes::CAPABILITY_DENIED,
+            "API requests cannot reach nested tools ({operation})"
+        );
+    }
     assert_eq!(
         *reads.calls.lock().unwrap(),
         vec![(session, UsageScope::Session)]
