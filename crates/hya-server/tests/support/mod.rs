@@ -221,6 +221,7 @@ fn prepared_bundles(agents: &[AgentFixture]) -> Vec<Bundle> {
                 .map(|id| AgentName::new(*id))
                 .collect(),
                 hook_refs: Vec::new(),
+                advertise: Vec::new(),
             }],
             tools: Vec::new(),
             mcp: Vec::new(),
