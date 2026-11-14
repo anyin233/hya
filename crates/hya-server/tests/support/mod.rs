@@ -222,6 +222,7 @@ fn prepared_bundles(agents: &[AgentFixture]) -> Vec<Bundle> {
                 .collect(),
                 hook_refs: Vec::new(),
                 advertise: Vec::new(),
+                handoff: hya_bundle::HandoffPolicy::Model,
             }],
             tools: Vec::new(),
             mcp: Vec::new(),

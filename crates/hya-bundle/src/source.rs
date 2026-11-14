@@ -11,7 +11,9 @@ use serde::de::IgnoredAny;
 use serde_json::Value;
 
 use crate::BundleError;
-use crate::model::{AgentRole, BundleIdentity, ModelPolicy, PreparedChannelTemplate, ResourceView};
+use crate::model::{
+    AgentRole, BundleIdentity, HandoffPolicy, ModelPolicy, PreparedChannelTemplate, ResourceView,
+};
 
 /// One logical file in a bundle source: relative path plus raw bytes.
 #[derive(Clone, Debug)]
@@ -302,6 +304,8 @@ pub(crate) struct SourceAgent {
     // Validate strings during prepare: YAML otherwise coerces numeric scalars.
     #[serde(default)]
     pub advertise: Vec<Value>,
+    #[serde(default)]
+    pub handoff: HandoffPolicy,
     #[serde(default)]
     pub hook_refs: Vec<String>,
     /// Removed with the single-agent format; the tool plane is host-controlled.

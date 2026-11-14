@@ -2705,3 +2705,159 @@ async fn harness_notice_has_no_channel_even_with_a_parent_dm() {
         "a harness notice must not borrow the recipient's DM: {notice}"
     );
 }
+
+/// Writes a model handoff and bills one call, so its use is visible on the log.
+#[derive(Default)]
+struct CountingHandoff {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl hya_core::Summarizer for CountingHandoff {
+    async fn summarize(
+        &self,
+        _messages: &[hya_proto::Message],
+        options: hya_core::SummarizeOptions,
+    ) -> Result<String, CoreError> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Some(usage) = &options.usage {
+            usage.record(
+                ModelRef::new("fake"),
+                hya_proto::TokenUsage {
+                    input: 10,
+                    output: 5,
+                    ..hya_proto::TokenUsage::default()
+                },
+            );
+        }
+        Ok("1. Goal - model goal\n2. Current state - done\n3. Files and code - none\n4. Decisions - none\n5. Pending tasks - none\n6. Next step - none".into())
+    }
+}
+
+/// Report from a bundle subagent declaring `handoff_field`; returns the
+/// summarizer call count and the root and child logs.
+async fn reported_episode(handoff_field: &str) -> (usize, Vec<Event>, Vec<Event>) {
+    let source = hya_bundle::BundleSource::new(
+        "handoff-policy",
+        vec![hya_bundle::SourceFile::new(
+            "bundle.yaml",
+            format!(
+                "kind: Bundle\nidentity: {{ id: acme/handoff-policy, version: 1.0.0, publisher: acme }}\nagents: [{{ id: quick-scout, role: subagent{handoff_field} }}]\n"
+            ),
+        )],
+    );
+    let prepared = hya_bundle::prepare_package(source).unwrap();
+    let bundles = hya_bundle::BundleCatalog::from_prepared(prepared.bundles()).unwrap();
+    let agents = hya_core::AgentCatalog::new(Arc::new(bundles)).unwrap();
+    let runtime = Arc::new(hya_core::RuntimeRegistry::new(
+        ToolRegistry::builtins(),
+        Arc::new(agents),
+    ));
+    let summary = Arc::new(CountingHandoff::default());
+    let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
+    let engine = Arc::new(
+        SessionEngine::new(
+            SessionStore::connect_memory().await.unwrap(),
+            Arc::new(ProviderRouter::new().with(Arc::new(StubProvider))),
+            runtime,
+            permission,
+            EventBus::default(),
+        )
+        .with_compaction(summary.clone(), hya_core::CompactionConfig::default()),
+    );
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let agent = AgentSpec {
+        name: AgentName::new("quick-scout"),
+        ..agent_spec()
+    };
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let resources = binding.agent_resource_policy("quick-scout").unwrap();
+    let (child, handle) = supervisor
+        .spawn_resident(
+            root,
+            agent,
+            (binding, Arc::from([]), resources, None),
+            "inspect the tree".to_string(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    wait_idle(&engine, root, &handle, child).await;
+    submit_and_wait(
+        &engine,
+        &supervisor,
+        root,
+        &handle,
+        ReportOutcome::Done,
+        "tree inspected".to_string(),
+    )
+    .await
+    .unwrap();
+    let events = |log: Vec<hya_proto::Envelope>| log.into_iter().map(|envelope| envelope.event);
+    (
+        summary.calls.load(std::sync::atomic::Ordering::SeqCst),
+        events(engine.replay(root).await.unwrap()).collect(),
+        events(engine.replay(child).await.unwrap()).collect(),
+    )
+}
+
+fn committed_handoff(events: &[Event]) -> Option<bool> {
+    events.iter().find_map(|event| match event {
+        Event::HandoffCommitted { degraded, .. } => Some(*degraded),
+        _ => None,
+    })
+}
+
+fn compaction_usage(events: &[Event]) -> usize {
+    events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::UsageRecorded {
+                    purpose: hya_proto::UsagePurpose::Compaction,
+                    ..
+                }
+            )
+        })
+        .count()
+}
+
+fn reported_and_mailed(root_log: &[Event]) -> bool {
+    root_log.iter().any(|event| {
+        matches!(event, Event::SubagentReported { report, .. } if report.contains("tree inspected"))
+    }) && root_log.iter().any(|event| {
+        matches!(event, Event::MailSent { body, .. } if body.contains("tree inspected"))
+    })
+}
+
+#[tokio::test]
+async fn deterministic_handoff_policy_skips_the_summarizer_on_report() {
+    let (calls, root_log, child_log) = reported_episode(", handoff: deterministic").await;
+    assert_eq!(calls, 0, "no summarizer call for a deterministic handoff");
+    assert_eq!(committed_handoff(&child_log), Some(true));
+    assert_eq!(
+        compaction_usage(&child_log) + compaction_usage(&root_log),
+        0
+    );
+    assert!(reported_and_mailed(&root_log), "{root_log:#?}");
+    assert!(root_log.iter().any(|event| matches!(
+        event,
+        Event::AgentArchived {
+            reason: ArchiveReason::Reported,
+            ..
+        }
+    )));
+}
+
+#[tokio::test]
+async fn default_handoff_policy_still_asks_the_summarizer_on_report() {
+    let (calls, root_log, child_log) = reported_episode("").await;
+    assert_eq!(calls, 1);
+    assert_eq!(committed_handoff(&child_log), Some(false));
+    assert_eq!(compaction_usage(&child_log), 1);
+    assert!(reported_and_mailed(&root_log), "{root_log:#?}");
+}

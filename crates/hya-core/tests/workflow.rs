@@ -2053,6 +2053,7 @@ fn sidecar_probe_catalog() -> Arc<hya_core::AgentCatalog> {
                     can_spawn: Vec::new(),
                     hook_refs: Vec::new(),
                     advertise: Vec::new(),
+                    handoff: hya_bundle::HandoffPolicy::Model,
                 }],
                 tools,
                 skills: Vec::new(),

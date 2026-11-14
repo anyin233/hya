@@ -157,6 +157,7 @@ pub(super) fn agent(stable_id: &str, resource_view: ResourceView) -> PreparedAge
         can_spawn: Vec::new(),
         hook_refs: Vec::new(),
         advertise: Vec::new(),
+        handoff: hya_bundle::HandoffPolicy::Model,
     }
 }
 
