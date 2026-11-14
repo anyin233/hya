@@ -252,6 +252,76 @@ describe("agents.run host bridge", () => {
     });
   }
 
+  for (const ending of ["failure", "timeout", "completed", "late start", "archive failure", "unknown start"]) {
+    test(`cleans up abandoned workers on ${ending}`, async () => {
+      const calls: any[] = [];
+      const task = Promise.withResolvers<any>();
+      const wait = Promise.withResolvers<any>();
+      const member = { member: "main/hya-scout-x", session: "child", status: "running" };
+      const spawned = { output: { metadata: { members: [member] } } };
+      let startSignal: AbortSignal | undefined;
+      const script = ending === "timeout"
+        ? '// @options: {"timeout_ms":100}\nawait agents.run({agent:"hya-scout",prompt:"Count files"});'
+        : ending === "completed" || ending === "unknown start"
+          ? 'agents.run({agent:"hya-scout",prompt:"Count files"}); return 1;'
+          : 'await Promise.all([agents.run({agent:"hya-scout",prompt:"Count files"}), models.classify({state:{},questions:{}})]);';
+      const result = await run(script, {
+        host: async (method, params, signal) => {
+          if (method === "tools.list") return { tools: [] };
+          calls.push(params);
+          if (params.name === "task") {
+            startSignal = signal;
+            if (ending === "unknown start") return task.promise;
+            if (ending === "late start") {
+              setTimeout(() => task.resolve(spawned), 30);
+              return task.promise;
+            }
+            return spawned;
+          }
+          if (params.name === "wait") {
+            expect(Number.isInteger(params.input.timeout_secs)).toBe(true);
+            return wait.promise;
+          }
+          expect(params.name).toBe("archive");
+          expect(params.input.target).toBe(member.member);
+          expect(signal.aborted).toBe(false);
+          if (ending === "archive failure") throw new Error("archive denied");
+          return { output: {} };
+        },
+      });
+      expect(result.ok).toBe(ending === "completed" || ending === "unknown start");
+      expect(result.trace[0]).toMatchObject({ kind: "agent", abandoned: true, ok: false });
+      if (ending === "unknown start") {
+        expect(startSignal?.aborted).toBe(true);
+        expect(result.output).toContain("abandoned (start unknown)");
+        expect(calls.filter(call => call.name === "archive")).toHaveLength(0);
+      } else {
+        expect(result.trace[0]).toMatchObject({ handle: member.member, session: "child", archived: ending !== "archive failure" });
+        expect(calls.filter(call => call.name === "archive")).toHaveLength(1);
+        expect(result.output).toContain(ending === "archive failure"
+          ? "abandoned and archive failed: archive denied, main/hya-scout-x"
+          : 'agents.run hya-scout "Count files" -> abandoned and archived, main/hya-scout-x');
+      }
+      expect(records(result.traceFile)[1]).toMatchObject(result.trace[0]);
+      const saved = JSON.stringify(result.trace);
+      task.resolve(spawned);
+      wait.resolve({ output: { metadata: { finished: [], running: [], woke_by: "timeout" } } });
+      await new Promise(resolve => setImmediate(resolve));
+      expect(JSON.stringify(result.trace)).toBe(saved);
+    }, 10000);
+  }
+
+  test("notifies identity before waiting and rounds fractional wait time up", async () => {
+    let identity: any;
+    const result = await runAgent({ prompt: "work", timeout_secs: 0.1 }, async (_method, params) => {
+      if (params.name === "task") return { output: { metadata: { members: [{ member: "main/worker", session: "child", status: "running" }] } } };
+      expect(identity).toMatchObject({ handle: "main/worker", session: "child" });
+      expect(params.input.timeout_secs).toBe(1);
+      return { output: { metadata: { finished: [], running: [], woke_by: "timeout" } } };
+    }, new AbortController().signal, value => { identity = { ...value }; });
+    expect(result.status).toBe("timeout");
+  });
+
   test("mail/stall wakes keep waiting; already_finished is terminal; handle read works without channel", async () => {
     let waits = 0;
     const calls: string[] = [];
