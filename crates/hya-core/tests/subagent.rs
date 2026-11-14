@@ -396,6 +396,7 @@ fn sidecar_permission_bundle() -> Bundle {
             can_spawn: Vec::new(),
             hook_refs: Vec::new(),
             advertise: Vec::new(),
+            handoff: hya_bundle::HandoffPolicy::Model,
         }],
         tools: vec![PreparedResource {
             local_id: "echo".to_string(),

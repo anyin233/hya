@@ -1746,6 +1746,7 @@ fn nested_root_divergence_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegist
             can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
             hook_refs: Vec::new(),
             advertise: Vec::new(),
+            handoff: hya_bundle::HandoffPolicy::Model,
         }],
         tools: Vec::new(),
         skills: Vec::new(),
@@ -2030,6 +2031,7 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
                 can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
                 hook_refs: Vec::new(),
                 advertise: Vec::new(),
+                handoff: hya_bundle::HandoffPolicy::Model,
             }
         };
         // `general` is a compiled-in built-in, so only the two bundle agents

@@ -314,6 +314,14 @@ Files and code and Decisions carry forward from the previous handoff, labelled
 Forced endings leave unread mail unread in history and carry it in Pending;
 revival never delivers it again. Terminality never blocks on the summarizer.
 
+An agent whose manifest declares `handoff: deterministic`
+([authoring guide](../agent-bundle-authoring.md#per-agent-fields)) gets this
+degraded document for its reported endings too: the ending code reads the
+policy from the episode's captured runtime binding and skips the summarizer, so
+no `usage_recorded { purpose: compaction }` is written. The archive transaction
+that follows is unchanged. Built-in agents and agents without the field use
+the summarizer as above.
+
 ### 3.3 The lead is never archived
 
 The lead — the user-started root agent at depth 0, handle `main` — is not a

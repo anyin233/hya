@@ -212,6 +212,7 @@ fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
                     .collect(),
                 hook_refs: Vec::new(),
                 advertise: Vec::new(),
+                handoff: hya_bundle::HandoffPolicy::Model,
             }],
             tools: Vec::new(),
             skills: Vec::new(),

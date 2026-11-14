@@ -2334,6 +2334,7 @@ fn catalog_with_agents(stable_ids: &[&str]) -> Arc<AgentCatalog> {
                     can_spawn: Vec::new(),
                     hook_refs: Vec::new(),
                     advertise: Vec::new(),
+                    handoff: hya_bundle::HandoffPolicy::Model,
                 }],
                 tools: Vec::new(),
                 skills: Vec::new(),
@@ -2481,6 +2482,7 @@ fn catalog_with_worker_policy(model_policy: ModelPolicy) -> Arc<AgentCatalog> {
             can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
             hook_refs: Vec::new(),
             advertise: Vec::new(),
+            handoff: hya_bundle::HandoffPolicy::Model,
         };
         Bundle {
             check: None,
@@ -5942,6 +5944,7 @@ fn materialized_bundle(marker: &str) -> Bundle {
             can_spawn: Vec::new(),
             hook_refs: vec!["bundle:hya/materialized/hook/event".to_string()],
             advertise: Vec::new(),
+            handoff: hya_bundle::HandoffPolicy::Model,
         }],
         tools: vec![materialized_resource(
             marker,
@@ -6059,6 +6062,7 @@ fn disjoint_materialized_bundle(marker: &str) -> Bundle {
             can_spawn: Vec::new(),
             hook_refs: vec![alpha_hook.stable_id.clone()],
             advertise: Vec::new(),
+            handoff: hya_bundle::HandoffPolicy::Model,
         }],
         tools: vec![alpha_tool, beta_tool],
         skills: Vec::new(),
@@ -6755,6 +6759,7 @@ fn sidecar_factory_is_scoped_to_the_selected_agent_effective_capability() {
         can_spawn: vec![AgentName::new("worker")],
         hook_refs: Vec::new(),
         advertise: Vec::new(),
+        handoff: hya_bundle::HandoffPolicy::Model,
     };
 
     let catalog = Arc::new(to_agent_catalog(

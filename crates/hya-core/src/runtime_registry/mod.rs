@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
-use hya_bundle::{BundleCatalog, BundleError, ExportKind, ResourceView};
+use hya_bundle::{BundleCatalog, BundleError, ExportKind, HandoffPolicy, ResourceView};
 
 use crate::agent_catalog::{AgentCatalog, AgentDefinition, AgentOrigin};
 use crate::catalog_scope::{CatalogScope, ScopeKey, ScopeOverlay};

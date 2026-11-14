@@ -32,6 +32,25 @@ impl AgentRole {
     }
 }
 
+/// How a reported episode's terminal handoff document is written.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HandoffPolicy {
+    /// The configured summarizer writes it.
+    #[default]
+    Model,
+    /// The deterministic projection-derived document, with no model call.
+    Deterministic,
+}
+
+impl HandoffPolicy {
+    /// Whether this is the default policy, which prepared documents omit.
+    #[must_use]
+    pub const fn is_model(&self) -> bool {
+        matches!(self, Self::Model)
+    }
+}
+
 /// Bundle payload kind in a prepared document.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PreparedBundleKind {
@@ -119,6 +138,9 @@ pub struct PreparedAgent {
     /// Non-empty allowlist of model-facing tool names; dispatch remains unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub advertise: Vec<String>,
+    /// Reported-episode handoff policy; the default `model` is omitted.
+    #[serde(default, skip_serializing_if = "HandoffPolicy::is_model")]
+    pub handoff: HandoffPolicy,
     /// Hook resource refs selected for this agent (exact-path join at activation).
     pub hook_refs: Vec<String>,
 }

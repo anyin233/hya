@@ -1,7 +1,9 @@
-//! Model-facing tool selection and bundle process request timeout contracts.
+//! Model-facing tool selection, handoff policy, and bundle process request timeout contracts.
 #![allow(clippy::expect_used)]
 
-use hya_bundle::{BundleError, BundleSource, PreparedCatalog, SourceFile, prepare_package};
+use hya_bundle::{
+    BundleError, BundleSource, HandoffPolicy, PreparedCatalog, SourceFile, prepare_package,
+};
 
 fn source(agent_fields: &str, process_fields: &str) -> BundleSource {
     BundleSource::new(
@@ -86,4 +88,43 @@ fn legacy_manifest_prepares_to_identical_bytes() {
     );
     let empty = prepare_package(source(", advertise: []", "")).expect("empty means unrestricted");
     assert_eq!(prepared.bytes(), empty.bytes());
+}
+
+#[test]
+fn handoff_policy_prepares_and_round_trips() {
+    let legacy = prepare_package(source("", "")).expect("legacy manifest");
+    let model = prepare_package(source(", handoff: model", "")).expect("handoff: model accepted");
+    assert_eq!(
+        model.bytes(),
+        legacy.bytes(),
+        "the default is not serialized"
+    );
+    let decoded = PreparedCatalog::decode(legacy.bytes(), legacy.digest()).expect("legacy decodes");
+    assert_eq!(
+        decoded.bundles()[0].agents()[0].handoff,
+        HandoffPolicy::Model
+    );
+
+    let deterministic = prepare_package(source(", handoff: deterministic", ""))
+        .expect("handoff: deterministic accepted");
+    let decoded = PreparedCatalog::decode(deterministic.bytes(), deterministic.digest())
+        .expect("deterministic policy decodes canonically");
+    assert_eq!(
+        decoded.bundles()[0].agents()[0].handoff,
+        HandoffPolicy::Deterministic
+    );
+    assert_eq!(decoded.bytes(), deterministic.bytes());
+}
+
+#[test]
+fn unknown_handoff_policy_is_rejected() {
+    for value in ["summarizer", "Deterministic", "''", "[]", "1"] {
+        let error = prepare_package(source(&format!(", handoff: {value}"), ""))
+            .expect_err("unknown handoff policy rejected");
+        assert!(
+            matches!(error, BundleError::InvalidManifest { .. }),
+            "{error}"
+        );
+        assert!(error.to_string().contains("handoff"), "{error}");
+    }
 }
