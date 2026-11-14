@@ -2,7 +2,9 @@
 //!
 //! One [`BundleCapability`] backs one capability lease: either a bundle tool
 //! call (any process kind — `rust`, `bun`, or `claude`) or an `api/request`
-//! bundle API request. Every operation is read-only or permission-checked,
+//! bundle API request. Every operation is read-only or permission-checked
+//! (`tool.call` runs a tool of the calling agent's view through the engine's
+//! nested plane, authorized like a model call of that tool),
 //! and the lease is bound to (connection, session-or-none, call) and revoked
 //! when the reply arrives.
 
@@ -11,7 +13,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use hya_core::{HostSessionReads, UsageScope};
 use hya_proto::{SessionId, ToolCallId};
-use hya_tool::{Action, Resource, ToolCtx};
+use hya_tool::{Action, Resource, ToolCtx, ToolError};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -106,6 +108,43 @@ impl BundleCapability {
             .map_err(|error| rpc_error(codes::INTERNAL_ERROR, error.to_string()))?;
         serde_json::to_value(report).map_err(|error| rpc_error(codes::INTERNAL_ERROR, error))
     }
+}
+
+/// Largest `tool.call` result, as serialized JSON, sent back to the process.
+const MAX_TOOL_CALL_RESULT_BYTES: usize = 768 * 1024;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ToolCallParams {
+    name: String,
+    input: serde_json::Map<String, Value>,
+}
+
+async fn nested_tool_call(ctx: &ToolCtx, params: Value) -> Result<Value, JsonRpcError> {
+    let request: ToolCallParams = serde_json::from_value(params)
+        .map_err(|error| rpc_error(codes::INVALID_PARAMS, error.to_string()))?;
+    let output = ctx
+        .nested
+        .call(&request.name, Value::Object(request.input))
+        .await
+        .map_err(|error| match error {
+            ToolError::Permission(error) => rpc_error(codes::PERMISSION_DENIED, error),
+            error => rpc_error(codes::TOOL_FAILED, error),
+        })?;
+    let result = json!({ "output": output });
+    let size = serde_json::to_vec(&result)
+        .map_err(|error| rpc_error(codes::INTERNAL_ERROR, error))?
+        .len();
+    if size > MAX_TOOL_CALL_RESULT_BYTES {
+        return Err(rpc_error(
+            codes::TOOL_FAILED,
+            format!(
+                "result of `{}` is too large ({size} bytes, limit {MAX_TOOL_CALL_RESULT_BYTES}); narrow the call",
+                request.name
+            ),
+        ));
+    }
+    Ok(result)
 }
 
 #[derive(Deserialize)]
@@ -213,6 +252,39 @@ impl HostCapabilityHandler for BundleCapability {
                 Ok(json!({}))
             }
             "session.usage" => self.session_usage(params).await,
+            "tools.list" => {
+                let Grant::ToolCall(ctx) = &self.grant else {
+                    return Err(rpc_error(
+                        codes::CAPABILITY_DENIED,
+                        "tools.list is available only to tool calls",
+                    ));
+                };
+                if params != json!({}) {
+                    return Err(rpc_error(codes::INVALID_PARAMS, "expected empty params"));
+                }
+                let tools: Vec<Value> = ctx
+                    .nested
+                    .list()
+                    .into_iter()
+                    .map(|schema| {
+                        json!({
+                            "name": schema.name,
+                            "description": schema.description,
+                            "input_schema": schema.input_schema,
+                        })
+                    })
+                    .collect();
+                Ok(json!({ "tools": tools }))
+            }
+            "tool.call" => {
+                let Grant::ToolCall(ctx) = &self.grant else {
+                    return Err(rpc_error(
+                        codes::CAPABILITY_DENIED,
+                        "tool.call is available only to tool calls",
+                    ));
+                };
+                nested_tool_call(ctx, params).await
+            }
             _ => Err(rpc_error(
                 codes::METHOD_NOT_FOUND,
                 "unknown host capability",
