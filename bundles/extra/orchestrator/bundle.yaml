@@ -28,6 +28,7 @@ agents:
   - id: orchestrator-scout
     description: Finds facts by reading and searching files.
     role: subagent
+    handoff: deterministic
     prompt: prompts/scout.md
     resource_view:
       allow:
@@ -37,6 +38,7 @@ agents:
   - id: orchestrator-runner
     description: Runs commands and reads files to report what happened.
     role: subagent
+    handoff: deterministic
     prompt: prompts/runner.md
     resource_view:
       allow:
@@ -45,6 +47,7 @@ agents:
   - id: orchestrator-editor
     description: Reads, searches and changes files without running commands.
     role: subagent
+    handoff: deterministic
     prompt: prompts/editor.md
     resource_view:
       allow:

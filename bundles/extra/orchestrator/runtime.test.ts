@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import {
   CapabilityClient, DEFAULT_OPTIONS, INITIALIZE_RESULT, buildJevRequest, classify,
@@ -9,8 +10,12 @@ import {
 
 const directory = mkdtempSync(join(import.meta.dir, ".runtime-test-"));
 const received: Array<{ method: string; params: any }> = [];
-const checkedHost = (host: Host): Host => async (method, params, signal) => {
+const checkedHost = (host: Host, state: () => string | null | Promise<string | null> = () => null): Host => async (method, params, signal) => {
   received.push({ method, params });
+  if (method === "workspace.state") {
+    expect(params).toEqual({});
+    return { state: await state() };
+  }
   expect(method).toBe("tool.call");
   expect(["task", "wait", "archive", "read"]).toContain(params.name);
   if (params.name === "read") expect(params.input.path).toStartWith("channel://");
@@ -18,6 +23,10 @@ const checkedHost = (host: Host): Host => async (method, params, signal) => {
 };
 afterAll(() => {
   for (const { method, params } of received) {
+    if (method === "workspace.state") {
+      expect(params).toEqual({});
+      continue;
+    }
     expect(method).toBe("tool.call");
     expect(["task", "wait", "archive", "read"]).toContain(params.name);
     if (params.name === "read") expect(params.input.path).toStartWith("channel://");
@@ -26,11 +35,21 @@ afterAll(() => {
 });
 let nextCall = 0;
 const host: Host = async () => ({ output: { metadata: { members: [{ member: "main/worker", session: "child", status: "done", summary: "ok" }] } } });
-const context = (overrides: Partial<RunContext> = {}): RunContext => ({
-  session: "test-session", call: `call-${++nextCall}`, configDir: directory, ...overrides, host: checkedHost(overrides.host ?? host),
+type TestContext = Partial<RunContext> & { workspaceState?: () => string | null | Promise<string | null> };
+const context = (overrides: TestContext = {}): RunContext => ({
+  session: "test-session", call: `call-${++nextCall}`, configDir: directory, ...overrides, host: checkedHost(overrides.host ?? host, overrides.workspaceState),
 });
-const run = (script: string, overrides: Partial<RunContext> = {}) => executeScript(script, context(overrides));
-const workflow = (input: unknown, overrides: Partial<RunContext> = {}) => executeWorkflow(input, context(overrides));
+const run = async (script: string, overrides: TestContext = {}) => {
+  const result = await executeScript(script, context(overrides));
+  for (const entry of result.trace.filter((entry) => entry.kind === "agent")) {
+    expect(entry).toHaveProperty("state_before");
+    expect(entry).toHaveProperty("state_after");
+    expect(entry.state_before === null || typeof entry.state_before === "string").toBe(true);
+    expect(entry.state_after === null || typeof entry.state_after === "string").toBe(true);
+  }
+  return result;
+};
+const workflow = (input: unknown, overrides: TestContext = {}) => executeWorkflow(input, context(overrides));
 const runAgent = (input: AgentInput, host: Host, signal: AbortSignal, onStarted?: (result: AgentResult) => void) => runAgentRaw(input, checkedHost(host), signal, onStarted);
 const records = (path: string) => readFileSync(path, "utf8").trim().split("\n").map((line) => JSON.parse(line));
 const judge = parseJudgeConfig({ judge: { api_key: "test-key" } })!;
@@ -460,6 +479,185 @@ describe("agents.run host bridge", () => {
   });
 });
 
+describe("remembered observations", () => {
+  const state = "a".repeat(64);
+  const changed = "b".repeat(64);
+  const input: AgentInput = { agent: "orchestrator-scout", prompt: "Find the exporter", result: { paths: "Relevant paths" } };
+  const script = (args: AgentInput = input) => `return await agents.run(${JSON.stringify(args)});`;
+  const answer = (output: string) => JSON.parse(output.split("\n")[1]);
+  const memoFiles = (configDir: string) => existsSync(join(configDir, "memo")) ? readdirSync(join(configDir, "memo")) : [];
+  const fakeWorker = (status: AgentResult["status"] = "done") => {
+    const calls: Array<{ name: string; input: any }> = [];
+    let tasks = 0;
+    const host: Host = async (_method, params) => {
+      calls.push(params as any);
+      switch (params.name) {
+        case "task":
+          tasks++;
+          return { output: { metadata: { members: [{ member: `main/scout-${tasks}`, session: `worker-${tasks}`, status: "running" }] } } };
+        case "wait": return { output: { metadata: {
+          finished: status === "timeout" ? [] : [{ handle: params.input.targets[0], outcome: status, channel: "DM-observation" }],
+          running: status === "timeout" ? [{ handle: params.input.targets[0], state: "working" }] : [],
+          woke_by: status === "timeout" ? "timeout" : "members",
+        } } };
+        case "read": return { output: { output: 'Exporter: src/export.ts\nRESULT: {"paths":["src/export.ts"]}' } };
+        default: throw new Error(`unexpected ${params.name}`);
+      }
+    };
+    return { host, calls };
+  };
+
+  test("stores the exact observation and reuses its report and result across scripts and sessions", async () => {
+    const configDir = join(directory, "memo-hit");
+    const worker = fakeWorker();
+    const options = { configDir, host: worker.host, workspaceState: () => state };
+    const first = await run(`await agents.run({agent:"orchestrator-scout",prompt:"Different question"});\n${script()}`, { ...options, session: "source-session" });
+    expect(first.ok).toBe(true);
+    expect(worker.calls.map((call) => call.name)).toEqual(["task", "wait", "read", "task", "wait", "read"]);
+    expect(first.trace[1]).toMatchObject({ state_before: state, state_after: state });
+    expect(first.output).not.toContain("reused observations:");
+    const prompt = 'Find the exporter\n\nEnd your report with one final line of the form RESULT: {...} — a single-line JSON object with exactly these fields:\n- paths: Relevant paths';
+    expect(worker.calls[3].input.tasks[0].prompt).toBe(prompt);
+    const key = createHash("sha256").update(JSON.stringify([state, input.agent, prompt, null, null])).digest("hex");
+    const memoPath = join(configDir, "memo", `${key}.json`);
+    const memo = JSON.parse(readFileSync(memoPath, "utf8"));
+    expect(memo).toEqual({
+      key, state, agent: input.agent, description: input.prompt, prompt,
+      ...answer(first.output), trace: first.traceFile, seq: 2, stored_ms: expect.any(Number),
+    });
+    const before = received.length;
+    const hit = await run(script(), { ...options, session: "later-session" });
+    expect(hit.ok).toBe(true);
+    expect(worker.calls).toHaveLength(6);
+    expect(received.slice(before)).toEqual([{ method: "workspace.state", params: {} }]);
+    expect(answer(hit.output)).toEqual({ ...answer(first.output), cached: true });
+    const source = { handle: memo.handle, session: memo.session, trace: first.traceFile, seq: 2 };
+    expect(hit.trace[0]).toMatchObject({ state_before: state, state_after: null, cached: true, source, result: { paths: ["src/export.ts"] } });
+    expect(records(hit.traceFile)[1]).toMatchObject({ cached: true, source });
+    expect(hit.output).toContain(`-> cached from ${memo.handle}, 0.0 s\n</trace>\nreused observations: 1\n`);
+    expect(readFileSync(memoPath, "utf8")).toBe(JSON.stringify(memo) + "\n");
+    const multiple = await run(`await agents.run(${JSON.stringify(input)}); ${script()}`, options);
+    expect(multiple.output).toContain("reused observations: 2");
+    expect(multiple.output.length).toBeLessThan(4800);
+  });
+
+  for (const [name, before, after, status] of [
+    ["changed workspace", state, changed, "done"],
+    ["unknown workspace", null, null, "done"],
+    ["unknown final state", state, null, "done"],
+    ["unknown initial state", null, state, "done"],
+    ["failed worker", state, state, "failed"],
+    ["timed out worker", state, state, "timeout"],
+    ["cancelled worker", state, state, "cancelled"],
+  ] as const) {
+    test(`does not store or reuse a ${name}`, async () => {
+      const configDir = join(directory, `memo-${name.replaceAll(" ", "-")}`);
+      const worker = fakeWorker(status);
+      let states = 0;
+      for (let n = 0; n < 2; n++) {
+        const result = await run(script(), { configDir, host: worker.host, workspaceState: () => ++states % 2 ? before : after });
+        expect(result.ok).toBe(true);
+        expect(answer(result.output).status).toBe(status);
+        expect(result.trace[0]).toMatchObject({ state_before: before, state_after: after });
+        expect(result.trace[0].cached).toBeUndefined();
+        expect(result.output).not.toContain("reused observations:");
+        expect(memoFiles(configDir)).toEqual([]);
+      }
+      expect(states).toBe(4);
+      expect(worker.calls.filter((call) => call.name === "task")).toHaveLength(2);
+    });
+  }
+
+  test("cache:false skips both lookup and store while recording workspace states", async () => {
+    const worker = fakeWorker();
+    const configDir = join(directory, "memo-opt-out");
+    let states = 0;
+    const options = { configDir, host: worker.host, workspaceState: () => { states++; return state; } };
+    await run(script({ ...input, cache: false }), options);
+    expect(memoFiles(configDir)).toEqual([]);
+    await run(script(), options);
+    const file = join(configDir, "memo", memoFiles(configDir)[0]);
+    const saved = readFileSync(file, "utf8");
+    const uncached = await run(script({ ...input, cache: false }), options);
+    expect(uncached.trace[0]).toMatchObject({ state_before: state, state_after: state });
+    expect(uncached.trace[0].cached).toBeUndefined();
+    expect(readFileSync(file, "utf8")).toBe(saved);
+    const hit = await run(script(), options);
+    expect(hit.trace[0].cached).toBe(true);
+    expect(worker.calls.filter((call) => call.name === "task")).toHaveLength(3);
+    expect(states).toBe(7);
+  });
+
+  test("keys include state, agent, exact prompt and result instruction, model, and effort", async () => {
+    const configDir = join(directory, "memo-keys");
+    const worker = fakeWorker();
+    const variants: Array<[AgentInput, string]> = [
+      [input, state],
+      [input, changed],
+      [{ ...input, agent: "orchestrator-runner" }, state],
+      [{ ...input, prompt: input.prompt + " " }, state],
+      [{ ...input, result: { paths: "Different result request" } }, state],
+      [{ ...input, model: "fake/model" }, state],
+      [{ ...input, effort: "low" }, state],
+    ];
+    for (const [variant, workspace] of variants) {
+      const result = await run(script(variant), { configDir, host: worker.host, workspaceState: () => workspace });
+      expect(result.ok).toBe(true);
+      expect(result.trace[0].cached).toBeUndefined();
+      const key = createHash("sha256").update(JSON.stringify([workspace, variant.agent, worker.calls.at(-3)!.input.tasks[0].prompt, variant.model ?? null, variant.effort ?? null])).digest("hex");
+      expect(memoFiles(configDir)).toContain(`${key}.json`);
+    }
+    expect(memoFiles(configDir)).toHaveLength(variants.length);
+    expect(worker.calls.filter((call) => call.name === "task")).toHaveLength(variants.length);
+    const hit = await run(script({ ...input, description: "Different display label", timeout_secs: 7 }), { configDir, host: worker.host, workspaceState: () => state });
+    expect(hit.trace[0].cached).toBe(true);
+  });
+
+  test("refuses a record whose state differs even when its filename matches the key", async () => {
+    const configDir = join(directory, "memo-mismatched-record");
+    const worker = fakeWorker();
+    const options = { configDir, host: worker.host, workspaceState: () => state };
+    await run(script(), options);
+    const file = join(configDir, "memo", memoFiles(configDir)[0]);
+    const memo = JSON.parse(readFileSync(file, "utf8"));
+    writeFileSync(file, JSON.stringify({ ...memo, state: changed }));
+    const result = await run(script(), options);
+    expect(result.ok).toBe(true);
+    expect(result.trace[0].cached).toBeUndefined();
+    expect(worker.calls.filter((call) => call.name === "task")).toHaveLength(2);
+  });
+
+  test("an abandoned worker is never stored, including after its late report arrives", async () => {
+    const configDir = join(directory, "memo-abandoned");
+    const late = Promise.withResolvers<any>();
+    const read = Promise.withResolvers<void>();
+    const calls: string[] = [];
+    const options = { configDir, workspaceState: () => state, host: (async (_method, params) => {
+      calls.push(params.name as string);
+      if (params.name === "task") {
+        const handle = params.input.tasks[0].prompt;
+        return { output: { metadata: { members: [{ member: handle, session: `session-${handle}`, status: "running" }] } } };
+      }
+      if (params.name === "wait") {
+        if (params.input.targets[0] === "abandoned") return late.promise;
+        return { output: { metadata: { finished: [{ handle: "barrier", outcome: "done" }], running: [] } } };
+      }
+      if (params.name === "read") { read.resolve(); return { output: { output: "done" } }; }
+      return { output: {} };
+    }) as Host };
+    const result = await run('agents.run({agent:"orchestrator-scout",prompt:"abandoned"}); await agents.run({agent:"orchestrator-runner",prompt:"barrier",cache:false});', options);
+    expect(result.trace[0]).toMatchObject({ abandoned: true, archived: true, state_before: state, state_after: null });
+    expect(calls).toContain("archive");
+    expect(memoFiles(configDir)).toEqual([]);
+    late.resolve({ output: { metadata: { finished: [{ handle: "abandoned", outcome: "done" }], running: [] } } });
+    await read.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(memoFiles(configDir)).toEqual([]);
+    const rerun = await run('return await agents.run({agent:"orchestrator-scout",prompt:"abandoned"});', { configDir, host: fakeWorker().host, workspaceState: () => state });
+    expect(rerun.trace[0].cached).toBeUndefined();
+  });
+});
+
 describe("workflow inputs and persistent store", () => {
   const store = join(directory, "store");
   const metadata = (name: string) => JSON.parse(readFileSync(join(store, "workflows", `${name}.json`), "utf8"));
@@ -475,14 +673,15 @@ describe("workflow inputs and persistent store", () => {
     expect(records(result.output.match(/trace file: (.+)$/)![1])[0]).toMatchObject({ script, args: { request: "hello" }, stored: null });
   });
 
-  test("save only completed scripts; replace source unchanged; run with fresh args and update metadata", async () => {
+  test("save completed and failed scripts; replace source unchanged; run with fresh args and update metadata", async () => {
     const source = '// Return the request\nif (args.fail) throw new Error("failed request");\nreturn args.request;\n';
     const failed = await workflow({ script: 'throw new Error("no save");', save_as: "never-saved" }, { configDir: store });
     expect(failed.ok).toBe(false);
     expect(failed.output).toStartWith("Workflow failed in ");
-    expect(failed.output).not.toContain("saved as");
-    expect(records(failed.output.match(/trace file: (.+)$/)![1])[0].stored).toBeNull();
-    expect(existsSync(join(store, "workflows", "never-saved.js"))).toBe(false);
+    expect(failed.output).toContain("saved as never-saved");
+    expect(records(failed.output.match(/trace file: (.+)$/)![1])[0].stored).toBe("never-saved");
+    expect(saved("never-saved")).toBe('throw new Error("no save");');
+    expect(metadata("never-saved")).toMatchObject({ last_status: "failed", last_error: "no save", runs: 1 });
 
     const first = await workflow({ script: source, args: { request: "first" }, save_as: "return-request" }, { configDir: store });
     expect(first.ok).toBe(true);
@@ -490,7 +689,7 @@ describe("workflow inputs and persistent store", () => {
     expect(first.output).toContain("\nsaved as return-request\n");
     expect(saved("return-request")).toBe(source);
     const initial = metadata("return-request");
-    expect(initial).toEqual({ name: "return-request", description: "Return the request", saved_ms: expect.any(Number), runs: 1, last_run_ms: expect.any(Number), last_status: "completed" });
+    expect(initial).toEqual({ name: "return-request", description: "Return the request", saved_ms: expect.any(Number), runs: 1, last_run_ms: expect.any(Number), last_status: "completed", last_error: "" });
     expect(records(first.output.match(/trace file: (.+)$/)![1])[0]).toMatchObject({ script: source, args: { request: "first" }, stored: "return-request" });
 
     const second = await workflow({ run: "return-request", args: { request: "second" } }, { configDir: store, session: "another-session" });
@@ -504,11 +703,14 @@ describe("workflow inputs and persistent store", () => {
     const failedRun = await workflow({ run: "return-request", args: { fail: true } }, { configDir: store });
     expect(failedRun.ok).toBe(false);
     expect(failedRun.output).toStartWith("Workflow return-request failed in ");
-    expect(metadata("return-request")).toMatchObject({ runs: 3, last_status: "failed" });
+    expect(metadata("return-request")).toMatchObject({ runs: 3, last_status: "failed", last_error: "failed request" });
     expect(saved("return-request")).toBe(source);
-    await workflow({ script: 'throw new Error("do not replace");', save_as: "return-request" }, { configDir: store });
-    expect(saved("return-request")).toBe(source);
-    expect(metadata("return-request")).toMatchObject({ runs: 3, last_status: "failed" });
+    await workflow({ run: "return-request", args: { request: "repaired" } }, { configDir: store });
+    expect(metadata("return-request")).toMatchObject({ runs: 4, last_status: "completed", last_error: "" });
+    const failedReplacement = 'throw new Error("replace even on failure");';
+    await workflow({ script: failedReplacement, save_as: "return-request" }, { configDir: store });
+    expect(saved("return-request")).toBe(failedReplacement);
+    expect(metadata("return-request")).toMatchObject({ runs: 1, last_status: "failed", last_error: "replace even on failure" });
 
     const replacement = '// Replacement\nreturn {value: args.value};';
     await workflow({ script: replacement, save_as: "return-request" }, { configDir: store });
@@ -529,9 +731,9 @@ describe("workflow inputs and persistent store", () => {
     const listed = await workflow({ list: true }, { configDir: local });
     expect(listed.ok).toBe(true);
     expect(JSON.parse(listed.output.slice("Stored workflows:\n".length))).toEqual([
-      { name: "comment", description: "Description", saved_ms: expect.any(Number), runs: 2 },
-      { name: "no-comment", description: "", saved_ms: expect.any(Number), runs: 1 },
-      { name: "options", description: "", saved_ms: expect.any(Number), runs: 1 },
+      { name: "comment", description: "Description", saved_ms: expect.any(Number), runs: 2, last_status: "completed" },
+      { name: "no-comment", description: "", saved_ms: expect.any(Number), runs: 1, last_status: "completed" },
+      { name: "options", description: "", saved_ms: expect.any(Number), runs: 1, last_status: "completed" },
     ]);
     expect(received.length).toBe(before);
     expect(readdirSync(join(local, "traces", "test-session"))).toEqual(traceFiles);
@@ -539,18 +741,53 @@ describe("workflow inputs and persistent store", () => {
     await expect(workflow({ run: "unknown" }, { configDir: join(directory, "empty") })).rejects.toThrow("Stored workflows: (none)");
   });
 
+  test("show returns unchanged source and full metadata without running; list cuts only the failed error", async () => {
+    const configDir = join(directory, "repairable");
+    const error = "START" + "x".repeat(300) + "END";
+    const script = `// Repair this workflow\nif (args.fail) throw new Error(${JSON.stringify(error)});\nreturn "recovered";`;
+    const failed = await workflow({ script, args: { fail: true }, save_as: "repair-me" }, { configDir });
+    expect(failed.ok).toBe(false);
+    const before = received.length;
+    const traceFiles = readdirSync(join(configDir, "traces", "test-session"));
+    const shown = await workflow({ show: "repair-me" }, { configDir });
+    expect(shown.ok).toBe(true);
+    const storedMetadata = JSON.parse(readFileSync(join(configDir, "workflows", "repair-me.json"), "utf8"));
+    expect(JSON.parse(shown.output)).toEqual({ script, metadata: storedMetadata });
+    expect(storedMetadata).toMatchObject({ name: "repair-me", last_status: "failed", last_error: error, runs: 1 });
+    const listed = await workflow({ list: true }, { configDir });
+    const item = JSON.parse(listed.output.split("\n")[1])[0];
+    expect(item.last_status).toBe("failed");
+    expect(item.last_error).toHaveLength(200);
+    expect(item.last_error).toStartWith("START");
+    expect(item.last_error).toEndWith("END");
+    expect(received.length).toBe(before);
+    expect(readdirSync(join(configDir, "traces", "test-session"))).toEqual(traceFiles);
+    const completed = await workflow({ run: "repair-me", args: { fail: false } }, { configDir });
+    expect(completed.ok).toBe(true);
+    expect(JSON.parse((await workflow({ show: "repair-me" }, { configDir })).output)).toMatchObject({ script, metadata: { runs: 2, last_status: "completed", last_error: "" } });
+    expect(JSON.parse((await workflow({ list: true }, { configDir })).output.split("\n")[1])[0]).not.toHaveProperty("last_error");
+  });
+
+  test("show and run of unknown names return identical errors", async () => {
+    for (const configDir of [store, join(directory, "unknown-empty")]) {
+      const errors = await Promise.all([workflow({ run: "unknown" }, { configDir }), workflow({ show: "unknown" }, { configDir })].map((pending) => pending.catch((error) => error.message)));
+      expect(errors[0]).toStartWith("Unknown workflow: unknown. Stored workflows:");
+      expect(errors[1]).toBe(errors[0]);
+    }
+  });
+
   test("rejects invalid names before execution", async () => {
     for (const name of ["", "../escape", "Upper", "two words", "-start", "a".repeat(65), 12]) {
-      for (const input of [{ script: 'throw new Error("must not run");', save_as: name }, { run: name }]) {
-        await expect(workflow(input, { configDir: store })).rejects.toThrow(typeof name === "number" && "run" in input ? "workflow input must be exactly one of" : "must match");
+      for (const input of [{ script: 'throw new Error("must not run");', save_as: name }, { run: name }, { show: name }]) {
+        await expect(workflow(input, { configDir: store })).rejects.toThrow(typeof name === "number" && !("script" in input) ? "workflow input must be exactly one of" : "must match");
       }
     }
     expect((await workflow({ script: "return 1;", save_as: "a".repeat(64) }, { configDir: store })).ok).toBe(true);
   });
 
-  test("wrong combinations identify all three forms", async () => {
-    for (const input of [null, [], {}, { script: 1 }, { run: 2 }, { list: false }, { script: "return 1", run: "x" }, { script: "return 1", list: true }, { run: "x", save_as: "y" }, { list: true, args: {} }, { args: {} }, { script: "return 1", extra: true }, { script: "return 1", args: [] }, { script: "return 1", args: null }, { run: "x", args: "wrong" }]) {
-      await expect(workflow(input, { configDir: store })).rejects.toThrow("{script: string, args?: object, save_as?: string}, {run: string, args?: object}, or {list: true}");
+  test("wrong combinations identify all four forms", async () => {
+    for (const input of [null, [], {}, { script: 1 }, { run: 2 }, { show: 2 }, { list: false }, { script: "return 1", run: "x" }, { script: "return 1", list: true }, { run: "x", save_as: "y" }, { list: true, args: {} }, { args: {} }, { script: "return 1", extra: true }, { script: "return 1", args: [] }, { script: "return 1", args: null }, { run: "x", args: "wrong" }, { show: "x", args: {} }, { show: "x", run: "x" }, { show: "x", list: true }, { show: "x", script: "return 1" }, { show: "x", save_as: "x" }]) {
+      await expect(workflow(input, { configDir: store })).rejects.toThrow("{script: string, args?: object, save_as?: string}, {run: string, args?: object}, {list: true}, or {show: string}");
     }
   });
 });
@@ -651,13 +888,21 @@ describe("request-scoped stdio protocol", () => {
     try {
       send({ id: 1, method: "initialize", params: { protocol_version: 1, host: { name: "test", version: "1" } } });
       expect(await next()).toEqual({ jsonrpc: "2.0", id: 1, result: INITIALIZE_RESULT });
-      expect(INITIALIZE_RESULT.tools[0]).toMatchObject({ name: "workflow", inputSchema: { type: "object", oneOf: expect.any(Array) } });
+      expect(INITIALIZE_RESULT.tools[0].name).toBe("workflow");
+      expect(INITIALIZE_RESULT.tools[0].inputSchema.type).toBe("object");
+      expect(INITIALIZE_RESULT.tools[0].inputSchema.oneOf).toHaveLength(4);
       send({ id: 2, method: "tool/call", params: { tool: "workflow", session: "stdio-session", call: "stdio-call", host_capability: "opaque-token", input: { script: 'return await agents.run({agent:"orchestrator-scout",prompt:args.request});', args: {request:"wire"}, save_as: "wire-check" } } });
-      const call = await next();
-      expect(call).toMatchObject({ method: "host/capability", params: { capability: "opaque-token", session: "stdio-session", call: "stdio-call", method: "tool.call", params: { name: "task", input: { tasks: [{subagent_type:"orchestrator-scout",prompt:"wire"}] } } } });
+      const before = await next();
+      expect(before).toMatchObject({ method: "host/capability", params: { capability: "opaque-token", session: "stdio-session", call: "stdio-call", method: "workspace.state", params: {} } });
       send({ id: 3, method: "initialize", params: {} });
       expect((await next()).id).toBe(3);
+      send({ id: before.id, result: { state: "c".repeat(64) } });
+      const call = await next();
+      expect(call).toMatchObject({ method: "host/capability", params: { capability: "opaque-token", session: "stdio-session", call: "stdio-call", method: "tool.call", params: { name: "task", input: { tasks: [{subagent_type:"orchestrator-scout",prompt:"wire"}] } } } });
       send({ id: call.id, result: { output: { metadata: { members: [{member:"main/scout",session:"child",status:"done",summary:'RESULT: {"wire":true}'}] } } } });
+      const after = await next();
+      expect(after).toMatchObject({ method: "host/capability", params: { method: "workspace.state", params: {} } });
+      send({ id: after.id, result: { state: "c".repeat(64) } });
       const reply = await next();
       expect(reply).toMatchObject({ id: 2, result: { ok: true } });
       expect(reply.result.output).toStartWith("Workflow completed in ");
@@ -669,6 +914,15 @@ describe("request-scoped stdio protocol", () => {
       expect(await next()).toMatchObject({ id:5,error:{code:-32602,message:expect.stringContaining("{list: true}")} });
       send({ id: 6, method: "tool/call", params: { tool: "workflow", session: "stdio-session", call: "listing", host_capability: "opaque-token", input: {list:true} } });
       expect(await next()).toMatchObject({ id:6,result:{ok:true,output:expect.stringContaining("wire-check")} });
+      send({ id: 7, method: "tool/call", params: { tool: "workflow", session: "stdio-session", call: "showing", host_capability: "opaque-token", input: {show:"wire-check"} } });
+      const shown = await next();
+      expect(shown.id).toBe(7);
+      expect(JSON.parse(shown.result.output)).toMatchObject({ script: expect.stringContaining("agents.run"), metadata: { name: "wire-check", runs: 1, last_error: "" } });
+      send({ id: 8, method: "tool/call", params: { tool: "workflow", session: "later-session", call: "reusing", host_capability: "opaque-token", input: {run:"wire-check",args:{request:"wire"}} } });
+      const lookup = await next();
+      expect(lookup).toMatchObject({ method: "host/capability", params: { session: "later-session", call: "reusing", method: "workspace.state", params: {} } });
+      send({ id: lookup.id, result: { state: "c".repeat(64) } });
+      expect(await next()).toMatchObject({ id: 8, result: { ok: true, output: expect.stringContaining("reused observations: 1") } });
       send({ id: 4, method: "shutdown", params: {} });
       expect(await next()).toEqual({ jsonrpc: "2.0", id: 4, result: {} });
       expect(await child.exited).toBe(0);
