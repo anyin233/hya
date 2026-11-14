@@ -131,6 +131,7 @@ fn ctx_with(session: SessionId) -> ToolCtx {
     let (interaction, _irx) = InteractionPlane::new();
     let (spawner, _srx) = SpawnerPlane::new();
     ToolCtx {
+        nested: hya_tool::NestedToolPlane::disconnected(),
         workflows: hya_tool::WorkflowPlane::disconnected(),
         permission: permission.for_session(session),
         interaction: interaction.for_session(session),

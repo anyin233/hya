@@ -25,6 +25,7 @@ fn ctx_with(mailbox: MailboxPlane, session: SessionId) -> ToolCtx {
     let (spawner, _srx) = SpawnerPlane::new();
     let (interaction, _irx) = InteractionPlane::new();
     ToolCtx {
+        nested: hya_tool::NestedToolPlane::disconnected(),
         workflows: hya_tool::WorkflowPlane::disconnected(),
         permission,
         interaction,

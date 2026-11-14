@@ -137,6 +137,9 @@ pub struct ToolCtx {
     pub roots: Vec<PathBuf>,
     /// Cancellation token for cooperative abort.
     pub cancel: CancellationToken,
+    /// The calling agent's other tools, callable as part of this call
+    /// (disconnected inside a nested call; see [`crate::nested`]).
+    pub nested: crate::NestedToolPlane,
 }
 
 impl ToolCtx {

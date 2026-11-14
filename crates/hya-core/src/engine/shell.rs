@@ -463,6 +463,7 @@ impl SessionEngine {
                             let channel_policy = crate::ChannelPolicy::from_binding(binding)?
                                 .snapshot_for(agent.name.as_str());
                             let ctx = ToolCtx {
+                                nested: hya_tool::NestedToolPlane::disconnected(),
                                 workflows: hya_tool::WorkflowPlane::disconnected(),
                                 permission,
                                 interaction: self.interaction.for_session(session),

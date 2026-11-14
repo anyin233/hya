@@ -29,6 +29,7 @@ fn temp_path(suffix: &str) -> PathBuf {
 
 fn process_tool_ctx(workdir: &std::path::Path) -> ToolCtx {
     ToolCtx {
+        nested: hya_tool::NestedToolPlane::disconnected(),
         permission: PermissionPlane::new(PermissionRules::default()).0,
         interaction: hya_tool::InteractionPlane::new().0,
         spawner: hya_tool::SpawnerPlane::new().0,

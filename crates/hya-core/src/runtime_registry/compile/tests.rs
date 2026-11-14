@@ -3137,6 +3137,7 @@ fn dispatch_ctx(workdir: &Path) -> ToolCtx {
         Mode::Allow,
     )]));
     ToolCtx {
+        nested: hya_tool::NestedToolPlane::disconnected(),
         workflows: hya_tool::WorkflowPlane::disconnected(),
         permission,
         interaction: hya_tool::InteractionPlane::new().0,

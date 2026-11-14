@@ -1347,6 +1347,8 @@ impl SessionEngine {
         // Set when a `report` of this turn is accepted: the turn ends right
         // after that tool round, and a second `report` is rejected.
         let report_latch = hya_tool::ReportLatch::new();
+        // Engine handle for nested tool calls, cloned once per turn on first use.
+        let mut nested_engine: Option<Arc<SessionEngine>> = None;
         loop {
             self.validate_actor_claim(actor_claim).await?;
             if activation_hook_for(session).is_some_and(|hooks| !hooks.is_healthy()) {
@@ -2097,21 +2099,16 @@ impl SessionEngine {
                     Ok::<_, CoreError>(match resources.resolve_tool(&tc.name) {
                         Some(resolved) => {
                             let result_policy = resolved.tool.result_policy();
-                            // Read the tree's permission mode at every call, so a
-                            // switch applies to the next check even mid-turn.
-                            let mode_plane = self
-                                .mode_permission_plane(binding, session, Some(&live_agent.name))
+                            let permission = self
+                                .tool_call_permission(
+                                    binding,
+                                    session,
+                                    &live_agent.name,
+                                    external_dirs,
+                                    &workspace.grant_scope,
+                                    activation_hooks.as_ref(),
+                                )
                                 .await?;
-                            let mut permission =
-                                permission_for_session(&mode_plane, session, external_dirs)
-                                    .with_grant_scope(workspace.grant_scope.clone());
-                            if let Some(hooks) = &activation_hooks {
-                                permission = permission.prepend_interceptor(Arc::new(
-                                    crate::bundle_hooks::BundlePermissionInterceptor::new(
-                                        Arc::clone(hooks),
-                                    ),
-                                ));
-                            }
                             let authorized = {
                                 authorize_tool_call(
                                     &resolved, &tc.input, permission, message, tc.call,
@@ -2123,7 +2120,8 @@ impl SessionEngine {
                                     let channel_policy =
                                         crate::ChannelPolicy::from_binding(binding)?
                                             .snapshot_for(live_agent.name.as_str());
-                                    let ctx = ToolCtx {
+                                    let mut ctx = ToolCtx {
+                                        nested: hya_tool::NestedToolPlane::disconnected(),
                                         workflows: self
                                             .workflows
                                             .for_binding(binding)
@@ -2165,6 +2163,24 @@ impl SessionEngine {
                                         roots: workspace.roots.clone(),
                                         cancel: cancel.clone(),
                                     };
+                                    let nested = super::nested_tools::TurnNestedTools {
+                                        engine: Arc::clone(
+                                            nested_engine
+                                                .get_or_insert_with(|| Arc::new(self.clone())),
+                                        ),
+                                        binding: binding.clone(),
+                                        resources: Arc::clone(&live_resources),
+                                        agent: live_agent.name.clone(),
+                                        session,
+                                        message,
+                                        actor_claim: actor_claim.copied(),
+                                        external_dirs: external_dirs.into(),
+                                        grant_scope: workspace.grant_scope.clone(),
+                                        activation_hooks: activation_hooks.clone(),
+                                        caller: resolved.tool.name().to_string(),
+                                        base: ctx.clone(),
+                                    };
+                                    ctx.nested = hya_tool::NestedToolPlane::new(Arc::new(nested));
                                     // Permission and plugin hooks can await. Recheck at the
                                     // actual dispatch boundary so takeover cannot turn a
                                     // previously valid resident into an unfenced launch.
@@ -2399,6 +2415,34 @@ fn is_retryable_round_error(error: &CoreError) -> bool {
                 || message.contains("unexpected end of file")
         }
         _ => false,
+    }
+}
+
+impl SessionEngine {
+    /// Permission plane for one tool call of `agent`, before authorization.
+    ///
+    /// Reads the tree's permission mode at every call, so a switch applies to
+    /// the next check even mid-turn.
+    pub(super) async fn tool_call_permission(
+        &self,
+        binding: &TurnBinding,
+        session: SessionId,
+        agent: &AgentName,
+        external_dirs: &[PathBuf],
+        grant_scope: &hya_tool::GrantScope,
+        activation_hooks: Option<&Arc<dyn HookDispatcher>>,
+    ) -> Result<PermissionPlane, CoreError> {
+        let mode_plane = self
+            .mode_permission_plane(binding, session, Some(agent))
+            .await?;
+        let mut permission = permission_for_session(&mode_plane, session, external_dirs)
+            .with_grant_scope(grant_scope.clone());
+        if let Some(hooks) = activation_hooks {
+            permission = permission.prepend_interceptor(Arc::new(
+                crate::bundle_hooks::BundlePermissionInterceptor::new(Arc::clone(hooks)),
+            ));
+        }
+        Ok(permission)
     }
 }
 
