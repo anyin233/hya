@@ -157,9 +157,9 @@ denial, and `-32602` for malformed params. An unsupported operation returns
 `-32601`. The host applies the active call's permission snapshot.
 
 `workspace.state` is a read-only identity of the Git work tree containing the
-calling session's working directory. A bundle can compare it before and after
-an observation, then reuse the answer while the identity stays equal. Send
-empty params on the tool call's lease:
+calling session's working directory: its location and its content. A bundle
+can compare it before and after an observation, then reuse the answer while
+the identity stays equal. Send empty params on the tool call's lease:
 
 ```json
 {"jsonrpc":"2.0","id":43,"method":"host/capability","params":{"capability":"<host_capability>","session":"<session-id>","call":"<call-id>","method":"workspace.state","params":{}}}
@@ -168,21 +168,24 @@ empty params on the tool call's lease:
 
 The value is lowercase hexadecimal SHA-256 over these bytes, in order:
 
-1. The output of `git rev-parse HEAD^{tree}`, including its trailing newline,
+1. The output of `git rev-parse --show-toplevel`, including its trailing
+   newline. An answer about one checkout can name absolute paths in it, so
+   the same content in another work tree is another state.
+2. The output of `git rev-parse HEAD^{tree}`, including its trailing newline,
    or the literal bytes `none` on an unborn branch (no commit).
-2. The NUL-delimited output of
+3. The NUL-delimited output of
    `git status --porcelain=v1 -z --untracked-files=all` from the work tree root,
    excluding paths under top-level `.hya/`. Git's pathspec exclusion
    `:(top,exclude).hya/**` applies before rename detection; a rename across
    that boundary appears as an addition or deletion on the included side.
-3. For every status-listed path that currently names a regular file, in
+4. For every status-listed path that currently names a regular file, in
    status order: the raw path bytes, a NUL byte, and the 32-byte SHA-256 digest
    of the file's bytes. A rename lists its destination before its source.
 
 Ignored untracked files and `.hya/` status entries/file hashes do not
 contribute. The HEAD tree remains the Git tree identity, independent of commit
-message, author, or date. Equal values imply the same tree, status, and listed
-regular-file contents (subject to SHA-256 collision resistance). States with
+message, author, or date. Equal values imply the same work tree location,
+tree, status, and listed regular-file contents (subject to SHA-256 collision resistance). States with
 the same file bytes can still differ when the Git index differs; such changes
 conservatively prevent reuse.
 

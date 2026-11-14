@@ -568,6 +568,20 @@ describe("remembered observations", () => {
     });
   }
 
+  for (const agent of ["orchestrator-runner", "orchestrator-editor"]) {
+    test(`never stores or reuses an answer of ${agent}`, async () => {
+      const configDir = join(directory, `memo-${agent}`);
+      const worker = fakeWorker();
+      for (let n = 0; n < 2; n++) {
+        const result = await run(script({ ...input, agent }), { configDir, host: worker.host, workspaceState: () => state });
+        expect(result.trace[0]).toMatchObject({ state_before: state, state_after: state });
+        expect(result.trace[0].cached).toBeUndefined();
+        expect(memoFiles(configDir)).toEqual([]);
+      }
+      expect(worker.calls.filter((call) => call.name === "task")).toHaveLength(2);
+    });
+  }
+
   test("cache:false skips both lookup and store while recording workspace states", async () => {
     const worker = fakeWorker();
     const configDir = join(directory, "memo-opt-out");
@@ -588,13 +602,12 @@ describe("remembered observations", () => {
     expect(states).toBe(7);
   });
 
-  test("keys include state, agent, exact prompt and result instruction, model, and effort", async () => {
+  test("keys include state, exact prompt and result instruction, model, and effort", async () => {
     const configDir = join(directory, "memo-keys");
     const worker = fakeWorker();
     const variants: Array<[AgentInput, string]> = [
       [input, state],
       [input, changed],
-      [{ ...input, agent: "orchestrator-runner" }, state],
       [{ ...input, prompt: input.prompt + " " }, state],
       [{ ...input, result: { paths: "Different result request" } }, state],
       [{ ...input, model: "fake/model" }, state],

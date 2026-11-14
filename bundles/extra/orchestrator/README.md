@@ -98,14 +98,18 @@ and 3600 characters respectively. The host process timeout is 3600000 ms.
 
 ## Remembered observations
 
-A worker that finishes with `status: "done"` and leaves the workspace content
-unchanged made an observation. The runtime remembers its complete report and
-parsed result across scripts and sessions, saving another worker call when
-the same question is asked on the same content.
+An `orchestrator-scout` that finishes with `status: "done"` and leaves the
+workspace unchanged made an observation. The runtime remembers its complete
+report and parsed result across scripts and sessions, saving another worker
+call when the same question is asked in the same work tree on the same
+content. Runner and editor answers are never remembered: a command can depend
+on, or change, what the state does not cover (ignored files, the environment,
+chance), so the same command on the same files is not the same observation.
 
 Before starting a worker, the runtime calls `workspace.state({})`. Its state
-is a SHA-256 identity of the containing git work tree's content: tracked and
-untracked non-ignored files, excluding the top-level `.hya/` directory. A null
+is a SHA-256 identity of the containing git work tree: its location, and its
+tracked and untracked non-ignored files, excluding the top-level `.hya/`
+directory. A null
 state (outside git or unavailable git state) disables reuse and storage. The
 runtime checks state again after the worker returns; a changed or null state,
 failure, cancellation, timeout or abandonment is never stored.
@@ -131,13 +135,13 @@ after `</trace>` says `reused observations: <n>` only when at least one answer
 was reused. The trace's `source` names the original handle, session, absolute
 trace file and sequence number; every agent record carries its state fields.
 
-Use `cache: false` for observations that depend on time, network or other state
-outside the project files. It skips both lookup and storage while still
+Use `cache: false` for a scout whose answer depends on files git ignores, such
+as build output or logs. It skips both lookup and storage while still
 recording workspace states:
 
 ```js
-return await agents.run({agent: "orchestrator-runner",
-  prompt: "Check the remote service status", cache: false});
+return await agents.run({agent: "orchestrator-scout",
+  prompt: "Read build/test.log and list the failing tests", cache: false});
 ```
 
 ## Store, results and traces

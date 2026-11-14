@@ -511,7 +511,9 @@ export async function executeScript(script: string, context: RunContext): Promis
                       const key = createHash("sha256").update(json([before, input.agent, prepared.task.prompt, input.model ?? null, input.effort ?? null])).digest("hex");
                       const memoDir = resolve(context.configDir ?? tmpdir(), "memo");
                       const memoFile = join(memoDir, `${key}.json`);
-                      if (input.cache !== false && before !== null && existsSync(memoFile)) {
+                      // A command can depend on, or change, what the state does not cover; a scout only reads files.
+                      const remember = input.agent === "orchestrator-scout" && input.cache !== false && before !== null;
+                      if (remember && existsSync(memoFile)) {
                         const memo: Observation = JSON.parse(readFileSync(memoFile, "utf8"));
                         if (memo.key === key && memo.state === before && memo.status === "done") {
                           entry.cached = true;
@@ -529,7 +531,7 @@ export async function executeScript(script: string, context: RunContext): Promis
                       const after = (await context.host("workspace.state", {}, controller.signal)).state as string | null;
                       ensureActive();
                       entry.state_after = after;
-                      if (input.cache !== false && before !== null && after === before && result.status === "done") {
+                      if (remember && after === before && result.status === "done") {
                         const memo: Observation = { key, state: before, agent: input.agent, description: prepared.task.description, prompt: prepared.task.prompt, ...result, trace: traceFile, seq: entry.seq, stored_ms: Date.now() };
                         mkdirSync(memoDir, { recursive: true });
                         writeFileSync(memoFile, json(memo) + "\n");
@@ -689,7 +691,7 @@ export const INITIALIZE_RESULT = {
   skills: [],
   tools: [{
     name: "workflow",
-    description: "Orchestrate specialised workers and an optional judge with a traced JavaScript async-function body. Use {script, args?, save_as?}, {run, args?}, {list:true}, or {show:name}. Globals: args, agents.run (agent required: orchestrator-scout, orchestrator-runner, orchestrator-editor; cache:false disables remembered observations), models.classify, text, console.log. No local tools, imports, process, fetch, Bun, or timers. A first-line // @options: JSON comment sets timeout_ms (default 1800000, max 3000000) and max_output_chars (default 3000, max 3600). Scripts are saved even on failure for inspection and repair with show.",
+    description: "Orchestrate specialised workers and an optional judge with a traced JavaScript async-function body. Use {script, args?, save_as?}, {run, args?}, {list:true}, or {show:name}. Globals: args, agents.run (agent required: orchestrator-scout, orchestrator-runner, orchestrator-editor; a scout's answer on an unchanged workspace is remembered unless cache:false), models.classify, text, console.log. No local tools, imports, process, fetch, Bun, or timers. A first-line // @options: JSON comment sets timeout_ms (default 1800000, max 3000000) and max_output_chars (default 3000, max 3600). Scripts are saved even on failure for inspection and repair with show.",
     inputSchema: {
       type: "object",
       oneOf: [

@@ -132,7 +132,7 @@ async fn commit_metadata_does_not_affect_state() {
 }
 
 #[tokio::test]
-async fn identical_repositories_have_identical_states() {
+async fn identical_content_in_another_work_tree_is_another_state() {
     let first = Repo::new();
     let second = Repo::new();
     for repo in [&first, &second] {
@@ -141,7 +141,7 @@ async fn identical_repositories_have_identical_states() {
         repo.write("tracked", b"same dirty content");
         repo.write("untracked", b"same untracked content");
     }
-    assert_eq!(first.state().await, second.state().await);
+    assert_ne!(first.state().await, second.state().await);
 }
 
 #[tokio::test]
@@ -149,6 +149,7 @@ async fn unborn_repository_uses_literal_none_and_raw_file_digest() {
     let repo = Repo::new();
     repo.write("loose.txt", b"content");
     let mut expected = Sha256::new();
+    expected.update(repo.git(&["rev-parse", "--show-toplevel"]));
     expected.update(b"none");
     expected.update(b"?? loose.txt\0");
     expected.update(b"loose.txt\0");
