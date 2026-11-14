@@ -335,6 +335,7 @@ describe("agents.run host bridge", () => {
             running: status === "timeout" ? [{ handle, state: "working" }] : [],
           } } };
           case "read": return { output: { title: "#DM-test · 1 message(s)", output: `[${handle}] ${"full report ".repeat(800)}`, metadata: { type: "channel", channel: "DM-test", count: 1, unreadRemaining: 0, warning: null } } };
+          case "archive": return { output: {} };
           default: throw new Error(`unexpected ${params.name}`);
         }
       };
@@ -344,7 +345,7 @@ describe("agents.run host bridge", () => {
       expect(calls[1].input).toMatchObject({ targets: [handle], mode: "all" });
       expect(calls[1].input.timeout_secs).toBeLessThanOrEqual(4);
       if (status === "timeout") {
-        expect(calls.length).toBe(2);
+        expect(calls.slice(2)).toEqual([{ name: "archive", input: { target: handle, reason: "agents.run timed out" } }]);
         expect(result.report).toBe("");
       } else {
         expect(calls[2].input).toEqual({ path: "channel://DM-test" });
@@ -362,7 +363,7 @@ describe("agents.run host bridge", () => {
       const spawned = { output: { metadata: { members: [member] } } };
       let startSignal: AbortSignal | undefined;
       const script = ending === "timeout"
-        ? '// @options: {"timeout_ms":100}\nawait agents.run({agent:"orchestrator-scout",prompt:"Count files"});'
+        ? '// @options: {"timeout_ms":1000}\nawait agents.run({agent:"orchestrator-scout",prompt:"Count files"});'
         : ending === "completed" || ending === "unknown start"
           ? 'agents.run({agent:"orchestrator-scout",prompt:"Count files"}); return 1;'
           : 'await Promise.all([agents.run({agent:"orchestrator-scout",prompt:"Count files"}), models.classify({state:{},questions:{}})]);';
@@ -416,6 +417,7 @@ describe("agents.run host bridge", () => {
     const result = await runAgent({ agent: "orchestrator-editor", prompt: "work", timeout_secs: 0.1 }, async (_method, params) => {
       if (params.name === "task") return { output: { metadata: { members: [{ member: "main/worker", session: "child", status: "running" }] } } };
       expect(identity).toMatchObject({ handle: "main/worker", session: "child" });
+      if (params.name === "archive") return { output: {} };
       expect(params.input.timeout_secs).toBe(1);
       return { output: { metadata: { finished: [], running: [], woke_by: "timeout" } } };
     }, new AbortController().signal, value => { identity = { ...value }; });
@@ -501,6 +503,7 @@ describe("remembered observations", () => {
           woke_by: status === "timeout" ? "timeout" : "members",
         } } };
         case "read": return { output: { output: 'Exporter: src/export.ts\nRESULT: {"paths":["src/export.ts"]}' } };
+        case "archive": return { output: {} };
         default: throw new Error(`unexpected ${params.name}`);
       }
     };
