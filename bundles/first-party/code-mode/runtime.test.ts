@@ -3,9 +3,9 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import {
-  CapabilityClient, DEFAULT_OPTIONS, INITIALIZE_RESULT, buildJevRequest, classify,
+  CapabilityClient, DEFAULT_OPTIONS, INITIALIZE_RESULT, initializeResult, PERSONALITIES, buildJevRequest, classify,
   callHostTool, executeScript, executeWorkflow, parseJudgeConfig, parseOptions, runAgent as runAgentRaw, truncate,
-  type AgentInput, type AgentResult, type ClassifyInput, type Host, type RunContext,
+  type ToolSchema, type AgentInput, type AgentResult, type ClassifyInput, type Host, type RunContext,
 } from "./runtime.ts";
 
 const directory = mkdtempSync(join(import.meta.dir, ".runtime-test-"));
@@ -878,7 +878,7 @@ describe("request-scoped stdio protocol", () => {
   });
 
   test("real runtime child initializes, interleaves a host call, replies, and shuts down", async () => {
-    const child = Bun.spawn([process.execPath, "run", join(import.meta.dir, "runtime.ts")], {
+    const child = Bun.spawn([process.execPath, "run", join(import.meta.dir, "runtime.ts"), "workflow"], {
       cwd: import.meta.dir, stdin: "pipe", stdout: "pipe", stderr: "pipe",
       env: { HYA_BUNDLE_CONFIG_DIR: directory },
     });
@@ -949,4 +949,311 @@ describe("request-scoped stdio protocol", () => {
       await child.exited;
     }
   }, 5000);
+});
+
+describe("run personality legacy coverage", () => {
+const INITIALIZE_RESULT = initializeResult(PERSONALITIES.run);
+const directory = mkdtempSync(join(import.meta.dir, ".runtime-test-"));
+afterAll(() => rmSync(directory, { recursive: true, force: true }));
+let nextCall = 0;
+const schema = (name: string): ToolSchema => ({ name, description: `${name} description`, input_schema: { type: "object" } });
+const schemas = [schema("echo"), schema("file-read")];
+const host: Host = async (method, params) => method === "tools.list" ? { tools: schemas } : { output: params.input };
+const run = (script: string, overrides: Partial<RunContext> = {}) => executeScript(script, {
+  personality: PERSONALITIES.run, session: "test-session", call: `call-${++nextCall}`, configDir: directory, host, ...overrides,
+});
+const records = (path: string) => readFileSync(path, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+describe("script VM and trace", () => {
+  test("concurrent calls preserve start order, script lines, full sizes, and filtered output", async () => {
+    const first = Promise.withResolvers<unknown>();
+    const second = Promise.withResolvers<unknown>();
+    const bothStarted = Promise.withResolvers<void>();
+    const calls: string[] = [];
+    let listCalls = 0;
+    const pending = run([
+      'const found = ALL_TOOLS.filter(t => t.name.includes("echo"));',
+      'text(found.map(t => t.name));',
+      'const a = tools.echo({order: 1});',
+      'const b = tools.file_read({order: 2});',
+      'const values = await Promise.all([a, b]);',
+      'console.log("kept", values.length);',
+      'return values.filter(v => v.keep).map(v => v.value);',
+    ].join("\n"), { host: async (method, params) => {
+      if (method === "tools.list") { listCalls++; return { tools: schemas }; }
+      calls.push(params.name);
+      if (calls.length === 2) bothStarted.resolve();
+      return { output: await (params.name === "echo" ? first.promise : second.promise) };
+    } });
+    await bothStarted.promise;
+    const a = { keep: true, value: "kept".repeat(1500) };
+    const b = { keep: false, value: "discard" };
+    second.resolve(b);
+    first.resolve(a);
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    expect(listCalls).toBe(1);
+    expect(calls).toEqual(["echo", "file-read"]);
+    expect(result.trace.map(({ seq, line, name }) => ({ seq, line, name }))).toEqual([
+      { seq: 1, line: 3, name: "echo" }, { seq: 2, line: 4, name: "file-read" },
+    ]);
+    expect(result.output).toContain('["echo"]');
+    expect(result.output).toContain('<console_output>\nkept 2\n</console_output>');
+    expect(result.output).toContain(`#1 L3 tools.echo {"order":1} -> ok, ${JSON.stringify(a).length} chars`);
+    expect(result.output.indexOf("#1")).toBeLessThan(result.output.indexOf("#2"));
+    expect(result.trace[0].output!.length).toBe(4000);
+    const log = records(result.traceFile);
+    expect(log[0].script).toContain("const a = tools.echo");
+    expect(log[0].options).toEqual(DEFAULT_OPTIONS);
+    expect(log.at(-1).status).toBe("completed");
+    expect(log.at(-1).output).toContain("kept".repeat(1500));
+    expect(log.at(-1).output).not.toContain("discard");
+  });
+
+  test("only specified effects and standard JavaScript globals are available", async () => {
+    const result = await run(`return {
+      require: typeof require, process: typeof process, fetch: typeof fetch,
+      Bun: typeof Bun, setTimeout: typeof setTimeout, setInterval: typeof setInterval,
+      consoleWarn: typeof console.warn, Promise: typeof Promise, JSON: typeof JSON,
+      tools: ALL_TOOLS, schema: describeTool("echo"), missing: describeTool("absent")
+    };`);
+    expect(result.ok).toBe(true);
+    for (const key of ["require", "process", "fetch", "Bun", "setTimeout", "setInterval", "consoleWarn"]) {
+      expect(result.output).toContain(`"${key}":"undefined"`);
+    }
+    expect(result.output).toContain('"Promise":"function"');
+    expect(result.output).toContain('"JSON":"object"');
+    expect(result.output).toContain('"schema":{"name":"echo","description":"echo description","input_schema":{"type":"object"}}');
+    expect(result.output).not.toContain('"missing":');
+  });
+
+  test("static and dynamic imports are unavailable", async () => {
+    expect((await run('import fs from "node:fs";')).ok).toBe(false);
+    const result = await run('return await import("node:fs");');
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("dynamic import");
+  });
+
+  test("a tool error keeps its message, is traced, and can be caught", async () => {
+    const result = await run('try { await tools.echo({}); } catch (e) { text(e.message); }\nreturn "recovered";', {
+      host: async (method) => {
+        if (method === "tools.list") return { tools: schemas };
+        throw new Error("Permission denied: /secret");
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("Permission denied: /secret\nrecovered");
+    expect(result.trace[0]).toMatchObject({ line: 1, ok: false, error: "Permission denied: /secret" });
+    expect(result.output).toContain("-> error: Permission denied: /secret");
+  });
+
+  test("uncaught failures retain partial output and write the complete trace", async () => {
+    const result = await run('text("before");\nawait tools.echo({n: 1});\nconsole.log("log before");\nthrow new Error("broken");');
+    expect(result.ok).toBe(false);
+    expect(result.output).toStartWith("Script failed in ");
+    expect(result.output).toContain("before\n<console_output>\nlog before\n</console_output>");
+    expect(result.output).toContain("Script error: broken");
+    expect(records(result.traceFile).at(-1)).toMatchObject({ status: "failed" });
+    expect(records(result.traceFile)[1]).toMatchObject({ line: 2, ok: true });
+  });
+
+  test("unawaited calls are recorded as abandoned and cannot append after return", async () => {
+    const outstanding = Promise.withResolvers<any>();
+    const result = await run('tools.echo({});\nreturn "finished";', {
+      host: async (method) => method === "tools.list" ? { tools: schemas } : outstanding.promise,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.trace[0]).toMatchObject({ ok: false, error: "Abandoned when the script ended" });
+    const saved = readFileSync(result.traceFile, "utf8");
+    outstanding.resolve({ output: "late" });
+    await Promise.resolve();
+    expect(readFileSync(result.traceFile, "utf8")).toBe(saved);
+  });
+
+  test("small output budgets remain bounded, including a zero-length tail", async () => {
+    for (let size = 1; size <= 80; size++) expect(truncate("x".repeat(500), size).length).toBeLessThanOrEqual(size);
+    const result = await run('// @options: {"max_output_chars":18}\nreturn "x".repeat(9000);');
+    expect(result.output.length).toBeLessThan(4800);
+    expect(records(result.traceFile).at(-1).output).toContain("x".repeat(9000));
+  });
+
+
+  test("truncation keeps output start/end, first/last trace lines, and full trace file", async () => {
+    const result = await run([
+      '// @options: {"max_output_chars":3600}',
+      'text("START" + "x".repeat(9000) + "END");',
+      'for (let i = 0; i < 80; i++) await tools.echo({i, data: "y".repeat(5000)});',
+    ].join("\n"));
+    expect(result.ok).toBe(true);
+    expect(result.output.length).toBeLessThan(4800);
+    expect(result.output).toContain("START");
+    expect(result.output).toContain("END");
+    expect(result.output).toContain("#1 L3");
+    expect(result.output).toContain("#80 L3");
+    expect(result.output).toContain("78 trace lines omitted");
+    const log = records(result.traceFile);
+    expect(log.length).toBe(82);
+    expect(log.at(-1).output).toContain("x".repeat(9000));
+    expect(log.slice(1, -1).every((entry) => entry.input.length <= 4000 && entry.output.length <= 4000)).toBe(true);
+  });
+});
+
+describe("options and timeouts", () => {
+  test("accepts a first-line JSON options comment and enforces exact limits", () => {
+    expect(parseOptions("return 1")).toEqual(DEFAULT_OPTIONS);
+    expect(parseOptions('// @options: {"timeout_ms":3000000,"max_output_chars":3600}\nreturn 1')).toEqual({ timeout_ms: 3_000_000, max_output_chars: 3600 });
+    expect(parseOptions('// @options: {"timeout_ms":1,"max_output_chars":1}')).toEqual({ timeout_ms: 1, max_output_chars: 1 });
+    for (const script of [
+      '\n// @options: {}', 'text(1);\n// @options: {}', '// @options: {}\n// @options: {}',
+      '// @options: {"timeout_ms":3000001}', '// @options: {"max_output_chars":3601}',
+      '// @options: {"timeout_ms":0}', '// @options: {"max_output_chars":-1}',
+      '// @options: {"timeout_ms":1.5}', '// @options: {"timeout_ms":null}', '// @options: {"max_output_chars":null}', '// @options: {"other":1}', '// @options: []', '// @options: nope',
+    ]) expect(() => parseOptions(script)).toThrow();
+  });
+
+  test("rejected options still produce a failed result and a trace file", async () => {
+    const result = await run('text("never");\n// @options: {}');
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("@options must appear only on the first line");
+    expect(records(result.traceFile).at(-1).status).toBe("failed");
+  });
+
+  test("deadline ends a hanging async script and keeps partial output", async () => {
+    const result = await run('// @options: {"timeout_ms":500}\ntext("before hang");\nawait new Promise(() => {});');
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("before hang");
+    expect(result.output).toContain("Script timed out after 500 ms");
+    expect(records(result.traceFile).at(-1).status).toBe("failed");
+  });
+
+
+  test("deadline also stops CPU loops after an awaited host call", async () => {
+    const result = await run('// @options: {"timeout_ms":500}\nawait tools.echo({});\ntext("resumed");\nwhile (true) {}');
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("resumed");
+    expect(result.output).toContain("Script timed out after 500 ms");
+    expect(result.trace[0].ok).toBe(true);
+  });
+
+  test("deadline also covers tool discovery and aborts outstanding host work", async () => {
+    let signal: AbortSignal | undefined;
+    const result = await run('// @options: {"timeout_ms":500}\nreturn 1;', {
+      host: async (_method, _params, receivedSignal) => { signal = receivedSignal; return new Promise(() => {}); },
+    });
+    expect(result.ok).toBe(false);
+    expect(signal?.aborted).toBe(true);
+    expect(result.output).toContain("Script timed out");
+  });
+});
+
+describe("request-scoped stdio protocol", () => {
+  test("capability errors reject with host text and replies correlate out of order", async () => {
+    const frames: any[] = [];
+    const client = new CapabilityClient((frame) => frames.push(frame));
+    const signal = new AbortController().signal;
+    const first = client.call("token", "session", "call", "tool.call", { name: "echo" }, signal);
+    const second = client.call("token", "session", "call", "tools.list", {}, signal);
+    expect(client.accept({ id: 1, method: "initialize" })).toBe(false);
+    client.accept({ id: frames[1].id, result: { tools: [] } });
+    client.accept({ id: frames[0].id, error: { code: -32003, message: "tool exploded" } });
+    await expect(first).rejects.toThrow("tool exploded");
+    expect(await second).toEqual({ tools: [] });
+  });
+
+  test("real runtime child initializes, interleaves a host call, replies, and shuts down", async () => {
+    const child = Bun.spawn([process.execPath, "run", join(import.meta.dir, "runtime.ts"), "run"], {
+      cwd: import.meta.dir, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+      env: { HYA_BUNDLE_CONFIG_DIR: directory },
+    });
+    async function* messages() {
+      let buffer = "";
+      const decoder = new TextDecoder();
+      for await (const chunk of child.stdout) {
+        buffer += decoder.decode(chunk, { stream: true });
+        let newline: number;
+        while ((newline = buffer.indexOf("\n")) >= 0) {
+          yield JSON.parse(buffer.slice(0, newline));
+          buffer = buffer.slice(newline + 1);
+        }
+      }
+    }
+    const incoming = messages();
+    const send = (frame: any) => child.stdin.write(JSON.stringify({ jsonrpc: "2.0", ...frame }) + "\n");
+    const next = async () => {
+      const frame = await incoming.next();
+      if (frame.done) throw new Error(`child exited: ${await new Response(child.stderr).text()}`);
+      return frame.value;
+    };
+    try {
+      send({ id: 1, method: "initialize", params: { protocol_version: 1, host: { name: "test", version: "1" } } });
+      expect(await next()).toEqual({ jsonrpc: "2.0", id: 1, result: INITIALIZE_RESULT });
+      expect(INITIALIZE_RESULT.tools[0].inputSchema).toMatchObject({ type: "object", oneOf: expect.any(Array) });
+      send({ id: 2, method: "tool/call", params: { tool: "run", session: "stdio-session", call: "stdio-call", host_capability: "opaque-token", input: { script: 'return await tools.echo({value:"wire"});' } } });
+      const list = await next();
+      expect(list).toMatchObject({ method: "host/capability", params: { capability: "opaque-token", session: "stdio-session", call: "stdio-call", method: "tools.list", params: {} } });
+      send({ id: 3, method: "initialize", params: {} });
+      expect((await next()).id).toBe(3);
+      send({ id: list.id, result: { tools: [schema("echo")] } });
+      const call = await next();
+      expect(call).toMatchObject({ method: "host/capability", params: { method: "tool.call", params: { name: "echo", input: { value: "wire" } } } });
+      send({ id: call.id, result: { output: { echoed: "wire" } } });
+      const reply = await next();
+      expect(reply).toMatchObject({ id: 2, result: { ok: true } });
+      expect(reply.result.output).toContain('{"echoed":"wire"}');
+      expect(reply.result.output).toContain("#1 L1 tools.echo");
+      expect(records(join(directory, "traces", "stdio-session", "stdio-call.jsonl"))[1].ok).toBe(true);
+      send({ id: 4, method: "shutdown", params: {} });
+      expect(await next()).toEqual({ jsonrpc: "2.0", id: 4, result: {} });
+      expect(await child.exited).toBe(0);
+      expect(await new Response(child.stderr).text()).toBe("");
+    } finally {
+      child.stdin.end();
+      child.kill();
+      await child.exited;
+    }
+  }, 5000);
+});
+
+});
+
+test("runtime copies are byte-identical", () => { expect(readFileSync(join(import.meta.dir, "runtime.ts"))).toEqual(readFileSync(join(import.meta.dir, "../../extra/orchestrator/runtime.ts"))); });
+
+describe("full run personality", () => {
+  test("tool and arbitrary worker calls share start-order trace and Script wording", async () => {
+    const calls: any[] = [];
+    const ctx: RunContext = {
+      personality: PERSONALITIES.run, session: "mixed", call: "mixed", configDir: directory,
+      host: async (method, params) => {
+        if (method === "tools.list") return { tools: [{ name: "echo", description: "echo", input_schema: {} }] };
+        if (method === "workspace.state") return { state: null };
+        calls.push(params);
+        return params.name === "task" ? { output: { metadata: { members: [{ member: "worker", session: "child", status: "done", summary: "ok" }] } } } : { output: params.input };
+      },
+    };
+    const result = await executeScript('const a = tools.echo({value: 1});\nconst b = agents.run({agent: "custom-worker", prompt: "work"});\nreturn await Promise.all([a,b]);', ctx);
+    expect(result.ok).toBe(true);
+    expect(result.output).toStartWith("Script completed in ");
+    expect(result.trace.map(({ seq, line, kind }) => ({ seq, line, kind }))).toEqual([
+      { seq: 1, line: 1, kind: "tool" }, { seq: 2, line: 2, kind: "agent" },
+    ]);
+    expect(calls.find(call => call.name === "task").input.tasks[0].subagent_type).toBe("custom-worker");
+    await executeWorkflow({ script: 'return args.value;', args: { value: 3 }, save_as: "run-wording" }, ctx);
+    expect((await executeWorkflow({ run: "run-wording", args: { value: 4 } }, ctx)).output).toStartWith("Script run-wording completed in ");
+    expect((await executeScript('throw new Error("broken");', ctx)).output).toStartWith("Script failed in ");
+    expect((await executeScript('return await models.classify({});', ctx)).output).toContain("No judge configured");
+  });
+
+  test("rejects unknown and missing personalities at startup", async () => {
+    for (const args of [[], ["unknown"]]) {
+      const child = Bun.spawn([process.execPath, "run", join(import.meta.dir, "runtime.ts"), ...args], { stdout: "pipe", stderr: "pipe" });
+      expect(await child.exited).not.toBe(0);
+      expect(await new Response(child.stdout).text()).toBe("");
+      expect(await new Response(child.stderr).text()).toContain("Expected personality: workflow or run");
+    }
+  });
+});
+
+test("registers exactly run with the required description and workflow input forms", () => {
+ const result = initializeResult(PERSONALITIES.run);
+ expect(result.plugin.id).toBe("code-mode");
+ expect(result.tools).toEqual([{ ...INITIALIZE_RESULT.tools[0], name: "run", description: "Run a JavaScript program that calls your other tools and can start worker agents. Only what the program outputs comes back to you, so one call can run several tools, run them in parallel, branch on their results, and filter or combine them before you read them.\n\nInput is one of: `{script, args?, save_as?}` runs a program (`save_as` stores it under a name, also when it fails); `{run, args?}` runs a stored program with new `args`; `{list: true}` lists stored programs; `{show: name}` returns a stored program's source and last error so you can repair it.\n\n`script` is the body of an async function: top-level `await` and `return` work. It has no file, network, import, or timer access; it reaches the outside only through these globals:\n\n- `args`: the `args` object of the call, or `{}`.\n- `await tools.<name>(args)` calls a tool with the arguments you would pass it directly and resolves to the tool's result value. A character of the tool name that cannot be part of a JavaScript identifier becomes `_`. File and shell tools resolve to an object such as `{title, output, metadata}` whose `output` is the text you would see when calling the tool directly. A failed or denied call rejects with an `Error` carrying the tool's error text; use `Promise.allSettled` to keep the results of the calls that succeed.\n- `ALL_TOOLS` is `[{name, description}]` for every tool the program can call. `describeTool(name)` returns `{name, description, input_schema}` or `undefined`.\n- `await agents.run({agent, prompt, description?, result?, model?, effort?, timeout_secs?, cache?})` starts one worker agent you may spawn and waits for its report; it resolves to `{handle, session, status, report, result}`. `result` maps field names to descriptions: the worker must end its report with a `RESULT: {...}` line holding those fields, which comes back parsed as `result` (or `null`). A worker gets 600 seconds unless you pass `timeout_secs` (at most 1800); one that runs out is stopped. Start several with `Promise.all`.\n- `await models.classify({state, questions})` asks the configured judge model typed questions (`bool`, `choice`, `score`) about `state`; it rejects when no judge is configured.\n- `text(value)` adds an item to the output (a string as is, anything else as JSON); `return value` does the same. `console.log(...)` adds a line to a separate console block.\n- An optional first line sets limits: `// @options: {\"timeout_ms\": 1800000, \"max_output_chars\": 3000}` (at most 3000000 and 3600).\n\nOutput longer than `max_output_chars` keeps only its start and end, so select what you need inside the program: slice file text, filter matches, summarise command output. The result ends with one trace line per tool, agent, or judge call (source line, call, arguments, outcome, time). Calls are real: calls made before an error are not undone." }]);
 });

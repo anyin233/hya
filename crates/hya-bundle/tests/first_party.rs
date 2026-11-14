@@ -217,3 +217,16 @@ fn concurrent_first_party_loads_share_one_catalog_per_identity() {
         }
     });
 }
+
+/// `hya-extra/orchestrator` and `hya/code-mode` serve two tools from one
+/// runtime; a bundle cannot reference a file outside itself, so the source is
+/// kept twice and must not drift.
+#[test]
+fn orchestrator_runtime_is_a_copy_of_the_code_mode_runtime() {
+    let bundles = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bundles");
+    let read = |path: &str| std::fs::read(bundles.join(path)).expect("runtime source");
+    assert!(
+        read("first-party/code-mode/runtime.ts") == read("extra/orchestrator/runtime.ts"),
+        "copy bundles/first-party/code-mode/runtime.ts to bundles/extra/orchestrator/runtime.ts"
+    );
+}

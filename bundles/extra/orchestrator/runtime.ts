@@ -7,6 +7,12 @@ import { createInterface } from "node:readline";
 import vm from "node:vm";
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
 
+export interface ToolSchema { name: string; description: string; input_schema: Record<string, unknown>; }
+export const PERSONALITIES = {
+  workflow: { name: "workflow", plugin: "orchestrator", label: "Workflow", file: "orchestrator-script.js", tools: false },
+  run: { name: "run", plugin: "code-mode", label: "Script", file: "code-mode-script.js", tools: true },
+};
+type Personality = typeof PERSONALITIES[keyof typeof PERSONALITIES];
 export type Host = (method: string, params: Record<string, unknown>, signal: AbortSignal) => Promise<any>;
 export interface Options {
   timeout_ms: number;
@@ -47,7 +53,7 @@ export interface AgentResult {
 export interface TraceEntry {
   seq: number;
   line: number;
-  kind: "agent" | "classify";
+  kind: "agent" | "classify" | "tool";
   name: string;
   input: string;
   ok: boolean;
@@ -66,7 +72,6 @@ export interface TraceEntry {
   archived?: boolean;
   archive_error?: string;
 }
-const SCRIPT_FILE = "orchestrator-script.js";
 export const DEFAULT_OPTIONS: Options = { timeout_ms: 1_800_000, max_output_chars: 3000 };
 const MAX_RESULT_CHARS = 4799;
 
@@ -231,11 +236,11 @@ function parseAgentResult(report: string, requested?: Record<string, string>): R
   return record(value) && Object.keys(requested ?? {}).every((key) => Object.hasOwn(value, key)) ? value : null;
 }
 
-function prepareAgent(input: AgentInput) {
+function prepareAgent(input: AgentInput, personality = PERSONALITIES.workflow) {
   if (!record(input)) throw new Error("agents.run requires an argument object");
   string(input.prompt, "agents.run prompt");
   const agent = string(input.agent, "agents.run agent");
-  if (!WORKER_AGENTS.includes(agent)) throw new Error(`agents.run agent must be one of: ${WORKER_AGENTS.join(", ")}`);
+  if (!personality.tools && !WORKER_AGENTS.includes(agent)) throw new Error(`agents.run agent must be one of: ${WORKER_AGENTS.join(", ")}`);
   let prompt = input.prompt;
   if (input.result !== undefined) {
     if (!record(input.result)) throw new Error("agents.run result must map field names to descriptions");
@@ -260,8 +265,8 @@ function prepareAgent(input: AgentInput) {
   };
 }
 
-export async function runAgent(input: AgentInput, host: Host, signal: AbortSignal, onStarted?: (result: AgentResult) => void, startSignal = signal): Promise<AgentResult> {
-  const prepared = prepareAgent(input);
+export async function runAgent(input: AgentInput, host: Host, signal: AbortSignal, onStarted?: (result: AgentResult) => void, startSignal = signal, personality = PERSONALITIES.workflow): Promise<AgentResult> {
+  const prepared = prepareAgent(input, personality);
   const call = (name: string, args: Record<string, unknown>) => callHostTool(host, name, args, signal);
   const task = await callHostTool(host, "task", { tasks: [prepared.task] }, startSignal);
   startSignal.throwIfAborted();
@@ -301,8 +306,11 @@ export async function runAgent(input: AgentInput, host: Host, signal: AbortSigna
   }
 }
 
+function toolIdentifier(name: string): string {
+  return name.replace(/[^\p{ID_Continue}$\u200C\u200D]/gu, "_").replace(/^[^\p{ID_Start}_$]/u, "_");
+}
 function scriptLine(): number {
-  const match = new Error().stack?.match(/orchestrator-script\.js:(\d+):\d+/);
+  const match = new Error().stack?.match(/(?:orchestrator|code-mode)-script\.js:(\d+):\d+/);
   if (!match) throw new Error("could not locate the script call site");
   return Number(match[1]);
 }
@@ -311,6 +319,10 @@ function traceLine(entry: TraceEntry): string {
   let call: string;
   let result: string;
   switch (entry.kind) {
+    case "tool":
+      call = `tools.${toolIdentifier(entry.name)} ${truncate(entry.input, 180).replaceAll("\n", " ")}`;
+      result = entry.ok ? `ok, ${entry.output?.length ?? 0} chars` : `error: ${entry.error}`;
+      break;
     case "agent": {
       const input = JSON.parse(entry.input);
       call = record(input)
@@ -344,6 +356,7 @@ function traceLine(entry: TraceEntry): string {
 }
 
 export interface RunContext {
+  personality?: Personality;
   host: Host;
   session: string;
   call: string;
@@ -425,6 +438,7 @@ export async function executeWorkflow(input: unknown, context: RunContext): Prom
   return executeScript(script, { ...context, args: input.args ?? {}, stored: stored ? input.run : null, saveAs: input.save_as });
 }
 export async function executeScript(script: string, context: RunContext): Promise<ScriptResult> {
+  const personality = context.personality ?? PERSONALITIES.workflow;
   const started = Date.now();
   const component = (value: string) => encodeURIComponent(value).replaceAll(".", "%2E");
   const traceDir = resolve(context.configDir ?? tmpdir(), "traces", component(context.session));
@@ -487,10 +501,12 @@ export async function executeScript(script: string, context: RunContext): Promis
       timer = setTimeout(() => reject(new Error(`Script timed out after ${options.timeout_ms} ms`)), options.timeout_ms);
     });
     const run = async () => {
+      const schemas: ToolSchema[] = personality.tools ? (await context.host("tools.list", {}, controller.signal)).tools : [];
+      ensureActive();
       await new Promise<void>((resolveRun, rejectRun) => {
         // A worker lets the parent enforce the deadline even for a CPU loop
         // resumed after an await, outside vm.Script's synchronous timeout.
-        worker = new Worker(new URL(import.meta.url), { workerData: { script, args: context.args ?? {}, options } });
+        worker = new Worker(new URL(import.meta.url), { workerData: { script, args: context.args ?? {}, options, personality, schemas } });
         worker.on("error", rejectRun);
         worker.on("exit", (code) => { if (active) rejectRun(new Error(`Script worker exited with code ${code}`)); });
         worker.on("message", (event) => {
@@ -503,8 +519,11 @@ export async function executeScript(script: string, context: RunContext): Promis
             case "call": {
               const invoke = tracked(event.kind, event.name, async (input, entry) => {
                 switch (event.kind) {
+                  case "tool":
+                    if (!record(input)) throw new Error(`tools.${event.name} expects an argument object`);
+                    return (await context.host("tool.call", { name: event.name, input }, controller.signal)).output;
                   case "agent": {
-                    const prepared = prepareAgent(input);
+                    const prepared = prepareAgent(input, personality);
                     const start = Promise.withResolvers<void>();
                     const startController = new AbortController();
                     agents.set(entry, { started: start.promise, controller: startController, input: json(input) });
@@ -530,7 +549,7 @@ export async function executeScript(script: string, context: RunContext): Promis
                         entry.session = result.session;
                         entry.result = result.result;
                         start.resolve();
-                      }, startController.signal);
+                      }, startController.signal, personality);
                       ensureActive();
                       const after = (await context.host("workspace.state", {}, controller.signal)).state as string | null;
                       ensureActive();
@@ -601,7 +620,7 @@ export async function executeScript(script: string, context: RunContext): Promis
       entry.error = "Abandoned when the script ended";
       entry.ms = Date.now() - entry.started_ms;
       // Inputs may be cut JSON; abandoned lines need no parsing.
-      lines[entry.seq - 1] = `#${entry.seq} L${entry.line} ${entry.name} -> abandoned, ${(entry.ms / 1000).toFixed(1)} s`;
+      lines[entry.seq - 1] = `#${entry.seq} L${entry.line} ${entry.kind === "tool" ? `tools.${toolIdentifier(entry.name)}` : entry.name} -> abandoned, ${(entry.ms / 1000).toFixed(1)} s`;
     }
   }
   const status = failure === undefined ? "completed" : "failed";
@@ -621,7 +640,7 @@ export async function executeScript(script: string, context: RunContext): Promis
     const metadata: WorkflowMetadata = { name: context.saveAs, description, saved_ms: now, runs: 1, last_run_ms: now, last_status: status, last_error: failure ?? "" };
     writeFileSync(join(directory, `${context.saveAs}.json`), json(metadata) + "\n");
   }
-  const header = `Workflow${context.stored ? ` ${context.stored}` : ""} ${status} in ${((Date.now() - started) / 1000).toFixed(1)} s`;
+  const header = `${personality.label}${context.stored ? ` ${context.stored}` : ""} ${status} in ${((Date.now() - started) / 1000).toFixed(1)} s`;
   const savedLine = context.saveAs ? `\nsaved as ${context.saveAs}` : "";
   const fullBody = [...items, ...(logs.length ? [`<console_output>\n${logs.join("\n")}\n</console_output>`] : [])].join("\n");
   const errorLine = failure === undefined ? "" : `\nScript error: ${failure}`;
@@ -652,7 +671,7 @@ export async function executeScript(script: string, context: RunContext): Promis
 }
 
 async function runVMWorker(): Promise<void> {
-  const { script, args, options }: { script: string; args: Record<string, unknown>; options: Options } = workerData;
+  const { script, args, options, personality, schemas }: { script: string; args: Record<string, unknown>; options: Options; personality: Personality; schemas: ToolSchema[] } = workerData;
   const port = parentPort!;
   const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   let sequence = 0;
@@ -681,8 +700,21 @@ async function runVMWorker(): Promise<void> {
     text: (value: unknown) => port.postMessage({ type: "text", value: typeof value === "string" ? value : json(value) }),
     console: { log: (...values: unknown[]) => port.postMessage({ type: "log", value: values.map((value) => typeof value === "string" ? value : json(value)).join(" ") }) },
   };
+  if (personality.tools) {
+    const tools = Object.create(null);
+    for (const schema of schemas) {
+      const name = toolIdentifier(schema.name);
+      if (Object.hasOwn(tools, name)) throw new Error(`tool identifier collision: ${name}`);
+      tools[name] = invoke("tool", schema.name);
+    }
+    Object.defineProperty(globals, "tools", { value: tools });
+    Object.assign(globals, {
+      ALL_TOOLS: schemas.map(({ name, description }) => ({ name, description })),
+      describeTool: (name: string) => schemas.find((schema) => schema.name === name),
+    });
+  }
   const sandbox = vm.createContext(globals);
-  const compiled = new vm.Script(`(async function() {${script}\n})()`, { filename: SCRIPT_FILE });
+  const compiled = new vm.Script(`(async function() {${script}\n})()`, { filename: personality.file });
   const value = await compiled.runInContext(sandbox, { timeout: options.timeout_ms });
   if (value !== undefined) port.postMessage({ type: "text", value: typeof value === "string" ? value : json(value) });
   port.postMessage({ type: "done" });
@@ -707,6 +739,11 @@ export const INITIALIZE_RESULT = {
     },
   }],
 };
+
+export function initializeResult(personality: Personality) {
+  return { ...INITIALIZE_RESULT, plugin: { ...INITIALIZE_RESULT.plugin, id: personality.plugin },
+    tools: [{ ...INITIALIZE_RESULT.tools[0], name: personality.name, description: personality.tools ? "Run a JavaScript program that calls your other tools and can start worker agents. Only what the program outputs comes back to you, so one call can run several tools, run them in parallel, branch on their results, and filter or combine them before you read them.\n\nInput is one of: `{script, args?, save_as?}` runs a program (`save_as` stores it under a name, also when it fails); `{run, args?}` runs a stored program with new `args`; `{list: true}` lists stored programs; `{show: name}` returns a stored program's source and last error so you can repair it.\n\n`script` is the body of an async function: top-level `await` and `return` work. It has no file, network, import, or timer access; it reaches the outside only through these globals:\n\n- `args`: the `args` object of the call, or `{}`.\n- `await tools.<name>(args)` calls a tool with the arguments you would pass it directly and resolves to the tool's result value. A character of the tool name that cannot be part of a JavaScript identifier becomes `_`. File and shell tools resolve to an object such as `{title, output, metadata}` whose `output` is the text you would see when calling the tool directly. A failed or denied call rejects with an `Error` carrying the tool's error text; use `Promise.allSettled` to keep the results of the calls that succeed.\n- `ALL_TOOLS` is `[{name, description}]` for every tool the program can call. `describeTool(name)` returns `{name, description, input_schema}` or `undefined`.\n- `await agents.run({agent, prompt, description?, result?, model?, effort?, timeout_secs?, cache?})` starts one worker agent you may spawn and waits for its report; it resolves to `{handle, session, status, report, result}`. `result` maps field names to descriptions: the worker must end its report with a `RESULT: {...}` line holding those fields, which comes back parsed as `result` (or `null`). A worker gets 600 seconds unless you pass `timeout_secs` (at most 1800); one that runs out is stopped. Start several with `Promise.all`.\n- `await models.classify({state, questions})` asks the configured judge model typed questions (`bool`, `choice`, `score`) about `state`; it rejects when no judge is configured.\n- `text(value)` adds an item to the output (a string as is, anything else as JSON); `return value` does the same. `console.log(...)` adds a line to a separate console block.\n- An optional first line sets limits: `// @options: {\"timeout_ms\": 1800000, \"max_output_chars\": 3000}` (at most 3000000 and 3600).\n\nOutput longer than `max_output_chars` keeps only its start and end, so select what you need inside the program: slice file text, filter matches, summarise command output. The result ends with one trace line per tool, agent, or judge call (source line, call, arguments, outcome, time). Calls are real: calls made before an error are not undone." : INITIALIZE_RESULT.tools[0].description }] };
+}
 
 interface Frame {
   id?: number | string | null;
@@ -743,6 +780,9 @@ export class CapabilityClient {
 }
 
 async function main(): Promise<void> {
+  const name = process.argv[2];
+  if (name !== "workflow" && name !== "run") throw new Error("Expected personality: workflow or run");
+  const personality = PERSONALITIES[name];
   let judge: JudgeConfig | null = null;
   let judgeError: string | undefined;
   try {
@@ -760,7 +800,7 @@ async function main(): Promise<void> {
     const error = (code: number, message: string) => write({ jsonrpc: "2.0", id: frame.id, error: { code, message } });
     if (frame.id === undefined || frame.id === null) return;
     switch (frame.method) {
-      case "initialize": respond(INITIALIZE_RESULT); return;
+      case "initialize": respond(initializeResult(personality)); return;
       case "shutdown":
         closing = true;
         await Promise.all(active);
@@ -768,14 +808,14 @@ async function main(): Promise<void> {
         return;
       case "tool/call": {
         const p = frame.params;
-        if (!record(p) || p.tool !== "workflow" || typeof p.session !== "string" || typeof p.call !== "string" || typeof p.host_capability !== "string") {
-          error(-32602, `workflow requires ${INPUT_FORMS}, session, call, and a host_capability`);
+        if (!record(p) || p.tool !== personality.name || typeof p.session !== "string" || typeof p.call !== "string" || typeof p.host_capability !== "string") {
+          error(-32602, `${personality.name} requires ${INPUT_FORMS}, session, call, and a host_capability`);
           return;
         }
         const start = Date.now();
         try {
           const result = await executeWorkflow(p.input, {
-            session: p.session, call: p.call, configDir: process.env.HYA_BUNDLE_CONFIG_DIR, judge, judgeError,
+            session: p.session, call: p.call, configDir: process.env.HYA_BUNDLE_CONFIG_DIR, judge, judgeError, personality,
             host: (method, params, signal) => cap.call(p.host_capability, p.session, p.call, method, params, signal),
           });
           respond({ ok: result.ok, output: result.output, time_ms: Date.now() - start });
