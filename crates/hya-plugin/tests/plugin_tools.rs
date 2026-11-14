@@ -443,3 +443,63 @@ for line in sys.stdin:
         "{message}"
     );
 }
+
+#[tokio::test]
+async fn bundle_tool_reads_workspace_state_over_its_lease() {
+    let script = r#"import json,sys
+for line in sys.stdin:
+ request=json.loads(line)
+ method=request.get('method')
+ if method=='initialize':
+  result={'protocol_version':1,'plugin':{'id':'toolbox','version':'0.1.0','kind':'rust'},'hooks':[],'tools':[{'name':'native','description':'native test','inputSchema':{'type':'object'}}]}
+ elif method=='tool/call':
+  p=request['params']
+  def capability(seq, params):
+   outbound={'jsonrpc':'2.0','id':seq,'method':'host/capability','params':{'capability':p['host_capability'],'session':p['session'],'call':p['call'],'method':'workspace.state','params':params}}
+   print(json.dumps(outbound),flush=True)
+   return json.loads(sys.stdin.readline())
+  result={'ok':True,'output':{'state':capability(71,{}),'invalid':capability(72,{'x':1})}}
+ else: result={}
+ if 'id' in request: print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':result}),flush=True)
+"#;
+    let root = std::env::temp_dir().join(format!("hya-plugin-workspace-{}", SessionId::new()));
+    std::fs::create_dir(&root).unwrap();
+    let mut bundle_spec = spec();
+    bundle_spec.command = vec!["python3".into(), "-c".into(), script.into()];
+    bundle_spec
+        .env
+        .insert("PATH".into(), std::env::var("PATH").unwrap());
+    let host = PluginHost::connect(bundle_spec.in_bundle(root.clone()), host_info(), None)
+        .await
+        .unwrap();
+    let mut ctx = ctx_with(SessionId::new());
+    ctx.workdir = root.clone();
+    let tool = &host.tools()[0];
+    let outside = tool.execute(&ctx, json!({})).await.unwrap();
+    assert_eq!(outside["state"]["result"], json!({"state": null}));
+    assert_eq!(outside["invalid"]["error"]["code"], -32602);
+
+    let init = std::process::Command::new("git")
+        .args(["init", "--quiet", "--template=", "--initial-branch=main"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "{init:?}");
+    std::fs::write(root.join("file"), "content").unwrap();
+    let inside = tool.execute(&ctx, json!({})).await.unwrap();
+    let state = inside["state"]["result"]["state"].as_str().unwrap();
+    assert_eq!(inside["state"]["result"].as_object().unwrap().len(), 1);
+    assert_eq!(state.len(), 64);
+    assert!(
+        state
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    );
+    assert_eq!(
+        inside["state"]["result"],
+        tool.execute(&ctx, json!({})).await.unwrap()["state"]["result"]
+    );
+    assert_eq!(inside["invalid"]["error"]["code"], -32602);
+    host.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}

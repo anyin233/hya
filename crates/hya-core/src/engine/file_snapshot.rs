@@ -251,6 +251,11 @@ pub(crate) fn content_hash(bytes: &[u8]) -> String {
 }
 
 async fn git(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
+    let output = git_output(cwd, args).await?;
+    output.status.success().then_some(output.stdout)
+}
+
+pub(super) async fn git_output(cwd: &Path, args: &[&str]) -> Option<std::process::Output> {
     let run = tokio::process::Command::new("git")
         .args(args)
         .current_dir(cwd)
@@ -259,8 +264,7 @@ async fn git(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true)
         .output();
-    let output = tokio::time::timeout(GIT_TIMEOUT, run).await.ok()?.ok()?;
-    output.status.success().then_some(output.stdout)
+    tokio::time::timeout(GIT_TIMEOUT, run).await.ok()?.ok()
 }
 
 fn split_nul(bytes: &[u8]) -> impl Iterator<Item = String> + '_ {

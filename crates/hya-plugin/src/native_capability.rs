@@ -252,6 +252,19 @@ impl HostCapabilityHandler for BundleCapability {
                 Ok(json!({}))
             }
             "session.usage" => self.session_usage(params).await,
+            "workspace.state" => {
+                let Grant::ToolCall(ctx) = &self.grant else {
+                    return Err(rpc_error(
+                        codes::CAPABILITY_DENIED,
+                        "workspace.state is available only to tool calls",
+                    ));
+                };
+                if params != json!({}) {
+                    return Err(rpc_error(codes::INVALID_PARAMS, "expected empty params"));
+                }
+                let state = hya_core::engine::workspace_state(&ctx.workdir).await;
+                Ok(json!({ "state": state }))
+            }
             "tools.list" => {
                 let Grant::ToolCall(ctx) = &self.grant else {
                     return Err(rpc_error(

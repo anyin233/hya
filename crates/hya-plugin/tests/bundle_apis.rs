@@ -60,7 +60,8 @@ for line in sys.stdin:
     denied=capability(token,session,p['call'],'permission.assert',{'action':'read','resource':{'kind':'path','value':'/x'}})
     listed=capability(token,session,p['call'],'tools.list',{})
     called=capability(token,session,p['call'],'tool.call',{'name':'read','input':{}})
-    body={'request':p,'context':context.get('result'),'usage':usage.get('result'),'usage_error':usage.get('error'),'denied':denied.get('error'),'tools_list':listed.get('error'),'tool_call':called.get('error')}
+    workspace=capability(token,session,p['call'],'workspace.state',{})
+    body={'request':p,'context':context.get('result'),'usage':usage.get('result'),'usage_error':usage.get('error'),'denied':denied.get('error'),'tools_list':listed.get('error'),'tool_call':called.get('error'),'workspace_state':workspace.get('error')}
     if p['api']=='malformed':
       result={'body':body,'headers':{}}
     elif p['api']=='plain':
@@ -257,11 +258,11 @@ async fn session_api_request_gets_a_session_bound_read_only_capability() {
         hya_plugin::protocol::codes::CAPABILITY_DENIED,
         "API requests cannot assert permissions"
     );
-    for operation in ["tools_list", "tool_call"] {
+    for operation in ["tools_list", "tool_call", "workspace_state"] {
         assert_eq!(
             body[operation]["code"],
             hya_plugin::protocol::codes::CAPABILITY_DENIED,
-            "API requests cannot reach nested tools ({operation})"
+            "operation unavailable to API requests ({operation})"
         );
     }
     assert_eq!(
@@ -299,6 +300,10 @@ async fn global_api_request_gets_a_sessionless_capability() {
         body["usage_error"]["code"],
         hya_plugin::protocol::codes::CAPABILITY_DENIED,
         "session.usage needs a session"
+    );
+    assert_eq!(
+        body["workspace_state"]["code"],
+        hya_plugin::protocol::codes::CAPABILITY_DENIED
     );
     assert!(reads.calls.lock().unwrap().is_empty());
 }
