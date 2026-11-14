@@ -47,7 +47,13 @@ impl NestedTools for TurnNestedTools {
         self.resources
             .tool_schemas()
             .into_iter()
-            .filter(|schema| schema.name.as_str() != self.caller)
+            // A bundle tool is advertised under a view name that differs from
+            // its own `name()`, so compare the resolved tool, not the schema.
+            .filter(|schema| {
+                self.resources
+                    .resolve_tool(schema.name.as_str())
+                    .is_none_or(|resolved| resolved.tool.name() != self.caller)
+            })
             .collect()
     }
 
