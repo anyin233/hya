@@ -158,6 +158,18 @@ and `metadata.durationMs` records elapsed milliseconds. Timeout returns a
 structured result with `timedOut: true`; explicit cancellation returns
 `ToolError::Cancelled`.
 
+`glob` and `find` traverse directories breadth-first without following directory
+symlinks, with a 30-second traversal budget. For example,
+`glob {"path": "src", "pattern": "*.rs"}` returns the lexically first 100
+matching paths and the total match count. When traversal stops at the budget,
+that count covers only matches seen so far, `metadata.truncated` and
+`metadata.incomplete` are `true`, and the output ends with a blank line and
+`(Search stopped after 30 seconds before every directory was visited, so results are incomplete. Use a more specific path or pattern.)`
+If no matches were seen, the text before that note is
+`No files found in the part searched`. `find` adds `"incomplete": true` to
+its result object when traversal stops at the budget. Both incomplete keys
+are absent when traversal completes.
+
 ### Path boundary
 
 The file tools (`read`, `write`, `edit`, `ls`, `glob`, `find`, `grep`,
@@ -444,9 +456,9 @@ and artifact spill; coding results use its structured field/envelope bounds.
 | `edit` | Output and patch each 50 KiB; fallback text only included when at most 50 KiB. Raw diagnostic metadata and title/path still need host bounds. |
 | `grep` | Output and serialized display budgets 50 KiB; match limit at most 200, context at most five, display at most 4,096 rows; warnings at most 16 / 4,096 bytes total. Host row and envelope limits differ. |
 | `bash` | Captured inline bytes and rendered output bounded to 50 KiB, overflow saved to artifact; output path serialized limit 32 KiB. This does not establish every host metadata/title/envelope bound. |
-| `glob` | 100 results; no total text/serialized-byte bound. |
+| `glob` | 100 results; 30-second breadth-first traversal budget; incomplete searches set `metadata.incomplete` and `metadata.truncated` to `true`. No total text/serialized-byte bound. |
 | `ls` | No tool-local output bound. |
-| `find` | No result-row or byte bound. |
+| `find` | 30-second breadth-first traversal budget; incomplete searches set `incomplete: true`. No result-row or byte bound. |
 | `ask_user` | No byte bound on selected/free-text answers. |
 | `apply_patch` | No complete output-envelope cap; diagnostic text uses shared row limits but raw diagnostic metadata does not. |
 | `lsp` | Plane response; no native wrapper output-byte cap. |

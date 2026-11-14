@@ -1,5 +1,6 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use hya_proto::ToolSchema;
@@ -13,31 +14,48 @@ use hya_tool::tool::obj_schema;
 use hya_tool::{Action, ProjectScope, Resource, Tool, ToolCtx, ToolError, glob_match};
 
 const SEARCH_LIMIT: usize = 100;
+const SEARCH_BUDGET: Duration = Duration::from_secs(30);
 const MAX_GLOB_BYTES: usize = 4096;
 
-/// Collect files recursively while checking the call cancellation token.
-fn walk(dir: &Path, out: &mut Vec<PathBuf>, cancel: &CancellationToken) -> Result<(), ToolError> {
-    if cancel.is_cancelled() {
-        return Err(ToolError::Cancelled);
-    }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Ok(());
-    };
-    for entry in entries {
+/// Visit non-directory entries breadth-first without following directory symlinks.
+fn walk(
+    root: &Path,
+    cancel: &CancellationToken,
+    deadline: Instant,
+    mut visit: impl FnMut(PathBuf),
+) -> Result<bool, ToolError> {
+    let mut directories = VecDeque::from([root.to_path_buf()]);
+    while let Some(directory) = directories.pop_front() {
         if cancel.is_cancelled() {
             return Err(ToolError::Cancelled);
         }
-        let Ok(entry) = entry else {
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        let Ok(entries) = std::fs::read_dir(directory) else {
             continue;
         };
-        let path = entry.path();
-        if path.is_dir() {
-            walk(&path, out, cancel)?;
-        } else {
-            out.push(path);
+        for entry in entries {
+            if cancel.is_cancelled() {
+                return Err(ToolError::Cancelled);
+            }
+            if Instant::now() >= deadline {
+                return Ok(false);
+            }
+            let Ok(entry) = entry else {
+                continue;
+            };
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                directories.push_back(entry.path());
+            } else {
+                visit(entry.path());
+            }
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 fn relative_title(path: &Path, workdir: &Path) -> String {
@@ -92,66 +110,6 @@ fn validate_glob_pattern(pattern: &str) -> Result<(), ToolError> {
         return Err(ToolError::Input(format!(
             "glob pattern exceeds {MAX_GLOB_BYTES} bytes"
         )));
-    }
-    Ok(())
-}
-
-/// Traverse files while retaining only the lexically first bounded Glob results.
-///
-/// # Parameters
-/// - `directory`: Directory currently being visited.
-/// - `root`: Search root used to build relative match candidates.
-/// - `pattern`: Validated caller glob pattern.
-/// - `matches`: Bounded ordered set of the first matching paths.
-/// - `total`: Saturating count of all matching files observed.
-/// - `cancel`: Call token checked before each directory entry and recursion.
-///
-/// # Returns
-/// Success after the branch is exhausted, or typed cancellation.
-fn collect_glob_matches(
-    directory: &Path,
-    root: &Path,
-    pattern: &str,
-    matches: &mut BTreeSet<PathBuf>,
-    total: &mut usize,
-    cancel: &CancellationToken,
-) -> Result<(), ToolError> {
-    if cancel.is_cancelled() {
-        return Err(ToolError::Cancelled);
-    }
-    let Ok(entries) = std::fs::read_dir(directory) else {
-        return Ok(());
-    };
-    for entry in entries {
-        if cancel.is_cancelled() {
-            return Err(ToolError::Cancelled);
-        }
-        let Ok(entry) = entry else {
-            continue;
-        };
-        let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_dir() {
-            collect_glob_matches(&path, root, pattern, matches, total, cancel)?;
-            continue;
-        }
-        let relative = path.strip_prefix(root).unwrap_or(path.as_path());
-        let relative = relative.to_string_lossy().replace('\\', "/");
-        let name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if grep::wildcard_match(pattern, &relative) || grep::wildcard_match(pattern, &name) {
-            *total = total.saturating_add(1);
-            matches.insert(path);
-            if matches.len() > SEARCH_LIMIT
-                && let Some(last) = matches.iter().next_back().cloned()
-            {
-                matches.remove(&last);
-            }
-        }
     }
     Ok(())
 }
@@ -216,34 +174,61 @@ impl Tool for GlobTool {
                 display_path(&search)
             )));
         }
-        let mut bounded = BTreeSet::new();
-        let mut total = 0usize;
-        collect_glob_matches(
-            &search,
-            &search,
-            &input.pattern,
-            &mut bounded,
-            &mut total,
-            &ctx.cancel,
-        )?;
+        let cancel = ctx.cancel.clone();
+        let root = search.clone();
+        let deadline = Instant::now() + SEARCH_BUDGET;
+        let worker = tokio::task::spawn_blocking(move || {
+            let mut bounded = BTreeSet::new();
+            let mut total = 0usize;
+            let complete = walk(&root, &cancel, deadline, |path| {
+                let relative = path.strip_prefix(&root).unwrap_or(path.as_path());
+                let relative = relative.to_string_lossy().replace('\\', "/");
+                let name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy())
+                    .unwrap_or_default();
+                if grep::wildcard_match(&input.pattern, &relative)
+                    || grep::wildcard_match(&input.pattern, &name)
+                {
+                    total = total.saturating_add(1);
+                    bounded.insert(path);
+                    if bounded.len() > SEARCH_LIMIT {
+                        bounded.pop_last();
+                    }
+                }
+            })?;
+            Ok::<_, ToolError>((bounded, total, complete))
+        });
+        let (bounded, total, complete) = tokio::select! {
+            result = worker => result.map_err(|error| ToolError::Other(format!("glob worker failed: {error}")))??,
+            _ = ctx.cancel.cancelled() => return Err(ToolError::Cancelled),
+        };
         if ctx.cancel.is_cancelled() {
             return Err(ToolError::Cancelled);
         }
         let rows = bounded.into_iter().collect::<Vec<_>>();
-        let truncated = total > SEARCH_LIMIT;
+        let truncated = !complete || total > SEARCH_LIMIT;
         let output_rows = rows
             .iter()
             .map(|path| display_path(path))
             .collect::<Vec<_>>();
         let mut output = if output_rows.is_empty() {
-            "No files found".to_string()
+            if complete {
+                "No files found"
+            } else {
+                "No files found in the part searched"
+            }
+            .to_string()
         } else {
             output_rows.join("\n")
         };
-        if truncated {
+        if total > SEARCH_LIMIT {
             output.push_str(
                 "\n\n(Results are truncated: showing first 100 results. Consider using a more specific path or pattern.)",
             );
+        }
+        if !complete {
+            output.push_str("\n\n(Search stopped after 30 seconds before every directory was visited, so results are incomplete. Use a more specific path or pattern.)");
         }
         let legacy_paths = rows
             .iter()
@@ -254,7 +239,7 @@ impl Tool for GlobTool {
                     .replace('\\', "/")
             })
             .collect::<Vec<_>>();
-        Ok(json!({
+        let mut result = json!({
             "title": relative_title(&search, &ctx.workdir),
             "metadata": {
                 "count": output_rows.len(),
@@ -263,7 +248,11 @@ impl Tool for GlobTool {
             "output": output,
             "paths": legacy_paths,
             "total": total,
-        }))
+        });
+        if !complete {
+            result["metadata"]["incomplete"] = json!(true);
+        }
+        Ok(result)
     }
 }
 
@@ -370,8 +359,18 @@ impl Tool for FindTool {
             .assert(Action::Glob, Resource::Glob(input.pattern.clone()))
             .await?;
         assert_external_directory(ctx, &root, true).await?;
-        let mut files = Vec::new();
-        walk(&root, &mut files, &ctx.cancel)?;
+        let cancel = ctx.cancel.clone();
+        let search = root.clone();
+        let deadline = Instant::now() + SEARCH_BUDGET;
+        let worker = tokio::task::spawn_blocking(move || {
+            let mut files = Vec::new();
+            let complete = walk(&search, &cancel, deadline, |path| files.push(path))?;
+            Ok::<_, ToolError>((files, complete))
+        });
+        let (files, complete) = tokio::select! {
+            result = worker => result.map_err(|error| ToolError::Other(format!("find worker failed: {error}")))??,
+            _ = ctx.cancel.cancelled() => return Err(ToolError::Cancelled),
+        };
         let mut rows: Vec<(String, u64)> = Vec::new();
         for f in &files {
             if ctx.cancel.is_cancelled() {
@@ -395,7 +394,11 @@ impl Tool for FindTool {
             .into_iter()
             .map(|(path, size)| json!({ "path": path, "size": size }))
             .collect();
-        Ok(json!({ "results": results }))
+        let mut result = json!({ "results": results });
+        if !complete {
+            result["incomplete"] = json!(true);
+        }
+        Ok(result)
     }
 }
 
@@ -403,6 +406,48 @@ impl Tool for FindTool {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    fn walk_fixture() -> Result<PathBuf, std::io::Error> {
+        let root = std::env::temp_dir().join(format!(
+            "hya-walk-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::create_dir_all(root.join("aaa/bbb/ccc"))?;
+        std::fs::write(root.join("aaa/bbb/ccc/aaa"), "deep")?;
+        std::fs::write(root.join("zzz"), "shallow")?;
+        Ok(root)
+    }
+
+    #[test]
+    fn expired_walk_is_incomplete() -> Result<(), Box<dyn std::error::Error>> {
+        let root = walk_fixture()?;
+        let mut files = Vec::new();
+        assert!(!walk(
+            &root,
+            &CancellationToken::new(),
+            Instant::now(),
+            |path| files.push(path)
+        )?);
+        assert!(files.is_empty());
+        std::fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn future_walk_visits_every_file_breadth_first() -> Result<(), Box<dyn std::error::Error>> {
+        let root = walk_fixture()?;
+        let mut files = Vec::new();
+        assert!(walk(
+            &root,
+            &CancellationToken::new(),
+            Instant::now() + SEARCH_BUDGET,
+            |path| files.push(path)
+        )?);
+        assert_eq!(files, vec![root.join("zzz"), root.join("aaa/bbb/ccc/aaa")]);
+        std::fs::remove_dir_all(root)?;
+        Ok(())
+    }
 
     #[test]
     fn ls_empty_path_resolves_to_workdir_same_as_omitted() {
