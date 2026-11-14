@@ -49,6 +49,7 @@ pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> 
                     .map(|agent| AgentName::new(*agent))
                     .collect(),
                 hook_refs: Vec::new(),
+                advertise: Vec::new(),
             }],
             tools: Vec::new(),
             skills: Vec::new(),

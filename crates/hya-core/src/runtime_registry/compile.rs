@@ -80,13 +80,16 @@ impl AgentToolPlane {
 }
 
 /// Catalog-derived policy retained only for one in-process agent execution.
-/// It contains no agent identity and is never persisted or exposed on the wire.
+/// It is never persisted or exposed on the wire.
 #[derive(Clone, Debug)]
 pub struct AgentResourcePolicy {
+    agent_id: String,
     /// Owning bundle id, or `None` for a built-in agent (which owns no bundle).
     bundle_id: Option<String>,
     plane: AgentToolPlane,
-    resource_view: ResourceView,
+    // Keep policies compact inside turn and resident activation enums.
+    resource_view: Box<ResourceView>,
+    advertise: BTreeSet<String>,
     /// Whether the agent may spawn anyone (a non-empty effective spawn set);
     /// decides the `task`/`archive` coordination tools.
     spawn_rights: bool,
@@ -150,6 +153,7 @@ impl AgentResourcePolicy {
 pub(crate) struct CompiledResourceView {
     tools: BTreeMap<String, ResolvedTool>,
     schemas: Vec<ToolSchema>,
+    advertise: BTreeSet<String>,
     skills: Arc<Vec<SkillCatalogEntry>>,
     canonical_hook_ids: Arc<[String]>,
     /// Whether the selected view includes the canonical harness skill facade
@@ -654,13 +658,16 @@ impl TurnBinding {
         let bundle_id = definition.origin.bundle_id().map(str::to_string);
         // Built-ins own no bundle: their view comes from the core-agents
         // preset (read-only agents deny the write tools), and they carry no hooks.
-        let (resource_view, hook_refs) = match bundle_id.as_deref() {
-            None => (
-                crate::builtin_agents::preset_agent(stable_id)
-                    .map(|agent| agent.resource_view.clone())
-                    .unwrap_or_default(),
-                Vec::new(),
-            ),
+        let (resource_view, hook_refs, advertise) = match bundle_id.as_deref() {
+            None => crate::builtin_agents::preset_agent(stable_id)
+                .map(|agent| {
+                    (
+                        agent.resource_view.clone(),
+                        Vec::new(),
+                        agent.advertise.clone(),
+                    )
+                })
+                .unwrap_or_default(),
             Some(id) => {
                 let (_, agent) = self
                     .snapshot
@@ -670,7 +677,11 @@ impl TurnBinding {
                     .ok_or_else(|| BundleError::UnknownAgentId {
                         agent_id: format!("{id}/{stable_id}"),
                     })?;
-                (agent.resource_view.clone(), agent.hook_refs.clone())
+                (
+                    agent.resource_view.clone(),
+                    agent.hook_refs.clone(),
+                    agent.advertise.clone(),
+                )
             }
         };
         // Spawn rights are the effective (installed) spawn set: a built-in with
@@ -681,9 +692,11 @@ impl TurnBinding {
             .spawnable(stable_id)
             .is_ok_and(|agents| !agents.is_empty());
         let mut policy = AgentResourcePolicy {
+            agent_id: stable_id.to_string(),
             bundle_id,
             plane,
-            resource_view,
+            resource_view: Box::new(resource_view),
+            advertise: advertise.into_iter().collect(),
             spawn_rights,
             selected_bundle_tool_ids: Arc::new(Vec::new()),
             selected_bundle_skill_ids: Arc::new(Vec::new()),
@@ -736,13 +749,16 @@ impl TurnBinding {
     ) -> Result<AgentResourcePolicy, BundleError> {
         let definition = self.snapshot.catalog.require(stable_id)?;
         let bundle_id = definition.origin.bundle_id().map(str::to_string);
-        let (resource_view, hook_refs) = match bundle_id.as_deref() {
-            None => (
-                crate::builtin_agents::preset_agent(stable_id)
-                    .map(|agent| agent.resource_view.clone())
-                    .unwrap_or_default(),
-                Vec::new(),
-            ),
+        let (resource_view, hook_refs, advertise) = match bundle_id.as_deref() {
+            None => crate::builtin_agents::preset_agent(stable_id)
+                .map(|agent| {
+                    (
+                        agent.resource_view.clone(),
+                        Vec::new(),
+                        agent.advertise.clone(),
+                    )
+                })
+                .unwrap_or_default(),
             Some(_) => {
                 let (_, agent) = self
                     .snapshot
@@ -752,13 +768,19 @@ impl TurnBinding {
                     .ok_or_else(|| BundleError::UnknownAgentId {
                         agent_id: stable_id.to_string(),
                     })?;
-                (agent.resource_view.clone(), agent.hook_refs.clone())
+                (
+                    agent.resource_view.clone(),
+                    agent.hook_refs.clone(),
+                    agent.advertise.clone(),
+                )
             }
         };
         Ok(AgentResourcePolicy {
+            agent_id: stable_id.to_string(),
             bundle_id,
             plane,
-            resource_view,
+            resource_view: Box::new(resource_view),
+            advertise: advertise.into_iter().collect(),
             spawn_rights: self
                 .snapshot
                 .catalog
@@ -1214,9 +1236,22 @@ impl TurnBinding {
             );
         }
 
+        for name in &policy.advertise {
+            if !tools.contains_key(name) {
+                return Err(BundleError::InvalidManifest {
+                    source_name: policy.diagnostic_scope().to_string(),
+                    detail: format!(
+                        "agent `{}` advertise: tool `{name}` is not in its compiled view",
+                        policy.agent_id
+                    ),
+                });
+            }
+        }
+
         let compiled = Arc::new(CompiledResourceView {
             tools,
             schemas,
+            advertise: policy.advertise.clone(),
             skills: Arc::new(skills),
             canonical_hook_ids: Arc::clone(&policy.canonical_hook_ids),
             skill_facade_selected,
@@ -1316,6 +1351,10 @@ impl TurnBinding {
 }
 
 impl CompiledResourceView {
+    pub(crate) fn advertises(&self, name: &str) -> bool {
+        self.advertise.is_empty() || self.advertise.contains(name)
+    }
+
     pub(crate) fn tool_schemas(&self) -> Vec<ToolSchema> {
         self.schemas.clone()
     }

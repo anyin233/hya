@@ -395,6 +395,7 @@ fn sidecar_permission_bundle() -> Bundle {
             resource_view: ResourceView::default(),
             can_spawn: Vec::new(),
             hook_refs: Vec::new(),
+            advertise: Vec::new(),
         }],
         tools: vec![PreparedResource {
             local_id: "echo".to_string(),

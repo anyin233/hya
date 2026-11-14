@@ -2854,6 +2854,7 @@ for line in sys.stdin:
             },
             can_spawn: Vec::new(),
             hook_refs: Vec::new(),
+            advertise: Vec::new(),
         };
         let bundle = Bundle {
             check: None,
