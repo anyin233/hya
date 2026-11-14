@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import {
-  CapabilityClient, DEFAULT_OPTIONS, INITIALIZE_RESULT, initializeResult, PERSONALITIES, buildJevRequest, classify,
+  CapabilityClient, DEFAULT_OPTIONS, checkScript, INITIALIZE_RESULT, initializeResult, PERSONALITIES, buildJevRequest, classify,
   callHostTool, executeScript, executeWorkflow, parseJudgeConfig, parseOptions, runAgent as runAgentRaw, truncate,
   type ToolSchema, type AgentInput, type AgentResult, type ClassifyInput, type Host, type RunContext,
 } from "./runtime.ts";
@@ -133,7 +133,7 @@ describe("script VM and trace", () => {
     expect((await run('import fs from "node:fs";')).ok).toBe(false);
     const result = await run('return await import("node:fs");');
     expect(result.ok).toBe(false);
-    expect(result.output).toContain("dynamic import");
+    expect(result.output).toContain("`import` is not available");
   });
 
   test("host errors keep their messages, are traced, and can be caught", async () => {
@@ -258,7 +258,7 @@ describe("agents.run host bridge", () => {
       const before = received.length;
       const result = await run(`return await agents.run(${JSON.stringify({ agent, prompt: "work" })});`);
       expect(result.ok).toBe(false);
-      expect(result.output).toContain("agents.run agent");
+      expect(result.output).toMatch(/agents\.run( agent|: missing required argument `agent`)/);
       expect(received.length).toBe(before);
     }
     for (const agent of ["orchestrator-scout", "orchestrator-runner", "orchestrator-editor"]) {
@@ -697,7 +697,7 @@ describe("workflow inputs and persistent store", () => {
     expect(failed.output).toContain("saved as never-saved");
     expect(records(failed.output.match(/trace file: (.+)$/)![1])[0].stored).toBe("never-saved");
     expect(saved("never-saved")).toBe('throw new Error("no save");');
-    expect(metadata("never-saved")).toMatchObject({ last_status: "failed", last_error: "no save", runs: 1 });
+    expect(metadata("never-saved")).toMatchObject({ last_status: "failed", last_error: "no save (line 1)", runs: 1 });
 
     const first = await workflow({ script: source, args: { request: "first" }, save_as: "return-request" }, { configDir: store });
     expect(first.ok).toBe(true);
@@ -719,14 +719,14 @@ describe("workflow inputs and persistent store", () => {
     const failedRun = await workflow({ run: "return-request", args: { fail: true } }, { configDir: store });
     expect(failedRun.ok).toBe(false);
     expect(failedRun.output).toStartWith("Workflow return-request failed in ");
-    expect(metadata("return-request")).toMatchObject({ runs: 3, last_status: "failed", last_error: "failed request" });
+    expect(metadata("return-request")).toMatchObject({ runs: 3, last_status: "failed", last_error: "failed request (line 2)" });
     expect(saved("return-request")).toBe(source);
     await workflow({ run: "return-request", args: { request: "repaired" } }, { configDir: store });
     expect(metadata("return-request")).toMatchObject({ runs: 4, last_status: "completed", last_error: "" });
     const failedReplacement = 'throw new Error("replace even on failure");';
     await workflow({ script: failedReplacement, save_as: "return-request" }, { configDir: store });
     expect(saved("return-request")).toBe(failedReplacement);
-    expect(metadata("return-request")).toMatchObject({ runs: 1, last_status: "failed", last_error: "replace even on failure" });
+    expect(metadata("return-request")).toMatchObject({ runs: 1, last_status: "failed", last_error: "replace even on failure (line 1)" });
 
     const replacement = '// Replacement\nreturn {value: args.value};';
     await workflow({ script: replacement, save_as: "return-request" }, { configDir: store });
@@ -769,13 +769,13 @@ describe("workflow inputs and persistent store", () => {
     expect(shown.ok).toBe(true);
     const storedMetadata = JSON.parse(readFileSync(join(configDir, "workflows", "repair-me.json"), "utf8"));
     expect(JSON.parse(shown.output)).toEqual({ script, metadata: storedMetadata });
-    expect(storedMetadata).toMatchObject({ name: "repair-me", last_status: "failed", last_error: error, runs: 1 });
+    expect(storedMetadata).toMatchObject({ name: "repair-me", last_status: "failed", last_error: `${error} (line 2)`, runs: 1 });
     const listed = await workflow({ list: true }, { configDir });
     const item = JSON.parse(listed.output.split("\n")[1])[0];
     expect(item.last_status).toBe("failed");
     expect(item.last_error).toHaveLength(200);
     expect(item.last_error).toStartWith("START");
-    expect(item.last_error).toEndWith("END");
+    expect(item.last_error).toEndWith("END (line 2)");
     expect(received.length).toBe(before);
     expect(readdirSync(join(configDir, "traces", "test-session"))).toEqual(traceFiles);
     const completed = await workflow({ run: "repair-me", args: { fail: false } }, { configDir });
@@ -1030,7 +1030,7 @@ describe("script VM and trace", () => {
     expect((await run('import fs from "node:fs";')).ok).toBe(false);
     const result = await run('return await import("node:fs");');
     expect(result.ok).toBe(false);
-    expect(result.output).toContain("dynamic import");
+    expect(result.output).toContain("`import` is not available");
   });
 
   test("a tool error keeps its message, is traced, and can be caught", async () => {
@@ -1239,7 +1239,7 @@ describe("full run personality", () => {
     await executeWorkflow({ script: 'return args.value;', args: { value: 3 }, save_as: "run-wording" }, ctx);
     expect((await executeWorkflow({ run: "run-wording", args: { value: 4 } }, ctx)).output).toStartWith("Script run-wording completed in ");
     expect((await executeScript('throw new Error("broken");', ctx)).output).toStartWith("Script failed in ");
-    expect((await executeScript('return await models.classify({});', ctx)).output).toContain("No judge configured");
+    expect((await executeScript('return await models.classify({state: 1, questions: {}});', ctx)).output).toContain("No judge configured");
   });
 
   test("rejects unknown and missing personalities at startup", async () => {
@@ -1255,5 +1255,80 @@ describe("full run personality", () => {
 test("registers exactly run with the required description and workflow input forms", () => {
  const result = initializeResult(PERSONALITIES.run);
  expect(result.plugin.id).toBe("code-mode");
- expect(result.tools).toEqual([{ ...INITIALIZE_RESULT.tools[0], name: "run", description: "Run a JavaScript program that calls your other tools and can start worker agents. Only what the program outputs comes back to you, so one call can run several tools, run them in parallel, branch on their results, and filter or combine them before you read them.\n\nInput is one of: `{script, args?, save_as?}` runs a program (`save_as` stores it under a name, also when it fails); `{run, args?}` runs a stored program with new `args`; `{list: true}` lists stored programs; `{show: name}` returns a stored program's source and last error so you can repair it.\n\n`script` is the body of an async function: top-level `await` and `return` work. It has no file, network, import, or timer access; it reaches the outside only through these globals:\n\n- `args`: the `args` object of the call, or `{}`.\n- `await tools.<name>(args)` calls a tool with the arguments you would pass it directly and resolves to the tool's result value. A character of the tool name that cannot be part of a JavaScript identifier becomes `_`. File and shell tools resolve to an object such as `{title, output, metadata}` whose `output` is the text you would see when calling the tool directly. A failed or denied call rejects with an `Error` carrying the tool's error text; use `Promise.allSettled` to keep the results of the calls that succeed.\n- `ALL_TOOLS` is `[{name, description}]` for every tool the program can call. `describeTool(name)` returns `{name, description, input_schema}` or `undefined`.\n- `await agents.run({agent, prompt, description?, result?, model?, effort?, timeout_secs?, cache?})` starts one worker agent you may spawn and waits for its report; it resolves to `{handle, session, status, report, result}`. `result` maps field names to descriptions: the worker must end its report with a `RESULT: {...}` line holding those fields, which comes back parsed as `result` (or `null`). A worker gets 600 seconds unless you pass `timeout_secs` (at most 1800); one that runs out is stopped. Start several with `Promise.all`.\n- `await models.classify({state, questions})` asks the configured judge model typed questions (`bool`, `choice`, `score`) about `state`; it rejects when no judge is configured.\n- `text(value)` adds an item to the output (a string as is, anything else as JSON); `return value` does the same. `console.log(...)` adds a line to a separate console block.\n- An optional first line sets limits: `// @options: {\"timeout_ms\": 1800000, \"max_output_chars\": 3000}` (at most 3000000 and 3600).\n\nOutput longer than `max_output_chars` keeps only its start and end, so select what you need inside the program: slice file text, filter matches, summarise command output. The result ends with one trace line per tool, agent, or judge call (source line, call, arguments, outcome, time). Calls are real: calls made before an error are not undone." }]);
+ expect(result.tools).toEqual([{ ...INITIALIZE_RESULT.tools[0], name: "run", description: "Run a JavaScript program that calls your other tools and can start worker agents. Only what the program outputs comes back to you, so one call can run several tools, run them in parallel, branch on their results, and filter or combine them before you read them.\n\nInput is one of: `{script, args?, save_as?}` runs a program (`save_as` stores it under a name, also when it fails); `{run, args?}` runs a stored program with new `args`; `{list: true}` lists stored programs; `{show: name}` returns a stored program's source and last error so you can repair it.\n\n`script` is the body of an async function: top-level `await` and `return` work. It has no file, network, import, or timer access; it reaches the outside only through these globals:\n\n- `args`: the `args` object of the call, or `{}`.\n- `await tools.<name>(args)` calls a tool with the arguments you would pass it directly and resolves to the tool's result value. A character of the tool name that cannot be part of a JavaScript identifier becomes `_`. File and shell tools resolve to an object such as `{title, output, metadata}` whose `output` is the text you would see when calling the tool directly. A failed or denied call rejects with an `Error` carrying the tool's error text; use `Promise.allSettled` to keep the results of the calls that succeed.\n- `ALL_TOOLS` is `[{name, description}]` for every tool the program can call. `describeTool(name)` returns `{name, description, input_schema}` or `undefined`.\n- `await agents.run({agent, prompt, description?, result?, model?, effort?, timeout_secs?, cache?})` starts one worker agent you may spawn and waits for its report; it resolves to `{handle, session, status, report, result}`. `result` maps field names to descriptions: the worker must end its report with a `RESULT: {...}` line holding those fields, which comes back parsed as `result` (or `null`). A worker gets 600 seconds unless you pass `timeout_secs` (at most 1800); one that runs out is stopped. Start several with `Promise.all`.\n- `await models.classify({state, questions})` asks the configured judge model typed questions (`bool`, `choice`, `score`) about `state`; it rejects when no judge is configured.\n- `text(value)` adds an item to the output (a string as is, anything else as JSON); `return value` does the same. `console.log(...)` adds a line to a separate console block.\n- An optional first line sets limits: `// @options: {\"timeout_ms\": 1800000, \"max_output_chars\": 3000}` (at most 3000000 and 3600).\n\nOutput longer than `max_output_chars` keeps only its start and end, so select what you need inside the program: slice file text, filter matches, summarise command output. The result ends with one trace line per tool, agent, or judge call (source line, call, arguments, outcome, time). Calls are real: calls made before an error are not undone. Before anything runs, the program is checked for syntax errors, unknown tools, missing required arguments, and unavailable globals; a program that fails the check makes no call, and the result names the line and column to fix." }]);
+});
+
+describe("pre-run check", () => {
+  const tool = (name: string, properties: string[], required: string[], closed = false): ToolSchema => ({
+    name, description: name,
+    input_schema: { type: "object", properties: Object.fromEntries(properties.map((key) => [key, { type: "string" }])), required, ...(closed ? { additionalProperties: false } : {}) },
+  });
+  const tools = [tool("read", ["path", "offset", "limit"], ["path"]), tool("bash", ["command", "timeout"], ["command"], true), tool("hya-lsp__diagnostics", ["path"], ["path"])];
+  const check = (script: string, personality = PERSONALITIES.run) => checkScript(script, tools, personality);
+  const messages = (script: string, personality = PERSONALITIES.run) => check(script, personality).map(({ line, column, message }) => `${line}:${column} ${message}`);
+
+  test("a rejected script makes no call and says where and what to fix", async () => {
+    const calls: string[] = [];
+    const result = await executeScript('await tools.read({ path: "a" });\nconst b = await tools.read({ path: "x" };', {
+      personality: PERSONALITIES.run, session: "check", call: "syntax", configDir: directory,
+      host: async (method, params) => { calls.push(method === "tools.list" ? method : params.name); return method === "tools.list" ? { tools } : { output: "" }; },
+    });
+    expect(result.ok).toBe(false);
+    expect(calls).toEqual(["tools.list"]);
+    expect(result.trace).toEqual([]);
+    expect(result.output).toContain('made no call');
+    expect(result.output).toContain('L2:41: Expected ")" but found ";"\n  const b = await tools.read({ path: "x" };\n' + " ".repeat(42) + "^");
+  });
+
+  test("syntax errors on the first line are located in the script, not the wrapper", () => {
+    expect(messages("const a = [1,;")).toEqual(["1:13 Unexpected ;"]);
+    expect(messages("x;\nconst a = [1,;")).toEqual(["2:13 Unexpected ;"]);
+    expect(messages('["a"].map((p) => await tools.read({ path: p }));')).toEqual(['1:23 "await" can only be used inside an "async" function']);
+  });
+
+  test("unknown tools, missing required arguments, and unknown arguments of closed schemas", () => {
+    expect(messages('await tools.read_file({ path: "x" });')).toEqual(["1:12 tools.read_file does not exist; nearest callable tools: tools.read, tools.bash, tools.hya_lsp__diagnostics"]);
+    expect(messages('await tools.read({ file_path: "x" });')).toEqual(["1:12 tools.read: missing required argument `path` (given: file_path)"]);
+    expect(messages('await tools.bash({ cmd: "ls" });')).toEqual([
+      "1:12 tools.bash: unknown argument `cmd`; it takes command, timeout", "1:12 tools.bash: missing required argument `command`",
+    ]);
+    expect(messages('await agents.run({ agent: "a", prompt: "p", timeout: 5 });')[0]).toContain("agents.run: unknown argument `timeout`");
+    expect(messages('await models.classify({ state: 1 });')).toEqual(["1:13 models.classify: missing required argument `questions`"]);
+  });
+
+  test("unavailable globals are reported unless bound by the script or only probed with typeof", () => {
+    expect(messages('const fs = require("fs");\nsetTimeout(() => {}, 1);\nimport("x");').map((text) => text.split(" ")[0])).toEqual(["1:11", "2:0", "3:0"]);
+    expect(check('const process = 1; return [process, typeof fetch];')).toEqual([]);
+    expect(check('const f = (setTimeout, { fetch }) => setTimeout + fetch; function g(Bun) { return Bun; } try {} catch (require) { require; }')).toEqual([]);
+  });
+
+  test("valid scripts pass: strings, templates, regexes, comments, shorthand, spread, computed keys, namespaced tools", () => {
+    expect(check([
+      '// tools.nope({}) in a comment',
+      'const text = "tools.nope({})", tpl = `a ${ `b ${ { x: tools.read } && 1 }` } tools.nope()`;',
+      'const re = /tools\\.nope\\(/g, half = 4 / 2 / 1;',
+      'const path = args.path ?? "README.md";',
+      'const a = await tools.read({ path });',
+      'const b = await tools.read({ ...args, limit: "1" });',
+      'const c = await tools.read({ ["path"]: path });',
+      'const d = await tools.bash({ command: "ls", timeout: "1" });',
+      'const e = await tools.hya_lsp__diagnostics({ "path": path });',
+      'const f = await tools.read(args);',
+      'const g = await agents.run({ agent: "hya-scout", prompt: `where ${path}`, result: { file: "f" } });',
+      'return [a, b, c, d, e, f, g, re, text, tpl, half];',
+    ].join("\n"))).toEqual([]);
+  });
+
+  test("a workflow cannot reference tools and names only its three workers", () => {
+    expect(messages('return typeof tools;', PERSONALITIES.workflow)[0]).toContain("A workflow can only call agents.run and models.classify");
+    expect(messages('await agents.run({ agent: "hya-scout", prompt: "p" });', PERSONALITIES.workflow)).toEqual(["1:26 agents.run agent must be one of: orchestrator-scout, orchestrator-runner, orchestrator-editor"]);
+    expect(check('await agents.run({ agent: "orchestrator-scout", prompt: "p" });', PERSONALITIES.workflow)).toEqual([]);
+  });
+
+  test("a runtime failure names its script line", async () => {
+    const result = await executeScript('const a = 1;\nconst b = null;\nreturn b.field;', {
+      personality: PERSONALITIES.run, session: "check", call: "runtime", configDir: directory, host: async () => ({ tools }),
+    });
+    expect(result.output).toMatch(/Script error: .*\(line 3\)/);
+  });
 });

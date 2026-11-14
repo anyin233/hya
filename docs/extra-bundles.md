@@ -696,7 +696,10 @@ with `Workflow completed in … s` or `Workflow failed in … s`; a stored run u
 `Workflow <name> completed in … s` (or `failed`). All saves add
 `saved as <name>`. Output items and optional `<console_output>` precede the
 `<trace>` of `agents.run` and `models.classify` calls. Failures retain partial
-output and add `Script error: <message>`. Display output stays below 4800
+output and add `Script error: <message>`, which ends with `(line N)` when the
+error came from a script line. A script is checked before it runs, as in
+[code mode](code-mode.md#pre-run-check) (syntax, unavailable globals, `tools`,
+and literal `agents.run` agents and arguments); a rejected script makes no call. Display output stays below 4800
 characters, retaining output start/end and the first/last trace lines.
 
 Full JSONL traces live at

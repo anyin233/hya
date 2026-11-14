@@ -10,6 +10,12 @@ can then run several tools, run them in parallel, branch on results, and
 filter a large result before the model reads it. A program can be stored under
 a name and run again with new arguments.
 
+Before a program runs, the bundle checks it: syntax, tool names, required
+arguments and unavailable globals. A program that fails the check makes no
+call, and the result shows the line and column to fix, so a model does not
+spend a round, or real side effects, on a program that cannot work. The check
+belongs to the bundle, so it is on exactly when code mode is on.
+
 Every call a program makes is one record of a trace, with the source line that
 made it. That is the point beyond saving rounds: the plan is in the program,
 and each effect can be traced to the line that caused it.
@@ -150,6 +156,48 @@ An optional first line sets limits:
 `timeout_ms` defaults to 1800000 and is at most 3000000. `max_output_chars`
 defaults to 3000 and is at most 3600, because hya caps a bundle tool result at
 5000 characters.
+
+### Pre-run check
+
+Every inline or stored program is checked after the tool list is fetched and
+before the script starts. The check is part of the bundle's runtime, so it runs
+exactly when the bundle does: `tools.code.mode: normal` or `hya bundle disable
+hya/code-mode` turns it off with the tool. It uses only Bun built-ins (the JSC
+compiler that runs the script, and `Bun.Transpiler` to locate a syntax error)
+plus a token scan; it adds no dependency.
+
+| Rule | Reported when |
+| --- | --- |
+| Syntax | The script does not compile. Only the first error is shown, with Bun's explanation (`"await" can only be used inside an "async" function`). |
+| Unknown tool | `tools.<name>` names no callable tool; the three nearest names are listed. |
+| Missing argument | A literal object argument of `tools.<name>(…)`, `agents.run(…)` or `models.classify(…)` lacks a key the schema requires, and has no spread or computed key. |
+| Unknown argument | The same object has a key the schema does not list, and the schema is closed (`additionalProperties: false`). `agents.run` and `models.classify` are closed. |
+| Unavailable global | `require`, `import`, `process`, `Bun`, `fetch`, timers, `Buffer`, `module`, `exports`, `__dirname`, `__filename` are used and not bound by the script. `typeof x` is allowed. |
+| Workflow only | `tools` is referenced, or `agents.run` names a literal agent outside the three workers. |
+
+Arguments passed as a variable (`tools.read(args)`) are not checked; the tool
+still validates them when called. A rejected program is a failed run: `save_as`
+still stores it and `show` returns the error. The result looks like:
+
+```text
+Script failed in 0.0 s
+
+Script error: the script was checked before running and made no call; fix it and send it again:
+L2:23: tools.read: missing required argument `path` (given: file_path)
+  const r = await tools.read({ file_path: files[0] });
+                        ^
+<trace>
+
+</trace>
+trace file: <absolute path>
+```
+
+At most five problems are listed (`… N more` follows). An error the check
+cannot see, thrown while the script runs, ends with its script line:
+`Script error: null is not an object (evaluating 'b.field') (line 3)`.
+
+The check takes about 20 µs per KB of script (p50; p99 stays under 1 ms up to
+about 20 KB) and under 1 ms for the first script of a fresh process.
 
 ### Result and trace
 
