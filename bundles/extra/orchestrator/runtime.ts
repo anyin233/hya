@@ -243,7 +243,7 @@ function prepareAgent(input: AgentInput) {
     prompt += "\n\nEnd your report with one final line of the form RESULT: {...} — a single-line JSON object with exactly these fields:"
       + Object.entries(input.result).map(([field, description]) => `\n- ${field}: ${description}`).join("");
   }
-  const timeout = input.timeout_secs === undefined ? 1800 : input.timeout_secs;
+  const timeout = input.timeout_secs === undefined ? 600 : input.timeout_secs;
   if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout < 0 || timeout > 1800) {
     throw new Error("agents.run timeout_secs must be in 0..=1800");
   }
@@ -292,7 +292,11 @@ export async function runAgent(input: AgentInput, host: Host, signal: AbortSigna
       result.status = "cancelled";
       return result;
     }
-    if (metadata.woke_by === "timeout" || Date.now() >= deadline) return result;
+    if (metadata.woke_by === "timeout" || Date.now() >= deadline) {
+      // Nothing can reach a worker after its call returned, so it must not keep running.
+      await call("archive", { target: result.handle, reason: "agents.run timed out" });
+      return result;
+    }
     // Mail/stall wakes are not terminal; wait again within the same deadline.
   }
 }

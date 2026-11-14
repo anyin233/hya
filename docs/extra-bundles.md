@@ -587,7 +587,8 @@ The script is an async function body. Its globals are:
 - `agents.run({agent, prompt, description?, result?, model?, effort?, timeout_secs?, cache?})`:
   `agent` is required and must name one of the three workers above; `prompt` is
   a non-empty string. `result?: Record<string,string>` describes requested report
-  fields. Timeout defaults to 1800 seconds and accepts `0..1800`. Resolves to
+  fields. Timeout defaults to 600 seconds and accepts `0..1800`; a worker that
+  times out is archived. Resolves to
   `{handle, session, status, report, result}`, where `status` is `done`, `failed`,
   `cancelled` or `timeout`, `report` is rendered channel text, and `result` is an
   object or `null`. `cache?: boolean` defaults to enabled; a remembered answer

@@ -19,7 +19,7 @@ A program is the body of an async function. It has exactly these:
 - `agents.run({agent, prompt, description?, result?, timeout_secs?})` starts one worker, waits for its report, and resolves to `{handle, session, status, report, result}`.
   - `prompt`: everything this worker needs, written for its role.
   - `result`: the fields you want back, as `{field: "what to put there"}`. The worker is told to end its report with those fields as JSON, and you get them as `result` (`null` if it did not comply). Ask for the facts the program will branch on: booleans, short strings, lists of paths, a command.
-  - `status` is `done`, `failed`, `cancelled` or `timeout`. `report` is the worker's full text.
+  - `status` is `done`, `failed`, `cancelled` or `timeout`. A worker gets 600 seconds unless you pass `timeout_secs` (at most 1800); one that runs out is stopped. `report` is the worker's full text.
 - `models.classify({state, questions})` puts typed questions about `state` (any JSON, for example a worker's report) to a fast judge model and resolves to `{answers}`. Types: `{type: "bool", instructions}` gives `{probability}`; `{type: "choice", instructions, criteria: {label: meaning}}` gives `{choice, probabilities, confidence}`; `{type: "score", instructions, criteria: [lowest, …, highest]}` gives `{score, confidence}`. Use it for narrow questions, one fact each. Treat a `bool` between 0.3 and 0.7, or a `choice` below 0.6, as "not known".
 - `args`: the object you passed with the call, so one workflow can serve different requests.
 - `text(value)`, `console.log(...)`, `return value` put things in the output you will see, together with a trace of every call and the line that made it.
