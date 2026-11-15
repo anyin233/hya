@@ -1,6 +1,8 @@
 //! Shared helpers for encoding stored tool parts into provider wire formats.
 
-use hya_proto::{PartId, ToolCallId, ToolPartState};
+use std::collections::HashSet;
+
+use hya_proto::{Message, Part, PartId, ToolCallId, ToolPartState};
 use serde_json::Value;
 
 pub(crate) fn tool_input(state: &ToolPartState) -> &Value {
@@ -21,22 +23,84 @@ pub(crate) struct ToolResult<'a> {
     pub(crate) images: Vec<(&'a str, &'a str)>,
 }
 
-/// Render a stored tool result for one request. `images` says whether the
-/// request's model accepts image input (`Capabilities::image_input ==
-/// Some(true)`) on a protocol that carries tool-result images.
+/// Tool-result image data (data URL length, about the base64 length) one
+/// request carries.
+pub(crate) const MAX_REQUEST_IMAGE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Which tool-result images one request sends.
+pub(crate) struct ToolImages<'a> {
+    /// The request's model accepts image input (`Capabilities::image_input ==
+    /// Some(true)`) on a protocol that carries tool-result images.
+    send: bool,
+    /// Images older than the newest ones that fit [`MAX_REQUEST_IMAGE_BYTES`],
+    /// as (tool part, index among its image attachments).
+    aged_out: HashSet<(&'a PartId, usize)>,
+}
+
+impl<'a> ToolImages<'a> {
+    /// Plan the images of a request over `messages`. Walking from the newest
+    /// image back, images are kept until the next would exceed the budget;
+    /// it and every older image are aged out. The plan depends only on the
+    /// history, so a later request differs only in the images that newer ones
+    /// pushed out.
+    pub(crate) fn new(messages: &'a [Message], send: bool) -> Self {
+        let mut aged_out = HashSet::new();
+        if send {
+            let mut used = 0usize;
+            let parts = messages
+                .iter()
+                .rev()
+                .filter_map(|message| match message {
+                    Message::Assistant { parts, .. } => Some(parts),
+                    Message::User { .. } | Message::System { .. } => None,
+                })
+                .flat_map(|parts| parts.iter().rev());
+            for part in parts {
+                let Part::Tool {
+                    id,
+                    state: ToolPartState::Completed { output, .. },
+                    ..
+                } = part
+                else {
+                    continue;
+                };
+                let images: Vec<_> = attached_images(output).collect();
+                for (index, (_, data)) in images.iter().enumerate().rev() {
+                    used = used.saturating_add(data.len());
+                    if used > MAX_REQUEST_IMAGE_BYTES {
+                        aged_out.insert((id, index));
+                    }
+                }
+            }
+        }
+        Self { send, aged_out }
+    }
+}
+
+/// Render the stored tool result of tool part `part` for one request.
 ///
 /// The stored result is model-independent: an image attachment either goes
 /// with the result or the text says it is not shown, so a session replayed
 /// with another model is told the truth. A pending or running state should not
 /// reach the encoder, but is handled so request pairing (every call needs a
 /// result) never breaks.
-pub(crate) fn tool_result(state: &ToolPartState, images: bool) -> ToolResult<'_> {
+pub(crate) fn tool_result<'a>(
+    part: &PartId,
+    state: &'a ToolPartState,
+    images: &ToolImages<'_>,
+) -> ToolResult<'a> {
     let (text, is_error) = match state {
         ToolPartState::Completed { output, .. } => {
             let mut text = value_to_text(output);
             let mut sent = Vec::new();
-            for (mime, data) in attached_images(output) {
-                if images && crate::media::image_url(mime, data).is_ok() {
+            for (index, (mime, data)) in attached_images(output).enumerate() {
+                if images.aged_out.contains(&(part, index)) {
+                    text.push_str(&format!(
+                        "\n\n[The image attached to this result ({mime}) is no longer attached: \
+                         newer images fill this request's image budget. Read the file again to \
+                         see it.]"
+                    ));
+                } else if images.send && crate::media::image_url(mime, data).is_ok() {
                     sent.push((mime, data));
                 } else {
                     text.push_str(&format!(
@@ -214,7 +278,7 @@ mod tests {
     use serde_json::json;
 
     fn plain(state: &ToolPartState) -> (String, bool) {
-        let result = tool_result(state, false);
+        let result = tool_result(&PartId::new(), state, &ToolImages::new(&[], false));
         (result.text, result.is_error)
     }
 
@@ -282,14 +346,14 @@ mod tests {
     fn an_image_goes_with_the_result_only_to_a_model_that_takes_images() {
         let state = image_result("data:image/png;base64,aGVsbG8=", json!({}));
 
-        let shown = tool_result(&state, true);
+        let shown = tool_result(&PartId::new(), &state, &ToolImages::new(&[], true));
         assert_eq!(shown.text, "Image file (image/png, 5 bytes).");
         assert_eq!(
             shown.images,
             vec![("image/png", "data:image/png;base64,aGVsbG8=")]
         );
 
-        let hidden = tool_result(&state, false);
+        let hidden = tool_result(&PartId::new(), &state, &ToolImages::new(&[], false));
         assert!(hidden.images.is_empty());
         assert!(
             hidden.text.starts_with("Image file (image/png, 5 bytes).")
@@ -302,7 +366,7 @@ mod tests {
     #[test]
     fn an_image_the_media_check_rejects_is_described_as_not_shown() {
         let state = image_result("data:image/jpeg;base64,aGVsbG8=", json!({}));
-        let result = tool_result(&state, true);
+        let result = tool_result(&PartId::new(), &state, &ToolImages::new(&[], true));
         assert!(result.images.is_empty());
         assert!(
             result.text.contains("is not shown to you"),
@@ -322,7 +386,7 @@ mod tests {
             }),
             time_ms: 1,
         };
-        let result = tool_result(&state, true);
+        let result = tool_result(&PartId::new(), &state, &ToolImages::new(&[], true));
         assert!(result.images.is_empty());
         assert!(
             result

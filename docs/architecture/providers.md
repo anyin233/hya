@@ -699,13 +699,23 @@ renders it per request ([`wire.rs`](../../crates/hya-provider/src/wire.rs)
 - Otherwise (`Some(false)`, unknown, a rejected image, or the Google route)
   the result stays text and gets the line `[The image attached to this result
   (<mime>) is not shown to you. Inspect it with a program instead …]`.
+- A request carries at most **16 MiB** of tool-result image data (data URL
+  length, about the base64 length). Walking back from the newest image, images
+  are sent until the next one would exceed that; it and every older image
+  become the line `[The image attached to this result (<mime>) is no longer
+  attached: newer images fill this request's image budget. Read the file again
+  to see it.]`.
 - When the coding-tool result cap dropped an attachment for size
-  (`metadata.attachmentsTruncated`; `read` keeps at most 50 KiB of serialized
-  attachments), the text says the attachment is not shown, for every model.
+  (`metadata.attachmentsTruncated`; the cap keeps at most 2 MiB of serialized
+  attachments per result), the text says the attachment is not shown, for
+  every model. `read` does not attach an image that would exceed that budget
+  (a file over about 1.5 MiB); its text says so and suggests downscaling or
+  cropping the image with a program and reading the smaller file.
 
 The rendering depends only on the stored history and the model, so an image
 stays at the same place in every later request of the session and the prompt
-cache prefix is stable. A result without images is encoded exactly as before.
+cache prefix is stable, until newer images push it out of the request budget.
+A result without images is encoded exactly as before.
 
 ## Usage Reporting
 

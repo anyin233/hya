@@ -56,7 +56,7 @@ stay globally unique inside a registry. `hya-tool` exposes the mechanism in
 | Tool | Input (advertised) | Output |
 | --- | --- | --- |
 | `invalid` | unknown call payload | Structured invalid-tool response. |
-| `read` | `{ "path": string, "offset"?: integer >= 1, "limit"?: integer >= 1, "raw"?: boolean }` (closed) | Hashline or raw file text, media attachment, or directory listing. An image goes to a model that takes images; other models, and every PDF, get text saying the content is not shown (see [Tool-result images](providers.md#tool-result-images)). |
+| `read` | `{ "path": string, "offset"?: integer >= 1, "limit"?: integer >= 1, "raw"?: boolean }` (closed) | Hashline or raw file text, media attachment, or directory listing. An image goes to a model that takes images; other models, and every PDF, get text saying the content is not shown (see [Tool-result images](providers.md#tool-result-images)). An image file over about 1.5 MiB is not attached; the text says to downscale or crop it with a program and read the smaller file. |
 | `write` | `{ "path": string, "content": string }` (closed) | Final write result plus bounded display metadata and formatter/LSP diagnostics when available. |
 | `edit` | `{ "path": string, "edits": [...] }` (closed; operations are `replace`, `append`, `prepend`, or `replace_text`) | Fresh hashline preview, bounded diff, warnings, and diagnostics. |
 | `apply_patch` (`patch`) | `{ "patchText": string }` (alias `patch`) | Aggregate diff and per-file metadata. |
@@ -189,7 +189,12 @@ structured caps.
 Coding-tool results use a structurally idempotent policy: each nested row/group
 is serialized once for byte accounting, bounded Read/Write/Grep/Bash envelopes
 and Edit diff metadata remain objects, and independent hard limits set explicit
-truncation flags. No metadata or hook can bypass the final cap. Provider replay
+truncation flags. The envelope is held to `MAX_CODING_ENVELOPE_BYTES = 256 KiB`
+not counting its `attachments` array, which has its own budget,
+`MAX_CODING_ATTACHMENT_BYTES = 2 MiB` serialized: an entry that does not fit is
+dropped whole and `metadata.attachmentsTruncated` is set. A request then sends
+at most 16 MiB of tool-result image data, newest first (see
+[Tool-result images](providers.md#tool-result-images)). No metadata or hook can bypass the final cap. Provider replay
 uses an object's string `output` field when present and falls back to JSON only
 when no such field exists.
 

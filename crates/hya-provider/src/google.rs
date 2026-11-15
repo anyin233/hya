@@ -5,7 +5,7 @@ use hya_proto::{
 };
 use serde_json::{Map, Value, json};
 
-use crate::wire::{tool_input, tool_result};
+use crate::wire::{ToolImages, tool_input, tool_result};
 use crate::{CompletionRequest, Decoder, Protocol, ProviderError, ReasoningEffort};
 
 /// Gemini generateContent request encoder + stream decoder factory.
@@ -39,7 +39,9 @@ fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) -> Result<(), ProviderEr
                     model_parts.push(json!({ "text": text }));
                 }
             }
-            Part::Tool { name, state, .. } => {
+            Part::Tool {
+                id, name, state, ..
+            } => {
                 let input = tool_input(state);
                 let args = if input.is_null() {
                     json!({})
@@ -50,7 +52,7 @@ fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) -> Result<(), ProviderEr
                     "functionCall": { "name": name.as_str(), "args": args }
                 }));
                 // This route sends no tool-result image; the text says so.
-                let result = tool_result(state, false).text;
+                let result = tool_result(id, state, &ToolImages::new(&[], false)).text;
                 responses.push(json!({
                     "functionResponse": { "name": name.as_str(), "response": { "result": result } }
                 }));

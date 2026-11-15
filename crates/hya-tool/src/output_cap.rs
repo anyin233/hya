@@ -27,7 +27,9 @@ pub const MAX_CODING_DISPLAY_BYTES: usize = 50 * 1024;
 /// Maximum raw UTF-8 bytes retained in one Edit diff or patch field.
 pub const MAX_CODING_DIFF_BYTES: usize = 50 * 1024;
 /// Maximum serialized bytes retained by one coding attachment or its container.
-pub const MAX_CODING_ATTACHMENT_BYTES: usize = 50 * 1024;
+/// Sized so an ordinary image or scanned page reaches a model that takes
+/// images; it is counted apart from [`MAX_CODING_ENVELOPE_BYTES`].
+pub const MAX_CODING_ATTACHMENT_BYTES: usize = 2 * 1024 * 1024;
 /// Maximum serialized bytes retained for an artifact path that must stay atomic.
 pub(crate) const MAX_CODING_OUTPUT_PATH_BYTES: usize = 32 * 1024;
 /// Maximum attachment entries retained after validation.
@@ -44,7 +46,8 @@ pub const MAX_CODING_GREP_GROUPS: usize = 100;
 pub const MAX_CODING_GREP_ROWS: usize = 2000;
 /// Maximum serialized bytes retained by Grep display rows and groups.
 pub const MAX_CODING_GREP_DISPLAY_BYTES: usize = 50 * 1024;
-/// Maximum serialized JSON bytes retained by a coding result envelope.
+/// Maximum serialized JSON bytes retained by a coding result envelope, not
+/// counting its attachment array (bounded by [`MAX_CODING_ATTACHMENT_BYTES`]).
 pub const MAX_CODING_ENVELOPE_BYTES: usize = 256 * 1024;
 
 const MAX_GENERIC_METADATA_ITEMS: usize = 128;
@@ -1851,37 +1854,6 @@ fn add_truncation_facts(metadata: &mut Value, facts: &TruncationFacts) {
     }
 }
 
-/// Drop complete attachment entries until the enclosing envelope fits.
-///
-/// # Parameters
-/// - `envelope`: Mutable coding result envelope being fitted.
-/// - `facts`: Truncation facts shared by the enclosing coding result.
-///
-/// # Returns
-/// Nothing; attachments are removed only as complete entries or as a complete
-/// container, never by recursively shortening a payload string.
-fn drop_attachments_to_budget(envelope: &mut Map<String, Value>, facts: &mut TruncationFacts) {
-    loop {
-        if serialized_len(envelope) <= MAX_CODING_ENVELOPE_BYTES {
-            return;
-        }
-        let removed_entry = match envelope.get_mut("attachments") {
-            Some(Value::Array(entries)) => entries.pop().is_some(),
-            Some(_) | None => false,
-        };
-        if removed_entry {
-            facts.mark_attachment();
-            refresh_envelope_flags(envelope, facts);
-            continue;
-        }
-        if envelope.remove("attachments").is_some() {
-            facts.mark_attachment();
-            refresh_envelope_flags(envelope, facts);
-        }
-        return;
-    }
-}
-
 /// Return whether a bounded metadata field carries adapter-owned state.
 fn is_adapter_metadata_flag(key: &str) -> bool {
     matches!(
@@ -1935,19 +1907,23 @@ fn is_adapter_metadata_flag(key: &str) -> bool {
     )
 }
 
-/// Keep the complete approved envelope below one serialized-byte hard bound.
+/// Whether the envelope without its attachment array fits
+/// [`MAX_CODING_ENVELOPE_BYTES`]; the array has its own budget.
+fn envelope_fits(envelope: &Map<String, Value>) -> bool {
+    let rest: std::collections::BTreeMap<&String, &Value> = envelope
+        .iter()
+        .filter(|(key, _)| key.as_str() != "attachments")
+        .collect();
+    serialized_len(&rest) <= MAX_CODING_ENVELOPE_BYTES
+}
+
+/// Keep the approved envelope, apart from its separately bounded attachments,
+/// below one serialized-byte hard bound.
 fn enforce_envelope_bound(envelope: &mut Map<String, Value>, facts: &mut TruncationFacts) {
-    if serialized_len(envelope) <= MAX_CODING_ENVELOPE_BYTES {
+    if envelope_fits(envelope) {
         return;
     }
 
-    if envelope.contains_key("attachments") {
-        drop_attachments_to_budget(envelope, facts);
-        refresh_envelope_flags(envelope, facts);
-        if serialized_len(envelope) <= MAX_CODING_ENVELOPE_BYTES {
-            return;
-        }
-    }
     for key in ["matches", "paths", "files"] {
         if envelope.contains_key(key) {
             if let Some(value) = envelope.get_mut(key) {
@@ -1955,7 +1931,7 @@ fn enforce_envelope_bound(envelope: &mut Map<String, Value>, facts: &mut Truncat
             }
             facts.display = true;
             refresh_envelope_flags(envelope, facts);
-            if serialized_len(envelope) <= MAX_CODING_ENVELOPE_BYTES {
+            if envelope_fits(envelope) {
                 return;
             }
         }
@@ -1967,7 +1943,7 @@ fn enforce_envelope_bound(envelope: &mut Map<String, Value>, facts: &mut Truncat
             }
             facts.display = true;
             refresh_envelope_flags(envelope, facts);
-            if serialized_len(envelope) <= MAX_CODING_ENVELOPE_BYTES {
+            if envelope_fits(envelope) {
                 return;
             }
         }
@@ -1992,31 +1968,28 @@ fn enforce_envelope_bound(envelope: &mut Map<String, Value>, facts: &mut Truncat
                 facts.metadata = true;
             }
             refresh_envelope_flags(envelope, facts);
-            if serialized_len(envelope) <= MAX_CODING_ENVELOPE_BYTES {
+            if envelope_fits(envelope) {
                 return;
             }
         }
     }
-    for key in [
-        "attachments",
-        "matches",
-        "paths",
-        "files",
-        "stdout",
-        "stderr",
-        "content",
-    ] {
+    for key in ["matches", "paths", "files", "stdout", "stderr", "content"] {
         if envelope.remove(key).is_some() {
             facts.display = true;
             refresh_envelope_flags(envelope, facts);
-            if serialized_len(envelope) <= MAX_CODING_ENVELOPE_BYTES {
+            if envelope_fits(envelope) {
                 return;
             }
         }
     }
 
     facts.envelope = true;
-    envelope.retain(|key, _| matches!(key.as_str(), "title" | "output" | "metadata"));
+    envelope.retain(|key, _| {
+        matches!(
+            key.as_str(),
+            "title" | "output" | "metadata" | "attachments"
+        )
+    });
     if let Some(value) = envelope.get_mut("title") {
         shrink_value_to_budget(value, MAX_CODING_TITLE_BYTES);
     }
@@ -2277,6 +2250,27 @@ mod tests {
         assert_eq!(capped["attachments"], json!([]));
         assert_eq!(capped["metadata"]["attachmentsTruncated"], true);
         assert!(serialized_len(&capped) <= MAX_CODING_ENVELOPE_BYTES);
+    }
+
+    #[test]
+    fn attachment_within_its_budget_survives_an_over_large_envelope() {
+        let payload = format!("data:image/png;base64,{}", "A".repeat(1536 * 1024));
+        let result = json!({
+            "title": "image.png",
+            "output": "o".repeat(MAX_CODING_OUTPUT_BYTES * 2),
+            "content": "c".repeat(MAX_CODING_ENVELOPE_BYTES),
+            "metadata": {},
+            "attachments": [{"type": "file", "mime": "image/png", "url": payload}],
+        });
+        let capped = cap_tool_output_with_policy(result, ToolResultPolicy::Coding);
+        assert_eq!(capped["attachments"][0]["url"], payload);
+        assert_eq!(capped["metadata"].get("attachmentsTruncated"), None);
+        assert_eq!(capped["metadata"]["outputTruncated"], true);
+        let Value::Object(mut rest) = capped else {
+            panic!("coding result stays an object");
+        };
+        rest.remove("attachments");
+        assert!(serialized_len(&rest) <= MAX_CODING_ENVELOPE_BYTES);
     }
 
     #[test]
