@@ -855,19 +855,22 @@ pub enum Event {
         before_message: Option<MessageId>,
     },
 
-    /// Stale tool outputs were dropped from this turn's request to fit the window.
+    /// Stale reasoning and tool outputs were left out of this turn's request to
+    /// fit the window.
     ///
     /// Cheaper than summarizing: the model keeps every tool call and its input,
-    /// and loses only old outputs it can re-fetch. Emitted when eviction alone
-    /// brought the transcript under the threshold, so no summarization ran.
+    /// and loses only old steps' reasoning and old outputs it can re-fetch.
+    /// Emitted whenever the eviction saved tokens, whether or not that alone
+    /// brought the transcript under the threshold.
     ///
-    /// **Request-local.** The event log still holds every tool output in full, so
-    /// an offline viewer reconstructs the true trajectory; only what was *sent*
-    /// this turn was reduced. Reducer no-op.
+    /// **Request-local.** The event log still holds every reasoning part and
+    /// tool output in full, so an offline viewer reconstructs the true
+    /// trajectory; only what was *sent* this turn was reduced. Reducer no-op.
     ContextEvicted {
         /// Session whose request was reduced.
         session: SessionId,
-        /// Number of tool-output parts replaced with a size notice.
+        /// Number of parts reduced: reasoning parts left out plus tool outputs
+        /// replaced with a notice.
         evicted_parts: u32,
         /// Token count before eviction.
         tokens_before: u64,
