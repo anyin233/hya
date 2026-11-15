@@ -715,6 +715,7 @@ mod tests {
                     folded_count: 1,
                     input_tokens_est: 100,
                     threshold: 75,
+                    step_cut: None,
                 },
             ),
             env(

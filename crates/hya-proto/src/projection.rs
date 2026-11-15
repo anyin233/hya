@@ -215,6 +215,11 @@ pub struct MessageProjection {
     /// Part offset at the newest `StepStarted`; absent before the first step.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_step_start: Option<usize>,
+    /// Leading parts folded into a compaction summary by a step cut
+    /// (`ContextCompacted.step_cut`). They stay here for readers of the
+    /// transcript; requests send only the parts after them.
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub folded_parts: usize,
     /// Files this message's tool calls changed, with their prior state
     /// (`FilesChanged`), in call order. What a revert restores from.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -501,6 +506,10 @@ fn is_zero(value: &u64) -> bool {
     *value == 0
 }
 
+fn is_zero_usize(value: &usize) -> bool {
+    *value == 0
+}
+
 /// Latest terminal handoff folded onto a child session (ADR-0015).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HandoffProjection {
@@ -594,7 +603,7 @@ pub fn session_archive_event(
 /// different projection, or when `Projection` (or anything it contains)
 /// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
 /// the bump is recorded.
-pub const PROJECTION_REDUCER_VERSION: u32 = 8;
+pub const PROJECTION_REDUCER_VERSION: u32 = 9;
 
 /// Durable snapshot encoding: the wire projection plus replay-only reducer
 /// state the wire form deliberately omits.
@@ -1070,6 +1079,7 @@ impl Projection {
                         agents: Vec::new(),
                         parts: Vec::new(),
                         last_step_start: None,
+                        folded_parts: 0,
                         file_changes: Vec::new(),
                         error: None,
                     });
@@ -1161,6 +1171,9 @@ impl Projection {
                     message.parts.remove(at);
                     if let Some(start) = &mut message.last_step_start && at < *start {
                         *start -= 1;
+                    }
+                    if at < message.folded_parts {
+                        message.folded_parts -= 1;
                     }
                 }
             }
@@ -1578,12 +1591,15 @@ impl Projection {
             Event::ContextCompacted {
                 message: marker,
                 to_message,
+                step_cut,
                 ..
             } => {
                 // MessageStarted is append-only, so the marker is recorded after
                 // the in-flight assistant message. Move it to the boundary named
                 // by the compaction record; otherwise request reconstruction
-                // drops the assistant's retained tail on the next round.
+                // drops the assistant's retained tail on the next round. A step
+                // cut keeps the turn's head and the in-flight message after the
+                // marker, minus the folded leading parts.
                 if let Some(marker_index) = self
                     .session
                     .messages
@@ -1591,13 +1607,28 @@ impl Projection {
                     .position(|row| row.id == *marker)
                 {
                     let marker_row = self.session.messages.remove(marker_index);
-                    if let Some(to_index) = self
-                        .session
-                        .messages
-                        .iter()
-                        .position(|row| row.id == *to_message)
-                    {
-                        self.session.messages.insert(to_index + 1, marker_row);
+                    let boundary = match step_cut {
+                        Some(cut) => {
+                            if let Some(row) = self.message_mut(*to_message)
+                                && let Some(at) =
+                                    row.parts.iter().position(|part| part.id() == cut.through_part)
+                            {
+                                row.folded_parts = at + 1;
+                            }
+                            self.session
+                                .messages
+                                .iter()
+                                .position(|row| row.id == cut.kept_head)
+                        }
+                        None => self
+                            .session
+                            .messages
+                            .iter()
+                            .position(|row| row.id == *to_message)
+                            .map(|to_index| to_index + 1),
+                    };
+                    if let Some(boundary) = boundary {
+                        self.session.messages.insert(boundary, marker_row);
                     } else {
                         self.session
                             .messages
@@ -2327,6 +2358,7 @@ mod compaction_tests {
                     folded_count: 1,
                     input_tokens_est: 100,
                     threshold: 75,
+                    step_cut: None,
                 },
             ),
         ]);
@@ -2338,6 +2370,179 @@ mod compaction_tests {
             .map(|message| message.id)
             .collect();
         assert_eq!(ids, vec![user, marker, assistant]);
+    }
+
+    /// A log written before step cuts existed carries no `step_cut` field; it
+    /// must decode to `None` and fold exactly as it always did.
+    #[test]
+    fn context_compacted_without_step_cut_decodes_as_a_message_fold() {
+        let session = SessionId::new();
+        let (marker, from, to) = (MessageId::new(), MessageId::new(), MessageId::new());
+        let json = serde_json::json!({
+            "type": "context_compacted",
+            "session": session,
+            "message": marker,
+            "strategy": "local_summarizer",
+            "from_message": from,
+            "to_message": to,
+            "folded_count": 2,
+            "input_tokens_est": 100,
+            "threshold": 75,
+        })
+        .to_string();
+        let event: Event = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            event,
+            Event::ContextCompacted {
+                session,
+                message: marker,
+                strategy: CompactionStrategy::LocalSummarizer,
+                from_message: from,
+                to_message: to,
+                folded_count: 2,
+                input_tokens_est: 100,
+                threshold: 75,
+                step_cut: None,
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            serde_json::from_str::<serde_json::Value>(&json).unwrap(),
+            "a message fold still writes the old shape"
+        );
+    }
+
+    struct Turn {
+        session: SessionId,
+        user: MessageId,
+        notice: MessageId,
+        assistant: MessageId,
+        parts: Vec<PartId>,
+        events: Vec<Event>,
+    }
+
+    /// `[user, notice, assistant]` with `parts` leading parts on the assistant.
+    fn single_turn(parts: usize) -> Turn {
+        let session = SessionId::new();
+        let (user, notice, assistant) = (MessageId::new(), MessageId::new(), MessageId::new());
+        let started = |message, role| Event::MessageStarted {
+            session,
+            message,
+            role,
+            agent: None,
+            model: None,
+        };
+        let mut events = vec![
+            Event::SessionCreated {
+                session,
+                parent: None,
+                agent: AgentName::new("build"),
+                model: ModelRef::new("fake"),
+                workdir: "/tmp".to_string(),
+                project: None,
+                kind: crate::SessionKind::Project,
+            },
+            started(user, Role::User),
+            started(notice, Role::System),
+            started(assistant, Role::Assistant),
+        ];
+        let parts: Vec<PartId> = (0..parts).map(|_| PartId::new()).collect();
+        events.extend(parts.iter().map(|part| Event::TextStart {
+            session,
+            message: assistant,
+            part: *part,
+        }));
+        Turn {
+            session,
+            user,
+            notice,
+            assistant,
+            parts,
+            events,
+        }
+    }
+
+    impl Turn {
+        fn step_fold(&mut self, through: usize) -> MessageId {
+            let marker = MessageId::new();
+            self.events.push(Event::MessageStarted {
+                session: self.session,
+                message: marker,
+                role: Role::System,
+                agent: None,
+                model: None,
+            });
+            self.events.push(Event::ContextCompacted {
+                session: self.session,
+                message: marker,
+                strategy: CompactionStrategy::LocalSummarizer,
+                from_message: self.assistant,
+                to_message: self.assistant,
+                folded_count: 1,
+                input_tokens_est: 100,
+                threshold: 75,
+                step_cut: Some(crate::StepCut {
+                    through_part: self.parts[through],
+                    kept_head: self.user,
+                }),
+            });
+            marker
+        }
+
+        fn fold(&self) -> Projection {
+            let envelopes: Vec<_> = self
+                .events
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(seq, event)| env(seq as u64 + 1, event))
+                .collect();
+            Projection::from_events(&envelopes)
+        }
+    }
+
+    #[test]
+    fn step_cut_keeps_the_turn_head_and_folds_leading_parts() {
+        let mut turn = single_turn(4);
+        let marker = turn.step_fold(1);
+        let projection = turn.fold();
+        let ids: Vec<MessageId> = projection.session.messages.iter().map(|m| m.id).collect();
+        assert_eq!(ids, vec![marker, turn.user, turn.notice, turn.assistant]);
+        let assistant = &projection.session.messages[3];
+        assert_eq!(
+            assistant.folded_parts, 2,
+            "parts through the cut are folded"
+        );
+        assert_eq!(assistant.parts.len(), 4, "the projection keeps every part");
+    }
+
+    #[test]
+    fn second_step_cut_moves_the_new_marker_before_the_head() {
+        let mut turn = single_turn(6);
+        let first = turn.step_fold(1);
+        let second = turn.step_fold(3);
+        let projection = turn.fold();
+        let ids: Vec<MessageId> = projection.session.messages.iter().map(|m| m.id).collect();
+        assert_eq!(
+            ids,
+            vec![first, second, turn.user, turn.notice, turn.assistant]
+        );
+        assert_eq!(projection.session.messages[4].folded_parts, 4);
+    }
+
+    #[test]
+    fn deleting_a_folded_part_keeps_the_kept_parts_kept() {
+        let mut turn = single_turn(4);
+        turn.step_fold(1);
+        turn.events.push(Event::PartDeleted {
+            session: turn.session,
+            message: turn.assistant,
+            part: turn.parts[0],
+        });
+        let projection = turn.fold();
+        let assistant = &projection.session.messages[3];
+        assert_eq!(assistant.folded_parts, 1);
+        assert_eq!(assistant.parts[1].id(), turn.parts[2], "first kept part");
     }
 }
 

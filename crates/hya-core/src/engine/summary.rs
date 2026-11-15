@@ -204,6 +204,7 @@ impl SessionEngine {
                 folded_count,
                 input_tokens_est,
                 threshold,
+                step_cut: None,
             });
         }
         self.emit_batch_for_actor(actor_claim, session, events)
