@@ -8,7 +8,6 @@ use hya_proto::{
 };
 use hya_provider::{
     CompletionRequest, EventStream, ProviderError, ProviderRouter, ReasoningEffort,
-    ReasoningReplayPolicy,
 };
 
 use crate::error::CoreError;
@@ -210,11 +209,10 @@ pub(crate) fn foldable_range(messages: &[Message], keep_recent: usize) -> Option
 ///
 /// Each rung's wire name matches oh-my-pi's `compaction.methodOrder` exactly:
 ///
-/// 1. [`SpillToolOutputs`] (`shake`) leaves stale reasoning out of the request
-///    first, then, if still over, moves output bodies out and leaves a handle
-///    behind. Every call and input survives, the body stays retrievable, and
-///    the stored session keeps the reasoning — the request is shaped, nothing
-///    is destroyed.
+/// 1. [`SpillToolOutputs`] (`shake`) moves output bodies out of the request and
+///    leaves a handle behind. Every call, input, and reasoning step survives
+///    and the body stays retrievable — nothing is destroyed, it costs a fetch
+///    to read.
 /// 2. [`ProviderCompact`] (`remote`) lets the route fold its own window,
 ///    keeping whatever internal fidelity it chooses.
 /// 3. [`Summarize`] (`soft`) folds the transcript prefix into a structured,
@@ -238,8 +236,7 @@ pub(crate) fn foldable_range(messages: &[Message], keep_recent: usize) -> Option
 /// [`Summarize`]: CompactionRung::Summarize
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CompactionRung {
-    /// Leave stale reasoning out of the request, then move stale tool-output
-    /// bodies to durable storage, leaving handles.
+    /// Move stale tool-output bodies to durable storage, leaving handles.
     SpillToolOutputs,
     /// Ask the route to fold its own context window.
     ProviderCompact,
@@ -395,7 +392,7 @@ fn stale_tool_outputs(messages: &[Message], keep_recent: usize) -> Vec<(usize, u
 }
 
 /// Runtime record of evicted parts: projected message/part id to the exact
-/// model-facing placeholder that replaced its tool output or reasoning text.
+/// model-facing placeholder that replaced its output.
 pub type StickyEvictions = std::collections::HashMap<(MessageId, PartId), String>;
 
 /// Evict stale tool outputs, reusing placeholders recorded in `sticky`.
@@ -467,101 +464,6 @@ pub fn evict_stale_tool_outputs_sticky(
     evicted
 }
 
-/// Replayed reasoning parts not yet left out that are stale: outside the last
-/// `keep_recent` messages or before the last `keep_recent` tool steps — the
-/// recency [`stale_tool_outputs`] uses, so the reasoning that led to a kept
-/// output stays with it. A tool step is a run of consecutive tool parts (one
-/// round's parallel calls), so the latest round's reasoning is always recent.
-fn stale_reasoning(
-    messages: &[Message],
-    keep_recent: usize,
-    policy: ReasoningReplayPolicy,
-) -> Vec<(usize, usize)> {
-    let turn_start = hya_provider::current_turn_start(messages);
-    let mut steps = 0;
-    let mut candidates = Vec::new();
-    for (message_index, message) in messages.iter().enumerate() {
-        let Message::Assistant { parts, .. } = message else {
-            continue;
-        };
-        let mut in_tool_run = false;
-        for (part_index, part) in parts.iter().enumerate() {
-            let is_tool = matches!(part, Part::Tool { .. });
-            if is_tool && !in_tool_run {
-                steps += 1;
-            }
-            in_tool_run = is_tool;
-            if policy.replays(turn_start, message_index, part) && !is_left_out(part) {
-                candidates.push((message_index, part_index, steps));
-            }
-        }
-    }
-    let message_cut = messages.len().saturating_sub(keep_recent);
-    candidates
-        .into_iter()
-        .filter(|(message_index, _, steps_before)| {
-            steps_before + keep_recent < steps || *message_index < message_cut
-        })
-        .map(|(message_index, part_index, _)| (message_index, part_index))
-        .collect()
-}
-
-/// Whether `part` is already in its [`left_out_reasoning`] form.
-fn is_left_out(part: &Part) -> bool {
-    matches!(part, Part::Reasoning { text, provider_data, .. }
-        if text.is_empty()
-            && (provider_data.is_none()
-                || ReasoningReplayPolicy::ReasoningContent.replays(None, 0, part)))
-}
-
-/// `part` as it stands once its reasoning is left out of the request: empty
-/// text, and no `provider_data` except a chat `reasoning_content` mark. There
-/// the reasoning is the text, and the mark keeps the (now empty) field that
-/// thinking-mode chat routes require on every assistant message; elsewhere
-/// `provider_data` is the reasoning itself (Responses items, signed thinking).
-/// The part stays so encoders keep splitting tool rounds where they did.
-fn left_out_reasoning(part: &Part) -> Part {
-    let Part::Reasoning {
-        id, provider_data, ..
-    } = part
-    else {
-        return part.clone();
-    };
-    Part::Reasoning {
-        id: *id,
-        text: String::new(),
-        provider_data: provider_data
-            .clone()
-            .filter(|_| ReasoningReplayPolicy::ReasoningContent.replays(None, 0, part)),
-    }
-}
-
-/// Leave stale reasoning out of the request, recording each part in `sticky`.
-///
-/// All stale reasoning goes in one pass: every eviction rewrites the cached
-/// prefix, so it should happen rarely. Returns how many parts were left out.
-pub fn evict_stale_reasoning_sticky(
-    messages: &mut [Message],
-    keep_recent: usize,
-    policy: ReasoningReplayPolicy,
-    sticky: &mut StickyEvictions,
-) -> u32 {
-    let mut evicted = 0;
-    for (message_index, part_index) in stale_reasoning(messages, keep_recent, policy) {
-        let Message::Assistant { id, parts, .. } = &mut messages[message_index] else {
-            continue;
-        };
-        let part = &mut parts[part_index];
-        let Part::Reasoning { id: part_id, .. } = part else {
-            continue;
-        };
-        sticky.insert((*id, *part_id), String::new());
-        *part = left_out_reasoning(part);
-        evicted += 1;
-    }
-    evicted
-}
-
 /// Re-apply the placeholders recorded in `sticky` without evicting anything
 /// new.
 ///
@@ -581,25 +483,32 @@ pub fn apply_sticky_evictions(messages: &mut [Message], sticky: &StickyEvictions
         };
         let message_id = *id;
         for part in parts.iter_mut() {
-            let (Part::Tool { id: part_id, .. } | Part::Reasoning { id: part_id, .. }) = part
+            let Part::Tool {
+                id: part_id, state, ..
+            } = part
             else {
                 continue;
             };
             let Some(notice) = sticky.get(&(message_id, *part_id)) else {
                 continue;
             };
-            match part {
-                Part::Tool {
-                    state: ToolPartState::Completed { output, .. },
-                    ..
-                } => *output = serde_json::Value::String(notice.clone()),
-                Part::Reasoning { .. } => *part = left_out_reasoning(part),
-                _ => continue,
-            }
+            let ToolPartState::Completed { input, time_ms, .. } = state else {
+                continue;
+            };
+            *state = ToolPartState::Completed {
+                input: input.clone(),
+                output: serde_json::Value::String(notice.clone()),
+                time_ms: *time_ms,
+            };
             applied += 1;
         }
     }
     applied
+}
+
+/// Whether at least one completed tool output is stale enough to spill.
+pub(crate) fn has_spillable_tool_output(messages: &[Message], keep_recent: usize) -> bool {
+    !stale_tool_outputs(messages, keep_recent).is_empty()
 }
 
 /// The anchored summary already present in `messages`, if any.
@@ -1424,185 +1333,6 @@ mod tests {
             evict_stale_tool_outputs_sticky(&mut msgs, 1, None, &mut StickyEvictions::default()),
             0,
             "a second pass has nothing left to evict"
-        );
-    }
-
-    fn reasoning(text: &str, provider_data: serde_json::Value) -> Part {
-        Part::Reasoning {
-            id: PartId::new(),
-            text: text.to_string(),
-            provider_data: Some(provider_data),
-        }
-    }
-
-    fn tool_step(step: usize) -> Part {
-        use hya_proto::{ToolCallId, ToolName};
-        Part::Tool {
-            id: PartId::new(),
-            call_id: ToolCallId::new(),
-            name: ToolName::new("find"),
-            state: ToolPartState::Completed {
-                input: serde_json::json!({ "step": step }),
-                output: serde_json::json!("ok"),
-                time_ms: 1,
-            },
-        }
-    }
-
-    /// The headless shape: one prompt, one assistant message holding every step.
-    fn single_turn(parts: Vec<Part>) -> Vec<Message> {
-        vec![
-            user("go"),
-            Message::Assistant {
-                id: MessageId::new(),
-                agent: hya_proto::AgentName::new("build"),
-                model: ModelRef::new("m"),
-                parts,
-                finish: None,
-                tokens: None,
-                last_round: None,
-            },
-        ]
-    }
-
-    fn reasoning_parts(messages: &[Message]) -> Vec<Part> {
-        let Message::Assistant { parts, .. } = &messages[1] else {
-            panic!("expected assistant");
-        };
-        parts
-            .iter()
-            .filter(|part| matches!(part, Part::Reasoning { .. }))
-            .cloned()
-            .collect()
-    }
-
-    /// Responses-style steps: the bulk of each step is its opaque reasoning item.
-    fn responses_steps(count: usize) -> Vec<Message> {
-        let parts = (0..count)
-            .flat_map(|step| {
-                [
-                    reasoning(
-                        "",
-                        serde_json::json!({
-                            "type": "reasoning",
-                            "encrypted_content": format!("step-{step} {}", "lorem ipsum ".repeat(500)),
-                        }),
-                    ),
-                    tool_step(step),
-                ]
-            })
-            .collect();
-        single_turn(parts)
-    }
-
-    #[test]
-    fn reasoning_eviction_leaves_out_old_steps_inside_one_assistant_message() {
-        let policy = ReasoningReplayPolicy::ProviderData;
-        let accounting = crate::tokens::TokenAccounting::default();
-        let original = responses_steps(4);
-        let mut messages = original.clone();
-        let mut sticky = StickyEvictions::default();
-        let before = accounting.estimate_with_reasoning_policy(&messages, policy);
-
-        assert_eq!(
-            evict_stale_reasoning_sticky(&mut messages, 2, policy, &mut sticky),
-            2
-        );
-        let after = accounting.estimate_with_reasoning_policy(&messages, policy);
-        assert!(
-            after < before * 6 / 10,
-            "two of four reasoning items left out: {before} -> {after}"
-        );
-        let kept = reasoning_parts(&messages);
-        let kept_original = reasoning_parts(&original);
-        for stale in &kept[..2] {
-            assert!(matches!(
-                stale,
-                Part::Reasoning { text, provider_data: None, .. } if text.is_empty()
-            ));
-        }
-        assert_eq!(kept[2..], kept_original[2..], "recent steps keep reasoning");
-
-        // A second pass neither re-adds nor re-counts, and re-applying the
-        // record to a rebuilt transcript gives the same request.
-        assert_eq!(
-            evict_stale_reasoning_sticky(&mut messages, 2, policy, &mut sticky),
-            0
-        );
-        assert_eq!(
-            accounting.estimate_with_reasoning_policy(&messages, policy),
-            after
-        );
-        let mut rebuilt = original;
-        assert_eq!(apply_sticky_evictions(&mut rebuilt, &sticky), 2);
-        assert_eq!(rebuilt, messages);
-    }
-
-    #[test]
-    fn reasoning_eviction_keeps_the_latest_round_with_parallel_calls() {
-        let thinking = |text: &str| {
-            reasoning(
-                text,
-                serde_json::json!({"type": "thinking", "signature": "sig"}),
-            )
-        };
-        let mut parts = vec![thinking("old"), tool_step(0), thinking("latest")];
-        parts.extend((1..5).map(tool_step));
-        let mut messages = single_turn(parts);
-
-        assert_eq!(
-            evict_stale_reasoning_sticky(
-                &mut messages,
-                1,
-                ReasoningReplayPolicy::SignedCurrentTurn,
-                &mut StickyEvictions::default()
-            ),
-            1
-        );
-        let kept = reasoning_parts(&messages);
-        assert!(matches!(&kept[0], Part::Reasoning { text, .. } if text.is_empty()));
-        assert!(matches!(&kept[1], Part::Reasoning { text, .. } if text == "latest"));
-    }
-
-    #[test]
-    fn reasoning_eviction_keeps_the_chat_reasoning_mark() {
-        let mark = serde_json::json!({"type": "reasoning_content"});
-        let mut messages = single_turn(vec![
-            reasoning("old thought", mark.clone()),
-            tool_step(0),
-            reasoning("new thought", mark.clone()),
-            tool_step(1),
-        ]);
-
-        assert_eq!(
-            evict_stale_reasoning_sticky(
-                &mut messages,
-                1,
-                ReasoningReplayPolicy::ReasoningContent,
-                &mut StickyEvictions::default()
-            ),
-            1
-        );
-        let kept = reasoning_parts(&messages);
-        assert!(matches!(
-            &kept[0],
-            Part::Reasoning { text, provider_data: Some(data), .. }
-                if text.is_empty() && *data == mark
-        ));
-        assert!(matches!(&kept[1], Part::Reasoning { text, .. } if text == "new thought"));
-    }
-
-    #[test]
-    fn reasoning_eviction_ignores_reasoning_the_route_does_not_replay() {
-        let mut messages = responses_steps(4);
-        assert_eq!(
-            evict_stale_reasoning_sticky(
-                &mut messages,
-                1,
-                ReasoningReplayPolicy::None,
-                &mut StickyEvictions::default()
-            ),
-            0
         );
     }
 
