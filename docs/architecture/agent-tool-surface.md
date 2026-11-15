@@ -609,10 +609,6 @@ Before each completion request, hya obtains canonical registry schemas and
 applies an advertisement-only filter:
 
 - Hashline `write` and `edit` are advertised to **every** model.
-- `invalid` is never advertised. There is no builtin implementation or special
-  malformed-call dispatch target in the current registry: unknown names produce
-  the existing `ToolError` (`unknown tool: <name>`), and malformed arguments keep
-  the target tool's input error.
 - `ask_user` and `plan_exit` are omitted when the engine's `InteractionPlane`
   has no question receiver (`InteractionPlane::is_available() -> bool` is false).
   In-process headless startup drops that receiver; the same engine and plane

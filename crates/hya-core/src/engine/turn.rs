@@ -45,7 +45,7 @@ use messages::{
 
 /// Human-answer tools cannot be useful once their host receiver is gone.
 pub(super) fn tool_available(name: &str, interaction_available: bool) -> bool {
-    name != "invalid" && (interaction_available || !["ask_user", "plan_exit"].contains(&name))
+    interaction_available || !["ask_user", "plan_exit"].contains(&name)
 }
 
 /// Range endpoints for a compaction that folded the entire input window.

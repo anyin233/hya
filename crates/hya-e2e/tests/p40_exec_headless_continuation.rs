@@ -329,7 +329,7 @@ async fn e8_spurious_summary_triggers_a_user_facing_completion() {
 async fn headless_tool_surface_preserves_unknown_and_malformed_call_errors() {
     let (env, output, _) = run_lead(
         vec![
-            tool_step("invalid", json!({"tool": "missing", "error": "bad call"})),
+            tool_step("no_such_tool", json!({})),
             tool_step("read", json!({})),
             text_step("FINAL_ANSWER"),
         ],
@@ -342,7 +342,7 @@ async fn headless_tool_surface_preserves_unknown_and_malformed_call_errors() {
         for tool in tools {
             let name = tool["function"]["name"].as_str().expect("tool name");
             assert!(
-                !["invalid", "ask_user", "plan_exit"].contains(&name),
+                !["ask_user", "plan_exit"].contains(&name),
                 "{name} was offered"
             );
         }
@@ -363,7 +363,7 @@ async fn headless_tool_surface_preserves_unknown_and_malformed_call_errors() {
         })
         .collect::<Vec<_>>();
     assert_eq!(errors.len(), 2, "{events:?}");
-    assert_eq!(errors[0].0, "unknown tool: invalid");
+    assert_eq!(errors[0].0, "unknown tool: no_such_tool");
     assert_eq!(
         errors[1].1.as_ref().expect("structured error")["error"]["type"],
         "input"

@@ -200,7 +200,6 @@ async fn runtime_only_offers_human_answer_tools_with_a_question_receiver() {
             .iter()
             .map(|tool| tool.name.as_str())
             .collect::<Vec<_>>();
-        assert!(!names.contains(&"invalid"));
         for name in ["ask_user", "plan_exit"] {
             assert_eq!(
                 names.contains(&name),
