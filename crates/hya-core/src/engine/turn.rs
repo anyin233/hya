@@ -1168,6 +1168,9 @@ impl SessionEngine {
 
     /// Re-read the transcript after a rung replaced it, and re-count it.
     ///
+    /// Outputs spilled earlier stay spilled: their placeholders are re-applied
+    /// before counting, as at the top of every round.
+    ///
     /// The count is estimated rather than measured on purpose. A provider's
     /// reported usage describes the prompt it was sent, and after compaction that
     /// prompt no longer exists; trusting the stale anchor would report the
@@ -1178,10 +1181,12 @@ impl SessionEngine {
         session: SessionId,
         agent: &AgentSpec,
         model: &ModelRef,
+        sticky: &crate::compaction::StickyEvictions,
     ) -> Result<(Vec<Message>, usize), CoreError> {
         let projection = self.store.read_projection_shared(session).await?;
         let attachments = self.attachment_data(session, &projection).await?;
-        let messages = projection_to_messages(agent, &projection, model, &attachments);
+        let mut messages = projection_to_messages(agent, &projection, model, &attachments);
+        crate::compaction::apply_sticky_evictions(&mut messages, sticky);
         let tokens = self.token_accounting.estimate(&messages);
         Ok((messages, tokens))
     }
@@ -1678,7 +1683,12 @@ impl SessionEngine {
                         )
                         .await?;
                         (messages, tokens) = self
-                            .reload_after_compaction(session, &live_agent, &model)
+                            .reload_after_compaction(
+                                session,
+                                &live_agent,
+                                &model,
+                                &sticky_evictions,
+                            )
                             .await?;
                         tokens = tokens.saturating_add(request_overhead);
                     }
@@ -1705,7 +1715,12 @@ impl SessionEngine {
                         )
                         .await?;
                         (messages, tokens) = self
-                            .reload_after_compaction(session, &live_agent, &model)
+                            .reload_after_compaction(
+                                session,
+                                &live_agent,
+                                &model,
+                                &sticky_evictions,
+                            )
                             .await?;
                         tokens = tokens.saturating_add(request_overhead);
                     }
@@ -1766,7 +1781,12 @@ impl SessionEngine {
                         )
                         .await?;
                         (messages, tokens) = self
-                            .reload_after_compaction(session, &live_agent, &model)
+                            .reload_after_compaction(
+                                session,
+                                &live_agent,
+                                &model,
+                                &sticky_evictions,
+                            )
                             .await?;
                         tokens = tokens.saturating_add(request_overhead);
                     }
@@ -1826,7 +1846,12 @@ impl SessionEngine {
                         )
                         .await?;
                         (messages, tokens) = self
-                            .reload_after_compaction(session, &live_agent, &model)
+                            .reload_after_compaction(
+                                session,
+                                &live_agent,
+                                &model,
+                                &sticky_evictions,
+                            )
                             .await?;
                         tokens = tokens.saturating_add(request_overhead);
                     }
