@@ -196,6 +196,12 @@ impl InteractionPlane {
         )
     }
 
+    /// Whether a host can still receive human questions.
+    #[must_use]
+    pub fn is_available(&self) -> bool {
+        !self.asks.is_closed()
+    }
+
     /// Scope subsequent asks to a session id.
     #[must_use]
     pub fn for_session(&self, session: SessionId) -> Self {
@@ -262,6 +268,17 @@ impl InteractionPlane {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn availability_follows_the_host_receiver() {
+        let (plane, receiver) = InteractionPlane::new();
+        let scoped = plane.for_session(SessionId::new());
+        assert!(plane.is_available());
+        assert!(scoped.is_available());
+        drop(receiver);
+        assert!(!plane.is_available());
+        assert!(!scoped.is_available());
+    }
 
     #[tokio::test]
     async fn ask_round_trips_free_text() {

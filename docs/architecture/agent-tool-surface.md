@@ -32,7 +32,7 @@ advertised.
 | File access | `read`, `write`, `edit`, `apply_patch` | Read or mutate workspace files. `read`, `write`, and `edit` are native coding tools; `apply_patch` remains the separate patch envelope. |
 | Local discovery | `ls`, `glob`, `find`, `grep`, `lsp` | List directories, match paths, search text, or query language servers. |
 | Commands | `bash` | Run a command with bounded capture; hidden runtime name `shell` is not advertised. |
-| Human/session interaction | `ask_user`, `todo__read`, `todo__update_status`, `todo__update_content`, `plan_exit`, `invalid` | Ask batched structured questions, read/update session todos, request a plan-mode transition, or represent invalid tool arguments. |
+| Human/session interaction | `ask_user`, `todo__read`, `todo__update_status`, `todo__update_content`, `plan_exit` | Ask batched structured questions, read/update session todos, request a plan-mode transition. |
 | Agents and teams | `skill`, `list_agents`, `task`, `workflow`, `search_agent`, `archive`, `wait` | Load skills, discover/spawn agents, execute governed Workflow commands, search archived subagents, stop-and-archive a subagent, and block until subagents finish (`wait` stays advertised at every depth). The orchestration plane is hidden at depth 2 ([ADR-0015](../adr/0015-unified-resident-subagent-lifecycle.md)). |
 | Project activity | `project_activity` | Read-only, Project-scoped view of recent sessions and newest changes per file; never exposes prompts, arguments, or contents. `busy`/`idle` is live state from this daemon. |
 | Communication | `send`, `list_channel`, `report` | Channel-plane communication: one channel-addressed send (the channel's nature picks DM vs broadcast, with archive revival), channel listing, and terminal reports ([ADR-0016](../adr/0016-channel-communication-plane.md)). |
@@ -609,6 +609,23 @@ Before each completion request, hya obtains canonical registry schemas and
 applies an advertisement-only filter:
 
 - Hashline `write` and `edit` are advertised to **every** model.
+- `invalid` is never advertised. There is no builtin implementation or special
+  malformed-call dispatch target in the current registry: unknown names produce
+  the existing `ToolError` (`unknown tool: <name>`), and malformed arguments keep
+  the target tool's input error.
+- `ask_user` and `plan_exit` are omitted when the engine's `InteractionPlane`
+  has no question receiver (`InteractionPlane::is_available() -> bool` is false).
+  In-process headless startup drops that receiver; the same engine and plane
+  serve its lead and subagents. Interactive server sessions retain both tools.
+  Filtering checks the resolved tool name, so resource-view aliases follow the
+  same rule. It runs before exclusive-tool descriptions are assembled and also
+  applies to nested-tool discovery. The bundled planning prompt asks for the
+  completed plan without naming an unavailable interaction tool; the offered
+  `plan_exit` schema describes interactive approval. Dispatch and permission
+  checks are unchanged.
+  No flag, config key, RPC, or tool argument changes: for example,
+  `hya exec "summarize this repo"` offers neither human-answer tool, while a
+  session attached through the TUI/server can still ask questions.
 - `apply_patch` is never advertised. It remains registered for hidden `patch`
   dispatch.
 - enabled `websearch` is advertised to every model provider.

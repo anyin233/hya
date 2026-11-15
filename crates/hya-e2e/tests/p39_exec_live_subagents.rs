@@ -188,6 +188,17 @@ async fn t2_38_exec_lead_collects_a_live_worker_before_the_run_ends() {
         String::from_utf8_lossy(&output.stderr),
         env.diagnostics()
     );
+    for route in [ROOT, WORKER] {
+        for request in env.fake.route_requests(route).unwrap().expect("route") {
+            for tool in request["tools"].as_array().expect("tool definitions") {
+                let name = tool["function"]["name"].as_str().expect("tool name");
+                assert!(
+                    !["invalid", "ask_user", "plan_exit"].contains(&name),
+                    "{route} offered {name}"
+                );
+            }
+        }
+    }
     // The worker was not stopped: it ran its whole script and reported.
     assert_eq!(env.fake.route_remaining(WORKER).unwrap(), Some(0));
     let requests = lead_requests(&env);
