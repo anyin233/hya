@@ -65,11 +65,11 @@ fn replacement_child() {
         json!({"implementation":"replacement", "input":{"nonce":42}})
     );
     // Loading before installation must still share the host's live cell.
-    hya_tool::deadline::install(std::time::Duration::from_secs(30));
+    hya_tool::deadline::install(std::time::Duration::from_secs(8));
     let result = runtime
         .block_on(tool.tool.execute(&ctx, json!({})))
         .unwrap();
-    assert_eq!(result["budgetSeconds"], 30);
+    assert_eq!(result["budgetSeconds"], 8);
     assert_eq!(result["cappedSeconds"], hya_tool::deadline::MIN_TOOL_SECS);
     // A second registry reuses the mapping without adopting the cell twice.
     let _ = ToolRegistry::from_tool_families(&["hya/todo-tools"]);
