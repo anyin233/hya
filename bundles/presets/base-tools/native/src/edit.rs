@@ -64,7 +64,7 @@ against the current file — re-read the file if an anchor is rejected as stale.
                                 {
                                     "type": "object",
                                     "additionalProperties": false,
-                                    "description": "Replace the line(s) at anchor \"pos\" (through optional \"end\", inclusive) with \"lines\". Anchors must be freshly read. Example: {\"op\":\"replace\",\"pos\":\"12#A1B2\",\"lines\":[\"new line\"]}. For exact literal-text substitution instead, use op \"replace_text\" with oldText/newText.",
+                                    "description": "Replace the line(s) at anchor \"pos\" (through optional \"end\", inclusive) with \"lines\". Anchors must be freshly read. Example: {\"op\":\"replace\",\"pos\":\"12#VK\",\"lines\":[\"new line\"]}. For exact literal-text substitution instead, use op \"replace_text\" with oldText/newText.",
                                     "properties": {
                                         "op": { "type": "string", "enum": ["replace"] },
                                         "pos": { "type": "string", "description": "Start anchor \"LINE#HASH\" from a prior read/grep/edit output." },
