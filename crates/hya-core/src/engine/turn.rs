@@ -1659,6 +1659,7 @@ impl SessionEngine {
                             body,
                             CompactionStrategy::Native,
                             folded,
+                            None,
                             input_tokens_est,
                             threshold,
                         )
@@ -1695,6 +1696,7 @@ impl SessionEngine {
                                 to.id(),
                                 u32::try_from(end - start).unwrap_or(u32::MAX),
                             )),
+                            None,
                             input_tokens_est,
                             threshold,
                         )
@@ -1752,6 +1754,7 @@ impl SessionEngine {
                             body,
                             CompactionStrategy::Handoff,
                             Some((plan.from_message, plan.to_message, plan.folded_count)),
+                            None,
                             input_tokens_est,
                             threshold,
                         )
@@ -1813,6 +1816,7 @@ impl SessionEngine {
                             body,
                             CompactionStrategy::LocalSummarizer,
                             Some((plan.from_message, plan.to_message, plan.folded_count)),
+                            None,
                             input_tokens_est,
                             threshold,
                         )
