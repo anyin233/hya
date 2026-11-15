@@ -100,6 +100,7 @@ fn catalog() -> Arc<AgentCatalog> {
         namespace: None,
         digest: "test-only".to_string(),
         agents: vec![PreparedAgent {
+            private: false,
             id: AgentName::new("nesting-agent"),
             description: None,
             role: AgentRole::Main,

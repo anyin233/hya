@@ -49,6 +49,8 @@ impl AgentOrigin<'_> {
 pub struct AgentDefinition<'a> {
     /// Stable agent id used for selection, spawn graphs, and session binding.
     pub stable_id: &'a str,
+    /// Whether ordinary built-in spawn and selector listings exclude this agent.
+    pub private: bool,
     /// Optional human description for selectors.
     pub description: Option<&'a str>,
     /// Main vs subagent selector role.
@@ -156,6 +158,7 @@ impl AgentCatalog {
         let (bundle_id, agent) = self.bundles.resolve_agent_entry(reference)?;
         Some(AgentDefinition {
             stable_id: agent.id.as_str(),
+            private: agent.private,
             description: agent.description.as_deref(),
             role: agent.role,
             color: agent.color.as_deref(),
@@ -200,6 +203,24 @@ impl AgentCatalog {
         caller: &str,
         requested: &str,
     ) -> Result<AgentDefinition<'_>, BundleError> {
+        let target = self.resolve_workflow_agent(caller, requested)?;
+        if target.private && matches!(self.spawn_scope_of(caller)?, CallerScope::Builtin(_)) {
+            return Err(BundleError::AgentSpawnNotAllowed {
+                caller: caller.to_string(),
+                agent_id: target.stable_id.to_string(),
+            });
+        }
+        Ok(target)
+    }
+
+    /// Authorise a workflow node or verifier, including private bundle agents.
+    /// Built-ins with ordinary scope may use any non-reserved target; bundle
+    /// callers still need an explicit `can_spawn` grant. Reserved callers cannot run agents.
+    pub fn resolve_workflow_agent(
+        &self,
+        caller: &str,
+        requested: &str,
+    ) -> Result<AgentDefinition<'_>, BundleError> {
         let scope = self.spawn_scope_of(caller)?;
         let target = self.require(requested)?;
         let allowed = match scope {
@@ -224,39 +245,14 @@ impl AgentCatalog {
         self.all_ordinary()
     }
 
-    /// Every agent in the catalog, including the reserved system agents.
-    ///
-    /// Reserved agents are never selectable or spawnable; listings that must
-    /// still show them (the Compat agent metadata surface marks them `hidden`)
-    /// use this instead of [`Self::selectable`].
+    /// Every agent, including private bundle agents and reserved system agents.
+    /// Metadata surfaces use this list and mark private/reserved entries hidden.
     #[must_use]
     pub fn all(&self) -> Vec<AgentDefinition<'_>> {
-        let mut agents = self.all_ordinary();
-        for agent in self
-            .preset
-            .agents()
-            .iter()
-            .filter(|agent| self.preset.is_reserved(agent.id.as_str()))
-        {
-            agents.push(preset_definition(agent));
-        }
-        agents.sort_by(|left, right| left.stable_id.cmp(right.stable_id));
-        agents
-    }
-
-    /// Whether `id` is a reserved system agent that no ordinary agent may spawn.
-    #[must_use]
-    pub fn is_reserved(&self, id: &str) -> bool {
-        self.preset.is_reserved(id)
-    }
-
-    /// Non-reserved built-ins followed by every installed bundle agent.
-    fn all_ordinary(&self) -> Vec<AgentDefinition<'_>> {
         let mut agents = self
             .preset
             .agents()
             .iter()
-            .filter(|agent| !self.preset.is_reserved(agent.id.as_str()))
             .map(preset_definition)
             .collect::<Vec<_>>();
         for bundle in self.bundles.bundles() {
@@ -268,6 +264,20 @@ impl AgentCatalog {
         }
         agents.sort_by(|left, right| left.stable_id.cmp(right.stable_id));
         agents
+    }
+
+    /// Whether `id` is a reserved system agent that no ordinary agent may spawn.
+    #[must_use]
+    pub fn is_reserved(&self, id: &str) -> bool {
+        self.preset.is_reserved(id)
+    }
+
+    /// Non-reserved built-ins and public installed bundle agents.
+    fn all_ordinary(&self) -> Vec<AgentDefinition<'_>> {
+        self.all()
+            .into_iter()
+            .filter(|agent| !agent.private && !self.is_reserved(agent.stable_id))
+            .collect()
     }
 
     fn spawn_scope_of(&self, caller: &str) -> Result<CallerScope<'_>, BundleError> {
@@ -317,6 +327,7 @@ enum CallerScope<'a> {
 fn preset_definition(agent: &hya_bundle::PreparedAgent) -> AgentDefinition<'_> {
     AgentDefinition {
         stable_id: agent.id.as_str(),
+        private: agent.private,
         description: agent.description.as_deref(),
         role: agent.role,
         color: agent.color.as_deref(),

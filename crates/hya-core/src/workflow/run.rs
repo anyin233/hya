@@ -189,7 +189,7 @@ fn resolve_agent(
 ) -> Result<ResolvedAgent, WorkflowError> {
     let definition = ctx
         .binding
-        .resolve_spawn(&ctx.caller, agent_id)
+        .resolve_workflow_agent(&ctx.caller, agent_id)
         .map_err(|error| WorkflowError::Unauthorized {
             caller: ctx.caller.clone(),
             agent_id: agent_id.to_string(),

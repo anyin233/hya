@@ -2837,6 +2837,7 @@ for line in sys.stdin:
         );
 
         let agent = PreparedAgent {
+            private: false,
             id: AgentName::new("static-agent"),
             description: None,
             role: AgentRole::Main,

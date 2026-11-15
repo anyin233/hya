@@ -205,6 +205,7 @@ fn prepared_bundles(agents: &[AgentFixture]) -> Vec<Bundle> {
                 })
                 .unwrap_or_default(),
             agents: vec![PreparedAgent {
+            private: false,
             id: AgentName::new(agent.stable_id),
             description: agent.description.map(str::to_string),
             role: agent.role,
