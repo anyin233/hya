@@ -116,6 +116,8 @@ enum Narration {
     MalformedToolMarkup(String),
     /// Internal compaction prose escaped as the final answer.
     SpuriousSummary,
+    /// No text and no tool call: nothing was delivered.
+    Empty,
 }
 
 impl<'a> Pending<'a> {
@@ -187,6 +189,9 @@ impl<'a> Pending<'a> {
             )),
             Some(Narration::SpuriousSummary) => notice.push_str(
                 "Your last message emitted an internal <summary> block instead of executing the next step or delivering a user-facing completion report.\n  → Continue any remaining work with a tool call, or deliver your normal final answer.\n",
+            ),
+            Some(Narration::Empty) => notice.push_str(
+                "Your last response was empty: no text and no tool call.\n  → Continue the remaining work with a tool call, or deliver your final answer.\n",
             ),
             None => {}
         }
@@ -260,6 +265,9 @@ fn narration(projection: &Projection, finish: FinishReason) -> Option<Narration>
         return Some(Narration::Truncated);
     }
     let text = final_step_text(projection)?;
+    if text.trim().is_empty() {
+        return Some(Narration::Empty);
+    }
     if let Some(marker) = malformed_tool_markup(&text) {
         return Some(Narration::MalformedToolMarkup(marker));
     }
@@ -1082,6 +1090,21 @@ mod tests {
         assert!(!announces_next_step("Done.\n\n---"));
     }
 
+    /// A provider can end a step with one token and no content (seen as
+    /// `finish=stop`, 1 output token): that is not a delivery.
+    #[test]
+    fn u13_an_empty_last_step_is_not_a_final_answer() {
+        for parts in [vec![], vec![text("")], vec![text(" \n")]] {
+            let projection = with_messages(vec![message(Role::Assistant, parts)]);
+            assert_eq!(
+                narration(&projection, FinishReason::Stop),
+                Some(Narration::Empty)
+            );
+        }
+        let answered = with_messages(vec![message(Role::Assistant, vec![text("Done.")])]);
+        assert_eq!(narration(&answered, FinishReason::Stop), None);
+    }
+
     #[test]
     fn u12_spurious_compaction_summary_is_caught() {
         let projection = with_messages(vec![message(
@@ -1247,7 +1270,10 @@ mod tests {
                 provider_data: None,
             });
         assert_eq!(final_step_text(&projection).as_deref(), Some(""));
-        assert_eq!(narration(&projection, FinishReason::Stop), None);
+        assert_eq!(
+            narration(&projection, FinishReason::Stop),
+            Some(Narration::Empty)
+        );
     }
 
     #[test]
