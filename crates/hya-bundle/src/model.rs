@@ -135,6 +135,9 @@ pub struct PreparedAgent {
     pub resource_view: ResourceView,
     /// Stable agent ids this agent is allowed to spawn.
     pub can_spawn: Vec<AgentName>,
+    /// Excluded from ordinary selection and spawn; workflows and explicit grants may use it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private: bool,
     /// Non-empty allowlist of model-facing tool names; dispatch remains unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub advertise: Vec<String>,

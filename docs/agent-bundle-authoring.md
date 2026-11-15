@@ -607,6 +607,7 @@ line per mode.
 | `resource_view` | no | `allow`, `deny`, `aliases`, `namespace` (see below). |
 | `advertise` | no | `string[]`, default `[]`: a non-empty list limits model-facing tool schemas to the listed names in the compiled view. It does not remove executable tools. Unknown names fail view compilation with an error naming the agent and tool. |
 | `handoff` | no | `model` (default) or `deterministic`: who writes the terminal handoff when this agent ends an episode with an accepted `report`. Any other value fails prepare. See below. |
+| `private` | no | Boolean, default `false`. `true` excludes the agent from ordinary built-in spawn rosters and selectors. Workflows and bundle agents with an explicit `can_spawn` grant may still use it. |
 | `can_spawn` | no | Allowlist of stable agent ids this agent may spawn. Targets are **not** resolved at prepare time — a bundle may name an agent from a bundle that is not installed yet. |
 | `hook_refs` | no | Bundle-local hook resource references only (not `harness:hook/*`). |
 
@@ -830,11 +831,31 @@ agents:
 
 `stable_id` is the public `AgentName`; preserve its bytes for events, projection, replay, fork, and resume. `local_id` is not a replacement public identity.
 
-- `role: main` is selectable in a client's direct selector.
+- `role: main` is selectable in a client's direct selector unless `private: true`.
 - `role: subagent` is hidden from direct client selection.
 - `role` controls selector visibility only. Agent-facing roster and ordinary spawn derive from the caller's `can_spawn` reachability, never from `role`.
 - Every spawned agent is a resident actor, whatever its `role`; there is no per-agent lifecycle choice.
 - Empty or omitted `subagent_type` on the `task` tool normalizes to `hya-task` before authorization.
+
+### Private workflow agents
+
+Declare `private: true` when an agent's prompt assumes a Workflow node or
+verifier contract. For example:
+
+```yaml
+agents:
+  - { id: guide, role: main, can_spawn: [verifier] }
+  - { id: verifier, role: subagent, private: true }
+```
+
+Built-ins such as `hya-main` cannot `task` the `verifier`, including through a
+bundle-qualified reference, and do not see it in `list_agents` or selectors.
+The `guide` may spawn it through its explicit grant. A Workflow launched by an
+ordinary built-in may use it as a node or verifier. Bundle callers still need
+`can_spawn` for every Workflow agent; reserved system callers cannot run them.
+The complete catalog retains private agents, with `hidden: true` in agent model
+metadata. Prepared agents preserve the boolean; omitted and explicit `false`
+produce the same public-agent representation.
 
 ### `can_spawn` enforcement
 
@@ -992,7 +1013,7 @@ They differ from bundle agents in three ways:
 - Their ids are reserved: installing a bundle whose agent claims one is rejected
   at install with `BUNDLE_AGENT_ID_RESERVED`.
 - Ordinary built-ins can spawn ordinary catalog agents, so installing a bundle
-  makes its agent spawnable immediately, with no edit to a built-in's
+  makes its public agents spawnable immediately, with no edit to a built-in's
   `can_spawn`; `hya-scout` cannot call `task` because its view denies it. The
   reserved system agents `hya-compaction`, `hya-summary`, and `hya-title` are never
   selectable and never an ordinary spawn target.

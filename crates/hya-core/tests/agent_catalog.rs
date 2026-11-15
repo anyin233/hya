@@ -27,6 +27,7 @@ fn installed(bundle_id: &str, agent_id: &str, can_spawn: &[&str]) -> Bundle {
         namespace: None,
         digest: format!("digest-{bundle_id}"),
         agents: vec![PreparedAgent {
+            private: false,
             id: AgentName::new(agent_id),
             description: Some(format!("{agent_id} description")),
             role: AgentRole::Subagent,
@@ -343,4 +344,115 @@ fn core_agents_preset_is_the_runtime_loaded_first_party_bundle() {
     let catalog = hya_bundle::first_party_bundle("hya/core-agents").expect("load core-agents");
     assert!(std::ptr::eq(preset.prepared_bytes(), catalog.bytes()));
     assert_eq!(preset.digest(), catalog.digest());
+}
+
+#[test]
+fn private_agents_require_workflow_or_explicit_spawn_authorization() {
+    let mut helper = installed("acme/helper", "acme-helper", &[]);
+    helper.agents[0].private = true;
+    let catalog = catalog(&[
+        helper,
+        installed("acme/lead", "acme-lead", &["acme-helper"]),
+        installed("acme/other", "acme-other", &[]),
+    ]);
+    for builtin in [
+        "hya-main",
+        "hya-task",
+        "bundle:hya/core-agents/agent/hya-main",
+    ] {
+        assert!(
+            !catalog
+                .spawnable(builtin)
+                .unwrap()
+                .iter()
+                .any(|a| a.stable_id == "acme-helper")
+        );
+        for reference in ["acme-helper", "bundle:acme/helper/agent/acme-helper"] {
+            assert!(matches!(
+                catalog.resolve_spawn(builtin, reference),
+                Err(BundleError::AgentSpawnNotAllowed { .. })
+            ));
+            assert!(
+                catalog
+                    .resolve_workflow_agent(builtin, reference)
+                    .unwrap()
+                    .private
+            );
+        }
+    }
+    assert!(
+        !catalog
+            .selectable()
+            .iter()
+            .any(|a| a.stable_id == "acme-helper")
+    );
+    assert!(
+        catalog
+            .all()
+            .iter()
+            .any(|a| a.stable_id == "acme-helper" && a.private)
+    );
+    assert_eq!(
+        catalog.spawnable("acme-lead").unwrap()[0].stable_id,
+        "acme-helper"
+    );
+    assert!(catalog.resolve_spawn("acme-lead", "acme-helper").is_ok());
+    assert!(
+        catalog
+            .resolve_workflow_agent("acme-lead", "acme-helper")
+            .is_ok()
+    );
+    assert!(matches!(
+        catalog.resolve_workflow_agent("acme-other", "acme-helper"),
+        Err(BundleError::AgentSpawnNotAllowed { .. })
+    ));
+    for reserved in ["hya-title", "hya-summary", "hya-compaction"] {
+        assert!(matches!(
+            catalog.resolve_workflow_agent(reserved, "acme-helper"),
+            Err(BundleError::AgentSpawnNotAllowed { .. })
+        ));
+        assert!(matches!(
+            catalog.resolve_workflow_agent("hya-main", reserved),
+            Err(BundleError::AgentSpawnNotAllowed { .. })
+        ));
+    }
+    assert!(matches!(
+        catalog.resolve_workflow_agent("hya-main", "missing"),
+        Err(BundleError::UnknownAgentId { .. })
+    ));
+    assert!(matches!(
+        catalog.resolve_workflow_agent("missing", "acme-helper"),
+        Err(BundleError::UnknownAgentId { .. })
+    ));
+}
+
+#[test]
+fn first_party_workflow_agents_are_private() {
+    for bundle_id in ["hya/goal-loop", "hya/plan-impl-review"] {
+        let prepared = hya_bundle::first_party_bundle(bundle_id).unwrap();
+        let bundles = BundleCatalog::from_verified_catalogs(&[prepared]).unwrap();
+        let catalog = AgentCatalog::new(Arc::new(bundles)).unwrap();
+        let agents = prepared.bundles()[0].agents();
+        assert!(!agents.is_empty());
+        for agent in agents {
+            assert!(agent.private, "{} must be workflow-private", agent.id);
+            assert!(
+                catalog
+                    .resolve_spawn("hya-main", agent.id.as_str())
+                    .is_err()
+            );
+            assert!(
+                catalog
+                    .resolve_workflow_agent("hya-main", agent.id.as_str())
+                    .is_ok()
+            );
+        }
+        if bundle_id == "hya/goal-loop" {
+            assert!(
+                catalog
+                    .resolve_spawn("hya-goal-guide", "hya-goal-verifier")
+                    .is_ok()
+            );
+        }
+    }
 }

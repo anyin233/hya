@@ -2182,6 +2182,7 @@ fn prepare_agent(
         workdir: source.workdir,
         resource_view: source.resource_view,
         can_spawn: source.can_spawn.into_iter().map(AgentName::new).collect(),
+        private: source.private,
         hook_refs: source.hook_refs,
         advertise,
         handoff: source.handoff,

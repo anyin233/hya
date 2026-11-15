@@ -26,6 +26,11 @@
 
 ## Bundle and plugin interfaces
 
+- Bundle agents may declare `private: true` to stay out of ordinary spawn
+  rosters and selectors while remaining usable by Workflows and explicit
+  `can_spawn` grants. The first-party goal and plan/implement/review agents
+  are private; complete agent metadata marks them hidden.
+
 - Bundle tools can call the other tools of their agent's view: host
   capabilities `tools.list` and `tool.call` (new error code `-32003`), backed
   by `ToolCtx::nested`. A nested call is authorized like a model call and its

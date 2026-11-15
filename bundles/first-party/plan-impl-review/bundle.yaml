@@ -9,11 +9,14 @@ workflow:
   path: workflows/plan-impl-review.hya.md
 agents:
   - id: hya-pir-planner
+    private: true
     role: subagent
     prompt: prompts/planner.md
   - id: hya-pir-implementer
+    private: true
     role: subagent
     prompt: prompts/implementer.md
   - id: hya-pir-reviewer
+    private: true
     role: subagent
     prompt: prompts/reviewer.md
