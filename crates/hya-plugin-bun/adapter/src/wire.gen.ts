@@ -531,6 +531,7 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly folded_count: number
   readonly input_tokens_est: number
   readonly threshold: number
+  readonly step_cut?: StepCut | null
 }) |
 ({ readonly type: "session_forked" } & {
   readonly session: SessionId
@@ -828,6 +829,11 @@ export type SessionKind = ("project") |
 
 export type SessionLifecycleParams = {
   readonly session: SessionId
+}
+
+export type StepCut = {
+  readonly through_part: PartId
+  readonly kept_head: MessageId
 }
 
 export type SubagentMode = ("transient") |
@@ -1217,7 +1223,7 @@ export function isEvent(value: unknown): value is Event {
     (isRecord(value) && value["type"] === "agent_archived" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("handle" in value && typeof value["handle"] === "string") && ("child" in value && isSessionId(value["child"])) && ("reason" in value && isArchiveReason(value["reason"]))) ||
     (isRecord(value) && value["type"] === "mail_consumed" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("handle" in value && typeof value["handle"] === "string") && ("through" in value && (typeof value["through"] === "number" && Number.isInteger(value["through"]) && value["through"] >= 0))) ||
     (isRecord(value) && value["type"] === "agent_restarted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("handle" in value && typeof value["handle"] === "string") && ("child" in value && isSessionId(value["child"])) && ("epoch" in value && isActorEpoch(value["epoch"]))) ||
-    (isRecord(value) && value["type"] === "context_compacted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("strategy" in value && isCompactionStrategy(value["strategy"])) && ("from_message" in value && isMessageId(value["from_message"])) && ("to_message" in value && isMessageId(value["to_message"])) && ("folded_count" in value && (typeof value["folded_count"] === "number" && Number.isInteger(value["folded_count"]) && value["folded_count"] >= 0)) && ("input_tokens_est" in value && (typeof value["input_tokens_est"] === "number" && Number.isInteger(value["input_tokens_est"]) && value["input_tokens_est"] >= 0)) && ("threshold" in value && (typeof value["threshold"] === "number" && Number.isInteger(value["threshold"]) && value["threshold"] >= 0))) ||
+    (isRecord(value) && value["type"] === "context_compacted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("strategy" in value && isCompactionStrategy(value["strategy"])) && ("from_message" in value && isMessageId(value["from_message"])) && ("to_message" in value && isMessageId(value["to_message"])) && ("folded_count" in value && (typeof value["folded_count"] === "number" && Number.isInteger(value["folded_count"]) && value["folded_count"] >= 0)) && ("input_tokens_est" in value && (typeof value["input_tokens_est"] === "number" && Number.isInteger(value["input_tokens_est"]) && value["input_tokens_est"] >= 0)) && ("threshold" in value && (typeof value["threshold"] === "number" && Number.isInteger(value["threshold"]) && value["threshold"] >= 0)) && (value["step_cut"] === undefined || (value["step_cut"] === null || isStepCut(value["step_cut"])))) ||
     (isRecord(value) && value["type"] === "session_forked" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("source" in value && isSessionId(value["source"])) && (value["before_message"] === undefined || (value["before_message"] === null || isMessageId(value["before_message"])))) ||
     (isRecord(value) && value["type"] === "context_evicted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("evicted_parts" in value && (typeof value["evicted_parts"] === "number" && Number.isInteger(value["evicted_parts"]) && value["evicted_parts"] >= 0)) && ("tokens_before" in value && (typeof value["tokens_before"] === "number" && Number.isInteger(value["tokens_before"]) && value["tokens_before"] >= 0)) && ("tokens_after" in value && (typeof value["tokens_after"] === "number" && Number.isInteger(value["tokens_after"]) && value["tokens_after"] >= 0)) && ("threshold" in value && (typeof value["threshold"] === "number" && Number.isInteger(value["threshold"]) && value["threshold"] >= 0))) ||
     (isRecord(value) && value["type"] === "context_status" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("tokens" in value && (typeof value["tokens"] === "number" && Number.isInteger(value["tokens"]) && value["tokens"] >= 0)) && ("source" in value && isTokenSource(value["source"])) && ("mode" in value && isTokenAccountingMode(value["mode"])) && ("threshold" in value && (typeof value["threshold"] === "number" && Number.isInteger(value["threshold"]) && value["threshold"] >= 0))) ||
@@ -1432,6 +1438,10 @@ export function isSessionKind(value: unknown): value is SessionKind {
 
 export function isSessionLifecycleParams(value: unknown): value is SessionLifecycleParams {
   return isRecord(value) && ("session" in value && isSessionId(value["session"]))
+}
+
+export function isStepCut(value: unknown): value is StepCut {
+  return isRecord(value) && ("through_part" in value && isPartId(value["through_part"])) && ("kept_head" in value && isMessageId(value["kept_head"]))
 }
 
 export function isSubagentMode(value: unknown): value is SubagentMode {
