@@ -382,6 +382,34 @@ fn error_diagnostics(path: &Path, message: &str) -> Value {
     })
 }
 
+/// A model copies the schema's example anchors: each must be one the tool accepts.
+#[test]
+fn edit_schema_example_anchors_have_the_runtime_hash_shape() {
+    let schema = ToolRegistry::builtins().get("edit").unwrap().schema();
+    let text = format!("{} {}", schema.description, schema.input_schema);
+    let mut examples = 0;
+    for (index, _) in text.match_indices('#') {
+        let line_digits = text[..index]
+            .chars()
+            .rev()
+            .take_while(char::is_ascii_digit)
+            .count();
+        if line_digits == 0 {
+            continue;
+        }
+        let hash: String = text[index + 1..]
+            .chars()
+            .take_while(char::is_ascii_alphanumeric)
+            .collect();
+        examples += 1;
+        assert!(
+            hash.len() == 2 && hash.chars().all(|c| "ZPMQVRWSNKTXJBYH".contains(c)),
+            "example anchor hash {hash:?} is not a two-character runtime hash"
+        );
+    }
+    assert!(examples > 0, "the schema shows no example anchor");
+}
+
 #[test]
 fn edit_schema_exposes_only_closed_hashline_operations() {
     // Given
