@@ -681,7 +681,10 @@ details are observed.
 ### File kinds and text output
 
 Read dispatches directories, supported media, and text. PNG, JPEG, GIF, WebP,
-and PDF files return bounded base64 data-URL attachments. Unsupported binary
+and PDF files return base64 data-URL attachments. An image whose attachment
+would exceed the 2 MiB attachment budget of the result cap (a file over about
+1.5 MiB) is not attached; the output says it is larger than the limit and that
+a downscaled or cropped copy can be read instead. Unsupported binary
 files return a typed error. Directory reads list immediate children, put
 directories first, sort each group lexically, and use one-based offset paging.
 

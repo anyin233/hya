@@ -2,7 +2,7 @@ use hya_proto::{Message, MessageId, Part, SessionId};
 use serde_json::{Value, json};
 
 use crate::media::anthropic_image_source;
-use crate::wire::{tool_input, tool_result};
+use crate::wire::{ToolImages, tool_input, tool_result};
 use crate::{CompletionRequest, Decoder, Protocol, ProviderError, ReasoningEffort};
 
 mod decoder;
@@ -69,6 +69,7 @@ impl Protocol for AnthropicMessagesProtocol {
         output_limit: Option<u32>,
         images: bool,
     ) -> Result<Value, ProviderError> {
+        let images = ToolImages::new(&req.messages, images);
         let mut messages: Vec<Value> = Vec::new();
         let last_message = req.messages.len().checked_sub(1);
         let turn_start = crate::current_turn_start(&req.messages);
@@ -83,7 +84,7 @@ impl Protocol for AnthropicMessagesProtocol {
                     message_index,
                     parts,
                     Some(message_index) == last_message,
-                    images,
+                    &images,
                 )?,
                 // Mid-conversation system text is where compaction summaries
                 // live. The Messages API has no system role inside `messages`,
@@ -223,7 +224,7 @@ fn emit_assistant(
     message_index: usize,
     parts: &[Part],
     is_final_message: bool,
-    images: bool,
+    images: &ToolImages<'_>,
 ) -> Result<(), ProviderError> {
     let mut clusters: Vec<(Vec<Value>, String, Vec<&Part>)> = Vec::new();
     for parts in crate::wire::assistant_clusters(parts, |_| true) {
@@ -311,7 +312,7 @@ fn flush_cluster(
     reasoning: &[Value],
     text: &str,
     tools: &[&Part],
-    images: bool,
+    images: &ToolImages<'_>,
 ) -> Result<(), ProviderError> {
     let mut content = reasoning.to_vec();
     if !text.is_empty() {
@@ -332,10 +333,13 @@ fn flush_cluster(
     push_coalesced(out, "assistant", Value::Array(content));
     let mut results = Vec::new();
     for &p in tools {
-        let Part::Tool { call_id, state, .. } = p else {
+        let Part::Tool {
+            id, call_id, state, ..
+        } = p
+        else {
             continue;
         };
-        let result = tool_result(state, images);
+        let result = tool_result(id, state, images);
         let is_error = result.is_error;
         results.push(json!({
             "type": "tool_result",

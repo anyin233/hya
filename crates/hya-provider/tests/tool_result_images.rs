@@ -191,3 +191,81 @@ fn a_model_without_image_input_is_told_the_image_is_not_shown() {
     assert_eq!(OpenAiResponsesProtocol.encode(&first).unwrap(), responses);
     assert_eq!(OpenAiChatProtocol.encode(&first).unwrap(), chat);
 }
+
+/// A request carries at most 16 MiB of tool-result image data: the newest
+/// images go, each older one is told it is no longer attached.
+#[test]
+fn the_newest_images_fill_the_request_budget_and_older_ones_become_text() {
+    // A valid PNG data URL of about 6 MiB; three of them exceed the budget.
+    let big = format!(
+        "data:image/png;base64,iVBORw0KGgoA{}",
+        "A".repeat(6 * 1024 * 1024)
+    );
+    let read = |n: usize| {
+        tool(
+            "read",
+            json!({
+                "title": format!("page{n}.png"),
+                "output": format!("Image file page{n}."),
+                "metadata": {},
+                "attachments": [{"type": "file", "mime": "image/png", "url": big}],
+            }),
+        )
+    };
+    let request = |pages: &[usize]| {
+        let mut messages = vec![Message::User {
+            id: MessageId::new(),
+            parts: vec![Part::Text {
+                id: PartId::new(),
+                text: "read the pages".to_string(),
+            }],
+        }];
+        for &n in pages {
+            messages.push(Message::Assistant {
+                id: MessageId::new(),
+                agent: AgentName::new("build"),
+                model: ModelRef::new("m"),
+                parts: vec![read(n)],
+                finish: None,
+                tokens: None,
+                last_round: None,
+            });
+        }
+        CompletionRequest {
+            model: ModelRef::new("m"),
+            system: None,
+            messages,
+            tools: Vec::new(),
+            temperature: None,
+            max_output_tokens: None,
+            reasoning: None,
+            headers: Default::default(),
+        }
+    };
+    let protocols: [&dyn Protocol; 3] = [
+        &AnthropicMessagesProtocol,
+        &OpenAiResponsesProtocol,
+        &OpenAiChatProtocol,
+    ];
+    for protocol in protocols {
+        let encode = |pages: &[usize]| {
+            protocol
+                .encode_for_model(&request(pages), None, true)
+                .unwrap()
+                .to_string()
+        };
+        let sent = |body: &str| body.matches("iVBORw0KGgoA").count();
+        let aged = "[The image attached to this result (image/png) is no longer attached";
+
+        // Under the budget: every image goes.
+        let two = encode(&[2, 3]);
+        assert_eq!(sent(&two), 2);
+        assert!(!two.contains(aged));
+
+        // Over it: the two newest go, the oldest becomes text.
+        let three = encode(&[1, 2, 3]);
+        assert_eq!(sent(&three), 2);
+        assert_eq!(three.matches(aged).count(), 1);
+        assert!(three.contains(&format!("Image file page1.\\n\\n{aged}")));
+    }
+}
