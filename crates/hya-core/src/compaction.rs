@@ -210,6 +210,7 @@ pub(crate) struct FoldCut {
 /// but the newest `keep_steps` steps (fewer while the kept turn is over half
 /// the threshold, never fewer than one). A step is cut whole, reasoning, calls
 /// and results together, so every kept step goes out exactly as stored.
+/// Calls no reasoning leads may be cut apart.
 ///
 /// `count` estimates a transcript as the route will be sent it.
 pub(crate) fn fold_cut(
@@ -269,13 +270,21 @@ fn step_fold(
         return None;
     };
     // A step starts where a non-tool part follows the previous step's tool
-    // calls; cutting only there keeps reasoning with the calls it led to and
-    // every call with its result.
-    let step_starts: Vec<usize> = (1..parts.len())
-        .filter(|&at| {
-            matches!(parts[at - 1], Part::Tool { .. }) && !matches!(parts[at], Part::Tool { .. })
-        })
-        .collect();
+    // calls. Between two calls a cut is also safe when no reasoning leads
+    // them (a model that calls tools without thinking aloud); a call led by
+    // reasoning stays with it. Every call keeps its result: a tool part holds
+    // both.
+    let mut step_starts = Vec::new();
+    let mut led_by_reasoning = false;
+    for at in 1..parts.len() {
+        let after_call = matches!(parts[at - 1], Part::Tool { .. });
+        if !after_call {
+            led_by_reasoning = matches!(parts[at - 1], Part::Reasoning { .. });
+        }
+        if after_call && (!matches!(parts[at], Part::Tool { .. }) || !led_by_reasoning) {
+            step_starts.push(at);
+        }
+    }
     // The turn's head: the prompt and notices right before the message.
     let head = messages[start..last]
         .iter()
@@ -2008,6 +2017,36 @@ mod tests {
             assert_eq!(fold.folded[0], msgs[0]);
             assert_eq!(parts_of(&fold.folded[1]), &parts[..cut]);
         }
+    }
+
+    /// A model that calls tools without reasoning or text between them still
+    /// has steps to fold; calls led by reasoning are never cut from it.
+    #[test]
+    fn tool_calls_without_reasoning_are_steps_of_their_own() {
+        let calls = vec![
+            user("go"),
+            assistant((0..3).map(|n| tool_step(&n.to_string())).collect()),
+        ];
+        let parts = parts_of(&calls[1]);
+        let fold = fold_cut(&calls, 2, 1, usize::MAX, &estimate).expect("fold");
+        assert_eq!(
+            fold.step_cut.map(|cut| cut.through_part),
+            Some(part_id(&parts[1]))
+        );
+
+        let led = vec![
+            user("go"),
+            assistant(vec![
+                reasoning("r"),
+                tool_step("a"),
+                tool_step("b"),
+                tool_step("c"),
+            ]),
+        ];
+        assert!(
+            fold_cut(&led, 2, 1, usize::MAX, &estimate).is_none(),
+            "calls led by reasoning are one step"
+        );
     }
 
     #[test]
