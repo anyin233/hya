@@ -17,7 +17,7 @@ emits. Thresholds and token accounting are configured alongside; see
 
 | Name (oh-my-pi) | What it does | Model call | Wire strategy |
 | --- | --- | --- | --- |
-| `shake` | Moves stale completed tool-output bodies to durable storage (`artifact://` handles), leaving the calls, inputs, and reasoning in place. Lossless: the body stays retrievable by reading the handle. | no | `ContextEvicted` |
+| `shake` | Leaves the reasoning of old steps out of the request, then, if still over, moves stale completed tool-output bodies to durable storage (`artifact://` handles), leaving the calls and inputs in place. The stored session keeps the reasoning, and a body stays retrievable by reading its handle. | no | `ContextEvicted` |
 | `remote` | Asks the route to fold its own context window (OpenAI Responses `/responses/compact`; `openai-response`, `openai-codex`, and `grok-build` routes). | provider-side | `native` |
 | `soft` | Folds the transcript prefix into a structured, incrementally anchored summary (the fixed `hya-compaction` system agent). | yes | `local_summarizer` |
 | `snapcompact` | Replaces the folded prefix with a local, deterministic dense archive under oh-my-pi's serialization budgets. Works with no summarizer wired at all. | no | `snap_compact` |
@@ -25,13 +25,26 @@ emits. Thresholds and token accounting are configured alongside; see
 
 Details worth knowing per mechanism:
 
-- **`shake`** evicts a completed tool output when it lies outside the last
+- **`shake`** first leaves out every stale reasoning part the route replays:
+  one outside the last `keep_recent` messages or before the last
+  `keep_recent` tool steps (a step is one round's run of tool calls, so the
+  latest round always keeps its reasoning). Old reasoning goes before tool
+  outputs because its conclusions are already in the calls that followed,
+  while an output is evidence the agent may need again. All stale reasoning
+  goes in one pass, since every eviction rewrites the cached prefix. The part
+  stays in the request with empty text and no provider payload, so encoders
+  keep splitting tool rounds where they did; a chat route keeps its empty
+  `reasoning_content` field, which thinking-mode routes require. Anthropic
+  only requires the thinking of the latest tool round, which always stays.
+  If the transcript is still over the threshold, shake then evicts a
+  completed tool output when it lies outside the last
   `keep_recent` messages (older turns) or outside the last `keep_recent`
-  completed tool steps. The step tail applies inside the active assistant
-  message too, so one long turn sheds its early outputs mid-turn. Shake is
-  sticky for the lifetime of the running session: once a part is moved, every
-  later round reapplies the exact same byte-stable placeholder and does not
-  emit another `ContextEvicted` for it. Only newly encountered stale parts are
+  completed tool steps. Both step tails apply inside the active assistant
+  message too, so one long turn — a headless run is a single assistant
+  message, which no fold can split — sheds its early steps mid-turn. Shake is
+  sticky for the lifetime of the running session: once a part is left out or
+  moved, every later round reapplies the exact same byte-stable placeholder
+  and does not emit another `ContextEvicted` for it. Only newly encountered stale parts are
   added. The placeholder retains an appended `--- [NEW MAIL ...]` steer notice
   verbatim, so consumed mail remains visible to the model. With the session's
   artifact store the eviction is a *move*: the transcript keeps
@@ -117,7 +130,7 @@ The walk itself:
    one already fit the transcript, nothing further runs.
 2. An unavailable mechanism advances: `remote` on a route without a compact
    endpoint, `soft`/`handoff` when no summarizer is wired, `shake` when there
-   is nothing left to evict.
+   is no stale reasoning or tool output left to evict.
 3. A failed mechanism advances the same way: a native compact transport
    error or a summarizer failure falls through to the next rung, ending with
    the model-free `snapcompact` if the order leaves it last.
@@ -142,8 +155,8 @@ the same compacted boundary from being summarized repeatedly.
 
 The walk trips when occupancy exceeds
 `min(window * context_fraction, window - reserve_tokens)`, floored at 1,000
-tokens; each rung then checks its own precondition (`shake` needs a stale tool
-output, the folding rungs a foldable message prefix). When the route advertises
+tokens; each rung then checks its own precondition (`shake` needs stale
+reasoning or a stale tool output, the folding rungs a foldable message prefix). When the route advertises
 no window, the flat `token_threshold` applies.
 In `auto` mode, a reported provider measurement is anchored to the **latest
 round** (`input + cache_read + cache_write`), then locally estimated content
@@ -171,7 +184,9 @@ Each mechanism records what it did on the event log:
 - `ContextEvicted` — recorded whenever `shake` saved tokens, including when
   the saving alone was not enough and the walk escalated anyway. Its payload
   contains `session`, `evicted_parts`, `tokens_before`, `tokens_after`, and
-  `threshold`; artifact handles are request-local notices, not event fields.
+  `threshold`; `evicted_parts` counts reasoning parts left out plus tool
+  outputs replaced. Artifact handles are request-local notices, not event
+  fields.
 - `ContextStatus` — emitted once per streaming round after the ladder, with
   the occupancy the request actually carries, its source (provider-reported or
   estimated), the accounting mode, and the resolved threshold. Clients surface
