@@ -1524,6 +1524,19 @@ impl SessionEngine {
             let mut tokens = initial_count.tokens.saturating_add(request_overhead);
             let token_source = initial_count.source;
             let over_threshold = |tokens: usize| tokens > resolved_threshold;
+            let count = |messages: &[Message]| {
+                self.token_accounting
+                    .estimate_with_reasoning_policy(messages, reasoning_policy)
+            };
+            let fold_cut = |messages: &[Message]| {
+                crate::compaction::fold_cut(
+                    messages,
+                    fold_config.keep_recent,
+                    self.compaction.keep_recent,
+                    resolved_threshold,
+                    &count,
+                )
+            };
 
             // Reduction ladder: the five built-in mechanisms (oh-my-pi parity),
             // walked in the configured order — `compaction.method_order`. The
@@ -1674,16 +1687,10 @@ impl SessionEngine {
                         // gate. Folds the same prefix a summary would into the
                         // dense archive, so the ladder's model-free rung works
                         // even where no summarizer is wired at all.
-                        let Some((start, end)) =
-                            crate::compaction::foldable_range(&messages, fold_config.keep_recent)
-                        else {
+                        let Some(cut) = fold_cut(&messages) else {
                             continue;
                         };
-                        let (Some(from), Some(to)) = (messages.get(start), messages.get(end - 1))
-                        else {
-                            continue;
-                        };
-                        let archive = crate::compaction::snapcompact_archive(&messages[start..end]);
+                        let archive = crate::compaction::snapcompact_archive(&cut.folded);
                         let body = format!("{}\n{}", hya_provider::COMPACT_CONTEXT_MARKER, archive);
                         committed_summary_tokens = Some(body.len() / 4);
                         self.commit_compaction(
@@ -1691,12 +1698,8 @@ impl SessionEngine {
                             session,
                             body,
                             CompactionStrategy::SnapCompact,
-                            Some((
-                                from.id(),
-                                to.id(),
-                                u32::try_from(end - start).unwrap_or(u32::MAX),
-                            )),
-                            None,
+                            Some((cut.from_message, cut.to_message, cut.folded_count)),
+                            cut.step_cut,
                             input_tokens_est,
                             threshold,
                         )
@@ -1708,6 +1711,9 @@ impl SessionEngine {
                     }
                     crate::compaction::CompactionRung::Handoff => {
                         let Some(summarizer) = &self.summarizer else {
+                            continue;
+                        };
+                        let Some(cut) = fold_cut(&messages) else {
                             continue;
                         };
                         let definition = match &compaction_agent {
@@ -1729,7 +1735,7 @@ impl SessionEngine {
                         };
                         let planned = crate::compaction::plan_handoff(
                             &messages,
-                            &fold_config,
+                            cut,
                             summarizer.as_ref(),
                             options,
                         )
@@ -1742,7 +1748,7 @@ impl SessionEngine {
                             &usage,
                         )
                         .await;
-                        let Ok(Some(plan)) = planned else {
+                        let Ok(plan) = planned else {
                             continue;
                         };
                         let body =
@@ -1754,7 +1760,7 @@ impl SessionEngine {
                             body,
                             CompactionStrategy::Handoff,
                             Some((plan.from_message, plan.to_message, plan.folded_count)),
-                            None,
+                            plan.step_cut,
                             input_tokens_est,
                             threshold,
                         )
@@ -1766,6 +1772,9 @@ impl SessionEngine {
                     }
                     crate::compaction::CompactionRung::Summarize => {
                         let Some(summarizer) = &self.summarizer else {
+                            continue;
+                        };
+                        let Some(cut) = fold_cut(&messages) else {
                             continue;
                         };
                         let definition = match &compaction_agent {
@@ -1785,13 +1794,8 @@ impl SessionEngine {
                                 &summarizer_instructions,
                             )
                         };
-                        let planned = crate::compaction::fold_prefix(
-                            &messages,
-                            &fold_config,
-                            summarizer.as_ref(),
-                            options,
-                        )
-                        .await;
+                        let planned =
+                            crate::compaction::fold_prefix(cut, summarizer.as_ref(), options).await;
                         // Billed even when the rung then fails or is skipped.
                         self.record_side_call_usage(
                             actor_claim,
@@ -1800,7 +1804,7 @@ impl SessionEngine {
                             &usage,
                         )
                         .await;
-                        let Ok(Some(plan)) = planned else {
+                        let Ok(plan) = planned else {
                             continue;
                         };
                         // Persist the local summary behind the same marker the
@@ -1816,7 +1820,7 @@ impl SessionEngine {
                             body,
                             CompactionStrategy::LocalSummarizer,
                             Some((plan.from_message, plan.to_message, plan.folded_count)),
-                            None,
+                            plan.step_cut,
                             input_tokens_est,
                             threshold,
                         )
