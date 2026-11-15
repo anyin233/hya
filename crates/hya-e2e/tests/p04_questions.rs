@@ -50,11 +50,6 @@ async fn t1_8_ask_user_tool_receives_user_answer() {
             "server must offer {name}"
         );
     }
-    assert!(
-        tools
-            .iter()
-            .all(|tool| tool["function"]["name"] != "invalid")
-    );
 
     let events = env.events(session, None).await.expect("events");
     let mut saw_done = false;

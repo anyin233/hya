@@ -184,9 +184,8 @@ fn hidden_tools_section(hidden: &[hya_proto::ToolSchema]) -> String {
 ///
 /// Hashline `write` and `edit` are advertised to every model. `apply_patch`
 /// stays registered for hidden `patch` dispatch but is never advertised.
-/// The reserved `invalid` spelling is never offered either.
 pub fn advertise_tool(name: &str) -> bool {
-    !["apply_patch", "invalid"].contains(&name)
+    name != "apply_patch"
 }
 
 /// The orchestration plane (ADR-0015): spawn, discovery, workflow control,
@@ -467,7 +466,6 @@ mod tests {
                 }
             }
         }
-        assert!(!advertise_tool("invalid"));
         Ok(())
     }
 

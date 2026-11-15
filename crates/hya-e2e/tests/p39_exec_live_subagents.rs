@@ -193,7 +193,7 @@ async fn t2_38_exec_lead_collects_a_live_worker_before_the_run_ends() {
             for tool in request["tools"].as_array().expect("tool definitions") {
                 let name = tool["function"]["name"].as_str().expect("tool name");
                 assert!(
-                    !["invalid", "ask_user", "plan_exit"].contains(&name),
+                    !["ask_user", "plan_exit"].contains(&name),
                     "{route} offered {name}"
                 );
             }
