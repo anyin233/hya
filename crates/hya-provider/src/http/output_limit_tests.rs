@@ -1,4 +1,5 @@
-//! Per-model output limits shape every protocol's max-tokens field.
+//! Per-model output limits shape every protocol's max-tokens field; per-model
+//! image input decides whether tool-result images are sent.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -248,4 +249,48 @@ fn configured_identity_covers_model_limits() {
         identity(8_192),
         "changing only an output limit changes the request shape"
     );
+}
+
+#[test]
+fn only_a_model_declared_to_take_images_gets_tool_result_images() {
+    use hya_proto::{
+        AgentName, Message, MessageId, Part, PartId, ToolCallId, ToolName, ToolPartState,
+    };
+    use serde_json::json;
+
+    let mut req = request(LIMITED, None, None);
+    req.messages = vec![Message::Assistant {
+        id: MessageId::new(),
+        agent: AgentName::new("build"),
+        model: ModelRef::new(LIMITED),
+        parts: vec![Part::Tool {
+            id: PartId::new(),
+            call_id: ToolCallId::new(),
+            name: ToolName::new("read"),
+            state: ToolPartState::Completed {
+                input: json!({"path": "a.png"}),
+                output: json!({
+                    "output": "Image file (image/png, 8 bytes).",
+                    "attachments": [{"mime": "image/png", "url": "data:image/png;base64,iVBORw0KGgo="}],
+                }),
+                time_ms: 1,
+            },
+        }],
+        finish: None,
+        tokens: None,
+        last_round: None,
+    }];
+    let result = |support: Option<bool>| {
+        let route = route(ProviderKind::Anthropic, 0)
+            .with_model_image_input(support.map(|value| (LIMITED.to_string(), value)));
+        body(&route, req.clone())["messages"][1]["content"][0]["content"].clone()
+    };
+    assert_eq!(result(Some(true))[1]["type"], "image");
+    for support in [Some(false), None] {
+        let text = result(support);
+        assert!(
+            text.as_str().unwrap().contains("is not shown to you"),
+            "{support:?}: {text}"
+        );
+    }
 }
