@@ -198,6 +198,10 @@ current-turn thinking. Encoder and estimator share one predicate
 (`hya_provider::ReasoningReplayPolicy::replays`), so they cannot drift.
 Tool outputs appended to the running assistant message after its latest round
 are not yet in that round's measurement; the next round's report includes them.
+When the local preflight estimate has already crossed `window` even though the
+latest provider report still sits below the threshold, the ladder falls back to
+the local estimate and reduces the request before sending so preflight does not
+reject an un-compacted turn.
 See [Configuration](configuration.md) for every field and its environment override.
 
 ## Observability
