@@ -437,6 +437,12 @@ title = "default tools.code.mode (normal) — the first-party hya/code-mode bund
 track = "P"
 path = "crates/hya-e2e/tests/p41_code_mode.rs"
 
+[[scenario]]
+id = "T2.53"
+title = "headless exec: a single turn whose steps outgrow the window folds its old steps into the summary and finishes; later requests carry the summary, the prompt and the newest steps"
+track = "P"
+path = "crates/hya-e2e/tests/p42_exec_step_fold.rs"
+
 # Index-only deep engine coverage (not duplicated in Track P).
 [[scenario]]
 id = "I.nested"
