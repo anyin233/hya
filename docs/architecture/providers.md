@@ -142,7 +142,7 @@ leaves `reasoning_request` false.
 | `Transport(String)` | `transport: …` | Request transport failed before an event stream was returned. | Check provider reachability and connection health. This class is eligible for bounded retry/failover before stream ownership passes to the caller. |
 | `HttpStatus { status, message, retry_after }` | `http status <code>: …` | Upstream returned a non-success response before the stream began, or a classified in-stream error frame (message starts with `in-stream error`; see [In-stream error frames](#in-stream-error-frames)). | HTTP 429 and 5xx are retryable; other statuses fail immediately. `Retry-After` (or an in-band `retry_after` hint), when valid, is retained as a bounded delay. |
 | `UnknownModel(String)` | `unknown provider for model: …` | No route's `capabilities()` returned `Some` for the ref. | [`../troubleshooting.md`](../troubleshooting.md) — *unknown provider for model*. |
-| `Incompatible(String)` | `incompatible route: …` | Preflight failure, or an unsupported part (for example media on a non-Google route). | No dedicated entry yet; for media MIME failures see [Media parts](#media-parts-non-google-routes) below and switch to a `kind: google` route when you need attachments. |
+| `Incompatible(String)` | `incompatible route: …` | Preflight failure, or an unsupported part (for example audio, video, or assistant media on a non-Google route). | No dedicated entry yet; for media MIME failures see [Media parts](#media-parts-non-google-routes) below and switch to a `kind: google` route when you need non-image attachments. |
 | `Decode(String)` | `decode: …` | Malformed or truncated stream / compact-window payload. | No dedicated entry; inspect SSE frames. |
 | `AuthExpired { provider, hint }` | `auth expired for provider '<p>': <hint>` | Produced by the OAuth bearer-resolver wiring in `hya-app` when refresh fails or credentials are revoked. | Re-run `hya oauth login` for that provider (see [`../configuration.md`](../configuration.md) / CLI auth). |
 
@@ -478,10 +478,10 @@ a tool round:
 {"role": "tool", "tool_call_id": "…", "content": "slides_draft.md"}
 ```
 
-**Media.** User/system media parts fail encode with
-`ProviderError::Incompatible("OpenAI chat does not support media type <mime>")`
-(display: `incompatible route: …`). Assistant `Part::Media` entries are ignored
-on encode (not forwarded). Only Google encodes media; see below.
+**Media.** User image parts are sent as `{"type":"image_url","image_url":{"url":…}}`
+content items; see [Media parts](#media-parts-non-google-routes). Assistant
+`Part::Media` fails encode with
+`ProviderError::Incompatible("OpenAI chat does not support assistant media type <mime>")`.
 
 ## OpenAI Responses Protocol
 
@@ -526,7 +526,9 @@ instead of being summarized away.
 
 ### Media
 
-Any `Part::Media` in user or assistant history fails encode with
+User image parts are sent as `{"type":"input_image","image_url":…}` content
+items; see [Media parts](#media-parts-non-google-routes). A `Part::Media` in
+assistant history fails encode with
 `ProviderError::Incompatible("OpenAI Responses does not support media type <mime>")`.
 
 ### Decoder
@@ -595,9 +597,11 @@ optional `system`, `tools`, `thinking`).
 
 ### Media
 
-User media parts fail with
-`ProviderError::Incompatible("Anthropic messages does not support media type <mime>")`.
-Assistant `Part::Media` entries are ignored on encode (not forwarded).
+User image parts are sent as `{"type":"image","source":…}` blocks (`base64`
+for a data URL or bare payload, `url` for an HTTP URL); see
+[Media parts](#media-parts-non-google-routes). Assistant `Part::Media` fails
+encode with
+`ProviderError::Incompatible("Anthropic messages does not support assistant media type <mime>")`.
 
 Like the OpenAI decoder, the Anthropic decoder converts provider-specific
 stream events into the same hya event variants.
@@ -662,13 +666,15 @@ single text part, and closes on the first `finishReason` it sees.
 
 ## Media parts (non-Google routes)
 
-Canonical media parts (for example from v2 prompt file attachments) are only
-encoded on the **Google** route. On OpenAI chat, OpenAI Responses / Codex /
-Grok Build, and Anthropic, media in the positions those encoders validate fails
-the turn with `ProviderError::Incompatible` and a
-`… does not support media type <mime>` message (wrapped as
-`incompatible route: …`). To send images or other attachments, use a session
-route with `kind: google`.
+OpenAI chat, OpenAI Responses / Codex / Grok Build, and Anthropic encode
+canonical media parts of a **user** message (for example prompt image
+attachments) when they are images: `image/png`, `image/jpeg`, `image/gif`, or
+`image/webp`, given as a `data:<mime>;base64,…` URL whose declared MIME
+matches, a bare base64 payload, or an HTTP(S) URL
+([`media.rs`](../../crates/hya-provider/src/media.rs)). Any other MIME type, a
+mismatched data URL, invalid base64, or media in an assistant message fails the
+turn with `ProviderError::Incompatible` (wrapped as `incompatible route: …`).
+Audio, video, and other attachments need a session route with `kind: google`.
 
 ## Tool-result images
 
