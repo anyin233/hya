@@ -59,13 +59,11 @@ pub(super) fn projection_to_messages(
 pub(super) fn request_from_messages(
     agent: &AgentSpec,
     messages: Vec<Message>,
-    resources: &CompiledResourceView,
+    tools: Vec<hya_proto::ToolSchema>,
     model: &ModelRef,
     depth: u32,
     reasoning: Option<ReasoningEffort>,
-    exclusive: Option<&str>,
 ) -> CompletionRequest {
-    let tools = filtered_tool_schemas(resources, model, depth, exclusive);
     // The team quick reference teaches exactly the coordination tools this
     // request advertises (harness-allocated per agent and depth).
     let reference = crate::prompt::team_quick_reference(
@@ -104,13 +102,13 @@ pub(super) fn reasoning_for_model(
     }
 }
 
-fn filtered_tool_schemas(
+pub(super) fn filtered_tool_schemas(
     resources: &CompiledResourceView,
-    _model: &ModelRef,
+    interaction_available: bool,
     depth: u32,
     exclusive: Option<&str>,
 ) -> Vec<hya_proto::ToolSchema> {
-    let offered = offered_tool_schemas(resources, depth);
+    let offered = offered_tool_schemas(resources, depth, interaction_available);
     let Some(exclusive) = exclusive_in_effect(&offered, exclusive) else {
         return offered;
     };
@@ -129,6 +127,7 @@ fn filtered_tool_schemas(
 fn offered_tool_schemas(
     resources: &CompiledResourceView,
     depth: u32,
+    interaction_available: bool,
 ) -> Vec<hya_proto::ToolSchema> {
     resources
         .tool_schemas()
@@ -136,6 +135,9 @@ fn offered_tool_schemas(
         .filter(|schema| {
             let name = schema.name.as_str();
             advertise_tool_at_depth(name, depth)
+                && resources.resolve_tool(name).is_some_and(|resolved| {
+                    super::tool_available(resolved.tool.name(), interaction_available)
+                })
                 && (resources.advertises(name) || (depth >= 1 && name == "report"))
         })
         .collect()
@@ -154,9 +156,10 @@ pub(super) fn hidden_behind<'a>(
     resources: &CompiledResourceView,
     depth: u32,
     exclusive: Option<&'a str>,
+    interaction_available: bool,
     name: &str,
 ) -> Option<&'a str> {
-    let offered = offered_tool_schemas(resources, depth);
+    let offered = offered_tool_schemas(resources, depth, interaction_available);
     exclusive_in_effect(&offered, exclusive).filter(|tool| ![*tool, "report"].contains(&name))
 }
 
@@ -181,8 +184,9 @@ fn hidden_tools_section(hidden: &[hya_proto::ToolSchema]) -> String {
 ///
 /// Hashline `write` and `edit` are advertised to every model. `apply_patch`
 /// stays registered for hidden `patch` dispatch but is never advertised.
+/// The reserved `invalid` spelling is never offered either.
 pub fn advertise_tool(name: &str) -> bool {
-    name != "apply_patch"
+    !["apply_patch", "invalid"].contains(&name)
 }
 
 /// The orchestration plane (ADR-0015): spawn, discovery, workflow control,
@@ -355,7 +359,7 @@ mod tests {
             (1, vec!["bash", "report"]),
             (crate::MAX_SUBAGENT_DEPTH, vec!["bash", "report"]),
         ] {
-            let mut names = filtered_tool_schemas(&resources, &ModelRef::new("fake"), depth, None)
+            let mut names = filtered_tool_schemas(&resources, true, depth, None)
                 .into_iter()
                 .map(|schema| schema.name.to_string())
                 .collect::<Vec<_>>();
@@ -379,7 +383,7 @@ mod tests {
         let resources = bundle_advertise_view(
             "advertise: [run]\n    resource_view: { allow: ['harness:tool/bash'], aliases: { run: 'harness:tool/bash' } }",
         )?;
-        let names = filtered_tool_schemas(&resources, &ModelRef::new("fake"), 0, None)
+        let names = filtered_tool_schemas(&resources, true, 0, None)
             .into_iter()
             .map(|schema| schema.name.to_string())
             .collect::<Vec<_>>();
@@ -395,9 +399,8 @@ mod tests {
         let resources = bundle_advertise_view(
             "resource_view: { allow: ['harness:tool/bash', 'harness:tool/read'] }",
         )?;
-        let model = ModelRef::new("fake");
         for (depth, expected) in [(0, vec!["bash"]), (1, vec!["bash", "report"])] {
-            let offered = filtered_tool_schemas(&resources, &model, depth, Some("bash"));
+            let offered = filtered_tool_schemas(&resources, true, depth, Some("bash"));
             let mut names = offered
                 .iter()
                 .map(|schema| schema.name.as_str())
@@ -422,26 +425,81 @@ mod tests {
     }
 
     #[test]
+    fn headless_surface_omits_human_tools_and_their_exclusive_descriptions()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for aliases in [
+            "",
+            ", aliases: { ask: 'harness:tool/ask_user', approve: 'harness:tool/plan_exit' }",
+        ] {
+            let resources = bundle_advertise_view(&format!(
+                "resource_view: {{ allow: ['harness:tool/bash', 'harness:tool/ask_user', 'harness:tool/plan_exit']{aliases} }}"
+            ))?;
+            let human_tools = if aliases.is_empty() {
+                ["ask_user", "plan_exit"]
+            } else {
+                ["ask", "approve"]
+            };
+            for depth in [0, 1, crate::MAX_SUBAGENT_DEPTH] {
+                for interactive in [false, true] {
+                    let offered = filtered_tool_schemas(&resources, interactive, depth, None);
+                    for name in human_tools {
+                        assert_eq!(
+                            offered.iter().any(|tool| tool.name.as_str() == name),
+                            interactive
+                        );
+                        assert!(
+                            resources.resolve_tool(name).is_some(),
+                            "dispatch is unchanged"
+                        );
+                    }
+                    let exclusive =
+                        filtered_tool_schemas(&resources, interactive, depth, Some("bash"));
+                    let bash = exclusive
+                        .iter()
+                        .find(|tool| tool.name.as_str() == "bash")
+                        .ok_or("bash is offered")?;
+                    for name in human_tools {
+                        assert_eq!(
+                            bash.description.contains(&format!("### {name}\n")),
+                            interactive
+                        );
+                    }
+                }
+            }
+        }
+        assert!(!advertise_tool("invalid"));
+        Ok(())
+    }
+
+    #[test]
     fn a_hidden_tool_names_the_exclusive_tool_it_is_behind()
     -> Result<(), Box<dyn std::error::Error>> {
         let resources = bundle_advertise_view(
             "resource_view: { allow: ['harness:tool/bash', 'harness:tool/read'] }",
         )?;
         assert_eq!(
-            hidden_behind(&resources, 0, Some("bash"), "read"),
+            hidden_behind(&resources, 0, Some("bash"), true, "read"),
             Some("bash")
         );
-        assert_eq!(hidden_behind(&resources, 0, Some("bash"), "bash"), None);
-        assert_eq!(hidden_behind(&resources, 1, Some("bash"), "report"), None);
-        assert_eq!(hidden_behind(&resources, 0, None, "read"), None);
-        assert_eq!(hidden_behind(&resources, 0, Some("absent"), "read"), None);
+        assert_eq!(
+            hidden_behind(&resources, 0, Some("bash"), true, "bash"),
+            None
+        );
+        assert_eq!(
+            hidden_behind(&resources, 1, Some("bash"), true, "report"),
+            None
+        );
+        assert_eq!(hidden_behind(&resources, 0, None, true, "read"), None);
+        assert_eq!(
+            hidden_behind(&resources, 0, Some("absent"), true, "read"),
+            None
+        );
         Ok(())
     }
 
     #[test]
     fn exclusive_tool_outside_the_offered_set_changes_nothing()
     -> Result<(), Box<dyn std::error::Error>> {
-        let model = ModelRef::new("fake");
         for (fields, exclusive) in [
             ("resource_view: { allow: ['harness:tool/read'] }", "bash"),
             (
@@ -451,8 +509,8 @@ mod tests {
         ] {
             let resources = bundle_advertise_view(fields)?;
             assert_eq!(
-                filtered_tool_schemas(&resources, &model, 0, Some(exclusive)),
-                filtered_tool_schemas(&resources, &model, 0, None),
+                filtered_tool_schemas(&resources, true, 0, Some(exclusive)),
+                filtered_tool_schemas(&resources, true, 0, None),
                 "{fields}"
             );
         }
@@ -471,7 +529,7 @@ mod tests {
                     .filter(|schema| advertise_tool_at_depth(schema.name.as_str(), depth))
                     .map(|schema| schema.name.to_string())
                     .collect::<BTreeSet<_>>();
-                let actual = filtered_tool_schemas(&resources, &ModelRef::new("fake"), depth, None)
+                let actual = filtered_tool_schemas(&resources, true, depth, None)
                     .into_iter()
                     .map(|schema| schema.name.to_string())
                     .collect::<BTreeSet<_>>();

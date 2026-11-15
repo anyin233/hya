@@ -757,6 +757,15 @@ run; when a server (the backend daemon) already holds it, `exec` runs the turn
 through that server instead, still with the caller's cwd as the workdir (see
 [Database lock and the backend daemon](#database-lock-and-the-backend-daemon)).
 
+In-process headless runs have no human question receiver, so model requests
+omit `ask_user` and `plan_exit` for both the lead and its subagents. For example,
+`hya exec "summarize this repo"` proceeds without offering a question or plan
+approval tool. Interactive server sessions retain those tools; a routed `exec`
+uses that server's interaction plane. The reserved `invalid` name is never
+advertised. Unknown tool names and malformed arguments still produce the
+existing tool errors. This is automatic and adds no CLI flags, config fields,
+or wire contracts.
+
 For an in-process run, the exec driver alone owns root continuation turns;
 the resident supervisor does not admit `TEAM QUIESCED` synthesis prompts.
 A lead turn ending with live direct subagents or unread root mail,

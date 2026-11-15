@@ -52,7 +52,13 @@ impl NestedTools for TurnNestedTools {
             .filter(|schema| {
                 self.resources
                     .resolve_tool(schema.name.as_str())
-                    .is_none_or(|resolved| resolved.tool.name() != self.caller)
+                    .is_some_and(|resolved| {
+                        resolved.tool.name() != self.caller
+                            && super::turn::tool_available(
+                                resolved.tool.name(),
+                                self.engine.interaction.is_available(),
+                            )
+                    })
             })
             .collect()
     }
