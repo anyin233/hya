@@ -798,13 +798,17 @@ announces the whole run's wall-clock budget with a system message after session
 startup. It appends WrapUp/Final notices to the next successful tool result,
 once per stage per session, after any team steer mail. Both notices enter the
 same tool-result transaction. Earlier messages are unchanged. Subagents receive
-notices directing them to finish and `report` their work.
+notices directing them to finish and `report` their work. Between stage
+notices, a tool result carries one clock line (`HEADLESS RUN — clock: …s of
+…s used, …s left.`) each time another tenth of the budget has passed since
+the session was last told the time.
 
 The thresholds are remaining time: WrapUp is
 `min(clamp(35% B, 300s, 3600s), 50% B)`, Final is
 `clamp(12% B, 90s, 600s)`, and the Over guard is `clamp(5% B, 30s, 120s)`.
 Over uses the Final notice. Bash and member `wait` timeouts are capped to
-`max(remaining - guard, 5s)`; a shorter requested timeout remains unchanged.
+`max(remaining - min(guard, remaining / 2), 5s)`; a shorter requested timeout
+remains unchanged.
 This includes Bash's omitted timeout and `timeout: 0`. Bash reports
 `metadata.deadlineCapped: true` when shortened and explains the effective
 limit in `<shell_metadata>`. For example, a 900-second run with 200 seconds
