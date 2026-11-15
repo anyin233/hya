@@ -49,7 +49,8 @@ fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) -> Result<(), ProviderEr
                 model_parts.push(json!({
                     "functionCall": { "name": name.as_str(), "args": args }
                 }));
-                let (result, _is_error) = tool_result(state);
+                // This route sends no tool-result image; the text says so.
+                let result = tool_result(state, false).text;
                 responses.push(json!({
                     "functionResponse": { "name": name.as_str(), "response": { "result": result } }
                 }));
