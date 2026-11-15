@@ -2,7 +2,7 @@ use hya_proto::{Message, MessageId, Part, SessionId};
 use serde_json::{Value, json};
 
 use crate::media::image_url;
-use crate::wire::{tool_input, tool_result};
+use crate::wire::{ToolImages, tool_input, tool_result};
 use crate::{
     CompletionRequest, Decoder, Protocol, ProviderError, ReasoningEffort, ReasoningReplayPolicy,
 };
@@ -36,6 +36,7 @@ impl Protocol for OpenAiChatProtocol {
         _output_limit: Option<u32>,
         images: bool,
     ) -> Result<Value, ProviderError> {
+        let images = ToolImages::new(&req.messages, images);
         let mut messages = Vec::new();
         let deepseek = req
             .model
@@ -67,7 +68,7 @@ impl Protocol for OpenAiChatProtocol {
                     }));
                 }
                 Message::Assistant { parts, .. } => {
-                    emit_assistant(&mut messages, parts, thinking, images)?;
+                    emit_assistant(&mut messages, parts, thinking, &images)?;
                 }
             }
         }
@@ -153,7 +154,7 @@ fn emit_assistant(
     out: &mut Vec<Value>,
     parts: &[Part],
     thinking: bool,
-    images: bool,
+    images: &ToolImages<'_>,
 ) -> Result<(), ProviderError> {
     for parts in crate::wire::assistant_clusters(parts, replays_reasoning) {
         let mut cluster = Cluster::default();
@@ -185,7 +186,7 @@ fn flush_cluster(
     out: &mut Vec<Value>,
     cluster: &Cluster<'_>,
     thinking: bool,
-    images: bool,
+    images: &ToolImages<'_>,
 ) -> Result<(), ProviderError> {
     let content = if cluster.text.is_empty() && !thinking {
         Value::Null
@@ -232,8 +233,11 @@ fn flush_cluster(
     // tool messages as one user message, each labelled with its call.
     let mut shown = Vec::new();
     for &p in &cluster.tools {
-        if let Part::Tool { call_id, state, .. } = p {
-            let result = tool_result(state, images);
+        if let Part::Tool {
+            id, call_id, state, ..
+        } = p
+        {
+            let result = tool_result(id, state, images);
             out.push(
                 json!({"role": "tool", "tool_call_id": call_id.to_string(), "content": result.text}),
             );

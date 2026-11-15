@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 use super::OpenAiResponsesDecoder;
 use crate::media::image_url;
-use crate::wire::{tool_input, tool_result};
+use crate::wire::{ToolImages, tool_input, tool_result};
 use crate::{CompletionRequest, Decoder, Protocol, ProviderError, ReasoningEffort};
 
 /// System-message prefix written by the engine after a successful
@@ -110,6 +110,7 @@ impl Protocol for OpenAiResponsesProtocol {
 ///
 /// Used by both `/responses` create and `/responses/compact`.
 pub fn encode_input_items(messages: &[Message], images: bool) -> Result<Vec<Value>, ProviderError> {
+    let images = ToolImages::new(messages, images);
     let mut input = Vec::new();
     for message in messages {
         let (role, parts) = match message {
@@ -123,7 +124,7 @@ pub fn encode_input_items(messages: &[Message], images: bool) -> Result<Vec<Valu
             }
             Message::User { parts, .. } => ("user", parts),
             Message::Assistant { parts, .. } => {
-                emit_assistant(&mut input, parts, images)?;
+                emit_assistant(&mut input, parts, &images)?;
                 continue;
             }
         };
@@ -181,7 +182,11 @@ fn other_kind(value: &Value) -> &'static str {
     }
 }
 
-fn emit_assistant(out: &mut Vec<Value>, parts: &[Part], images: bool) -> Result<(), ProviderError> {
+fn emit_assistant(
+    out: &mut Vec<Value>,
+    parts: &[Part],
+    images: &ToolImages<'_>,
+) -> Result<(), ProviderError> {
     let mut text = String::new();
     for part in parts {
         match part {
@@ -193,10 +198,10 @@ fn emit_assistant(out: &mut Vec<Value>, parts: &[Part], images: bool) -> Result<
                 }
             }
             Part::Tool {
+                id,
                 call_id,
                 name,
                 state,
-                ..
             } => {
                 flush_text(out, &mut text);
                 let input = tool_input(state);
@@ -214,7 +219,7 @@ fn emit_assistant(out: &mut Vec<Value>, parts: &[Part], images: bool) -> Result<
                 out.push(json!({
                     "type": "function_call_output",
                     "call_id": call_id.to_string(),
-                    "output": function_call_output(tool_result(state, images))?,
+                    "output": function_call_output(tool_result(id, state, images))?,
                 }));
             }
             Part::Media { media_type, .. } => {
