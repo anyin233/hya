@@ -764,8 +764,10 @@ pending/in-progress todos, an announced next step, or length-truncated output
 receives a `HEADLESS RUN —` system notice and another turn. Raw DSML tool
 markup, unexecuted XML tool-call suffixes, and an internal `<analysis>`/`<summary>` response also trigger correction:
 the agent must issue a structured tool call or deliver its normal final answer.
+A final step with no text and no tool call (a provider can end a step on one
+empty token) delivers nothing and gets the same correction.
 These checks read only a tool-free final provider step; a reasoning-only final
-step does not reuse text from an earlier step. Closed backtick/tilde fences
+step does not reuse text from an earlier step and counts as empty. Closed backtick/tilde fences
 and matched inline code spans are excluded from tool-markup detection.
 A parameter opener may precede a long value, but its result closing tag must
 end the output. Ordinary endings such as `Vec<Calls>` and `syscalls>` do not
