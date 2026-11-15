@@ -45,8 +45,28 @@
 - An `extensions.process` of `kind: bun` whose command starts with `bun` now
   uses the Bun hya resolves (`$BUN`, the release's own Bun, then `PATH`).
 
+## Context compaction
+
+- A long single turn (a headless `hya exec` run is one prompt and one
+  assistant message holding every step) now folds its old steps into the
+  compaction summary instead of ending with `exceeds context window ... after
+  context reduction`. When no whole message can be folded, `soft`,
+  `snapcompact` and `handoff` cut inside the in-flight message between whole
+  steps; the prompt and the newest `keep_recent` steps stay verbatim, reasoning
+  included. See [Step folds](docs/compaction.md#step-folds).
+- `ContextCompacted` gains an optional `step_cut { through_part, kept_head }`
+  and the session projection a per-message `folded_parts`. Logs written before
+  read unchanged. The projection reducer version is now 9, so cached snapshots
+  are rebuilt once from the event log. An older backend reading a log with step
+  folds shows the turn's kept steps behind the summary marker and leaves them
+  out of its requests.
+- The summarizer sees both ends of long reasoning and tool output, where
+  conclusions and verdicts sit, instead of only their opening.
+
 ## Fixes
 
+- A fold that follows a `shake` spill in the same reduction no longer sends
+  the spilled tool outputs again; their placeholders stay in place.
 - `glob` and `find` no longer walk a tree without bound. They search
   breadth-first for at most 30 seconds; a walk that is stopped returns what it
   found, marked `incomplete`. A `glob` that completes returns what it did
