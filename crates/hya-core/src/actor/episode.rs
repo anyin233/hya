@@ -949,6 +949,14 @@ impl TeamActor {
         // when the turn's own engine events never tripped the throttle.
         self.heartbeat_turn_finish(session, claim.as_ref(), &handle)
             .await;
+        if finish == FinishReason::Stop
+            && !is_main
+            && self.engine.lifecycle_connected()
+            && crate::lifecycle::report_allowed(channel_policy.snapshot_for(agent.name.as_str()))
+        {
+            self.report_final_answer(session, claim.as_ref(), &handle)
+                .await?;
+        }
         Ok(if finish == FinishReason::Cancelled {
             let projection = self.engine.read_projection_shared(session).await?;
             let root = self.engine.read_projection_shared(self.root).await?;
@@ -997,24 +1005,7 @@ impl TeamActor {
         if !self.lock().residents.get(&session).is_some_and(eligible) {
             return Ok(());
         }
-        let projection = self.engine.read_projection_shared(session).await?;
-        let final_text = projection
-            .session
-            .messages
-            .iter()
-            .rev()
-            .find(|message| message.role == hya_proto::Role::Assistant)
-            .map(|message| {
-                message
-                    .parts
-                    .iter()
-                    .filter_map(|part| match part {
-                        hya_proto::PartProjection::Text { text, .. } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<String>()
-            })
-            .unwrap_or_default();
+        let final_text = last_assistant_text(&*self.engine.read_projection_shared(session).await?);
         let root = self.engine.read_projection_shared(self.root).await?;
         let mut state = self.lock();
         if let Some(slot) = state
@@ -1046,6 +1037,54 @@ impl TeamActor {
                     .done
                     .send(Ok(ActivationResult::Settled { final_text }));
             }
+        }
+        Ok(())
+    }
+
+    /// A member whose turn ended normally with a text answer, no accepted
+    /// report and nothing queued for it reports that answer (outcome `done`)
+    /// through the same pending-report path as the `report` tool. Called
+    /// before the slot goes idle, so a parent's `wait` never sees a stall in
+    /// between. Unread mail or live children (the report gate), an empty
+    /// answer, or a Workflow activation (which settles on its final text)
+    /// leave the member idle as before.
+    async fn report_final_answer(
+        &self,
+        session: SessionId,
+        claim: Option<&ActorClaim>,
+        handle: &str,
+    ) -> Result<(), CoreError> {
+        let eligible = |slot: &Episode| {
+            slot.claim.as_ref() == claim
+                && !slot.is_main
+                && !slot.user_stopped
+                && slot.ending.is_none()
+                && slot.report.is_none()
+                && slot.activation.is_none()
+        };
+        if !self.lock().residents.get(&session).is_some_and(eligible) {
+            return Ok(());
+        }
+        let answer = last_assistant_text(&*self.engine.read_projection_shared(session).await?);
+        let answer = answer.trim();
+        if answer.is_empty() {
+            return Ok(());
+        }
+        match super::ending::report_gate_projection(&self.engine, self.root, handle).await {
+            Ok(_) => {}
+            Err(CoreError::Invalid(_)) => return Ok(()),
+            Err(error) => return Err(error),
+        }
+        if let Some(slot) = self
+            .lock()
+            .residents
+            .get_mut(&session)
+            .filter(|slot| eligible(slot))
+        {
+            slot.report = Some(PendingReport {
+                outcome: ReportOutcome::Done,
+                report: answer.to_string(),
+            });
         }
         Ok(())
     }
@@ -1113,4 +1152,25 @@ impl TeamActor {
             slot.done.send_replace(Some(result));
         }
     }
+}
+
+/// The text parts of the session's last assistant message ("" when none).
+fn last_assistant_text(projection: &hya_proto::Projection) -> String {
+    projection
+        .session
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role == hya_proto::Role::Assistant)
+        .map(|message| {
+            message
+                .parts
+                .iter()
+                .filter_map(|part| match part {
+                    hya_proto::PartProjection::Text { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<String>()
+        })
+        .unwrap_or_default()
 }

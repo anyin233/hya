@@ -298,7 +298,13 @@ Archived peers' DM channels are excluded (use `search_agent`).
 
 **`report`** (channel-tools family): required `result`, optional `outcome`
 (`done`/`failed`). Rejected while the caller has unread mail or live direct
-subagents. Mail the caller's current resident wake already put into its turn
+subagents. A member that ends its turn normally with a final answer (non-empty
+text in its last assistant message, finish `stop`) and no accepted report
+reports that text with outcome `done` the same way, when the gate passes and
+its channel policy allows `report`; otherwise it stays idle (a `wait` sees it
+`stalled`). A cut-off (`length`), failed, or cancelled turn is never reported,
+and a Workflow Stage activation settles on its final text instead. `report`
+is the only way to say `failed`. Mail the caller's current resident wake already put into its turn
 counts as read. The unread-mail rejection names every channel holding unread
 mail and the exact read call, for example:
 
@@ -396,8 +402,8 @@ calling turn until subagents finish, bounded by a timeout.
 | `mode` | `"all"` (default) \| `"any"` | Return when every target / the first target finished during this call. |
 | `timeout_secs` | integer, default 600, clamped to 1800 | `0` returns the current state at once without blocking. |
 
-A target **finishes** only when it reports (`report`, then its archive
-commits) or is archived without a report (`archive` by an ancestor, a drain,
+A target **finishes** only when it reports (`report`, or a final answer
+that ends its turn, then its archive commits) or is archived without a report (`archive` by an ancestor, a drain,
 teardown). Going idle is never finishing: a member between turns with work
 owed (a running turn, queued mail or directive, an accepted report still
 executing, or live subagents of its own) is `working`.
@@ -411,7 +417,7 @@ call never returns the same news twice:
 | Target had already reported or been archived before the call (not woken since) | listed in `already_finished` with its report; never counts toward `any`/`all` and never wakes the wait |
 | Every target already finished (or no live subagent) | returns at once with `woke_by: nothing_to_wait_for`; calling again gives the same answer, never `members` |
 | Target woken again after its report (mail to an archived member revives it) | `working` until its **next** report; the earlier report is not repeated (the member's terminal handoff generation, bumped by every archive, tells the finishes apart) |
-| Target's turn ended without a report and nothing is queued for it | `idle` under `running`; it will not continue until it is mailed, so the wait returns `woke_by: stalled` — once per stopped turn; a repeated wait on the same stopped member blocks |
+| Target's turn ended without a report (no answer, a cut-off answer, or its answer was refused by the report gate) and nothing is queued for it | `idle` under `running`; it will not continue until it is mailed, so the wait returns `woke_by: stalled` — once per stopped turn; a repeated wait on the same stopped member blocks |
 | New mail for the caller (channel-tools `wait` only) | `woke_by: mail`; returned once (see below) |
 | Nothing new before the deadline | `woke_by: timeout` (`timeout_secs: 0`: the current state at once) |
 

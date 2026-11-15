@@ -82,11 +82,12 @@ fn lead_requests(env: &E2eEnv) -> Vec<String> {
 }
 
 /// An idle member without a report must not give the resident supervisor a
-/// second root driver between the exec lead's turns.
+/// second root driver between the exec lead's turns. (Its turn ends with an
+/// empty answer: a non-empty one would be its report.)
 #[tokio::test]
 async fn t2_38_exec_alone_continues_after_a_worker_goes_idle() {
     let env = E2eEnvBuilder::new()
-        .route(WORKER, vec![text_step("WORKER_IDLE"), text_step("WORKER_EXTRA")])
+        .route(WORKER, vec![text_step(""), text_step("WORKER_EXTRA")])
         .route(ROOT, vec![
             spawn_worker(),
             tool_step("wait", json!({"timeout_secs": 60})),
@@ -262,12 +263,13 @@ async fn t2_39_exec_ends_after_two_ignored_notices() {
     assert_eq!(env.fake.route_remaining(ROOT).unwrap(), Some(1));
 }
 
-/// Ending a resident episode with text leaves it idle, with no report to
-/// collect. The lead must explicitly archive it before completing the run.
+/// Ending a resident episode with no answer and no report leaves it idle,
+/// with nothing to collect. The lead must explicitly archive it before
+/// completing the run.
 #[tokio::test]
 async fn t2_49_exec_wait_reports_an_idle_worker_as_stalled() {
     let env = E2eEnvBuilder::new()
-        .route(WORKER, vec![text_step("WORKER_IDLE"), text_step("WORKER_EXTRA")])
+        .route(WORKER, vec![text_step(""), text_step("WORKER_EXTRA")])
         .route(ROOT, vec![
             spawn_worker(),
             tool_step("wait", json!({"timeout_secs": 60})),
@@ -302,7 +304,7 @@ async fn t2_49_idle_team_wakes_lead_with_user_synthesis_prompt() {
             WORKER,
             vec![
                 tool_step("bash", json!({"command": "sleep 1"})),
-                text_step("WORKER_IDLE"),
+                text_step(""),
                 text_step("WORKER_EXTRA"),
             ],
         )

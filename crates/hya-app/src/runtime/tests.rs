@@ -1791,6 +1791,16 @@ You are the installed resident agent.
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             let projection = observed_store.read_projection(root).await.unwrap();
+            // The offline model's answer is the member's report: the turn that
+            // consumed the mail can end in the archive.
+            if projection
+                .team
+                .archived
+                .get("main/installed-resident-1")
+                .is_some_and(|entry| entry.reason == hya_proto::ArchiveReason::Reported)
+            {
+                break;
+            }
             let Some(entry) = projection.team.roster.get("main/installed-resident-1") else {
                 tokio::task::yield_now().await;
                 continue;
