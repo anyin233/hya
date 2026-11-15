@@ -201,6 +201,7 @@ impl Tool for WriteTool {
             write: &write,
             loaded: &loaded,
             final_text: &final_text,
+            submitted: &content,
             executable,
             chmod_warning,
             stripped,
@@ -261,6 +262,8 @@ struct WriteSuccessContext<'a> {
     loaded: &'a MutationText,
     /// Reloaded post-formatter normalized text and warnings.
     final_text: &'a MutationText,
+    /// Content the call asked to write, after display-prefix stripping.
+    submitted: &'a str,
     /// Whether the final target has execute bits.
     executable: bool,
     /// Non-fatal warning from shebang chmod handling.
@@ -285,6 +288,7 @@ fn success_result(context: WriteSuccessContext<'_>) -> Value {
         write,
         loaded,
         final_text,
+        submitted,
         executable,
         chmod_warning,
         stripped,
@@ -307,9 +311,14 @@ fn success_result(context: WriteSuccessContext<'_>) -> Value {
     let preview = display_text.lines().take(20).collect::<Vec<_>>().join("\n");
 
     let mut output = "Wrote file successfully.".to_string();
-    output.push_str("\n\n<content>\n");
-    output.push_str(&display_text);
-    output.push_str("\n</content>");
+    // The call already carries the content; repeating it doubles its cost in
+    // every later model call. Show the file only when it ended up different
+    // (formatter, stripped display prefixes, line-ending restoration).
+    if final_text.text != submitted {
+        output.push_str("\n\nThe file on disk differs from the content you sent:\n<content>\n");
+        output.push_str(&display_text);
+        output.push_str("\n</content>");
+    }
     lsp_post_edit::append_write_diagnostics(&mut output, &write.path, &diagnostics);
     let (output, _) = append_bounded_notices(output, &warnings);
     let output = bound_output(output);
