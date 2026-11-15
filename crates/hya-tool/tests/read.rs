@@ -433,7 +433,10 @@ async fn read_returns_open_code_attachment_for_png_files() {
         .unwrap();
 
     // Then
-    assert_eq!(out["output"], "Image read successfully");
+    // The model gets no pixels from a tool result, and is told so.
+    let output = out["output"].as_str().unwrap();
+    assert!(output.contains("image/png"), "{output}");
+    assert!(output.contains("not shown to you"), "{output}");
     assert_eq!(out["metadata"]["preview"], "Image read successfully");
     assert_eq!(out["metadata"]["truncated"], false);
     assert_eq!(out["metadata"]["loaded"], json!([]));
