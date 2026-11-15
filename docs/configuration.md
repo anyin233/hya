@@ -384,7 +384,8 @@ compaction:
   # that fits; an unavailable one (unsupported route, no summarizer) advances
   # to the next. A partial list is completed with the unmentioned names in
   # default order; an unknown name ignores the whole list.
-  #   shake        evict stale tool outputs to artifact:// handles (no model)
+  #   shake        leave stale reasoning out, then evict stale tool outputs
+  #                to artifact:// handles (no model)
   #   remote       provider-native compaction (/responses/compact)
   #   soft         structured LLM summary of the folded prefix
   #   snapcompact  local deterministic dense archive (no model call)
