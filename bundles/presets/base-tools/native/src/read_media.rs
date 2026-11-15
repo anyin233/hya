@@ -37,9 +37,25 @@ pub(crate) async fn attachment_value(
     } else {
         "Image read successfully"
     };
+    // The attachment is for the client's display. No tool result carries an
+    // image or a PDF to the model, so the model is told what it did not get.
+    let output = if is_pdf_attachment(mime) {
+        format!(
+            "This file is a PDF ({} bytes). Its content is not shown to you: a tool result \
+             reaches you as text only. Extract the text with a program instead.",
+            bytes.len()
+        )
+    } else {
+        format!(
+            "This file is an image ({mime}, {} bytes). Its pixels are not shown to you: a tool \
+             result reaches you as text only. Inspect it with a program instead (an image \
+             library, OCR, a conversion to text).",
+            bytes.len()
+        )
+    };
     Ok(json!({
         "title": relative_title(path, workdir),
-        "output": message,
+        "output": output,
         "metadata": {
             "preview": message,
             "truncated": false,
