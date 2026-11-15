@@ -29,12 +29,27 @@ pub enum Stage {
     Over,
 }
 
-/// The run's start and budget, and the stage each session was last told of.
+/// The run's start and budget, and what each session was last told.
 #[derive(Debug)]
 pub struct RunDeadline {
     start: Instant,
     budget: Duration,
-    notified: Mutex<HashMap<SessionId, Stage>>,
+    notified: Mutex<HashMap<SessionId, Told>>,
+}
+
+/// The stage a session was last told of, and the tenth of the budget that
+/// had passed when it last read the clock.
+#[derive(Clone, Copy, Debug)]
+struct Told {
+    stage: Stage,
+    tenth: u64,
+}
+
+impl Told {
+    const START: Self = Self {
+        stage: Stage::Normal,
+        tenth: 0,
+    };
 }
 
 static DEADLINE: OnceLock<RunDeadline> = OnceLock::new();
@@ -143,14 +158,17 @@ impl RunDeadline {
     }
 
     /// The timeout a tool call may use now: `requested` (`None` = none)
-    /// capped to `max(remaining - grace, MIN_TOOL_SECS)`, and whether it
-    /// was capped. A call without a timeout is capped too: the kill would
-    /// end it anyway, with nothing returned.
+    /// capped to what is left after a reserve for the step that reads the
+    /// result, and whether it was capped. The reserve is the grace, or half
+    /// of what is left once that is less: near the end a call may still use
+    /// as much time as it leaves behind. Never under [`MIN_TOOL_SECS`]. A
+    /// call without a timeout is capped too: the kill would end it anyway,
+    /// with nothing returned.
     #[must_use]
     pub fn cap(&self, requested: Option<Duration>) -> (Duration, bool) {
-        let limit = self
-            .remaining()
-            .saturating_sub(self.grace())
+        let remaining = self.remaining();
+        let limit = remaining
+            .saturating_sub(self.grace().min(remaining / 2))
             .max(Duration::from_secs(MIN_TOOL_SECS));
         match requested {
             Some(requested) if requested <= limit => (requested, false),
@@ -167,10 +185,11 @@ impl RunDeadline {
             Stage::WrapUp => Stage::WrapUp,
             Stage::Final | Stage::Over => Stage::Final,
         };
+        let tenth = self.tenth();
         let mut notified = self.notified.lock().unwrap_or_else(PoisonError::into_inner);
-        let told = notified.entry(session).or_insert(Stage::Normal);
-        (*told < stage).then(|| {
-            *told = stage;
+        let told = notified.entry(session).or_insert(Told::START);
+        (told.stage < stage).then(|| {
+            *told = Told { stage, tenth };
             stage
         })
     }
@@ -178,9 +197,38 @@ impl RunDeadline {
     /// Record that `session` was told of `stage` another way (a lead
     /// continuation notice), so no in-turn notice repeats it.
     pub fn mark_notified(&self, session: SessionId, stage: Stage) {
+        let tenth = self.tenth();
         let mut notified = self.notified.lock().unwrap_or_else(PoisonError::into_inner);
-        let told = notified.entry(session).or_insert(Stage::Normal);
-        *told = (*told).max(stage);
+        let told = notified.entry(session).or_insert(Told::START);
+        *told = Told {
+            stage: told.stage.max(stage),
+            tenth,
+        };
+    }
+
+    /// The clock line for `session` when another tenth of the budget has
+    /// passed since it last read the time (the opening, a stage notice, or
+    /// an earlier clock line). An agent has no other clock, and a notice per
+    /// result would sit in every file it reads.
+    pub fn take_clock(&self, session: SessionId) -> Option<String> {
+        let tenth = self.tenth();
+        let mut notified = self.notified.lock().unwrap_or_else(PoisonError::into_inner);
+        let told = notified.entry(session).or_insert(Told::START);
+        (told.tenth < tenth).then(|| {
+            told.tenth = tenth;
+            format!(
+                "HEADLESS RUN — clock: {}s of {}s used, {}s left.",
+                self.elapsed().as_secs(),
+                self.budget.as_secs(),
+                self.remaining().as_secs()
+            )
+        })
+    }
+
+    /// Whole tenths of the budget used so far.
+    fn tenth(&self) -> u64 {
+        let budget = self.budget.as_millis().max(1);
+        u64::try_from(self.elapsed().as_millis() * 10 / budget).unwrap_or(u64::MAX)
     }
 
     /// The first notice of a budgeted run.
@@ -189,7 +237,7 @@ impl RunDeadline {
         format!(
             "HEADLESS RUN — time budget: {}s wall clock for this whole run; at the limit the \
              process is killed and only files on disk count. Put a working deliverable in place \
-             early.",
+             early. Tool results report the clock as the run goes.",
             self.budget.as_secs()
         )
     }
@@ -213,9 +261,8 @@ impl RunDeadline {
             ),
             (Stage::Final | Stage::Over, false) => format!(
                 "HEADLESS RUN — FINAL {left}s: write any missing deliverable now from the work \
-                 you have, remove scratch files you created in the requested location, commit \
-                 if the request asks for a commit, then end your turn. Start no new install, \
-                 build, training or test run."
+                 you have, commit if the request asks for a commit, then end your turn. Start \
+                 only commands that finish well within the time left."
             ),
             (Stage::Normal | Stage::WrapUp, true) => format!(
                 "HEADLESS RUN — TIME: {elapsed}s of {budget}s used, {left}s left in the whole \
@@ -275,9 +322,10 @@ mod tests {
         assert_eq!(started(30, 0).stage(), Stage::Over);
     }
 
-    /// D2: a tool call keeps the grace free, but never gets under 5 s.
+    /// D2: a tool call keeps the grace free, or half of what is left near
+    /// the end, and never gets under 5 s.
     #[test]
-    fn d2_cap_keeps_the_grace_free() {
+    fn d2_cap_keeps_a_reserve_free() {
         // B = 900, G = 45: R = 200 leaves 155 s.
         let deadline = started(900, 700);
         let (timeout, capped) = deadline.cap(Some(Duration::from_secs(300)));
@@ -289,11 +337,41 @@ mod tests {
         );
         let (none, capped) = deadline.cap(None);
         assert!(capped && none.as_secs() <= 155);
-        // R = 40 < G: the floor.
+        // B = 3600, G = 120, R = 121: a 60 s command runs whole.
         assert_eq!(
-            started(900, 860).cap(Some(Duration::from_secs(300))),
+            started(3600, 3479).cap(Some(Duration::from_secs(60))),
+            (Duration::from_secs(60), false)
+        );
+        // R = 40 < G = 45: half of what is left.
+        let (timeout, capped) = started(900, 860).cap(Some(Duration::from_secs(300)));
+        assert!(capped);
+        assert!((19..=20).contains(&timeout.as_secs()), "{timeout:?}");
+        // R = 6: the floor.
+        assert_eq!(
+            started(900, 894).cap(Some(Duration::from_secs(300))),
             (Duration::from_secs(MIN_TOOL_SECS), true)
         );
+    }
+
+    /// D4: the clock is told once per tenth of the budget, and a stage
+    /// notice counts as reading it.
+    #[test]
+    fn d4_the_clock_is_told_once_per_tenth() {
+        let lead = session();
+        assert_eq!(started(900, 80).take_clock(lead), None);
+        let third = started(900, 300);
+        let clock = third.take_clock(lead).expect("three tenths passed");
+        assert!(
+            clock.starts_with("HEADLESS RUN — clock: 300s of 900s used, "),
+            "{clock}"
+        );
+        assert_eq!(third.take_clock(lead), None);
+        let wrap_up = started(900, 600);
+        assert_eq!(wrap_up.take_notice(lead), Some(Stage::WrapUp));
+        assert_eq!(wrap_up.take_clock(lead), None);
+        let member = session();
+        wrap_up.mark_notified(member, Stage::WrapUp);
+        assert_eq!(wrap_up.take_clock(member), None);
     }
 
     /// D3: once per stage per session, and only upward.

@@ -92,7 +92,7 @@ cargo test -p hya-e2e -- --test-threads=1
 | T2.42 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec: a plain summary after tool work ends the run with no notice | e2e (Track P) |
 | T2.43 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec: two ignored announcement notices in a row end the run | e2e (Track P) |
 | T2.44 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec --time-budget: the opening names the budget and the FINAL header appears once across tool results and continuation notices | e2e (Track P) |
-| T2.45 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec --time-budget: a bash timeout is shortened to the time left minus the grace | e2e (Track P) |
+| T2.45 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec --time-budget: a bash timeout is shortened to the time left minus the reserve | e2e (Track P) |
 | T2.46 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec --time-budget: no continuation turn starts within the grace | e2e (Track P) |
 | T2.47 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec corrects a spurious internal summary and resumes work | e2e (Track P) |
 | T2.48 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec recovers a raw DSML tool-call leak through the structured tool interface | e2e (Track P) |

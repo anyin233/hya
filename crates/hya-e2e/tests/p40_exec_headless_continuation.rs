@@ -238,7 +238,7 @@ async fn e7_no_continuation_past_the_grace() {
 }
 
 /// A budgeted run shortens a long `bash` timeout to the time left minus the
-/// grace (40 s budget, 30 s grace: about 10 s), and says so.
+/// reserve (40 s budget: half of the time left, about 20 s), and says so.
 #[tokio::test]
 async fn e6_bash_timeouts_are_capped_to_the_time_left() {
     // `sleep 120` returning inside run_exec's 90 s limit is the cap at work.

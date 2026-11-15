@@ -2323,20 +2323,22 @@ impl SessionEngine {
                             if let Some(notice) = steer.drain(self).await? {
                                 append_steer_notice(&mut output, &notice);
                             }
-                            if let Some(deadline) = hya_tool::deadline::current()
-                                && let Some(stage) = deadline.take_notice(session)
-                            {
-                                let policy = crate::ChannelPolicy::from_binding(binding)?
-                                    .snapshot_for(live_agent.name.as_str());
-                                let can_report = parent_session.is_some()
-                                    && self.lifecycle.is_connected()
-                                    && crate::lifecycle::report_allowed(policy)
-                                    && request
-                                        .tools
-                                        .iter()
-                                        .any(|tool| tool.name.as_str() == "report");
-                                let notice = deadline.notice(stage, can_report);
-                                append_steer_notice(&mut output, &format!("\n\n{notice}"));
+                            if let Some(deadline) = hya_tool::deadline::current() {
+                                if let Some(stage) = deadline.take_notice(session) {
+                                    let policy = crate::ChannelPolicy::from_binding(binding)?
+                                        .snapshot_for(live_agent.name.as_str());
+                                    let can_report = parent_session.is_some()
+                                        && self.lifecycle.is_connected()
+                                        && crate::lifecycle::report_allowed(policy)
+                                        && request
+                                            .tools
+                                            .iter()
+                                            .any(|tool| tool.name.as_str() == "report");
+                                    let notice = deadline.notice(stage, can_report);
+                                    append_steer_notice(&mut output, &format!("\n\n{notice}"));
+                                } else if let Some(clock) = deadline.take_clock(session) {
+                                    append_steer_notice(&mut output, &format!("\n\n{clock}"));
+                                }
                             }
                         }
                         let retains_artifact = artifact_guard.retained_by(&output);
