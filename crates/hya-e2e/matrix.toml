@@ -307,7 +307,7 @@ path = "crates/hya-e2e/tests/p35_token_summary.rs"
 
 [[scenario]]
 id = "T2.31"
-title = "wait is woken inside the lead turn by a worker report and never repeats it; a worker that stops without a report wakes it as stalled; archive stops a worker and mail to its handle wakes it"
+title = "wait is woken inside the lead turn by a worker report and never repeats it; a worker that ends with a plain answer finishes with it as its report; a worker that stops without a report or an answer wakes it as stalled; archive stops a worker and mail to its handle wakes it"
 track = "P"
 path = "crates/hya-e2e/tests/p36_wait_archive.rs"
 

@@ -36,19 +36,21 @@ async fn t2_25_installed_channel_policy_denies_child_send_and_uninstall_restores
             }),
         )
     };
+    // The children end with an empty answer and stay idle: a non-empty one
+    // would be their report and wake the lead for turns this script lacks.
     let env = E2eEnvBuilder::new()
         .route(
             CHILD,
             vec![
                 tool_step("send", json!({"body": "DENIED_CHANNEL_PAYLOAD"})),
-                text_step("DENIED_CHILD_FINISHED"),
+                text_step(""),
             ],
         )
         .route(
             RESTORED_CHILD,
             vec![
                 tool_step("send", json!({"body": "RESTORED_CHANNEL_PAYLOAD"})),
-                text_step("RESTORED_CHILD_FINISHED"),
+                text_step(""),
             ],
         )
         .route(

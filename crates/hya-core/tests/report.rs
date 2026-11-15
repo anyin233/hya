@@ -31,7 +31,8 @@ use hya_core::engine::{AgentSpec, CreateSession, SessionEngine};
 use hya_core::resident::ResidentSupervisor;
 use hya_core::run_lifecycle_service;
 
-/// Minimal fake route: one text part, then stop — enough to drive a turn.
+/// Minimal fake route: an empty answer, then stop — enough to drive a turn
+/// that leaves a member idle (a non-empty final answer would be its report).
 struct StubProvider;
 
 #[async_trait]
@@ -55,14 +56,8 @@ impl Provider for StubProvider {
         session: SessionId,
         message: MessageId,
     ) -> Result<EventStream, ProviderError> {
-        let events = FakeProvider::materialize(
-            &[
-                FakeStep::Text("ok".to_string()),
-                FakeStep::Finish(FinishReason::Stop),
-            ],
-            session,
-            message,
-        );
+        let events =
+            FakeProvider::materialize(&[FakeStep::Finish(FinishReason::Stop)], session, message);
         Ok(Box::pin(stream::iter(
             events.into_iter().map(Ok::<Event, ProviderError>),
         )))

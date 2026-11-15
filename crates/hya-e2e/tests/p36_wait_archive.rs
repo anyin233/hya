@@ -1,9 +1,10 @@
 //! T2.31 — `wait` and `archive` through a real backend: the lead's `wait`
 //! is woken inside its own turn by a worker's report (delivered once: a
 //! repeated wait lists it as already finished and returns at once, and the
-//! report mail is not steered again); a worker that ends its turn without a
-//! report wakes the wait as `stalled`, never as finished; `archive` stops it
-//! and mail to its handle wakes it again.
+//! report mail is not steered again); a worker that ends its turn with a
+//! plain answer and no `report` finishes with that answer as its report; one
+//! that ends with neither wakes the wait as `stalled`, never as finished;
+//! `archive` stops it and mail to its handle wakes it again.
 //!
 //! Handles are `<prefix>-<operator>` with a random operator name; the backend
 //! runs with `HYA_HANDLE_SEED` so the scripted lead can address the worker.
@@ -104,6 +105,41 @@ async fn t2_31_wait_returns_when_the_worker_reports_inside_the_lead_turn() {
     );
 }
 
+/// REPORT H8: a worker whose turn ends with a plain answer and no `report`
+/// is finished with that answer; the lead's wait does not see a stall.
+#[tokio::test]
+async fn t2_31_a_worker_answer_without_report_finishes_it() {
+    let env = E2eEnvBuilder::new()
+        .backend_env("HYA_HANDLE_SEED", SEED.to_string())
+        .route(WORKER, vec![text_step("PLAIN_ANSWER_OK")])
+        .route(
+            ROOT,
+            vec![
+                spawn_worker(),
+                tool_step("wait", json!({"timeout_secs": 60})),
+                text_step("ROOT_AFTER_WAIT"),
+                text_step("ROOT_EXTRA_1"),
+                text_step("ROOT_EXTRA_2"),
+            ],
+        )
+        .build()
+        .await
+        .expect("e2e env");
+    let session = env.create_session().await.expect("root session");
+    env.prompt(session, "delegate and wait")
+        .await
+        .expect("prompt");
+    let timeout = Duration::from_secs(30);
+    env.wait_route_contains(ROOT, "Subagents finished.", timeout)
+        .await
+        .unwrap_or_else(|error| panic!("wait result missing: {error}; {}", env.diagnostics()));
+    env.wait_route_contains(ROOT, "PLAIN_ANSWER_OK", timeout)
+        .await
+        .unwrap_or_else(|error| panic!("answer missing: {error}; {}", env.diagnostics()));
+    let dump = env.route_dump(ROOT).expect("root route");
+    assert!(!dump.contains("stopped without reporting"), "{dump}");
+}
+
 #[tokio::test]
 async fn t2_31_archive_stops_a_worker_and_mail_wakes_it() {
     let env = E2eEnvBuilder::new()
@@ -111,7 +147,8 @@ async fn t2_31_archive_stops_a_worker_and_mail_wakes_it() {
         .route(
             WORKER,
             vec![
-                text_step("WORKER_FIRST_EPISODE"),
+                // No answer and no report: the worker stays idle.
+                text_step(""),
                 text_step("WORKER_WOKEN_AGAIN"),
                 text_step("WORKER_EXTRA"),
             ],
