@@ -391,7 +391,7 @@ path = "crates/hya-e2e/tests/p40_exec_headless_continuation.rs"
 
 [[scenario]]
 id = "T2.45"
-title = "headless exec --time-budget: a bash timeout is shortened to the time left minus the grace"
+title = "headless exec --time-budget: a bash timeout is shortened to the time left minus the reserve"
 track = "P"
 path = "crates/hya-e2e/tests/p40_exec_headless_continuation.rs"
 
