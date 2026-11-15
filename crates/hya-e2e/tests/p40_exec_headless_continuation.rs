@@ -324,3 +324,48 @@ async fn e8_spurious_summary_triggers_a_user_facing_completion() {
     assert!(requests[1].contains("deliver your normal final answer"));
     assert_eq!(env.fake.route_remaining(ROOT).unwrap(), Some(1));
 }
+
+#[tokio::test]
+async fn headless_tool_surface_preserves_unknown_and_malformed_call_errors() {
+    let (env, output, _) = run_lead(
+        vec![
+            tool_step("invalid", json!({"tool": "missing", "error": "bad call"})),
+            tool_step("read", json!({})),
+            text_step("FINAL_ANSWER"),
+        ],
+        &[],
+    )
+    .await;
+    let requests = env.fake.route_requests(ROOT).unwrap().expect("root route");
+    for request in requests {
+        let tools = request["tools"].as_array().expect("tool definitions");
+        for tool in tools {
+            let name = tool["function"]["name"].as_str().expect("tool name");
+            assert!(
+                !["invalid", "ask_user", "plan_exit"].contains(&name),
+                "{name} was offered"
+            );
+        }
+    }
+    let events = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| serde_json::from_str::<hya_proto::Envelope>(line).expect("exec envelope"))
+        .collect::<Vec<_>>();
+    let errors = events
+        .iter()
+        .filter_map(|event| match &event.event {
+            hya_proto::Event::ToolError {
+                message_text,
+                value,
+                ..
+            } => Some((message_text, value)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(errors.len(), 2, "{events:?}");
+    assert_eq!(errors[0].0, "unknown tool: invalid");
+    assert_eq!(
+        errors[1].1.as_ref().expect("structured error")["error"]["type"],
+        "input"
+    );
+}

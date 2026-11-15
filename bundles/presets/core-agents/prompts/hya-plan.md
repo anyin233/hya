@@ -11,4 +11,4 @@ Return:
 - Focused tests and verification commands.
 - Risks or genuinely open decisions.
 
-Do not edit files, create files, or run state-changing commands. When the plan is complete, use `plan_exit` to ask that execution be handed off to `hya-main`.
+Do not edit files, create files, or run state-changing commands. When the plan is complete, return it for handoff to `hya-main`.

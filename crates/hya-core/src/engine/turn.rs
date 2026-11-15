@@ -39,8 +39,14 @@ use super::stream_round::RoundAttribution;
 use crate::agent_catalog::AgentDefinition;
 pub use messages::advertise_tool;
 use messages::{
-    AttachmentData, attachment_blobs, hidden_behind, projection_to_messages, request_from_messages,
+    AttachmentData, attachment_blobs, filtered_tool_schemas, hidden_behind, projection_to_messages,
+    request_from_messages,
 };
+
+/// Human-answer tools cannot be useful once their host receiver is gone.
+pub(super) fn tool_available(name: &str, interaction_available: bool) -> bool {
+    name != "invalid" && (interaction_available || !["ask_user", "plan_exit"].contains(&name))
+}
 
 /// Range endpoints for a compaction that folded the entire input window.
 ///
@@ -1499,15 +1505,18 @@ impl SessionEngine {
                 usage_reporting,
                 reasoning_policy,
             );
-            let exclusive = self.exclusive_tool.as_deref();
             let template = request_from_messages(
                 &live_agent,
                 Vec::new(),
-                resources,
+                filtered_tool_schemas(
+                    resources,
+                    self.interaction.is_available(),
+                    depth,
+                    self.exclusive_tool.as_deref(),
+                ),
                 &model,
                 depth,
                 None,
-                exclusive,
             );
             let request_overhead = self
                 .token_accounting
@@ -1878,11 +1887,15 @@ impl SessionEngine {
             let request = request_from_messages(
                 &live_agent,
                 messages,
-                resources,
+                filtered_tool_schemas(
+                    resources,
+                    self.interaction.is_available(),
+                    depth,
+                    self.exclusive_tool.as_deref(),
+                ),
                 &model,
                 depth,
                 effort,
-                self.exclusive_tool.as_deref(),
             );
             let request = if let Some(hooks) = self.active_hook_dispatcher(session) {
                 let root_session = self
@@ -2116,6 +2129,7 @@ impl SessionEngine {
                     resources,
                     depth,
                     self.exclusive_tool.as_deref(),
+                    self.interaction.is_available(),
                     tc.name.as_str(),
                 );
                 let collect_tool = async {
