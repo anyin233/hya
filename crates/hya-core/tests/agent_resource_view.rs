@@ -179,6 +179,7 @@ fn catalog() -> (Arc<AgentCatalog>, Vec<RuntimeSource>) {
             namespace: None,
             digest: format!("test-only-{bundle_slug}"),
             agents: vec![PreparedAgent {
+                private: false,
                 id: AgentName::new(stable_id),
                 description: None,
                 role: AgentRole::Main,
@@ -443,6 +444,7 @@ async fn canonical_allow_deny_and_alias_share_schema_and_dispatch() {
         namespace: None,
         digest: "test-only".to_string(),
         agents: vec![PreparedAgent {
+            private: false,
             id: AgentName::new("alias-agent"),
             description: None,
             role: AgentRole::Main,
@@ -738,6 +740,7 @@ async fn a_bundle_agent_cannot_select_a_harness_mcp_export_or_skill() {
             namespace: None,
             digest: format!("test-only-{slug}"),
             agents: vec![PreparedAgent {
+                private: false,
                 id: AgentName::new(format!("plane-refusal-{slug}")),
                 description: None,
                 role: AgentRole::Main,

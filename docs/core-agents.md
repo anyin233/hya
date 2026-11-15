@@ -69,8 +69,15 @@ sessions woken by mail are not switched: a child whose agent was removed fails
 with `AGENT_DEFINITION_MISSING`. Explicitly spawning an unknown agent still
 fails rather than falling back. The former first-party
 `hya/subagents` bundle has been removed; `hya-task` replaces its worker.
-Workflow-private agents are now `hya-goal-guide`, `hya-goal-verifier`, and
-`hya-pir-planner`, `hya-pir-implementer`, `hya-pir-reviewer`.
+Workflow-private agents are `hya-goal-guide`, `hya-goal-verifier`, and
+`hya-pir-planner`, `hya-pir-implementer`, `hya-pir-reviewer`. Their bundle
+entries set `private: true`: ordinary built-ins cannot spawn them with `task`,
+and they are absent from ordinary rosters and selectors. Workflows launched by
+ordinary built-ins can still use them as nodes or verifiers. Bundle agents need
+an explicit `can_spawn` grant; for example, `hya-goal-guide` can spawn
+`hya-goal-verifier`. Complete agent metadata retains them with `hidden: true`.
+See [private workflow agents](agent-bundle-authoring.md#private-workflow-agents)
+for the manifest contract and an example.
 
 Editing `bundle.yaml` or a prompt under the preset directory takes effect on
 the next restart; no rebuild is required in a Cargo build. Invalid source
@@ -96,8 +103,8 @@ See the [task input and worked example](architecture/agent-tool-surface.md#task)
 The source payload is an `AgentSetBundle` with identity `hya/core-agents` and
 publisher `hya`. Every member uses the standard Agent interface: `id`, optional
 `description`, `role`, optional `prompt`, `model_policy`, `workdir`,
-`resource_view`, `can_spawn`, and `hook_refs`. The shipped
-agents leave `model_policy` empty so the runtime's configured model remains the
+`resource_view`, `can_spawn`, optional `private: boolean` (default `false`), and
+`hook_refs`. The shipped agents leave `model_policy` empty so the runtime's configured model remains the
 default. When spawned with `task`, every agent (built-in or bundle) runs as a
 resident actor; `spawn_lifecycle` is a removed manifest key. The preset's inert `policy.yaml`
 explicitly names engine-only reserved ids and the ordinary spawn scope; loading

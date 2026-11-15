@@ -84,6 +84,7 @@ fn catalog_without_historical() -> Arc<AgentCatalog> {
             namespace: None,
             digest: format!("test-only-{stable_id}"),
             agents: vec![PreparedAgent {
+                private: false,
                 id: AgentName::new(stable_id),
                 description: None,
                 role: AgentRole::Main,

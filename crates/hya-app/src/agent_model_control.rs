@@ -778,7 +778,7 @@ fn project_agent_model(
         agent_id: agent.stable_id.to_string(),
         description: agent.description.map(str::to_string),
         mode: agent.selector_mode().to_string(),
-        hidden: binding.agent_catalog().is_reserved(agent.stable_id),
+        hidden: agent.private || binding.agent_catalog().is_reserved(agent.stable_id),
         configured,
         settable: !configured,
         preference,

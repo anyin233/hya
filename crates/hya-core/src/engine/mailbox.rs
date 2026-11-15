@@ -825,6 +825,7 @@ mod tests {
                 agents: ["resident"]
                     .into_iter()
                     .map(|id| hya_bundle::PreparedAgent {
+                        private: false,
                         id: AgentName::new(id),
                         description: None,
                         role: hya_bundle::AgentRole::Subagent,
