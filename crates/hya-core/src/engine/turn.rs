@@ -1579,6 +1579,14 @@ impl SessionEngine {
                 if !over_threshold(tokens) {
                     break;
                 }
+                if matches!(rung, crate::compaction::CompactionRung::SpillToolOutputs)
+                    && !crate::compaction::has_spillable_tool_output(
+                        &messages,
+                        fold_config.keep_recent,
+                    )
+                {
+                    continue;
+                }
                 // Snapshot what tripped the threshold before this rung edits the
                 // transcript, so each record explains why that rung ran.
                 let input_tokens_est = u64::try_from(tokens).unwrap_or(u64::MAX);
@@ -1586,34 +1594,23 @@ impl SessionEngine {
 
                 match rung {
                     crate::compaction::CompactionRung::SpillToolOutputs => {
-                        let estimate = |messages: &[Message]| {
-                            self.token_accounting
-                                .estimate_with_reasoning_policy(messages, reasoning_policy)
-                        };
-                        let estimate_before = estimate(&messages);
-                        // Old reasoning goes first: its conclusions are already
-                        // in the calls that followed, while a tool output is
-                        // evidence the agent may need again.
-                        let mut evicted = crate::compaction::evict_stale_reasoning_sticky(
+                        let estimate_before = self
+                            .token_accounting
+                            .estimate_with_reasoning_policy(&messages, reasoning_policy);
+                        let evicted = crate::compaction::evict_stale_tool_outputs_sticky(
                             &mut messages,
                             fold_config.keep_recent,
-                            reasoning_policy,
+                            Some(&spill),
                             &mut sticky_evictions,
                         );
-                        let saved = estimate_before.saturating_sub(estimate(&messages));
-                        if over_threshold(tokens.saturating_sub(saved)) {
-                            evicted += crate::compaction::evict_stale_tool_outputs_sticky(
-                                &mut messages,
-                                fold_config.keep_recent,
-                                Some(&spill),
-                                &mut sticky_evictions,
-                            );
-                        }
                         if evicted == 0 {
                             continue;
                         }
-                        tokens = tokens
-                            .saturating_sub(estimate_before.saturating_sub(estimate(&messages)));
+                        let saved = estimate_before.saturating_sub(
+                            self.token_accounting
+                                .estimate_with_reasoning_policy(&messages, reasoning_policy),
+                        );
+                        tokens = tokens.saturating_sub(saved);
                         // Record the saving whether or not it sufficed. A partial
                         // reduction that still needed a summary is real work, and
                         // hiding it made the ledger disagree with the transcript.
