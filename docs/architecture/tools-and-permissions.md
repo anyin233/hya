@@ -56,7 +56,7 @@ stay globally unique inside a registry. `hya-tool` exposes the mechanism in
 | Tool | Input (advertised) | Output |
 | --- | --- | --- |
 | `invalid` | unknown call payload | Structured invalid-tool response. |
-| `read` | `{ "path": string, "offset"?: integer >= 1, "limit"?: integer >= 1, "raw"?: boolean }` (closed) | Hashline or raw file text, media attachment, or directory listing. |
+| `read` | `{ "path": string, "offset"?: integer >= 1, "limit"?: integer >= 1, "raw"?: boolean }` (closed) | Hashline or raw file text, media attachment, or directory listing. An image goes to a model that takes images; other models, and every PDF, get text saying the content is not shown (see [Tool-result images](providers.md#tool-result-images)). |
 | `write` | `{ "path": string, "content": string }` (closed) | Final write result plus bounded display metadata and formatter/LSP diagnostics when available. |
 | `edit` | `{ "path": string, "edits": [...] }` (closed; operations are `replace`, `append`, `prepend`, or `replace_text`) | Fresh hashline preview, bounded diff, warnings, and diagnostics. |
 | `apply_patch` (`patch`) | `{ "patchText": string }` (alias `patch`) | Aggregate diff and per-file metadata. |

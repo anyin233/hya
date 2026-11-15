@@ -27,6 +27,15 @@ pub struct OpenAiChatProtocol;
 
 impl Protocol for OpenAiChatProtocol {
     fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
+        self.encode_for_model(req, None, false)
+    }
+
+    fn encode_for_model(
+        &self,
+        req: &CompletionRequest,
+        _output_limit: Option<u32>,
+        images: bool,
+    ) -> Result<Value, ProviderError> {
         let mut messages = Vec::new();
         let deepseek = req
             .model
@@ -58,7 +67,7 @@ impl Protocol for OpenAiChatProtocol {
                     }));
                 }
                 Message::Assistant { parts, .. } => {
-                    emit_assistant(&mut messages, parts, thinking)?;
+                    emit_assistant(&mut messages, parts, thinking, images)?;
                 }
             }
         }
@@ -144,6 +153,7 @@ fn emit_assistant(
     out: &mut Vec<Value>,
     parts: &[Part],
     thinking: bool,
+    images: bool,
 ) -> Result<(), ProviderError> {
     for parts in crate::wire::assistant_clusters(parts, replays_reasoning) {
         let mut cluster = Cluster::default();
@@ -165,13 +175,18 @@ fn emit_assistant(
             }
         }
         if !cluster.tools.is_empty() || !cluster.text.is_empty() || !cluster.reasoning.is_empty() {
-            flush_cluster(out, &cluster, thinking);
+            flush_cluster(out, &cluster, thinking, images)?;
         }
     }
     Ok(())
 }
 
-fn flush_cluster(out: &mut Vec<Value>, cluster: &Cluster<'_>, thinking: bool) {
+fn flush_cluster(
+    out: &mut Vec<Value>,
+    cluster: &Cluster<'_>,
+    thinking: bool,
+    images: bool,
+) -> Result<(), ProviderError> {
     let content = if cluster.text.is_empty() && !thinking {
         Value::Null
     } else {
@@ -183,7 +198,7 @@ fn flush_cluster(out: &mut Vec<Value>, cluster: &Cluster<'_>, thinking: bool) {
     }
     if cluster.tools.is_empty() {
         out.push(message);
-        return;
+        return Ok(());
     }
     let tool_calls: Vec<Value> = cluster
         .tools
@@ -213,12 +228,30 @@ fn flush_cluster(out: &mut Vec<Value>, cluster: &Cluster<'_>, thinking: bool) {
         .collect();
     message["tool_calls"] = Value::Array(tool_calls);
     out.push(message);
+    // A tool message carries text only, so the step's images follow its
+    // tool messages as one user message, each labelled with its call.
+    let mut shown = Vec::new();
     for &p in &cluster.tools {
         if let Part::Tool { call_id, state, .. } = p {
-            let (result, _is_error) = tool_result(state);
+            let result = tool_result(state, images);
             out.push(
-                json!({"role": "tool", "tool_call_id": call_id.to_string(), "content": result}),
+                json!({"role": "tool", "tool_call_id": call_id.to_string(), "content": result.text}),
             );
+            if !result.images.is_empty() {
+                shown.push(json!({
+                    "type": "text",
+                    "text": format!("Image from the result of tool call {call_id}:"),
+                }));
+            }
+            for (mime, data) in result.images {
+                shown.push(
+                    json!({"type": "image_url", "image_url": {"url": image_url(mime, data)?}}),
+                );
+            }
         }
     }
+    if !shown.is_empty() {
+        out.push(json!({"role": "user", "content": shown}));
+    }
+    Ok(())
 }

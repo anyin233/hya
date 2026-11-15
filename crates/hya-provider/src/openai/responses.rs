@@ -21,7 +21,16 @@ pub(crate) struct GrokBuildProtocol;
 
 impl Protocol for GrokBuildProtocol {
     fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
-        let mut body = OpenAiResponsesProtocol.encode(req)?;
+        self.encode_for_model(req, None, false)
+    }
+
+    fn encode_for_model(
+        &self,
+        req: &CompletionRequest,
+        output_limit: Option<u32>,
+        images: bool,
+    ) -> Result<Value, ProviderError> {
+        let mut body = OpenAiResponsesProtocol.encode_for_model(req, output_limit, images)?;
         body["include"] = json!(["reasoning.encrypted_content"]);
         Ok(body)
     }
@@ -38,7 +47,16 @@ impl Protocol for GrokBuildProtocol {
 
 impl Protocol for OpenAiResponsesProtocol {
     fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
-        let input = encode_input_items(&req.messages)?;
+        self.encode_for_model(req, None, false)
+    }
+
+    fn encode_for_model(
+        &self,
+        req: &CompletionRequest,
+        _output_limit: Option<u32>,
+        images: bool,
+    ) -> Result<Value, ProviderError> {
+        let input = encode_input_items(&req.messages, images)?;
         let tools: Vec<Value> = req
             .tools
             .iter()
@@ -86,10 +104,12 @@ impl Protocol for OpenAiResponsesProtocol {
     }
 }
 
-/// Build the Responses API `input` item array from hya messages.
+/// Build the Responses API `input` item array from hya messages. `images`:
+/// the model accepts image input, so tool-result images are sent (see
+/// [`crate::Protocol::encode_for_model`]).
 ///
 /// Used by both `/responses` create and `/responses/compact`.
-pub fn encode_input_items(messages: &[Message]) -> Result<Vec<Value>, ProviderError> {
+pub fn encode_input_items(messages: &[Message], images: bool) -> Result<Vec<Value>, ProviderError> {
     let mut input = Vec::new();
     for message in messages {
         let (role, parts) = match message {
@@ -103,7 +123,7 @@ pub fn encode_input_items(messages: &[Message]) -> Result<Vec<Value>, ProviderEr
             }
             Message::User { parts, .. } => ("user", parts),
             Message::Assistant { parts, .. } => {
-                emit_assistant(&mut input, parts)?;
+                emit_assistant(&mut input, parts, images)?;
                 continue;
             }
         };
@@ -161,7 +181,7 @@ fn other_kind(value: &Value) -> &'static str {
     }
 }
 
-fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) -> Result<(), ProviderError> {
+fn emit_assistant(out: &mut Vec<Value>, parts: &[Part], images: bool) -> Result<(), ProviderError> {
     let mut text = String::new();
     for part in parts {
         match part {
@@ -191,11 +211,10 @@ fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) -> Result<(), ProviderEr
                     "name": name.as_str(),
                     "arguments": arguments,
                 }));
-                let (output, _is_error) = tool_result(state);
                 out.push(json!({
                     "type": "function_call_output",
                     "call_id": call_id.to_string(),
-                    "output": output,
+                    "output": function_call_output(tool_result(state, images))?,
                 }));
             }
             Part::Media { media_type, .. } => {
@@ -207,6 +226,22 @@ fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) -> Result<(), ProviderEr
     }
     flush_text(out, &mut text);
     Ok(())
+}
+
+/// A result without images stays a string; with images `output` is a
+/// content list of `input_text` and `input_image` items.
+fn function_call_output(result: crate::wire::ToolResult<'_>) -> Result<Value, ProviderError> {
+    if result.images.is_empty() {
+        return Ok(Value::String(result.text));
+    }
+    let mut content = Vec::new();
+    if !result.text.is_empty() {
+        content.push(json!({"type": "input_text", "text": result.text}));
+    }
+    for (mime, data) in result.images {
+        content.push(json!({"type": "input_image", "image_url": image_url(mime, data)?}));
+    }
+    Ok(Value::Array(content))
 }
 
 fn flush_text(out: &mut Vec<Value>, text: &mut String) {
@@ -275,7 +310,7 @@ mod tests {
                 }],
             },
         ];
-        let input = encode_input_items(&messages).unwrap();
+        let input = encode_input_items(&messages, false).unwrap();
         assert_eq!(input.len(), 3);
         assert_eq!(input[0], items[0]);
         assert_eq!(input[1], items[1]);
@@ -289,7 +324,7 @@ mod tests {
             id: MessageId::new(),
             content: "HYA_COMPACTED_CONTEXT\nsummary only".into(),
         }];
-        let input = encode_input_items(&messages).unwrap();
+        let input = encode_input_items(&messages, false).unwrap();
         assert_eq!(input.len(), 1);
         assert_eq!(input[0]["role"], "system");
     }
