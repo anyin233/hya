@@ -75,6 +75,7 @@ impl SessionEngine {
                 format!("{COMPACT_CONTEXT_MARKER}\n{summary}"),
                 CompactionStrategy::LocalSummarizer,
                 folded,
+                None,
                 u64::try_from(self.token_accounting.estimate(&messages)).unwrap_or(u64::MAX),
                 0,
             )
@@ -156,6 +157,7 @@ impl SessionEngine {
         content: String,
         strategy: CompactionStrategy,
         folded: Option<(MessageId, MessageId, u32)>,
+        step_cut: Option<hya_proto::StepCut>,
         input_tokens_est: u64,
         threshold: u64,
     ) -> Result<MessageId, CoreError> {
@@ -204,7 +206,7 @@ impl SessionEngine {
                 folded_count,
                 input_tokens_est,
                 threshold,
-                step_cut: None,
+                step_cut,
             });
         }
         self.emit_batch_for_actor(actor_claim, session, events)
