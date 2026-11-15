@@ -1266,9 +1266,11 @@ async fn stale_tool_outputs_spill_inside_one_long_turn() {
         CompactionConfig {
             token_threshold: 1_000_000,
             keep_recent: 1,
-            // ~32,000-token threshold: one ~30,100-token read output fits,
-            // two do not (see the cross-turn eviction test above).
-            context_fraction: 0.16,
+            // ~46,000-token threshold: fixed tool schemas (~14,000) plus one
+            // ~30,100-token read output fit (~44,100), while two read outputs
+            // (~74,200) cross the threshold and spilling the stale one brings
+            // the request back to ~44,100 without summarizing.
+            context_fraction: 0.23,
             ..CompactionConfig::default()
         },
     );
@@ -1773,4 +1775,169 @@ async fn a_fold_after_a_spill_keeps_the_spilled_placeholders() {
     );
     assert!(outputs[1].contains(&"R".repeat(100)));
     assert!(outputs[2].contains(&"R".repeat(100)));
+}
+
+/// When a provider's reported prompt size is plausible (`~0.70` of the local
+/// estimate, e.g. dense JSON/reasoning tokenization) and still sits below
+/// `resolved_threshold` (`0.75 * max_context`) while the local estimate has
+/// already crossed `max_context`, the reduction ladder must still run before
+/// `check_request_context` refuses the request.
+#[tokio::test]
+async fn step_fold_runs_before_preflight_rejects_an_under_threshold_provider_count() {
+    struct CompactTokenizerRoute {
+        inner: OpaqueReasoningRoute,
+    }
+
+    #[async_trait::async_trait]
+    impl hya_provider::Provider for CompactTokenizerRoute {
+        fn id(&self) -> &str {
+            "fake"
+        }
+
+        fn capabilities(&self, model: &ModelRef) -> Option<hya_provider::Capabilities> {
+            let mut caps = self.inner.capabilities(model)?;
+            caps.usage_reporting = true;
+            Some(caps)
+        }
+
+        fn reasoning_replay_policy(&self) -> hya_provider::ReasoningReplayPolicy {
+            self.inner.reasoning_replay_policy()
+        }
+
+        async fn stream(
+            &self,
+            req: hya_provider::CompletionRequest,
+            session: hya_proto::SessionId,
+            message: hya_proto::MessageId,
+        ) -> Result<hya_provider::EventStream, hya_provider::ProviderError> {
+            use futures::StreamExt as _;
+            let tokenizer = hya_core::tokens::TokenAccounting::default();
+            let estimated = tokenizer.estimate_with_reasoning_policy(
+                &req.messages,
+                hya_provider::ReasoningReplayPolicy::ProviderData,
+            );
+            // Plausible (`0.68 >= 0.50`) yet stays below `0.75 * max_context`
+            // even when `estimated` just crossed `max_context`.
+            let reported = (estimated * 68) / 100;
+            let stream = self.inner.stream(req, session, message).await?;
+            Ok(Box::pin(stream.map(move |event| match event {
+                Ok(Event::MessageFinished {
+                    session,
+                    message,
+                    role,
+                    finish,
+                    cause,
+                    ..
+                }) => Ok(Event::MessageFinished {
+                    session,
+                    message,
+                    role,
+                    finish,
+                    tokens: Some(TokenUsage {
+                        input: reported as u64,
+                        output: 100,
+                        reasoning: 0,
+                        cache_read: 0,
+                        cache_write: 0,
+                        reasoning_unknown: false,
+                    }),
+                    cause,
+                }),
+                other => other,
+            })))
+        }
+    }
+
+    let dir = tempdir();
+    let file = dir.join("small.txt");
+    tokio::fs::write(&file, "ok").await.unwrap();
+    let path = file.to_string_lossy().into_owned();
+
+    let tokenizer = hya_core::tokens::TokenAccounting::default();
+    let unit = "lorem ipsum dolor sit amet ".repeat(100);
+    let per_unit = tokenizer.tokenizer().count_text(&unit);
+    let blob = unit.repeat(20_000 / per_unit + 1);
+    let item_tokens = tokenizer.tokenizer().count_text(&blob);
+    // Five items (~100k estimated) cross a 95k window while `0.68 * 80k = 54.4k`
+    // from step 4 is still well below `0.75 * 95k = 71.25k`.
+    let max_context = u32::try_from(item_tokens * 4 + item_tokens * 3 / 4).unwrap();
+
+    let mut scripts: Vec<_> = (0..6)
+        .map(|step| {
+            vec![
+                FakeStep::Reasoning(format!("thinking step {step}")),
+                FakeStep::ToolCall {
+                    name: "read".to_string(),
+                    input: json!({ "path": path }),
+                },
+                FakeStep::Finish(FinishReason::ToolCalls),
+            ]
+        })
+        .collect();
+    scripts.push(vec![
+        FakeStep::Text("done".to_string()),
+        FakeStep::Finish(FinishReason::Stop),
+    ]);
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let route = CompactTokenizerRoute {
+        inner: OpaqueReasoningRoute {
+            inner: FakeProvider::scripted_turns(scripts),
+            blob,
+            max_context: Arc::new(std::sync::atomic::AtomicU32::new(max_context)),
+            requests: Arc::clone(&requests),
+        },
+    };
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+        Action::Read,
+        "/**",
+        Mode::Allow,
+    )]));
+    let folds: StepFolds = Arc::default();
+    let engine = SessionEngine::new(
+        SessionStore::connect_memory().await.unwrap(),
+        Arc::new(ProviderRouter::new().with(Arc::new(route))),
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        perm,
+        EventBus::default(),
+    )
+    .with_compaction(
+        Arc::new(StepFoldRecorder(Arc::clone(&folds))),
+        CompactionConfig {
+            keep_recent: 1,
+            context_fraction: 0.75,
+            reserve_tokens: 0,
+            ..CompactionConfig::default()
+        },
+    );
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "x".to_string(),
+        workdir: dir,
+        reasoning: None,
+    };
+    engine
+        .admit_user_prompt(session, "work through it".to_string())
+        .await
+        .unwrap();
+    let finish = engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .expect("preflight-bound turn folds instead of failing un-compacted");
+    assert_eq!(finish, FinishReason::Stop);
+    assert!(
+        !folds.lock().unwrap().is_empty(),
+        "step fold ran before preflight rejected the request"
+    );
 }

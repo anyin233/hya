@@ -1182,12 +1182,15 @@ impl SessionEngine {
         agent: &AgentSpec,
         model: &ModelRef,
         sticky: &crate::compaction::StickyEvictions,
+        reasoning_policy: hya_provider::ReasoningReplayPolicy,
     ) -> Result<(Vec<Message>, usize), CoreError> {
         let projection = self.store.read_projection_shared(session).await?;
         let attachments = self.attachment_data(session, &projection).await?;
         let mut messages = projection_to_messages(agent, &projection, model, &attachments);
         crate::compaction::apply_sticky_evictions(&mut messages, sticky);
-        let tokens = self.token_accounting.estimate(&messages);
+        let tokens = self
+            .token_accounting
+            .estimate_with_reasoning_policy(&messages, reasoning_policy);
         Ok((messages, tokens))
     }
 
@@ -1526,12 +1529,32 @@ impl SessionEngine {
             let request_overhead = self
                 .token_accounting
                 .estimate_request(&template, reasoning_policy);
-            let mut tokens = initial_count.tokens.saturating_add(request_overhead);
-            let token_source = initial_count.source;
-            let over_threshold = |tokens: usize| tokens > resolved_threshold;
             let count = |messages: &[Message]| {
                 self.token_accounting
                     .estimate_with_reasoning_policy(messages, reasoning_policy)
+            };
+            let max_context = capabilities.as_ref().map_or(0, |c| c.max_context as usize);
+            let over_window = |messages: &[Message]| {
+                max_context > 0 && count(messages).saturating_add(request_overhead) > max_context
+            };
+            // When the local preflight (`check_request_context`) would reject
+            // the request outright even though provider-reported occupancy from
+            // the previous step sits below `resolved_threshold`, measure by the
+            // local estimate so the ladder reduces the request instead of
+            // letting the preflight fail the turn un-compacted.
+            let (mut tokens, mut token_source) = {
+                let reported = initial_count.tokens.saturating_add(request_overhead);
+                if reported <= resolved_threshold && over_window(&messages) {
+                    (
+                        count(&messages).saturating_add(request_overhead),
+                        crate::tokens::TokenSource::Estimate,
+                    )
+                } else {
+                    (reported, initial_count.source)
+                }
+            };
+            let needs_reduction = |tokens: usize, messages: &[Message]| {
+                tokens > resolved_threshold || over_window(messages)
             };
             let fold_cut = |messages: &[Message]| {
                 crate::compaction::fold_cut(
@@ -1565,7 +1588,7 @@ impl SessionEngine {
             // trigger is Overflow: the request cannot go out un-compacted, so
             // `resolve_compaction_decision` demotes any Skip to a warning and
             // a Replace only rewrites the summarizer instructions below.
-            let summarizer_instructions = if over_threshold(tokens) {
+            let summarizer_instructions = if needs_reduction(tokens, &messages) {
                 match self.active_hook_dispatcher(session) {
                     Some(hooks) => {
                         let decision = hooks
@@ -1594,20 +1617,27 @@ impl SessionEngine {
             let mut committed_summary_tokens: Option<usize> = None;
 
             for rung in self.compaction.method_order {
-                if !over_threshold(tokens) {
+                if !needs_reduction(tokens, &messages) {
                     break;
                 }
                 if matches!(rung, crate::compaction::CompactionRung::SpillToolOutputs)
                     && !crate::compaction::has_spillable_tool_output(
                         &messages,
                         fold_config.keep_recent,
+                        self.compaction.keep_recent,
                     )
                 {
                     continue;
                 }
                 // Snapshot what tripped the threshold before this rung edits the
                 // transcript, so each record explains why that rung ran.
-                let input_tokens_est = u64::try_from(tokens).unwrap_or(u64::MAX);
+                let estimated_now = count(&messages).saturating_add(request_overhead);
+                let input_tokens_est = u64::try_from(if over_window(&messages) {
+                    tokens.max(estimated_now)
+                } else {
+                    tokens
+                })
+                .unwrap_or(u64::MAX);
                 let threshold = u64::try_from(resolved_threshold).unwrap_or(u64::MAX);
 
                 match rung {
@@ -1615,9 +1645,10 @@ impl SessionEngine {
                         let estimate_before = self
                             .token_accounting
                             .estimate_with_reasoning_policy(&messages, reasoning_policy);
-                        let evicted = crate::compaction::evict_stale_tool_outputs_sticky(
+                        let evicted = crate::compaction::evict_stale_tool_outputs_in_turn(
                             &mut messages,
                             fold_config.keep_recent,
+                            self.compaction.keep_recent,
                             Some(&spill),
                             &mut sticky_evictions,
                         );
@@ -1688,9 +1719,11 @@ impl SessionEngine {
                                 &live_agent,
                                 &model,
                                 &sticky_evictions,
+                                reasoning_policy,
                             )
                             .await?;
                         tokens = tokens.saturating_add(request_overhead);
+                        token_source = crate::tokens::TokenSource::Estimate;
                     }
                     crate::compaction::CompactionRung::SnapCompact => {
                         // Local and deterministic: no model call, no capability
@@ -1720,9 +1753,11 @@ impl SessionEngine {
                                 &live_agent,
                                 &model,
                                 &sticky_evictions,
+                                reasoning_policy,
                             )
                             .await?;
                         tokens = tokens.saturating_add(request_overhead);
+                        token_source = crate::tokens::TokenSource::Estimate;
                     }
                     crate::compaction::CompactionRung::Handoff => {
                         let Some(summarizer) = &self.summarizer else {
@@ -1786,9 +1821,11 @@ impl SessionEngine {
                                 &live_agent,
                                 &model,
                                 &sticky_evictions,
+                                reasoning_policy,
                             )
                             .await?;
                         tokens = tokens.saturating_add(request_overhead);
+                        token_source = crate::tokens::TokenSource::Estimate;
                     }
                     crate::compaction::CompactionRung::Summarize => {
                         let Some(summarizer) = &self.summarizer else {
@@ -1851,9 +1888,11 @@ impl SessionEngine {
                                 &live_agent,
                                 &model,
                                 &sticky_evictions,
+                                reasoning_policy,
                             )
                             .await?;
                         tokens = tokens.saturating_add(request_overhead);
+                        token_source = crate::tokens::TokenSource::Estimate;
                     }
                 }
             }

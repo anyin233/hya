@@ -272,17 +272,18 @@ fn step_fold(
     // A step starts where a non-tool part follows the previous step's tool
     // calls. Between two calls a cut is also safe when no reasoning leads
     // them (a model that calls tools without thinking aloud); a call led by
-    // reasoning stays with it. Every call keeps its result: a tool part holds
-    // both.
+    // reasoning stays with it even when text sits between the reasoning and
+    // the calls. Every call keeps its result: a tool part holds both.
     let mut step_starts = Vec::new();
-    let mut led_by_reasoning = false;
+    let mut led_by_reasoning = matches!(parts.first(), Some(Part::Reasoning { .. }));
     for at in 1..parts.len() {
         let after_call = matches!(parts[at - 1], Part::Tool { .. });
-        if !after_call {
-            led_by_reasoning = matches!(parts[at - 1], Part::Reasoning { .. });
-        }
-        if after_call && (!matches!(parts[at], Part::Tool { .. }) || !led_by_reasoning) {
+        let is_call = matches!(parts[at], Part::Tool { .. });
+        if after_call && (!is_call || !led_by_reasoning) {
             step_starts.push(at);
+            led_by_reasoning = matches!(parts[at], Part::Reasoning { .. });
+        } else if matches!(parts[at], Part::Reasoning { .. }) {
+            led_by_reasoning = true;
         }
     }
     // The turn's head: the prompt and notices right before the message.
@@ -515,10 +516,14 @@ fn is_eviction_notice(output: &serde_json::Value) -> bool {
 }
 
 /// Completed, not-yet-evicted tool outputs that are stale: outside the last
-/// `keep_recent` messages (older turns, as before) OR outside the last
-/// `keep_recent` tool steps. The step tail is what lets a long turn — one
+/// `keep_messages` messages (older turns, as before) OR outside the last
+/// `keep_steps` tool steps. The step tail is what lets a long turn — one
 /// assistant message holding many tool steps — shed its own early outputs.
-fn stale_tool_outputs(messages: &[Message], keep_recent: usize) -> Vec<(usize, usize)> {
+fn stale_tool_outputs(
+    messages: &[Message],
+    keep_messages: usize,
+    keep_steps: usize,
+) -> Vec<(usize, usize)> {
     let mut candidates = Vec::new();
     for (message_index, message) in messages.iter().enumerate() {
         let parts = match message {
@@ -536,8 +541,8 @@ fn stale_tool_outputs(messages: &[Message], keep_recent: usize) -> Vec<(usize, u
             }
         }
     }
-    let step_cut = candidates.len().saturating_sub(keep_recent);
-    let message_cut = messages.len().saturating_sub(keep_recent);
+    let step_cut = candidates.len().saturating_sub(keep_steps);
+    let message_cut = messages.len().saturating_sub(keep_messages);
     candidates
         .into_iter()
         .enumerate()
@@ -560,8 +565,18 @@ pub fn evict_stale_tool_outputs_sticky(
     sink: Option<&dyn EvictionSink>,
     sticky: &mut StickyEvictions,
 ) -> u32 {
+    evict_stale_tool_outputs_in_turn(messages, keep_recent, keep_recent, sink, sticky)
+}
+
+pub(crate) fn evict_stale_tool_outputs_in_turn(
+    messages: &mut [Message],
+    keep_messages: usize,
+    keep_steps: usize,
+    sink: Option<&dyn EvictionSink>,
+    sticky: &mut StickyEvictions,
+) -> u32 {
     let mut evicted = 0;
-    for (message_index, part_index) in stale_tool_outputs(messages, keep_recent) {
+    for (message_index, part_index) in stale_tool_outputs(messages, keep_messages, keep_steps) {
         let (Message::Assistant { id, parts, .. } | Message::User { id, parts, .. }) =
             &mut messages[message_index]
         else {
@@ -662,8 +677,12 @@ pub fn apply_sticky_evictions(messages: &mut [Message], sticky: &StickyEvictions
 }
 
 /// Whether at least one completed tool output is stale enough to spill.
-pub(crate) fn has_spillable_tool_output(messages: &[Message], keep_recent: usize) -> bool {
-    !stale_tool_outputs(messages, keep_recent).is_empty()
+pub(crate) fn has_spillable_tool_output(
+    messages: &[Message],
+    keep_messages: usize,
+    keep_steps: usize,
+) -> bool {
+    !stale_tool_outputs(messages, keep_messages, keep_steps).is_empty()
 }
 
 /// The anchored summary already present in `messages`, if any.
@@ -2046,6 +2065,23 @@ mod tests {
         assert!(
             fold_cut(&led, 2, 1, usize::MAX, &estimate).is_none(),
             "calls led by reasoning are one step"
+        );
+
+        let led_with_text = vec![
+            user("go"),
+            assistant(vec![
+                reasoning("r"),
+                Part::Text {
+                    id: PartId::new(),
+                    text: "checking both".to_string(),
+                },
+                tool_step("a"),
+                tool_step("b"),
+            ]),
+        ];
+        assert!(
+            fold_cut(&led_with_text, 2, 1, usize::MAX, &estimate).is_none(),
+            "text between reasoning and parallel calls does not split the step"
         );
     }
 
