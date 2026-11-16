@@ -1266,9 +1266,11 @@ async fn stale_tool_outputs_spill_inside_one_long_turn() {
         CompactionConfig {
             token_threshold: 1_000_000,
             keep_recent: 1,
-            // ~32,000-token threshold: one ~30,100-token read output fits,
-            // two do not (see the cross-turn eviction test above).
-            context_fraction: 0.16,
+            // ~46,000-token threshold: fixed tool schemas (~14,000) plus one
+            // ~30,100-token read output fit (~44,100), while two read outputs
+            // (~74,200) cross the threshold and spilling the stale one brings
+            // the request back to ~44,100 without summarizing.
+            context_fraction: 0.23,
             ..CompactionConfig::default()
         },
     );
@@ -1333,5 +1335,609 @@ async fn stale_tool_outputs_spill_inside_one_long_turn() {
     assert!(
         !called.load(Ordering::SeqCst),
         "spilling was enough; nothing was summarized"
+    );
+}
+
+/// Records every request; replays reasoning as an opaque per-part provider
+/// item of `blob`'s size (Responses-shaped); the advertised window can change
+/// between turns.
+struct OpaqueReasoningRoute {
+    inner: FakeProvider,
+    blob: String,
+    max_context: Arc<std::sync::atomic::AtomicU32>,
+    requests: Arc<Mutex<Vec<hya_provider::CompletionRequest>>>,
+}
+
+#[async_trait::async_trait]
+impl hya_provider::Provider for OpaqueReasoningRoute {
+    fn id(&self) -> &str {
+        "fake"
+    }
+
+    fn capabilities(&self, _model: &ModelRef) -> Option<hya_provider::Capabilities> {
+        Some(hya_provider::Capabilities {
+            streaming_tool_calls: true,
+            max_context: self.max_context.load(Ordering::SeqCst),
+            ..hya_provider::Capabilities::default()
+        })
+    }
+
+    fn reasoning_replay_policy(&self) -> hya_provider::ReasoningReplayPolicy {
+        hya_provider::ReasoningReplayPolicy::ProviderData
+    }
+
+    async fn stream(
+        &self,
+        req: hya_provider::CompletionRequest,
+        session: hya_proto::SessionId,
+        message: hya_proto::MessageId,
+    ) -> Result<hya_provider::EventStream, hya_provider::ProviderError> {
+        use futures::StreamExt as _;
+        self.requests.lock().unwrap().push(req.clone());
+        let blob = self.blob.clone();
+        let stream = self.inner.stream(req, session, message).await?;
+        Ok(Box::pin(stream.map(move |event| match event {
+            Ok(Event::ReasoningEnd {
+                session,
+                message,
+                part,
+                ..
+            }) => Ok(Event::ReasoningEnd {
+                session,
+                message,
+                part,
+                provider_data: Some(json!({
+                    "type": "reasoning",
+                    "id": part.to_string(),
+                    "encrypted_content": blob,
+                })),
+            }),
+            other => other,
+        })))
+    }
+}
+
+/// Records, per summarizer call, the reasoning texts it was shown and the
+/// summary it was anchored on.
+type StepFolds = Arc<Mutex<Vec<(Vec<String>, Option<String>)>>>;
+struct StepFoldRecorder(StepFolds);
+
+#[async_trait::async_trait]
+impl Summarizer for StepFoldRecorder {
+    async fn summarize(
+        &self,
+        messages: &[Message],
+        options: hya_core::SummarizeOptions,
+    ) -> Result<String, CoreError> {
+        let reasoning = messages
+            .iter()
+            .flat_map(|message| match message {
+                Message::Assistant { parts, .. } => parts.as_slice(),
+                _ => &[],
+            })
+            .filter_map(|part| match part {
+                hya_proto::Part::Reasoning { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        let mut calls = self.0.lock().unwrap();
+        calls.push((reasoning, options.previous_summary));
+        Ok(format!("STEP SUMMARY {}", calls.len()))
+    }
+}
+
+/// A headless run is one prompt and one assistant message holding every step,
+/// so no message prefix exists to fold. Once the replayed reasoning passes the
+/// threshold, whole old steps (reasoning, calls and results together) must
+/// fold into the summary while the prompt and the recent steps stay verbatim,
+/// reasoning included; otherwise the run dies at the window.
+#[tokio::test]
+async fn single_turn_folds_old_steps_and_replays_the_kept_reasoning() {
+    const STEPS: usize = 9;
+    let dir = tempdir();
+    let file = dir.join("small.txt");
+    tokio::fs::write(&file, "ok").await.unwrap();
+    let path = file.to_string_lossy().into_owned();
+
+    // Each replayed item is ~20k tokens; the window holds seven of them, and
+    // the threshold (0.55 of it) a little under four.
+    let tokenizer = hya_core::tokens::TokenAccounting::default();
+    let unit = "lorem ipsum dolor sit amet ".repeat(100);
+    let per_unit = tokenizer.tokenizer().count_text(&unit);
+    let blob = unit.repeat(20_000 / per_unit + 1);
+    let item_tokens = tokenizer.tokenizer().count_text(&blob);
+    let max_context = u32::try_from(item_tokens * 7).unwrap();
+
+    let mut scripts: Vec<_> = (0..STEPS)
+        .map(|step| {
+            vec![
+                FakeStep::Reasoning(format!("thinking step {step}")),
+                FakeStep::ToolCall {
+                    name: "read".to_string(),
+                    input: json!({ "path": path }),
+                },
+                FakeStep::Finish(FinishReason::ToolCalls),
+            ]
+        })
+        .collect();
+    scripts.push(vec![
+        FakeStep::Text("done".to_string()),
+        FakeStep::Finish(FinishReason::Stop),
+    ]);
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let route = OpaqueReasoningRoute {
+        inner: FakeProvider::scripted_turns(scripts),
+        blob,
+        max_context: Arc::new(std::sync::atomic::AtomicU32::new(max_context)),
+        requests: Arc::clone(&requests),
+    };
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(route)));
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+        Action::Read,
+        "/**",
+        Mode::Allow,
+    )]));
+    let folds: StepFolds = Arc::default();
+    let engine = SessionEngine::new(
+        SessionStore::connect_memory().await.unwrap(),
+        router,
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        perm,
+        EventBus::default(),
+    )
+    .with_compaction(
+        Arc::new(StepFoldRecorder(Arc::clone(&folds))),
+        CompactionConfig {
+            keep_recent: 1,
+            context_fraction: 0.55,
+            reserve_tokens: 0,
+            ..CompactionConfig::default()
+        },
+    );
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "x".to_string(),
+        workdir: dir,
+        reasoning: None,
+    };
+    engine
+        .admit_user_prompt(session, "work through it".to_string())
+        .await
+        .unwrap();
+    let finish = engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(finish, FinishReason::Stop);
+
+    let requests = std::mem::take(&mut *requests.lock().unwrap());
+    assert_eq!(requests.len(), STEPS + 1, "every round's request was sent");
+    for request in &requests {
+        assert!(
+            tokenizer.estimate_with_reasoning_policy(
+                &request.messages,
+                hya_provider::ReasoningReplayPolicy::ProviderData
+            ) <= max_context as usize,
+            "every request fits the window"
+        );
+    }
+
+    let envelopes = engine.replay(session).await.unwrap();
+    let step_folds = envelopes
+        .iter()
+        .filter(|e| {
+            matches!(
+                &e.event,
+                Event::ContextCompacted {
+                    step_cut: Some(_),
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(step_folds, 2, "old steps fold twice over nine steps");
+
+    // The stored session keeps every step's reasoning.
+    let projection = hya_proto::Projection::from_events(&envelopes);
+    let stored = projection
+        .session
+        .messages
+        .iter()
+        .find(|m| m.role == Role::Assistant)
+        .unwrap();
+    let stored_reasoning: Vec<_> = stored
+        .parts
+        .iter()
+        .filter_map(|part| match part {
+            PartProjection::Reasoning {
+                id,
+                text,
+                provider_data: Some(data),
+                ..
+            } => Some((*id, text.clone(), data.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stored_reasoning.len(), STEPS);
+
+    // The last request: the summary, the prompt verbatim, and the kept steps
+    // with their reasoning exactly as stored.
+    let last = requests.last().unwrap();
+    let markers: Vec<_> = last
+        .messages
+        .iter()
+        .filter_map(|m| match m {
+            Message::System { content, .. }
+                if content.starts_with(hya_provider::COMPACT_CONTEXT_MARKER) =>
+            {
+                Some(content.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(markers.len(), 1, "exactly one summary marker is sent");
+    assert!(markers[0].contains("STEP SUMMARY 2"), "{}", markers[0]);
+    assert!(
+        last.messages.iter().any(|m| matches!(m,
+            Message::User { parts, .. } if parts.iter().any(|p| matches!(p,
+                hya_proto::Part::Text { text, .. } if text == "work through it")))),
+        "the turn's prompt stays verbatim"
+    );
+    let sent_reasoning: Vec<_> = last
+        .messages
+        .iter()
+        .flat_map(|message| match message {
+            Message::Assistant { parts, .. } => parts.as_slice(),
+            _ => &[],
+        })
+        .filter_map(|part| match part {
+            hya_proto::Part::Reasoning {
+                id,
+                text,
+                provider_data,
+                ..
+            } => Some((*id, text.clone(), provider_data.clone().unwrap())),
+            _ => None,
+        })
+        .collect();
+    assert!(!sent_reasoning.is_empty());
+    assert_eq!(
+        sent_reasoning.as_slice(),
+        &stored_reasoning[STEPS - sent_reasoning.len()..],
+        "the kept steps are the newest ones, reasoning replayed byte-identical"
+    );
+
+    // Folded steps reach the summarizer instead; the second fold updates the
+    // first summary rather than starting over.
+    let folds = folds.lock().unwrap();
+    assert_eq!(folds.len(), 2);
+    let folded: Vec<_> = folds.iter().flat_map(|(texts, _)| texts.clone()).collect();
+    for (_, text, _) in &stored_reasoning[..STEPS - sent_reasoning.len()] {
+        assert!(folded.contains(text), "{text} was summarized: {folded:?}");
+        assert!(
+            !sent_reasoning.iter().any(|(_, sent, _)| sent == text),
+            "{text} left the request"
+        );
+    }
+    assert_eq!(folds[0].1, None);
+    assert_eq!(folds[1].1.as_deref(), Some("STEP SUMMARY 1"));
+}
+
+/// A fold in the same ladder walk as a spill must not bring the spilled
+/// outputs back: the request still carries their placeholders.
+#[tokio::test]
+async fn a_fold_after_a_spill_keeps_the_spilled_placeholders() {
+    let dir = tempdir();
+    let big_file = dir.join("big.txt");
+    // ~30,100 tokens per read (see the spill tests above).
+    let big = format!("{}\n", "R".repeat(100)).repeat(200);
+    tokio::fs::write(&big_file, &big).await.unwrap();
+    let path = big_file.to_string_lossy().into_owned();
+    let read = || FakeStep::ToolCall {
+        name: "read".to_string(),
+        input: json!({ "path": path }),
+    };
+    let tokenizer = hya_core::tokens::TokenAccounting::default();
+    let unit = "earlier context ".repeat(100);
+    let prompt = unit.repeat(40_000 / tokenizer.tokenizer().count_text(&unit) + 1);
+
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    // Turn 1 runs under a window it cannot fill; turn 2 under one where
+    // spilling the oldest read is not enough and the prompt must fold.
+    let window = Arc::new(std::sync::atomic::AtomicU32::new(10_000_000));
+    let route = OpaqueReasoningRoute {
+        inner: FakeProvider::scripted_turns(vec![
+            vec![read(), FakeStep::Finish(FinishReason::ToolCalls)],
+            vec![read(), FakeStep::Finish(FinishReason::ToolCalls)],
+            vec![read(), FakeStep::Finish(FinishReason::ToolCalls)],
+            vec![
+                FakeStep::Text("read".to_string()),
+                FakeStep::Finish(FinishReason::Stop),
+            ],
+            vec![
+                FakeStep::Text("done".to_string()),
+                FakeStep::Finish(FinishReason::Stop),
+            ],
+        ]),
+        blob: String::new(),
+        max_context: Arc::clone(&window),
+        requests: Arc::clone(&requests),
+    };
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+        Action::Read,
+        "/**",
+        Mode::Allow,
+    )]));
+    let called = Arc::new(AtomicBool::new(false));
+    let engine = SessionEngine::new(
+        SessionStore::connect_memory().await.unwrap(),
+        Arc::new(ProviderRouter::new().with(Arc::new(route))),
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        perm,
+        EventBus::default(),
+    )
+    .with_compaction(
+        Arc::new(Recording(called.clone())),
+        CompactionConfig {
+            keep_recent: 2,
+            reserve_tokens: 0,
+            ..CompactionConfig::default()
+        },
+    );
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "x".to_string(),
+        workdir: dir,
+        reasoning: None,
+    };
+    engine.admit_user_prompt(session, prompt).await.unwrap();
+    engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+    // Threshold 82,500: prompt (~40k) + three reads (~90k) is over, and still
+    // over with the oldest read spilled; folding the prompt leaves ~60k.
+    window.store(110_000, Ordering::SeqCst);
+    engine
+        .admit_user_prompt(session, "go on".to_string())
+        .await
+        .unwrap();
+    engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(called.load(Ordering::SeqCst), "the prompt was folded");
+    let envelopes = engine.replay(session).await.unwrap();
+    let reductions: Vec<_> = envelopes
+        .iter()
+        .filter_map(|e| match e.event {
+            Event::ContextEvicted { .. } => Some("spill"),
+            Event::ContextCompacted { .. } => Some("fold"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reductions,
+        ["spill", "fold"],
+        "one walk spilled, then folded"
+    );
+
+    let requests = requests.lock().unwrap();
+    let last = requests.last().unwrap();
+    let outputs: Vec<String> = last
+        .messages
+        .iter()
+        .flat_map(|message| match message {
+            Message::Assistant { parts, .. } => parts.as_slice(),
+            _ => &[],
+        })
+        .filter_map(|part| match part {
+            hya_proto::Part::Tool {
+                state: ToolPartState::Completed { output, .. },
+                ..
+            } => Some(
+                output
+                    .as_str()
+                    .map_or_else(|| output.to_string(), ToString::to_string),
+            ),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(outputs.len(), 3, "the turn's three reads are kept");
+    assert!(
+        outputs[0].starts_with("[tool output moved to "),
+        "the spilled read stays spilled: {}",
+        &outputs[0][..outputs[0].len().min(200)]
+    );
+    assert!(outputs[1].contains(&"R".repeat(100)));
+    assert!(outputs[2].contains(&"R".repeat(100)));
+}
+
+/// When a provider's reported prompt size is plausible (`~0.70` of the local
+/// estimate, e.g. dense JSON/reasoning tokenization) and still sits below
+/// `resolved_threshold` (`0.75 * max_context`) while the local estimate has
+/// already crossed `max_context`, the reduction ladder must still run before
+/// `check_request_context` refuses the request.
+#[tokio::test]
+async fn step_fold_runs_before_preflight_rejects_an_under_threshold_provider_count() {
+    struct CompactTokenizerRoute {
+        inner: OpaqueReasoningRoute,
+    }
+
+    #[async_trait::async_trait]
+    impl hya_provider::Provider for CompactTokenizerRoute {
+        fn id(&self) -> &str {
+            "fake"
+        }
+
+        fn capabilities(&self, model: &ModelRef) -> Option<hya_provider::Capabilities> {
+            let mut caps = self.inner.capabilities(model)?;
+            caps.usage_reporting = true;
+            Some(caps)
+        }
+
+        fn reasoning_replay_policy(&self) -> hya_provider::ReasoningReplayPolicy {
+            self.inner.reasoning_replay_policy()
+        }
+
+        async fn stream(
+            &self,
+            req: hya_provider::CompletionRequest,
+            session: hya_proto::SessionId,
+            message: hya_proto::MessageId,
+        ) -> Result<hya_provider::EventStream, hya_provider::ProviderError> {
+            use futures::StreamExt as _;
+            let tokenizer = hya_core::tokens::TokenAccounting::default();
+            let estimated = tokenizer.estimate_with_reasoning_policy(
+                &req.messages,
+                hya_provider::ReasoningReplayPolicy::ProviderData,
+            );
+            // Plausible (`0.68 >= 0.50`) yet stays below `0.75 * max_context`
+            // even when `estimated` just crossed `max_context`.
+            let reported = (estimated * 68) / 100;
+            let stream = self.inner.stream(req, session, message).await?;
+            Ok(Box::pin(stream.map(move |event| match event {
+                Ok(Event::MessageFinished {
+                    session,
+                    message,
+                    role,
+                    finish,
+                    cause,
+                    ..
+                }) => Ok(Event::MessageFinished {
+                    session,
+                    message,
+                    role,
+                    finish,
+                    tokens: Some(TokenUsage {
+                        input: reported as u64,
+                        output: 100,
+                        reasoning: 0,
+                        cache_read: 0,
+                        cache_write: 0,
+                        reasoning_unknown: false,
+                    }),
+                    cause,
+                }),
+                other => other,
+            })))
+        }
+    }
+
+    let dir = tempdir();
+    let file = dir.join("small.txt");
+    tokio::fs::write(&file, "ok").await.unwrap();
+    let path = file.to_string_lossy().into_owned();
+
+    let tokenizer = hya_core::tokens::TokenAccounting::default();
+    let unit = "lorem ipsum dolor sit amet ".repeat(100);
+    let per_unit = tokenizer.tokenizer().count_text(&unit);
+    let blob = unit.repeat(20_000 / per_unit + 1);
+    let item_tokens = tokenizer.tokenizer().count_text(&blob);
+    // Five items (~100k estimated) cross a 95k window while `0.68 * 80k = 54.4k`
+    // from step 4 is still well below `0.75 * 95k = 71.25k`.
+    let max_context = u32::try_from(item_tokens * 4 + item_tokens * 3 / 4).unwrap();
+
+    let mut scripts: Vec<_> = (0..6)
+        .map(|step| {
+            vec![
+                FakeStep::Reasoning(format!("thinking step {step}")),
+                FakeStep::ToolCall {
+                    name: "read".to_string(),
+                    input: json!({ "path": path }),
+                },
+                FakeStep::Finish(FinishReason::ToolCalls),
+            ]
+        })
+        .collect();
+    scripts.push(vec![
+        FakeStep::Text("done".to_string()),
+        FakeStep::Finish(FinishReason::Stop),
+    ]);
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let route = CompactTokenizerRoute {
+        inner: OpaqueReasoningRoute {
+            inner: FakeProvider::scripted_turns(scripts),
+            blob,
+            max_context: Arc::new(std::sync::atomic::AtomicU32::new(max_context)),
+            requests: Arc::clone(&requests),
+        },
+    };
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+        Action::Read,
+        "/**",
+        Mode::Allow,
+    )]));
+    let folds: StepFolds = Arc::default();
+    let engine = SessionEngine::new(
+        SessionStore::connect_memory().await.unwrap(),
+        Arc::new(ProviderRouter::new().with(Arc::new(route))),
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        perm,
+        EventBus::default(),
+    )
+    .with_compaction(
+        Arc::new(StepFoldRecorder(Arc::clone(&folds))),
+        CompactionConfig {
+            keep_recent: 1,
+            context_fraction: 0.75,
+            reserve_tokens: 0,
+            ..CompactionConfig::default()
+        },
+    );
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "x".to_string(),
+        workdir: dir,
+        reasoning: None,
+    };
+    engine
+        .admit_user_prompt(session, "work through it".to_string())
+        .await
+        .unwrap();
+    let finish = engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .expect("preflight-bound turn folds instead of failing un-compacted");
+    assert_eq!(finish, FinishReason::Stop);
+    assert!(
+        !folds.lock().unwrap().is_empty(),
+        "step fold ran before preflight rejected the request"
     );
 }

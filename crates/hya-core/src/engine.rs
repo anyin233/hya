@@ -941,6 +941,11 @@ impl SessionEngine {
         self
     }
 
+    /// Whether a lifecycle service runs: without one no member can `report`.
+    pub(crate) fn lifecycle_connected(&self) -> bool {
+        self.lifecycle.is_connected()
+    }
+
     /// Replace the random source of subagent handle names (tests seed or
     /// force it; see [`crate::handle_naming`]). The default draws from process
     /// entropy, or from the `HYA_HANDLE_SEED` seed when that is set.

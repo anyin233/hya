@@ -1,6 +1,7 @@
 //! The `wait` lifecycle request (0.41.0): block the caller until its
-//! subagents finish — a subagent finishes only when it **reports** or is
-//! **archived** (terminated), never merely by going idle between turns — or,
+//! subagents finish — a subagent finishes only when it **reports** (a final
+//! answer that ends its turn is reported for it) or is **archived**
+//! (terminated), never merely by going idle between turns — or,
 //! for the channel-tools `wait`, until new mail for the caller arrives
 //! (harness mail such as `LEADER FAILED` included), bounded by a timeout.
 //!
@@ -18,7 +19,8 @@
 //!   wait returns — and the report mail of targets it reports finished — is
 //!   committed as consumed, so neither the next wait nor the `[NEW MAIL]`
 //!   steer notice nor a later resident wake delivers it again.
-//! - **Stalls**: a target whose turn ended without a report while nothing is
+//! - **Stalls**: a target whose turn ended without a report (no answer, a
+//!   cut-off answer, or a gate that refused its answer) while nothing is
 //!   queued for it (no running turn, owed mail or directive, accepted report,
 //!   or live subagent of its own) will not continue by itself. That is not a
 //!   finish; the wait says so once per stopped turn (`woke_by: stalled`, the

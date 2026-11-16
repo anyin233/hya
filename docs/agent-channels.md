@@ -82,8 +82,8 @@ The channel tool family (`hya/channel-tools`: `send`, `list_channel`,
 default builtin registry — its `wait` replaces the member-only `wait` of
 `hya/extended-tools` through an explicit `overrides: hya/extended-tools`
 declaration in its exposure policy ([Tool-family presets](base-tools.md#overrides)).
-Besides returning when subagents finish (they report or are archived — idle
-is never finished), it returns as soon as new mail reaches the caller's inbox —
+Besides returning when subagents finish (they report — a final answer that
+ends a member's turn counts — or are archived; idle is never finished), it returns as soon as new mail reaches the caller's inbox —
 on a DM or group channel, or harness mail such as the `LEADER FAILED` wrap-up
 notice, which bypasses channel policy — with `woke_by: "mail"`. The output
 shows each message's body (bounded to 600 chars, like the `[NEW MAIL]`

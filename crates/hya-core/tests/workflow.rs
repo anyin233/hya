@@ -2040,6 +2040,7 @@ fn sidecar_probe_catalog() -> Arc<hya_core::AgentCatalog> {
                 namespace: None,
                 digest: format!("test-only-{stable_id}"),
                 agents: vec![hya_bundle::PreparedAgent {
+                    private: true,
                     id: AgentName::new(*stable_id),
                     description: None,
                     role: AgentRole::Subagent,
@@ -2144,7 +2145,7 @@ impl hya_core::sidecar::SidecarHandle for MarkerSidecarHandle {
 /// resident runtime and whose independent verifier resolves against ITS OWN target
 /// context — resolver order pins builder (worker) then reviewer (verifier).
 #[tokio::test]
-async fn loop_worker_and_verifier_reuse_target_execution_contexts() {
+async fn private_loop_worker_and_verifier_reuse_target_execution_contexts() {
     const LOOP_SIDECAR_WORKFLOW: &str = r#"---
 kind: Workflow
 name: sidecar-loop-flow
@@ -2167,6 +2168,9 @@ flowchart TD
     let provider = ProbeProvider::new("sidecar_ping");
     let environment = OnlyBuilderSidecarEnvironment::new();
     let catalog = sidecar_probe_catalog();
+    for id in ["builder", "reviewer"] {
+        assert!(catalog.resolve_spawn("hya-main", id).is_err());
+    }
     let (engine, mut loop_event_rx) = engine_parts(
         provider,
         catalog,

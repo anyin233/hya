@@ -87,7 +87,7 @@ impl Tool for Probe {
     }
 }
 
-/// One bundle agent whose view is `nester`, `probe`, and `write`.
+/// One bundle agent with nested calls, file writes, and human-answer tools.
 fn catalog() -> Arc<AgentCatalog> {
     let bundle = Bundle {
         check: None,
@@ -100,6 +100,7 @@ fn catalog() -> Arc<AgentCatalog> {
         namespace: None,
         digest: "test-only".to_string(),
         agents: vec![PreparedAgent {
+            private: false,
             id: AgentName::new("nesting-agent"),
             description: None,
             role: AgentRole::Main,
@@ -114,6 +115,8 @@ fn catalog() -> Arc<AgentCatalog> {
                     "harness:tool/nester".to_string(),
                     "harness:tool/probe".to_string(),
                     "harness:tool/write".to_string(),
+                    "harness:tool/ask_user".to_string(),
+                    "harness:tool/plan_exit".to_string(),
                 ],
                 deny: Vec::new(),
                 aliases: BTreeMap::new(),
@@ -237,7 +240,7 @@ async fn nested_calls_run_in_the_callers_view_and_record_against_the_caller() {
     assert_eq!(results.len(), 5, "{events:?}");
     let outcome = |index: usize| results[&calls[index].0]["outcome"].clone();
 
-    // The listed set is the caller's view minus the caller itself.
+    // Discovery omits the caller and human-answer tools without a receiver.
     let listed = &results[&calls[0].0]["listed"];
     let listed: Vec<&str> = listed
         .as_array()
@@ -253,6 +256,10 @@ async fn nested_calls_run_in_the_callers_view_and_record_against_the_caller() {
         !listed.contains(&"nester") && !listed.contains(&"glob"),
         "{listed:?}"
     );
+
+    for name in ["invalid", "ask_user", "plan_exit"] {
+        assert!(!listed.contains(&name), "{listed:?}");
+    }
 
     // (a) The nested write changed the file and is recorded on the caller.
     assert!(outcome(0).get("ok").is_some(), "{:?}", outcome(0));

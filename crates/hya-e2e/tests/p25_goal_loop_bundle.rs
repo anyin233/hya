@@ -2,7 +2,7 @@
 //! `goal.evaluate` injection path:
 //!
 //! 1. the preset bundle's skills are served into a session and readable via
-//!    the `skill` tool, and its guide agent is visible;
+//!    the `skill` tool, and its workflow-private agents have hidden metadata;
 //! 2. a "patch" plugin registering `goal.evaluate` is selected as the goal
 //!    evaluator;
 //! 3. the patch injects a `喵` prompt through the evaluator reason after the
@@ -87,7 +87,7 @@ async fn goal_loop_bundle_skills_and_guide_agent_are_served_and_usable() {
         .await
         .expect("e2e env");
 
-    // The bundle's guide agent is visible on the agents route.
+    // Complete metadata retains workflow agents but hides them from selectors.
     let agents = env
         .get_json(&format!(
             "/v1/agents?directory={}",
@@ -95,11 +95,20 @@ async fn goal_loop_bundle_skills_and_guide_agent_are_served_and_usable() {
         ))
         .await
         .expect("agent catalog");
-    let agents_text = agents.to_string();
-    assert!(
-        agents_text.contains("hya-goal-guide"),
-        "hya-goal-guide agent must be served: {agents_text}"
-    );
+    let rows = agents["agents"].as_array().expect("agent metadata rows");
+    for id in [
+        "hya-goal-guide",
+        "hya-goal-verifier",
+        "hya-pir-planner",
+        "hya-pir-implementer",
+        "hya-pir-reviewer",
+    ] {
+        let row = rows
+            .iter()
+            .find(|row| row["name"] == id)
+            .unwrap_or_else(|| panic!("missing {id}: {agents}"));
+        assert_eq!(row["hidden"], true, "workflow-private metadata: {row}");
+    }
 
     // The bundle agent's own session can read the bundle's skill through the
     // skill tool: the preset bundle's content is provided AND usable.

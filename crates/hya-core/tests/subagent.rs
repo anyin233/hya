@@ -383,6 +383,7 @@ fn sidecar_permission_bundle() -> Bundle {
         namespace: None,
         digest: "test-only".to_string(),
         agents: vec![PreparedAgent {
+            private: false,
             id: AgentName::new("sidecar-agent"),
             description: None,
             role: AgentRole::Subagent,

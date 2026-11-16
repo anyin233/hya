@@ -66,3 +66,26 @@ fn agent_set_rejects_duplicate_agents_invalid_fields_and_missing_sources() {
         );
     }
 }
+
+#[test]
+fn private_agent_flag_round_trips_and_defaults_to_public() -> Result<(), Box<dyn std::error::Error>>
+{
+    let public = source("[{id: worker, role: subagent}]", "");
+    let explicit_public = source("[{id: worker, role: subagent, private: false}]", "");
+    let private = source("[{id: worker, role: subagent, private: true}]", "");
+    let prepared_public = prepare_package(public)?;
+    assert!(!prepared_public.bundles()[0].agents()[0].private);
+    assert_eq!(
+        prepared_public.bytes(),
+        prepare_package(explicit_public)?.bytes()
+    );
+    let prepared = prepare_package(private.clone())?;
+    assert_ne!(prepared_public.digest(), prepared.digest());
+    let package = write_public_package(&private)?;
+    let inspected = inspect_public_package(&package)?;
+    let decoded = PreparedCatalog::decode(inspected.bytes(), inspected.digest())?;
+    assert!(decoded.bundles()[0].agents()[0].private);
+    assert_eq!(prepared.bytes(), decoded.bytes());
+    assert!(prepare_package(source("[{id: worker, role: subagent, private: wrong}]", "")).is_err());
+    Ok(())
+}

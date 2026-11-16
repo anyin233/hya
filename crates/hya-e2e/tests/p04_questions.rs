@@ -42,6 +42,15 @@ async fn t1_8_ask_user_tool_receives_user_answer() {
         .await
         .expect("prompt+question");
 
+    let requests = env.fake.requests().unwrap();
+    let tools = requests[0]["tools"].as_array().expect("tool definitions");
+    for name in ["ask_user", "plan_exit"] {
+        assert!(
+            tools.iter().any(|tool| tool["function"]["name"] == name),
+            "server must offer {name}"
+        );
+    }
+
     let events = env.events(session, None).await.expect("events");
     let mut saw_done = false;
     let mut text_bits = String::new();

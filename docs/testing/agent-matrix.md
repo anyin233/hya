@@ -92,7 +92,7 @@ cargo test -p hya-e2e -- --test-threads=1
 | T2.42 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec: a plain summary after tool work ends the run with no notice | e2e (Track P) |
 | T2.43 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec: two ignored announcement notices in a row end the run | e2e (Track P) |
 | T2.44 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec --time-budget: the opening names the budget and the FINAL header appears once across tool results and continuation notices | e2e (Track P) |
-| T2.45 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec --time-budget: a bash timeout is shortened to the time left minus the grace | e2e (Track P) |
+| T2.45 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec --time-budget: a bash timeout is shortened to the time left minus the reserve | e2e (Track P) |
 | T2.46 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec --time-budget: no continuation turn starts within the grace | e2e (Track P) |
 | T2.47 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec corrects a spurious internal summary and resumes work | e2e (Track P) |
 | T2.48 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec recovers a raw DSML tool-call leak through the structured tool interface | e2e (Track P) |
@@ -100,6 +100,7 @@ cargo test -p hya-e2e -- --test-threads=1
 | T2.50 | [p41_code_mode.rs](../../crates/hya-e2e/tests/p41_code_mode.rs) | `tools.code.mode: only`: the first request offers `code-mode__run` alone and its description carries a section per hidden tool (`### read`, `### bash`); a program `return await tools.read(...)` puts the file text and the trace line `#1 L1 tools.read` into the follow-up request; a direct `read` call is refused with `` `read` is not offered here: call it from a `code-mode__run` program `` | e2e (Track P) |
 | T2.51 | [p41_code_mode.rs](../../crates/hya-e2e/tests/p41_code_mode.rs) | `tools.code.mode: with_tools`: `code-mode__run` is offered next to `read`, `bash`, `edit`; its description lists no hidden tool; a program's nested `tools.read` and a direct `read` both deliver the file text | e2e (Track P) |
 | T2.52 | [p41_code_mode.rs](../../crates/hya-e2e/tests/p41_code_mode.rs) | default mode: no `code-mode__run` in the offered tools; `hya bundle list` shows `hya/code-mode` as `disabled` | e2e (Track P) |
+| T2.53 | [p42_exec_step_fold.rs](../../crates/hya-e2e/tests/p42_exec_step_fold.rs) | headless exec, one turn of twelve ~11k-token `bash` steps (no reasoning) against a 120k window (`keep_recent` 1): old steps fold into the summary (the summarizer sees `STEP_0_BEGIN` and the prompt), the run exits 0 with `FINAL_ANSWER`, and the last request carries the latest summary, the prompt and the newest step but not `STEP_0_BEGIN` | e2e (Track P) |
 
 ### Built-in tool coverage
 

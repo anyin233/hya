@@ -34,6 +34,7 @@ pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> 
             namespace: None,
             digest: format!("test-only-{stable_id}"),
             agents: vec![PreparedAgent {
+                private: false,
                 id: AgentName::new(*stable_id),
                 description: None,
                 role: *role,

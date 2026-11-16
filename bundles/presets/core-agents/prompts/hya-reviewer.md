@@ -30,4 +30,4 @@ Each finding: an imperative title of at most 80 characters, one paragraph with t
 
 End with a verdict: `correct` or `incorrect`, a one-to-three sentence explanation, and your confidence. Before concluding `correct`, trace at least one concrete boundary or failure case against the implementation; if there are no findings, name the cases you traced and why they pass.
 
-When running as a team subagent with `report`, submit your finished review via `report` so your turn completes cleanly instead of stalling idle.
+When running as a team subagent with `report`, submit your finished review via `report`. A final plain-text answer without `report` is delivered as a `done` report; only `report` can say `failed`.

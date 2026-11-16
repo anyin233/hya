@@ -84,7 +84,9 @@ async fn t2_6_send_default_broadcast_reaches_the_direct_child() {
     let env = E2eEnvBuilder::new()
         .route(
             SYS_CHILD,
-            vec![text_step("CHILD_IDLE"), text_step("CHILD_HEARD")],
+            // An empty answer keeps the child live: a non-empty one would be
+            // its report, and an archived member hears no broadcast.
+            vec![text_step(""), text_step("CHILD_HEARD")],
         )
         .route(
             SYS_ROOT,
