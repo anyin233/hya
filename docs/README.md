@@ -54,6 +54,7 @@ Everything needed to install, configure, operate, and extend `hya` day to day:
   - [Browser-Rendered TUI (WebUI)](tui-web.md) — Running the TUI in browsers over a real PTY + xterm.js, plus the `tui-exp` and Playwright test harnesses.
   - [Secure Relay](relay.md) — End-to-end encrypted remote access with `hya proxy`, `hya serve --relay`, `hya --connect`, `hya bridge`, and `hya relay doctor`.
 - **Context, Skills, Workflows & Bundles:**
+  - [Kernel](kernel.md) — Three Context primitives, five built-in tools, rewrite rules, and `hya exec --bare`.
   - [Compaction](compaction.md) — The five context-reduction mechanisms, thresholds, and configurable order.
   - [Skills](skills.md) — Skill discovery roots, progressive loading via `skill`, and `hya/core-skills`.
   - [Workflows](workflows.md) — Authoring `*.hya.md` Stage DAGs, stage model routing, CLI/TUI control, and WorkflowBundle packaging.

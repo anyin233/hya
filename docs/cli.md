@@ -127,7 +127,7 @@ use the store's single-connection pool with a keeper connection.
 
 | Command | Store | Server holds the file `--db` | Nobody holds it |
 | --- | --- | --- | --- |
-| `exec` | `--db`, else in-memory | Through the server: a new root session in the current directory, one prompt turn, the same stdout. `--model` sets the session's model, `--yolo` its permission mode. `--pure` or `--time-budget` exits 75. | Lock held for the run |
+| `exec` | `--db`, else in-memory | Through the server: a new root session in the current directory, one prompt turn, the same stdout. `--model` sets the session's model, `--yolo` its permission mode. `--bare`, `--pure`, or `--time-budget` exits 75. | Lock held for the run |
 | `workflow use`, `workflow state` | `--db`, else in-memory | Through the server (`/v1/sessions/{id}/workflow`) | Lock held for the command |
 | `workflow run` | `--db`, else in-memory | Through the server; a run without `--session` creates the session there. `--revision`, `--pure`, and `--yolo` exit 75 (no `/v1` field for them). | Lock held for the run |
 | `workflow list`, `workflow info` | Catalog only; existing `--db` read-only for Project lookup | Read directly, no lock | Read directly, no lock |
@@ -740,6 +740,25 @@ hya exec "summarize this repo"
 hya exec --json "summarize this repo"
 hya exec --time-budget 900 "implement the requested change"
 ```
+
+### `--bare`
+
+`hya exec --bare "<prompt>"` runs the three-primitive kernel alone, with five
+built-in tools (`bash`, `read`, `write`, `edit`, `rewrite`), its minimal system
+prompt, and event logging. It loads no bundle. It prints the final text to
+stdout; `--db` keeps the event log in SQLite.
+
+```sh
+hya exec --bare "say hi" --db /tmp/x.db
+```
+
+`--bare` conflicts with `--pure`, `--time-budget`, and routing to a running
+server (including a server holding the selected database); it errors out
+instead of routing the run. Use another database or stop that server first.
+See [Kernel](kernel.md) for tool contracts, rewrite rules, and the differences
+from full mode.
+
+### Full mode
 
 Runs a headless task and prints the rendered transcript. The session works
 in the current directory: its workdir is the caller's cwd as an absolute path.
