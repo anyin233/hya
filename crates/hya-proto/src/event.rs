@@ -1139,11 +1139,14 @@ pub enum CompactionStrategy {
     SnapCompact,
     /// Model-written handoff document over the verbatim transcript.
     Handoff,
+    /// Kernel rewrite: whole steps before the current one are removed and
+    /// replaced by a summary, initiated by the harness or the model.
+    Rewrite,
 }
 
 impl CompactionStrategy {
     /// Stable snake_case wire name (the serde form): `native`,
-    /// `local_summarizer`, `snap_compact`, or `handoff`.
+    /// `local_summarizer`, `snap_compact`, `handoff`, or `rewrite`.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -1151,6 +1154,7 @@ impl CompactionStrategy {
             Self::LocalSummarizer => "local_summarizer",
             Self::SnapCompact => "snap_compact",
             Self::Handoff => "handoff",
+            Self::Rewrite => "rewrite",
         }
     }
 }
@@ -1378,6 +1382,7 @@ mod tests {
             CompactionStrategy::LocalSummarizer,
             CompactionStrategy::SnapCompact,
             CompactionStrategy::Handoff,
+            CompactionStrategy::Rewrite,
         ] {
             let json = serde_json::to_string(&strategy).expect("serialize");
             let back: CompactionStrategy = serde_json::from_str(&json).expect("deserialize");

@@ -1822,7 +1822,8 @@ strategy in words (`state/format.ts` `strategyText()`): `native` (provider-
 native), `local_summarizer` → `local summary` (a model-written summary —
 also every manual compaction), `snap_compact` → `snapshot` (a local dense
 archive, no model call), `handoff` → `handoff` (a model-written handoff
-document). The divider sits right before `message`, the system message that
+document), `rewrite` → `rewrite` (a kernel rewrite: earlier steps replaced
+by a summary). The divider sits right before `message`, the system message that
 holds the summary, once the transcript has it (until then, right after the
 newest message); the summary follows it as a muted notice, without the
 internal `HYA_COMPACTED_CONTEXT` marker line. For example, `/compact` after

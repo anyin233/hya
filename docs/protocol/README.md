@@ -545,7 +545,8 @@ it, and `manual` is true for a client-requested `CompactSession` (or
 crossed its threshold mid-turn. `strategy` is a stable snake_case name:
 `native` (provider-native compaction), `local_summarizer` (a model-written
 summary; also every manual compaction), `snap_compact` (a local dense
-archive, no model call), or `handoff` (a model-written handoff document).
+archive, no model call), `handoff` (a model-written handoff document), or
+`rewrite` (a kernel rewrite: earlier steps replaced by a summary).
 The record is in `ListEvents` too, so a transcript read can place the
 divider.
 
