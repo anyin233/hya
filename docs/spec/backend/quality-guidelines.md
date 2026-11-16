@@ -538,6 +538,14 @@ permissions: write-all
 - Old release.
 ```
 
+```sh
+# Non-version, split-side, or unprefixed tags are forbidden:
+git tag backend/0.47.0
+git tag frontend/0.47.0-dev.1
+git tag 0.47.0-dev.1
+git tag phase1
+```
+
 #### Correct
 
 ```yaml
@@ -551,9 +559,15 @@ jobs:
 ```
 
 ```markdown
-# 0.2.0
+# 0.47.0
 
 - New release.
+```
+
+```sh
+# Unified pure-version tags only (`vx.x.x`, optional `-<suffix>`):
+git tag -a v0.47.0 -m "release v0.47.0"
+git tag -a v0.47.1-dev.1 -m "release v0.47.1-dev.1"
 ```
 
 ---

@@ -300,18 +300,71 @@ in `docs/changes/`).
 
 ## Publishing a release
 
-`.github/workflows/release.yml` publishes only when a `v<version>` tag is pushed:
+`.github/workflows/release.yml` publishes only when a canonical `v<version>` tag
+is pushed:
 
 | Tag | Archive | Installer delivery | Payload |
 | --- | --- | --- | --- |
 | `v<version>` (e.g. `v0.47.0`, `v0.47.1-dev.1`) | `hya-<version>-<target>.tar.gz` | Hosted `scripts/hya-install.sh`; no installer asset | `bin/hya`, first-party bundles, Argus example, Bun, Bun adapter, TUI, WebUI, TUI SDK |
 
+### Git tag rules
+
+Every Git tag in `origin` and local checkouts represents a unified `hya`
+release (backend, bundles, TUI, and WebUI together). Keeping one pure-version
+tag namespace ensures Git tags, GitHub Releases, `https://hya.ed-aisys.com/install.sh`,
+and `hya update` stay 1:1 aligned without split-side ambiguity or stale
+milestone refs.
+
+**Tag grammar (contract):**
+
+- **Required pattern:** `v<major>.<minor>.<patch>` with an optional pre-release
+  suffix `-<prerelease>` (for example `v0.47.0` or `v0.47.1-dev.1`).
+- **Exact regular expression** (enforced by `.github/workflows/release.yml` and
+  `crates/xtask`):
+  `^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`
+- **Version alignment:** `<version>` (the tag name without the leading `v`)
+  must match `versions.toml` (`version`), `Cargo.toml`
+  (`[workspace.package].version` and `hya-backend`),
+  `packages/hya-tui/frontend-version.ts` (`frontendVersion`), and the first
+  heading `# <version>` in `CHANGELOG.md`.
+
+| Category | Pattern / Examples | GitHub Release & Installer Behavior |
+| --- | --- | --- |
+| **Stable release** | `vx.x.x` (`v0.47.0`, `v1.0.0`) | Publishes a normal GitHub Release (`prerelease: false`); selected by default `install.sh` and `hya update` via `releases/latest`. |
+| **Pre-release** | `vx.x.x-<suffix>` (`v0.47.1-dev.1`, `v0.48.0-rc.1`) | Publishes a GitHub Pre-release (`prerelease: true`); skipped by `releases/latest`, installed only when pinned with `--version v0.47.1-dev.1` (or `0.47.1-dev.1`). |
+| **Forbidden tags** | `backend/*`, `frontend/*`, `0.47.0`, `0.45.10-dev.1`, `phase*`, `v0.47.0+build.1`, `v0.47` | Rejected by `.github/workflows/release.yml` and `xtask`; must never exist on `origin` or be pushed. |
+
+**Usage (creating, pushing, and cleaning tags):**
+
+```sh
+# 1. Push the unified version + CHANGELOG.md commit to main first.
+git push origin main
+
+# 2. Tag a stable release (`vx.x.x`) or a pre-release (`vx.x.x-dev.x`).
+git tag -a v0.47.0 -m "release v0.47.0"
+git push origin v0.47.0
+
+# Example pre-release tag with optional `-dev.x` suffix:
+git tag -a v0.47.1-dev.1 -m "release v0.47.1-dev.1"
+git push origin v0.47.1-dev.1
+```
+
+If a tag or release must be retracted or cleaned up, keep `origin`, GitHub
+Releases, and local tags consistent:
+
+- **Tag with a GitHub Release:** run `gh release delete <tag> --cleanup-tag --yes`
+  and `git tag -d <tag>` locally. Never delete only the remote Git ref when a
+  GitHub Release is attached to it — deleting the ref alone leaves an orphaned
+  `untagged-*` draft Release on GitHub.
+- **Tag without a GitHub Release:** run `git push origin --delete <tag>` and
+  `git tag -d <tag>`.
+- **Sync local tags with `origin`:** run `git fetch --prune --prune-tags origin`
+  so deleted remote tags do not linger locally and get re-pushed by mistake.
+
 The single installer is served at `https://hya.ed-aisys.com/install.sh` from
 `main` and embedded in `hya update`. It downloads `releases/latest/download/SHA256SUMS`
 by default (or `releases/download/v<version>/SHA256SUMS` when `--version` is
-given), verifies `SHA256SUMS`, and rolls back a failed swap. Never push
-non-version tags (`backend/*`, `frontend/*`, `phase*`, or bare semver without a
-leading `v`).
+given), verifies `SHA256SUMS`, and rolls back a failed swap.
 
 The supported targets are `x86_64-unknown-linux-gnu`,
 `aarch64-unknown-linux-gnu`, and `aarch64-apple-darwin`. Each release publishes
@@ -453,6 +506,7 @@ When changing a boundary, update the nearest docs page:
 | OpenTUI frontend | [OpenTUI frontend](tui.md) |
 | Browser-rendered TUI, WebUI host, TUI browser tests | [Browser-rendered TUI](tui-web.md) |
 | Standalone TUI extension SDK | [TUI Extension SDK](tui-extension-sdk.md) |
+| Release packaging, unified versions, and Git tag rules | [Development](development.md#git-tag-rules), [Install and update](install.md#release-tags), [Quality Guidelines](spec/backend/quality-guidelines.md#scenario-github-release-binary-workflow) |
 
 Every new or modified feature ships with its documentation in the same change.
 The feature's documentation must state, at minimum:
