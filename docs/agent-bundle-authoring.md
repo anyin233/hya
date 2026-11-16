@@ -264,7 +264,7 @@ kind: Bundle
 | `workflow` | no | `{id: string, path: string}`; path is `workflows/*.hya.md`, id matches the compiled Workflow name. |
 | `channels` | no | Channel template list, default `[]`; see [Agent Channels](agent-channels.md). |
 | `check` | no | `{command: string[], timeout_secs?: integer}`; timeout defaults to 120 seconds. |
-| `version_ref` | no | `backend` resolves identity version `0.0.0` to the backend aggregate. |
+| `version_ref` | no | `hya` (or legacy `backend`) resolves identity version `0.0.0` to the unified `hya` release version. |
 | `tui` | no | Bundle-owned frontend extension; see below. |
 
 `agent`, `api_version`, and per-agent `harness_access` are rejected. Use an

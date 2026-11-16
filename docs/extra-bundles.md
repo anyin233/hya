@@ -14,7 +14,7 @@ the `crates/hya-e2e` process suite (`T2.26`–`T2.28` and `T2.30` in the
 Every `hya-extra/*` bundle follows the same identity rule as the first-party
 bundles: `identity.id` starts with `hya-extra/`, `identity.publisher` is
 `hya-extra`, and source manifests use `version: 0.0.0` with
-`version_ref: backend`, which preparation resolves to `[backend].version` in
+`version_ref: hya`, which preparation resolves to `version` in
 `versions.toml`.
 
 ## `hya-extra/zvec-grep`

@@ -14,7 +14,7 @@ For visual dependency and runtime flow diagrams, see
 
 | Path | Purpose |
 | --- | --- |
-| [`../Cargo.toml`](../Cargo.toml), [`../versions.toml`](../versions.toml) | Workspace members, shared dependencies, Rust `1.91` / edition `2024`, clippy lints (`unwrap_used`/`expect_used` denied), and independent `[backend]` / `[frontend]` aggregate release versions. |
+| [`../Cargo.toml`](../Cargo.toml), [`../versions.toml`](../versions.toml) | Workspace members, shared dependencies, Rust `1.91` / edition `2024`, clippy lints (`unwrap_used`/`expect_used` denied), and the unified `hya` release version + minimum compatible backend version. |
 | [`../CONTEXT.md`](../CONTEXT.md) | Ubiquitous domain glossary across runtime, store, tools, Projects, Relay, Workflows, and TUI. |
 | [`../proto/hya/v1`](../proto/hya/v1), [`../proto/hya/relay/v1`](../proto/hya/relay/v1) | Canonical protobuf IDLs for the `hya.v1` client/server contract (18 services, 107 RPCs) and the `hya.relay.v1` rendezvous protocol. |
 | [`../crates`](../crates) | 21 Rust crates: runtime, providers, tools, MCP, plugins, store, server, SDK, relay, updater, unified `hya` binary, E2E harness, and `xtask`. |
@@ -31,7 +31,7 @@ For visual dependency and runtime flow diagrams, see
 
 | Crate | Source | Responsibility |
 | --- | --- | --- |
-| `hya-version` | [`../crates/hya-version`](../crates/hya-version) | Compile-time `BACKEND_VERSION`, `FRONTEND_VERSION`, and `MINIMUM_BACKEND_VERSION` constants parsed from `versions.toml`. |
+| `hya-version` | [`../crates/hya-version`](../crates/hya-version) | Compile-time unified `VERSION` (`BACKEND_VERSION` / `FRONTEND_VERSION`) and `MINIMUM_BACKEND_VERSION` constants parsed from `versions.toml`. |
 | `hya-proto` | [`../crates/hya-proto`](../crates/hya-proto) | Dependency-light domain & wire types: prefixed strong IDs (`hysec_`, `msg_`, `part_`, `tc_`, `prj_`, …), `Event`/`Envelope`, `Message`/`Part`, mail/scope types, and the deterministic `Projection` reducer. |
 | `hya-api` | [`../crates/hya-api`](../crates/hya-api) | Generated `hya.v1` Rust types (prost/tonic/pbjson), HTTP status ↔ gRPC code error table, and pagination cursor helpers (`cargo run -p xtask -- gen-api`). |
 | `hya-provider` | [`../crates/hya-provider`](../crates/hya-provider) | `Provider`/`Protocol`/`Decoder` traits, `ProviderRouter`, HTTP/SSE client, OpenAI Chat/Responses/Codex, Grok Build, Anthropic, Google Gemini, scripted `FakeProvider`, and offline `DevProvider`. |

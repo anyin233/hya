@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "hya": { "version-reference": "backend" },
+  "hya": { "version-reference": "hya" },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "bun test ./test",

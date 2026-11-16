@@ -24,15 +24,15 @@ configured, `hya` starts offline against its built-in echo provider
 
 ## Status
 
-`hya` is under active development (backend version `0.47.0`, frontend version
-`0.44.23-dev.7`, minimum compatible backend `0.46.0`, licensed under
-`MIT OR Apache-2.0`). Backend and frontend releases iterate independently via
-`backend/<version>` and `frontend/<version>` tags.
+`hya` is under active development (unified version `0.47.0`, minimum compatible
+backend `0.46.0` for remote/daemon connections, licensed under `MIT OR Apache-2.0`).
+Releases ship unified backend + TUI/WebUI archives from `v<version>` tags
+(`v0.47.0`, `v0.47.1-dev.1`, …).
 
 ## Quick Install
 
-Install the latest backend and frontend releases (including a bundled Bun
-runtime) into `$HOME/.local`:
+Install the latest release (backend, first-party bundles, TUI, WebUI, and a
+bundled Bun runtime) into `$HOME/.local`:
 
 ```sh
 curl -fsSL https://hya.ed-aisys.com/install.sh | sh
@@ -40,13 +40,11 @@ export PATH="$HOME/.local/bin:$PATH"   # if not already on PATH
 hya                                    # Terminal TUI here + WebUI on http://127.0.0.1:3250
 ```
 
-Update or install a single side (`--backend-only` for headless servers,
-`--tui-only` for the TUI/WebUI):
+Update an installed release (or pin a specific version):
 
 ```sh
 hya update
-hya update --backend-only
-hya update --tui-only
+hya update --version v0.47.0
 ```
 
 To build and install from a source checkout instead (requires Rust `1.91`+, Git,

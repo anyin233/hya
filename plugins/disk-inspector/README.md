@@ -103,7 +103,7 @@ make the missing host bridge available.
 
 Identity: `hya-extra/disk-inspector`; provider protocol id: `disk-inspector`;
 pane key: `hya-extra/disk-inspector#disk`. Manifest identity version is `0.0.0`
-with `version_ref: backend`, following the existing bundle preparation contract.
+with `version_ref: hya`, following the existing bundle preparation contract.
 This optional source folder is not part of Hya's release archives.
 
 ### Backend

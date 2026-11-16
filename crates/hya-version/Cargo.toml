@@ -6,6 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 
 [package.metadata.hya]
-version-reference = "backend"
+version-reference = "hya"
 
 [build-dependencies]

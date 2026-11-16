@@ -219,10 +219,10 @@ fn resolve_version_reference(
     let Some(version_ref) = version_ref.take() else {
         return Ok(());
     };
-    if version_ref != "backend" {
+    if version_ref != "hya" && version_ref != "backend" {
         return Err(BundleError::InvalidManifest {
             source_name: source_name.to_string(),
-            detail: format!("unsupported version_ref `{version_ref}`; expected `backend`"),
+            detail: format!("unsupported version_ref `{version_ref}`; expected `hya` or `backend`"),
         });
     }
     if identity.version != "0.0.0" {
@@ -231,7 +231,7 @@ fn resolve_version_reference(
             detail: "version_ref requires identity.version 0.0.0".to_string(),
         });
     }
-    identity.version = hya_version::BACKEND_VERSION.to_string();
+    identity.version = hya_version::VERSION.to_string();
     Ok(())
 }
 

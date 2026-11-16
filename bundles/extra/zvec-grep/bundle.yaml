@@ -1,5 +1,5 @@
 kind: Bundle
-version_ref: backend
+version_ref: hya
 identity:
   id: hya-extra/zvec-grep
   version: 0.0.0
