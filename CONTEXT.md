@@ -4,6 +4,45 @@
 the ubiquitous language across `hya-proto`, `hya-core`, `hya-store`, `hya-tool`,
 `hya-server`, `hya-relay`, and `packages/hya-tui`.
 
+## Kernel
+
+**Context**:
+What the model sees in one request: the event log folded by the `hya-proto`
+reducer into a short system prompt, the tool list, and the live work. The
+request is a pure function of it ([ADR-0033](docs/adr/0033-three-primitive-kernel.md)).
+_Avoid_: history, memory, transcript (the transcript is the whole log)
+
+**Model append**:
+The primitive that adds the model's own sampled output — text, reasoning, tool
+calls — to the Context. It is a claim or a plan, never evidence about the
+outside world.
+_Avoid_: response, completion
+
+**Tool append**:
+The primitive that adds a deterministic observation: a tool result paired with
+the model's call, or user input. Unknown tools, errors and cancellation return
+as failed tool results; the harness never synthesizes one.
+_Avoid_: observation injection, synthetic result
+
+**Rewrite**:
+The destructive primitive: it removes everything before the current step from
+the Context, logged as a system marker plus `ContextCompacted{strategy:
+rewrite}`. The harness starts one at 80% of the window; the model starts one
+with the `rewrite` tool. Removed text stays in the log and cannot be read back.
+_Avoid_: summarize, compaction (compaction is the full-mode bundle method)
+
+**Bare mode**:
+Running the kernel alone with `hya exec --bare`: no bundle, five tools (`bash`,
+`read`, `write`, `edit`, `rewrite`), the minimal system prompt, and the event
+log. It has no permissions, hooks, or subagents.
+_Avoid_: minimal mode, safe mode
+
+**Internal bundle**:
+A first-party `.hyabundle` under `bundles/internal/` that carries a feature
+moved out of the kernel (compaction, permissions, ...). Full mode loads them;
+bare mode does not.
+_Avoid_: plugin, module
+
 ## Sessions, Agents & Bundles
 
 **Session**:
