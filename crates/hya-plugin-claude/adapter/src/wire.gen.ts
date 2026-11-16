@@ -166,7 +166,8 @@ export type CompactionBeforeParams = {
 export type CompactionStrategy = ("native") |
 ("local_summarizer") |
 ("snap_compact") |
-("handoff")
+("handoff") |
+("rewrite")
 
 export type CompactionTriggerWire = ("overflow") |
 ("proactive")
@@ -1150,7 +1151,8 @@ export function isCompactionStrategy(value: unknown): value is CompactionStrateg
   return (value === "native") ||
     (value === "local_summarizer") ||
     (value === "snap_compact") ||
-    (value === "handoff")
+    (value === "handoff") ||
+    (value === "rewrite")
 }
 
 export function isCompactionTriggerWire(value: unknown): value is CompactionTriggerWire {

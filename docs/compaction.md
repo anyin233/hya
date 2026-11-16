@@ -209,7 +209,7 @@ See [Configuration](configuration.md) for every field and its environment overri
 Each mechanism records what it did on the event log:
 
 - `ContextCompacted` — one per fold, with the `strategy` that produced it
-  (`native`, `local_summarizer`, `snap_compact`, `handoff`), the folded range
+  (`native`, `local_summarizer`, `snap_compact`, `handoff`, `rewrite`), the folded range
   (`from_message..=to_message`, `folded_count`), the estimated input tokens
   that tripped the threshold, and the threshold in force. A
   [step fold](#step-folds) adds `step_cut { through_part, kept_head }`, and
