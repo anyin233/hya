@@ -313,8 +313,8 @@ sequenceDiagram
     TUI->>Bridge: Plain loopback HTTP / SSE / PTY WS (+ bridge token)
     Bridge->>Proxy: OpenStream (HMAC-SHA256 open token · gRPC or WS via t=auto)
     Proxy->>Host: Splice encrypted stream frames
-    Bridge<-->Host: Noise_NKpsk0_25519_ChaChaPoly_BLAKE2s handshake
-    Bridge<-->Host: End-to-end encrypted raw HTTP/1.1 stream
+    Bridge<<->>Host: Noise_NKpsk0_25519_ChaChaPoly_BLAKE2s handshake
+    Bridge<<->>Host: End-to-end encrypted raw HTTP/1.1 stream
     Host->>V1: hyper::serve_connection (tagged Origin::Relay)
     V1-->>TUI: hya.v1 responses & live SSE / WS frames
 ```
