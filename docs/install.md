@@ -112,6 +112,21 @@ and `aarch64-apple-darwin`; Intel macOS is not built. Each release also
 publishes standalone first-party `.hyabundle` assets and `SHA256SUMS`, which
 the installer verifies before replacing files.
 
+### Release tags
+
+Repository Git tags follow a single pure-version rule (no frontend/backend split
+prefixes and no non-version milestone tags):
+
+- **Format:** `vx.x.x` for stable releases (for example `v0.47.0`) or
+  `vx.x.x-<suffix>` for pre-releases (for example `v0.47.1-dev.1`, suffix
+  optional), matching `^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`.
+- **Forbidden tags:** `backend/*`, `frontend/*`, `phase*`, bare versions without
+  a leading `v` (`0.47.0`, `0.45.10-dev.1`), and `+` build metadata.
+- **Stable vs. pre-release:** tags without `-` publish as stable GitHub
+  Releases (`Latest`); tags with `-` (such as `-dev.1`) publish as GitHub
+  Pre-releases and are installed only when explicitly requested via
+  `--version v0.47.1-dev.1` (or `--version 0.47.1-dev.1`).
+
 ### Hosted installer URL
 
 `https://hya.ed-aisys.com/install.sh` is a Cloudflare redirect to

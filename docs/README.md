@@ -87,5 +87,5 @@ Visual blueprints and protocol/lifecycle diagrams for the current `hya` system:
 | Area | Pages |
 | --- | --- |
 | `hya.v1` Wire Contract | [Protocol Guide](protocol/README.md) · [Generated API Reference](protocol/api-reference.md) · [OpenAPI Schema](protocol/openapi.json) |
-| Workspace Development & Release | [Development Guide](development.md) · [Backend Spec Guidelines](spec/backend/index.md) · [Cross-Layer & Reuse Guides](spec/guides/index.md) |
+| Workspace Development & Release | [Development Guide & Git Tag Rules](development.md) · [Backend Spec Guidelines](spec/backend/index.md) · [Cross-Layer & Reuse Guides](spec/guides/index.md) |
 | Verification & E2E Matrix | [Testing Overview](testing/README.md) · [Agent Feature Matrix](testing/agent-matrix.md) · [Process E2E Harness](testing/process-e2e.md) |
