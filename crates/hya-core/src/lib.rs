@@ -52,6 +52,8 @@ pub mod error;
 pub mod handle_naming;
 /// Plugin/host hook dispatch contract and native payload types.
 pub mod hooks;
+/// Minimal execution kernel.
+pub mod kernel;
 /// Team mailbox service loop (event-sourced mail/channels).
 pub mod lifecycle;
 /// Loop-mode verifier/planner traits and drive helpers.

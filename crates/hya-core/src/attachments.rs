@@ -216,42 +216,7 @@ pub(crate) fn file_entry(part: PartId, attachment: &PromptAttachment, hash: &str
     entry
 }
 
-/// A prompt image as recorded on a user message (no bytes).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RecordedAttachment {
-    /// Transcript part id.
-    pub part: String,
-    /// File name.
-    pub name: String,
-    /// Image type.
-    pub mime: String,
-    /// Size in bytes.
-    pub size: u64,
-    /// sha256 of the bytes (the session blob key).
-    pub blob: String,
-    /// Client-side path, when sent.
-    pub path: Option<String>,
-}
-
-impl RecordedAttachment {
-    /// Parse one `UserPromptContextRecorded.files` entry; `None` for entries
-    /// that are not prompt images (for example `@file` context).
-    #[must_use]
-    pub fn from_entry(entry: &Value) -> Option<Self> {
-        if entry.get("type").and_then(Value::as_str) != Some(ENTRY_TYPE) {
-            return None;
-        }
-        let text = |key: &str| entry.get(key).and_then(Value::as_str).map(str::to_string);
-        Some(Self {
-            part: text("part")?,
-            name: text("name")?,
-            mime: text("mime")?,
-            size: entry.get("size").and_then(Value::as_u64).unwrap_or(0),
-            blob: text("blob")?,
-            path: text("path"),
-        })
-    }
-}
+pub use crate::kernel::request::RecordedAttachment;
 
 /// The prompt images recorded in a message's `files`, in order.
 #[must_use]
