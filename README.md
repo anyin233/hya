@@ -102,6 +102,17 @@ hya --connect -    # connect TUI + WebUI to a remote backend over a Noise_NKpsk0
 
 ## Documentation
 
+Serve the searchable Astro Starlight documentation locally:
+
+```sh
+cd docs/site
+npm ci
+npm run dev -- --port 4321
+```
+
+Open `http://localhost:4321`. See [Documentation Website](docs/docs-site.md)
+for production search, builds, and GitHub Pages deployment.
+
 Full documentation lives in **[docs/README.md](docs/README.md)**, organized into
 three core categories:
 

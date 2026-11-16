@@ -505,6 +505,7 @@ When changing a boundary, update the nearest docs page:
 | Agent process E2E / matrix | [Testing](testing/README.md), [Agent matrix](testing/agent-matrix.md) |
 | OpenTUI frontend | [OpenTUI frontend](tui.md) |
 | Browser-rendered TUI, WebUI host, TUI browser tests | [Browser-rendered TUI](tui-web.md) |
+| Documentation website, local serving, and Pages CI | [Documentation Website](docs-site.md) |
 | Standalone TUI extension SDK | [TUI Extension SDK](tui-extension-sdk.md) |
 | Release packaging, unified versions, and Git tag rules | [Development](development.md#git-tag-rules), [Install and update](install.md#release-tags), [Quality Guidelines](spec/backend/quality-guidelines.md#scenario-github-release-binary-workflow) |
 
