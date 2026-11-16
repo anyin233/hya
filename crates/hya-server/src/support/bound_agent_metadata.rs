@@ -1,7 +1,7 @@
 //! Map the single bound BundleCatalog into catalog agent metadata rows.
 //!
 //! Not a second catalog authority: binds once per request workdir and projects
-//! role → mode and can_spawn reachability → wire `hidden` from that catalog only.
+//! role → mode and private/reserved status → wire `hidden` from that catalog only.
 //!
 //! Also owns the sole `default_agent` fallback chain used by session create and
 //! list sorting — `ServerState.default_agent`, then the bound process agent. No
@@ -17,7 +17,7 @@ use hya_proto::{AgentName, ModelRef};
 
 use crate::{ApiError, ServerState};
 
-/// Shared projection used by `/api/agent` and legacy `/agent`.
+/// Shared projection used by `/v1/agents`.
 pub(crate) struct BoundAgentRow {
     pub(crate) name: String,
     pub(crate) description: Option<String>,
@@ -136,18 +136,16 @@ pub(crate) async fn list(
     let binding = place.bind(st).await?;
     let catalog = binding.agent_catalog();
 
-    // Ordinary reachability: every non-reserved agent is reachable, because
-    // built-ins spawn the whole ordinary set. Reserved system agents are not.
+    // Retain the complete catalog while marking private and reserved entries hidden.
     let mut rows: Vec<BoundAgentRow> = catalog
         .all()
         .into_iter()
         .map(|agent| {
             let name = agent.stable_id;
-            // Role is the sole selector rule (main → primary).
+            // Role determines selector mode (main → primary).
             let mode = agent.selector_mode().to_string();
-            // Wire `hidden` preserves autocomplete exclusion for unreachable
-            // subagents; it never affects the TUI selector.
-            let hidden = mode == "subagent" && catalog.is_reserved(name);
+            // Private agents and reserved system subagents stay out of ordinary pickers.
+            let hidden = agent.private || (mode == "subagent" && catalog.is_reserved(name));
             BoundAgentRow {
                 name: name.to_string(),
                 description: agent.description.map(str::to_string),

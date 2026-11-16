@@ -6,12 +6,17 @@
 //! the tool round in which a report is accepted (no further model call), a
 //! second `report` in that turn is rejected, and a member woken by mail after
 //! its report runs a new episode that may report once more.
+//!
+//! A member that ends its turn with a final answer and no `report` reports
+//! that answer (REPORT H8): the same acceptance path, outcome `done`. An empty
+//! or cut-off answer, or unread mail at the turn's end, leaves it idle.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -47,6 +52,10 @@ struct ScriptProvider {
     root: Mutex<Option<SessionId>>,
     member_rounds: Mutex<HashMap<SessionId, usize>>,
     script: Box<MemberScript>,
+    engine: OnceLock<Weak<SessionEngine>>,
+    /// The lead mails the member while its first model round streams, so the
+    /// mail is still unread when that round ends the turn.
+    mail_in_first_round: AtomicBool,
 }
 
 impl ScriptProvider {
@@ -55,6 +64,8 @@ impl ScriptProvider {
             root: Mutex::new(None),
             member_rounds: Mutex::new(HashMap::new()),
             script: Box::new(script),
+            engine: OnceLock::new(),
+            mail_in_first_round: AtomicBool::new(false),
         })
     }
 
@@ -102,6 +113,30 @@ impl Provider for ScriptProvider {
                 *count += 1;
                 *count - 1
             };
+            if round == 0 && self.mail_in_first_round.load(Ordering::SeqCst) {
+                let engine = self.engine.get().and_then(Weak::upgrade).unwrap();
+                let root = self.root.lock().unwrap().unwrap();
+                let handle = engine
+                    .read_projection(root)
+                    .await
+                    .unwrap()
+                    .team
+                    .roster
+                    .values()
+                    .find(|entry| entry.session == session)
+                    .unwrap()
+                    .handle
+                    .clone();
+                engine
+                    .mail_send(
+                        root,
+                        MailEndpoint::Handle(handle),
+                        MailKind::Message,
+                        "also check the tests".to_string(),
+                    )
+                    .await
+                    .unwrap();
+            }
             (self.script)(round)
         };
         let events = FakeProvider::materialize(&steps, session, message);
@@ -190,6 +225,7 @@ async fn team(provider: Arc<ScriptProvider>) -> Team {
         .await
         .unwrap();
     *provider.root.lock().unwrap() = Some(root);
+    provider.engine.set(Arc::downgrade(&engine)).unwrap();
     let binding = engine.bind_runtime(&PathBuf::from(".")).unwrap();
     let lead_policy = binding.agent_resource_policy("lead").unwrap();
     supervisor
@@ -458,4 +494,133 @@ async fn a_member_woken_after_its_report_can_report_once_more() {
         vec![(FinishReason::Stop, None), (FinishReason::Stop, None)]
     );
     assert!(log.errors.is_empty(), "{:?}", log.errors);
+}
+
+fn answer(text: &str, finish: FinishReason) -> Vec<FakeStep> {
+    let mut steps = Vec::new();
+    if !text.is_empty() {
+        steps.push(FakeStep::Text(text.to_string()));
+    }
+    steps.push(FakeStep::Finish(finish));
+    steps
+}
+
+/// Wait until the member's first turn ended and its slot settled, then assert
+/// it is still live (idle) with no report delivered.
+async fn assert_idle_unreported(team: &Team, child: SessionId, handle: &str) {
+    for _ in 0..500 {
+        if !member_log(team, child).await.finishes.is_empty()
+            && team
+                .engine
+                .read_projection(team.root)
+                .await
+                .unwrap()
+                .team
+                .roster
+                .get(handle)
+                .is_some_and(|entry| entry.status == hya_proto::RosterStatus::Idle)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let projection = team.engine.read_projection(team.root).await.unwrap();
+    assert!(
+        projection.team.roster.contains_key(handle),
+        "`{handle}` must stay live: {:?}",
+        projection
+            .team
+            .archived
+            .get(handle)
+            .map(|entry| entry.reason)
+    );
+    assert!(
+        reported(team).await.is_empty(),
+        "{:?}",
+        reported(team).await
+    );
+}
+
+#[tokio::test]
+async fn a_final_answer_without_report_is_delivered_as_the_report() {
+    let provider = ScriptProvider::new(|round| {
+        answer(&format!("answer of episode {round}"), FinishReason::Stop)
+    });
+    let team = team(provider.clone()).await;
+    let (child, handle) = spawn_scout(&team).await;
+    wait_reported(&team, &handle, 1).await;
+
+    assert_eq!(provider.rounds(child), 1);
+    assert_eq!(
+        reported(&team).await,
+        vec!["answer of episode 0".to_string()]
+    );
+    let log = team.engine.replay(team.root).await.unwrap();
+    assert!(
+        log.iter().any(|envelope| matches!(
+            &envelope.event,
+            Event::SubagentReported { child: reporter, outcome: hya_proto::ReportOutcome::Done, .. }
+                if *reporter == child
+        )),
+        "the answer is reported with outcome done"
+    );
+
+    // Mail from the parent wakes it for a new episode, which reports again.
+    team.engine
+        .mail_send(
+            team.root,
+            MailEndpoint::Handle(handle.clone()),
+            MailKind::Message,
+            "follow-up: also check the docs".to_string(),
+        )
+        .await
+        .unwrap();
+    wait_reported(&team, &handle, 2).await;
+    assert_eq!(provider.rounds(child), 2);
+    assert_eq!(
+        reported(&team).await,
+        vec![
+            "answer of episode 0".to_string(),
+            "answer of episode 1".to_string()
+        ]
+    );
+}
+
+#[tokio::test]
+async fn an_empty_final_answer_leaves_the_member_idle() {
+    let provider = ScriptProvider::new(|_| answer("", FinishReason::Stop));
+    let team = team(provider.clone()).await;
+    let (child, handle) = spawn_scout(&team).await;
+    assert_idle_unreported(&team, child, &handle).await;
+}
+
+#[tokio::test]
+async fn an_answer_cut_by_the_length_limit_leaves_the_member_idle() {
+    let provider = ScriptProvider::new(|_| answer("the marker is in", FinishReason::Length));
+    let team = team(provider.clone()).await;
+    let (child, handle) = spawn_scout(&team).await;
+    assert_idle_unreported(&team, child, &handle).await;
+    assert_eq!(
+        member_log(&team, child).await.finishes,
+        vec![(FinishReason::Length, None)]
+    );
+}
+
+#[tokio::test]
+async fn unread_mail_at_the_end_of_the_turn_blocks_the_answer_until_it_is_handled() {
+    let provider = ScriptProvider::new(|round| {
+        answer(&format!("answer of round {round}"), FinishReason::Stop)
+    });
+    provider.mail_in_first_round.store(true, Ordering::SeqCst);
+    let team = team(provider.clone()).await;
+    let (child, handle) = spawn_scout(&team).await;
+    wait_reported(&team, &handle, 1).await;
+
+    assert_eq!(
+        provider.rounds(child),
+        2,
+        "the unread mail wakes a second turn instead of the first answer being reported"
+    );
+    assert_eq!(reported(&team).await, vec!["answer of round 1".to_string()]);
 }

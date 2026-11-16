@@ -1,5 +1,17 @@
 # Unified resident subagent lifecycle (episodic actors)
 
+> **Amended (2026-11-15, final answer is the report):** a member whose turn
+> ends normally (finish `stop`, not cancelled or cut by the length limit) with
+> non-empty text in its last assistant message, no accepted report, and its
+> channel policy allowing `report`, reports that text with outcome `done`
+> through the same pending-report path as the `report` tool: report gate,
+> handoff, `SubagentReported` to the parent, archive. Unread mail or live
+> children (the gate), an empty or cut-off answer, and a Workflow Stage
+> activation (which settles on its final text) leave the member idle as
+> before. `report` stays the explicit form and the only way to say `failed`.
+> Benchmark subagents regularly finished with a plain-text answer; their
+> parents' `wait` then woke `stalled` and had to mail them for a report.
+
 ADR-0002 gave subagents a hybrid lifecycle: `transient` blocking-join teams plus
 opt-in `resident` actors idling indefinitely. That split produced two spawn
 admission paths (the durable-owner route for all-transient batches, the legacy
@@ -61,7 +73,8 @@ communication half (ADR-0011).
   at most five more, then commit a degraded handoff and archive. A killed team
   leaves the live map immediately; subsequent work gets fresh counters and main
   context. An idle agent without a report is never auto-archived — it may be
-  awaiting an answer from its parent.
+  awaiting an answer from its parent. (Amended: a final answer is its report;
+  see the note at the top.)
 - **A user cancel stops the subtree without archiving it** (0.45.9). Cancelling
   a session's turn cancels every live member's turn below it and holds them:
   the harness starts none of their turns (mail wakes, quiescence synthesis)

@@ -60,7 +60,8 @@ async fn completed_turn_loss(report: bool) {
     let round = if report {
         Round::tool("report", json!({"result":"F1_ACCEPTED_DONE"}))
     } else {
-        Round::text("F1_COMPLETED_WORK")
+        // An empty answer: a non-empty one would be the member's report.
+        Round::text("")
     };
     let (child, handle) = h
         .spawn_with_sidecar(
@@ -426,7 +427,7 @@ async fn f1_empty_steered_wake_with_lost_cached_sidecar_stays_live() {
         .spawn_with_sidecar(
             vec![
                 Round::tool("m4__blocking_write", json!({})),
-                Round::text("finished steered work"),
+                Round::unfinished("finished steered work"),
             ],
             Arc::new(CompletedLoss {
                 loss: CancellationToken::new(),
@@ -438,7 +439,9 @@ async fn f1_empty_steered_wake_with_lost_cached_sidecar_stays_live() {
         .await
         .unwrap();
     tool_gate.arrived().await;
-    let (barrier_child, barrier_handle) = h.spawn(vec![Round::text("listener barrier idle")]).await;
+    let (barrier_child, barrier_handle) = h
+        .spawn(vec![Round::unfinished("listener barrier idle")])
+        .await;
     h.idle(barrier_child, &barrier_handle).await;
     let barrier = Arc::new(Gate::default());
     let marker = h.provider.script(vec![
@@ -613,7 +616,7 @@ async fn f5_cached_loss_is_replaced_before_the_next_turn() {
     let initial = Arc::new(Gate::default());
     let (child, handle) = h
         .spawn_with_sidecar(
-            vec![Round::text("first activation").gated(initial.clone())],
+            vec![Round::unfinished("first activation").gated(initial.clone())],
             Arc::new(CachedLossFactory {
                 engine: Arc::downgrade(&h.engine),
                 actor: actor.clone(),

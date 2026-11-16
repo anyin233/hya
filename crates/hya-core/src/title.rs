@@ -133,6 +133,7 @@ mod tests {
             time_updated: None,
             config_generation: None,
             last_step_start: None,
+            folded_parts: 0,
             finish: None,
             tokens: None,
             usage: None,

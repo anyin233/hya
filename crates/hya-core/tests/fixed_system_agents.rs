@@ -191,6 +191,7 @@ fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
             namespace: None,
             digest: format!("test-only-{}", agent.stable_id),
             agents: vec![PreparedAgent {
+                private: false,
                 id: AgentName::new(&agent.stable_id),
                 description: None,
                 role: agent.role,

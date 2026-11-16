@@ -16,7 +16,7 @@ impl Tool for ReportTool {
     fn schema(&self) -> hya_proto::ToolSchema {
         obj_schema(
             "report",
-            "Submit your terminal report; it takes effect when this turn ends. The engine checks you have no unread mail and no live children (answer or archive them first). Submission ends your turn right after this tool round (no further model call). The engine then rechecks the gate, writes your state handoff, delivers the report to your parent, and archives you. If new mail, a live subagent, or a changed episode prevents archive, you receive a harness notice and must report again after handling it. Call it once per turn. Mail from your parent can wake you after archive for a new episode with that handoff context.",
+            "Submit your terminal report; it takes effect when this turn ends. The engine checks you have no unread mail and no live children (answer or archive them first). Submission ends your turn right after this tool round (no further model call). The engine then rechecks the gate, writes your state handoff, delivers the report to your parent, and archives you. If new mail, a live subagent, or a changed episode prevents archive, you receive a harness notice and must report again after handling it. Call it once per turn. Ending your turn with a final answer and no `report` submits that answer the same way with outcome `done`. Mail from your parent can wake you after archive for a new episode with that handoff context.",
             json!({
                 "result": {
                     "type": "string",

@@ -44,7 +44,9 @@ Details worth knowing per mechanism:
   threshold, the walk escalates to the next mechanism instead of ending the
   sequence over the window.
 - **`soft`** renders role, text, reasoning, tool name, bounded tool input and
-  output into an eight-section template (primary intent → next step). When the
+  output (reasoning and output keep their head and tail, where conclusions
+  and verdicts sit) into an eight-section template (primary intent → next
+  step). When the
   session already carries a summary, it is passed as `<previous-summary>` so
   each compaction *updates* an anchored summary instead of re-paraphrasing
   one. Output is capped by `summary_max_tokens`.
@@ -138,12 +140,52 @@ subsequent rounds continue with the tool calls and results already produced.
 The compaction ladder excludes that marker from its foldable range, preventing
 the same compacted boundary from being summarized repeatedly.
 
+### Step folds
+
+One assistant message holds every step of a turn. A long single turn, such as
+a headless `hya exec` run (one prompt, one message with dozens of steps), has
+no whole message the fold could take, so `soft`, `snapcompact` and `handoff`
+also cut **inside** the in-flight message:
+
+1. They first plan the usual message fold: everything after the previous
+   marker except the last `keep_recent` messages (one more while the turn's
+   assistant message is in flight).
+2. When that folds nothing, or what it keeps is still over the threshold, and
+   the in-flight message holds more than one step, they cut it between steps
+   instead. Folded: the messages before the turn's head, and the oldest steps.
+   Kept verbatim: the head (the prompt and system notices right before the
+   message) and the newest `keep_recent` steps, fewer while those are over half
+   the threshold, never fewer than one.
+3. A step is cut whole: its reasoning, text, tool calls and results stay
+   together, and a kept step goes out exactly as stored, its reasoning
+   (`provider_data` included) byte for byte. The cut falls where a step's
+   tool calls end and the next step begins, or, when no reasoning leads them,
+   between two tool calls (a model that calls tools without reasoning or text
+   in between).
+
+The summarizer reads the folded messages, the head as context, and the folded
+steps. A later step fold in the same turn anchors on the earlier summary, as
+any repeated fold does.
+
+The cut is recorded on `ContextCompacted.step_cut { through_part, kept_head }`:
+`to_message` is the in-flight message, and its parts up to `through_part` are
+folded. The projection places the marker before `kept_head` and counts the
+folded parts on the message as `MessageProjection.folded_parts`; requests send
+the parts after them. The projection keeps every part, so transcripts, revert,
+and reports still see the whole message.
+
+Example: a run `[prompt, HEADLESS RUN notice, assistant(65 steps)]` with
+`keep_recent: 6` folds steps 1–59; the next request is
+`[summary, prompt, notice, assistant(steps 60–65)]`, and the steps that follow
+append to the same message.
+
 ## Thresholds
 
 The walk trips when occupancy exceeds
 `min(window * context_fraction, window - reserve_tokens)`, floored at 1,000
 tokens; each rung then checks its own precondition (`shake` needs a stale tool
-output, the folding rungs a foldable message prefix). When the route advertises
+output, the folding rungs a foldable message prefix or, inside a turn, a
+[step fold](#step-folds)). When the route advertises
 no window, the flat `token_threshold` applies.
 In `auto` mode, a reported provider measurement is anchored to the **latest
 round** (`input + cache_read + cache_write`), then locally estimated content
@@ -156,6 +198,10 @@ current-turn thinking. Encoder and estimator share one predicate
 (`hya_provider::ReasoningReplayPolicy::replays`), so they cannot drift.
 Tool outputs appended to the running assistant message after its latest round
 are not yet in that round's measurement; the next round's report includes them.
+When the local preflight estimate has already crossed `window` even though the
+latest provider report still sits below the threshold, the ladder falls back to
+the local estimate and reduces the request before sending so preflight does not
+reject an un-compacted turn.
 See [Configuration](configuration.md) for every field and its environment override.
 
 ## Observability
@@ -165,9 +211,11 @@ Each mechanism records what it did on the event log:
 - `ContextCompacted` — one per fold, with the `strategy` that produced it
   (`native`, `local_summarizer`, `snap_compact`, `handoff`), the folded range
   (`from_message..=to_message`, `folded_count`), the estimated input tokens
-  that tripped the threshold, and the threshold in force. The folded input is
-  a pointer, not a copy: the range plus the event log reconstructs exactly
-  what was folded.
+  that tripped the threshold, and the threshold in force. A
+  [step fold](#step-folds) adds `step_cut { through_part, kept_head }`, and
+  `folded_count` then counts the cut message as one. The folded input is a
+  pointer, not a copy: the range plus the event log reconstructs exactly what
+  was folded.
 - `ContextEvicted` — recorded whenever `shake` saved tokens, including when
   the saving alone was not enough and the walk escalated anyway. Its payload
   contains `session`, `evicted_parts`, `tokens_before`, `tokens_after`, and

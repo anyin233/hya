@@ -146,7 +146,9 @@ async fn i1_stale_session_start_cannot_remove_revived_episode() {
         epoch,
         "a live initializer must end under its own claim, without Takeover"
     );
-    let revived = h.provider.script(vec![Round::text("revived episode")]);
+    let revived = h
+        .provider
+        .script(vec![Round::unfinished("revived episode")]);
     h.mail(&handle, revived).await.unwrap();
     plugin.gate.release();
     h.until(child, |p| p.session.messages.iter().any(|m| m.parts.iter().any(|part| matches!(part, hya_proto::PartProjection::Text { text, .. } if text == "revived episode")))).await;
@@ -320,7 +322,7 @@ async fn blocked_sidecar() -> (
     let (child, handle) = h
         .spawn_agent(
             "m4-sidecar-worker",
-            vec![Round::text("initial activation").gated(initial.clone())],
+            vec![Round::unfinished("initial activation").gated(initial.clone())],
         )
         .await;
     control.started().await;
@@ -451,7 +453,9 @@ async fn i5_post_kill_task_uses_fresh_team_without_waiting_for_other_endings() {
     }
     let (mut h, plugin, mut control, _, stuck) = blocked_sidecar().await;
     let killed = h.built.resident_supervisor().team_cancel(h.root).unwrap();
-    let (other, handle) = h.spawn(vec![Round::text("another real activation")]).await;
+    let (other, handle) = h
+        .spawn(vec![Round::unfinished("another real activation")])
+        .await;
     h.until(other, |p| {
         p.session
             .messages
@@ -650,7 +654,7 @@ async fn i23_user_hold_refuses_mail_until_explicit_steer() {
 async fn i16_cancelling_archive_caller_does_not_cancel_the_ending() {
     let plugin = support::lifecycle::BlockingPlugin::for_hook("chat.params").await;
     let mut h = Harness::with_plugins(vec![plugin.spec.clone()]).await;
-    let (child, handle) = h.spawn(vec![Round::text("first activation")]).await;
+    let (child, handle) = h.spawn(vec![Round::unfinished("first activation")]).await;
     h.idle(child, &handle).await;
     plugin.arm_session(child);
     let marker = h.provider.script(vec![Round::text("blocked in plugin")]);
@@ -751,7 +755,7 @@ async fn i15_one_owed_wake_admits_one_coalesced_owned_prompt() {
 #[tokio::test]
 async fn i15_failed_prompt_admission_rolls_back_work_started() {
     let mut h = Harness::new().await;
-    let (child, handle) = h.spawn(vec![Round::text("initial activation")]).await;
+    let (child, handle) = h.spawn(vec![Round::unfinished("initial activation")]).await;
     h.idle(child, &handle).await;
     let count = |events: &[hya_proto::Envelope]| {
         events.iter().filter(|e| matches!(&e.event, Event::ResidentWorkStarted { actor_session, .. } if *actor_session == child)).count()
@@ -896,7 +900,7 @@ async fn harness_blocking_tool_writes_only_when_released() {
 #[tokio::test]
 async fn i11_revive_skips_prior_mail_and_handoff_retains_unread_mail() {
     let mut h = Harness::new().await;
-    let (child, handle) = h.spawn(vec![Round::text("initial work")]).await;
+    let (child, handle) = h.spawn(vec![Round::unfinished("initial work")]).await;
     h.idle(child, &handle).await;
     let busy = Arc::new(Gate::default());
     let old = h
@@ -918,7 +922,7 @@ async fn i11_revive_skips_prior_mail_and_handoff_retains_unread_mail() {
         .iter()
         .map(|m| m.id)
         .collect::<std::collections::BTreeSet<_>>();
-    let next = h.provider.script(vec![Round::text("next episode")]);
+    let next = h.provider.script(vec![Round::unfinished("next episode")]);
     let mut requests = h.provider.requests.subscribe();
     h.mail(&handle, next).await.unwrap();
     let request = request_for(&mut requests, child).await;
@@ -1039,7 +1043,7 @@ async fn i6_report_wait_and_search_use_real_tools() {
 #[tokio::test]
 async fn i6_parent_archive_has_no_report_mail() {
     let mut h = Harness::new().await;
-    let (child, handle) = h.spawn(vec![Round::text("working")]).await;
+    let (child, handle) = h.spawn(vec![Round::unfinished("working")]).await;
     h.idle(child, &handle).await;
     let before = h.engine.replay(h.root).await.unwrap().len();
     let archived = h
@@ -1087,7 +1091,7 @@ async fn i6_turn_error_reports_failure_to_parent() {
 #[tokio::test]
 async fn i6_user_archive_records_parent_archive_reason() {
     let mut h = Harness::new().await;
-    let (child, handle) = h.spawn(vec![Round::text("idle")]).await;
+    let (child, handle) = h.spawn(vec![Round::unfinished("idle")]).await;
     h.idle(child, &handle).await;
     h.engine.archive_subagent(child).await.unwrap();
     let root = h.engine.read_projection(h.root).await.unwrap();
@@ -1111,7 +1115,7 @@ async fn i6_turn_budget_kill_records_failure_reason() {
         return;
     }
     let mut h = Harness::new().await;
-    let (child, handle) = h.spawn(vec![Round::text("one allowed turn")]).await;
+    let (child, handle) = h.spawn(vec![Round::unfinished("one allowed turn")]).await;
     h.archived(&handle).await;
     let root = h.engine.read_projection(h.root).await.unwrap();
     let waited = h
@@ -1193,7 +1197,7 @@ async fn i6_workflow_cancel_records_parent_archive_reason() {
 #[tokio::test]
 async fn i3_terminal_write_error_releases_in_memory_episode() {
     let mut h = Harness::new().await;
-    let (child, handle) = h.spawn(vec![Round::text("working")]).await;
+    let (child, handle) = h.spawn(vec![Round::unfinished("working")]).await;
     h.idle(child, &handle).await;
     h.trigger("agent_archived").await;
     let result = h.tool("archive", json!({"target": handle})).await;
@@ -1244,7 +1248,7 @@ async fn i3_terminal_write_error_releases_in_memory_episode() {
 #[tokio::test]
 async fn i4_failed_terminal_write_can_be_reconciled() {
     let mut h = Harness::new().await;
-    let (child, handle) = h.spawn(vec![Round::text("working")]).await;
+    let (child, handle) = h.spawn(vec![Round::unfinished("working")]).await;
     h.idle(child, &handle).await;
     let epoch = h.claim_epoch(child).await;
     let before = h.engine.replay(child).await.unwrap();
@@ -1300,7 +1304,7 @@ async fn i7_refused_report_delivers_a_harness_notice() {
     let gate = Arc::new(Gate::default());
     let mail = h
         .provider
-        .script(vec![Round::text("read new mail").gated(gate.clone())]);
+        .script(vec![Round::unfinished("read new mail").gated(gate.clone())]);
     h.mail(&handle, format!("new information {mail}"))
         .await
         .unwrap();
@@ -1423,7 +1427,7 @@ async fn i10_rejected_restart_rolls_back_the_whole_revive() {
 #[tokio::test]
 async fn i21_handle_send_persists_only_dm_channel_targets() {
     let mut h = Harness::new().await;
-    let (child, handle) = h.spawn(vec![Round::text("idle")]).await;
+    let (child, handle) = h.spawn(vec![Round::unfinished("idle")]).await;
     h.idle(child, &handle).await;
     output(
         &h.tool("send", json!({"channel": handle, "body": "alias mail"}))
@@ -1445,7 +1449,7 @@ async fn i21_handle_send_persists_only_dm_channel_targets() {
 async fn i19_shutdown_drop_releases_engine_ownership() {
     let mut h = Harness::new().await;
     let weak = Arc::downgrade(&h.engine);
-    let (child, handle) = h.spawn(vec![Round::text("idle")]).await;
+    let (child, handle) = h.spawn(vec![Round::unfinished("idle")]).await;
     h.idle(child, &handle).await;
     h.shutdown().await;
     drop(h);
@@ -1464,9 +1468,9 @@ async fn i13_capacity_is_a_live_member_lease_across_root_turns() {
         return;
     }
     let mut h = Harness::new().await;
-    let (a, first) = h.spawn(vec![Round::text("A")]).await;
+    let (a, first) = h.spawn(vec![Round::unfinished("A")]).await;
     h.idle(a, &first).await;
-    let (b, second) = h.spawn(vec![Round::text("B")]).await;
+    let (b, second) = h.spawn(vec![Round::unfinished("B")]).await;
     h.idle(b, &second).await;
     let third = h.tool("task", json!({"description": "C", "prompt": "C", "subagent_type": "hya-task", "model": "fake"})).await;
     let overloaded = serde_json::to_string(&third)
@@ -1475,7 +1479,7 @@ async fn i13_capacity_is_a_live_member_lease_across_root_turns() {
         .contains("overload");
     if overloaded {
         output(&h.tool("archive", json!({"target": first})).await);
-        let (c, third) = h.spawn(vec![Round::text("C")]).await;
+        let (c, third) = h.spawn(vec![Round::unfinished("C")]).await;
         h.idle(c, &third).await;
         let revive = h.mail(&first, "must consume capacity".into()).await;
         assert!(
@@ -1944,7 +1948,7 @@ async fn i20_ready_successor_does_not_wait_for_independent_stage() {
 #[tokio::test]
 async fn i6_shutdown_records_shutdown_reason_and_releases_claim() {
     let mut h = Harness::new().await;
-    let (child, handle) = h.spawn(vec![Round::text("idle")]).await;
+    let (child, handle) = h.spawn(vec![Round::unfinished("idle")]).await;
     h.idle(child, &handle).await;
     h.shutdown().await;
     let root = h.engine.read_projection(h.root).await.unwrap();
@@ -2029,7 +2033,7 @@ async fn i17_root_delete_does_not_send_failure_mail_or_wake_members() {
 #[tokio::test]
 async fn e7_live_member_turns_are_refused_before_prompt_admission() {
     let mut h = Harness::new().await;
-    let (child, handle) = h.spawn(vec![Round::text("idle member")]).await;
+    let (child, handle) = h.spawn(vec![Round::unfinished("idle member")]).await;
     h.idle(child, &handle).await;
     let before = h.engine.replay(child).await.unwrap();
     let error = h
@@ -2134,7 +2138,7 @@ async fn e7_archived_member_turns_are_refused_before_prompt_admission() {
 #[tokio::test]
 async fn e7_member_model_switch_is_refused() {
     let mut h = Harness::new().await;
-    let (child, handle) = h.spawn(vec![Round::text("idle")]).await;
+    let (child, handle) = h.spawn(vec![Round::unfinished("idle")]).await;
     h.idle(child, &handle).await;
     for archived in [false, true] {
         if archived {
@@ -2158,7 +2162,7 @@ async fn e7_member_model_switch_is_refused() {
 #[tokio::test]
 async fn e7_member_agent_switch_is_refused() {
     let mut h = Harness::new().await;
-    let (child, handle) = h.spawn(vec![Round::text("idle")]).await;
+    let (child, handle) = h.spawn(vec![Round::unfinished("idle")]).await;
     h.idle(child, &handle).await;
     for archived in [false, true] {
         if archived {
@@ -2182,7 +2186,7 @@ async fn e7_member_agent_switch_is_refused() {
 #[tokio::test]
 async fn e7_member_revert_and_unrevert_are_refused() {
     let mut h = Harness::new().await;
-    let (child, handle) = h.spawn(vec![Round::text("idle")]).await;
+    let (child, handle) = h.spawn(vec![Round::unfinished("idle")]).await;
     h.idle(child, &handle).await;
     for archived in [false, true] {
         if archived {
@@ -2392,7 +2396,7 @@ async fn i3_sidecar_start_and_terminal_write_failure_leaves_an_orphan() {
 #[tokio::test]
 async fn e1_orphan_archives_and_revival_share_the_registration_lock() {
     let mut h = Harness::new().await;
-    let (child, handle) = h.spawn(vec![Round::text("first episode")]).await;
+    let (child, handle) = h.spawn(vec![Round::unfinished("first episode")]).await;
     h.idle(child, &handle).await;
     h.trigger("agent_archived").await;
     assert!(matches!(
@@ -2401,7 +2405,9 @@ async fn e1_orphan_archives_and_revival_share_the_registration_lock() {
     ));
     assert_eq!(h.built.resident_supervisor().episode_count(), 0);
     h.heal().await;
-    let next = h.provider.script(vec![Round::text("revived episode")]);
+    let next = h
+        .provider
+        .script(vec![Round::unfinished("revived episode")]);
     let engine = h.engine.clone();
     let root = h.root;
     let address = handle.clone();
@@ -2464,7 +2470,7 @@ async fn e1_orphan_archives_and_revival_share_the_registration_lock() {
 #[tokio::test]
 async fn a1_cancel_wakes_an_idle_episode() {
     let mut h = Harness::new().await;
-    let (child, handle) = h.spawn(vec![Round::text("idle before cancel")]).await;
+    let (child, handle) = h.spawn(vec![Round::unfinished("idle before cancel")]).await;
     h.idle(child, &handle).await;
     h.built
         .resident_supervisor()
@@ -2657,7 +2663,7 @@ async fn a3_kill_terminate_error_removes_episode_within_bound() {
     let stopping = Arc::new(Gate::default());
     let (child, handle) = h
         .spawn_with_sidecar(
-            vec![Round::text("idle sidecar")],
+            vec![Round::unfinished("idle sidecar")],
             Arc::new(support::lifecycle::EndingSidecar {
                 stopping: stopping.clone(),
                 fail: true,
@@ -2743,7 +2749,7 @@ async fn a5_kill_during_init_publishes_registration_first_and_keeps_spawn_identi
     }
     let plugin = support::lifecycle::BlockingPlugin::new().await;
     let mut h = Harness::with_plugins(vec![plugin.spec.clone()]).await;
-    let (sibling, sibling_handle) = h.spawn(vec![Round::text("sibling")]).await;
+    let (sibling, sibling_handle) = h.spawn(vec![Round::unfinished("sibling")]).await;
     h.idle(sibling, &sibling_handle).await;
     plugin.arm();
     let mut bus = h.engine.bus().subscribe();
@@ -2824,7 +2830,9 @@ async fn a5_kill_during_init_publishes_registration_first_and_keeps_spawn_identi
 #[tokio::test]
 async fn i18_shutdown_reconciles_an_already_orphaned_member() {
     let mut h = Harness::new().await;
-    let (child, handle) = h.spawn(vec![Round::text("orphan before shutdown")]).await;
+    let (child, handle) = h
+        .spawn(vec![Round::unfinished("orphan before shutdown")])
+        .await;
     h.idle(child, &handle).await;
     let epoch = h.claim_epoch(child).await;
     h.trigger("agent_archived").await;
@@ -2859,7 +2867,7 @@ async fn i6_idle_sidecar_loss_drops_handle_and_next_wake_starts_fresh() {
         dropped: Arc::new(tokio::sync::Notify::new()),
     });
     let (child, handle) = h
-        .spawn_with_sidecar(vec![Round::text("first activation")], probe.clone())
+        .spawn_with_sidecar(vec![Round::unfinished("first activation")], probe.clone())
         .await
         .unwrap();
     h.idle(child, &handle).await;
@@ -2881,7 +2889,7 @@ async fn i6_idle_sidecar_loss_drops_handle_and_next_wake_starts_fresh() {
     );
     let marker = h
         .provider
-        .script(vec![Round::text("fresh sidecar activation")]);
+        .script(vec![Round::unfinished("fresh sidecar activation")]);
     h.mail(&handle, marker).await.unwrap();
     h.until(child, |p| p.session.messages.iter().any(|m| m.parts.iter().any(|part| matches!(part, hya_proto::PartProjection::Text { text, .. } if text == "fresh sidecar activation")))).await;
     h.idle(child, &handle).await;
@@ -2957,12 +2965,12 @@ async fn i8_running_sidecar_loss_removes_episode_before_archive_publication() {
 #[tokio::test]
 async fn m45_r1_user_cancel_retains_mail_and_resumes_its_existing_prompt_once() {
     let mut h = Harness::new().await;
-    let (child, handle) = h.spawn(vec![Round::text("initial work")]).await;
+    let (child, handle) = h.spawn(vec![Round::unfinished("initial work")]).await;
     h.idle(child, &handle).await;
     let gate = Arc::new(Gate::default());
     let marker = h.provider.script(vec![
         Round::text("cancelled work").stream_gated(gate.clone()),
-        Round::text("resumed work"),
+        Round::unfinished("resumed work"),
     ]);
     h.mail(&handle, format!("CANCELLED_WAKE {marker}"))
         .await
@@ -3066,7 +3074,7 @@ async fn m46_s1_cancelled_directive_mail_is_owed_on_resume() {
     let (child, handle) = h
         .spawn(vec![
             Round::text("partial initial work").stream_gated(gate.clone()),
-            Round::text("initial work resumed"),
+            Round::unfinished("initial work resumed"),
         ])
         .await;
     gate.arrived().await;
@@ -3095,14 +3103,14 @@ async fn m46_s1_consumed_history_does_not_start_an_extra_turn_after_cancel() {
     let mut h = Harness::new().await;
     let gate = Arc::new(Gate::default());
     let (child, handle) = h
-        .spawn(vec![Round::text("initial work").gated(gate.clone())])
+        .spawn(vec![Round::unfinished("initial work").gated(gate.clone())])
         .await;
     let lead = h.engine.try_begin_turn(h.root).unwrap();
     gate.release();
     h.idle(child, &handle).await;
     let marker = h
         .provider
-        .script(vec![Round::text("consumed historical mail")]);
+        .script(vec![Round::unfinished("consumed historical mail")]);
     h.mail(&handle, marker).await.unwrap();
     h.until(h.root, |p| p.team.roster[&handle].resident_cursor == 2)
         .await;
@@ -3113,7 +3121,7 @@ async fn m46_s1_consumed_history_does_not_start_an_extra_turn_after_cancel() {
     assert!(h.engine.cancel_user_turn(h.root));
     h.engine.resume_after_user_stop(h.root);
     drop(lead);
-    let next = h.provider.script(vec![Round::text("fresh mail")]);
+    let next = h.provider.script(vec![Round::unfinished("fresh mail")]);
     h.mail(&handle, next).await.unwrap();
     h.until(child, |p| p.session.messages.iter().any(|m| m.parts.iter().any(|part| matches!(part, hya_proto::PartProjection::Text { text, .. } if text == "fresh mail")))).await;
     h.idle(child, &handle).await;
@@ -3145,7 +3153,7 @@ async fn cancelled_answer_then_new_mail(mail_wake: bool) {
     let gate = Arc::new(Gate::default());
     let rounds = vec![Round::text("cancelled answer").stream_gated(gate.clone())];
     let (child, handle) = if mail_wake {
-        let (child, handle) = h.spawn(vec![Round::text("initial settled")]).await;
+        let (child, handle) = h.spawn(vec![Round::unfinished("initial settled")]).await;
         h.idle(child, &handle).await;
         let marker = h.provider.script(rounds);
         h.mail(&handle, format!("S3_OLD_MAIL {marker}"))
@@ -3170,7 +3178,9 @@ async fn cancelled_answer_then_new_mail(mail_wake: bool) {
         .find(|m| m.role == hya_proto::Role::User)
         .unwrap()
         .clone();
-    let marker = h.provider.script(vec![Round::text("new mail answered")]);
+    let marker = h
+        .provider
+        .script(vec![Round::unfinished("new mail answered")]);
     let mut requests = h.provider.requests.subscribe();
     h.engine
         .steer_subagent(child, &format!("S2_NEW_MAIL {marker}"))
@@ -3220,7 +3230,7 @@ async fn m46_s3_unanswered_admitted_prompt_is_reused_once() {
         .find(|m| m.role == hya_proto::Role::User)
         .unwrap()
         .id;
-    let marker = h.provider.script(vec![Round::text("answered once")]);
+    let marker = h.provider.script(vec![Round::unfinished("answered once")]);
     let mut requests = h.provider.requests.subscribe();
     h.engine.steer_subagent(child, &marker).await.unwrap();
     let request = request_for(&mut requests, child).await;
@@ -3346,12 +3356,12 @@ async fn m46_s2_restart_requeues_cancelled_directive_mail_work() {
 async fn m45_r1_user_cancel_before_begin_work_rearms_mail_for_resume() {
     let plugin = support::lifecycle::BlockingPlugin::for_hook("message.user.before").await;
     let mut h = Harness::with_plugins(vec![plugin.spec.clone()]).await;
-    let (child, handle) = h.spawn(vec![Round::text("initial work")]).await;
+    let (child, handle) = h.spawn(vec![Round::unfinished("initial work")]).await;
     h.idle(child, &handle).await;
     plugin.arm_session(child);
     let marker = h
         .provider
-        .script(vec![Round::text("resumed pre-admission wake")]);
+        .script(vec![Round::unfinished("resumed pre-admission wake")]);
     h.mail(&handle, marker.clone()).await.unwrap();
     plugin.gate.arrived().await;
     assert!(h.engine.cancel_user_turn(h.root));
@@ -3500,11 +3510,13 @@ async fn m46_sidecar_failed_episode_revives_with_only_new_mail_and_working_tools
     let mut control = support::lifecycle::SidecarControl::new(false).await;
     let mut h = Harness::new().await;
     let (child, handle) = h
-        .spawn_agent("m4-sidecar-worker", vec![Round::text("initial")])
+        .spawn_agent("m4-sidecar-worker", vec![Round::unfinished("initial")])
         .await;
     control.started().await;
     h.idle(child, &handle).await;
-    let completed = h.provider.script(vec![Round::text("completed mail work")]);
+    let completed = h
+        .provider
+        .script(vec![Round::unfinished("completed mail work")]);
     h.mail(&handle, format!("COMPLETED_BEFORE_LOSS {completed}"))
         .await
         .unwrap();
@@ -3539,7 +3551,7 @@ async fn m46_sidecar_failed_episode_revives_with_only_new_mail_and_working_tools
     assert!(!doc.contains("COMPLETED_BEFORE_LOSS"));
     let next = h.provider.script(vec![
         Round::tool("echo", json!({})),
-        Round::text("new episode finished"),
+        Round::unfinished("new episode finished"),
     ]);
     let mut requests = h.provider.requests.subscribe();
     h.mail(&handle, next.clone()).await.unwrap();
@@ -3579,7 +3591,7 @@ async fn m46_forced_handoff_describes_the_ended_episode_instead_of_copying_its_p
     h.archived(&handle).await;
     let next = h
         .provider
-        .script(vec![Round::text("CURRENT_EPISODE_STATE")]);
+        .script(vec![Round::unfinished("CURRENT_EPISODE_STATE")]);
     h.mail(&handle, format!("CURRENT_EPISODE_GOAL {next}"))
         .await
         .unwrap();
@@ -3640,7 +3652,7 @@ async fn m46_handoff_summarizer_receives_only_the_latest_episode() {
 #[tokio::test]
 async fn m46_in_episode_compaction_does_not_replace_the_handoff_goal() {
     let mut h = Harness::new().await;
-    let (child, handle) = h.spawn(vec![Round::text("initial state")]).await;
+    let (child, handle) = h.spawn(vec![Round::unfinished("initial state")]).await;
     h.idle(child, &handle).await;
     let actor = h.engine.read_projection(child).await.unwrap();
     let goal = actor
@@ -3657,7 +3669,9 @@ async fn m46_in_episode_compaction_does_not_replace_the_handoff_goal() {
         })
         .collect::<String>();
     h.engine.summarize_session(child).await.unwrap();
-    let later = h.provider.script(vec![Round::text("latest episode state")]);
+    let later = h
+        .provider
+        .script(vec![Round::unfinished("latest episode state")]);
     h.mail(&handle, later).await.unwrap();
     h.idle(child, &handle).await;
     output(&h.tool("archive", json!({"target": handle})).await);
@@ -3708,7 +3722,7 @@ async fn m46_review_s6_promptless_catalog_agent_keeps_host_base_after_revive() {
             .is_none()
     );
     let (child, handle) = h
-        .spawn_agent("review-worker", vec![Round::text("first episode")])
+        .spawn_agent("review-worker", vec![Round::unfinished("first episode")])
         .await;
     h.idle(child, &handle).await;
     let first = h
@@ -3724,7 +3738,9 @@ async fn m46_review_s6_promptless_catalog_agent_keeps_host_base_after_revive() {
         .clone()
         .unwrap_or_default();
     output(&h.tool("archive", json!({"target": handle})).await);
-    let second = h.provider.script(vec![Round::text("revived episode")]);
+    let second = h
+        .provider
+        .script(vec![Round::unfinished("revived episode")]);
     h.mail(&handle, second).await.unwrap();
     h.idle(child, &handle).await;
     let revived = h
@@ -4258,7 +4274,7 @@ async fn review_w3_stage_failure_output_is_the_report_text() {
 async fn review_s2_terminal_record_outlives_callers_actor_claim() {
     use sqlx::Row;
     let mut h = Harness::new().await;
-    let (caller, handle) = h.spawn(vec![Round::text("ready")]).await;
+    let (caller, handle) = h.spawn(vec![Round::unfinished("ready")]).await;
     h.idle(caller, &handle).await;
     let mut tx = h.engine.store().begin_transaction().await.unwrap();
     let row = sqlx::query("SELECT epoch, owner_run_id FROM resident_actor_claim WHERE actor_id = ? AND state = 'active'")

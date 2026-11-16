@@ -1791,6 +1791,16 @@ You are the installed resident agent.
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             let projection = observed_store.read_projection(root).await.unwrap();
+            // The offline model's answer is the member's report: the turn that
+            // consumed the mail can end in the archive.
+            if projection
+                .team
+                .archived
+                .get("main/installed-resident-1")
+                .is_some_and(|entry| entry.reason == hya_proto::ArchiveReason::Reported)
+            {
+                break;
+            }
             let Some(entry) = projection.team.roster.get("main/installed-resident-1") else {
                 tokio::task::yield_now().await;
                 continue;
@@ -2320,6 +2330,7 @@ fn catalog_with_agents(stable_ids: &[&str]) -> Arc<AgentCatalog> {
                 namespace: None,
                 digest: format!("test-only-{stable_id}"),
                 agents: vec![PreparedAgent {
+                    private: false,
                     id: AgentName::new(*stable_id),
                     description: None,
                     role: AgentRole::Main,
@@ -2469,6 +2480,7 @@ fn catalog_with_worker_policy(model_policy: ModelPolicy) -> Arc<AgentCatalog> {
     // `build` is a compiled-in built-in; only `worker` needs a bundle.
     let bundle = |stable_id: &str, role: AgentRole, can_spawn: &[&str], policy: ModelPolicy| {
         let agent = PreparedAgent {
+            private: false,
             id: AgentName::new(stable_id),
             description: None,
             role,
@@ -5931,6 +5943,7 @@ fn materialized_bundle(marker: &str) -> Bundle {
         namespace: None,
         digest: format!("{marker}-bundle-digest"),
         agents: vec![PreparedAgent {
+            private: false,
             id: AgentName::new("worker"),
             description: None,
             role: AgentRole::Subagent,
@@ -6005,6 +6018,7 @@ fn disjoint_materialized_bundles(marker: &str) -> Vec<Bundle> {
         ..alpha.extensions[1].clone()
     }];
     beta.agents[0] = PreparedAgent {
+        private: false,
         id: AgentName::new("beta"),
         prompt: Some(format!("{marker} beta prompt")),
         resource_view: ResourceView {
@@ -6046,6 +6060,7 @@ fn disjoint_materialized_bundle(marker: &str) -> Bundle {
         // the bundle still ships both extensions so selection can be
         // exercised over a superset.
         agents: vec![PreparedAgent {
+            private: false,
             id: AgentName::new("alpha"),
             description: None,
             role: AgentRole::Subagent,
@@ -6746,6 +6761,7 @@ fn sidecar_factory_is_scoped_to_the_selected_agent_effective_capability() {
     lead_bundle.hooks.clear();
     lead_bundle.extensions.clear();
     lead_bundle.agents[0] = PreparedAgent {
+        private: false,
         id: AgentName::new("lead"),
         description: None,
         role: AgentRole::Main,

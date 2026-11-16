@@ -335,7 +335,7 @@ pub(crate) fn resolve_member_target(
 /// Projection-level report gate (ADR-0015): live roster row, inbox drained,
 /// no live children. Pure read; shared by the tool pre-check, the direct
 /// archive path, and the at-rest pending-report execution.
-async fn report_gate_projection(
+pub(super) async fn report_gate_projection(
     engine: &Arc<SessionEngine>,
     root: SessionId,
     canonical: &str,

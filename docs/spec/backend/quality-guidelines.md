@@ -587,7 +587,7 @@ git tag -a v0.47.1-dev.1 -m "release v0.47.1-dev.1"
   `{ id, reasoning: { default?, variants? }, limit: { context?, output? } }`.
 - A known per-model `limit.output` (configured or cached) is the default and
   ceiling for `CompletionRequest.max_output_tokens`, applied by `HttpProvider`
-  before `Protocol::encode_with_output_limit`; without one the request is
+  before `Protocol::encode_for_model`; without one the request is
   encoded unchanged (Anthropic's required `max_tokens` falls back to 4096).
 - Provider behavior stays behind `Protocol::encode(CompletionRequest)` and a
   protocol-specific `Decoder` selected by `HttpProvider` construction.

@@ -322,10 +322,8 @@ async fn write_creates_parents_and_reports_final_metadata() {
     assert_eq!(bytes, content.as_bytes());
     assert_write_metadata(&result, &target, bytes.len(), false);
     assert_eq!(result["title"], "src/generated/config.txt");
-    assert_eq!(
-        result["output"],
-        "Wrote file successfully.\n\n<content>\nhello\n\n</content>"
-    );
+    // The model sent this content and the file holds exactly it: no echo.
+    assert_eq!(result["output"], "Wrote file successfully.");
     assert!(temporary_files(&directory).await.is_empty());
 }
 

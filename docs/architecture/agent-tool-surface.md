@@ -32,7 +32,7 @@ advertised.
 | File access | `read`, `write`, `edit`, `apply_patch` | Read or mutate workspace files. `read`, `write`, and `edit` are native coding tools; `apply_patch` remains the separate patch envelope. |
 | Local discovery | `ls`, `glob`, `find`, `grep`, `lsp` | List directories, match paths, search text, or query language servers. |
 | Commands | `bash` | Run a command with bounded capture; hidden runtime name `shell` is not advertised. |
-| Human/session interaction | `ask_user`, `todo__read`, `todo__update_status`, `todo__update_content`, `plan_exit`, `invalid` | Ask batched structured questions, read/update session todos, request a plan-mode transition, or represent invalid tool arguments. |
+| Human/session interaction | `ask_user`, `todo__read`, `todo__update_status`, `todo__update_content`, `plan_exit` | Ask batched structured questions, read/update session todos, request a plan-mode transition. |
 | Agents and teams | `skill`, `list_agents`, `task`, `workflow`, `search_agent`, `archive`, `wait` | Load skills, discover/spawn agents, execute governed Workflow commands, search archived subagents, stop-and-archive a subagent, and block until subagents finish (`wait` stays advertised at every depth). The orchestration plane is hidden at depth 2 ([ADR-0015](../adr/0015-unified-resident-subagent-lifecycle.md)). |
 | Project activity | `project_activity` | Read-only, Project-scoped view of recent sessions and newest changes per file; never exposes prompts, arguments, or contents. `busy`/`idle` is live state from this daemon. |
 | Communication | `send`, `list_channel`, `report` | Channel-plane communication: one channel-addressed send (the channel's nature picks DM vs broadcast, with archive revival), channel listing, and terminal reports ([ADR-0016](../adr/0016-channel-communication-plane.md)). |
@@ -298,7 +298,13 @@ Archived peers' DM channels are excluded (use `search_agent`).
 
 **`report`** (channel-tools family): required `result`, optional `outcome`
 (`done`/`failed`). Rejected while the caller has unread mail or live direct
-subagents. Mail the caller's current resident wake already put into its turn
+subagents. A member that ends its turn normally with a final answer (non-empty
+text in its last assistant message, finish `stop`) and no accepted report
+reports that text with outcome `done` the same way, when the gate passes and
+its channel policy allows `report`; otherwise it stays idle (a `wait` sees it
+`stalled`). A cut-off (`length`), failed, or cancelled turn is never reported,
+and a Workflow Stage activation settles on its final text instead. `report`
+is the only way to say `failed`. Mail the caller's current resident wake already put into its turn
 counts as read. The unread-mail rejection names every channel holding unread
 mail and the exact read call, for example:
 
@@ -396,8 +402,8 @@ calling turn until subagents finish, bounded by a timeout.
 | `mode` | `"all"` (default) \| `"any"` | Return when every target / the first target finished during this call. |
 | `timeout_secs` | integer, default 600, clamped to 1800 | `0` returns the current state at once without blocking. |
 
-A target **finishes** only when it reports (`report`, then its archive
-commits) or is archived without a report (`archive` by an ancestor, a drain,
+A target **finishes** only when it reports (`report`, or a final answer
+that ends its turn, then its archive commits) or is archived without a report (`archive` by an ancestor, a drain,
 teardown). Going idle is never finishing: a member between turns with work
 owed (a running turn, queued mail or directive, an accepted report still
 executing, or live subagents of its own) is `working`.
@@ -411,7 +417,7 @@ call never returns the same news twice:
 | Target had already reported or been archived before the call (not woken since) | listed in `already_finished` with its report; never counts toward `any`/`all` and never wakes the wait |
 | Every target already finished (or no live subagent) | returns at once with `woke_by: nothing_to_wait_for`; calling again gives the same answer, never `members` |
 | Target woken again after its report (mail to an archived member revives it) | `working` until its **next** report; the earlier report is not repeated (the member's terminal handoff generation, bumped by every archive, tells the finishes apart) |
-| Target's turn ended without a report and nothing is queued for it | `idle` under `running`; it will not continue until it is mailed, so the wait returns `woke_by: stalled` — once per stopped turn; a repeated wait on the same stopped member blocks |
+| Target's turn ended without a report (no answer, a cut-off answer, or its answer was refused by the report gate) and nothing is queued for it | `idle` under `running`; it will not continue until it is mailed, so the wait returns `woke_by: stalled` — once per stopped turn; a repeated wait on the same stopped member blocks |
 | New mail for the caller (channel-tools `wait` only) | `woke_by: mail`; returned once (see below) |
 | Nothing new before the deadline | `woke_by: timeout` (`timeout_secs: 0`: the current state at once) |
 
@@ -609,6 +615,19 @@ Before each completion request, hya obtains canonical registry schemas and
 applies an advertisement-only filter:
 
 - Hashline `write` and `edit` are advertised to **every** model.
+- `ask_user` and `plan_exit` are omitted when the engine's `InteractionPlane`
+  has no question receiver (`InteractionPlane::is_available() -> bool` is false).
+  In-process headless startup drops that receiver; the same engine and plane
+  serve its lead and subagents. Interactive server sessions retain both tools.
+  Filtering checks the resolved tool name, so resource-view aliases follow the
+  same rule. It runs before exclusive-tool descriptions are assembled and also
+  applies to nested-tool discovery. The bundled planning prompt asks for the
+  completed plan without naming an unavailable interaction tool; the offered
+  `plan_exit` schema describes interactive approval. Dispatch and permission
+  checks are unchanged.
+  No flag, config key, RPC, or tool argument changes: for example,
+  `hya exec "summarize this repo"` offers neither human-answer tool, while a
+  session attached through the TUI/server can still ask questions.
 - `apply_patch` is never advertised. It remains registered for hidden `patch`
   dispatch.
 - enabled `websearch` is advertised to every model provider.
@@ -681,7 +700,10 @@ details are observed.
 ### File kinds and text output
 
 Read dispatches directories, supported media, and text. PNG, JPEG, GIF, WebP,
-and PDF files return bounded base64 data-URL attachments. Unsupported binary
+and PDF files return base64 data-URL attachments. An image whose attachment
+would exceed the 2 MiB attachment budget of the result cap (a file over about
+1.5 MiB) is not attached; the output says it is larger than the limit and that
+a downscaled or cropped copy can be read instead. Unsupported binary
 files return a typed error. Directory reads list immediate children, put
 directories first, sort each group lexically, and use one-based offset paging.
 

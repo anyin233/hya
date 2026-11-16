@@ -39,8 +39,14 @@ use super::stream_round::RoundAttribution;
 use crate::agent_catalog::AgentDefinition;
 pub use messages::advertise_tool;
 use messages::{
-    AttachmentData, attachment_blobs, hidden_behind, projection_to_messages, request_from_messages,
+    AttachmentData, attachment_blobs, filtered_tool_schemas, hidden_behind, projection_to_messages,
+    request_from_messages,
 };
+
+/// Human-answer tools cannot be useful once their host receiver is gone.
+pub(super) fn tool_available(name: &str, interaction_available: bool) -> bool {
+    interaction_available || !["ask_user", "plan_exit"].contains(&name)
+}
 
 /// Range endpoints for a compaction that folded the entire input window.
 ///
@@ -1162,6 +1168,9 @@ impl SessionEngine {
 
     /// Re-read the transcript after a rung replaced it, and re-count it.
     ///
+    /// Outputs spilled earlier stay spilled: their placeholders are re-applied
+    /// before counting, as at the top of every round.
+    ///
     /// The count is estimated rather than measured on purpose. A provider's
     /// reported usage describes the prompt it was sent, and after compaction that
     /// prompt no longer exists; trusting the stale anchor would report the
@@ -1172,11 +1181,16 @@ impl SessionEngine {
         session: SessionId,
         agent: &AgentSpec,
         model: &ModelRef,
+        sticky: &crate::compaction::StickyEvictions,
+        reasoning_policy: hya_provider::ReasoningReplayPolicy,
     ) -> Result<(Vec<Message>, usize), CoreError> {
         let projection = self.store.read_projection_shared(session).await?;
         let attachments = self.attachment_data(session, &projection).await?;
-        let messages = projection_to_messages(agent, &projection, model, &attachments);
-        let tokens = self.token_accounting.estimate(&messages);
+        let mut messages = projection_to_messages(agent, &projection, model, &attachments);
+        crate::compaction::apply_sticky_evictions(&mut messages, sticky);
+        let tokens = self
+            .token_accounting
+            .estimate_with_reasoning_policy(&messages, reasoning_policy);
         Ok((messages, tokens))
     }
 
@@ -1499,22 +1513,58 @@ impl SessionEngine {
                 usage_reporting,
                 reasoning_policy,
             );
-            let exclusive = self.exclusive_tool.as_deref();
             let template = request_from_messages(
                 &live_agent,
                 Vec::new(),
-                resources,
+                filtered_tool_schemas(
+                    resources,
+                    self.interaction.is_available(),
+                    depth,
+                    self.exclusive_tool.as_deref(),
+                ),
                 &model,
                 depth,
                 None,
-                exclusive,
             );
             let request_overhead = self
                 .token_accounting
                 .estimate_request(&template, reasoning_policy);
-            let mut tokens = initial_count.tokens.saturating_add(request_overhead);
-            let token_source = initial_count.source;
-            let over_threshold = |tokens: usize| tokens > resolved_threshold;
+            let count = |messages: &[Message]| {
+                self.token_accounting
+                    .estimate_with_reasoning_policy(messages, reasoning_policy)
+            };
+            let max_context = capabilities.as_ref().map_or(0, |c| c.max_context as usize);
+            let over_window = |messages: &[Message]| {
+                max_context > 0 && count(messages).saturating_add(request_overhead) > max_context
+            };
+            // When the local preflight (`check_request_context`) would reject
+            // the request outright even though provider-reported occupancy from
+            // the previous step sits below `resolved_threshold`, measure by the
+            // local estimate so the ladder reduces the request instead of
+            // letting the preflight fail the turn un-compacted.
+            let (mut tokens, mut token_source) = {
+                let reported = initial_count.tokens.saturating_add(request_overhead);
+                if reported <= resolved_threshold && over_window(&messages) {
+                    (
+                        count(&messages).saturating_add(request_overhead),
+                        crate::tokens::TokenSource::Estimate,
+                    )
+                } else {
+                    (reported, initial_count.source)
+                }
+            };
+            let needs_reduction = |tokens: usize, messages: &[Message]| {
+                tokens > resolved_threshold || over_window(messages)
+            };
+            let fold_cut = |messages: &[Message]| {
+                crate::compaction::fold_cut(
+                    messages,
+                    fold_config.keep_recent,
+                    self.compaction.keep_recent,
+                    resolved_threshold,
+                    &count,
+                )
+            };
 
             // Reduction ladder: the five built-in mechanisms (oh-my-pi parity),
             // walked in the configured order — `compaction.method_order`. The
@@ -1538,7 +1588,7 @@ impl SessionEngine {
             // trigger is Overflow: the request cannot go out un-compacted, so
             // `resolve_compaction_decision` demotes any Skip to a warning and
             // a Replace only rewrites the summarizer instructions below.
-            let summarizer_instructions = if over_threshold(tokens) {
+            let summarizer_instructions = if needs_reduction(tokens, &messages) {
                 match self.active_hook_dispatcher(session) {
                     Some(hooks) => {
                         let decision = hooks
@@ -1567,20 +1617,27 @@ impl SessionEngine {
             let mut committed_summary_tokens: Option<usize> = None;
 
             for rung in self.compaction.method_order {
-                if !over_threshold(tokens) {
+                if !needs_reduction(tokens, &messages) {
                     break;
                 }
                 if matches!(rung, crate::compaction::CompactionRung::SpillToolOutputs)
                     && !crate::compaction::has_spillable_tool_output(
                         &messages,
                         fold_config.keep_recent,
+                        self.compaction.keep_recent,
                     )
                 {
                     continue;
                 }
                 // Snapshot what tripped the threshold before this rung edits the
                 // transcript, so each record explains why that rung ran.
-                let input_tokens_est = u64::try_from(tokens).unwrap_or(u64::MAX);
+                let estimated_now = count(&messages).saturating_add(request_overhead);
+                let input_tokens_est = u64::try_from(if over_window(&messages) {
+                    tokens.max(estimated_now)
+                } else {
+                    tokens
+                })
+                .unwrap_or(u64::MAX);
                 let threshold = u64::try_from(resolved_threshold).unwrap_or(u64::MAX);
 
                 match rung {
@@ -1588,9 +1645,10 @@ impl SessionEngine {
                         let estimate_before = self
                             .token_accounting
                             .estimate_with_reasoning_policy(&messages, reasoning_policy);
-                        let evicted = crate::compaction::evict_stale_tool_outputs_sticky(
+                        let evicted = crate::compaction::evict_stale_tool_outputs_in_turn(
                             &mut messages,
                             fold_config.keep_recent,
+                            self.compaction.keep_recent,
                             Some(&spill),
                             &mut sticky_evictions,
                         );
@@ -1650,30 +1708,32 @@ impl SessionEngine {
                             body,
                             CompactionStrategy::Native,
                             folded,
+                            None,
                             input_tokens_est,
                             threshold,
                         )
                         .await?;
                         (messages, tokens) = self
-                            .reload_after_compaction(session, &live_agent, &model)
+                            .reload_after_compaction(
+                                session,
+                                &live_agent,
+                                &model,
+                                &sticky_evictions,
+                                reasoning_policy,
+                            )
                             .await?;
                         tokens = tokens.saturating_add(request_overhead);
+                        token_source = crate::tokens::TokenSource::Estimate;
                     }
                     crate::compaction::CompactionRung::SnapCompact => {
                         // Local and deterministic: no model call, no capability
                         // gate. Folds the same prefix a summary would into the
                         // dense archive, so the ladder's model-free rung works
                         // even where no summarizer is wired at all.
-                        let Some((start, end)) =
-                            crate::compaction::foldable_range(&messages, fold_config.keep_recent)
-                        else {
+                        let Some(cut) = fold_cut(&messages) else {
                             continue;
                         };
-                        let (Some(from), Some(to)) = (messages.get(start), messages.get(end - 1))
-                        else {
-                            continue;
-                        };
-                        let archive = crate::compaction::snapcompact_archive(&messages[start..end]);
+                        let archive = crate::compaction::snapcompact_archive(&cut.folded);
                         let body = format!("{}\n{}", hya_provider::COMPACT_CONTEXT_MARKER, archive);
                         committed_summary_tokens = Some(body.len() / 4);
                         self.commit_compaction(
@@ -1681,22 +1741,29 @@ impl SessionEngine {
                             session,
                             body,
                             CompactionStrategy::SnapCompact,
-                            Some((
-                                from.id(),
-                                to.id(),
-                                u32::try_from(end - start).unwrap_or(u32::MAX),
-                            )),
+                            Some((cut.from_message, cut.to_message, cut.folded_count)),
+                            cut.step_cut,
                             input_tokens_est,
                             threshold,
                         )
                         .await?;
                         (messages, tokens) = self
-                            .reload_after_compaction(session, &live_agent, &model)
+                            .reload_after_compaction(
+                                session,
+                                &live_agent,
+                                &model,
+                                &sticky_evictions,
+                                reasoning_policy,
+                            )
                             .await?;
                         tokens = tokens.saturating_add(request_overhead);
+                        token_source = crate::tokens::TokenSource::Estimate;
                     }
                     crate::compaction::CompactionRung::Handoff => {
                         let Some(summarizer) = &self.summarizer else {
+                            continue;
+                        };
+                        let Some(cut) = fold_cut(&messages) else {
                             continue;
                         };
                         let definition = match &compaction_agent {
@@ -1718,7 +1785,7 @@ impl SessionEngine {
                         };
                         let planned = crate::compaction::plan_handoff(
                             &messages,
-                            &fold_config,
+                            cut,
                             summarizer.as_ref(),
                             options,
                         )
@@ -1731,7 +1798,7 @@ impl SessionEngine {
                             &usage,
                         )
                         .await;
-                        let Ok(Some(plan)) = planned else {
+                        let Ok(plan) = planned else {
                             continue;
                         };
                         let body =
@@ -1743,17 +1810,28 @@ impl SessionEngine {
                             body,
                             CompactionStrategy::Handoff,
                             Some((plan.from_message, plan.to_message, plan.folded_count)),
+                            plan.step_cut,
                             input_tokens_est,
                             threshold,
                         )
                         .await?;
                         (messages, tokens) = self
-                            .reload_after_compaction(session, &live_agent, &model)
+                            .reload_after_compaction(
+                                session,
+                                &live_agent,
+                                &model,
+                                &sticky_evictions,
+                                reasoning_policy,
+                            )
                             .await?;
                         tokens = tokens.saturating_add(request_overhead);
+                        token_source = crate::tokens::TokenSource::Estimate;
                     }
                     crate::compaction::CompactionRung::Summarize => {
                         let Some(summarizer) = &self.summarizer else {
+                            continue;
+                        };
+                        let Some(cut) = fold_cut(&messages) else {
                             continue;
                         };
                         let definition = match &compaction_agent {
@@ -1773,13 +1851,8 @@ impl SessionEngine {
                                 &summarizer_instructions,
                             )
                         };
-                        let planned = crate::compaction::fold_prefix(
-                            &messages,
-                            &fold_config,
-                            summarizer.as_ref(),
-                            options,
-                        )
-                        .await;
+                        let planned =
+                            crate::compaction::fold_prefix(cut, summarizer.as_ref(), options).await;
                         // Billed even when the rung then fails or is skipped.
                         self.record_side_call_usage(
                             actor_claim,
@@ -1788,7 +1861,7 @@ impl SessionEngine {
                             &usage,
                         )
                         .await;
-                        let Ok(Some(plan)) = planned else {
+                        let Ok(plan) = planned else {
                             continue;
                         };
                         // Persist the local summary behind the same marker the
@@ -1804,14 +1877,22 @@ impl SessionEngine {
                             body,
                             CompactionStrategy::LocalSummarizer,
                             Some((plan.from_message, plan.to_message, plan.folded_count)),
+                            plan.step_cut,
                             input_tokens_est,
                             threshold,
                         )
                         .await?;
                         (messages, tokens) = self
-                            .reload_after_compaction(session, &live_agent, &model)
+                            .reload_after_compaction(
+                                session,
+                                &live_agent,
+                                &model,
+                                &sticky_evictions,
+                                reasoning_policy,
+                            )
                             .await?;
                         tokens = tokens.saturating_add(request_overhead);
+                        token_source = crate::tokens::TokenSource::Estimate;
                     }
                 }
             }
@@ -1878,11 +1959,15 @@ impl SessionEngine {
             let request = request_from_messages(
                 &live_agent,
                 messages,
-                resources,
+                filtered_tool_schemas(
+                    resources,
+                    self.interaction.is_available(),
+                    depth,
+                    self.exclusive_tool.as_deref(),
+                ),
                 &model,
                 depth,
                 effort,
-                self.exclusive_tool.as_deref(),
             );
             let request = if let Some(hooks) = self.active_hook_dispatcher(session) {
                 let root_session = self
@@ -2116,6 +2201,7 @@ impl SessionEngine {
                     resources,
                     depth,
                     self.exclusive_tool.as_deref(),
+                    self.interaction.is_available(),
                     tc.name.as_str(),
                 );
                 let collect_tool = async {
@@ -2323,20 +2409,22 @@ impl SessionEngine {
                             if let Some(notice) = steer.drain(self).await? {
                                 append_steer_notice(&mut output, &notice);
                             }
-                            if let Some(deadline) = hya_tool::deadline::current()
-                                && let Some(stage) = deadline.take_notice(session)
-                            {
-                                let policy = crate::ChannelPolicy::from_binding(binding)?
-                                    .snapshot_for(live_agent.name.as_str());
-                                let can_report = parent_session.is_some()
-                                    && self.lifecycle.is_connected()
-                                    && crate::lifecycle::report_allowed(policy)
-                                    && request
-                                        .tools
-                                        .iter()
-                                        .any(|tool| tool.name.as_str() == "report");
-                                let notice = deadline.notice(stage, can_report);
-                                append_steer_notice(&mut output, &format!("\n\n{notice}"));
+                            if let Some(deadline) = hya_tool::deadline::current() {
+                                if let Some(stage) = deadline.take_notice(session) {
+                                    let policy = crate::ChannelPolicy::from_binding(binding)?
+                                        .snapshot_for(live_agent.name.as_str());
+                                    let can_report = parent_session.is_some()
+                                        && self.lifecycle.is_connected()
+                                        && crate::lifecycle::report_allowed(policy)
+                                        && request
+                                            .tools
+                                            .iter()
+                                            .any(|tool| tool.name.as_str() == "report");
+                                    let notice = deadline.notice(stage, can_report);
+                                    append_steer_notice(&mut output, &format!("\n\n{notice}"));
+                                } else if let Some(clock) = deadline.take_clock(session) {
+                                    append_steer_notice(&mut output, &format!("\n\n{clock}"));
+                                }
                             }
                         }
                         let retains_artifact = artifact_guard.retained_by(&output);

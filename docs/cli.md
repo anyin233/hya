@@ -758,6 +758,13 @@ run; when a server (the backend daemon) already holds it, `exec` runs the turn
 through that server instead, still with the caller's cwd as the workdir (see
 [Database lock and the backend daemon](#database-lock-and-the-backend-daemon)).
 
+In-process headless runs have no human question receiver, so model requests
+omit `ask_user` and `plan_exit` for both the lead and its subagents. For example,
+`hya exec "summarize this repo"` proceeds without offering a question or plan
+approval tool. Interactive server sessions retain those tools; a routed `exec`
+uses that server's interaction plane. This is automatic and adds no CLI flags,
+config fields, or wire contracts.
+
 For an in-process run, the exec driver alone owns root continuation turns;
 the resident supervisor does not admit `TEAM QUIESCED` synthesis prompts.
 A lead turn ending with live direct subagents or unread root mail,
@@ -765,8 +772,10 @@ pending/in-progress todos, an announced next step, or length-truncated output
 receives a `HEADLESS RUN —` system notice and another turn. Raw DSML tool
 markup, unexecuted XML tool-call suffixes, and an internal `<analysis>`/`<summary>` response also trigger correction:
 the agent must issue a structured tool call or deliver its normal final answer.
+A final step with no text and no tool call (a provider can end a step on one
+empty token) delivers nothing and gets the same correction.
 These checks read only a tool-free final provider step; a reasoning-only final
-step does not reuse text from an earlier step. Closed backtick/tilde fences
+step does not reuse text from an earlier step and counts as empty. Closed backtick/tilde fences
 and matched inline code spans are excluded from tool-markup detection.
 A parameter opener may precede a long value, but its result closing tag must
 end the output. Ordinary endings such as `Vec<Calls>` and `syscalls>` do not
@@ -797,13 +806,17 @@ announces the whole run's wall-clock budget with a system message after session
 startup. It appends WrapUp/Final notices to the next successful tool result,
 once per stage per session, after any team steer mail. Both notices enter the
 same tool-result transaction. Earlier messages are unchanged. Subagents receive
-notices directing them to finish and `report` their work.
+notices directing them to finish and `report` their work. Between stage
+notices, a tool result carries one clock line (`HEADLESS RUN — clock: …s of
+…s used, …s left.`) each time another tenth of the budget has passed since
+the session was last told the time.
 
 The thresholds are remaining time: WrapUp is
 `min(clamp(35% B, 300s, 3600s), 50% B)`, Final is
 `clamp(12% B, 90s, 600s)`, and the Over guard is `clamp(5% B, 30s, 120s)`.
 Over uses the Final notice. Bash and member `wait` timeouts are capped to
-`max(remaining - guard, 5s)`; a shorter requested timeout remains unchanged.
+`max(remaining - min(guard, remaining / 2), 5s)`; a shorter requested timeout
+remains unchanged.
 This includes Bash's omitted timeout and `timeout: 0`. Bash reports
 `metadata.deadlineCapped: true` when shortened and explains the effective
 limit in `<shell_metadata>`. For example, a 900-second run with 200 seconds

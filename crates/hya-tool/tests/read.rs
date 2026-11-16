@@ -433,7 +433,9 @@ async fn read_returns_open_code_attachment_for_png_files() {
         .unwrap();
 
     // Then
-    assert_eq!(out["output"], "Image read successfully");
+    // The text is model-independent; the provider encoder adds the image or
+    // says that it is not shown.
+    assert_eq!(out["output"], "Image file (image/png, 8 bytes).");
     assert_eq!(out["metadata"]["preview"], "Image read successfully");
     assert_eq!(out["metadata"]["truncated"], false);
     assert_eq!(out["metadata"]["loaded"], json!([]));
@@ -443,6 +445,32 @@ async fn read_returns_open_code_attachment_for_png_files() {
         out["attachments"][0]["url"],
         "data:image/png;base64,iVBORw0KGgo="
     );
+}
+
+#[tokio::test]
+async fn read_does_not_attach_an_image_over_the_attachment_budget() {
+    // Given: a PNG whose base64 data URL is larger than the attachment budget.
+    let workdir = tempdir();
+    let mut png = vec![0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    png.resize(hya_tool::MAX_CODING_ATTACHMENT_BYTES * 3 / 4, 0);
+    tokio::fs::write(workdir.join("big.png"), &png)
+        .await
+        .unwrap();
+    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let ctx = ctx_with(workdir);
+
+    // When
+    let out = tool
+        .execute(&ctx, json!({ "filePath": "big.png" }))
+        .await
+        .unwrap();
+
+    // Then: no attachment, and the text says what to do instead.
+    let output = out["output"].as_str().unwrap();
+    assert!(output.starts_with(&format!("Image file (image/png, {} bytes).", png.len())));
+    assert!(output.contains("larger than the limit of"));
+    assert!(output.contains("Downscale or crop it with a program and read the smaller file"));
+    assert_eq!(out.get("attachments"), None);
 }
 
 #[tokio::test]

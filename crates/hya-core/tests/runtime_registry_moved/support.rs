@@ -144,6 +144,7 @@ pub(super) fn bundle_with_agent(
 
 pub(super) fn agent(stable_id: &str, resource_view: ResourceView) -> PreparedAgent {
     PreparedAgent {
+        private: false,
         id: AgentName::new(stable_id),
         description: None,
         role: AgentRole::Main,
