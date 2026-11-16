@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use hya_tool::MAX_CODING_ATTACHMENT_BYTES;
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
 
@@ -31,15 +32,47 @@ pub(crate) async fn attachment_value(
     workdir: &Path,
     mime: &str,
 ) -> Result<Value, std::io::Error> {
+    if !is_pdf_attachment(mime) {
+        let size = tokio::fs::metadata(path).await?.len();
+        let limit = max_image_bytes(mime);
+        if size > limit {
+            return Ok(json!({
+                "title": relative_title(path, workdir),
+                "output": format!(
+                    "Image file ({mime}, {size} bytes). It is larger than the limit of {limit} \
+                     bytes for an image in a tool result, so it is not attached. Downscale or \
+                     crop it with a program and read the smaller file, or inspect it with a \
+                     program."
+                ),
+                "metadata": {
+                    "preview": "Image too large to attach",
+                    "truncated": false,
+                    "loaded": [],
+                },
+            }));
+        }
+    }
     let bytes = tokio::fs::read(path).await?;
     let message = if is_pdf_attachment(mime) {
         "PDF read successfully"
     } else {
         "Image read successfully"
     };
+    // A PDF never reaches the model, so the model is told so here. An image
+    // goes to a model that takes images; the provider encoder either sends it
+    // or says that it is not shown, per request.
+    let output = if is_pdf_attachment(mime) {
+        format!(
+            "This file is a PDF ({} bytes). Its content is not shown to you. Extract the text \
+             with a program instead.",
+            bytes.len()
+        )
+    } else {
+        format!("Image file ({mime}, {} bytes).", bytes.len())
+    };
     Ok(json!({
         "title": relative_title(path, workdir),
-        "output": message,
+        "output": output,
         "metadata": {
             "preview": message,
             "truncated": false,
@@ -51,6 +84,14 @@ pub(crate) async fn attachment_value(
             "url": format!("data:{mime};base64,{}", STANDARD.encode(bytes)),
         }],
     }))
+}
+
+/// Largest image file whose one-entry attachment array (base64 data URL)
+/// fits the tool-result attachment budget.
+fn max_image_bytes(mime: &str) -> u64 {
+    let empty = json!([{"type": "file", "mime": mime, "url": format!("data:{mime};base64,")}]);
+    let base64 = MAX_CODING_ATTACHMENT_BYTES.saturating_sub(empty.to_string().len());
+    (base64 / 4 * 3) as u64
 }
 
 async fn read_sample(path: &Path) -> Result<Vec<u8>, std::io::Error> {

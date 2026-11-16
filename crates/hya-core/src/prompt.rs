@@ -170,7 +170,7 @@ pub fn team_quick_reference(has: impl Fn(&str) -> bool, depth: u32) -> Option<St
     }
     if has("wait") && has("task") {
         lines.push(
-            "- To block until your subagents finish (they call `report` or are archived; going idle is not finishing), call `wait` once — optionally naming targets, any/all, and a timeout; with the channel tools loaded it also returns when new mail arrives for you (each message once). If it reports a subagent stalled (its turn ended without a report), mail it to continue or `archive` it — waiting again will not restart it. A subagent the user stopped is listed `[stopped by the user]`: never try to restart it; tell the user what you need from it. It is the only correct way to wait: never loop on status tools.",
+            "- To block until your subagents finish (they report — a final answer that ends their turn counts as a done report — or are archived), call `wait` once — optionally naming targets, any/all, and a timeout; with the channel tools loaded it also returns when new mail arrives for you (each message once). If it reports a subagent stalled (its turn ended with nothing delivered: no answer, a cut-off answer, or unread mail or live subagents of its own), mail it to continue or `archive` it — waiting again will not restart it. A subagent the user stopped is listed `[stopped by the user]`: never try to restart it; tell the user what you need from it. It is the only correct way to wait: never loop on status tools.",
         );
     } else if has("wait") && mail {
         lines.push(
@@ -185,9 +185,9 @@ pub fn team_quick_reference(has: impl Fn(&str) -> bool, depth: u32) -> Option<St
         }
     } else if has("report") {
         lines.push(if has("archive") {
-            "- Finish your task with `report` (once, with your result for your parent; an accepted report ends your turn). It is rejected while you have unread mail — read the channel the error names, answer if needed, then report again — or live subagents (`archive` them first)."
+            "- Finish your task with `report` (once, with your result for your parent; an accepted report ends your turn). It is rejected while you have unread mail — read the channel the error names, answer if needed, then report again — or live subagents (`archive` them first). Ending your turn with a final answer and no `report` delivers that answer as a done report and ends your episode, so ask your parent questions with `send`, and use `report` to say failed."
         } else {
-            "- Finish your task with `report` (once, with your result for your parent; an accepted report ends your turn). It is rejected while you have unread mail — read the channel the error names, answer if needed, then report again."
+            "- Finish your task with `report` (once, with your result for your parent; an accepted report ends your turn). It is rejected while you have unread mail — read the channel the error names, answer if needed, then report again. Ending your turn with a final answer and no `report` delivers that answer as a done report and ends your episode, so ask your parent questions with `send`, and use `report` to say failed."
         });
     }
     if mail && has("read") {

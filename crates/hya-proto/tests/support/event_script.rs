@@ -17,9 +17,9 @@
 use hya_proto::{
     AgentName, CompactionStrategy, Event, FileChange, FileRestore, FileState, FinishReason,
     MailEndpoint, MailKind, MemberId, MemberRunStatus, MessageId, ModelRef, OwnerRunId, PartId,
-    ProjectId, Role, RosterStatus, SessionId, SessionKind, SubagentMode, TodoItem, TodoStatus,
-    TokenUsage, ToolCallId, UsagePurpose, WorkflowIdentity, WorkflowRevision, WorkflowRunId,
-    WorkflowRunStatus, WorkflowSourceId, WorkflowStagePlan,
+    ProjectId, Role, RosterStatus, SessionId, SessionKind, StepCut, SubagentMode, TodoItem,
+    TodoStatus, TokenUsage, ToolCallId, UsagePurpose, WorkflowIdentity, WorkflowRevision,
+    WorkflowRunId, WorkflowRunStatus, WorkflowSourceId, WorkflowStagePlan,
 };
 use uuid::Uuid;
 
@@ -232,15 +232,25 @@ impl Script {
                 let Some((message, _)) = self.message() else {
                     return self.title();
                 };
+                // Half the time a step cut inside another message's parts.
+                let (to_message, parts) = self.message().unwrap_or((message, Vec::new()));
+                let step_cut = match parts.last() {
+                    Some((part, _)) if self.rng.chance(50) => Some(StepCut {
+                        through_part: *part,
+                        kept_head: to_message,
+                    }),
+                    _ => None,
+                };
                 Event::ContextCompacted {
                     session,
                     message,
                     strategy: CompactionStrategy::LocalSummarizer,
-                    from_message: message,
-                    to_message: message,
+                    from_message: to_message,
+                    to_message,
                     folded_count: 3,
                     input_tokens_est: 10_000,
                     threshold: 8_000,
+                    step_cut,
                 }
             }
             15 => {

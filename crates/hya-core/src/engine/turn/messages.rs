@@ -32,7 +32,7 @@ pub(super) fn projection_to_messages(
 ) -> Vec<Message> {
     compacted_messages(projection)
         .iter()
-        .filter(|m| !(m.role == Role::Assistant && m.parts.is_empty()))
+        .filter(|m| !(m.role == Role::Assistant && sent_parts(m).is_empty()))
         .map(|m| match m.role {
             Role::User => Message::User {
                 id: m.id,
@@ -42,7 +42,7 @@ pub(super) fn projection_to_messages(
                 id: m.id,
                 agent: agent.name.clone(),
                 model: model.clone(),
-                parts: map_parts(&m.parts),
+                parts: map_parts(sent_parts(m)),
                 finish: m.finish,
                 tokens: m.tokens,
                 last_round: m.usage.as_ref().map(|usage| usage.last_round),
@@ -59,13 +59,11 @@ pub(super) fn projection_to_messages(
 pub(super) fn request_from_messages(
     agent: &AgentSpec,
     messages: Vec<Message>,
-    resources: &CompiledResourceView,
+    tools: Vec<hya_proto::ToolSchema>,
     model: &ModelRef,
     depth: u32,
     reasoning: Option<ReasoningEffort>,
-    exclusive: Option<&str>,
 ) -> CompletionRequest {
-    let tools = filtered_tool_schemas(resources, model, depth, exclusive);
     // The team quick reference teaches exactly the coordination tools this
     // request advertises (harness-allocated per agent and depth).
     let reference = crate::prompt::team_quick_reference(
@@ -104,13 +102,13 @@ pub(super) fn reasoning_for_model(
     }
 }
 
-fn filtered_tool_schemas(
+pub(super) fn filtered_tool_schemas(
     resources: &CompiledResourceView,
-    _model: &ModelRef,
+    interaction_available: bool,
     depth: u32,
     exclusive: Option<&str>,
 ) -> Vec<hya_proto::ToolSchema> {
-    let offered = offered_tool_schemas(resources, depth);
+    let offered = offered_tool_schemas(resources, depth, interaction_available);
     let Some(exclusive) = exclusive_in_effect(&offered, exclusive) else {
         return offered;
     };
@@ -129,6 +127,7 @@ fn filtered_tool_schemas(
 fn offered_tool_schemas(
     resources: &CompiledResourceView,
     depth: u32,
+    interaction_available: bool,
 ) -> Vec<hya_proto::ToolSchema> {
     resources
         .tool_schemas()
@@ -136,6 +135,9 @@ fn offered_tool_schemas(
         .filter(|schema| {
             let name = schema.name.as_str();
             advertise_tool_at_depth(name, depth)
+                && resources.resolve_tool(name).is_some_and(|resolved| {
+                    super::tool_available(resolved.tool.name(), interaction_available)
+                })
                 && (resources.advertises(name) || (depth >= 1 && name == "report"))
         })
         .collect()
@@ -154,9 +156,10 @@ pub(super) fn hidden_behind<'a>(
     resources: &CompiledResourceView,
     depth: u32,
     exclusive: Option<&'a str>,
+    interaction_available: bool,
     name: &str,
 ) -> Option<&'a str> {
-    let offered = offered_tool_schemas(resources, depth);
+    let offered = offered_tool_schemas(resources, depth, interaction_available);
     exclusive_in_effect(&offered, exclusive).filter(|tool| ![*tool, "report"].contains(&name))
 }
 
@@ -200,6 +203,12 @@ pub fn advertise_tool_at_depth(name: &str, depth: u32) -> bool {
     advertise_tool(name)
         && !(depth == 0 && name == "report")
         && !(depth >= crate::MAX_SUBAGENT_DEPTH && ORCHESTRATION_TOOLS.contains(&name))
+}
+
+/// The parts a request sends: those a step cut folded stay in the
+/// projection but are represented by the compaction summary.
+fn sent_parts(message: &MessageProjection) -> &[PartProjection] {
+    &message.parts[message.folded_parts..]
 }
 
 fn compacted_messages(projection: &Projection) -> &[MessageProjection] {
@@ -355,7 +364,7 @@ mod tests {
             (1, vec!["bash", "report"]),
             (crate::MAX_SUBAGENT_DEPTH, vec!["bash", "report"]),
         ] {
-            let mut names = filtered_tool_schemas(&resources, &ModelRef::new("fake"), depth, None)
+            let mut names = filtered_tool_schemas(&resources, true, depth, None)
                 .into_iter()
                 .map(|schema| schema.name.to_string())
                 .collect::<Vec<_>>();
@@ -379,7 +388,7 @@ mod tests {
         let resources = bundle_advertise_view(
             "advertise: [run]\n    resource_view: { allow: ['harness:tool/bash'], aliases: { run: 'harness:tool/bash' } }",
         )?;
-        let names = filtered_tool_schemas(&resources, &ModelRef::new("fake"), 0, None)
+        let names = filtered_tool_schemas(&resources, true, 0, None)
             .into_iter()
             .map(|schema| schema.name.to_string())
             .collect::<Vec<_>>();
@@ -395,9 +404,8 @@ mod tests {
         let resources = bundle_advertise_view(
             "resource_view: { allow: ['harness:tool/bash', 'harness:tool/read'] }",
         )?;
-        let model = ModelRef::new("fake");
         for (depth, expected) in [(0, vec!["bash"]), (1, vec!["bash", "report"])] {
-            let offered = filtered_tool_schemas(&resources, &model, depth, Some("bash"));
+            let offered = filtered_tool_schemas(&resources, true, depth, Some("bash"));
             let mut names = offered
                 .iter()
                 .map(|schema| schema.name.as_str())
@@ -422,26 +430,80 @@ mod tests {
     }
 
     #[test]
+    fn headless_surface_omits_human_tools_and_their_exclusive_descriptions()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for aliases in [
+            "",
+            ", aliases: { ask: 'harness:tool/ask_user', approve: 'harness:tool/plan_exit' }",
+        ] {
+            let resources = bundle_advertise_view(&format!(
+                "resource_view: {{ allow: ['harness:tool/bash', 'harness:tool/ask_user', 'harness:tool/plan_exit']{aliases} }}"
+            ))?;
+            let human_tools = if aliases.is_empty() {
+                ["ask_user", "plan_exit"]
+            } else {
+                ["ask", "approve"]
+            };
+            for depth in [0, 1, crate::MAX_SUBAGENT_DEPTH] {
+                for interactive in [false, true] {
+                    let offered = filtered_tool_schemas(&resources, interactive, depth, None);
+                    for name in human_tools {
+                        assert_eq!(
+                            offered.iter().any(|tool| tool.name.as_str() == name),
+                            interactive
+                        );
+                        assert!(
+                            resources.resolve_tool(name).is_some(),
+                            "dispatch is unchanged"
+                        );
+                    }
+                    let exclusive =
+                        filtered_tool_schemas(&resources, interactive, depth, Some("bash"));
+                    let bash = exclusive
+                        .iter()
+                        .find(|tool| tool.name.as_str() == "bash")
+                        .ok_or("bash is offered")?;
+                    for name in human_tools {
+                        assert_eq!(
+                            bash.description.contains(&format!("### {name}\n")),
+                            interactive
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn a_hidden_tool_names_the_exclusive_tool_it_is_behind()
     -> Result<(), Box<dyn std::error::Error>> {
         let resources = bundle_advertise_view(
             "resource_view: { allow: ['harness:tool/bash', 'harness:tool/read'] }",
         )?;
         assert_eq!(
-            hidden_behind(&resources, 0, Some("bash"), "read"),
+            hidden_behind(&resources, 0, Some("bash"), true, "read"),
             Some("bash")
         );
-        assert_eq!(hidden_behind(&resources, 0, Some("bash"), "bash"), None);
-        assert_eq!(hidden_behind(&resources, 1, Some("bash"), "report"), None);
-        assert_eq!(hidden_behind(&resources, 0, None, "read"), None);
-        assert_eq!(hidden_behind(&resources, 0, Some("absent"), "read"), None);
+        assert_eq!(
+            hidden_behind(&resources, 0, Some("bash"), true, "bash"),
+            None
+        );
+        assert_eq!(
+            hidden_behind(&resources, 1, Some("bash"), true, "report"),
+            None
+        );
+        assert_eq!(hidden_behind(&resources, 0, None, true, "read"), None);
+        assert_eq!(
+            hidden_behind(&resources, 0, Some("absent"), true, "read"),
+            None
+        );
         Ok(())
     }
 
     #[test]
     fn exclusive_tool_outside_the_offered_set_changes_nothing()
     -> Result<(), Box<dyn std::error::Error>> {
-        let model = ModelRef::new("fake");
         for (fields, exclusive) in [
             ("resource_view: { allow: ['harness:tool/read'] }", "bash"),
             (
@@ -451,8 +513,8 @@ mod tests {
         ] {
             let resources = bundle_advertise_view(fields)?;
             assert_eq!(
-                filtered_tool_schemas(&resources, &model, 0, Some(exclusive)),
-                filtered_tool_schemas(&resources, &model, 0, None),
+                filtered_tool_schemas(&resources, true, 0, Some(exclusive)),
+                filtered_tool_schemas(&resources, true, 0, None),
                 "{fields}"
             );
         }
@@ -471,7 +533,7 @@ mod tests {
                     .filter(|schema| advertise_tool_at_depth(schema.name.as_str(), depth))
                     .map(|schema| schema.name.to_string())
                     .collect::<BTreeSet<_>>();
-                let actual = filtered_tool_schemas(&resources, &ModelRef::new("fake"), depth, None)
+                let actual = filtered_tool_schemas(&resources, true, depth, None)
                     .into_iter()
                     .map(|schema| schema.name.to_string())
                     .collect::<BTreeSet<_>>();
@@ -659,6 +721,7 @@ mod tests {
                     folded_count: 1,
                     input_tokens_est: 100,
                     threshold: 75,
+                    step_cut: None,
                 },
             ),
             env(
@@ -702,5 +765,132 @@ mod tests {
                     Part::Text { text, .. } if text == "retained in-flight work"
                 ))
         ));
+    }
+
+    /// After a step cut the request is `[marker, prompt, kept steps]`: folded
+    /// parts are left out whole, and every kept reasoning part goes out exactly
+    /// as stored, `provider_data` included.
+    #[test]
+    fn request_skips_step_folded_parts_and_replays_kept_reasoning() {
+        use hya_proto::{
+            AgentName, CompactionStrategy, Envelope, Event, EventSeq, MessageId, PartId,
+            SessionKind, StepCut,
+        };
+        let session = hya_proto::SessionId::new();
+        let (user, assistant, marker) = (MessageId::new(), MessageId::new(), MessageId::new());
+        let user_part = PartId::new();
+        let marker_part = PartId::new();
+        let steps: Vec<PartId> = (0..3).map(|_| PartId::new()).collect();
+        let started = |message, role| Event::MessageStarted {
+            session,
+            message,
+            role,
+            agent: None,
+            model: None,
+        };
+        let text = |message, part, delta: &str| {
+            [
+                Event::TextStart {
+                    session,
+                    message,
+                    part,
+                },
+                Event::TextDelta {
+                    session,
+                    message,
+                    part,
+                    delta: delta.to_string(),
+                },
+            ]
+        };
+        let mut events = vec![Event::SessionCreated {
+            session,
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: "/tmp".to_string(),
+            project: None,
+            kind: SessionKind::Project,
+        }];
+        events.push(started(user, Role::User));
+        events.extend(text(user, user_part, "do the task"));
+        events.push(started(assistant, Role::Assistant));
+        for (step, part) in steps.iter().enumerate() {
+            events.extend([
+                Event::ReasoningStart {
+                    session,
+                    message: assistant,
+                    part: *part,
+                    reason: None,
+                },
+                Event::ReasoningDelta {
+                    session,
+                    message: assistant,
+                    part: *part,
+                    delta: format!("thinking {step}"),
+                },
+                Event::ReasoningEnd {
+                    session,
+                    message: assistant,
+                    part: *part,
+                    provider_data: Some(serde_json::json!({
+                        "type": "reasoning",
+                        "encrypted_content": format!("opaque {step}"),
+                    })),
+                },
+            ]);
+        }
+        events.push(started(marker, Role::System));
+        events.extend(text(marker, marker_part, "HYA_COMPACTED_CONTEXT\nsummary"));
+        events.push(Event::ContextCompacted {
+            session,
+            message: marker,
+            strategy: CompactionStrategy::LocalSummarizer,
+            from_message: assistant,
+            to_message: assistant,
+            folded_count: 1,
+            input_tokens_est: 100,
+            threshold: 75,
+            step_cut: Some(StepCut {
+                through_part: steps[0],
+                kept_head: user,
+            }),
+        });
+        let envelopes: Vec<_> = events
+            .into_iter()
+            .enumerate()
+            .map(|(seq, event)| Envelope {
+                seq: EventSeq(seq as u64 + 1),
+                ts_millis: 0,
+                event,
+            })
+            .collect();
+        let projection = Projection::from_events(&envelopes);
+        let agent = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            reasoning: None,
+            system_prompt: String::new(),
+            workdir: "/tmp".into(),
+        };
+
+        let messages = projection_to_messages(
+            &agent,
+            &projection,
+            &ModelRef::new("fake"),
+            &AttachmentData::new(),
+        );
+        let ids: Vec<_> = messages.iter().map(Message::id).collect();
+        assert_eq!(ids, vec![marker, user, assistant]);
+        let Message::Assistant { parts, .. } = &messages[2] else {
+            panic!("expected the in-flight assistant");
+        };
+        let stored = &projection.session.messages[2].parts;
+        assert_eq!(stored.len(), 3, "the projection keeps the folded step");
+        assert_eq!(parts, &map_parts(&stored[1..]));
+        assert!(parts.iter().all(|part| matches!(
+            part,
+            Part::Reasoning { provider_data: Some(data), .. } if data["encrypted_content"] != "opaque 0"
+        )));
     }
 }

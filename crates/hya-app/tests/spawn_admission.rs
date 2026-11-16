@@ -1733,6 +1733,7 @@ fn nested_root_divergence_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegist
         namespace: None,
         digest: format!("test-only-{stable_id}"),
         agents: vec![PreparedAgent {
+            private: false,
             id: AgentName::new(stable_id),
             description: None,
             role,
@@ -2018,6 +2019,7 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
     let runtime = {
         let agent = |stable_id: &str, role: AgentRole, can_spawn: &[&str]| -> PreparedAgent {
             PreparedAgent {
+                private: false,
                 id: AgentName::new(stable_id),
                 description: None,
                 role,

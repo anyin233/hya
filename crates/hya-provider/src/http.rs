@@ -889,17 +889,21 @@ impl HttpProvider {
         &self,
         mut req: CompletionRequest,
     ) -> Result<(CompletionRequest, Value), ProviderError> {
-        let output_limit = self
+        let caps = self
             .served_model_name(&req.model)
-            .map(|model| self.caps_for_model(model).max_output)
+            .map(|model| self.caps_for_model(model));
+        let output_limit = caps
+            .as_ref()
+            .map(|caps| caps.max_output)
             .filter(|limit| *limit > 0);
+        let images = caps.is_some_and(|caps| caps.image_input == Some(true));
         if let Some(model_id) = self.served_model_id(&req.model) {
             req.model = ModelRef::new(model_id);
         }
         if let Some(limit) = output_limit {
             req.max_output_tokens = Some(req.max_output_tokens.map_or(limit, |max| max.min(limit)));
         }
-        let mut body = self.protocol.encode_with_output_limit(&req, output_limit)?;
+        let mut body = self.protocol.encode_for_model(&req, output_limit, images)?;
         if self.prompt_caching {
             add_prompt_cache_breakpoints(&mut body);
         }
@@ -1255,8 +1259,11 @@ impl Provider for HttpProvider {
         let model_id = self
             .served_model_id(model)
             .unwrap_or_else(|| model.as_str().to_string());
+        let images = self
+            .capabilities(model)
+            .is_some_and(|caps| caps.image_input == Some(true));
         // Encode the same input window the create path would send.
-        let mut input = encode_input_items(messages)?;
+        let mut input = encode_input_items(messages, images)?;
         if let Some(system) = system.filter(|s| !s.is_empty()) {
             // Prefer instructions-equivalent as a system item at the front when
             // the compact endpoint is given an explicit system prompt.

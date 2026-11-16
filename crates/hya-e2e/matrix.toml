@@ -307,7 +307,7 @@ path = "crates/hya-e2e/tests/p35_token_summary.rs"
 
 [[scenario]]
 id = "T2.31"
-title = "wait is woken inside the lead turn by a worker report and never repeats it; a worker that stops without a report wakes it as stalled; archive stops a worker and mail to its handle wakes it"
+title = "wait is woken inside the lead turn by a worker report and never repeats it; a worker that ends with a plain answer finishes with it as its report; a worker that stops without a report or an answer wakes it as stalled; archive stops a worker and mail to its handle wakes it"
 track = "P"
 path = "crates/hya-e2e/tests/p36_wait_archive.rs"
 
@@ -391,7 +391,7 @@ path = "crates/hya-e2e/tests/p40_exec_headless_continuation.rs"
 
 [[scenario]]
 id = "T2.45"
-title = "headless exec --time-budget: a bash timeout is shortened to the time left minus the grace"
+title = "headless exec --time-budget: a bash timeout is shortened to the time left minus the reserve"
 track = "P"
 path = "crates/hya-e2e/tests/p40_exec_headless_continuation.rs"
 
@@ -436,6 +436,12 @@ id = "T2.52"
 title = "default tools.code.mode (normal) — the first-party hya/code-mode bundle publishes no tool and hya bundle list shows it disabled"
 track = "P"
 path = "crates/hya-e2e/tests/p41_code_mode.rs"
+
+[[scenario]]
+id = "T2.53"
+title = "headless exec: a single turn whose steps outgrow the window folds its old steps into the summary and finishes; later requests carry the summary, the prompt and the newest steps"
+track = "P"
+path = "crates/hya-e2e/tests/p42_exec_step_fold.rs"
 
 # Index-only deep engine coverage (not duplicated in Track P).
 [[scenario]]

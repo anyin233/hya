@@ -301,6 +301,8 @@ pub(crate) struct SourceAgent {
     pub resource_view: ResourceView,
     #[serde(default)]
     pub can_spawn: Vec<String>,
+    #[serde(default)]
+    pub private: bool,
     // Validate strings during prepare: YAML otherwise coerces numeric scalars.
     #[serde(default)]
     pub advertise: Vec<Value>,

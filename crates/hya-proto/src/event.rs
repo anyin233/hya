@@ -808,7 +808,9 @@ pub enum Event {
     ///
     /// Appended to the log of the session that compacted; there is no parent
     /// mirror, because `event_log.seq` already orders every agent's events on one
-    /// global timeline. Reducer no-op: this is a record, not a state transition.
+    /// global timeline. The reducer moves the summary `message` to the fold
+    /// boundary (right after `to_message`, or before `step_cut.kept_head`) so
+    /// request reconstruction starts at it; nothing else changes.
     ///
     /// The folded input is a **pointer**, not a copy. Compaction never deletes,
     /// so `from_message..=to_message` plus the log reconstructs exactly what the
@@ -832,6 +834,11 @@ pub enum Event {
         input_tokens_est: u64,
         /// Threshold in force when it tripped.
         threshold: u64,
+        /// Set when the fold also cut inside `to_message`, the turn's
+        /// in-flight assistant message, at a step boundary. Absent in logs
+        /// written before step folds existed, which fold whole messages only.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step_cut: Option<StepCut>,
     },
 
     /// A session was forked from another session.
@@ -1101,6 +1108,24 @@ fn default_step_finish_reason() -> FinishReason {
     FinishReason::Stop
 }
 
+/// Where a [`Event::ContextCompacted`] fold cut inside the in-flight
+/// assistant message (`to_message`).
+///
+/// One assistant message holds every step of a turn, so a long single turn has
+/// no whole message to fold. The cut falls between steps: the parts of
+/// `to_message` up to and including `through_part` are folded, later parts
+/// (the recent steps, reasoning included) stay. The messages from `kept_head`
+/// up to `to_message` (the turn's prompt and notices) stay verbatim; the
+/// marker goes right before `kept_head`, which is `to_message` itself when the
+/// turn has no such head.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepCut {
+    /// Last folded part of `to_message`.
+    pub through_part: PartId,
+    /// First message kept after the marker.
+    pub kept_head: MessageId,
+}
+
 /// Which compaction path produced a [`Event::ContextCompacted`] record.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1332,6 +1357,7 @@ mod tests {
             folded_count: 34,
             input_tokens_est: 120_000,
             threshold: 100_000,
+            step_cut: None,
         }
     }
 
@@ -1379,8 +1405,10 @@ mod tests {
         );
     }
 
+    /// Without its marker row in the transcript (the reducer only moves that
+    /// row), the record changes no state.
     #[test]
-    fn context_compacted_is_a_record_and_does_not_change_the_projection() {
+    fn context_compacted_without_its_marker_row_changes_no_state() {
         let session = SessionId::new();
         let base = [Envelope {
             seq: EventSeq(1),
@@ -1407,7 +1435,7 @@ mod tests {
         // `last_seq` advances for every appended event; the reduced state must not.
         assert_eq!(
             before.session, after.session,
-            "ContextCompacted is an observability record, not a state transition"
+            "only the marker row moves; there is none here"
         );
         assert_eq!(before.team, after.team, "no team state may change");
         assert_eq!(after.last_seq, 2, "the record still advances seq");

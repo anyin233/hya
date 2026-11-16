@@ -20,6 +20,7 @@ use support::{TestDir, builtin_only_catalog};
 
 fn agent(policy: ModelPolicy) -> AgentDefinition<'static> {
     AgentDefinition {
+        private: false,
         stable_id: "general",
         description: None,
         role: AgentRole::Subagent,

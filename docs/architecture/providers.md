@@ -39,11 +39,12 @@ Minimum surface for a new implementor: `id`, `capabilities`, and `stream`.
 ```text
 trait Protocol {
     fn encode(&self, req: &CompletionRequest) -> Result<serde_json::Value, ProviderError>;
-    // Default: ignores the limit and calls `encode`.
-    fn encode_with_output_limit(
+    // Default: ignores both and calls `encode`.
+    fn encode_for_model(
         &self,
         req: &CompletionRequest,
         output_limit: Option<u32>,
+        images: bool,
     ) -> Result<serde_json::Value, ProviderError>;
     fn decoder(&self, session: SessionId, message: MessageId) -> Box<dyn Decoder>;
 }
@@ -54,11 +55,13 @@ trait Decoder {
 }
 ```
 
-`encode` builds the HTTP JSON body. `HttpProvider` calls
-`encode_with_output_limit` with the model's known output limit (see
-[Per-model limits](#per-model-limits)); only Anthropic overrides it, to keep a
-thinking-derived `max_tokens` within the limit. `decoder` returns a fresh
-stateful decoder.
+`encode` builds the HTTP JSON body. `HttpProvider` calls `encode_for_model`
+with the model's known output limit (see [Per-model limits](#per-model-limits))
+and whether the model accepts image input (`image_input == Some(true)`).
+Anthropic uses the limit to keep a thinking-derived `max_tokens` within it;
+Anthropic, OpenAI Chat, and OpenAI Responses use `images` for
+[tool-result images](#tool-result-images). `encode` is `encode_for_model` with
+no limit and no images. `decoder` returns a fresh stateful decoder.
 Each `push`/`finish` returns a batch of canonical `Event`s (may be empty).
 
 ### DeepSeek thinking with tools over OpenAI Chat
@@ -100,7 +103,7 @@ tool result. The upstream requirement is described in
 | `reasoning_request` | Route accepts a reasoning-effort parameter on the request. |
 | `max_context` | Advertised context window (tokens). |
 | `max_output` | Advertised max output tokens (`0` means unspecified / unknown). Participates in identity hashing with the other caps. |
-| `image_input` | `Some(true)` / `Some(false)` when the model's config declares `modalities.input`, `None` when unknown. Prompt admission rejects image attachments only on `Some(false)`. |
+| `image_input` | `Some(true)` / `Some(false)` when the model's config declares `modalities.input`, `None` when unknown. Prompt admission rejects image attachments only on `Some(false)`; [tool-result images](#tool-result-images) are sent only on `Some(true)`. |
 | `prompt_caching` | Anthropic route may emit ephemeral prompt-cache breakpoints. |
 
 **HTTP default** (`HttpProvider::new`, every kind and model):
@@ -139,7 +142,7 @@ leaves `reasoning_request` false.
 | `Transport(String)` | `transport: …` | Request transport failed before an event stream was returned. | Check provider reachability and connection health. This class is eligible for bounded retry/failover before stream ownership passes to the caller. |
 | `HttpStatus { status, message, retry_after }` | `http status <code>: …` | Upstream returned a non-success response before the stream began, or a classified in-stream error frame (message starts with `in-stream error`; see [In-stream error frames](#in-stream-error-frames)). | HTTP 429 and 5xx are retryable; other statuses fail immediately. `Retry-After` (or an in-band `retry_after` hint), when valid, is retained as a bounded delay. |
 | `UnknownModel(String)` | `unknown provider for model: …` | No route's `capabilities()` returned `Some` for the ref. | [`../troubleshooting.md`](../troubleshooting.md) — *unknown provider for model*. |
-| `Incompatible(String)` | `incompatible route: …` | Preflight failure, or an unsupported part (for example media on a non-Google route). | No dedicated entry yet; for media MIME failures see [Media parts](#media-parts-non-google-routes) below and switch to a `kind: google` route when you need attachments. |
+| `Incompatible(String)` | `incompatible route: …` | Preflight failure, or an unsupported part (for example audio, video, or assistant media on a non-Google route). | No dedicated entry yet; for media MIME failures see [Media parts](#media-parts-non-google-routes) below and switch to a `kind: google` route when you need non-image attachments. |
 | `Decode(String)` | `decode: …` | Malformed or truncated stream / compact-window payload. | No dedicated entry; inspect SSE frames. |
 | `AuthExpired { provider, hint }` | `auth expired for provider '<p>': <hint>` | Produced by the OAuth bearer-resolver wiring in `hya-app` when refresh fails or credentials are revoked. | Re-run `hya oauth login` for that provider (see [`../configuration.md`](../configuration.md) / CLI auth). |
 
@@ -318,7 +321,7 @@ model's `max_output`; when it is non-zero:
 
 - an absent `CompletionRequest.max_output_tokens` becomes the limit;
 - an explicit value is clamped to `min(value, limit)`;
-- the protocol receives the limit through `encode_with_output_limit`.
+- the protocol receives the limit through `encode_for_model`.
 
 Every kind then encodes `max_output_tokens` in its own field (Chat
 `max_tokens`, Responses `max_output_tokens`, Google
@@ -475,10 +478,10 @@ a tool round:
 {"role": "tool", "tool_call_id": "…", "content": "slides_draft.md"}
 ```
 
-**Media.** User/system media parts fail encode with
-`ProviderError::Incompatible("OpenAI chat does not support media type <mime>")`
-(display: `incompatible route: …`). Assistant `Part::Media` entries are ignored
-on encode (not forwarded). Only Google encodes media; see below.
+**Media.** User image parts are sent as `{"type":"image_url","image_url":{"url":…}}`
+content items; see [Media parts](#media-parts-non-google-routes). Assistant
+`Part::Media` fails encode with
+`ProviderError::Incompatible("OpenAI chat does not support assistant media type <mime>")`.
 
 ## OpenAI Responses Protocol
 
@@ -523,7 +526,9 @@ instead of being summarized away.
 
 ### Media
 
-Any `Part::Media` in user or assistant history fails encode with
+User image parts are sent as `{"type":"input_image","image_url":…}` content
+items; see [Media parts](#media-parts-non-google-routes). A `Part::Media` in
+assistant history fails encode with
 `ProviderError::Incompatible("OpenAI Responses does not support media type <mime>")`.
 
 ### Decoder
@@ -592,9 +597,11 @@ optional `system`, `tools`, `thinking`).
 
 ### Media
 
-User media parts fail with
-`ProviderError::Incompatible("Anthropic messages does not support media type <mime>")`.
-Assistant `Part::Media` entries are ignored on encode (not forwarded).
+User image parts are sent as `{"type":"image","source":…}` blocks (`base64`
+for a data URL or bare payload, `url` for an HTTP URL); see
+[Media parts](#media-parts-non-google-routes). Assistant `Part::Media` fails
+encode with
+`ProviderError::Incompatible("Anthropic messages does not support assistant media type <mime>")`.
 
 Like the OpenAI decoder, the Anthropic decoder converts provider-specific
 stream events into the same hya event variants.
@@ -659,13 +666,56 @@ single text part, and closes on the first `finishReason` it sees.
 
 ## Media parts (non-Google routes)
 
-Canonical media parts (for example from v2 prompt file attachments) are only
-encoded on the **Google** route. On OpenAI chat, OpenAI Responses / Codex /
-Grok Build, and Anthropic, media in the positions those encoders validate fails
-the turn with `ProviderError::Incompatible` and a
-`… does not support media type <mime>` message (wrapped as
-`incompatible route: …`). To send images or other attachments, use a session
-route with `kind: google`.
+OpenAI chat, OpenAI Responses / Codex / Grok Build, and Anthropic encode
+canonical media parts of a **user** message (for example prompt image
+attachments) when they are images: `image/png`, `image/jpeg`, `image/gif`, or
+`image/webp`, given as a `data:<mime>;base64,…` URL whose declared MIME
+matches, a bare base64 payload, or an HTTP(S) URL
+([`media.rs`](../../crates/hya-provider/src/media.rs)). Any other MIME type, a
+mismatched data URL, invalid base64, or media in an assistant message fails the
+turn with `ProviderError::Incompatible` (wrapped as `incompatible route: …`).
+Audio, video, and other attachments need a session route with `kind: google`.
+
+## Tool-result images
+
+A stored tool result can carry image attachments
+(`attachments: [{"mime": "image/png", "url": "data:image/png;base64,…"}]`), for
+example from `read` of an image file, `webfetch` of an image, or an MCP tool's
+image content. The stored result is the same for every model; the encoder
+renders it per request ([`wire.rs`](../../crates/hya-provider/src/wire.rs)
+`tool_result`):
+
+- When the request's model accepts image input (`image_input == Some(true)`)
+  and the image passes the media check (`image/png`, `image/jpeg`,
+  `image/gif`, `image/webp`; valid base64 data URL), the image is sent with the
+  result:
+
+  | Protocol | Form |
+  | --- | --- |
+  | Anthropic Messages | `tool_result.content` is `[{"type":"text",…}, {"type":"image","source":{"type":"base64",…}}]` |
+  | OpenAI Responses (also Codex, Grok Build) | `function_call_output.output` is `[{"type":"input_text",…}, {"type":"input_image","image_url":"data:…"}]` |
+  | OpenAI Chat | the `role: tool` message stays text (the API accepts only text there); one `role: user` message after the step's tool messages holds, per call, `{"type":"text","text":"Image from the result of tool call <id>:"}` and its `image_url` parts |
+
+- Otherwise (`Some(false)`, unknown, a rejected image, or the Google route)
+  the result stays text and gets the line `[The image attached to this result
+  (<mime>) is not shown to you. Inspect it with a program instead …]`.
+- A request carries at most **16 MiB** of tool-result image data (data URL
+  length, about the base64 length). Walking back from the newest image, images
+  are sent until the next one would exceed that; it and every older image
+  become the line `[The image attached to this result (<mime>) is no longer
+  attached: newer images fill this request's image budget. Read the file again
+  to see it.]`.
+- When the coding-tool result cap dropped an attachment for size
+  (`metadata.attachmentsTruncated`; the cap keeps at most 2 MiB of serialized
+  attachments per result), the text says the attachment is not shown, for
+  every model. `read` does not attach an image that would exceed that budget
+  (a file over about 1.5 MiB); its text says so and suggests downscaling or
+  cropping the image with a program and reading the smaller file.
+
+The rendering depends only on the stored history and the model, so an image
+stays at the same place in every later request of the session and the prompt
+cache prefix is stable, until newer images push it out of the request budget.
+A result without images is encoded exactly as before.
 
 ## Usage Reporting
 

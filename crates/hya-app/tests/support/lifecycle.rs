@@ -85,6 +85,21 @@ impl Round {
         }
     }
 
+    /// A member's answer cut by the length limit: the member stays live with
+    /// `text` as its current state, where a complete final answer would be
+    /// delivered as its report.
+    pub fn unfinished(text: &str) -> Self {
+        Self {
+            steps: vec![
+                FakeStep::Text(text.into()),
+                FakeStep::Finish(FinishReason::Length),
+            ],
+            gate: None,
+            stream_gate: None,
+            error: None,
+        }
+    }
+
     pub fn tool(name: &str, input: Value) -> Self {
         Self {
             steps: vec![
@@ -212,7 +227,9 @@ impl Provider for ScriptedProvider {
                         })
                         .max_by_key(|(marker, _)| encoded.rfind(marker.as_str()))
                         .map(|(_, rounds)| {
-                            rounds.pop_front().unwrap_or_else(|| Round::text("settled"))
+                            rounds
+                                .pop_front()
+                                .unwrap_or_else(|| Round::unfinished("settled"))
                         })
                 })
                 .unwrap_or_else(|| {
@@ -749,8 +766,8 @@ pub async fn crash_seed_if_requested(test: &str, queue_main: bool) {
     .await;
     if queue_main {
         let gate = Arc::new(Gate::default());
-        let first = h.provider.script(vec![Round::text("A before crash")]);
-        let second = h.provider.script(vec![Round::text("B before crash")]);
+        let first = h.provider.script(vec![Round::unfinished("A before crash")]);
+        let second = h.provider.script(vec![Round::unfinished("B before crash")]);
         let marker = h.provider.script(vec![
             Round::tool("task", json!({"tasks": [
                 {"description":"A", "prompt":first, "subagent_type":"hya-task", "model":"fake"},
@@ -806,9 +823,9 @@ pub async fn crash_seed_if_requested(test: &str, queue_main: bool) {
             "stop_for_restart must seed the root's restore obligation"
         );
     } else {
-        let (a, first) = h.spawn(vec![Round::text("A before crash")]).await;
+        let (a, first) = h.spawn(vec![Round::unfinished("A before crash")]).await;
         h.idle(a, &first).await;
-        let (b, second) = h.spawn(vec![Round::text("B before crash")]).await;
+        let (b, second) = h.spawn(vec![Round::unfinished("B before crash")]).await;
         h.idle(b, &second).await;
     }
     let mut ready = tokio::net::TcpStream::connect(std::env::var("HYA_M4_CRASH_READY").unwrap())

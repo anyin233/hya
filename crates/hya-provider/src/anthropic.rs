@@ -2,7 +2,7 @@ use hya_proto::{Message, MessageId, Part, SessionId};
 use serde_json::{Value, json};
 
 use crate::media::anthropic_image_source;
-use crate::wire::{tool_input, tool_result};
+use crate::wire::{ToolImages, tool_input, tool_result};
 use crate::{CompletionRequest, Decoder, Protocol, ProviderError, ReasoningEffort};
 
 mod decoder;
@@ -60,14 +60,16 @@ const DEFAULT_MAX_TOKENS: u32 = 4096;
 
 impl Protocol for AnthropicMessagesProtocol {
     fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
-        self.encode_with_output_limit(req, None)
+        self.encode_for_model(req, None, false)
     }
 
-    fn encode_with_output_limit(
+    fn encode_for_model(
         &self,
         req: &CompletionRequest,
         output_limit: Option<u32>,
+        images: bool,
     ) -> Result<Value, ProviderError> {
+        let images = ToolImages::new(&req.messages, images);
         let mut messages: Vec<Value> = Vec::new();
         let last_message = req.messages.len().checked_sub(1);
         let turn_start = crate::current_turn_start(&req.messages);
@@ -82,6 +84,7 @@ impl Protocol for AnthropicMessagesProtocol {
                     message_index,
                     parts,
                     Some(message_index) == last_message,
+                    &images,
                 )?,
                 // Mid-conversation system text is where compaction summaries
                 // live. The Messages API has no system role inside `messages`,
@@ -221,6 +224,7 @@ fn emit_assistant(
     message_index: usize,
     parts: &[Part],
     is_final_message: bool,
+    images: &ToolImages<'_>,
 ) -> Result<(), ProviderError> {
     let mut clusters: Vec<(Vec<Value>, String, Vec<&Part>)> = Vec::new();
     for parts in crate::wire::assistant_clusters(parts, |_| true) {
@@ -297,13 +301,19 @@ fn emit_assistant(
                 push_coalesced(out, "assistant", Value::Array(content));
             }
         } else {
-            flush_cluster(out, &reasoning, &text, &tools);
+            flush_cluster(out, &reasoning, &text, &tools, images)?;
         }
     }
     Ok(())
 }
 
-fn flush_cluster(out: &mut Vec<Value>, reasoning: &[Value], text: &str, tools: &[&Part]) {
+fn flush_cluster(
+    out: &mut Vec<Value>,
+    reasoning: &[Value],
+    text: &str,
+    tools: &[&Part],
+    images: &ToolImages<'_>,
+) -> Result<(), ProviderError> {
     let mut content = reasoning.to_vec();
     if !text.is_empty() {
         content.push(json!({"type":"text","text":text}));
@@ -321,6 +331,39 @@ fn flush_cluster(out: &mut Vec<Value>, reasoning: &[Value], text: &str, tools: &
         }
     }
     push_coalesced(out, "assistant", Value::Array(content));
-    let results: Vec<Value>=tools.iter().filter_map(|&p| { let Part::Tool { call_id,state,..}=p else{return None}; let (result,is_error)=tool_result(state); Some(json!({"type":"tool_result","tool_use_id":call_id.to_string(),"content":result,"is_error":is_error})) }).collect();
+    let mut results = Vec::new();
+    for &p in tools {
+        let Part::Tool {
+            id, call_id, state, ..
+        } = p
+        else {
+            continue;
+        };
+        let result = tool_result(id, state, images);
+        let is_error = result.is_error;
+        results.push(json!({
+            "type": "tool_result",
+            "tool_use_id": call_id.to_string(),
+            "content": tool_result_content(result)?,
+            "is_error": is_error,
+        }));
+    }
     push_coalesced(out, "user", Value::Array(results));
+    Ok(())
+}
+
+/// A result without images stays a string; images go as `image` blocks
+/// inside the `tool_result` content.
+fn tool_result_content(result: crate::wire::ToolResult<'_>) -> Result<Value, ProviderError> {
+    if result.images.is_empty() {
+        return Ok(Value::String(result.text));
+    }
+    let mut blocks = Vec::new();
+    if !result.text.is_empty() {
+        blocks.push(json!({"type": "text", "text": result.text}));
+    }
+    for (mime, data) in result.images {
+        blocks.push(json!({"type": "image", "source": anthropic_image_source(mime, data)?}));
+    }
+    Ok(Value::Array(blocks))
 }

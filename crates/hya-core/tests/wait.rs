@@ -4,8 +4,9 @@
 //! on new mail (the channel-tools override), including harness mail, which is
 //! returned once and marked read; bounded by a timeout and aborted by the
 //! caller's cancellation. Targets that finished before the call are listed as
-//! `already_finished` and never wake it; a target that stops without a report
-//! wakes it once as `stalled`.
+//! `already_finished` and never wake it; a target that ends its turn with a
+//! final answer is reported with that answer, and one that stops without a
+//! report or an answer wakes it once as `stalled`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -42,11 +43,23 @@ use tokio_util::sync::CancellationToken;
 /// While `gate_members` is set, every stream of a non-root session parks on
 /// its own gate until released (a release before the member reaches the gate
 /// is kept, so the first turn cannot race it).
-#[derive(Default)]
 struct GateProvider {
     root: Mutex<Option<SessionId>>,
     gate_members: AtomicBool,
     gates: Mutex<HashMap<SessionId, Arc<Notify>>>,
+    /// Every turn's final answer; empty leaves a member idle without a report.
+    answer: Mutex<String>,
+}
+
+impl Default for GateProvider {
+    fn default() -> Self {
+        Self {
+            root: Mutex::default(),
+            gate_members: AtomicBool::default(),
+            gates: Mutex::default(),
+            answer: Mutex::new("done with the unit".to_string()),
+        }
+    }
 }
 
 impl GateProvider {
@@ -98,14 +111,13 @@ impl Provider for GateProvider {
             let gate = self.gate(session);
             gate.notified().await;
         }
-        let events = FakeProvider::materialize(
-            &[
-                FakeStep::Text("done with the unit".to_string()),
-                FakeStep::Finish(FinishReason::Stop),
-            ],
-            session,
-            message,
-        );
+        let answer = self.answer.lock().unwrap().clone();
+        let mut steps = Vec::new();
+        if !answer.is_empty() {
+            steps.push(FakeStep::Text(answer));
+        }
+        steps.push(FakeStep::Finish(FinishReason::Stop));
+        let events = FakeProvider::materialize(&steps, session, message);
         Ok(Box::pin(stream::iter(
             events.into_iter().map(Ok::<Event, ProviderError>),
         )))
@@ -129,6 +141,7 @@ async fn team_with_limits(limits: hya_core::SubagentLimits) -> Team {
     let store = SessionStore::connect_memory().await.unwrap();
     let router = Arc::new(ProviderRouter::new().with(provider.clone()));
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(Vec::new()));
+    let (lifecycle, rx) = LifecyclePlane::new();
     let engine = Arc::new(
         SessionEngine::new(
             store,
@@ -137,7 +150,8 @@ async fn team_with_limits(limits: hya_core::SubagentLimits) -> Team {
             permission,
             EventBus::default(),
         )
-        .with_governor(hya_core::SubagentGovernor::new(limits)),
+        .with_governor(hya_core::SubagentGovernor::new(limits))
+        .with_lifecycle(lifecycle.clone()),
     );
     let root = engine
         .create(CreateSession {
@@ -159,7 +173,6 @@ async fn team_with_limits(limits: hya_core::SubagentLimits) -> Team {
         .ensure_main(root, lead, (binding, Arc::from([]), resources), None, None)
         .await
         .unwrap();
-    let (lifecycle, rx) = LifecyclePlane::new();
     tokio::spawn(run_lifecycle_service(
         engine.clone(),
         supervisor.clone(),
@@ -402,14 +415,99 @@ async fn wait_any_returns_when_the_first_member_reports() {
     team.provider.release_all();
 }
 
+/// REPORT H8: a member that ends its turn with a final answer and no `report`
+/// is finished with that answer as its `done` report — the parent's wait
+/// wakes by `members`, not `stalled`.
+#[tokio::test]
+async fn a_member_that_ends_its_turn_with_an_answer_is_finished_with_it() {
+    let team = team().await;
+    let _lead_turn = hold_lead_turn(&team);
+    let (child, handle) = spawn(&team, team.root, true).await;
+    let waiter = {
+        let lifecycle = team.lifecycle.for_session(team.root);
+        tokio::spawn(async move {
+            lifecycle
+                .wait(
+                    WaitSpec::parse(&json!({"timeout_secs": 30}), true).unwrap(),
+                    &CancellationToken::new(),
+                )
+                .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    team.provider.release(child);
+    let outcome = tokio::time::timeout(Duration::from_secs(10), waiter)
+        .await
+        .expect("the answer finishes the member")
+        .unwrap()
+        .unwrap();
+    assert_eq!(outcome.woke_by, WaitWake::Members, "{outcome:?}");
+    let member = &outcome.finished[0];
+    assert_eq!(member.handle, handle);
+    assert_eq!(member.state, WaitMemberState::Reported, "{outcome:?}");
+    assert_eq!(member.outcome.as_deref(), Some("done"));
+    assert_eq!(member.report.as_deref(), Some("done with the unit"));
+    assert!(outcome.mail.is_empty(), "{outcome:?}");
+}
+
+/// A member whose turn ends with an answer while its own subagent is still
+/// live is not reported (the report gate): it waits on that subagent, whose
+/// report wakes it for a turn that then delivers the member's answer.
+#[tokio::test]
+async fn a_member_with_a_live_subagent_is_reported_only_after_it() {
+    let team = team().await;
+    let _lead_turn = hold_lead_turn(&team);
+    let (member, handle) = spawn(&team, team.root, true).await;
+    let (grandchild, _) = spawn(&team, member, true).await;
+    team.provider.gate_members.store(false, Ordering::SeqCst);
+    team.provider.release(member);
+    for _ in 0..300 {
+        if !team.engine.turn_active(member) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let now = wait(&team, team.root, json!({"timeout_secs": 0}), true).await;
+    assert!(now.finished.is_empty(), "{now:?}");
+    assert_eq!(now.running.len(), 1, "{now:?}");
+    assert_eq!(now.running[0].handle, handle);
+    assert_eq!(now.running[0].state, WaitMemberState::Working, "{now:?}");
+
+    team.provider.release(grandchild);
+    let mut report = None;
+    for _ in 0..500 {
+        report = team
+            .engine
+            .replay(team.root)
+            .await
+            .unwrap()
+            .into_iter()
+            .find_map(|envelope| match envelope.event {
+                Event::SubagentReported { child, report, .. } if child == member => Some(report),
+                _ => None,
+            });
+        if report.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        report.as_deref(),
+        Some("done with the unit"),
+        "the member reports once its subagent did"
+    );
+}
+
 /// Run-4 evidence (reviewer after 824 s, scout after a follow-up): a member
-/// whose turn ends without `report` is NOT finished — no `members` wake, no
-/// in-progress text surfaced as a report. It stopped for good (nothing is
-/// queued for it), so the wait says so once (`stalled`) and a repeated wait
-/// blocks instead of returning the same state again.
+/// whose turn ends without `report` and without an answer is NOT finished —
+/// no `members` wake. It stopped for good (nothing is queued for it), so the
+/// wait says so once (`stalled`) and a repeated wait blocks instead of
+/// returning the same state again.
 #[tokio::test]
 async fn a_member_that_ends_its_turn_without_reporting_is_stalled_not_finished() {
     let team = team().await;
+    team.provider.answer.lock().unwrap().clear();
     let _lead_turn = hold_lead_turn(&team);
     let (child, handle) = spawn(&team, team.root, true).await;
     let waiter = {
@@ -436,11 +534,6 @@ async fn a_member_that_ends_its_turn_without_reporting_is_stalled_not_finished()
     assert_eq!(outcome.running[0].handle, handle);
     assert_eq!(outcome.running[0].state, WaitMemberState::Idle);
     assert!(outcome.running[0].report.is_none(), "{outcome:?}");
-    let rendered = outcome.to_tool_result().to_string();
-    assert!(
-        !rendered.contains("done with the unit"),
-        "in-progress assistant text is never a report: {rendered}"
-    );
 
     // Nothing new since: the next wait blocks until its timeout.
     let started = std::time::Instant::now();
@@ -926,6 +1019,8 @@ async fn without_channels_mail_does_not_wake_the_wait() {
 #[tokio::test]
 async fn with_channels_harness_mail_wakes_a_member_wait() {
     let team = team().await;
+    // No answer: the member stays live (an answer would be its report).
+    team.provider.answer.lock().unwrap().clear();
     let (member, handle) = spawn(&team, team.root, false).await;
     // Let the member's own first turn finish; its wait then has no children.
     for _ in 0..300 {

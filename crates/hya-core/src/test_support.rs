@@ -26,6 +26,7 @@ pub(crate) fn runtime(tools: ToolRegistry) -> Arc<RuntimeRegistry> {
             namespace: None,
             digest: format!("test-only-{stable_id}"),
             agents: vec![PreparedAgent {
+                private: false,
                 id: AgentName::new(stable_id),
                 description: None,
                 role: AgentRole::Main,

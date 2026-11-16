@@ -258,7 +258,7 @@ fn parse_edit_item(value: &Value, index: usize) -> Result<HashlineEdit, Hashline
                     format!(
                         "{context} with op \"replace\" does not support oldText/newText. \
 op \"replace\" takes a \"pos\" (and optional \"end\") hashline anchor plus \"lines\", e.g. \
-{{\"op\":\"replace\",\"pos\":\"12#A1B2\",\"lines\":[\"new line\"]}}; for literal text \
+{{\"op\":\"replace\",\"pos\":\"12#VK\",\"lines\":[\"new line\"]}}; for literal text \
 replacement use op \"replace_text\" with \"oldText\"/\"newText\" instead."
                     ),
                 ));

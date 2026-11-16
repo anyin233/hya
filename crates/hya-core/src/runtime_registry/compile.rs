@@ -622,6 +622,19 @@ impl TurnBinding {
         Ok(self.overlay_agent_model(definition))
     }
 
+    /// Resolve a workflow node or verifier using workflow authorization.
+    pub fn resolve_workflow_agent(
+        &self,
+        caller: &str,
+        requested: &str,
+    ) -> Result<AgentDefinition<'_>, BundleError> {
+        let definition = self
+            .snapshot
+            .catalog
+            .resolve_workflow_agent(caller, requested)?;
+        Ok(self.overlay_agent_model(definition))
+    }
+
     /// Agents the caller may spawn per can_spawn rules.
     pub fn spawnable_agents(&self, caller: &str) -> Result<Vec<AgentDefinition<'_>>, BundleError> {
         Ok(self

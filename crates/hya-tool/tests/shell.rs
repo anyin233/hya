@@ -1338,7 +1338,8 @@ async fn deadline_capped_shell_child() {
         return;
     }
     let registry = ToolRegistry::from_tool_families(&["hya/base-tools"]);
-    hya_tool::deadline::install(Duration::from_secs(30));
+    // Under 10 s left the cap is its 5 s floor, whatever half of the rest is.
+    hya_tool::deadline::install(Duration::from_secs(8));
     let tool = registry.resolve("bash").unwrap();
     let workdir = tempdir();
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], workdir.clone());

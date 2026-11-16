@@ -107,7 +107,7 @@ pub use channel_policy::{AGENT_CHANNELS_PRESET_ID, ChannelPolicy};
 pub use compaction::{
     CompactionConfig, CompactionPlan, CompactionRung, MIN_RESOLVED_THRESHOLD, ModelSummarizer,
     SummarizeOptions, Summarizer, UsageCollector, handoff_request_messages, parse_method_order,
-    plan_handoff, resolved_threshold, snapcompact_archive,
+    resolved_threshold, snapcompact_archive,
 };
 pub use completion::{GateOutcome, IterationGate, validate_goal_condition};
 pub use completion::{
