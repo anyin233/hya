@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 [package.metadata.hya]
-version-reference = "backend"
+version-reference = "hya"
 
 [lints]
 workspace = true

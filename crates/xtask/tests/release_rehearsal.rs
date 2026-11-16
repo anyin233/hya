@@ -20,7 +20,7 @@ fn release_rehearsal_requires_a_host_target() {
         .args(["release-rehearsal"])
         .args([
             "--version",
-            hya_version::BACKEND_VERSION,
+            hya_version::VERSION,
             "--target",
             foreign,
             "--no-publish",

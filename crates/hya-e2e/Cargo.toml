@@ -8,7 +8,7 @@ description = "Process-level agent E2E harness: real hya + scripted FakeLlm"
 publish = false
 
 [package.metadata.hya]
-version-reference = "backend"
+version-reference = "hya"
 
 [lints]
 workspace = true

@@ -2,7 +2,7 @@
   "name": "@hya/bun-adapter",
   "version": "0.0.0",
   "private": true,
-  "hya": { "version-reference": "frontend" },
+  "hya": { "version-reference": "hya" },
   "type": "module",
   "scripts": {
     "start": "bun run src/main.ts",

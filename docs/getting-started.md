@@ -12,8 +12,8 @@ install, launch, and explore every surface immediately.
 
 ### Option A: Install Prebuilt Releases (Recommended)
 
-One command installs the latest `backend/<version>` and `frontend/<version>`
-releases (including a bundled Bun runtime) into `$HOME/.local`:
+One command installs the latest `v<version>` release (backend, first-party
+bundles, TUI, WebUI, and a bundled Bun runtime) into `$HOME/.local`:
 
 ```sh
 curl -fsSL https://hya.ed-aisys.com/install.sh | sh
@@ -23,19 +23,13 @@ hya --version
 
 Supported prebuilt targets: glibc Linux (`x86_64`, `aarch64`) and Apple silicon
 macOS (`aarch64`). On Windows, install inside WSL 2 (see
-[Install on Windows with WSL](install-wsl.md)). For headless servers without the
-TUI/WebUI, pass `--backend-only`:
-
-```sh
-curl -fsSL https://hya.ed-aisys.com/install.sh | sh -s -- --backend-only
-```
+[Install on Windows with WSL](install-wsl.md)).
 
 Update an existing release installation at any time:
 
 ```sh
-hya update                  # update both backend and frontend
-hya update --backend-only   # update only bin/hya, first-party bundles, and Bun adapter
-hya update --tui-only       # update only TUI and WebUI
+hya update                  # update to the latest stable release
+hya update --version v0.47.0
 ```
 
 See [Install and update](install.md) for `--version`, `--prefix`, `--force`, and

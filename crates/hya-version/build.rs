@@ -5,35 +5,28 @@ fn main() {
     let versions_path = manifest_dir.join("../../versions.toml");
     println!("cargo:rerun-if-changed={}", versions_path.display());
     let source = fs::read_to_string(&versions_path).expect("read versions.toml");
-    for (section, key, env_name) in [
-        ("backend", "version", "HYA_BACKEND_VERSION"),
-        ("frontend", "version", "HYA_FRONTEND_VERSION"),
-        (
-            "frontend",
-            "minimum_backend_version",
-            "HYA_MINIMUM_BACKEND_VERSION",
-        ),
+    for (key, env_name) in [
+        ("version", "HYA_VERSION"),
+        ("minimum_backend_version", "HYA_MINIMUM_BACKEND_VERSION"),
     ] {
-        let value = section_value(&source, section, key)
-            .unwrap_or_else(|| panic!("versions.toml is missing [{section}].{key}"));
+        let value = top_level_value(&source, key)
+            .unwrap_or_else(|| panic!("versions.toml is missing `{key}`"));
         println!("cargo:rustc-env={env_name}={value}");
     }
 }
 
-fn section_value<'a>(source: &'a str, section: &str, key: &str) -> Option<&'a str> {
-    let header = format!("[{section}]");
-    let mut in_section = false;
+fn top_level_value<'a>(source: &'a str, key: &str) -> Option<&'a str> {
     for line in source.lines() {
         let line = line.trim();
-        if line.starts_with('[') {
-            in_section = line == header;
+        if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        if in_section {
-            let (candidate, value) = line.split_once('=')?;
-            if candidate.trim() == key {
-                return value.trim().strip_prefix('"')?.strip_suffix('"');
-            }
+        if line.starts_with('[') {
+            break;
+        }
+        let (candidate, value) = line.split_once('=')?;
+        if candidate.trim() == key {
+            return value.trim().strip_prefix('"')?.strip_suffix('"');
         }
     }
     None

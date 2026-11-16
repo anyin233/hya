@@ -243,31 +243,27 @@ trusted bundle is a startup error, like a missing tool library.
 
 ### Release assets
 
-Every first-party bundle is released at the backend aggregate version. Source
-`bundle.yaml` files use identity version `0.0.0` with `version_ref: backend`;
+Every first-party bundle is released at the unified `hya` version. Source
+`bundle.yaml` files use identity version `0.0.0` with `version_ref: hya`;
 the preparation step resolves that reference before validation and packaging,
-and tests enforce that prepared identities match the backend release version.
+and tests enforce that prepared identities match `hya_version::VERSION`.
 A release builds each supported target natively: `x86_64-unknown-linux-gnu`,
 `aarch64-unknown-linux-gnu`, and `aarch64-apple-darwin`. It publishes:
 
-- Two side-specific archives per target, `hya-backend-<version>-<target>.tar.gz`
-  and `hya-frontend-<version>-<target>.tar.gz`. The backend archive holds
+- One unified archive per target, `hya-<version>-<target>.tar.gz`, holding
   `bin/hya`, `bundles/hya-<name>.hyabundle` for all thirteen bundles, the Argus
-  example bundle, and Bun with the Bun adapter under `lib/hya/`; it holds no
-  TUI. The frontend archive holds Bun, `lib/hya/tui` (the OpenTUI terminal UI
-  bare `hya` starts, including the target's `@opentui/core-<platform>` native
-  package), `lib/hya/tui-sdk`, and `lib/hya/tui-web` with its `web/` page; it
-  holds no `bin/hya` and no bundles. Installing both sides gives a working
-  setup, and running the TUI and WebUI needs Bun on `PATH`.
+  example bundle, Bun (`lib/hya/bin/bun`), `lib/hya/bun-adapter`, `lib/hya/tui`
+  (including the target's `@opentui/core-<platform>` native package and
+  precompiled `dist/app.js`), `lib/hya/tui-sdk`, and `lib/hya/tui-web` with its
+  `web/` page.
 - One standalone asset per bundle, byte-identical to the archived copy:
   `hya-<name>-<version>-<target>.hyabundle` for the five native tool families
   on each target, and `hya-<name>-<version>.hyabundle` once for the eight
   platform-independent bundles. The release fails if two targets built a
   platform-independent bundle with different bytes. To replace a bundle in an
   installed layout, save the asset as `<prefix>/bundles/hya-<name>.hyabundle`.
-- A `SHA256SUMS` per side and target covering that side's archive, plus every
-  bundle asset on the backend side, and build provenance attestations for each
-  file.
+- A `SHA256SUMS` file covering every target archive and standalone bundle asset,
+  plus build provenance attestations for each file.
 
 `cargo run -p xtask -- stage-first-party-bundles` produces both the archived
 packages and the assets and refuses a release version that any bundle does not

@@ -92,8 +92,8 @@ Check the install:
 hya --version
 ```
 
-Installer options (`--version`, `--prefix`, `--backend-only`, `--tui-only`,
-`--force`) are described in [Install and update](install.md#installer-interface).
+Installer options (`--version`, `--prefix`, `--force`) are described in
+[Install and update](install.md#installer-interface).
 
 ### Option B: Build from source
 
@@ -186,10 +186,8 @@ See the [Getting Started](getting-started.md) guide and the
 ## Update
 
 ```sh
-hya update                  # backend and frontend
-hya update --backend-only   # backend only
-hya update --tui-only       # frontend only
-hya serve restart           # make a running daemon use the new backend
+hya update                  # latest stable release (restarts a running daemon automatically)
+hya update --version v0.47.0
 ```
 
 A source install updates by pulling and re-running the installer:
