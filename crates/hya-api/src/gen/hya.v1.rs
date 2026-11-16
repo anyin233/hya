@@ -7970,8 +7970,8 @@ pub struct CompactionApplied {
     /// Sequence of this compaction record.
     #[prost(uint64, tag = "1")]
     pub until_seq: u64,
-    /// Strategy that fired: `native`, `local_summarizer`, `snap_compact`, or
-    /// `handoff` (a manual compaction reports `local_summarizer`).
+    /// Strategy that fired: `native`, `local_summarizer`, `snap_compact`,
+    /// `handoff`, or `rewrite` (a manual compaction reports `local_summarizer`).
     #[prost(string, tag = "2")]
     pub strategy: ::prost::alloc::string::String,
     /// System message carrying the summary (the transcript divider).

@@ -2004,7 +2004,7 @@ automatic mid-turn strategies and by a manual `CompactSession`.
 | Field | Type | Description |
 |---|---|---|
 | `until_seq` (1) | `uint64` | Sequence of this compaction record. |
-| `strategy` (2) | `string` | Strategy that fired: `native`, `local_summarizer`, `snap_compact`, or `handoff` (a manual compaction reports `local_summarizer`). |
+| `strategy` (2) | `string` | Strategy that fired: `native`, `local_summarizer`, `snap_compact`, `handoff`, or `rewrite` (a manual compaction reports `local_summarizer`). |
 | `message` (3) | `string` | System message carrying the summary (the transcript divider). |
 | `folded_count` (4) | `uint32` | Number of messages folded behind the summary. |
 | `manual` (5) | `bool` | Whether a client asked for it (`CompactSession`) rather than the context crossing its threshold. |

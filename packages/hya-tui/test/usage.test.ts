@@ -82,6 +82,7 @@ test("strategyText names every known strategy in words; an unknown or missing on
   expect(strategyText("local_summarizer")).toBe("local summary")
   expect(strategyText("snap_compact")).toBe("snapshot")
   expect(strategyText("handoff")).toBe("handoff")
+  expect(strategyText("rewrite")).toBe("rewrite")
   expect(strategyText("shake")).toBe("shake")
   expect(strategyText(undefined)).toBe("unknown")
 })

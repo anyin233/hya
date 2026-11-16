@@ -479,8 +479,8 @@ message TokensRecorded {
 message CompactionApplied {
   // Sequence of this compaction record.
   uint64 until_seq = 1;
-  // Strategy that fired: `native`, `local_summarizer`, `snap_compact`, or
-  // `handoff` (a manual compaction reports `local_summarizer`).
+  // Strategy that fired: `native`, `local_summarizer`, `snap_compact`,
+  // `handoff`, or `rewrite` (a manual compaction reports `local_summarizer`).
   string strategy = 2;
   // System message carrying the summary (the transcript divider).
   string message = 3;
