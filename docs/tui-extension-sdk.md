@@ -4,7 +4,7 @@
 extensions ([Bundle-owned TUI extensions](tui-extensions.md)). Its version
 (`TUI_EXTENSION_SDK_VERSION`, now `1.0.0`) is independent of the frontend and
 backend releases; the wire generation is `TUI_EXTENSION_API_VERSION` (`1`).
-The frontend release ships the SDK next to the TUI (`lib/hya/tui-sdk`); the
+The unified `hya` release ships the SDK next to the TUI (`lib/hya/tui-sdk`); the
 extension process bundles it with the extension, so extensions import it
 without installing anything.
 

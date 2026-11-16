@@ -7,7 +7,7 @@ license.workspace = true
 description = "`hya update` installer shell-out (no runtime/plugin/MCP/bundle deps)"
 
 [package.metadata.hya]
-version-reference = "backend"
+version-reference = "hya"
 
 [lints]
 workspace = true

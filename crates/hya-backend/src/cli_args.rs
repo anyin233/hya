@@ -362,9 +362,8 @@ pub(crate) enum Command {
         #[command(subcommand)]
         action: Option<crate::sessions_cmd::SessionsAction>,
     },
-    /// Update hya: bare `hya update` reinstalls the latest GitHub backend and
-    /// frontend releases into this hya's prefix (`--backend-only`/`--tui-only`
-    /// select one side; docs/install.md); `hya update version` prints the
+    /// Update hya: bare `hya update` reinstalls the latest GitHub release into
+    /// this hya's prefix (docs/install.md); `hya update version` prints the
     /// updater's package version.
     #[command(args_conflicts_with_subcommands = true)]
     Update {
@@ -652,15 +651,8 @@ mod tests {
             Some(super::Command::Update { command: None, .. })
         ));
         assert!(Cli::try_parse_from(["hya", "update", "--force", "version"]).is_err());
-        let cli = parse_slice(&["hya", "update", "--tui-only"]);
-        let Some(super::Command::Update { install, .. }) = cli.command else {
-            panic!("`hya update --tui-only` must parse as `hya update`");
-        };
-        assert!(install.tui_only && !install.backend_only);
-        assert!(
-            Cli::try_parse_from(["hya", "update", "--backend-only", "--tui-only"]).is_err(),
-            "one side at a time"
-        );
+        assert!(Cli::try_parse_from(["hya", "update", "--tui-only"]).is_err());
+        assert!(Cli::try_parse_from(["hya", "update", "--backend-only"]).is_err());
         assert!(Cli::try_parse_from(["hya", "update", "tui"]).is_err());
     }
 
@@ -680,14 +672,14 @@ mod tests {
             "`hya update version` must parse as the updater command"
         );
 
-        let cli = parse_slice(&["hya", "update", "--backend-only", "--version", "0.43.23"]);
+        let cli = parse_slice(&["hya", "update", "--version", "0.47.0"]);
         assert!(
             matches!(
                 cli.command,
                 Some(super::Command::Update {
                     command: None,
                     install,
-                }) if install.backend_only && install.version.as_deref() == Some("0.43.23")
+                }) if install.version.as_deref() == Some("0.47.0")
             ),
             "bare `hya update` must parse the installer flags"
         );

@@ -45,7 +45,7 @@ Everything needed to install, configure, operate, and extend `hya` day to day:
 - **[Quick Start Guide](getting-started.md)** — Release & source installation, launching the TUI + WebUI, connecting live providers / OAuth, headless `exec` / `-p` / `loop` runs, session replay, and remote Relay setup.
 - **[Configuration Guide](configuration.md)** — Complete `~/.config/hya/config.yaml` map, offline fallback, providers/auth/OAuth, remembered Agent models & reasoning effort, model categories, permissions, MCP, plugins, websearch, subagent budgets, formatter/LSP, and `HYA_*` environment variables.
 - **Installation & Operations:**
-  - [Install and Update](install.md) — Split backend/frontend release archives, `https://hya.ed-aisys.com/install.sh`, `hya update`, version pinning, and rollback.
+  - [Install and Update](install.md) — Unified `v<version>` release archives, `https://hya.ed-aisys.com/install.sh`, `hya update`, version pinning, and rollback.
   - [Install on Windows with WSL](install-wsl.md) — WSL 2 setup and accessing the WebUI from Windows browsers.
   - [CLI Reference](cli.md) — Every `hya` subcommand, flag, database lock rule, and exit code.
   - [Troubleshooting](troubleshooting.md) — Solutions for daemon locks, WebUI ports, Host allowlist (`403`), Relay diagnostics, and provider errors.

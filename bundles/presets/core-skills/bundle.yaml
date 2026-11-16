@@ -1,5 +1,5 @@
 kind: Bundle
-version_ref: backend
+version_ref: hya
 identity:
   id: hya/core-skills
   version: 0.0.0

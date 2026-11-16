@@ -1,28 +1,28 @@
 ---
 name: secure-self-update
 description: >-
-  Use when installing or updating a hya release with `hya update`: the embedded release installer, `--backend-only`/`--tui-only`, pinned versions, `SHA256SUMS` verification and per-side rollback, plus the source-checkout rebuild-and-restart flow. Do not use for bundle install or plugin load.
+  Use when installing or updating a hya release with `hya update`: the embedded release installer, pinned `v<version>` releases, `SHA256SUMS` verification and atomic rollback, plus the source-checkout rebuild-and-restart flow. Do not use for bundle install or plugin load.
 ---
 <!-- Trusted core Skill; its metadata and body are prepared from this bundle. -->
 
 # Update hya
 
-Use this skill when installing or updating an independent hya release with
+Use this skill when installing or updating a unified hya release with
 `hya update`. Do **not** use it for bundle install or plugin load.
 
 ## What `hya update` does
 
 `hya update` pipes the installer embedded from `scripts/hya-install.sh` to `sh`
 for the running hya's prefix. That is exactly the script
-`https://hya.ed-aisys.com/install.sh` serves: it downloads each selected side's
-release archive, verifies it against that release's `SHA256SUMS`, and rolls the
-side back when it fails.
+`https://hya.ed-aisys.com/install.sh` serves: it downloads the unified
+`hya-<version>-<target>.tar.gz` release archive, verifies it against that
+release's `SHA256SUMS`, and rolls back when placement or verification fails.
 
-- Bare `hya update` updates the backend and the frontend.
-- `--backend-only` installs/updates `bin/hya`, the bundles, and the Bun adapter.
-- `--tui-only` installs/updates Bun, the TUI, and the WebUI.
-- `--version <v>` pins each selected side, `--force` reinstalls the current
-  versions, and `--prefix <dir>` targets a prefix other than the running hya's.
+- Bare `hya update` updates `bin/hya`, the first-party bundles, Bun, the Bun
+  adapter, the TUI, the WebUI, and the TUI SDK to the latest stable release.
+- `--version <v>` pins a specific release (`0.47.0`, `v0.47.0`, or
+  `v0.47.1-dev.1`), `--force` reinstalls the current version, and
+  `--prefix <dir>` targets a prefix other than the running hya's.
 - `hya update version` prints the updater's package version.
 
 ## Hard rules

@@ -1,9 +1,11 @@
-//! Aggregate backend and frontend release versions.
+//! Unified hya release version and compatibility minimum.
 
-/// The release version of the shipped `hya` backend.
-pub const BACKEND_VERSION: &str = env!("HYA_BACKEND_VERSION");
-/// The release version of the shipped Bun/OpenTUI frontend.
-pub const FRONTEND_VERSION: &str = env!("HYA_FRONTEND_VERSION");
+/// The unified release version of shipped `hya` (backend, bundles, and TUI/WebUI).
+pub const VERSION: &str = env!("HYA_VERSION");
+/// Alias for [`VERSION`] retained for backend crates.
+pub const BACKEND_VERSION: &str = VERSION;
+/// Alias for [`VERSION`] retained for frontend consumers.
+pub const FRONTEND_VERSION: &str = VERSION;
 
 /// The minimum backend version required by the current frontend.
 pub const MINIMUM_BACKEND_VERSION: &str = env!("HYA_MINIMUM_BACKEND_VERSION");

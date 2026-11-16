@@ -14,7 +14,7 @@ standalone `hya-updater` binary are gone.
 | Sessions | `sessions`, `tail-session` |
 | Providers and auth | `provider` (alias `providers`: `add`, `list`, `remove`, `logout`), `login`, `oauth`, `models` |
 | Agents, bundles, Workflows | `agent`, `bundle`, `workflow` |
-| Update | `update` installs the latest backend and frontend releases; `--backend-only` or `--tui-only` selects one side (also `--version`, `--prefix`, `--force`; see [`docs/install.md`](install.md)) |
+| Update | `update` installs the latest release into this prefix (also `--version`, `--prefix`, `--force`; see [`docs/install.md`](install.md)) |
 | Secure relay | `proxy`, `bridge`, `relay doctor`, `serve --relay`, `serve relay connect\|disconnect\|status\|link\|rotate`, bare `hya --connect` (see [`docs/relay.md`](relay.md)) |
 
 ```sh
@@ -613,12 +613,13 @@ its command first and falls back to the database's daemon (found or started)
 when it does not answer.
 
 **Requirements.** Bare `hya` starts the frontends only when both stdin and
-stdout are terminals. It needs the separately installed frontend package,
-including Bun (`$BUN`, else `bun` on `PATH`) and the TUI/WebUI directories. A
-backend-only install therefore prints a guidance banner telling the user to
-install the frontend with `hya update --tui-only`; `hya serve`, `hya exec`, and other
-headless commands do not need it. Without a terminal it prints the same
-guidance banner and exits **0**, starting nothing:
+stdout are terminals. It needs Bun (`$BUN`, else the release's
+`<prefix>/lib/hya/bin/bun`, else `bun` on `PATH`) and the TUI/WebUI directories
+(shipped alongside `bin/hya` in every release archive). If the frontend assets
+are missing, it prints an error telling the user to install the release with
+`hya update`; `hya serve`, `hya exec`, and other headless commands do not need
+them. Without a terminal it prints a guidance banner and exits **0**, starting
+nothing:
 
 ```text
 hya <version> — a multi-agent coding agent
@@ -1454,18 +1455,14 @@ filters such as `head` and `grep -q` can close stdout without causing a panic.
 
 ## `hya update`
 
-`hya update [--backend-only | --tui-only] [--version VERSION] [--force]
-[--prefix DIR]` installs or reinstalls the latest backend and frontend
-releases into the running hya's prefix. `--backend-only` updates only the
-backend (`bin/hya`, bundles, Bun adapter); `--tui-only` updates only the
-frontend (Bun, TUI, WebUI) and never installs `bin/hya`. The two flags conflict.
-`--version` pins each selected side. A backend-only installation can run
-headless commands without the frontend, while bare `hya` tells the user to run
-`hya update --tui-only` when the frontend is missing. See
-[Install and update](install.md).
+`hya update [--version VERSION] [--force] [--prefix DIR]` installs or
+reinstalls the latest unified `hya` release into the running hya's prefix.
+`--version` pins a specific release (`0.47.0`, `v0.47.0`, or `v0.47.1-dev.1`).
+Bare `hya` tells the user to run `hya update` when the frontend assets are
+missing. See [Install and update](install.md).
 
-`hya update version` prints the updater's package version (the backend release
-version). `hya` dispatches every `update` command before composing any runtime:
+`hya update version` prints the updater's package version (the unified `hya`
+release version). `hya` dispatches every `update` command before composing any runtime:
 no config bootstrap, bundles, providers, plugins, MCP, or session store are
 loaded in the installer process. `--db` selects the daemon to refresh or restart;
 `--model` does not change the running daemon during installation.
@@ -1475,8 +1472,8 @@ session database when omitted) reloads its bundles if only bundle contents
 changed. A changed backend executable runs the installed `hya --db <db> serve
 restart`: stop drains interrupted turns, start restores them with a restore
 prompt, and connected TUIs automatically discover the new URL and reconnect.
-No running daemon is started solely by an update. Unchanged installs and
-frontend-only updates leave the daemon running.
+No running daemon is started solely by an update. Unchanged installs leave the
+daemon running.
 
 ## `hya proxy`
 

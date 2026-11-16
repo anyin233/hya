@@ -9,29 +9,22 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// `scripts/hya-install.sh`, embedded so `hya update` runs the exact installer
-/// `hya.ed-aisys.com/install.sh` serves. It installs the backend and frontend
-/// releases, or one side with `--backend-only`/`--tui-only`.
+/// `hya.ed-aisys.com/install.sh` serves.
 pub const RELEASE_INSTALLER: &str = include_str!("../../../scripts/hya-install.sh");
 
 /// Options of bare `hya update`.
 #[derive(Debug, Default, Args)]
 pub struct ReleaseInstallArgs {
-    /// Install this release of each selected side instead of the latest one
-    /// (`0.43.23` or `v0.43.23`).
+    /// Install this release instead of the latest stable one
+    /// (`0.47.0`, `v0.47.0`, or `v0.47.0-dev.1`).
     #[arg(long, value_name = "VERSION")]
     pub version: Option<String>,
-    /// Reinstall a side even when that version is already installed.
+    /// Reinstall even when that version is already installed.
     #[arg(long)]
     pub force: bool,
     /// Install prefix (`<prefix>/bin/hya`); defaults to the running hya's prefix.
     #[arg(long, value_name = "DIR")]
     pub prefix: Option<PathBuf>,
-    /// Update only the backend (`bin/hya`, bundles, Bun adapter).
-    #[arg(long, conflicts_with = "tui_only")]
-    pub backend_only: bool,
-    /// Update only the frontend (Bun, TUI, WebUI).
-    #[arg(long)]
-    pub tui_only: bool,
 }
 
 /// The install prefix of a released `hya` at `executable`: the real (symlink
@@ -84,12 +77,6 @@ pub fn run_release_install(args: &ReleaseInstallArgs) -> Result<InstalledChanges
     }
     if args.force {
         command.arg("--force");
-    }
-    if args.backend_only {
-        command.arg("--backend-only");
-    }
-    if args.tui_only {
-        command.arg("--tui-only");
     }
     let mut child = command
         .stdin(Stdio::piped())

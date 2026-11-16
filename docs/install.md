@@ -1,22 +1,20 @@
 # Install and update from a release
 
-Backend and frontend are released independently. A backend release is tagged
-`backend/<version>` and publishes the backend archive; a frontend release is
-tagged `frontend/<version>` and publishes the frontend archive. Tags and
-download URLs use the version directly; neither side uses a `v`-prefixed
-release tag. The two sides MAY have different versions. The backend package
-contains the `hya` executable, backend bundles, and the adapter, but no TUI or
-WebUI. The frontend package contains Bun, the TUI, and the WebUI, but no
-`bin/hya`.
+`hya` publishes unified releases tagged `v<version>` (`v0.47.0` for stable
+releases, or `v0.47.0-dev.1` for pre-releases). Each target ships one combined
+archive, `hya-<version>-<target>.tar.gz`, containing the `hya` executable, the
+thirteen first-party bundles, the Argus example bundle, a pinned Bun runtime,
+the Bun plugin adapter, the TUI, the WebUI host, and the TUI extension SDK.
 
-One installer, `scripts/hya-install.sh`, installs either side or both. Releases
-do not carry it: `https://hya.ed-aisys.com/install.sh` serves it from the
-repository's `main` branch, and `hya update` runs the copy compiled into the
-running `hya`. The installer finds the newest release of each side on GitHub,
-verifies each archive against that release's `SHA256SUMS`, and installs it.
+One installer, `scripts/hya-install.sh`, installs or updates the unified
+release. Releases do not carry the installer script as an asset:
+`https://hya.ed-aisys.com/install.sh` serves it from the repository's `main`
+branch, and `hya update` runs the copy compiled into the running `hya`. The
+installer downloads `SHA256SUMS`, verifies the archive's SHA-256 checksum, and
+swaps it into the prefix atomically.
 
 Building from a source checkout (`./install.sh`) is still supported and remains
-a separate source-install path; see the [README](../README.md#build-from-source).
+a separate source-install path; see the [README](../README.md#quick-install).
 
 On Windows, install inside WSL 2; see
 [Install on Windows with WSL](install-wsl.md).
@@ -27,61 +25,49 @@ On Windows, install inside WSL 2; see
 curl -fsSL https://hya.ed-aisys.com/install.sh | sh
 ```
 
-Without options this installs the latest backend and the latest frontend into
-`$HOME/.local`, backend first. Select one side with `--backend-only` or
-`--tui-only`; pass flags through `sh -s --`:
+Without options this installs the latest stable release into `$HOME/.local`.
+Pass flags through `sh -s --`:
 
 ```sh
-# Headless server: hya serve, hya exec, hya loop, … without TUI/WebUI.
-curl -fsSL https://hya.ed-aisys.com/install.sh | sh -s -- --backend-only
-# Add the frontend beside an installed backend.
-curl -fsSL https://hya.ed-aisys.com/install.sh | sh -s -- --tui-only
-# Pin one side's release into another prefix.
-curl -fsSL https://hya.ed-aisys.com/install.sh | sh -s -- --backend-only --version <version> --prefix /opt/hya
+# Pin a stable or pre-release version (`v` prefix optional) into a custom prefix.
+curl -fsSL https://hya.ed-aisys.com/install.sh | sh -s -- --version v0.47.0 --prefix /opt/hya
+curl -fsSL https://hya.ed-aisys.com/install.sh | sh -s -- --version v0.47.1-dev.1
 ```
 
-Each side is installed on its own: unpacked beside the install, swapped in by
-rename, then checked (`bin/hya --version` for the backend,
-`lib/hya/tui/frontend-version.ts` for the frontend). A side whose check fails
-is rolled back to its previous files. If the frontend fails after the backend
-succeeded, the new backend stays installed and the installer names it in the
-error. A side whose installed version already matches is skipped unless
+The archive is unpacked into a staging directory beside the install, swapped in
+by same-filesystem renames, and verified (`bin/hya --version` and
+`lib/hya/tui/frontend-version.ts` must both match the release version). If a
+check fails, the installer rolls back to the previous installation. If the
+target version is already installed, it exits `0` without downloading unless
 `--force` is given.
 
 The script does not edit shell startup files. If `<prefix>/bin` is not on
 `PATH`, it prints the export line to add. If a backend daemon is running, the
-old backend version remains active until `hya serve restart`. A frontend-only
-install has no `bin/hya`; the installer says so, and bare `hya` needs both
-sides.
+old backend version remains active until `hya serve restart` (which `hya update`
+runs automatically when `bin/hya` changes).
 
 ### Latest-release resolution
 
-GitHub's single `latest` release belongs to whichever side was published last,
-so it cannot name a side. For GitHub release URLs the installer asks the
-releases API (`HYA_RELEASES_API_URL`) for each selected side's newest
-non-prerelease `<side>/<version>` tag and reads
-`<releases>/download/<side>/<version>/SHA256SUMS`. Other release hosts serve
-`<releases>/latest/download/<side>/SHA256SUMS`, else a single
-`<releases>/latest/download/SHA256SUMS`. The two sides' latest versions MAY
-differ; the frontend declares the minimum backend version it accepts and
-refuses an older backend at startup.
+Without `--version`, the installer reads `<releases>/latest/download/SHA256SUMS`.
+GitHub's `releases/latest` automatically points to the newest non-prerelease
+`v<version>` release and skips `-dev.*` / `-rc.*` pre-releases. With
+`--version <ver>` (leading `v` optional), it reads
+`<releases>/download/v<ver>/SHA256SUMS` and downloads
+`<releases>/download/v<ver>/hya-<ver>-<target>.tar.gz`.
 
 ### Installer interface
 
 | Flag | Meaning |
 | --- | --- |
-| `--backend-only` | Install only the backend release (`bin/hya`, `bundles/hya-*.hyabundle`, `lib/hya/bun-adapter`, `lib/hya/bin/bun`). |
-| `--tui-only` | Install only the frontend release (`lib/hya/bin/bun`, `lib/hya/tui`, `lib/hya/tui-web`). Cannot be combined with `--backend-only`. |
-| `--version VERSION` | Install this release of each selected side (`0.44.0` or `v0.44.0`) instead of its latest. Without a side flag both sides must have that version; pin one side with `--backend-only`/`--tui-only` when versions differ. |
+| `--version VERSION` | Install this release (`0.47.0`, `v0.47.0`, or `v0.47.1-dev.1`) instead of the latest stable release. |
 | `--prefix DIR` | Install into `DIR/bin`, `DIR/lib/hya`, `DIR/bundles` (default `$HOME/.local`). |
-| `--force` | Reinstall a side even when that version is installed. |
+| `--force` | Reinstall even when that version is already installed. |
 | `-h`, `--help` | Print usage. |
 
 | Environment | Default | Meaning |
 | --- | --- | --- |
 | `HYA_REPO` | `anyin233/hya` | GitHub owner/repo of the releases. |
-| `HYA_RELEASES_URL` | `https://github.com/$HYA_REPO/releases` | Release base; serves `download/<side>/<version>/<asset>`. `file://` works for mirrors and tests. |
-| `HYA_RELEASES_API_URL` | `https://api.github.com/repos/$HYA_REPO/releases?per_page=100` | Release list used to find the newest `<side>/` tag. |
+| `HYA_RELEASES_URL` | `https://github.com/$HYA_REPO/releases` | Release base; serves `latest/download/SHA256SUMS` and `download/v<version>/<asset>`. `file://` works for mirrors and tests. |
 | `HYA_VERSION` | latest | Same as `--version`. |
 | `HYA_INSTALL_DIR` | `$HOME/.local` | Same as `--prefix`. |
 | `HYA_TARGET` | detected | Target triple override. |
@@ -93,49 +79,38 @@ or `wget`, `tar`, and a SHA-256 utility (`sha256sum`, `shasum`, or `openssl`).
 ## Update
 
 ```sh
-hya update                         # latest backend and frontend releases
-hya update --backend-only          # only the backend
-hya update --tui-only              # only the frontend (adds it if missing)
-hya update --backend-only --version <version>
-hya update --force                 # reinstall the current versions
+hya update                         # latest stable release
+hya update --version v0.47.1-dev.1 # pin a specific release or pre-release
+hya update --force                 # reinstall the current version
 hya update --prefix /opt/hya       # a prefix other than the running hya's
 ```
 
 `hya update` pipes the installer compiled into the running `hya` to `sh` with
-`--prefix <prefix>` and the given flags, so it accepts the installer's
-`--backend-only`, `--tui-only`, `--version`, `--force`, and `--prefix` with the
-same meaning. Without `--prefix` the prefix is the real `<prefix>` of the
-running `<prefix>/bin/hya` beside `<prefix>/lib/hya`; a build-tree `hya` is
-refused. `hya update version` prints the updater's package version.
+`--prefix <prefix>` and the given flags, so it accepts `--version`, `--force`,
+and `--prefix` with the same meaning. Without `--prefix` the prefix is the real
+`<prefix>` of the running `<prefix>/bin/hya` beside `<prefix>/lib/hya`; a
+build-tree `hya` is refused. `hya update version` prints the updater's package
+version.
 
 After a successful `hya update`, the running daemon for `--db` (the default
 session database when omitted) reloads its bundles if only bundle contents
 changed. A changed backend executable runs the installed `hya --db <db> serve
 restart`: stop drains interrupted turns, start restores them with a restore
 prompt, and connected TUIs automatically discover the new URL and reconnect.
-No running daemon is started solely by an update. Unchanged installs and
-frontend-only updates leave the daemon running.
+No running daemon is started solely by an update.
 
 ## Release package
 
-Backend and frontend release tags and archives are independent:
+Each `v<version>` tag publishes unified target archives:
 
-| Side | Tag | Archive | Contents |
-| --- | --- | --- | --- |
-| Backend | `backend/<version>` | `hya-backend-<version>-<target>.tar.gz` | `bin/hya`, backend bundles, `lib/hya/bun-adapter`; no TUI/WebUI |
-| Frontend | `frontend/<version>` | `hya-frontend-<version>-<target>.tar.gz` | `lib/hya/bin/bun`, `lib/hya/tui`, `lib/hya/tui-web`; no `bin/hya` |
+| Tag | Archive | Contents |
+| --- | --- | --- |
+| `v<version>` (e.g. `v0.47.0`, `v0.47.1-dev.1`) | `hya-<version>-<target>.tar.gz` | `bin/hya`, `bundles/hya-*.hyabundle`, `examples/hya-argus-example.hyabundle`, `lib/hya/bin/bun`, `lib/hya/bun-adapter`, `lib/hya/tui`, `lib/hya/tui-web`, `lib/hya/tui-sdk` |
 
-Supported targets remain `x86_64-unknown-linux-gnu`,
-`aarch64-unknown-linux-gnu`, and `aarch64-apple-darwin`; Intel macOS is not
-built. Each release also publishes `SHA256SUMS`, which the installer verifies
-before replacing files. The release body contains the pinned one-click command
-for that side (`… | sh -s -- --backend-only --version <version>` or
-`--tui-only`).
-
-The backend archive's Bun adapter is not the frontend runtime. Install both
-sides when using bare `hya`; backend-only commands remain usable without the
-frontend. The source checkout installer (`./install.sh`) is separate and may
-still install a combined development layout.
+Supported targets are `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
+and `aarch64-apple-darwin`; Intel macOS is not built. Each release also
+publishes standalone first-party `.hyabundle` assets and `SHA256SUMS`, which
+the installer verifies before replacing files.
 
 ### Hosted installer URL
 
@@ -145,12 +120,11 @@ so a change to the installer reaches new installs when it lands on `main`.
 
 ### Release workflow
 
-The release workflow packages only side-specific tags. `backend/<version>`
-builds and publishes the backend archive; `frontend/<version>` builds and
-publishes the frontend archive. Neither publishes an installer script. Each
-release body contains a pinned one-click install command for its own side. The
-workflow smoke-tests archive contents, verifies `SHA256SUMS`, and publishes
-provenance attestations for the archive, side assets, and checksum file.
+`.github/workflows/release.yml` packages `v<version>` tags matching
+`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`. Tags containing `-` (such as
+`v0.47.1-dev.1`) publish as GitHub Pre-releases. The workflow smoke-tests the
+archive and installer, verifies `SHA256SUMS`, and publishes build provenance
+attestations for the archives, `.hyabundle` assets, and checksum file.
 
 Pushes to `main` that change `Cargo.lock`, a Cargo manifest, or this workflow,
 the daily schedule, and `workflow_dispatch` refresh one Rust dependency cache
