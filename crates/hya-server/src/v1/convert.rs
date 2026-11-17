@@ -444,11 +444,14 @@ fn part(part: &PartProjection) -> Option<pb::PartInfo> {
                 variant: reason.clone().unwrap_or_default(),
             }),
         ),
+        // Clients see the full output; an eviction notice only changes
+        // what model requests send.
         PartProjection::Tool {
             id,
             call,
             name,
             state,
+            ..
         } => {
             let mut tool = tool_call_part(state);
             tool.call_id = call.to_string();

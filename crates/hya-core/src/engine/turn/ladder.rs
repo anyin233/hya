@@ -1,5 +1,6 @@
 //! The full mode's [`Rewriter`]: the compaction ladder walked before each
-//! round, over a transcript with this session's sticky evictions applied.
+//! round over the projected transcript. Every change it makes to what the
+//! request sends is an event, so the request is rebuilt from the projection.
 
 use hya_proto::{
     CompactionStrategy, Event, Message, MessageId, ModelRef, Projection, SessionId, UsagePurpose,
@@ -10,7 +11,7 @@ use super::super::spill::ArtifactEvictionSink;
 use super::super::{
     AgentSpec, FixedSystemAgent, SessionEngine, fixed_system_agent, session_workdir,
 };
-use super::messages::{projection_to_messages, system_prompt};
+use super::messages::{AttachmentData, projection_to_messages, system_prompt};
 use crate::TurnBinding;
 use crate::agent_catalog::AgentDefinition;
 use crate::error::CoreError;
@@ -59,8 +60,8 @@ pub(super) struct CompactionLadder<'a> {
     pub(super) resources: &'a CompiledResourceView,
     pub(super) depth: u32,
     pub(super) actor_claim: Option<&'a ActorClaim>,
-    /// The transcript the round's request sends, set by `before_round`.
-    pub(super) messages: Vec<Message>,
+    /// Prompt image data of the round's transcript.
+    pub(super) attachments: &'a AttachmentData,
 }
 
 #[async_trait::async_trait]
@@ -75,25 +76,13 @@ impl Rewriter for CompactionLadder<'_> {
             resources,
             depth,
             actor_claim,
-            ..
+            attachments,
         } = self;
-        let attachments = engine.attachment_data(session, projection).await?;
-        let mut messages = projection_to_messages(live_agent, projection, model, &attachments);
+        let mut messages = projection_to_messages(live_agent, projection, model, attachments);
         let mut fold_config = engine.compaction;
         if matches!(messages.last(), Some(Message::Assistant { .. })) {
             fold_config.keep_recent = fold_config.keep_recent.saturating_add(1);
         }
-        // Earlier evictions of this session stay in effect: re-apply their
-        // exact placeholders before measuring, so the prefix stays
-        // byte-stable (provider prompt cache) and a request they already
-        // keep under the threshold does not walk the ladder again.
-        let mut sticky_evictions = engine
-            .sticky_evictions
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&session)
-            .unwrap_or_default();
-        crate::compaction::apply_sticky_evictions(&mut messages, &sticky_evictions);
 
         // Active route for this turn. Its advertised context window scales
         // the compaction threshold, so resolve it before deciding.
@@ -114,11 +103,14 @@ impl Rewriter for CompactionLadder<'_> {
             reasoning_policy,
         );
         let tools = engine.offered_tools(resources, depth);
-        let template = crate::kernel::request::from_messages(
-            Vec::new(),
+        // A request with no messages: what the system prompt and tools cost.
+        let template = crate::kernel::request::request(
+            &Projection::default(),
             &system_prompt(live_agent, &tools, depth),
             tools,
             model,
+            &live_agent.name,
+            attachments,
             None,
         );
         let request_overhead = engine
@@ -238,14 +230,13 @@ impl Rewriter for CompactionLadder<'_> {
                     let estimate_before = engine
                         .token_accounting
                         .estimate_with_reasoning_policy(&messages, reasoning_policy);
-                    let evicted = crate::compaction::evict_stale_tool_outputs_in_turn(
+                    let evicted = crate::compaction::evict_stale_tool_outputs(
                         &mut messages,
                         fold_config.keep_recent,
                         engine.compaction.keep_recent,
                         Some(&spill),
-                        &mut sticky_evictions,
                     );
-                    if evicted == 0 {
+                    if evicted.is_empty() {
                         continue;
                     }
                     let saved = estimate_before.saturating_sub(
@@ -257,13 +248,16 @@ impl Rewriter for CompactionLadder<'_> {
                     // Record the saving whether or not it sufficed. A partial
                     // reduction that still needed a summary is real work, and
                     // hiding it made the ledger disagree with the transcript.
+                    // The notices ride on the event, so later requests (and a
+                    // restarted engine) send exactly these bytes.
                     engine
                         .emit_for_actor(
                             actor_claim,
                             session,
                             Event::ContextEvicted {
                                 session,
-                                evicted_parts: evicted,
+                                evicted_parts: u32::try_from(evicted.len()).unwrap_or(u32::MAX),
+                                parts: evicted,
                                 tokens_before: input_tokens_est,
                                 tokens_after: u64::try_from(tokens).unwrap_or(u64::MAX),
                                 threshold,
@@ -310,13 +304,7 @@ impl Rewriter for CompactionLadder<'_> {
                         )
                         .await?;
                     (messages, tokens) = engine
-                        .reload_after_compaction(
-                            session,
-                            live_agent,
-                            model,
-                            &sticky_evictions,
-                            reasoning_policy,
-                        )
+                        .reload_after_compaction(session, live_agent, model, reasoning_policy)
                         .await?;
                     tokens = tokens.saturating_add(request_overhead);
                     token_source = crate::tokens::TokenSource::Estimate;
@@ -345,13 +333,7 @@ impl Rewriter for CompactionLadder<'_> {
                         )
                         .await?;
                     (messages, tokens) = engine
-                        .reload_after_compaction(
-                            session,
-                            live_agent,
-                            model,
-                            &sticky_evictions,
-                            reasoning_policy,
-                        )
+                        .reload_after_compaction(session, live_agent, model, reasoning_policy)
                         .await?;
                     tokens = tokens.saturating_add(request_overhead);
                     token_source = crate::tokens::TokenSource::Estimate;
@@ -415,13 +397,7 @@ impl Rewriter for CompactionLadder<'_> {
                         )
                         .await?;
                     (messages, tokens) = engine
-                        .reload_after_compaction(
-                            session,
-                            live_agent,
-                            model,
-                            &sticky_evictions,
-                            reasoning_policy,
-                        )
+                        .reload_after_compaction(session, live_agent, model, reasoning_policy)
                         .await?;
                     tokens = tokens.saturating_add(request_overhead);
                     token_source = crate::tokens::TokenSource::Estimate;
@@ -484,38 +460,11 @@ impl Rewriter for CompactionLadder<'_> {
                         )
                         .await?;
                     (messages, tokens) = engine
-                        .reload_after_compaction(
-                            session,
-                            live_agent,
-                            model,
-                            &sticky_evictions,
-                            reasoning_policy,
-                        )
+                        .reload_after_compaction(session, live_agent, model, reasoning_policy)
                         .await?;
                     tokens = tokens.saturating_add(request_overhead);
                     token_source = crate::tokens::TokenSource::Estimate;
                 }
-            }
-        }
-        while sticky_evictions.len() > 4096 {
-            if let Some(key) = sticky_evictions.keys().next().copied() {
-                sticky_evictions.remove(&key);
-            }
-        }
-        engine
-            .sticky_evictions
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(session, sticky_evictions);
-        {
-            let mut sticky = engine
-                .sticky_evictions
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if sticky.len() > 64
-                && let Some(other) = sticky.keys().find(|key| **key != session).copied()
-            {
-                sticky.remove(&other);
             }
         }
         // Notify `compaction.after` best-effort: an enrichment point, so a
@@ -547,7 +496,6 @@ impl Rewriter for CompactionLadder<'_> {
                 },
             )
             .await?;
-        self.messages = messages;
         Ok(rewrote || committed_summary_tokens.is_some())
     }
 }

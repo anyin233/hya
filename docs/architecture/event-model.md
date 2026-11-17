@@ -337,13 +337,13 @@ while only the reviving mail is owed to the new episode. See the
 | `context_compacted` | `session`, summary `message`, `strategy`, `from_message`, `to_message`, `folded_count`, `input_tokens_est`, `threshold`, optional `step_cut { through_part, kept_head }` | Moves the summary `message` row to the fold boundary: right after `to_message`, or, with `step_cut`, right before `kept_head`, and sets `to_message`'s `MessageProjection.folded_parts` to the parts through `through_part` (reducer version 9). Requests start at the latest marker and skip a message's `folded_parts`; the projection keeps every message and part. A `step_cut` fold cuts inside the turn's in-flight assistant message at a step boundary (see [compaction](../compaction.md#in-flight-turns)); logs without the field fold whole messages, as before. The system message carries summary output and the range points to the folded log entries. A manual compaction (`CompactSession` / `SummarizeSession`) records `strategy: local_summarizer` over the whole window it summarized, with `threshold: 0` (no threshold tripped); v1 maps it to `compactionApplied { manual: true }`. |
 | `todos_updated` | `session`, `todos: [TodoItem { id, content, status }]` | Fold: `SessionProjection.todos` = the full list. Appended by the engine right after a todo tool's `tool_result` whose `metadata.todos` differs from the folded list (reads and no-op writes append nothing). Sessions without it (logs before reducer version 5) read the latest todo tool result instead. |
 | `session_forked` | `session`, `source`, optional `before_message` | Fold: `SessionProjection.forked_from = source`, `forked_before = before_message` (the source-log user message the copy stopped before; `None` for a head fork, which copies every visible message). Records a fork edge separate from subagent `SessionCreated.parent`. Copied messages receive fresh ids; their copied `tokens` never count toward the fork's `usage`. v1: `SessionInfo.forkedFrom`. |
-| `context_evicted` | `session`, `evicted_parts`, `tokens_before`, `tokens_after`, `threshold` | **no-op**; request-local tool-output reduction. The event log retains full outputs. |
+| `context_evicted` | `session`, `evicted_parts`, `parts: [EvictedPart { part, notice }]`, `tokens_before`, `tokens_after`, `threshold` | Fold: sets `PartProjection::Tool.eviction_notice = notice` on each listed tool part; `state` keeps the full output. Model requests send the notice (artifact handle included) instead of the output; v1 clients see the full output. Logs before `parts` fold nothing. |
 
 `ContextCompacted` is durable replay evidence and a baseline/checkpoint marker,
 not a deletion of the source transcript. A projection reader uses the summary
 message and the pointer range; an offline reader can reconstruct the exact
-folded input from the event log. `ContextEvicted` records only what was omitted
-from one request.
+folded input from the event log. `ContextEvicted` records the notices that
+replace evicted outputs in requests from then on.
 
 #### File snapshots and revert
 
@@ -704,10 +704,10 @@ contracts do not change and no database migration is needed.
 - `session_reverted` moves the reverted user message and everything after it
   into `revert.hidden`; `session_unreverted` moves them back; a new
   `message_started` commits (drops) a pending revert.
-- `session_forked` records the fork source and cut; `context_compacted` and
-  `context_evicted` remain durable observability records rather than
-  projection state transitions; the `context_compacted` system message and
-  pointer range provide the replay checkpoint.
+- `session_forked` records the fork source and cut; `context_compacted`
+  places its marker and the `context_evicted` notices land on their tool
+  parts; the `context_compacted` system message and pointer range provide the
+  replay checkpoint.
 
 ### `Projection::apply`
 

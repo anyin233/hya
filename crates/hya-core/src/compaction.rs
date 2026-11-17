@@ -510,8 +510,9 @@ fn spilled_output_notice(handle: &str) -> String {
 /// Both shapes are recognized so a repeat pass is a no-op and the reported
 /// count reflects real work rather than re-evicting a notice.
 fn is_eviction_notice(output: &serde_json::Value) -> bool {
+    // Prefixes: a notice may carry an appended mail notice.
     output.as_str().is_some_and(|text| {
-        text == EVICTED_OUTPUT_NOTICE || text.starts_with(SPILLED_OUTPUT_PREFIX)
+        text.starts_with(EVICTED_OUTPUT_NOTICE) || text.starts_with(SPILLED_OUTPUT_PREFIX)
     })
 }
 
@@ -551,64 +552,34 @@ fn stale_tool_outputs(
         .collect()
 }
 
-/// Runtime record of evicted parts: projected message/part id to the exact
-/// model-facing placeholder that replaced its output.
-pub type StickyEvictions = std::collections::HashMap<(MessageId, PartId), String>;
-
-/// Evict stale tool outputs, reusing placeholders recorded in `sticky`.
+/// Replace stale tool outputs in `messages` with notices, spilling each body
+/// to `sink` when one is wired, and return the parts it evicted with their
+/// notices for the `ContextEvicted` record.
 ///
-/// The map is runtime state owned by the session engine; its keys identify a
-/// projected message/part and its values are the exact model-facing notice.
-pub fn evict_stale_tool_outputs_sticky(
-    messages: &mut [Message],
-    keep_recent: usize,
-    sink: Option<&dyn EvictionSink>,
-    sticky: &mut StickyEvictions,
-) -> u32 {
-    evict_stale_tool_outputs_in_turn(messages, keep_recent, keep_recent, sink, sticky)
-}
-
-pub(crate) fn evict_stale_tool_outputs_in_turn(
+/// A notice keeps an appended `--- [NEW MAIL ...]` steer notice verbatim, so
+/// consumed mail stays visible to the model.
+pub(crate) fn evict_stale_tool_outputs(
     messages: &mut [Message],
     keep_messages: usize,
     keep_steps: usize,
     sink: Option<&dyn EvictionSink>,
-    sticky: &mut StickyEvictions,
-) -> u32 {
-    let mut evicted = 0;
+) -> Vec<hya_proto::EvictedPart> {
+    let mut evicted = Vec::new();
     for (message_index, part_index) in stale_tool_outputs(messages, keep_messages, keep_steps) {
-        let (Message::Assistant { id, parts, .. } | Message::User { id, parts, .. }) =
+        let (Message::Assistant { parts, .. } | Message::User { parts, .. }) =
             &mut messages[message_index]
         else {
             continue;
         };
-        let message_id = *id;
         let Part::Tool {
-            id: part_id,
+            id,
             name,
-            state,
+            state: ToolPartState::Completed { output, .. },
             ..
         } = &mut parts[part_index]
         else {
             continue;
         };
-        let key = (message_id, *part_id);
-        let ToolPartState::Completed {
-            input,
-            output,
-            time_ms,
-        } = state
-        else {
-            continue;
-        };
-        if let Some(notice) = sticky.get(&key) {
-            *state = ToolPartState::Completed {
-                input: input.clone(),
-                output: serde_json::Value::String(notice.clone()),
-                time_ms: *time_ms,
-            };
-            continue;
-        }
         let body = value_text(output);
         let mail = body
             .find("--- [NEW MAIL")
@@ -623,57 +594,10 @@ pub(crate) fn evict_stale_tool_outputs_in_turn(
             notice.push('\n');
             notice.push_str(&mail);
         }
-        sticky.insert(key, notice.clone());
-        *state = ToolPartState::Completed {
-            input: input.clone(),
-            output: serde_json::Value::String(notice),
-            time_ms: *time_ms,
-        };
-        evicted += 1;
+        *output = serde_json::Value::String(notice.clone());
+        evicted.push(hya_proto::EvictedPart { part: *id, notice });
     }
     evicted
-}
-
-/// Re-apply the placeholders recorded in `sticky` without evicting anything
-/// new.
-///
-/// Run on every rebuilt request before its size is measured, so earlier
-/// evictions keep byte-identical placeholders (a stable, cacheable prefix)
-/// and count toward the threshold decision. Returns how many parts were
-/// replaced.
-pub fn apply_sticky_evictions(messages: &mut [Message], sticky: &StickyEvictions) -> usize {
-    if sticky.is_empty() {
-        return 0;
-    }
-    let mut applied = 0;
-    for message in messages.iter_mut() {
-        let (Message::Assistant { id, parts, .. } | Message::User { id, parts, .. }) = message
-        else {
-            continue;
-        };
-        let message_id = *id;
-        for part in parts.iter_mut() {
-            let Part::Tool {
-                id: part_id, state, ..
-            } = part
-            else {
-                continue;
-            };
-            let Some(notice) = sticky.get(&(message_id, *part_id)) else {
-                continue;
-            };
-            let ToolPartState::Completed { input, time_ms, .. } = state else {
-                continue;
-            };
-            *state = ToolPartState::Completed {
-                input: input.clone(),
-                output: serde_json::Value::String(notice.clone()),
-                time_ms: *time_ms,
-            };
-            applied += 1;
-        }
-    }
-    applied
 }
 
 /// Whether at least one completed tool output is stale enough to spill.
@@ -1386,6 +1310,10 @@ mod tests {
         })
     }
 
+    fn evict(messages: &mut [Message], keep: usize, sink: Option<&dyn EvictionSink>) -> usize {
+        evict_stale_tool_outputs(messages, keep, keep, sink).len()
+    }
+
     #[test]
     fn eviction_drops_stale_outputs_keeps_inputs_and_respects_keep_recent() {
         let mut msgs = vec![
@@ -1396,8 +1324,7 @@ mod tests {
         let accounting = crate::tokens::TokenAccounting::default();
         let before = accounting.estimate(&msgs);
 
-        let evicted =
-            evict_stale_tool_outputs_sticky(&mut msgs, 1, None, &mut StickyEvictions::default());
+        let evicted = evict(&mut msgs, 1, None);
         assert_eq!(evicted, 2, "only the two stale messages are evicted");
         assert!(
             accounting.estimate(&msgs) < before,
@@ -1459,15 +1386,7 @@ mod tests {
             last_round: None,
         }];
 
-        assert_eq!(
-            evict_stale_tool_outputs_sticky(
-                &mut messages,
-                2,
-                None,
-                &mut StickyEvictions::default()
-            ),
-            2
-        );
+        assert_eq!(evict(&mut messages, 2, None), 2);
         let Message::Assistant { parts, .. } = &messages[0] else {
             panic!("expected assistant");
         };
@@ -1493,12 +1412,9 @@ mod tests {
             assistant_with_tool(&"OLD".repeat(200)),
             assistant_with_tool("recent"),
         ];
+        assert_eq!(evict(&mut msgs, 1, None), 1);
         assert_eq!(
-            evict_stale_tool_outputs_sticky(&mut msgs, 1, None, &mut StickyEvictions::default()),
-            1
-        );
-        assert_eq!(
-            evict_stale_tool_outputs_sticky(&mut msgs, 1, None, &mut StickyEvictions::default()),
+            evict(&mut msgs, 1, None),
             0,
             "a second pass has nothing left to evict"
         );
@@ -1730,15 +1646,7 @@ mod tests {
         let mut msgs = vec![assistant_with_tool(&body), assistant_with_tool("recent")];
         let sink = RecordingSink::new();
 
-        assert_eq!(
-            evict_stale_tool_outputs_sticky(
-                &mut msgs,
-                1,
-                Some(&sink),
-                &mut StickyEvictions::default()
-            ),
-            1
-        );
+        assert_eq!(evict(&mut msgs, 1, Some(&sink)), 1);
 
         let calls = sink.calls();
         assert_eq!(calls.len(), 1);
@@ -1767,53 +1675,30 @@ mod tests {
         ];
         let sink = RecordingSink::new();
 
+        assert_eq!(evict(&mut msgs, 1, Some(&sink)), 1);
         assert_eq!(
-            evict_stale_tool_outputs_sticky(
-                &mut msgs,
-                1,
-                Some(&sink),
-                &mut StickyEvictions::default()
-            ),
-            1
-        );
-        assert_eq!(
-            evict_stale_tool_outputs_sticky(
-                &mut msgs,
-                1,
-                Some(&sink),
-                &mut StickyEvictions::default()
-            ),
+            evict(&mut msgs, 1, Some(&sink)),
             0,
             "a second pass has nothing left to evict"
         );
         assert_eq!(sink.calls().len(), 1, "the notice must not be re-spilled");
     }
+    /// A notice keeps the mail appended to the output, and a later pass
+    /// recognizes such a notice as its own work.
     #[test]
-    fn eviction_reuses_sticky_placeholder_and_preserves_mail_notice() {
+    fn eviction_preserves_mail_notice_and_skips_it_on_a_later_pass() {
         let body = format!(
             "{}\n--- [NEW MAIL from scout] child failed",
             "OLD".repeat(200)
         );
-        let mut first = vec![assistant_with_tool(&body), assistant_with_tool("recent")];
-        let mut second = first.clone();
-        let sink = RecordingSink::new();
-        let mut sticky = std::collections::HashMap::new();
+        let mut msgs = vec![assistant_with_tool(&body), assistant_with_tool("recent")];
 
-        assert_eq!(
-            evict_stale_tool_outputs_sticky(&mut first, 1, Some(&sink), &mut sticky),
-            1
-        );
-        let first_notice = tool_output_of(&first[0]).expect("first placeholder");
-        assert!(first_notice.contains("--- [NEW MAIL from scout] child failed"));
-        assert_eq!(
-            evict_stale_tool_outputs_sticky(&mut second, 1, Some(&sink), &mut sticky),
-            0
-        );
-        assert_eq!(
-            tool_output_of(&second[0]).as_deref(),
-            Some(first_notice.as_str())
-        );
-        assert_eq!(sink.calls().len(), 1);
+        let evicted = evict_stale_tool_outputs(&mut msgs, 1, 1, None);
+        assert_eq!(evicted.len(), 1);
+        let notice = tool_output_of(&msgs[0]).expect("placeholder");
+        assert_eq!(evicted[0].notice, notice);
+        assert!(notice.contains("--- [NEW MAIL from scout] child failed"));
+        assert_eq!(evict(&mut msgs, 1, None), 0);
     }
 
     /// A sink that declines degrades to the lossy notice rather than failing the
@@ -1831,15 +1716,7 @@ mod tests {
             assistant_with_tool("recent"),
         ];
 
-        assert_eq!(
-            evict_stale_tool_outputs_sticky(
-                &mut msgs,
-                1,
-                Some(&Declines),
-                &mut StickyEvictions::default()
-            ),
-            1
-        );
+        assert_eq!(evict(&mut msgs, 1, Some(&Declines)), 1);
         assert_eq!(
             tool_output_of(&msgs[0]).as_deref(),
             Some(EVICTED_OUTPUT_NOTICE)

@@ -907,8 +907,9 @@ visible and fail closed.
   Carry one running count and apply each reduction as a delta instead.
 - The turn loop measures the request first and then calls `fold_prefix`, which
   never re-derives the decision from a transcript it has already edited.
-- Request-local reductions must never write the store. The event log stays a
-  sufficient statistic for offline reconstruction (see 0.34.15).
+- Reductions never rewrite logged content. Tool-output eviction appends its
+  notices in `ContextEvicted`, so the event log stays a sufficient statistic
+  for offline reconstruction (see 0.34.15) and for the next request.
 - Thresholds scale to `Capabilities::max_context` when advertised; a route with
   no window keeps the configured flat threshold. Clamp resolved thresholds to a
   floor — a near-zero threshold compacts every turn, which is worse than never.

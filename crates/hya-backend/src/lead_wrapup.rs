@@ -566,6 +566,7 @@ mod tests {
             state: ToolPartState::Running {
                 input: serde_json::json!({}),
             },
+            eviction_notice: None,
         }
     }
 
