@@ -28,6 +28,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::CoreError;
 use rewrite::Initiator;
+pub(crate) use rewrite::Rewriter;
 pub(crate) use round::ToolCall;
 
 /// Agent name the kernel renders assistant messages with in requests.
@@ -235,25 +236,14 @@ pub async fn run(run: Run<'_>) -> Result<FinishReason, CoreError> {
         session,
         message,
     };
+    let mut rewriter = rewrite::HarnessRewriter(&scope);
     let mut step = 0;
     loop {
         if cancel.is_cancelled() {
             return Ok(FinishReason::Cancelled);
         }
         let projection = store.read_projection_shared(session).await?;
-        let budget = rewrite::pressure(&projection, provider.capabilities(model).as_ref());
-        if budget.is_some_and(|(used, threshold)| used > threshold)
-            && rewrite::commit_rewrite(
-                emit,
-                &projection,
-                session,
-                message,
-                Initiator::Harness,
-                budget,
-            )
-            .await?
-            .is_some()
-        {
+        if rewriter.before_round(&projection).await? {
             continue;
         }
         let req = request::request(
