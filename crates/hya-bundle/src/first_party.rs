@@ -30,8 +30,13 @@ pub const FIRST_PARTY_BUNDLES: &[&str] = &[
     "hya/code-mode",
 ];
 
+/// First-party bundles in the `internal` group: native libraries that carry
+/// full-mode features out of the kernel (ADR-0033). Every entry is also in
+/// [`FIRST_PARTY_BUNDLES`]; bare mode loads none of them.
+pub const INTERNAL_BUNDLES: &[&str] = &[];
+
 /// In-tree source groups searched for a first-party bundle directory.
-const SOURCE_GROUPS: &[&str] = &["presets", "first-party"];
+const SOURCE_GROUPS: &[&str] = &["presets", "first-party", "internal"];
 
 /// Where one first-party bundle is loaded from.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,7 +48,7 @@ pub enum FirstPartySource {
 }
 
 /// Environment override of [`first_party_source_root`]: a directory with the
-/// same `presets/` and `first-party/` layout. A daemon rolling back a failed
+/// same `presets/`, `first-party/`, and `internal/` layout. A daemon rolling back a failed
 /// restart sets it for its pinned previous build, so that build loads the
 /// first-party sources it ran with instead of the since-edited tree.
 pub const FIRST_PARTY_SOURCE_ROOT_ENV: &str = "HYA_FIRST_PARTY_SOURCE_ROOT";

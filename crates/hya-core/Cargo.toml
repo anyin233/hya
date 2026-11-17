@@ -11,6 +11,7 @@ version-reference = "hya"
 workspace = true
 
 [dependencies]
+hya-bundle = { workspace = true }
 hya-proto = { workspace = true }
 hya-provider = { workspace = true }
 hya-tool = { workspace = true }
