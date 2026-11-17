@@ -1,14 +1,13 @@
 //! The rewrite primitive: remove everything before the current step.
 
+use async_trait::async_trait;
+use hya_proto::context::COMPACT_CONTEXT_MARKER;
 use hya_proto::{
     CompactionStrategy, Event, FinishReason, MessageId, PartId, Projection, Role, SessionId,
     StepCut,
 };
-use hya_provider::{COMPACT_CONTEXT_MARKER, Capabilities};
+use hya_tool::{RewriteCtx, Rewriter, ToolError};
 
-use async_trait::async_trait;
-
-use super::Emit;
 use super::request::{collect_text, compacted_messages, is_marker};
 use crate::error::CoreError;
 
@@ -25,20 +24,51 @@ pub(super) enum Initiator {
     Harness,
 }
 
-/// Rewrites the Context before a round when it must shrink.
+/// The kernel's own rewriter (bare mode): removes everything before the next
+/// step once the last round filled [`TRIGGER_PERCENT`] of the window.
+pub(super) struct HarnessRewriter;
+
 #[async_trait]
-pub trait Rewriter: Send {
-    /// Rewrite before the round `projection` would send, if needed; `true`
-    /// when the log changed.
-    async fn before_round(&mut self, projection: &Projection) -> Result<bool, CoreError>;
+impl Rewriter for HarnessRewriter {
+    async fn before_round(&self, cx: RewriteCtx<'_>) -> Result<bool, ToolError> {
+        let budget = pressure(cx.projection, cx.window.map(|window| window.max_context));
+        if budget.is_none_or(|(used, threshold)| used <= threshold) {
+            return Ok(false);
+        }
+        self.commit(&cx, budget).await
+    }
+
+    async fn rewrite_now(&self, cx: RewriteCtx<'_>) -> Result<bool, ToolError> {
+        let budget = pressure(cx.projection, cx.window.map(|window| window.max_context));
+        self.commit(&cx, budget).await
+    }
+}
+
+impl HarnessRewriter {
+    async fn commit(
+        &self,
+        cx: &RewriteCtx<'_>,
+        budget: Option<(u64, u64)>,
+    ) -> Result<bool, ToolError> {
+        let rewrite = rewrite_events(
+            cx.projection,
+            cx.session,
+            cx.message,
+            Initiator::Harness,
+            budget,
+        )
+        .map_err(|error| ToolError::Other(error.to_string()))?;
+        let Some((events, _)) = rewrite else {
+            return Ok(false);
+        };
+        cx.log.append(cx.session, events).await?;
+        Ok(true)
+    }
 }
 
 /// The latest recorded round's `prompt + output` tokens and the trigger
 /// threshold, when the projection has usage and the route a context window.
-pub(super) fn pressure(
-    projection: &Projection,
-    capabilities: Option<&Capabilities>,
-) -> Option<(u64, u64)> {
+pub(super) fn pressure(projection: &Projection, max_context: Option<u32>) -> Option<(u64, u64)> {
     let last = projection
         .session
         .messages
@@ -47,9 +77,7 @@ pub(super) fn pressure(
         .filter(|message| message.role == Role::Assistant)
         .find_map(|message| message.usage.as_ref())?
         .last_round;
-    let window = capabilities
-        .map(|caps| caps.max_context)
-        .filter(|w| *w > 0)?;
+    let window = max_context.filter(|w| *w > 0)?;
     Some((
         last.prompt().saturating_add(last.output),
         u64::from(window) * TRIGGER_PERCENT / 100,
@@ -60,17 +88,16 @@ pub(super) fn pressure(
 /// messages before the turn's user message, and the earlier steps of
 /// `message`. Keeps the turn's user message and the current step.
 ///
-/// Emits a system marker that repeats every earlier user message verbatim,
-/// then `ContextCompacted{strategy: Rewrite}`, as one batch. Returns the
-/// folded message count, or `None` (no events) when nothing is removable.
-pub(super) async fn commit_rewrite(
-    emit: &dyn Emit,
+/// The batch to append: a system marker that repeats every earlier user
+/// message verbatim, then `ContextCompacted{strategy: Rewrite}`. Returns it
+/// with the folded message count, or `None` when nothing is removable.
+pub(super) fn rewrite_events(
     projection: &Projection,
     session: SessionId,
     message: MessageId,
     initiator: Initiator,
     budget: Option<(u64, u64)>,
-) -> Result<Option<u32>, CoreError> {
+) -> Result<Option<(Vec<Event>, u32)>, CoreError> {
     let visible = compacted_messages(projection);
     let at = visible
         .iter()
@@ -133,8 +160,7 @@ pub(super) async fn commit_rewrite(
         threshold,
         step_cut,
     });
-    emit.emit(session, events).await?;
-    Ok(Some(folded_count))
+    Ok(Some((events, folded_count)))
 }
 
 fn marker_text(initiator: Initiator, users: &[String]) -> String {

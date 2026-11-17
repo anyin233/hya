@@ -77,7 +77,7 @@ pub mod sidecar;
 /// Session title generation helpers.
 pub mod title;
 /// Token accounting: local estimation and provider-usage reliability.
-pub mod tokens;
+pub use hya_tool::tokens;
 /// User-authored workflow DAGs over the governed team primitives.
 pub mod workflow;
 /// Tmux helpers for isolated workers.

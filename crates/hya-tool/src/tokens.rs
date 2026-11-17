@@ -7,7 +7,8 @@
 
 use std::sync::Arc;
 
-use hya_proto::{Message, Part, ToolPartState};
+use hya_proto::context::{ReasoningReplayPolicy, current_turn_start};
+use hya_proto::{Message, Part, ToolPartState, ToolSchema};
 
 /// Counts tokens for a text fragment.
 ///
@@ -256,7 +257,7 @@ impl TokenAccounting {
     pub fn estimate_with_reasoning_policy(
         &self,
         messages: &[Message],
-        policy: hya_provider::ReasoningReplayPolicy,
+        policy: ReasoningReplayPolicy,
     ) -> usize {
         self.estimate_range(messages, 0..messages.len(), Some(policy))
     }
@@ -268,19 +269,19 @@ impl TokenAccounting {
         self.estimate_range(messages, 0..messages.len(), None)
     }
 
-    /// Estimate the composed request, including top-level instructions and tool schemas.
-    pub(crate) fn estimate_request(
+    /// Estimate a composed request from its messages, top-level instructions,
+    /// and tool schemas.
+    #[must_use]
+    pub fn estimate_request(
         &self,
-        request: &hya_provider::CompletionRequest,
-        policy: hya_provider::ReasoningReplayPolicy,
+        messages: &[Message],
+        system: Option<&str>,
+        tools: &[ToolSchema],
+        policy: ReasoningReplayPolicy,
     ) -> usize {
-        self.estimate_with_reasoning_policy(&request.messages, policy)
-            + request
-                .system
-                .as_ref()
-                .map_or(0, |system| self.tokenizer.count_text(system))
-            + request
-                .tools
+        self.estimate_with_reasoning_policy(messages, policy)
+            + system.map_or(0, |system| self.tokenizer.count_text(system))
+            + tools
                 .iter()
                 .map(|tool| {
                     self.tokenizer.count_text(tool.name.as_str())
@@ -297,9 +298,9 @@ impl TokenAccounting {
         &self,
         messages: &[Message],
         range: std::ops::Range<usize>,
-        policy: Option<hya_provider::ReasoningReplayPolicy>,
+        policy: Option<ReasoningReplayPolicy>,
     ) -> usize {
-        let turn_start = hya_provider::current_turn_start(messages);
+        let turn_start = current_turn_start(messages);
         let replayed = |index: usize, part: &Part| {
             policy.is_none_or(|policy| policy.replays(turn_start, index, part))
         };
@@ -316,7 +317,7 @@ impl TokenAccounting {
                         // Responses-style routes resend only the opaque item.
                         (
                             Part::Reasoning { provider_data, .. },
-                            Some(hya_provider::ReasoningReplayPolicy::ProviderData),
+                            Some(ReasoningReplayPolicy::ProviderData),
                         ) => provider_data
                             .as_ref()
                             .map_or(0, |value| self.estimate_json(value)),
@@ -348,7 +349,7 @@ impl TokenAccounting {
         &self,
         messages: &[Message],
         usage_reporting: bool,
-        policy: hya_provider::ReasoningReplayPolicy,
+        policy: ReasoningReplayPolicy,
     ) -> TokenCount {
         self.count_in_use(messages, usage_reporting, Some(policy))
     }
@@ -357,7 +358,7 @@ impl TokenAccounting {
         &self,
         messages: &[Message],
         usage_reporting: bool,
-        policy: Option<hya_provider::ReasoningReplayPolicy>,
+        policy: Option<ReasoningReplayPolicy>,
     ) -> TokenCount {
         let estimated = TokenCount {
             tokens: self.estimate_range(messages, 0..messages.len(), policy),

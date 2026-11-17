@@ -112,9 +112,12 @@ impl CompactionLadder<'_> {
             attachments,
             None,
         );
-        let request_overhead = engine
-            .token_accounting
-            .estimate_request(&template, reasoning_policy);
+        let request_overhead = engine.token_accounting.estimate_request(
+            &template.messages,
+            template.system.as_deref(),
+            &template.tools,
+            reasoning_policy,
+        );
         let count = |messages: &[Message]| {
             engine
                 .token_accounting
