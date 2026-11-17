@@ -35,7 +35,6 @@ use crate::{AgentResourcePolicy, TurnBinding};
 pub(super) mod messages;
 
 use super::spill::ArtifactEvictionSink;
-use super::stream_round::RoundAttribution;
 use crate::agent_catalog::AgentDefinition;
 pub use messages::advertise_tool;
 use messages::{
@@ -2051,10 +2050,8 @@ impl SessionEngine {
                         message,
                         stream,
                         actor_claim,
-                        RoundAttribution {
-                            step,
-                            model: served_model,
-                        },
+                        step,
+                        &served_model,
                         cancel,
                     )
                     .await
