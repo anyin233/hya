@@ -1022,6 +1022,119 @@ async fn tool_output_eviction_avoids_summarizing_and_preserves_the_log() {
     );
 }
 
+/// Invariant 1: the request is a pure function of the log. Turn 2 evicts
+/// turn 1's stale output to an artifact handle and answers with nothing, so
+/// a request after a restart sees the same transcript. A new engine over the
+/// same SQLite file must send the same bytes, eviction notice and handle
+/// included, without evicting again.
+#[tokio::test]
+async fn request_is_identical_after_restart() {
+    let dir = tempdir();
+    let big_file = dir.join("big.txt");
+    tokio::fs::write(&big_file, format!("{}\n", "R".repeat(100)).repeat(200))
+        .await
+        .unwrap();
+    let provider = Arc::new(FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::ToolCall {
+                name: "read".to_string(),
+                input: json!({ "path": big_file.to_string_lossy() }),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![
+            FakeStep::Text("read it".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+        vec![FakeStep::Finish(FinishReason::Stop)],
+    ]));
+    let db = dir.join("hya.db").to_string_lossy().into_owned();
+    let engine_over = |store: SessionStore| {
+        let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+            Action::Read,
+            "/**",
+            Mode::Allow,
+        )]));
+        SessionEngine::new(
+            store,
+            Arc::new(ProviderRouter::new().with(provider.clone())),
+            support::test_runtime(Arc::new(ToolRegistry::builtins())),
+            perm,
+            EventBus::default(),
+        )
+        .with_compaction(
+            Arc::new(Recording(Arc::new(AtomicBool::new(false)))),
+            // Sized as in the eviction test above: turn 2 crosses the
+            // threshold and evicting turn 1's output brings it far below.
+            CompactionConfig {
+                token_threshold: 1_000_000,
+                keep_recent: 1,
+                context_fraction: 0.16,
+                ..CompactionConfig::default()
+            },
+        )
+    };
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "x".to_string(),
+        workdir: dir.clone(),
+        reasoning: None,
+    };
+
+    let engine = engine_over(SessionStore::connect(&db).await.unwrap());
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    for prompt in [
+        "read the big file".to_string(),
+        "now summarize ".repeat(1_500),
+    ] {
+        engine.admit_user_prompt(session, prompt).await.unwrap();
+        engine
+            .run_turn(session, &agent, CancellationToken::new())
+            .await
+            .unwrap();
+    }
+    let evictions = |envelopes: &[hya_proto::Envelope]| {
+        envelopes
+            .iter()
+            .filter(|e| matches!(e.event, Event::ContextEvicted { .. }))
+            .count()
+    };
+    assert_eq!(evictions(&engine.replay(session).await.unwrap()), 1);
+    drop(engine);
+
+    let engine = engine_over(SessionStore::connect(&db).await.unwrap());
+    engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        evictions(&engine.replay(session).await.unwrap()),
+        1,
+        "the restarted engine must not evict again"
+    );
+    let requests = provider.requests();
+    let [.., before, after] = requests.as_slice() else {
+        panic!("expected a request before and after the restart");
+    };
+    let before = format!("{before:?}");
+    assert!(
+        before.contains("artifact://"),
+        "the request sends the handle"
+    );
+    assert_eq!(before, format!("{after:?}"));
+}
+
 /// Eviction is sticky: once a stale output was evicted, later rounds re-apply
 /// the same placeholder before measuring the request. A later turn that is
 /// under the threshold with that placeholder must neither re-run the ladder

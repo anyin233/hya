@@ -544,6 +544,7 @@ export type Event = ({ readonly type: "session_created" } & {
 ({ readonly type: "context_evicted" } & {
   readonly session: SessionId
   readonly evicted_parts: number
+  readonly parts?: ReadonlyArray<EvictedPart>
   readonly tokens_before: number
   readonly tokens_after: number
   readonly threshold: number
@@ -594,6 +595,11 @@ export type EventNotificationParams = {
 }
 
 export type EventSeq = number
+
+export type EvictedPart = {
+  readonly part: PartId
+  readonly notice: string
+}
 
 export type EvidenceQualityWire = ("missing") |
 ("claim_only") |
@@ -1229,7 +1235,7 @@ export function isEvent(value: unknown): value is Event {
     (isRecord(value) && value["type"] === "agent_restarted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("handle" in value && typeof value["handle"] === "string") && ("child" in value && isSessionId(value["child"])) && ("epoch" in value && isActorEpoch(value["epoch"]))) ||
     (isRecord(value) && value["type"] === "context_compacted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("strategy" in value && isCompactionStrategy(value["strategy"])) && ("from_message" in value && isMessageId(value["from_message"])) && ("to_message" in value && isMessageId(value["to_message"])) && ("folded_count" in value && (typeof value["folded_count"] === "number" && Number.isInteger(value["folded_count"]) && value["folded_count"] >= 0)) && ("input_tokens_est" in value && (typeof value["input_tokens_est"] === "number" && Number.isInteger(value["input_tokens_est"]) && value["input_tokens_est"] >= 0)) && ("threshold" in value && (typeof value["threshold"] === "number" && Number.isInteger(value["threshold"]) && value["threshold"] >= 0)) && (value["step_cut"] === undefined || (value["step_cut"] === null || isStepCut(value["step_cut"])))) ||
     (isRecord(value) && value["type"] === "session_forked" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("source" in value && isSessionId(value["source"])) && (value["before_message"] === undefined || (value["before_message"] === null || isMessageId(value["before_message"])))) ||
-    (isRecord(value) && value["type"] === "context_evicted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("evicted_parts" in value && (typeof value["evicted_parts"] === "number" && Number.isInteger(value["evicted_parts"]) && value["evicted_parts"] >= 0)) && ("tokens_before" in value && (typeof value["tokens_before"] === "number" && Number.isInteger(value["tokens_before"]) && value["tokens_before"] >= 0)) && ("tokens_after" in value && (typeof value["tokens_after"] === "number" && Number.isInteger(value["tokens_after"]) && value["tokens_after"] >= 0)) && ("threshold" in value && (typeof value["threshold"] === "number" && Number.isInteger(value["threshold"]) && value["threshold"] >= 0))) ||
+    (isRecord(value) && value["type"] === "context_evicted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("evicted_parts" in value && (typeof value["evicted_parts"] === "number" && Number.isInteger(value["evicted_parts"]) && value["evicted_parts"] >= 0)) && (value["parts"] === undefined || (Array.isArray(value["parts"]) && value["parts"].every((item: unknown) => isEvictedPart(item)))) && ("tokens_before" in value && (typeof value["tokens_before"] === "number" && Number.isInteger(value["tokens_before"]) && value["tokens_before"] >= 0)) && ("tokens_after" in value && (typeof value["tokens_after"] === "number" && Number.isInteger(value["tokens_after"]) && value["tokens_after"] >= 0)) && ("threshold" in value && (typeof value["threshold"] === "number" && Number.isInteger(value["threshold"]) && value["threshold"] >= 0))) ||
     (isRecord(value) && value["type"] === "context_status" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("tokens" in value && (typeof value["tokens"] === "number" && Number.isInteger(value["tokens"]) && value["tokens"] >= 0)) && ("source" in value && isTokenSource(value["source"])) && ("mode" in value && isTokenAccountingMode(value["mode"])) && ("threshold" in value && (typeof value["threshold"] === "number" && Number.isInteger(value["threshold"]) && value["threshold"] >= 0))) ||
     (isRecord(value) && value["type"] === "usage_recorded" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && (value["message"] === undefined || (value["message"] === null || isMessageId(value["message"]))) && (value["step"] === undefined || (value["step"] === null || (typeof value["step"] === "number" && Number.isInteger(value["step"]) && value["step"] >= 0))) && ("model" in value && isModelRef(value["model"])) && ("purpose" in value && isUsagePurpose(value["purpose"])) && ("tokens" in value && isTokenUsage(value["tokens"]))) ||
     (isRecord(value) && value["type"] === "todos_updated" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("todos" in value && (Array.isArray(value["todos"]) && value["todos"].every((item: unknown) => isTodoItem(item))))) ||
@@ -1245,6 +1251,10 @@ export function isEventNotificationParams(value: unknown): value is EventNotific
 
 export function isEventSeq(value: unknown): value is EventSeq {
   return (typeof value === "number" && Number.isInteger(value) && value >= 0)
+}
+
+export function isEvictedPart(value: unknown): value is EvictedPart {
+  return isRecord(value) && ("part" in value && isPartId(value["part"])) && ("notice" in value && typeof value["notice"] === "string")
 }
 
 export function isEvidenceQualityWire(value: unknown): value is EvidenceQualityWire {

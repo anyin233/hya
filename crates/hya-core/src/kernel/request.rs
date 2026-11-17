@@ -1,5 +1,6 @@
 use hya_proto::{
     Message, MessageProjection, ModelRef, Part, PartId, PartProjection, Projection, Role,
+    ToolPartState,
 };
 use hya_provider::{COMPACT_CONTEXT_MARKER, CompletionRequest, ReasoningEffort};
 use serde_json::Value;
@@ -9,6 +10,9 @@ use serde_json::Value;
 pub type AttachmentData = std::collections::HashMap<String, String>;
 
 /// Build a model request from the visible projection and resolved inputs.
+///
+/// A pure function of its arguments: evicted tool outputs send the notice the
+/// projection recorded for them, so the log alone reproduces the request.
 pub fn request(
     projection: &Projection,
     system: &str,
@@ -18,31 +22,11 @@ pub fn request(
     attachments: &AttachmentData,
     reasoning: Option<ReasoningEffort>,
 ) -> CompletionRequest {
-    from_messages(
-        projection_to_messages(agent, projection, model, attachments),
-        system,
-        tools,
-        model,
-        reasoning,
-    )
-}
-
-/// Build a model request from already-rendered messages.
-///
-/// Full mode sends messages its compaction ladder reduced in memory (sticky
-/// evictions), which the projection does not record yet.
-pub fn from_messages(
-    messages: Vec<Message>,
-    system: &str,
-    tools: Vec<hya_proto::ToolSchema>,
-    model: &ModelRef,
-    reasoning: Option<ReasoningEffort>,
-) -> CompletionRequest {
     CompletionRequest {
         tools,
         model: model.clone(),
         system: Some(system.to_string()),
-        messages,
+        messages: projection_to_messages(agent, projection, model, attachments),
         temperature: None,
         max_output_tokens: None,
         reasoning,
@@ -191,11 +175,21 @@ pub fn map_parts(parts: &[PartProjection]) -> Vec<Part> {
                 call,
                 name,
                 state,
+                eviction_notice,
             } => Part::Tool {
                 id: *id,
                 call_id: *call,
                 name: name.clone(),
-                state: state.clone(),
+                state: match (state, eviction_notice) {
+                    (ToolPartState::Completed { input, time_ms, .. }, Some(notice)) => {
+                        ToolPartState::Completed {
+                            input: input.clone(),
+                            output: Value::String(notice.clone()),
+                            time_ms: *time_ms,
+                        }
+                    }
+                    _ => state.clone(),
+                },
             },
         })
         .collect()

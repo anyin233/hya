@@ -37,8 +37,8 @@ pub mod workflow;
 pub mod workspace;
 
 pub use event::{
-    ArchiveReason, CompactionStrategy, Envelope, Event, ReportOutcome, SessionKind, StepCut,
-    WorkflowRouteFailureClass, WorkflowStageRouteOutcome,
+    ArchiveReason, CompactionStrategy, Envelope, Event, EvictedPart, ReportOutcome, SessionKind,
+    StepCut, WorkflowRouteFailureClass, WorkflowStageRouteOutcome,
 };
 pub use ids::{
     ActorClaim, ActorEpoch, ConfigGeneration, EventSeq, GoalId, LoopRunId, MemberId, MessageId,
