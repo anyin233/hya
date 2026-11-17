@@ -740,8 +740,8 @@ treat seq-0 redelivery as a no-op.
 
 ## Live-only vs durable streaming
 
-During a provider round, `collect_stream_round`
-([`stream_round.rs`](../../crates/hya-core/src/engine/stream_round.rs)):
+During a provider round, `kernel::round::collect`
+([`round.rs`](../../crates/hya-core/src/kernel/round.rs)):
 
 1. **Text** events (`text_start` / `text_delta` / `text_end`, plus live
    `text_replace` from `text_complete`) are published with **`publish_live`
