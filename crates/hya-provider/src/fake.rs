@@ -1,5 +1,6 @@
 //! Deterministic scripted provider for tests and process E2E matrices.
 
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
@@ -36,6 +37,8 @@ pub struct FakeProvider {
     id: String,
     scripts: Vec<Vec<FakeStep>>,
     turn: AtomicUsize,
+    max_context: u32,
+    requests: Mutex<Vec<CompletionRequest>>,
 }
 
 impl FakeProvider {
@@ -54,7 +57,24 @@ impl FakeProvider {
             id: "fake".to_string(),
             scripts,
             turn: AtomicUsize::new(0),
+            max_context: 200_000,
+            requests: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Advertise `max_context` tokens instead of 200,000.
+    #[must_use]
+    pub fn with_max_context(mut self, max_context: u32) -> Self {
+        self.max_context = max_context;
+        self
+    }
+
+    /// Every request `stream()` received, in order.
+    pub fn requests(&self) -> Vec<CompletionRequest> {
+        self.requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Expand a script into the event sequence a live stream would emit for this turn.
@@ -161,17 +181,21 @@ impl Provider for FakeProvider {
         Some(Capabilities {
             streaming_tool_calls: true,
             usage_reporting: true,
-            max_context: 200_000,
+            max_context: self.max_context,
             ..Capabilities::default()
         })
     }
 
     async fn stream(
         &self,
-        _req: CompletionRequest,
+        req: CompletionRequest,
         session: SessionId,
         message: MessageId,
     ) -> Result<EventStream, ProviderError> {
+        self.requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(req);
         let idx = self.turn.fetch_add(1, Ordering::Relaxed);
         let stop = [FakeStep::Finish(FinishReason::Stop)];
         let script = self.scripts.get(idx).map_or(&stop[..], Vec::as_slice);
