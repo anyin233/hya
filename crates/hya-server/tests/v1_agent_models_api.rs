@@ -11,7 +11,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use futures::FutureExt as _;
 use http_body_util::BodyExt as _;
-use hya_core::{AgentSpec, EventBus, SessionEngine, TurnBinding};
+use hya_engine::{AgentSpec, EventBus, SessionEngine, TurnBinding};
 use hya_provider::{FakeProvider, ProviderRouter};
 use hya_server::{
     AGENT_MODEL_CONFIGURED, AGENT_MODEL_CONTROL_FAILURE, AGENT_MODEL_UNAVAILABLE,

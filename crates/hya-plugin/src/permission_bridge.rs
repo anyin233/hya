@@ -128,7 +128,7 @@ impl PluginHost {
     /// all-defer result (`None`) falls through to the user ask.
     pub async fn permission_approve(
         &self,
-        input: hya_core::hooks::PermissionApproveInput,
+        input: hya_engine::hooks::PermissionApproveInput,
     ) -> Option<Decision> {
         let params = PermissionApproveParams {
             session: input.session,

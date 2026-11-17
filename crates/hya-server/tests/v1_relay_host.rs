@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use futures::{SinkExt as _, StreamExt as _};
 use http_body_util::{BodyExt as _, Full};
-use hya_core::{AgentSpec, EventBus, SessionEngine};
+use hya_engine::{AgentSpec, EventBus, SessionEngine};
 use hya_proto::{AgentName, ModelRef};
 use hya_provider::{FakeProvider, ProviderRouter};
 use hya_relay::client::{ClientConfig, ClientError, ReconnectPolicy, RelayClient};

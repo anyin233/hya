@@ -74,5 +74,5 @@ pub use workflow_control::{
 };
 
 #[cfg(test)]
-#[path = "../../hya-core/tests/support/resident.rs"]
+#[path = "../../hya-engine/tests/support/resident.rs"]
 mod resident_fixture;

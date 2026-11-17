@@ -1,13 +1,13 @@
 //! Configuration-file model defaults for built-in and installed-bundle Agents.
 //!
-//! The owning file is selected from the immutable [`hya_core::AgentOrigin`].
+//! The owning file is selected from the immutable [`hya_engine::AgentOrigin`].
 //! Built-ins use the configured Hya file; bundle Agents use their bundle's one
 //! configuration file (see [`crate::bundle_config`]): user-scope bundles use
 //! `bundles/<percent-encoded-bundle-id>/config.yml` beside the Hya file, and
 //! project bundles use `config.yml` in their `.hya/bundles/<dir>/` source
 //! directory. Project bundles belong to one registered Project, so their
 //! files are resolved through a binding's
-//! [`hya_core::TurnBinding::project_bundle_dirs`] and their models are loaded
+//! [`hya_engine::TurnBinding::project_bundle_dirs`] and their models are loaded
 //! per Project ([`AgentModelConfigFiles::load_project`]). Updates lock a stable sidecar, reread the current document, and
 //! atomically replace the target after changing only the selected model leaf.
 
@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context as _, anyhow, bail};
-use hya_core::{AgentModelConfiguration, AgentOrigin};
+use hya_engine::{AgentModelConfiguration, AgentOrigin};
 
 use crate::bundle_config::{
     BUNDLE_CONFIG_FILE_NAME, BundleConfigResolver, decode_bundle_leaf, user_bundle_config_root,
@@ -71,7 +71,7 @@ impl AgentModelConfigFiles {
     }
 
     /// Resolver where the bundle ids of `project_dirs` (bundle id -> source
-    /// directory, typically [`hya_core::TurnBinding::project_bundle_dirs`])
+    /// directory, typically [`hya_engine::TurnBinding::project_bundle_dirs`])
     /// resolve to their project source directory.
     #[must_use]
     pub fn resolver_for(&self, project_dirs: &BTreeMap<String, PathBuf>) -> BundleConfigResolver {
@@ -99,7 +99,7 @@ impl AgentModelConfigFiles {
     /// See [`Self::path_for`].
     pub fn path_for_binding(
         &self,
-        binding: &hya_core::TurnBinding,
+        binding: &hya_engine::TurnBinding,
         origin: AgentOrigin<'_>,
     ) -> anyhow::Result<PathBuf> {
         self.path_in(&self.resolver_for(binding.project_bundle_dirs()), origin)

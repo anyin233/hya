@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use hya_bundle::{BundleCatalog, PreparedCatalog};
-use hya_core::{
+use hya_engine::{
     AgentCatalog, CatalogScope, CoreError, RuntimeCatalogRefresh, RuntimeRegistry, ScopeKey,
     ScopeOverlay,
 };
@@ -49,7 +49,7 @@ struct BundleRecord {
 struct PublishedBundle {
     enabled: bool,
     catalog: PreparedCatalog,
-    sources: BTreeMap<SourceKey, hya_core::RuntimeSource>,
+    sources: BTreeMap<SourceKey, hya_engine::RuntimeSource>,
     models: BTreeMap<String, ModelRef>,
     efforts: BTreeMap<String, hya_provider::ReasoningEffort>,
 }
@@ -380,19 +380,21 @@ impl ProjectScopeRefresh {
                         && !project_bundle_dirs.contains_key(source.id().configured_id())
                 }),
         );
-        let catalog = Arc::new(AgentCatalog::new(Arc::new(bundles))?);
-        runtime.publish_scope(
-            key.clone(),
-            ScopeOverlay {
-                catalog,
-                bundle_sources,
-                plugin_sources,
-                bundle_models,
-                bundle_efforts,
-                project_bundle_dirs,
-                fingerprint: inputs.fingerprint,
-            },
-        )?;
+        let catalog = Arc::new(AgentCatalog::new(Arc::new(bundles)).map_err(CoreError::bundle)?);
+        runtime
+            .publish_scope(
+                key.clone(),
+                ScopeOverlay {
+                    catalog,
+                    bundle_sources,
+                    plugin_sources,
+                    bundle_models,
+                    bundle_efforts,
+                    project_bundle_dirs,
+                    fingerprint: inputs.fingerprint,
+                },
+            )
+            .map_err(CoreError::runtime_refresh)?;
         self.installed
             .source_cache()
             .commit_scope(key, sources, &runtime.scope_keys());
@@ -515,7 +517,7 @@ fn compose_scope_catalog<'a>(
     let project_catalogs = catalogs.clone();
     catalogs.extend(base.filter(select));
     Ok((
-        BundleCatalog::from_verified_catalogs(&catalogs)?,
+        BundleCatalog::from_verified_catalogs(&catalogs).map_err(CoreError::bundle)?,
         project_catalogs,
     ))
 }

@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hya_core::{HostSessionReads, UsageScope};
+use hya_engine::{HostSessionReads, UsageScope};
 use hya_proto::{SessionId, ToolCallId};
 use hya_tool::{Action, Resource, ToolCtx, ToolError};
 use serde::Deserialize;
@@ -262,7 +262,7 @@ impl HostCapabilityHandler for BundleCapability {
                 if params != json!({}) {
                     return Err(rpc_error(codes::INVALID_PARAMS, "expected empty params"));
                 }
-                let state = hya_core::engine::workspace_state(&ctx.workdir).await;
+                let state = hya_engine::engine::workspace_state(&ctx.workdir).await;
                 Ok(json!({ "state": state }))
             }
             "tools.list" => {

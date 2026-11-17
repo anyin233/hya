@@ -58,7 +58,7 @@
 
 - Operation identity remains internal in 0.34.4; do not add it to HTTP/proto/CLI
   payloads.
-- Bundle API endpoints map `hya_core::BundleApiError` onto the stable v1
+- Bundle API endpoints map `hya_engine::BundleApiError` onto the stable v1
   codes: `SessionNotFound` → `session_not_found`, `NotFound` →
   `bundle_api_not_found` (404), `MethodNotAllowed` →
   `bundle_api_method_not_allowed` (405 + `Allow` header / gRPC

@@ -18,7 +18,7 @@ use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use http_body_util::BodyExt;
-use hya_core::{AgentSpec, EventBus, SessionEngine};
+use hya_engine::{AgentSpec, EventBus, SessionEngine};
 use hya_proto::{AgentName, ModelRef};
 use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};

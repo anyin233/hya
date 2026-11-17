@@ -12,8 +12,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use hya_app::{
     InvocationPolicy, WebSearchConfig, agent_with_model, build_session_engine, offline_router,
 };
-use hya_core::hooks::{HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome};
-use hya_core::{
+use hya_engine::hooks::{HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome};
+use hya_engine::{
     CatalogScope, CatalogScopeCacheConfig, CreateSession, EventBus, HookChain, RuntimeRegistry,
     SessionEngine, TurnBinding,
 };

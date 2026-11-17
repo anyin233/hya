@@ -58,7 +58,7 @@ pub struct PreparedPlugin {
 impl PreparedPlugin {
     /// The same connection owner retained by tool adapters and hook dispatch.
     #[must_use]
-    pub fn runtime_owner(&self) -> Arc<dyn hya_core::RuntimeSourceOwner> {
+    pub fn runtime_owner(&self) -> Arc<dyn hya_engine::RuntimeSourceOwner> {
         self.conn.clone()
     }
 
@@ -120,7 +120,7 @@ impl PreparedPlugin {
     }
 }
 
-impl hya_core::RuntimeSourceOwner for PluginConn {
+impl hya_engine::RuntimeSourceOwner for PluginConn {
     fn shutdown(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
             if let Err(error) = PluginConn::shutdown(self, true).await {
@@ -156,7 +156,7 @@ pub(crate) struct PluginConn {
     event_task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Read-only host services behind bundle capabilities (bundle processes
     /// only; `None` for configured plugins and hosts without a store).
-    host_reads: Option<Arc<dyn hya_core::HostSessionReads>>,
+    host_reads: Option<Arc<dyn hya_engine::HostSessionReads>>,
 }
 
 impl Drop for PluginConn {
@@ -273,7 +273,7 @@ impl PluginConn {
     /// Forward one routed bundle API request to this bundle process.
     pub(crate) async fn request_api(
         &self,
-        request: hya_core::BundleApiRequest,
+        request: hya_engine::BundleApiRequest,
     ) -> Result<crate::messages::ApiRequestResult, PluginError> {
         if !self.spec.has_capabilities() {
             return Err(PluginError::Json(
@@ -585,7 +585,7 @@ impl PluginHost {
     pub async fn connect(
         spec: PluginSpec,
         host: HostInfo,
-        reads: Option<Arc<dyn hya_core::HostSessionReads>>,
+        reads: Option<Arc<dyn hya_engine::HostSessionReads>>,
     ) -> Result<Self, PluginError> {
         let conn = connection::connect_one(spec, host, reads).await?;
         Ok(Self {
@@ -711,11 +711,11 @@ impl PluginHost {
 
 /// A bundle host forwards routed API requests to its (single) bundle process.
 #[async_trait::async_trait]
-impl hya_core::BundleApiProvider for PluginHost {
+impl hya_engine::BundleApiProvider for PluginHost {
     async fn request(
         &self,
-        request: hya_core::BundleApiRequest,
-    ) -> Result<hya_core::BundleApiReply, String> {
+        request: hya_engine::BundleApiRequest,
+    ) -> Result<hya_engine::BundleApiReply, String> {
         let conn = self
             .plugins
             .iter()
@@ -732,7 +732,7 @@ impl hya_core::BundleApiProvider for PluginHost {
             .request_api(request)
             .await
             .map_err(|error| error.to_string())?;
-        Ok(hya_core::BundleApiReply {
+        Ok(hya_engine::BundleApiReply {
             status: result.status,
             body: result.body,
         })

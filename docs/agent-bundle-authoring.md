@@ -748,7 +748,7 @@ Deterministically narrows and renames the candidate set for one agent.
 ### Reference grammar
 
 Each `allow` / `deny` entry resolves to a stable id. Accepted forms
-([`resolve_global_reference`](../crates/hya-core/src/runtime_registry/mod.rs)):
+([`resolve_global_reference`](../crates/hya-engine/src/runtime_registry/mod.rs)):
 
 | Form | Example |
 | --- | --- |
@@ -999,9 +999,9 @@ limit. A malformed response or timeout taints and terminates the sidecar.
 
 Built-in agents come from the trusted `hya/core-agents` [first-party
 bundle](bundle-runtime.md#first-party-bundles), loaded at runtime through
-[`crates/hya-core/src/builtin_agents/`](../crates/hya-core/src/builtin_agents/)
+[`crates/hya-engine/src/builtin_agents/`](../crates/hya-engine/src/builtin_agents/)
 and read as `PreparedAgent` entries through
-`hya_core::builtin_agents::preset_agents()`. In a Cargo build, editing the
+`hya_engine::builtin_agents::preset_agents()`. In a Cargo build, editing the
 preset source under `bundles/presets/core-agents` takes effect on the next
 restart with no rebuild; an installed layout loads the packaged
 `hya-core-agents.hyabundle` instead.

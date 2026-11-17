@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use hya_core::{
+use hya_engine::{
     CategoryEntry, CategoryRegistry, CompactionConfig, SubagentLimits, TokenAccountingMode,
 };
 use hya_mcp::McpServerConfig;
@@ -122,7 +122,7 @@ struct FileConfig {
     #[serde(default)]
     provider_retry: Option<ProviderRetryFile>,
     /// Per-Project catalog scope cache limits (`catalog_scopes:` block).
-    /// Absent → [`hya_core::CatalogScopeCacheConfig`] defaults.
+    /// Absent → [`hya_engine::CatalogScopeCacheConfig`] defaults.
     #[serde(default)]
     catalog_scopes: Option<CatalogScopesFile>,
 }
@@ -137,7 +137,7 @@ impl EngineSettings {
     pub(crate) fn agents(
         &self,
     ) -> anyhow::Result<(
-        hya_core::AgentModelConfiguration,
+        hya_engine::AgentModelConfiguration,
         BTreeMap<String, ReasoningEffort>,
     )> {
         crate::agent_model_config::AgentModelConfigFiles::new(active_config_path())
@@ -162,7 +162,7 @@ impl EngineSettings {
             .as_deref()
             .and_then(ReasoningEffort::parse)
     }
-    pub(crate) fn scopes(&self) -> hya_core::CatalogScopeCacheConfig {
+    pub(crate) fn scopes(&self) -> hya_engine::CatalogScopeCacheConfig {
         resolve_catalog_scope_cache(self.file.catalog_scopes.as_ref())
     }
     pub(crate) fn code_mode(&self) -> CodeMode {
@@ -1538,7 +1538,7 @@ fn resolve_subagent_limits(file: Option<&SubagentLimitsFile>) -> SubagentLimits 
 }
 
 /// Resolve the live EventBus capacity: `HYA_EVENT_BUS_CAPACITY` if set and valid,
-/// otherwise the raised [`hya_core::bus::DEFAULT_BUS_CAPACITY`]. A larger buffer keeps
+/// otherwise the raised [`hya_engine::bus::DEFAULT_BUS_CAPACITY`]. A larger buffer keeps
 /// 100+ concurrently-streaming subagents from lagging subscribers into a resync.
 #[must_use]
 pub fn resolve_event_bus_capacity() -> usize {
@@ -1548,7 +1548,7 @@ pub fn resolve_event_bus_capacity() -> usize {
     {
         return parsed;
     }
-    hya_core::bus::DEFAULT_BUS_CAPACITY
+    hya_engine::bus::DEFAULT_BUS_CAPACITY
 }
 
 /// Build a [`CategoryRegistry`] from the file's `categories:` block. Each entry
@@ -1568,9 +1568,9 @@ fn resolve_categories(file: &FileConfig) -> CategoryRegistry {
 /// absent fields keep the defaults (32 scopes, 30 minutes idle).
 fn resolve_catalog_scope_cache(
     file: Option<&CatalogScopesFile>,
-) -> hya_core::CatalogScopeCacheConfig {
-    let defaults = hya_core::CatalogScopeCacheConfig::default();
-    hya_core::CatalogScopeCacheConfig {
+) -> hya_engine::CatalogScopeCacheConfig {
+    let defaults = hya_engine::CatalogScopeCacheConfig::default();
+    hya_engine::CatalogScopeCacheConfig {
         max_scopes: file.and_then(|f| f.max).unwrap_or(defaults.max_scopes),
         idle_ttl: file
             .and_then(|f| f.idle_ttl_secs)
@@ -1628,10 +1628,10 @@ pub struct ContextSettings {
 /// silently lose a mechanism. An unknown name or an empty list invalidates the
 /// whole value, so a typo cannot reorder the ladder by accident; the caller
 /// then keeps whatever it had (file value or engine default).
-fn resolve_method_order(names: &[String]) -> Option<[hya_core::CompactionRung; 5]> {
-    let mut order: Vec<hya_core::CompactionRung> = Vec::new();
+fn resolve_method_order(names: &[String]) -> Option<[hya_engine::CompactionRung; 5]> {
+    let mut order: Vec<hya_engine::CompactionRung> = Vec::new();
     for name in names {
-        let rung = hya_core::CompactionRung::from_wire_name(name.trim())?;
+        let rung = hya_engine::CompactionRung::from_wire_name(name.trim())?;
         if !order.contains(&rung) {
             order.push(rung);
         }
@@ -1639,7 +1639,7 @@ fn resolve_method_order(names: &[String]) -> Option<[hya_core::CompactionRung; 5
     if order.is_empty() {
         return None;
     }
-    for rung in hya_core::CompactionRung::DEFAULT_ORDER {
+    for rung in hya_engine::CompactionRung::DEFAULT_ORDER {
         if !order.contains(&rung) {
             order.push(rung);
         }
@@ -2570,7 +2570,7 @@ fn splice_catalog(
 /// Force network discovery for the queued providers, update the model
 /// cache, and return rebuilt routes plus a replacement snapshot.
 ///
-/// Callers swap the result onto the live [`hya_core::SessionEngine`] and notify
+/// Callers swap the result onto the live [`hya_engine::SessionEngine`] and notify
 /// the TUI (`catalog.updated`) after this future completes.
 ///
 /// # Errors
@@ -2805,10 +2805,10 @@ permission:
         let absent = parse_config("default_model: x\n").unwrap();
         assert_eq!(
             resolve_catalog_scope_cache(absent.catalog_scopes.as_ref()),
-            hya_core::CatalogScopeCacheConfig::default()
+            hya_engine::CatalogScopeCacheConfig::default()
         );
         assert_eq!(
-            hya_core::CatalogScopeCacheConfig::default().max_scopes,
+            hya_engine::CatalogScopeCacheConfig::default().max_scopes,
             32,
             "documented default"
         );
@@ -2954,7 +2954,7 @@ permission:
         let from_file = resolve_context_settings(file.compaction.as_ref());
         assert_eq!(
             from_file.compaction.method_order,
-            hya_core::parse_method_order(&["remote", "snapcompact", "handoff", "shake", "soft"])
+            hya_engine::parse_method_order(&["remote", "snapcompact", "handoff", "shake", "soft"])
                 .unwrap(),
             "file order is honoured"
         );
@@ -2966,7 +2966,7 @@ permission:
         let overridden = resolve_context_settings(file.compaction.as_ref());
         assert_eq!(
             overridden.compaction.method_order,
-            hya_core::parse_method_order(&["handoff", "soft", "shake", "remote", "snapcompact"])
+            hya_engine::parse_method_order(&["handoff", "soft", "shake", "remote", "snapcompact"])
                 .unwrap(),
             "env order wins and missing methods append in default order"
         );
@@ -2988,7 +2988,7 @@ permission:
         let bogus_file = resolve_context_settings(broken.compaction.as_ref());
         assert_eq!(
             bogus_file.compaction.method_order,
-            hya_core::CompactionConfig::default().method_order,
+            hya_engine::CompactionConfig::default().method_order,
             "a broken file order keeps the default ladder"
         );
     }

@@ -11,7 +11,7 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use hya_api::v1 as pb;
-use hya_core::{AgentSpec, CreateSession, EventBus, SessionEngine};
+use hya_engine::{AgentSpec, CreateSession, EventBus, SessionEngine};
 use hya_proto::{AgentName, Event, ModelRef, SessionId, SubagentMode};
 use hya_provider::ProviderRouter;
 use hya_server::{AppState, V1Grpc, router};

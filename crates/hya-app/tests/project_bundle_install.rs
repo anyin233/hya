@@ -297,23 +297,23 @@ async fn an_installed_project_bundle_reaches_only_its_project_scope() {
     )
     .expect("install");
 
-    let runtime = Arc::new(hya_core::RuntimeRegistry::new(
+    let runtime = Arc::new(hya_engine::RuntimeRegistry::new(
         hya_tool::ToolRegistry::builtins(),
         hya_app::builtin_agent_catalog().unwrap(),
     ));
     let refresh = hya_app::ProjectScopeRefresh::new(Arc::new(
         hya_app::InstalledBundleRefresh::new(root.join("registry.db")),
     ));
-    let scope = hya_core::CatalogScope::Project {
+    let scope = hya_engine::CatalogScope::Project {
         id: hya_proto::ProjectId::new(),
         roots: vec![other.clone(), root.clone()],
     };
-    let bind = |scope: &hya_core::CatalogScope| {
+    let bind = |scope: &hya_engine::CatalogScope| {
         runtime
             .bind_scoped(scope, &root)
             .expect("bind the Project scope")
     };
-    use hya_core::RuntimeCatalogRefresh as _;
+    use hya_engine::RuntimeCatalogRefresh as _;
     refresh.refresh_if_changed(&runtime).await.unwrap();
     assert!(refresh.refresh_scope(&runtime, &scope).await.unwrap());
     assert!(bind(&scope).resolve_agent("acme-tools-lead").is_some());

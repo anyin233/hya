@@ -17,7 +17,7 @@ use axum::http::{Method, Request, StatusCode, header};
 use futures::StreamExt;
 use http_body_util::BodyExt;
 use hya_api::v1 as pb;
-use hya_core::{
+use hya_engine::{
     AgentSpec, CompactionConfig, EventBus, SessionEngine, SummarizeOptions, Summarizer,
 };
 use hya_proto::{AgentName, FinishReason, ModelRef, TokenUsage};
@@ -52,7 +52,7 @@ impl Summarizer for FixedSummary {
         &self,
         _messages: &[hya_proto::Message],
         _options: SummarizeOptions,
-    ) -> Result<String, hya_core::CoreError> {
+    ) -> Result<String, hya_engine::CoreError> {
         Ok("SUMMARY OF EVERYTHING".to_string())
     }
 }

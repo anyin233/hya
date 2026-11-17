@@ -15,7 +15,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use futures::StreamExt;
 use http_body_util::BodyExt;
-use hya_core::{AgentSpec, EventBus, SessionEngine};
+use hya_engine::{AgentSpec, EventBus, SessionEngine};
 use hya_proto::{AgentName, ModelRef};
 use hya_provider::{FakeProvider, ProviderRouter};
 use hya_server::{AppState, ShutdownReason, router};

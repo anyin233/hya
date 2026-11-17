@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use hya_core::hooks::{
+use hya_engine::hooks::{
     AgentSpawnInput, ChatParamsInput, CompactionAfterInput, CompactionBeforeInput,
     CompactionDecision, CompactionTrigger, HookDispatcher, SessionLifecycleInput,
 };
@@ -393,7 +393,7 @@ for line in sys.stdin:
             request: wire_request("fake/model"),
         })
         .await;
-    let hya_core::hooks::ChatParamsOutcome::Continue { request } = outcome;
+    let hya_engine::hooks::ChatParamsOutcome::Continue { request } = outcome;
     assert_eq!(request.model.as_str(), format!("routed/explore/{root}"));
 
     // Additive and optional: params written by an older host still decode.
@@ -448,7 +448,7 @@ for line in sys.stdin:
         })
         .await;
     match outcome {
-        hya_core::hooks::ChatParamsOutcome::Continue { request } => {
+        hya_engine::hooks::ChatParamsOutcome::Continue { request } => {
             assert_eq!(
                 request.model.as_str(),
                 "fake/model",
@@ -503,7 +503,7 @@ for line in sys.stdin:
         })
         .await;
     match outcome {
-        hya_core::hooks::ChatParamsOutcome::Continue { request } => {
+        hya_engine::hooks::ChatParamsOutcome::Continue { request } => {
             assert_eq!(
                 request.model.as_str(),
                 "fake/model",

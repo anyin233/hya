@@ -14,7 +14,7 @@ use hya_app::{
     offline_router,
 };
 use hya_bundle::{BundleCatalog, BundleSource, PreparedCatalog, SourceFile, prepare_package};
-use hya_core::{AgentCatalog, CreateSession, RuntimeRegistry};
+use hya_engine::{AgentCatalog, CreateSession, RuntimeRegistry};
 use hya_proto::{
     ToolCallId, WorkflowAvailability, WorkflowCommand, WorkflowCommandResult, WorkflowRevision,
     WorkflowRunId, WorkflowRunStatus,

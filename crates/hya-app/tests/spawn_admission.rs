@@ -13,7 +13,7 @@ use hya_app::spawn_team_supervisor;
 use hya_bundle::{
     AgentRole, Bundle, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, ResourceView,
 };
-use hya_core::{
+use hya_engine::{
     AgentSpec, BoundSpawnSender, CategoryRegistry, CreateSession, EventBus, ResidentSupervisor,
     RuntimeRegistry, SessionEngine, SubagentGovernor, SubagentLimits,
 };
@@ -742,7 +742,7 @@ async fn admission_fixture_with_store_and_gate(
         Arc::new(CategoryRegistry::from_entries(
             std::collections::HashMap::from([(
                 "live".to_string(),
-                hya_core::CategoryEntry {
+                hya_engine::CategoryEntry {
                     model: ModelRef::new("hya/offline"),
                     fallback: vec![ModelRef::new("fake")],
                 },
@@ -925,7 +925,7 @@ async fn queued_spawn_uses_parent_turn_binding_after_catalog_publication() {
     // just above, and the verified constructors take `&[&PreparedCatalog]`.
     let published_catalog =
         BundleCatalog::from_prepared(&published_bundles).expect("complete replacement catalog");
-    let published_catalog = hya_core::AgentCatalog::new(Arc::new(published_catalog))
+    let published_catalog = hya_engine::AgentCatalog::new(Arc::new(published_catalog))
         .expect("replacement agent catalog");
     runtime
         .publish_catalog(Arc::new(published_catalog))
@@ -1787,7 +1787,7 @@ fn nested_root_divergence_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegist
     ];
     let catalog = BundleCatalog::from_prepared(&bundles).expect("nested-root catalog");
     let catalog =
-        hya_core::AgentCatalog::new(Arc::new(catalog)).expect("nested-root agent catalog");
+        hya_engine::AgentCatalog::new(Arc::new(catalog)).expect("nested-root agent catalog");
     Arc::new(RuntimeRegistry::from_snapshot(
         tools.snapshot(),
         Arc::new(catalog),
@@ -2071,7 +2071,7 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
         .collect::<Vec<_>>();
         let catalog = BundleCatalog::from_prepared(&bundles).expect("missing-root catalog");
         let catalog =
-            hya_core::AgentCatalog::new(Arc::new(catalog)).expect("missing-root agent catalog");
+            hya_engine::AgentCatalog::new(Arc::new(catalog)).expect("missing-root agent catalog");
         Arc::new(RuntimeRegistry::from_snapshot(
             ToolRegistry::builtins().snapshot(),
             Arc::new(catalog),
@@ -2376,6 +2376,6 @@ async fn batch_registration_failure_rolls_back_every_member_and_lazy_main() {
     fixture._tasks.shutdown().await;
     fixture
         .resident
-        .drain(hya_proto::FinishCause::Shutdown, hya_core::DRAIN_DEADLINE)
+        .drain(hya_proto::FinishCause::Shutdown, hya_engine::DRAIN_DEADLINE)
         .await;
 }

@@ -334,7 +334,7 @@ pub(crate) async fn serve_until(
             state.begin_shutdown();
             stopping.cancel();
             drain_runtime.await;
-            let result = state.stop_for_restart(hya_core::DRAIN_DEADLINE).await;
+            let result = state.stop_for_restart(hya_engine::DRAIN_DEADLINE).await;
             let _ = drained.send(result);
         })
         .await;

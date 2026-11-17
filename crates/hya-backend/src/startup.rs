@@ -2,7 +2,7 @@
 
 use anyhow::Context as _;
 use hya_app::{BuiltSessionEngine, config};
-use hya_core::{AgentSpec, CreateSession};
+use hya_engine::{AgentSpec, CreateSession};
 use hya_proto::SessionId;
 use hya_provider::ProviderRouter;
 use hya_store::SessionStore;
@@ -85,7 +85,7 @@ pub(crate) struct HeadlessSession {
     pub(crate) evaluator_router: ProviderRouter,
     pub(crate) evaluator_model: String,
     responder: RejectResponder,
-    _root_drivers: Vec<hya_core::resident::RootDriverActivity>,
+    _root_drivers: Vec<hya_engine::resident::RootDriverActivity>,
 }
 
 struct RejectResponder(tokio::task::JoinHandle<()>);

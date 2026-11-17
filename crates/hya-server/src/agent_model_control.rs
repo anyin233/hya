@@ -5,7 +5,7 @@
 //! runtime binding, and provider catalog policy out of the HTTP layer.
 
 use futures::future::BoxFuture;
-use hya_core::TurnBinding;
+use hya_engine::TurnBinding;
 use hya_proto::ModelRef;
 use serde::{Deserialize, Serialize};
 

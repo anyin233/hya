@@ -20,7 +20,7 @@ use axum::routing::{MethodRouter, get};
 use super::Json;
 use hya_api::error::Code;
 use hya_api::v1 as pb;
-use hya_core::{
+use hya_engine::{
     ApiMethod, BundleApiCall, BundleApiError, BundleApiOutcome, MAX_BUNDLE_API_BODY_BYTES,
 };
 use hya_proto::SessionId;
@@ -128,7 +128,7 @@ async fn list_bundle_apis(
         Some(session) => st.engine.session_bundle_apis(session).await?,
         None => {
             let place = super::catalog_scope(&st, &request.directory).await?;
-            if matches!(place.scope(), hya_core::CatalogScope::Global) {
+            if matches!(place.scope(), hya_engine::CatalogScope::Global) {
                 st.engine.bundle_apis().await
             } else {
                 place.bind(&st).await?.published_bundle_apis()

@@ -8,7 +8,7 @@ use hya_bundle::{
     Bundle, PreparedApi, PreparedPermissionMode, PreparedProcessExtension, PreparedProcessKind,
     PreparedSchema,
 };
-use hya_core::{CoreError, RuntimeSource, RuntimeSourceExport, RuntimeSourceId};
+use hya_engine::{CoreError, RuntimeSource, RuntimeSourceExport, RuntimeSourceId};
 use hya_mcp::{McpServerConfig, PreparedMcpServer};
 use hya_plugin::config::PluginSpec;
 use hya_plugin::messages::PluginKindWire;
@@ -105,7 +105,7 @@ struct BundleOwner {
     _root: Option<MaterializedRoot>,
 }
 
-impl hya_core::RuntimeSourceOwner for BundleOwner {
+impl hya_engine::RuntimeSourceOwner for BundleOwner {
     fn shutdown(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
             if let Some(host) = &self._host
@@ -286,7 +286,7 @@ pub(crate) struct BundleRuntimeParts<'a> {
     /// Declared session permission modes (explicit process only).
     pub(crate) permission_modes: &'a [PreparedPermissionMode],
     /// Read-only host services behind the process's capabilities.
-    pub(crate) reads: Option<Arc<dyn hya_core::HostSessionReads>>,
+    pub(crate) reads: Option<Arc<dyn hya_engine::HostSessionReads>>,
 }
 
 /// Publishable endpoint declarations: parsed path templates plus the JSON
@@ -295,7 +295,7 @@ pub(crate) struct BundleRuntimeParts<'a> {
 fn source_apis(
     bundle: &Bundle,
     apis: &[PreparedApi],
-) -> Result<Vec<hya_core::SourceApi>, CoreError> {
+) -> Result<Vec<hya_engine::SourceApi>, CoreError> {
     let id = &bundle.identity().id;
     let schema = |path: &Option<String>| -> Result<Option<serde_json::Value>, CoreError> {
         let Some(path) = path else {
@@ -316,11 +316,11 @@ fn source_apis(
     };
     apis.iter()
         .map(|api| {
-            Ok(hya_core::SourceApi {
+            Ok(hya_engine::SourceApi {
                 id: api.id.clone(),
                 method: api.method,
                 scope: api.scope,
-                path: hya_core::ApiPathTemplate::parse(&api.path).map_err(|reason| {
+                path: hya_engine::ApiPathTemplate::parse(&api.path).map_err(|reason| {
                     CoreError::Invalid(format!(
                         "bundle `{id}` API `{}` path `{}` {reason}",
                         api.id, api.path
@@ -406,8 +406,8 @@ pub(crate) async fn prepare_source(
         _root: None,
     };
     let mut resources = BTreeMap::new();
-    let mut hooks: Option<Arc<dyn hya_core::hooks::HookDispatcher>> = None;
-    let mut api_provider: Option<Arc<dyn hya_core::BundleApiProvider>> = None;
+    let mut hooks: Option<Arc<dyn hya_engine::hooks::HookDispatcher>> = None;
+    let mut api_provider: Option<Arc<dyn hya_engine::BundleApiProvider>> = None;
     let mut declaration = Sha256::new();
     declaration.update(fingerprint);
     if process.is_some() || !bundle.mcp().is_empty() {
@@ -624,7 +624,7 @@ pub(crate) async fn prepare_source(
         source = source.with_permission_modes(
             permission_modes
                 .iter()
-                .map(|mode| hya_core::RuntimePermissionMode {
+                .map(|mode| hya_engine::RuntimePermissionMode {
                     id: mode.id.clone(),
                     title: mode.title.clone(),
                     description: mode.description.clone(),
@@ -995,7 +995,7 @@ for line in sys.stdin:
         .unwrap();
         assert_eq!(
             cached.source.permission_modes(),
-            [hya_core::RuntimePermissionMode {
+            [hya_engine::RuntimePermissionMode {
                 id: "careful".to_string(),
                 title: "Careful".to_string(),
                 description: "Approves reads".to_string(),

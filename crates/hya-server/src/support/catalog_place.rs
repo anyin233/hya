@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use hya_core::{CatalogScope, CoreError, TurnBinding};
+use hya_engine::{CatalogScope, CoreError, TurnBinding};
 use hya_proto::SessionId;
 
 use crate::ServerState;
@@ -103,11 +103,11 @@ impl CatalogPlace {
 
     /// Refresh the bundle catalogs of this place now and bind the result,
     /// reporting refresh failures instead of failing
-    /// ([`hya_core::SessionEngine::refresh_bundles`]).
+    /// ([`hya_engine::SessionEngine::refresh_bundles`]).
     pub(crate) async fn refresh_bundles(
         &self,
         st: &ServerState,
-    ) -> Result<hya_core::BundleRefresh, CoreError> {
+    ) -> Result<hya_engine::BundleRefresh, CoreError> {
         st.engine
             .refresh_bundles(&self.scope, self.workdir().unwrap_or(Path::new("")))
             .await

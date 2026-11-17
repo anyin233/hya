@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use hya_api::v1 as pb;
-use hya_core::completion::render_transcript;
+use hya_engine::completion::render_transcript;
 use hya_proto::{
     Envelope, Projection, SessionId, WorkflowCommandResult, WorkflowProjection, WorkflowRunResult,
     WorkflowRunStatus,

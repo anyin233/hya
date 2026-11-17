@@ -112,7 +112,7 @@ the preset validates every policy id against a real prepared Agent. This policy 
 specific to the trusted preset origin and does not grant special behavior to
 public bundles.
 
-`hya_core::core_agents_preset()` loads and verifies the bundle once per
+`hya_engine::core_agents_preset()` loads and verifies the bundle once per
 process and returns a `CoreAgentsPreset` view (or the load error):
 
 - `bundle_id() -> &'static str` returns `hya/core-agents`.
@@ -120,7 +120,7 @@ process and returns a `CoreAgentsPreset` view (or the load error):
 - `digest() -> &'static str` returns its 64-character SHA-256 hex digest.
 - `agents() -> &'static [PreparedAgent]` returns agents in stable-id order.
 
-`hya_core::builtin_agents::preset_agents() -> &'static [PreparedAgent]`
+`hya_engine::builtin_agents::preset_agents() -> &'static [PreparedAgent]`
 returns the same roster for callers that read it directly; `preset_agent(id)`
 resolves one by exact id and `builtin_agent_ids()` lists every id.
 

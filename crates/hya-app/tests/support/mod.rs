@@ -5,7 +5,7 @@ pub mod lifecycle;
 use std::sync::Arc;
 
 use hya_bundle::{AgentRole, BundleCatalog, BundleSource, SourceFile};
-use hya_core::RuntimeRegistry;
+use hya_engine::RuntimeRegistry;
 use hya_proto::{MessageId, ModelRef, SessionId};
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, Provider, ProviderError,
@@ -112,7 +112,7 @@ pub fn test_runtime(
         for target in *can_spawn {
             assert_yaml_safe_id(target);
         }
-        if hya_core::preset_agent(stable_id).is_some() {
+        if hya_engine::preset_agent(stable_id).is_some() {
             continue;
         }
         let role = match role {
@@ -145,7 +145,7 @@ pub fn test_runtime(
     let refs = prepared.iter().collect::<Vec<_>>();
     let catalog = BundleCatalog::from_verified_catalogs(&refs)
         .expect("test bundles must retain verified identity");
-    let catalog = hya_core::AgentCatalog::new(Arc::new(catalog)).expect("test agent catalog");
+    let catalog = hya_engine::AgentCatalog::new(Arc::new(catalog)).expect("test agent catalog");
     Arc::new(RuntimeRegistry::from_snapshot(
         tools.snapshot(),
         Arc::new(catalog),

@@ -442,7 +442,7 @@ path = "crates/hya-app/tests/nested_spawn_tree.rs"
 id = "I.subagent"
 title = "subagent/resident core"
 track = "I"
-path = "crates/hya-core/tests/subagent.rs"
+path = "crates/hya-engine/tests/subagent.rs"
 
 [[scenario]]
 id = "I.v1_api"

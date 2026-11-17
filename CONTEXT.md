@@ -1,7 +1,7 @@
 # hya — Domain Glossary (`CONTEXT.md`)
 
 `hya` is an event-sourced Rust multi-agent coding agent. This glossary defines
-the ubiquitous language across `hya-proto`, `hya-core`, `hya-store`, `hya-tool`,
+the ubiquitous language across `hya-proto`, `hya-core`, `hya-engine`, `hya-store`, `hya-tool`,
 `hya-server`, `hya-relay`, and `packages/hya-tui`.
 
 ## Kernel
@@ -175,7 +175,7 @@ team-root `event_log`.
 A named, revisioned, acyclic graph of **Stages** authored in `*.hya.md`
 (YAML frontmatter + `flowchart TD` topology), compiled by `hya-workflow`,
 admitted/inspected through `hya_app::WorkflowControl`, and executed on the
-unified resident subagent substrate by `hya-core`
+unified resident subagent substrate by `hya-engine`
 ([ADR-0013](docs/adr/0013-user-assembled-agent-workflows.md),
 [ADR-0014](docs/adr/0014-workflowbundle-and-event-sourced-control.md),
 [ADR-0017](docs/adr/0017-workflow-on-unified-substrate.md)).

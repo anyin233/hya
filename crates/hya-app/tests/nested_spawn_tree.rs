@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use hya_app::spawn_team_supervisor;
 use hya_bundle::AgentRole;
-use hya_core::{
+use hya_engine::{
     AgentSpec, BoundSpawnSender, CategoryRegistry, CreateSession, EventBus, ResidentSupervisor,
     SessionEngine,
 };

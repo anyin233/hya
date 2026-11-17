@@ -10,7 +10,7 @@ mod support;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use hya_core::{AgentSpec, EventBus, SessionEngine};
+use hya_engine::{AgentSpec, EventBus, SessionEngine};
 use hya_proto::{AgentName, ModelRef};
 use hya_provider::{FakeProvider, ProviderRouter};
 use hya_server::{AppState, HostPolicy, router};

@@ -17,7 +17,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use futures::{StreamExt, stream};
 use http_body_util::BodyExt;
-use hya_core::{AgentSpec, EventBus, SessionEngine};
+use hya_engine::{AgentSpec, EventBus, SessionEngine};
 use hya_proto::{
     AgentName, Event, FinishReason, Message, MessageId, ModelRef, Part, SessionId, TokenUsage,
     UsagePurpose,

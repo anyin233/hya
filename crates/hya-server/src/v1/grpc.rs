@@ -332,7 +332,7 @@ impl V1Grpc {
     #[allow(clippy::result_large_err)]
     async fn invoke_bundle_api(
         &self,
-        call: Result<hya_core::BundleApiCall, super::V1Error>,
+        call: Result<hya_engine::BundleApiCall, super::V1Error>,
     ) -> Result<GrpcResponse<pb::BundleApiResponse>, Status> {
         let call = call.map_err(|error| error.grpc_status())?;
         let bundle = call.bundle.clone();
@@ -369,7 +369,7 @@ fn bundle_api_call(
     path: String,
     query: std::collections::HashMap<String, String>,
     body: Option<pbjson_types::Value>,
-) -> Result<hya_core::BundleApiCall, super::V1Error> {
+) -> Result<hya_engine::BundleApiCall, super::V1Error> {
     let session = session.map(super::session::parse_session).transpose()?;
     let method = super::bundle_api::parse_method(method)?;
     let body = match body {
@@ -377,7 +377,7 @@ fn bundle_api_call(
             .map_err(|error| super::V1Error::internal(format!("decode body: {error}")))?,
         None => Value::Null,
     };
-    Ok(hya_core::BundleApiCall {
+    Ok(hya_engine::BundleApiCall {
         bundle,
         method,
         session,

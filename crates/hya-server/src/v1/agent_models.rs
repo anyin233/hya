@@ -82,7 +82,7 @@ async fn agent_model_body(
     body: Option<&serde_json::Value>,
     field: &str,
     label: &str,
-) -> Result<(hya_core::TurnBinding, Option<AgentModelIdentity>), V1Error> {
+) -> Result<(hya_engine::TurnBinding, Option<AgentModelIdentity>), V1Error> {
     let body_text = |name: &str| -> Result<String, V1Error> {
         match body.and_then(|value| value.get(name)) {
             None | Some(serde_json::Value::Null) => Ok(String::new()),
@@ -136,7 +136,7 @@ async fn save_agent_model_configuration(
 /// uses: runtime choice > `agents.<id>.reasoning` > authored policy.
 async fn with_agent_effort(
     st: &ServerState,
-    binding: &hya_core::TurnBinding,
+    binding: &hya_engine::TurnBinding,
     mut row: pb::AgentModelState,
 ) -> Result<pb::AgentModelState, V1Error> {
     let authored = binding
@@ -151,9 +151,9 @@ async fn with_agent_effort(
     {
         row.effort = effort.as_str().to_string();
         row.effort_source = match source {
-            hya_core::AgentEffortSource::Preference => pb::AgentEffortSource::Preference,
-            hya_core::AgentEffortSource::Configured => pb::AgentEffortSource::Configured,
-            hya_core::AgentEffortSource::Authored => pb::AgentEffortSource::Authored,
+            hya_engine::AgentEffortSource::Preference => pb::AgentEffortSource::Preference,
+            hya_engine::AgentEffortSource::Configured => pb::AgentEffortSource::Configured,
+            hya_engine::AgentEffortSource::Authored => pb::AgentEffortSource::Authored,
         } as i32;
     }
     Ok(row)
@@ -202,7 +202,7 @@ async fn model_binding(
     st: &ServerState,
     directory: &str,
     session: Option<SessionId>,
-) -> Result<hya_core::TurnBinding, V1Error> {
+) -> Result<hya_engine::TurnBinding, V1Error> {
     match session {
         Some(session) => {
             if !st.engine.session_exists(session).await? {

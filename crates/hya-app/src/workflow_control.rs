@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use hya_core::{
+use hya_engine::{
     AgentSpec, CatalogScope, CategoryRegistry, CompiledWorkflow, ResidentSupervisor, SessionEngine,
     TurnBinding, WorkflowError, WorkflowRoutingContext, WorkflowRunContext, WorkflowStatus,
     discover_workflow_files_in_root, load_workflow_file, prepare_workflow_run_for_actor,
@@ -542,7 +542,7 @@ pub enum WorkflowControlError {
     Execution(String),
     /// Core persistence, projection, or runtime resolution failed.
     #[error(transparent)]
-    Core(#[from] hya_core::CoreError),
+    Core(#[from] hya_engine::CoreError),
 }
 
 impl WorkflowControlError {
@@ -560,7 +560,7 @@ impl WorkflowControlError {
             Self::Busy { .. } => "WORKFLOW_BUSY",
             Self::RuntimeUnavailable => "WORKFLOW_RUNTIME_UNAVAILABLE",
             Self::OperationConflict { .. } => "WORKFLOW_OPERATION_CONFLICT",
-            Self::Core(hya_core::CoreError::Store(hya_store::StoreError::CapacityExceeded {
+            Self::Core(hya_engine::CoreError::Store(hya_store::StoreError::CapacityExceeded {
                 ..
             })) => "WORKFLOW_OVERLOADED",
             Self::Execution(_) | Self::Core(_) => "WORKFLOW_INTERNAL",
@@ -899,10 +899,10 @@ impl WorkflowControl {
             )
             .await?
         {
-            hya_core::DurableWorkflowSelection::Selected => {
+            hya_engine::DurableWorkflowSelection::Selected => {
                 self.state_inner(session, Some(binding)).await
             }
-            hya_core::DurableWorkflowSelection::Busy { run } => {
+            hya_engine::DurableWorkflowSelection::Busy { run } => {
                 Err(WorkflowControlError::Busy { session, run })
             }
         }
@@ -1087,8 +1087,8 @@ impl WorkflowControl {
             )
             .await?;
         match admission {
-            hya_core::DurableWorkflowAdmission::Admitted => {}
-            hya_core::DurableWorkflowAdmission::Existing => {
+            hya_engine::DurableWorkflowAdmission::Admitted => {}
+            hya_engine::DurableWorkflowAdmission::Existing => {
                 let existing = self
                     .existing_run(session, run, &request_hash)
                     .await?
@@ -1105,10 +1105,10 @@ impl WorkflowControl {
                     replayed: true,
                 });
             }
-            hya_core::DurableWorkflowAdmission::Conflict => {
+            hya_engine::DurableWorkflowAdmission::Conflict => {
                 return Err(WorkflowControlError::OperationConflict { run });
             }
-            hya_core::DurableWorkflowAdmission::Busy { run } => {
+            hya_engine::DurableWorkflowAdmission::Busy { run } => {
                 return Err(WorkflowControlError::Busy { session, run });
             }
         }
@@ -1163,7 +1163,7 @@ impl WorkflowControl {
         &self,
         session: SessionId,
         run: WorkflowRunId,
-        prepared: hya_core::PreparedWorkflowRun,
+        prepared: hya_engine::PreparedWorkflowRun,
         binding: TurnBinding,
         cancel: CancellationToken,
     ) -> Result<WorkflowRunResult, WorkflowControlError> {
@@ -1536,7 +1536,7 @@ fn workflow_info(entry: &ResolvedWorkflow) -> WorkflowInfo {
 /// Capture declaration-ordered display/provenance data and admitted selections.
 fn workflow_stage_plan(
     workflow: &CompiledWorkflow,
-    prepared: &hya_core::PreparedWorkflowRun,
+    prepared: &hya_engine::PreparedWorkflowRun,
 ) -> Vec<WorkflowStagePlan> {
     workflow
         .plan()
@@ -1565,7 +1565,7 @@ fn workflow_stage_plan(
 }
 
 fn workflow_selected_candidate(
-    route: &hya_core::WorkflowModelRoute,
+    route: &hya_engine::WorkflowModelRoute,
 ) -> Option<hya_proto::WorkflowModelResolvedCandidate> {
     let selected = route.selected()?;
     Some(hya_proto::WorkflowModelResolvedCandidate {
@@ -1646,7 +1646,7 @@ mod tests {
         WorkflowControlError, map_workflow_preflight_error, workflow_event_run,
         workflow_request_hash,
     };
-    use hya_core::WorkflowError;
+    use hya_engine::WorkflowError;
     use hya_proto::{ModelRef, WorkflowIdentity, WorkflowRevision, WorkflowSourceId};
     use std::collections::BTreeMap;
 
@@ -1667,7 +1667,7 @@ mod tests {
     #[test]
     fn w1_capacity_refusals_keep_overload_code_before_and_after_admission() {
         for preflight in [false, true] {
-            let error = WorkflowError::Engine(hya_core::CoreError::Store(
+            let error = WorkflowError::Engine(hya_engine::CoreError::Store(
                 hya_store::StoreError::CapacityExceeded {
                     root: hya_proto::SessionId::new(),
                     live: 1,

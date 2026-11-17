@@ -1,8 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::resident_fixture::{ResidentTurn, run_residents};
-use hya_core::CreateSession;
-use hya_core::resident::ResolvedSpawnMember;
+use hya_engine::CreateSession;
+use hya_engine::resident::ResolvedSpawnMember;
 use hya_tool::{ResolvedTool, SpawnMember};
 
 /// Test shim: wrap an installed-bundle catalog as an [`AgentCatalog`] over
@@ -22,8 +22,8 @@ use hya_bundle::{
     AgentRole, Bundle, BundleIdentity, BundleSource, ModelPolicy, PreparedAgent, PreparedResource,
     ResourceView, SourceFile, prepare_package,
 };
-use hya_core::CategoryEntry;
-use hya_core::hooks::{
+use hya_engine::CategoryEntry;
+use hya_engine::hooks::{
     ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
     ToolExecuteBeforeOutcome, ToolOutcomeNative,
 };
@@ -480,8 +480,8 @@ async fn shutdown_stops_plugin_and_mcp_sources_retained_by_retired_bindings() {
     runtime
         .refresh(|candidate| {
             candidate.remove_sources(&std::collections::BTreeSet::from([
-                hya_core::RuntimeSourceId::plugin("owned"),
-                hya_core::RuntimeSourceId::mcp("owned"),
+                hya_engine::RuntimeSourceId::plugin("owned"),
+                hya_engine::RuntimeSourceId::mcp("owned"),
             ]));
             Ok(())
         })
@@ -6941,13 +6941,13 @@ async fn catalog_scope_sweeper_evicts_idle_scopes_until_stopped() {
             permission,
             EventBus::default(),
         )
-        .with_catalog_scope_cache(hya_core::CatalogScopeCacheConfig {
+        .with_catalog_scope_cache(hya_engine::CatalogScopeCacheConfig {
             max_scopes: 32,
             idle_ttl: std::time::Duration::ZERO,
         }),
     );
     let root = std::env::temp_dir();
-    let scope = hya_core::CatalogScope::Project {
+    let scope = hya_engine::CatalogScope::Project {
         id: hya_proto::ProjectId::new(),
         roots: vec![root.clone()],
     };
@@ -6955,7 +6955,7 @@ async fn catalog_scope_sweeper_evicts_idle_scopes_until_stopped() {
     runtime
         .publish_scope(
             scope.key(),
-            hya_core::ScopeOverlay::new(builtin_agent_catalog().unwrap()),
+            hya_engine::ScopeOverlay::new(builtin_agent_catalog().unwrap()),
         )
         .unwrap();
     drop(binding);
@@ -7011,7 +7011,7 @@ impl SidecarHandle for NotifySidecarHandle {
     fn tool_bindings(&self) -> Arc<[ResolvedTool]> {
         self.inner.tool_bindings()
     }
-    fn hook_dispatcher(&self) -> Option<Arc<dyn hya_core::hooks::HookDispatcher>> {
+    fn hook_dispatcher(&self) -> Option<Arc<dyn hya_engine::hooks::HookDispatcher>> {
         self.inner.hook_dispatcher()
     }
 }

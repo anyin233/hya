@@ -128,7 +128,7 @@ pub fn user_bundle_config_root(config_file: &Path) -> PathBuf {
 ///
 /// Project bundles belong to one registered Project, so a resolver describes
 /// one catalog scope: build it from that scope's project bundle map
-/// (`hya_core::TurnBinding::project_bundle_dirs`, or the map a Project scope
+/// (`hya_engine::TurnBinding::project_bundle_dirs`, or the map a Project scope
 /// refresh publishes). A project bundle shadows a user install of the same
 /// id, so an id present in the project map resolves to its project source
 /// directory and every other id resolves to the user scope.

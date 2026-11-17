@@ -7,7 +7,7 @@ mod support;
 use std::sync::Arc;
 
 use hya_app::{AgentModelControlError, AgentModelIdentity, PersistentAgentModelControl};
-use hya_core::{EventBus, SessionEngine};
+use hya_engine::{EventBus, SessionEngine};
 use hya_proto::{AgentName, ModelRef, OwnerRunId};
 use hya_provider::{DevProvider, ProviderRouter};
 use hya_store::{AgentModelPreference, SessionStore};

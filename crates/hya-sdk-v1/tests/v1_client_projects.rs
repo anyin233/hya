@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use hya_api::v1 as pb;
 use hya_bundle::BundleCatalog;
-use hya_core::{AgentSpec, EventBus, RuntimeRegistry, SessionEngine};
+use hya_engine::{AgentSpec, EventBus, RuntimeRegistry, SessionEngine};
 use hya_proto::{AgentName, ModelRef};
 use hya_provider::{FakeProvider, ProviderRouter};
 use hya_sdk_v1::{Client, ClientError};
@@ -19,7 +19,7 @@ async fn serve() -> String {
         Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(Vec::new()))));
     let tools = Arc::new(ToolRegistry::builtins());
     let catalog = BundleCatalog::from_prepared(&[]).expect("catalog");
-    let catalog = hya_core::AgentCatalog::new(Arc::new(catalog)).expect("agent catalog");
+    let catalog = hya_engine::AgentCatalog::new(Arc::new(catalog)).expect("agent catalog");
     let runtime = Arc::new(RuntimeRegistry::from_snapshot(
         tools.snapshot(),
         Arc::new(catalog),

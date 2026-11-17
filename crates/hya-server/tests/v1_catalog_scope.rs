@@ -19,7 +19,7 @@ use axum::http::{Method, Request, StatusCode, header};
 use futures::StreamExt;
 use http_body_util::BodyExt;
 use hya_api::v1 as pb;
-use hya_core::{
+use hya_engine::{
     AgentSpec, ApiMethod, ApiPathTemplate, ApiScope, BundleApiProvider, BundleApiReply,
     BundleApiRequest, CatalogScope, CoreError, EventBus, RuntimeCatalogRefresh,
     RuntimePermissionMode, RuntimeRegistry, RuntimeSource, RuntimeSourceId, ScopeOverlay,
@@ -102,7 +102,9 @@ impl RuntimeCatalogRefresh for ProjectBundleRefresh {
         {
             return Ok(false);
         }
-        runtime.publish_scope(scope.key(), project_overlay())?;
+        runtime
+            .publish_scope(scope.key(), project_overlay())
+            .map_err(CoreError::runtime_refresh)?;
         Ok(true)
     }
 }

@@ -10,7 +10,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::{StreamExt, stream};
 use hya_app::{BuiltSessionEngine, InvocationPolicy, WebSearchConfig, build_session_engine_pure};
-use hya_core::{AgentSpec, CreateSession, SessionEngine};
+use hya_engine::{AgentSpec, CreateSession, SessionEngine};
 use hya_proto::{
     AgentName, FinishReason, MailEndpoint, MailKind, MessageId, ModelRef, PartProjection,
     SessionId, ToolPartState,
@@ -420,7 +420,7 @@ impl Harness {
         &self,
         name: &str,
         input: Value,
-    ) -> tokio::task::JoinHandle<Result<FinishReason, hya_core::CoreError>> {
+    ) -> tokio::task::JoinHandle<Result<FinishReason, hya_engine::CoreError>> {
         let marker = self.provider.script(vec![Round::tool(name, input)]);
         self.engine
             .admit_user_prompt(self.root, marker)
@@ -472,8 +472,8 @@ impl Harness {
     pub async fn spawn_with_sidecar(
         &self,
         rounds: Vec<Round>,
-        sidecar: Arc<dyn hya_core::BoundSidecarFactory>,
-    ) -> Result<(SessionId, String), hya_core::CoreError> {
+        sidecar: Arc<dyn hya_engine::BoundSidecarFactory>,
+    ) -> Result<(SessionId, String), hya_engine::CoreError> {
         let binding = self
             .engine
             .bind_session_runtime(self.root, &self.dir)
@@ -511,7 +511,7 @@ impl Harness {
             .await
     }
 
-    pub async fn mail(&self, handle: &str, body: String) -> Result<(), hya_core::CoreError> {
+    pub async fn mail(&self, handle: &str, body: String) -> Result<(), hya_engine::CoreError> {
         // Real DM mail appears in both peers' histories. Bind its script to
         // the recipient so a concurrent main synthesis cannot steal the round.
         let projection = self.engine.read_projection(self.root).await.unwrap();
@@ -1260,11 +1260,11 @@ pub struct EndingSidecar {
 }
 
 #[async_trait]
-impl hya_core::BoundSidecarFactory for EndingSidecar {
+impl hya_engine::BoundSidecarFactory for EndingSidecar {
     async fn start(
         &self,
-        _: hya_core::SidecarStart,
-    ) -> Result<Box<dyn hya_core::SidecarHandle>, hya_core::CoreError> {
+        _: hya_engine::SidecarStart,
+    ) -> Result<Box<dyn hya_engine::SidecarHandle>, hya_engine::CoreError> {
         Ok(Box::new(Self {
             stopping: self.stopping.clone(),
             fail: self.fail,
@@ -1273,14 +1273,16 @@ impl hya_core::BoundSidecarFactory for EndingSidecar {
 }
 
 #[async_trait]
-impl hya_core::SidecarHandle for EndingSidecar {
-    async fn ready(&mut self) -> Result<(), hya_core::CoreError> {
+impl hya_engine::SidecarHandle for EndingSidecar {
+    async fn ready(&mut self) -> Result<(), hya_engine::CoreError> {
         Ok(())
     }
-    async fn shutdown(&mut self) -> Result<(), hya_core::CoreError> {
+    async fn shutdown(&mut self) -> Result<(), hya_engine::CoreError> {
         self.stopping.block().await;
         if self.fail {
-            Err(hya_core::CoreError::Invalid("M4 terminate failure".into()))
+            Err(hya_engine::CoreError::Invalid(
+                "M4 terminate failure".into(),
+            ))
         } else {
             Ok(())
         }
@@ -1311,11 +1313,11 @@ impl Drop for LossHandle {
 }
 
 #[async_trait]
-impl hya_core::BoundSidecarFactory for LossSidecar {
+impl hya_engine::BoundSidecarFactory for LossSidecar {
     async fn start(
         &self,
-        _: hya_core::SidecarStart,
-    ) -> Result<Box<dyn hya_core::SidecarHandle>, hya_core::CoreError> {
+        _: hya_engine::SidecarStart,
+    ) -> Result<Box<dyn hya_engine::SidecarHandle>, hya_engine::CoreError> {
         let first = self
             .starts
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
@@ -1332,11 +1334,11 @@ impl hya_core::BoundSidecarFactory for LossSidecar {
 }
 
 #[async_trait]
-impl hya_core::SidecarHandle for LossHandle {
-    async fn ready(&mut self) -> Result<(), hya_core::CoreError> {
+impl hya_engine::SidecarHandle for LossHandle {
+    async fn ready(&mut self) -> Result<(), hya_engine::CoreError> {
         Ok(())
     }
-    async fn shutdown(&mut self) -> Result<(), hya_core::CoreError> {
+    async fn shutdown(&mut self) -> Result<(), hya_engine::CoreError> {
         Ok(())
     }
     fn loss_token(&self) -> Option<tokio_util::sync::CancellationToken> {

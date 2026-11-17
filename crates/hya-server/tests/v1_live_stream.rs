@@ -19,7 +19,7 @@ use axum::http::{Method, Request, StatusCode, header};
 use futures::StreamExt;
 use http_body_util::BodyExt;
 use hya_api::v1 as pb;
-use hya_core::{AgentSpec, EventBus, SessionEngine};
+use hya_engine::{AgentSpec, EventBus, SessionEngine};
 use hya_proto::{AgentName, Event, FinishReason, MessageId, ModelRef, PartId, Role, SessionId};
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, Provider, ProviderError, ProviderRouter,

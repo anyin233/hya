@@ -209,7 +209,7 @@ async fn shared_process_launch_policies_respawn_through_the_same_owner() {
 
 #[tokio::test]
 async fn private_activation_keeps_metadata_and_reports_hook_loss_without_respawning() {
-    use hya_core::hooks::{HookDispatcher, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome};
+    use hya_engine::hooks::{HookDispatcher, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome};
     use hya_plugin::messages::{ActivationLifecycle, ActivationMetadata};
     let root = std::env::temp_dir().join(format!("hya-owner-{}", SessionId::new()));
     std::fs::create_dir(&root).unwrap();

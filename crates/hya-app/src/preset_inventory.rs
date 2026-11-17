@@ -32,13 +32,13 @@ pub struct TrustedPresetDescriptor {
 /// # Errors
 /// Returns a bundle integrity error if a trusted first-party bundle fails to load.
 pub fn trusted_preset_inventory() -> Result<Vec<TrustedPresetDescriptor>, BundleError> {
-    let core = hya_core::core_agents_preset()?;
+    let core = hya_engine::core_agents_preset()?;
     let core_skills = first_party_bundle("hya/core-skills")?;
     let core_skills_bundle = single_bundle(core_skills.bundles(), "hya/core-skills")?;
     let core_commands = first_party_bundle("hya/core-commands")?;
     let core_commands_bundle = single_bundle(core_commands.bundles(), "hya/core-commands")?;
-    let channels = first_party_bundle(hya_core::AGENT_CHANNELS_PRESET_ID)?;
-    let channel_bundle = single_bundle(channels.bundles(), hya_core::AGENT_CHANNELS_PRESET_ID)?;
+    let channels = first_party_bundle(hya_engine::AGENT_CHANNELS_PRESET_ID)?;
+    let channel_bundle = single_bundle(channels.bundles(), hya_engine::AGENT_CHANNELS_PRESET_ID)?;
     let mut presets = hya_tool::tool_bundle_presets()
         .iter()
         .map(|policy| {
