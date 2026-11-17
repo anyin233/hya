@@ -46,6 +46,7 @@ pub(super) fn upsert_tool(
                 call,
                 name,
                 state,
+                eviction_notice: None,
             },
         );
     }

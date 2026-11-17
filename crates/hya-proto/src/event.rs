@@ -873,20 +873,25 @@ pub enum Event {
         before_message: Option<MessageId>,
     },
 
-    /// Stale tool outputs were dropped from this turn's request to fit the window.
+    /// Stale tool outputs were replaced by notices in the requests from now on.
     ///
     /// Cheaper than summarizing: the model keeps every tool call and its input,
-    /// and loses only old outputs it can re-fetch. Emitted when eviction alone
-    /// brought the transcript under the threshold, so no summarization ran.
+    /// and loses only old outputs it can re-fetch. Recorded whenever eviction
+    /// saved tokens, whether or not that alone was enough.
     ///
-    /// **Request-local.** The event log still holds every tool output in full, so
-    /// an offline viewer reconstructs the true trajectory; only what was *sent*
-    /// this turn was reduced. Reducer no-op.
+    /// The tool parts keep their full outputs in the log and the projection;
+    /// the reducer records each notice beside its part
+    /// ([`crate::PartProjection::Tool`] `eviction_notice`), and requests send
+    /// the notice instead of the output.
     ContextEvicted {
         /// Session whose request was reduced.
         session: SessionId,
-        /// Number of tool-output parts replaced with a size notice.
+        /// Number of tool-output parts replaced with a notice.
         evicted_parts: u32,
+        /// Each evicted part with the exact text requests send instead of its
+        /// output. Empty in logs written before this field.
+        #[serde(default)]
+        parts: Vec<EvictedPart>,
         /// Token count before eviction.
         tokens_before: u64,
         /// Token count after eviction.
@@ -1135,6 +1140,16 @@ pub struct StepCut {
     pub through_part: PartId,
     /// First message kept after the marker.
     pub kept_head: MessageId,
+}
+
+/// One tool part a [`Event::ContextEvicted`] replaced in later requests.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvictedPart {
+    /// The evicted tool part.
+    pub part: PartId,
+    /// Text requests send instead of the part's output, artifact handle
+    /// included when the body was spilled.
+    pub notice: String,
 }
 
 /// Which compaction path produced a [`Event::ContextCompacted`] record.
@@ -1524,11 +1539,17 @@ mod tests {
     }
 
     #[test]
-    fn context_evicted_round_trips_and_is_a_record_only() {
+    fn context_evicted_round_trips_and_records_the_notice_beside_the_output() {
         let session = SessionId::new();
+        let message = MessageId::new();
+        let part = PartId::new();
         let event = Event::ContextEvicted {
             session,
-            evicted_parts: 3,
+            evicted_parts: 1,
+            parts: vec![EvictedPart {
+                part,
+                notice: "[tool output moved to artifact://a]".to_string(),
+            }],
             tokens_before: 5000,
             tokens_after: 1200,
             threshold: 4000,
@@ -1537,32 +1558,43 @@ mod tests {
         let back: Event = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(event, back, "context_evicted must round-trip: {json}");
         assert_eq!(back.session(), Some(session));
+        let old: Event = serde_json::from_str(&format!(
+            r#"{{"type":"context_evicted","session":"{session}","evicted_parts":1,"tokens_before":2,"tokens_after":1,"threshold":1}}"#
+        ))
+        .expect("logs before `parts` still decode");
+        assert!(matches!(old, Event::ContextEvicted { parts, .. } if parts.is_empty()));
 
-        let base = [Envelope {
-            seq: EventSeq(1),
-            ts_millis: 1,
-            event: Event::SessionCreated {
+        let envelopes: Vec<_> = [
+            Event::MessageStarted {
                 session,
-                parent: None,
-                agent: AgentName::new("build"),
-                model: ModelRef::new("m"),
-                workdir: "/w".to_string(),
-                project: None,
-                kind: crate::SessionKind::Project,
+                message,
+                role: Role::Assistant,
+                agent: None,
+                model: None,
             },
-        }];
-        let mut with_record = base.to_vec();
-        with_record.push(Envelope {
-            seq: EventSeq(2),
-            ts_millis: 2,
-            event: back,
-        });
-        let before = crate::Projection::from_events(&base);
-        let after = crate::Projection::from_events(&with_record);
-        assert_eq!(
-            before.session, after.session,
-            "eviction is request-local; it must not change reduced state"
-        );
+            Event::ToolInputStart {
+                session,
+                message,
+                part,
+                call: ToolCallId::new(),
+                name: ToolName::new("read"),
+            },
+            back,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(seq, event)| Envelope {
+            seq: EventSeq(seq as u64 + 1),
+            ts_millis: 1,
+            event,
+        })
+        .collect();
+        let projection = crate::Projection::from_events(&envelopes);
+        assert!(matches!(
+            &projection.session.messages[0].parts[0],
+            crate::PartProjection::Tool { eviction_notice: Some(notice), .. }
+                if notice == "[tool output moved to artifact://a]"
+        ));
     }
 
     /// Orchestration events (ADR-0015/0016) round-trip and report the right

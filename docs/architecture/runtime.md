@@ -1219,7 +1219,7 @@ Default order: `shake, remote, soft, snapcompact, handoff`.
    document over the whole transcript. All three emit `ContextCompacted`
    with their own strategy (`local_summarizer` / `snap_compact` / `handoff`).
 5. `shake` evicts stale completed tool outputs to `artifact://` handles
-   (request-local, idempotent, `keep_recent` protected; a 512-byte floor
+   (logged in `ContextEvicted.parts`, idempotent, `keep_recent` protected; a 512-byte floor
    keeps bodies that cost more to reference than to keep) and emits
    `ContextEvicted` whenever it saved tokens — including when the saving
    alone did not suffice and the walk escalated.

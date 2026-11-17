@@ -286,6 +286,10 @@ pub enum PartProjection {
         name: ToolName,
         /// Current tool phase and payloads.
         state: ToolPartState,
+        /// Text requests send instead of the completed output, set by
+        /// [`Event::ContextEvicted`]. `state` keeps the full output.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        eviction_notice: Option<String>,
     },
 }
 
@@ -859,7 +863,7 @@ impl Projection {
                 None => {
                     self.session.agent_model_overrides.remove(agent.as_str());
                 }
-            }
+            },
             Event::SessionPermissionModeSet { mode, .. } => {
                 self.session.permission_mode = Some(mode.clone());
             }
@@ -928,10 +932,8 @@ impl Projection {
             Event::WorkflowStageStarted { run, stage, .. } => {
                 if let Some(current) = self.workflow_run_mut(*run)
                     && current.status == WorkflowRunStatus::Running
-                    && let Some(existing) = current
-                        .stages
-                        .iter_mut()
-                        .find(|row| row.plan.id == *stage)
+                    && let Some(existing) =
+                        current.stages.iter_mut().find(|row| row.plan.id == *stage)
                     && !existing.status.is_terminal()
                 {
                     existing.status = WorkflowStageStatus::Running;
@@ -947,10 +949,7 @@ impl Projection {
             } => {
                 if let Some(current) = self.workflow_run_mut(*run)
                     && current.status == WorkflowRunStatus::Running
-                    && let Some(stage) = current
-                        .stages
-                        .iter_mut()
-                        .find(|row| row.plan.id == *stage)
+                    && let Some(stage) = current.stages.iter_mut().find(|row| row.plan.id == *stage)
                     && !stage.members.iter().any(|row| {
                         row.member == *member && row.role == *role && row.iteration == *iteration
                     })
@@ -1006,28 +1005,19 @@ impl Projection {
                 }
             }
             Event::WorkflowStageFinished {
-                run,
-                stage,
-                status,
-                ..
+                run, stage, status, ..
             } => {
                 if status.is_terminal()
                     && let Some(current) = self.workflow_run_mut(*run)
                     && current.status == WorkflowRunStatus::Running
-                    && let Some(stage) = current
-                        .stages
-                        .iter_mut()
-                        .find(|row| row.plan.id == *stage)
+                    && let Some(stage) = current.stages.iter_mut().find(|row| row.plan.id == *stage)
                     && !stage.status.is_terminal()
                 {
                     stage.status = *status;
                 }
             }
             Event::WorkflowRunFinished {
-                run,
-                status,
-                error,
-                ..
+                run, status, error, ..
             } => {
                 if status.is_terminal()
                     && let Some(current) = self.workflow_run_mut(*run)
@@ -1169,7 +1159,9 @@ impl Projection {
                     && let Some(at) = message.parts.iter().position(|item| item.id() == *part)
                 {
                     message.parts.remove(at);
-                    if let Some(start) = &mut message.last_step_start && at < *start {
+                    if let Some(start) = &mut message.last_step_start
+                        && at < *start
+                    {
                         *start -= 1;
                     }
                     if at < message.folded_parts {
@@ -1274,6 +1266,7 @@ impl Projection {
                     state: ToolPartState::Pending {
                         input: serde_json::Value::Null,
                     },
+                    eviction_notice: None,
                 },
             ),
             Event::ToolCallRequested {
@@ -1394,13 +1387,20 @@ impl Projection {
                 // while refreshing the binding + mode.
                 // Archive removes unit broadcast membership; registering its
                 // next episode restores the same unit without minting channels.
-                if self.team.archived.contains_key(&path) && !self.team.roster.contains_key(&path)
+                if self.team.archived.contains_key(&path)
+                    && !self.team.roster.contains_key(&path)
                     && let Some(parent) = parent
-                    && let Some(channel) = self.team.channels.values_mut().find(|channel| channel.kind == ChannelKind::Group && channel.unit.as_ref() == Some(parent))
+                    && let Some(channel) = self.team.channels.values_mut().find(|channel| {
+                        channel.kind == ChannelKind::Group && channel.unit.as_ref() == Some(parent)
+                    })
                 {
                     channel.members.insert(path.clone());
                 }
-                let cursor = self.team.inboxes.get(&path).map_or(0, |inbox| inbox.len() as u64);
+                let cursor = self
+                    .team
+                    .inboxes
+                    .get(&path)
+                    .map_or(0, |inbox| inbox.len() as u64);
                 let entry = self
                     .team
                     .roster
@@ -1529,8 +1529,14 @@ impl Projection {
                     }
                 }
             }
-            Event::MailConsumed { handle, through, .. }
-            | Event::ResidentWorkFinished { handle, inbox_through: through, .. } => {
+            Event::MailConsumed {
+                handle, through, ..
+            }
+            | Event::ResidentWorkFinished {
+                handle,
+                inbox_through: through,
+                ..
+            } => {
                 if let Some(entry) = self.team.roster.get_mut(handle) {
                     if let Event::ResidentWorkFinished { epoch, .. } = e {
                         if entry.resident_work.is_none_or(|work| work.epoch != *epoch) {
@@ -1579,11 +1585,7 @@ impl Projection {
                             if !self.team.mail_recipient_is_live(&member) {
                                 continue;
                             }
-                            self.team
-                                .inboxes
-                                .entry(member)
-                                .or_default()
-                                .push(index);
+                            self.team.inboxes.entry(member).or_default().push(index);
                         }
                     }
                 }
@@ -1610,8 +1612,10 @@ impl Projection {
                     let boundary = match step_cut {
                         Some(cut) => {
                             if let Some(row) = self.message_mut(*to_message)
-                                && let Some(at) =
-                                    row.parts.iter().position(|part| part.id() == cut.through_part)
+                                && let Some(at) = row
+                                    .parts
+                                    .iter()
+                                    .position(|part| part.id() == cut.through_part)
                             {
                                 row.folded_parts = at + 1;
                             }
@@ -1644,11 +1648,23 @@ impl Projection {
             | Event::Error {
                 failed_message: None,
                 ..
+            } => {}
+            Event::ContextEvicted { parts, .. } => {
+                for evicted in parts {
+                    if let Some(PartProjection::Tool {
+                        eviction_notice, ..
+                    }) = self
+                        .session
+                        .messages
+                        .iter_mut()
+                        .rev()
+                        .flat_map(|row| row.parts.iter_mut())
+                        .find(|part| part.id() == evicted.part)
+                    {
+                        *eviction_notice = Some(evicted.notice.clone());
+                    }
+                }
             }
-            // The marker placement is the one stateful part: the folded
-            // messages stay in the log, and request reconstruction slices at
-            // this boundary. Other context events remain observability-only.
-            | Event::ContextEvicted { .. } => {}
             Event::SessionForked {
                 source,
                 before_message,

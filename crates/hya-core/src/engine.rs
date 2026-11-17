@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use hya_proto::{
@@ -415,9 +415,6 @@ pub struct SessionEngine {
     runtime_owner: hya_proto::OwnerRunId,
     /// Single-active-turn registry shared by every clone of this engine.
     turn_gate: Arc<turn_gate::TurnGate>,
-    /// Runtime-only sticky shake placeholders per session, shared by engine
-    /// clones (see [`crate::compaction::apply_sticky_evictions`]).
-    pub(crate) sticky_evictions: Arc<Mutex<HashMap<SessionId, crate::compaction::StickyEvictions>>>,
     #[cfg(test)]
     mail_pre_append_gate: Option<Arc<MailPreAppendGate>>,
 }
@@ -476,7 +473,6 @@ impl Clone for SessionEngine {
             ),
             runtime_owner: self.runtime_owner,
             turn_gate: Arc::clone(&self.turn_gate),
-            sticky_evictions: Arc::clone(&self.sticky_evictions),
             #[cfg(test)]
             mail_pre_append_gate: self.mail_pre_append_gate.clone(),
         }
@@ -640,7 +636,6 @@ impl SessionEngine {
             reviver: RwLock::new(None),
             runtime_owner: hya_proto::OwnerRunId::new(),
             turn_gate: Arc::new(turn_gate::TurnGate::default()),
-            sticky_evictions: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(test)]
             mail_pre_append_gate: None,
         };

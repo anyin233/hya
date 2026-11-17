@@ -1094,8 +1094,8 @@ impl SessionEngine {
 
     /// Re-read the transcript after a rung replaced it, and re-count it.
     ///
-    /// Outputs spilled earlier stay spilled: their placeholders are re-applied
-    /// before counting, as at the top of every round.
+    /// Outputs spilled earlier stay spilled: the projection carries their
+    /// notices.
     ///
     /// The count is estimated rather than measured on purpose. A provider's
     /// reported usage describes the prompt it was sent, and after compaction that
@@ -1107,13 +1107,11 @@ impl SessionEngine {
         session: SessionId,
         agent: &AgentSpec,
         model: &ModelRef,
-        sticky: &crate::compaction::StickyEvictions,
         reasoning_policy: hya_provider::ReasoningReplayPolicy,
     ) -> Result<(Vec<Message>, usize), CoreError> {
         let projection = self.store.read_projection_shared(session).await?;
         let attachments = self.attachment_data(session, &projection).await?;
-        let mut messages = projection_to_messages(agent, &projection, model, &attachments);
-        crate::compaction::apply_sticky_evictions(&mut messages, sticky);
+        let messages = projection_to_messages(agent, &projection, model, &attachments);
         let tokens = self
             .token_accounting
             .estimate_with_reasoning_policy(&messages, reasoning_policy);
@@ -1410,6 +1408,7 @@ impl SessionEngine {
                 agent,
             );
             let parent_session = projection.session.parent;
+            let attachments = self.attachment_data(session, &projection).await?;
             let mut ladder = ladder::CompactionLadder {
                 engine: self,
                 session,
@@ -1419,13 +1418,15 @@ impl SessionEngine {
                 resources,
                 depth,
                 actor_claim,
-                messages: Vec::new(),
+                attachments: &attachments,
             };
-            // The ladder re-reads the transcript after each rung it commits,
-            // so whether it rewrote needs no second read here.
-            ladder.before_round(&projection).await?;
-            let messages = ladder.messages;
-            drop(projection);
+            // Every change the ladder makes to what is sent is an event; the
+            // request is the re-read projection's.
+            let projection = if ladder.before_round(&projection).await? {
+                self.store.read_projection_shared(session).await?
+            } else {
+                projection
+            };
             // Resolved every round, so a preference saved mid-session applies
             // to the next request without a restart. `live_agent.reasoning` is
             // the Agent's authored effort; the user's per-Agent choices outrank it.
@@ -1446,8 +1447,16 @@ impl SessionEngine {
                     .await?;
                 recorded_digests = digests;
             }
-            let request =
-                crate::kernel::request::from_messages(messages, &system, tools, &model, effort);
+            let request = crate::kernel::request::request(
+                &projection,
+                &system,
+                tools,
+                &model,
+                &live_agent.name,
+                &attachments,
+                effort,
+            );
+            drop(projection);
             let request = if let Some(hooks) = self.active_hook_dispatcher(session) {
                 let root_session = self
                     .request_root_session(session, &mut root_session_cache)

@@ -29,15 +29,18 @@ Details worth knowing per mechanism:
   `keep_recent` messages (older turns) or outside the last `keep_recent`
   completed tool steps. The step tail applies inside the active assistant
   message too, so one long turn sheds its early outputs mid-turn. Shake is
-  sticky for the lifetime of the running session: once a part is moved, every
-  later round reapplies the exact same byte-stable placeholder and does not
-  emit another `ContextEvicted` for it. Only newly encountered stale parts are
-  added. The placeholder retains an appended `--- [NEW MAIL ...]` steer notice
+  sticky: `ContextEvicted` logs each evicted part with the exact notice that
+  replaces its output, and the projection keeps that notice beside the part
+  (`PartProjection::Tool.eviction_notice`), so every later request, in this
+  process or after a restart, sends the same byte-stable notice and no second
+  `ContextEvicted` is emitted for the part. Only newly encountered stale parts
+  are added. The notice retains an appended `--- [NEW MAIL ...]` steer notice
   verbatim, so consumed mail remains visible to the model. With the session's
-  artifact store the eviction is a *move*: the transcript keeps
+  artifact store the eviction is a *move*: the notice reads
   `[tool output moved to artifact://… ]` and `read` resolves the handle back to
   the full bytes. A body smaller than the notice replacing it is not spilled.
-  Sticky state is runtime-only; it does not alter the event log.
+  The tool part keeps its full output in the log and the projection; clients
+  see the full output, and only model requests send the notice.
 - **`remote`** persists the provider's folded window behind the
   `HYA_COMPACTED_CONTEXT` marker; later Responses requests re-inject the items
   verbatim. If the native compact succeeds but the transcript is still over
@@ -72,7 +75,8 @@ shake → remote → soft → snapcompact → handoff
 ```
 
 The default preserves hya's long-verified ladder exactly — the lossless,
-request-local spill runs before anything that rewrites the transcript, and
+spill (it moves outputs out of the request, not out of the log) runs before
+anything that rewrites the transcript, and
 the structured summary remains the primary fold — and adds the two new
 mechanisms as escalation: `snapcompact` is the deterministic fallback that
 works when no model call is available at all (no summarizer wired, or a
@@ -128,7 +132,8 @@ The walk itself:
    `HYA_COMPACTED_CONTEXT` marker and drop pre-marker history on later
    requests. The marker is placed before the retained tail, including an
    in-flight assistant message, so the next round sees its prior tool calls
-   and results. `shake` is request-local and never touches the event log.
+   and results. `shake` logs its notices in `ContextEvicted` and leaves the
+   tool outputs in the log.
 
 ## In-flight turns
 
@@ -218,8 +223,11 @@ Each mechanism records what it did on the event log:
   was folded.
 - `ContextEvicted` — recorded whenever `shake` saved tokens, including when
   the saving alone was not enough and the walk escalated anyway. Its payload
-  contains `session`, `evicted_parts`, `tokens_before`, `tokens_after`, and
-  `threshold`; artifact handles are request-local notices, not event fields.
+  contains `session`, `evicted_parts`, `parts`, `tokens_before`,
+  `tokens_after`, and `threshold`. `parts` lists `{ part, notice }` for each
+  evicted tool part: `notice` is the exact text requests send instead of the
+  output, artifact handle included, so the log alone reproduces the request.
+  Logs written before `parts` decode it as empty.
 - `ContextStatus` — emitted once per streaming round after the ladder, with
   the occupancy the request actually carries, its source (provider-reported or
   estimated), the accounting mode, and the resolved threshold. Clients surface
