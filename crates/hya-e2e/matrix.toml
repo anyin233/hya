@@ -109,12 +109,6 @@ track = "P"
 path = "crates/hya-e2e/tests/p18_custom_slash_resources.rs"
 
 [[scenario]]
-id = "T1.20"
-title = "custom command invokes MCP Tool"
-track = "P"
-path = "crates/hya-e2e/tests/p18_custom_slash_resources.rs"
-
-[[scenario]]
 id = "T1.21"
 title = "custom resource name conflicts fail closed"
 track = "P"
@@ -390,12 +384,6 @@ track = "P"
 path = "crates/hya-e2e/tests/p40_exec_headless_continuation.rs"
 
 [[scenario]]
-id = "T2.45"
-title = "headless exec --time-budget: a bash timeout is shortened to the time left minus the reserve"
-track = "P"
-path = "crates/hya-e2e/tests/p40_exec_headless_continuation.rs"
-
-[[scenario]]
 id = "T2.46"
 title = "headless exec --time-budget: no continuation turn starts within the grace"
 track = "P"
@@ -521,3 +509,11 @@ reason = "never defined — same as T1.1; the tier list it came from was not com
 [[retired]]
 id = "T2.18"
 reason = "automatic MCP backgrounding and reclaim were removed; MCP calls remain in their originating turn"
+
+[[retired]]
+id = "T1.20"
+reason = "custom command invoking an MCP Tool took 33-48 s alone; removed as excessively slow (2026-11-17)"
+
+[[retired]]
+id = "T2.45"
+reason = "the bash-timeout cap scenario waited out a ~20 s capped sleep (27-59 s alone); removed as excessively slow (2026-11-17)"
