@@ -1,6 +1,4 @@
-use hya_proto::{
-    AgentName, Event, FinishReason, Message, MessageId, ModelRef, Role, SessionId, TokenUsage,
-};
+use hya_proto::{AgentName, Event, FinishReason, Message, MessageId, ModelRef, Role, SessionId};
 use hya_provider::{CompletionRequest, EventStream, ProviderError};
 use hya_store::ActorClaim;
 use hya_tool::{Action, AgentDef, Mode, PermissionPlane, ResolvedTool, Rule};
@@ -17,26 +15,22 @@ use super::{
 };
 use crate::error::CoreError;
 use crate::hooks::{
-    ChatParamsInput, ChatParamsOutcome, HookChain, HookDispatcher, ModelFailureClass,
-    ModelFallbackInput, ModelFallbackOutcome, activation_hook_for, replace_activation_hooks,
-    scope_activation_hooks, scope_optional_activation_hooks,
+    HookChain, HookDispatcher, ModelFailureClass, ModelFallbackInput, ModelFallbackOutcome,
+    activation_hook_for, scope_activation_hooks, scope_optional_activation_hooks,
 };
-use crate::kernel::Rewriter;
 use crate::runtime_registry::CompiledResourceView;
 use crate::sidecar::{SidecarEnvironment, SidecarHandle, SidecarStart};
 use crate::workflow::WorkflowTurnRoute;
 use crate::{AgentResourcePolicy, TurnBinding};
 
+mod harness;
 mod ladder;
 pub(super) mod messages;
 mod tool_gate;
 
 use crate::agent_catalog::AgentDefinition;
 pub use messages::advertise_tool;
-use messages::{
-    AttachmentData, attachment_blobs, filtered_tool_schemas, projection_to_messages,
-    prompt_digests, system_prompt,
-};
+use messages::{AttachmentData, attachment_blobs, filtered_tool_schemas, projection_to_messages};
 
 /// Human-answer tools cannot be useful once their host receiver is gone.
 pub(super) fn tool_available(name: &str, interaction_available: bool) -> bool {
@@ -275,7 +269,7 @@ impl SessionEngine {
     /// candidate whose attempt opened the stream), for usage attribution.
     async fn stream_with_model_fallback(
         &self,
-        request: CompletionRequest,
+        request: &CompletionRequest,
         session: SessionId,
         message: MessageId,
         lineage: RequestLineage<'_>,
@@ -293,7 +287,7 @@ impl SessionEngine {
         for (index, candidate) in candidates.iter().enumerate() {
             tried.push(candidate.clone());
             match self
-                .stream_model_candidate(&request, candidate, session, message)
+                .stream_model_candidate(request, candidate, session, message)
                 .await
             {
                 Ok(stream) => return Ok((stream, candidate.clone())),
@@ -358,7 +352,7 @@ impl SessionEngine {
             );
             tried.push(model.clone());
             match self
-                .stream_model_candidate(&request, &model, session, message)
+                .stream_model_candidate(request, &model, session, message)
                 .await
             {
                 Ok(stream) => return Ok((stream, model)),
@@ -416,7 +410,7 @@ impl SessionEngine {
     /// Returns the stream with the selected candidate's model.
     async fn stream_with_workflow_route(
         &self,
-        request: CompletionRequest,
+        request: &CompletionRequest,
         session: SessionId,
         message: MessageId,
         route: &WorkflowTurnRoute,
@@ -1207,511 +1201,6 @@ impl SessionEngine {
             .or(authored_model)
             .or_else(|| projection.session.model.clone())
             .unwrap_or_else(|| agent.model.clone())
-    }
-
-    /// Drive the streaming rounds of one turn activation.
-    ///
-    /// Round-boundary dynamic rebinding (Root turns only): at the top of every
-    /// round after the first, a Root activation re-runs
-    /// `bind_session_runtime`. When the fresh binding carries a different
-    /// runtime generation, the round swaps in the fresh binding, a freshly
-    /// compiled resource view (retaining the activation's sidecar tools), a
-    /// refreshed agent roster, and a re-materialized agent prompt — so tools,
-    /// hooks, skills, and prompts published mid-turn take effect at the next
-    /// model call without rebuilding the transcript context. Any rebind or
-    /// recompilation failure is logged and ignored: the turn keeps the current
-    /// generation and never dies from a rebind failure (fail-open). Bound and
-    /// Resolved activations (subagents, Workflow members) pin their
-    /// activation-time binding for the whole turn and never rebind.
-    async fn run_turn_rounds(
-        &self,
-        session: SessionId,
-        message: MessageId,
-        agent: &AgentSpec,
-        execution: TurnExecution<'_>,
-    ) -> Result<FinishReason, CoreError> {
-        let TurnExecution {
-            binding,
-            resources,
-            agents,
-            cancel,
-            apply_default_overlays,
-            external_dirs,
-            workspace,
-            actor_claim,
-            guidance,
-            workflow_route,
-            explicit_model,
-            rebind,
-        } = execution;
-        // Owned rebind state. The loop reads it through shared locals so an
-        // activation-time generation and a round-swapped generation behave
-        // identically; a successful rebind republishes the owned state and
-        // re-points the shared locals at it.
-        let mut live_binding = binding;
-        let mut live_resources = resources;
-        let mut live_agents = agents;
-        // Active agent spec for the current round. Root rounds swap it at a
-        // round boundary (prompt heat); Bound/Resolved rounds keep the
-        // activation-time composition.
-        let mut live_agent = agent.clone();
-        let mut binding = &live_binding;
-        let mut resources = &*live_resources;
-        let mut agents = &live_agents;
-        let mut rounds: u32 = 0;
-        let mut total_tokens = None;
-        // Depth in the subagent tree, derived from the parent chain. Subagents use
-        // the general live provider-stream class; the root uses the independent
-        // reserved class so root progress never waits behind background work.
-        let depth = match &self.governor {
-            Some(_) => self
-                .session_lineage(session)
-                .await
-                .map(|(_, d)| d)
-                .unwrap_or(0),
-            None => 0,
-        };
-        // Digests of the system prompt and tool list, recorded with the
-        // binding at turn start and again whenever a round's differ.
-        let tools = self.offered_tools(resources, depth);
-        let mut recorded_digests =
-            prompt_digests(&system_prompt(&live_agent, &tools, depth), &tools)?;
-        self.emit_turn_binding(actor_claim, session, message, binding, &recorded_digests)
-            .await?;
-        // Steer mailbox (fix for the unread-mail blindness): unread mail is
-        // surfaced inside tool results, mid-turn, without breaking the model's
-        // chain of thought. Snapshot the durable backlog once, then follow the
-        // live bus so no per-tool projection replay is needed.
-        let steer_policy = Some(
-            crate::ChannelPolicy::from_binding(binding)?.snapshot_for(live_agent.name.as_str()),
-        );
-        let mut steer = self
-            .steer_mailbox_snapshot_with_policy(session, steer_policy)
-            .await;
-        // Root of this session's spawn tree, resolved on first hook use: the
-        // parent chain is immutable, so one walk serves every round.
-        let mut root_session_cache = None;
-        // Set when a `report` of this turn is accepted: the turn ends right
-        // after that tool round, and a second `report` is rejected.
-        let report_latch = hya_tool::ReportLatch::new();
-        // Engine handle for nested tool calls, cloned once per turn on first use.
-        let mut nested_engine: Option<Arc<SessionEngine>> = None;
-        loop {
-            self.validate_actor_claim(actor_claim).await?;
-            if activation_hook_for(session).is_some_and(|hooks| !hooks.is_healthy()) {
-                return Err(CoreError::Cancelled);
-            }
-            if cancel.is_cancelled() {
-                return Ok(FinishReason::Cancelled);
-            }
-            let projection = self.store.read_projection_shared(session).await?;
-            let stable_id = projection
-                .session
-                .agent
-                .as_ref()
-                .unwrap_or(&live_agent.name)
-                .as_str()
-                .to_string();
-            // Round-boundary dynamic rebind (Root turns only, never the first
-            // round). The bind already short-circuits on an unchanged registry
-            // generation, so the generation comparison here decides whether the
-            // round swaps in a new runtime at all.
-            if rounds > 0
-                && apply_default_overlays
-                && let Some(inputs) = rebind.as_ref()
-            {
-                let workdir = session_workdir(&live_agent, &projection);
-                // Skills are discovered into the registry explicitly (they are
-                // not part of the bind itself), so a workdir skill change must
-                // refresh them before the bind for the new generation to
-                // carry it. Fail-open like every other rebind step.
-                if let Err(error) = self.refresh_runtime(|candidate| {
-                    candidate.refresh_skills(&workdir);
-                    Ok(())
-                }) {
-                    tracing::warn!(
-                        session = %session,
-                        error = %error,
-                        "round rebind could not refresh skills; keeping current skills"
-                    );
-                }
-                match self.bind_session_runtime(session, &workdir).await {
-                    Ok(fresh) if fresh.generation() != binding.generation() => {
-                        // Mirror the Root activation compile path: agent_base
-                        // resolution, guidance layer, skills prompt, sidecar
-                        // tools retained, plus a fresh spawn roster.
-                        let rematerialized = effective_agent_for_binding_with_sidecar_tools(
-                            inputs.base_agent,
-                            stable_id.as_str(),
-                            &fresh,
-                            guidance.as_deref(),
-                            &inputs.sidecar_tools,
-                        )
-                        .and_then(|(materialized, compiled)| {
-                            agent_roster(&fresh, stable_id.as_str())
-                                .map(|roster| (materialized, compiled, roster))
-                        });
-                        match rematerialized {
-                            Ok((materialized, compiled, roster)) => {
-                                tracing::info!(
-                                    session = %session,
-                                    generation = ?fresh.generation(),
-                                    "round rebind applied a new runtime generation"
-                                );
-                                live_binding = fresh;
-                                live_agent = materialized;
-                                live_resources = compiled;
-                                live_agents = self
-                                    .annotate_agent_efforts(roster, Some(&live_binding))
-                                    .await?;
-                                binding = &live_binding;
-                                resources = &live_resources;
-                                agents = &live_agents;
-                                let mut hooks = binding.bundle_hooks_for_agent(stable_id.as_str());
-                                if let Some(sidecar_hooks) = &inputs.sidecar_hooks {
-                                    hooks.push(Arc::clone(sidecar_hooks));
-                                }
-                                let hooks = (!hooks.is_empty()).then(|| {
-                                    Arc::new(HookChain::new(hooks)) as Arc<dyn HookDispatcher>
-                                });
-                                replace_activation_hooks(session, hooks);
-                                let channel_policy = crate::ChannelPolicy::from_binding(binding)?
-                                    .snapshot_for(live_agent.name.as_str());
-                                steer.set_policy(channel_policy);
-                                self.update_session_channel_policy(session, channel_policy);
-                            }
-                            Err(error) => {
-                                tracing::warn!(
-                                    session = %session,
-                                    %error,
-                                    "round rebind failed to recompile resources; keeping the current runtime generation"
-                                );
-                            }
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        tracing::warn!(
-                            session = %session,
-                            %error,
-                            "round rebind failed; keeping the current runtime generation"
-                        );
-                    }
-                }
-            }
-            let model = self.requested_turn_model(
-                binding,
-                &stable_id,
-                apply_default_overlays,
-                explicit_model,
-                &projection,
-                agent,
-            );
-            let parent_session = projection.session.parent;
-            let attachments = self.attachment_data(session, &projection).await?;
-            let mut ladder = ladder::CompactionLadder {
-                engine: self,
-                session,
-                agent: &live_agent,
-                model: &model,
-                binding,
-                resources,
-                depth,
-                actor_claim,
-                attachments: &attachments,
-            };
-            // Every change the ladder makes to what is sent is an event; the
-            // request is the re-read projection's.
-            let projection = if ladder.before_round(&projection).await? {
-                self.store.read_projection_shared(session).await?
-            } else {
-                projection
-            };
-            // Resolved every round, so a preference saved mid-session applies
-            // to the next request without a restart. `live_agent.reasoning` is
-            // the Agent's authored effort; the user's per-Agent choices outrank it.
-            let effort = self
-                .effective_effort(
-                    &model,
-                    Some(&stable_id),
-                    live_agent.reasoning,
-                    Some(binding),
-                )
-                .await?
-                .effort;
-            let tools = self.offered_tools(resources, depth);
-            let system = system_prompt(&live_agent, &tools, depth);
-            let digests = prompt_digests(&system, &tools)?;
-            if digests != recorded_digests {
-                self.emit_turn_binding(actor_claim, session, message, binding, &digests)
-                    .await?;
-                recorded_digests = digests;
-            }
-            let request = crate::kernel::request::request(
-                &projection,
-                &system,
-                tools,
-                &model,
-                &live_agent.name,
-                &attachments,
-                effort,
-            );
-            drop(projection);
-            let request = if let Some(hooks) = self.active_hook_dispatcher(session) {
-                let root_session = self
-                    .request_root_session(session, &mut root_session_cache)
-                    .await;
-                match hooks
-                    .chat_params(ChatParamsInput {
-                        session,
-                        root_session,
-                        agent: Some(AgentName::new(stable_id.as_str())),
-                        message,
-                        request,
-                    })
-                    .await
-                {
-                    ChatParamsOutcome::Continue { request } => request,
-                }
-            } else {
-                request
-            };
-            // Hold a live provider-stream permit ONLY around provider streaming.
-            // It is dropped before tool execution, so a member blocked in the
-            // `task` tool (awaiting its children) holds no permit. These classes
-            // bound execution only; durable admission/order remains authoritative.
-            let stream_permit = match (&self.governor, depth > 0) {
-                (Some(gov), true) => gov.acquire_general_stream().await,
-                (Some(gov), false) => gov.acquire_reserved_stream().await,
-                (None, _) => None,
-            };
-            let mut round_retries = 0;
-            let stream_round = loop {
-                self.validate_actor_claim(actor_claim).await?;
-                let open_stream = async {
-                    Ok::<_, CoreError>(if let Some(route) = workflow_route {
-                        match self
-                            .stream_with_workflow_route(request.clone(), session, message, route)
-                            .await
-                        {
-                            Ok(opened) => opened,
-                            Err(error) => {
-                                if let Some(route) = workflow_route {
-                                    route
-                                        .finalize(Some(workflow_provider_failure_class(&error)))
-                                        .await?;
-                                }
-                                return Err(error.into());
-                            }
-                        }
-                    } else {
-                        self.stream_with_model_fallback(
-                            request.clone(),
-                            session,
-                            message,
-                            RequestLineage {
-                                agent: stable_id.as_str(),
-                                root_session_cache: &mut root_session_cache,
-                            },
-                        )
-                        .await?
-                    })
-                };
-                let (stream, served_model) = tokio::select! {
-                    biased;
-                    () = cancel.cancelled() => return Ok(FinishReason::Cancelled),
-                    result = open_stream => result?,
-                };
-                let step = rounds + round_retries;
-                self.emit_for_actor(
-                    actor_claim,
-                    session,
-                    Event::StepStarted {
-                        session,
-                        message,
-                        step,
-                    },
-                )
-                .await?;
-                match self
-                    .collect_stream_round(
-                        session,
-                        message,
-                        stream,
-                        actor_claim,
-                        step,
-                        &served_model,
-                        cancel,
-                    )
-                    .await
-                {
-                    Ok(stream_round) => {
-                        if let Some(route) = workflow_route {
-                            route.finalize(None).await?;
-                        }
-                        break stream_round;
-                    }
-                    Err(failure) => {
-                        self.emit_for_actor(
-                            actor_claim,
-                            session,
-                            Event::StepFinished {
-                                session,
-                                message,
-                                step,
-                                finish: FinishReason::Error,
-                            },
-                        )
-                        .await?;
-                        let retryable = round_retries < MAX_ROUND_RETRIES
-                            && !failure.saw_tool_call
-                            && !failure.saw_text
-                            && is_retryable_round_error(&failure.error);
-                        if !retryable {
-                            if let Some(route) = workflow_route {
-                                route
-                                    .finalize(Some(workflow_failure_class(&failure.error, cancel)))
-                                    .await?;
-                            }
-                            return Err(failure.error);
-                        }
-                        round_retries += 1;
-                        tracing::warn!(
-                            %session,
-                            retry = round_retries,
-                            "provider round failed before text or tool output; retrying"
-                        );
-                        let delay = std::time::Duration::from_secs(1 << (round_retries - 1))
-                            + std::time::Duration::from_millis(50 * u64::from(round_retries));
-                        tokio::select! {
-                            biased;
-                            _ = cancel.cancelled() => return Err(CoreError::Cancelled),
-                            () = tokio::time::sleep(delay) => {}
-                        }
-                    }
-                }
-            };
-            // Failed attempts consume step numbers so subsequent tool rounds do
-            // not reuse a step already recorded in the event log; `rounds` is
-            // now the step of the attempt that succeeded.
-            rounds += round_retries;
-            if let Some(tokens) = stream_round.tokens {
-                total_tokens
-                    .get_or_insert_with(TokenUsage::default)
-                    .add(tokens);
-            }
-            self.emit_for_actor(
-                actor_claim,
-                session,
-                Event::StepFinished {
-                    session,
-                    message,
-                    step: rounds,
-                    finish: stream_round.finish,
-                },
-            )
-            .await?;
-            // Release the streaming slot before running tools (which may spawn and
-            // await child subagents that need permits of their own).
-            drop(stream_permit);
-
-            if stream_round.finish == FinishReason::Cancelled {
-                return Ok(FinishReason::Cancelled);
-            }
-            if stream_round.tool_calls.is_empty() {
-                self.close_turn_message_with_tokens(
-                    actor_claim,
-                    session,
-                    message,
-                    stream_round.finish,
-                    None,
-                    total_tokens,
-                )
-                .await?;
-                return Ok(stream_round.finish);
-            }
-
-            let emit = super::stream_round::TurnEmit {
-                engine: self,
-                actor_claim,
-            };
-            let provider = self.provider_router();
-            let scope = crate::kernel::Scope {
-                store: &self.store,
-                emit: &emit,
-                provider: &provider,
-                model: &model,
-                session,
-                message,
-            };
-            let mut gate = tool_gate::TurnToolGate {
-                engine: self,
-                session,
-                message,
-                binding,
-                resources: &live_resources,
-                agents,
-                agent: &live_agent,
-                depth,
-                external_dirs,
-                workspace: &workspace,
-                actor_claim,
-                guidance: &guidance,
-                cancel,
-                report_latch: &report_latch,
-                nested_engine: &mut nested_engine,
-                steer: &mut steer,
-                parent_session,
-                offered: &request.tools,
-            };
-            // Calls a cancel leaves unrun stay open; the turn end closes them.
-            crate::kernel::execute_calls(&scope, &mut gate, stream_round.tool_calls, cancel)
-                .await?;
-            if cancel.is_cancelled() {
-                return Ok(FinishReason::Cancelled);
-            }
-
-            // An accepted `report` ends the member's episode: the round's
-            // other tool calls have completed and are recorded; no further
-            // model call is made.
-            if report_latch.is_set() {
-                self.close_turn_message_with_tokens(
-                    actor_claim,
-                    session,
-                    message,
-                    FinishReason::Stop,
-                    None,
-                    total_tokens,
-                )
-                .await?;
-                return Ok(FinishReason::Stop);
-            }
-
-            rounds += 1;
-        }
-    }
-}
-
-/// Maximum additional provider opens for one engine round.
-const MAX_ROUND_RETRIES: u32 = 2;
-
-/// Mid-stream retries are limited to link failures that are safe to replay before
-/// any assistant text or tool request was delivered. Decode is deliberately
-/// narrow: only the known truncated response-body diagnostics are included.
-fn is_retryable_round_error(error: &CoreError) -> bool {
-    let CoreError::Provider(error) = error else {
-        return false;
-    };
-    match error.as_ref() {
-        ProviderError::Transport(_) => true,
-        ProviderError::HttpStatus { status, .. } => *status == 429 || (500..=599).contains(status),
-        ProviderError::Decode(message) => {
-            let message = message.to_ascii_lowercase();
-            message == "error decoding response body"
-                || message.contains("unexpected eof")
-                || message.contains("unexpected end of file")
-        }
-        _ => false,
     }
 }
 

@@ -142,3 +142,29 @@ These capabilities belong to full mode and its bundles. The kernel retains
 its five tools, minimal prompt, 80% harness rewrite, and event logging.
 `--pure` only removes external project/user context from full mode; it does
 not select the kernel alone.
+
+## How full mode runs on the kernel
+
+Full-mode turns run the same kernel loop as `--bare`; there is no second
+round loop. Each round reads the projection, lets the harness rewrite it,
+builds the request with `kernel::request` from the (re-read) projection,
+streams one model round, and runs its tool calls in order. The full mode
+plugs into that loop at fixed points:
+
+| Point | Bare mode | Full mode |
+| --- | --- | --- |
+| Before the round (`Rewriter`) | 80% harness rewrite | Re-validate the actor claim, rebind a Root turn to a new runtime generation, resolve the round's model, then walk the [compaction ladder](compaction.md) |
+| Request | Kernel prompt and five tools | The agent's system prompt, filtered tool schemas plus `rewrite`, and reasoning effort, then the `chat.params` hook |
+| Opening the stream | The given model | Cross-model fallback or the Workflow route, under a governor stream permit |
+| Failed round | Ends the run | Retried up to twice when it failed before any text or tool call on a link error |
+| Tool call (`ToolGate`) | Execute the tool | Hooks, permissions, the full `ToolCtx`, file snapshots, output capping, steer notices |
+| Unrun calls after a cancel | Failed as `cancelled` | Left open; the turn end closes them as `CANCELLED` |
+| End | The round's finish | Also ends after an accepted `report` |
+
+The model's `rewrite` call is offered and handled by the kernel in both
+modes. Everything that shapes a request is in the log: the ladder's
+evictions are `ContextEvicted` events whose `parts` carry each evicted part
+with its exact notice, so the projection renders the notices; `TurnBindingRecorded` records the
+SHA-256 digests of the system prompt and tool list at turn start and again
+whenever a round's differ. Only the digests are logged, not the text, so a
+restart replays the same request while the bundles are unchanged.

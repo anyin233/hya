@@ -8,8 +8,8 @@ use hya_provider::{COMPACT_CONTEXT_MARKER, Capabilities};
 
 use async_trait::async_trait;
 
+use super::Emit;
 use super::request::{collect_text, compacted_messages, is_marker};
-use super::{Emit, Scope};
 use crate::error::CoreError;
 
 /// Share of `max_context` (percent) the last round may fill before the
@@ -31,32 +31,6 @@ pub(crate) trait Rewriter: Send {
     /// Rewrite before the round `projection` would send, if needed; `true`
     /// when the log changed.
     async fn before_round(&mut self, projection: &Projection) -> Result<bool, CoreError>;
-}
-
-/// Bare-mode [`Rewriter`]: removes everything before the next step once the
-/// last round filled [`TRIGGER_PERCENT`] of the window.
-pub(super) struct HarnessRewriter<'a>(pub(super) &'a Scope<'a>);
-
-#[async_trait]
-impl Rewriter for HarnessRewriter<'_> {
-    async fn before_round(&mut self, projection: &Projection) -> Result<bool, CoreError> {
-        let scope = self.0;
-        let budget = pressure(
-            projection,
-            scope.provider.capabilities(scope.model).as_ref(),
-        );
-        Ok(budget.is_some_and(|(used, threshold)| used > threshold)
-            && commit_rewrite(
-                scope.emit,
-                projection,
-                scope.session,
-                scope.message,
-                Initiator::Harness,
-                budget,
-            )
-            .await?
-            .is_some())
-    }
 }
 
 /// The latest recorded round's `prompt + output` tokens and the trigger

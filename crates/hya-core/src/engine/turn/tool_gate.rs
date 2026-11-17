@@ -1,5 +1,6 @@
-//! The full mode's [`ToolGate`]: hooks, permissions, tool context, file
-//! snapshots, output capping, and steer notices around each tool call.
+//! One tool call of a full-mode turn, for its harness's `ToolGate`: hooks,
+//! permissions, tool context, file snapshots, output capping, and steer
+//! notices around the call.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -20,7 +21,7 @@ use crate::hooks::{
     HookDispatcher, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
     ToolExecuteBeforeOutcome, ToolOutcomeNative, activation_hook_for,
 };
-use crate::kernel::{ToolCall, ToolGate};
+use crate::kernel::ToolCall;
 use crate::runtime_registry::CompiledResourceView;
 
 /// One round's tool calls of a full-mode turn.
@@ -48,9 +49,9 @@ pub(super) struct TurnToolGate<'a> {
     pub(super) offered: &'a [ToolSchema],
 }
 
-#[async_trait::async_trait]
-impl ToolGate for TurnToolGate<'_> {
-    async fn call(&mut self, mut tc: ToolCall) -> Result<(), CoreError> {
+impl TurnToolGate<'_> {
+    /// Run `tc` and record its outcome; an `Err` ends the turn.
+    pub(super) async fn call(&mut self, mut tc: ToolCall) -> Result<(), CoreError> {
         let &mut Self {
             engine,
             session,

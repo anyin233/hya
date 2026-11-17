@@ -377,33 +377,42 @@ complete immutable runtime snapshot for the entire assistant turn.
 
 ### Per-round sequence
 
-Each round runs **in this order** (see `run_turn_rounds` in
-[`engine/turn.rs`](../../crates/hya-core/src/engine/turn.rs)):
+Each round runs **in this order**: the kernel loop (`kernel::drive` in
+[`kernel/mod.rs`](../../crates/hya-core/src/kernel/mod.rs)) with the
+full-mode harness (`TurnHarness` in
+[`engine/turn/harness.rs`](../../crates/hya-core/src/engine/turn/harness.rs)):
 
-1. Validate the actor claim (if any).
-2. Check activation-hook health (`is_healthy`); unhealthy → `CoreError::Cancelled`.
-3. Check the cancel token; if cancelled, emit `MessageFinished` with
-   `FinishReason::Cancelled` and return.
-4. Read the current projection from the store.
-5. Maybe compact context (see [Compaction and Summaries](#compaction-and-summaries)).
-6. Run the `chat_params` hook (may rewrite the `CompletionRequest`).
-7. Acquire a governor stream permit (reserved or general by depth), then open
+1. Check the cancel token; if cancelled, return (the turn end records
+   `MessageFinished` with `FinishReason::Cancelled`).
+2. Read the current projection from the store.
+3. Before the round: validate the actor claim (if any); check activation-hook
+   health (`is_healthy`), unhealthy → `CoreError::Cancelled`; rebind a Root
+   turn after its first round; resolve the round's model; walk the compaction
+   ladder (see [Compaction and Summaries](#compaction-and-summaries)). When the
+   ladder changed the log, check the cancel token again and re-read the
+   projection.
+4. Build the request with `kernel::request` from the agent's system prompt,
+   filtered tool schemas plus `rewrite`, and reasoning effort; record
+   `TurnBindingRecorded` again when the prompt digests changed. Run the
+   `chat_params` hook (may rewrite the `CompletionRequest`).
+5. Acquire a governor stream permit (reserved or general by depth), then open
    the provider stream: walk the configured cross-model chain, then ask
    `model_fallback` while no stream exists (Workflow-routed turns use their
    declared route instead). The opener returns the stream together with the
    model that serves it.
-8. Emit `StepStarted`.
-9. Stream the provider round (`collect_stream_round`) — live **text and
+6. Emit `StepStarted`.
+7. Stream the provider round (`kernel::round::collect`) — live **text and
    tool-argument fragments** via `publish_live` (text gets a durable triple at round end; tool arguments
    get durable full input when complete); reasoning, tool starts/state
    changes, and other events via durable `emit_for_actor` immediately. When the
    round reported usage, append `UsageRecorded { purpose: turn }` with the
    serving model — also when the stream then failed (see
    [Usage attribution](#usage-attribution)).
-10. Emit `StepFinished`.
-11. **Drop the stream permit** before any tool work.
-12. If the round produced no tool calls, emit `MessageFinished` and end the turn.
-13. Otherwise run the tool-dispatch pipeline (below), then repeat.
+8. **Drop the stream permit** before any tool work, then emit `StepFinished`.
+9. If the round produced no tool calls, emit `MessageFinished` and end the turn.
+10. Otherwise run the tool calls in order — the kernel handles `rewrite`, the
+    tool-dispatch pipeline (below) every other call — then repeat. An accepted
+    `report` ends the turn after the round's calls.
 
 If a provider round produces tool calls, the engine starts another round with
 the updated projection. The turn continues until the provider finishes,
