@@ -3,7 +3,8 @@
 //! Every bundle in [`FIRST_PARTY_BUNDLES`] becomes
 //! `<package-root>/bundles/hya-<name>.hyabundle`, the path an installed backend
 //! loads. With `--assets`, each package is also copied as a standalone release
-//! asset: `hya-<name>-<version>-<target>.hyabundle` for native tool families and
+//! asset: `hya-<name>-<version>-<target>.hyabundle` for native bundles (tool
+//! families and internal bundles, the ones with a `native/` crate) and
 //! `hya-<name>-<version>.hyabundle` for platform-independent bundles.
 
 use std::path::{Path, PathBuf};
@@ -17,7 +18,7 @@ use crate::package_bundle::{package_directory, package_native_library};
 pub(crate) struct StageOptions {
     /// Release version every bundle identity must carry.
     pub(crate) version: String,
-    /// Directory holding the built `libhya_<family>_tools` libraries.
+    /// Directory holding the built `libhya_<name>` native bundle libraries.
     pub(crate) library_dir: PathBuf,
     /// Installed layout root; packages go to `<root>/bundles/`.
     pub(crate) package_root: PathBuf,
@@ -95,7 +96,7 @@ pub(crate) fn stage(options: &StageOptions) -> anyhow::Result<Vec<StagedBundle>>
         let source = first_party_source_directory(identity)
             .with_context(|| format!("missing in-tree source for {identity}"))?;
         let installed = bundles.join(format!("hya-{name}.hyabundle"));
-        let native = source.join("exposure.yaml").is_file();
+        let native = source.join("native").is_dir();
         if native {
             let library = options
                 .library_dir

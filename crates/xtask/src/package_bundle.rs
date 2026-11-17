@@ -91,24 +91,32 @@ fn stage_native(
             .with_context(|| format!("read {}", manifest_path.display()))?,
     )
     .context("parse tool-family bundle manifest")?;
-    let policy: NativePolicy = serde_norway::from_slice(
-        &std::fs::read(&exposure_path)
-            .with_context(|| format!("read {}", exposure_path.display()))?,
-    )
-    .context("parse tool-family exposure policy")?;
-    if policy.tools.is_empty() {
-        bail!("native tool-family policy has no tools");
-    }
+    // A tool family declares its tools in `exposure.yaml`; an internal bundle
+    // without tools has none.
+    let tools = if exposure_path.is_file() {
+        let policy: NativePolicy = serde_norway::from_slice(
+            &std::fs::read(&exposure_path)
+                .with_context(|| format!("read {}", exposure_path.display()))?,
+        )
+        .context("parse tool-family exposure policy")?;
+        if policy.tools.is_empty() {
+            bail!("native tool-family policy has no tools");
+        }
+        policy.tools
+    } else {
+        Vec::new()
+    };
     let root = manifest
         .as_object_mut()
         .context("bundle manifest must be a mapping")?;
     if root.get("kind").and_then(Value::as_str) != Some("Bundle") {
-        bail!("native tool-family source must be a Bundle");
+        bail!("native bundle source must be a Bundle");
     }
     let extensions = root
-        .get_mut("extensions")
-        .and_then(Value::as_object_mut)
-        .context("tool-family source needs extensions.files")?;
+        .entry("extensions")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .context("bundle extensions must be a mapping")?;
     if extensions.contains_key("rust")
         || extensions.contains_key("process")
         || extensions.contains_key("libraries")
@@ -137,30 +145,32 @@ fn stage_native(
             path
         }
     };
-    let resources = root.entry("resources").or_insert_with(|| json!({}));
-    let resources = resources
-        .as_object_mut()
-        .context("resources must be a mapping")?;
-    if resources.contains_key("tools") {
-        bail!("tool-family source already declares tool resources");
+    let mut source = BundleSource::read_directory(&source_root)
+        .with_context(|| format!("read bundle source directory {source}"))?;
+    if !tools.is_empty() {
+        let resources = root.entry("resources").or_insert_with(|| json!({}));
+        let resources = resources
+            .as_object_mut()
+            .context("resources must be a mapping")?;
+        if resources.contains_key("tools") {
+            bail!("tool-family source already declares tool resources");
+        }
+        resources.insert(
+            "tools".into(),
+            Value::Array(
+                tools
+                    .into_iter()
+                    .map(|tool| json!({"id":tool.name,"path":"declarations/tool.json"}))
+                    .collect(),
+            ),
+        );
+        source = source.with_file("declarations/tool.json", b"{}".to_vec());
     }
-    resources.insert(
-        "tools".into(),
-        Value::Array(
-            policy
-                .tools
-                .into_iter()
-                .map(|tool| json!({"id":tool.name,"path":"declarations/tool.json"}))
-                .collect(),
-        ),
-    );
-    let source = BundleSource::read_directory(&source_root)
-        .with_context(|| format!("read bundle source directory {source}"))?
+    let source = source
         .with_file(
             "bundle.yaml",
             serde_norway::to_string(&manifest)?.into_bytes(),
         )
-        .with_file("declarations/tool.json", b"{}".to_vec())
         .with_file(
             binary_path,
             std::fs::read(binary)
