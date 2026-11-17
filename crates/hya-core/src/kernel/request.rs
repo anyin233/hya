@@ -72,15 +72,17 @@ pub fn compacted_messages(projection: &Projection) -> &[MessageProjection] {
         .session
         .messages
         .iter()
-        .rposition(|message| {
-            message.role == Role::System
-                && collect_text(&message.parts).starts_with(COMPACT_CONTEXT_MARKER)
-        })
+        .rposition(is_marker)
         .unwrap_or(0);
     &projection.session.messages[start..]
 }
 
-fn collect_text(parts: &[PartProjection]) -> String {
+/// Whether `message` is a context-compaction marker.
+pub(super) fn is_marker(message: &MessageProjection) -> bool {
+    message.role == Role::System && collect_text(&message.parts).starts_with(COMPACT_CONTEXT_MARKER)
+}
+
+pub(super) fn collect_text(parts: &[PartProjection]) -> String {
     let mut s = String::new();
     for p in parts {
         if let PartProjection::Text { text, .. } = p {
