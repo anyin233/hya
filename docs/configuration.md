@@ -1085,7 +1085,7 @@ categories:
     - gateway/gpt-5.6-sol
 ```
 
-Semantics ([`crates/hya-core/src/category.rs`](../crates/hya-core/src/category.rs),
+Semantics ([`crates/hya-engine/src/category.rs`](../crates/hya-engine/src/category.rs),
 [`config.rs`](../crates/hya-app/src/config.rs)):
 
 - Empty or whitespace-only candidates are trimmed and dropped.
@@ -1212,7 +1212,7 @@ deleted with them and is not part of v1.
 
 Top-level `subagents:` caps nested and parallel subagent fan-out
 ([`crates/hya-app/src/config.rs`](../crates/hya-app/src/config.rs),
-[`crates/hya-core/src/orchestrator.rs`](../crates/hya-core/src/orchestrator.rs)).
+[`crates/hya-engine/src/orchestrator.rs`](../crates/hya-engine/src/orchestrator.rs)).
 Every field is optional; omitted fields keep their default. Still applied while
 offline (independent loader). See also
 [ADR-0002](adr/0002-resident-actor-model-and-autonomous-main-agent.md).
@@ -1438,18 +1438,18 @@ hya honors `HOME` and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 | Variable | Effect | Default | Source |
 | --- | --- | --- | --- |
 | `HYA_MODEL` | Active request model when `--model` is not passed. **Wins over** the row-backed startup default. Unknown overrides stay outside the catalog and fail through normal routing when used. | Configured `default_model` when it names a resolved row, otherwise the deterministic first live row, otherwise `hya/offline`. | `crates/hya-app/src/runtime.rs`, `crates/hya-app/src/config.rs` |
-| `HYA_COMPACTION_THRESHOLD` | Estimated tokens that trigger context compaction, used when the route advertises no context window. Overrides `compaction.token_threshold`; **env wins**. Unparseable values ignored. | `100000` | `crates/hya-core/src/compaction.rs`, `crates/hya-app/src/config.rs` |
+| `HYA_COMPACTION_THRESHOLD` | Estimated tokens that trigger context compaction, used when the route advertises no context window. Overrides `compaction.token_threshold`; **env wins**. Unparseable values ignored. | `100000` | `crates/hya-engine/src/compaction.rs`, `crates/hya-app/src/config.rs` |
 | `HYA_COMPACTION_KEEP_RECENT` | Most-recent messages kept verbatim during compaction. Overrides `compaction.keep_recent`; env wins. Unparseable values ignored. | `6` | same |
 | `HYA_COMPACTION_CONTEXT_FRACTION` | Share of an advertised `max_context` window the transcript may occupy. With a window, the trip threshold is the **tighter** of `window * fraction` and `window - reserve_tokens`, floored at `1000`. Missing or zero window, or a fraction outside `(0.0, 1.0]`, falls back to `HYA_COMPACTION_THRESHOLD`. Overrides `compaction.context_fraction`; env wins. | `0.75` | same |
 | `HYA_COMPACTION_RESERVE_TOKENS` | Tokens held back from the advertised window for the model's reply. Bounds the trigger independently of the fraction: a generous fraction on a large window can still leave less headroom than the reply needs. Overrides `compaction.reserve_tokens`; env wins. | `16384` | same |
 | `HYA_COMPACTION_SUMMARY_MAX_TOKENS` | Output cap for the summarizer call that folds the transcript prefix. The structured section template does not fit a smaller cap, and a truncated summary loses its trailing sections — the ones describing what to do next. Overrides `compaction.summary_max_tokens`; env wins. | `4096` | same |
-| `HYA_COMPACTION_METHOD_ORDER` | Comma-separated order of the five compaction mechanisms (`shake`, `remote`, `soft`, `snapcompact`, `handoff` — oh-my-pi `methodOrder` names). A partial list is completed with the unmentioned mechanisms in default order; an unknown name ignores the value. Overrides `compaction.method_order`; env wins. | `shake,remote,soft,snapcompact,handoff` | `crates/hya-core/src/compaction.rs`, `crates/hya-app/src/config.rs` |
-| `HYA_TOKEN_ACCOUNTING` | How window occupancy is measured. `auto` believes a route's reported usage only while it advertises usage support and stays plausible against the local estimate (ratio within `[0.5, 2.0]`), otherwise estimates locally; `provider` always trusts reported usage; `estimate` always counts locally. Overrides `compaction.token_accounting`; env wins. Unrecognized values ignored. | `auto` | `crates/hya-core/src/tokens.rs`, `crates/hya-app/src/config.rs` |
+| `HYA_COMPACTION_METHOD_ORDER` | Comma-separated order of the five compaction mechanisms (`shake`, `remote`, `soft`, `snapcompact`, `handoff` — oh-my-pi `methodOrder` names). A partial list is completed with the unmentioned mechanisms in default order; an unknown name ignores the value. Overrides `compaction.method_order`; env wins. | `shake,remote,soft,snapcompact,handoff` | `crates/hya-engine/src/compaction.rs`, `crates/hya-app/src/config.rs` |
+| `HYA_TOKEN_ACCOUNTING` | How window occupancy is measured. `auto` believes a route's reported usage only while it advertises usage support and stays plausible against the local estimate (ratio within `[0.5, 2.0]`), otherwise estimates locally; `provider` always trusts reported usage; `estimate` always counts locally. Overrides `compaction.token_accounting`; env wins. Unrecognized values ignored. | `auto` | `crates/hya-engine/src/tokens.rs`, `crates/hya-app/src/config.rs` |
 | `HYA_SUBAGENT_MAX_CONCURRENCY` | Overrides `subagents.max_concurrency`. Env wins. | `100` | same |
 | `HYA_SUBAGENT_BUDGET` | Overrides `subagents.per_run_budget` (env name drops `PER_RUN`). Env wins. | `1024` | same |
 | `HYA_SUBAGENT_TURN_BUDGET` | Overrides `subagents.per_team_turn_budget`. Env wins. | `1024` | same |
 | `HYA_SUBAGENT_MESSAGE_BUDGET` | Overrides `subagents.per_team_message_budget`. Env wins. | `1024` | same |
-| `HYA_EVENT_BUS_CAPACITY` | Live EventBus broadcast ring capacity. Must parse as `usize` **> 0** or ignored. **Env-only** (no config.yaml key). Raising it trades memory for tolerance of slow SSE consumers. | `8192` (`DEFAULT_BUS_CAPACITY`) | `crates/hya-app/src/config.rs`, `crates/hya-core/src/bus.rs` |
+| `HYA_EVENT_BUS_CAPACITY` | Live EventBus broadcast ring capacity. Must parse as `usize` **> 0** or ignored. **Env-only** (no config.yaml key). Raising it trades memory for tolerance of slow SSE consumers. | `8192` (`DEFAULT_BUS_CAPACITY`) | `crates/hya-app/src/config.rs`, `crates/hya-engine/src/bus.rs` |
 | `HYA_DEFER_SIDEPLANES` | When deferred (default), MCP connect runs after the engine is built so the HTTP listener comes up without waiting on MCP handshakes — MCP tools may not be registered for the very first prompt. Set to `0`, `false`, `off`, or `no` (case-insensitive, trimmed) for await-MCP-before-listen. Any other value, empty, or unset means deferred. | deferred (on) | `crates/hya-app/src/runtime.rs` |
 | `HYA_BUN_ADAPTER_DIR` | Path to an alternate Bun extension adapter checkout (`kind: bun` plugins). | Resolution order: this env override, executable-adjacent `../lib/hya/bun-adapter`, then workspace `crates/hya-plugin-bun/adapter`. | `crates/hya-app/src/plugins.rs` |
 | `HYA_CLAUDE_ADAPTER_DIR` | Path to an alternate Claude Code adapter checkout (`kind: claude` plugins and `bundle install --claude`). | Resolution order: this env override, executable-adjacent `../lib/hya/claude-adapter`, then workspace `crates/hya-plugin-claude/adapter`. | `crates/hya-app/src/plugins.rs` |
@@ -2138,7 +2138,7 @@ collecting every `AGENTS.md` it finds, **stopping** once it has processed
 `$HOME` (files above the home directory are never read). The list is then
 reversed so the outermost/parent `AGENTS.md` appears first in the system prompt
 and the workdir-local one last
-([`crates/hya-core/src/prompt.rs`](../crates/hya-core/src/prompt.rs)). Unreadable
+([`crates/hya-engine/src/prompt.rs`](../crates/hya-engine/src/prompt.rs)). Unreadable
 or missing files are skipped silently. This is the sole discovery
 implementation — callers re-export it rather than reimplement walk order.
 
@@ -2191,7 +2191,7 @@ Rule { action: ExternalDirectory, resource: "<dir>/*", mode: Allow }
 
 so tools may read/write/shell under that tree **without** an
 `ExternalDirectory` permission prompt for those paths
-([`run_turn_with_external_dirs`](../crates/hya-core/src/engine/turn.rs)).
+([`run_turn_with_external_dirs`](../crates/hya-engine/src/engine/turn.rs)).
 
 References that carry a non-empty `description` are also injected into the
 system prompt as sorted `<available_references>` / `<reference>` blocks (name,

@@ -666,7 +666,7 @@ const MAX_LINEAGE_HOPS: usize = 32;
 
 /// Match interaction sessions after conversion, without rebuilding the frame.
 async fn interaction_in_scope(
-    engine: &hya_core::SessionEngine,
+    engine: &hya_engine::SessionEngine,
     frame: &pb::StreamFrame,
     scope: StreamScope,
 ) -> bool {
@@ -694,7 +694,7 @@ async fn interaction_in_scope(
 
 /// Whether `ancestor` is on `session`'s parent chain.
 async fn is_descendant(
-    engine: &hya_core::SessionEngine,
+    engine: &hya_engine::SessionEngine,
     session: SessionId,
     ancestor: SessionId,
 ) -> bool {
@@ -819,7 +819,7 @@ fn counted_stream_event(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod fanout_tests {
     use super::*;
-    use hya_core::{AgentCatalog, AgentSpec, EventBus, RuntimeRegistry, SessionEngine};
+    use hya_engine::{AgentCatalog, AgentSpec, EventBus, RuntimeRegistry, SessionEngine};
     use hya_proto::{AgentName, Event, ModelRef};
     use hya_provider::ProviderRouter;
     use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};

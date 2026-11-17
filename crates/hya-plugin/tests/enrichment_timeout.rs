@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use hya_core::hooks::{ChatParamsInput, ChatParamsOutcome, HookDispatcher};
+use hya_engine::hooks::{ChatParamsInput, ChatParamsOutcome, HookDispatcher};
 use hya_plugin::PluginHost;
 use hya_plugin::config::PluginSpec;
 use hya_plugin::messages::{HostInfo, PluginKindWire};

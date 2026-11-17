@@ -261,13 +261,13 @@ bundle's resource keeps the name and the harness tool is not injected, so no
 
 The team quick reference appended to every request's system prompt is
 rendered from the tools that request advertises
-([`hya_core::prompt::team_quick_reference`](../../crates/hya-core/src/prompt.rs)):
+([`hya_engine::prompt::team_quick_reference`](../../crates/hya-engine/src/prompt.rs)):
 each line appears only when the agent has the tools it teaches, and the root
 gets the "never call `report`" line instead of the subagent's "finish with
 `report`" line. Implementation:
-[`crates/hya-core/src/coordination.rs`](../../crates/hya-core/src/coordination.rs)
+[`crates/hya-engine/src/coordination.rs`](../../crates/hya-engine/src/coordination.rs)
 and `select_candidates_globally` in
-[`runtime_registry.rs`](../../crates/hya-core/src/runtime_registry/mod.rs).
+[`runtime_registry.rs`](../../crates/hya-engine/src/runtime_registry/mod.rs).
 
 ### Communication tools (ADR-0016 channel plane)
 
@@ -642,7 +642,7 @@ harness-allocated [coordination tools](#coordination-tools-allocated-at-startup)
 The tools remain registered even when their schemas are filtered from the
 request. File mutation on the model-facing path is the hashline `write`/`edit`
 pair, not the Codex-style `apply_patch` envelope.
-([`hya_core::advertise_tool`](../../crates/hya-core/src/engine/turn/messages.rs))
+([`hya_engine::advertise_tool`](../../crates/hya-engine/src/engine/turn/messages.rs))
 
 ### Websearch provider independence
 
@@ -1102,8 +1102,8 @@ single `BundleCatalog` authority lives on `RuntimeSnapshot` / `TurnBinding`;
 application wiring does not replace an agent catalog authority.
 ([`ToolCtx`](../../crates/hya-tool/src/tool.rs),
 [`AgentDef`](../../crates/hya-tool/src/agents.rs),
-[`RuntimeSnapshot`](../../crates/hya-core/src/runtime_registry/mod.rs),
-[`TurnBinding::bundle_catalog`](../../crates/hya-core/src/runtime_registry/mod.rs),
+[`RuntimeSnapshot`](../../crates/hya-engine/src/runtime_registry/mod.rs),
+[`TurnBinding::bundle_catalog`](../../crates/hya-engine/src/runtime_registry/mod.rs),
 [`build_session_engine`](../../crates/hya-app/src/runtime.rs))
 
 A bare `SessionEngine` starts with a disconnected mailbox and default
@@ -1115,7 +1115,7 @@ an injectable catalog plane. Consequently, registry presence alone does not
 prove that a plane-backed tool can return useful data; for example, mailbox
 operations report that they are available only inside a running team, and LSP
 reports when no server supports a file type.
-([`SessionEngine::new`](../../crates/hya-core/src/engine.rs),
+([`SessionEngine::new`](../../crates/hya-engine/src/engine.rs),
 [`build_session_engine`](../../crates/hya-app/src/runtime.rs),
 [`MailboxError::Unavailable`](../../crates/hya-tool/src/mailbox.rs),
 [`LspTool`](../../bundles/presets/extended-tools/native/src/lsp.rs))
@@ -1179,7 +1179,7 @@ impl NestedToolPlane {
 ```
 
 ([`NestedToolPlane`](../../crates/hya-tool/src/nested.rs),
-[`TurnNestedTools`](../../crates/hya-core/src/engine/nested_tools.rs))
+[`TurnNestedTools`](../../crates/hya-engine/src/engine/nested_tools.rs))
 
 ### MCP tools
 
@@ -1242,7 +1242,7 @@ The focused contracts are owned by these seams:
   snapshots, and lock bounds: [`bundles/presets/base-tools/native/src/hashline/`](../../bundles/presets/base-tools/native/src/hashline/).
 - Invocation/resource permission and typed error mapping:
   [`crates/hya-tool/src/permission.rs`](../../crates/hya-tool/src/permission.rs)
-  and [`crates/hya-core/src/engine/tool_error.rs`](../../crates/hya-core/src/engine/tool_error.rs).
+  and [`crates/hya-engine/src/engine/tool_error.rs`](../../crates/hya-engine/src/engine/tool_error.rs).
 - Durable result projection and provider replay: [`docs/architecture/event-model.md`](event-model.md).
 
 These boundaries describe shipped behavior, not a promise of full Compat

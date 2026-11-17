@@ -17,7 +17,7 @@ hya-channel-tools = { workspace = true }
 hya-network-tools = { workspace = true }
 hya-bundle = { workspace = true }
 hya-version = { workspace = true }
-hya-core = { workspace = true }
+hya-engine = { workspace = true }
 hya-provider = { workspace = true }
 hya-tool = { workspace = true }
 hya-base-tools = { workspace = true }

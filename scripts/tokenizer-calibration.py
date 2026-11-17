@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Provenance for the `CalibratedTokenizer` weight table.
 
-`crates/hya-core/src/tokens.rs` estimates tokens by classifying text into run
+`crates/hya-engine/src/tokens.rs` estimates tokens by classifying text into run
 categories and weighting them. This script is how those weights were derived and
 how they are re-derived if the table ever needs to change:
 
@@ -14,7 +14,7 @@ how they are re-derived if the table ever needs to change:
 over repository files, then quantizes to sixteenths so the Rust implementation
 is exact integer arithmetic. `evaluate` scores the quantized table on held-out
 files against the `str::len() / 4` baseline it replaces. `fixtures` prints the
-ground-truth counts baked into `crates/hya-core/tests/token_accounting.rs`.
+ground-truth counts baked into `crates/hya-engine/tests/token_accounting.rs`.
 
 The Python featurizer below must stay a faithful mirror of `count_text` in
 `tokens.rs`; the fixture accuracy test is what catches divergence.
@@ -347,7 +347,7 @@ def report(label, corpus, enc):
     score("calibrated", np.array([predict(t) for t in corpus], dtype=float), truth)
 
 
-# Mirrors the `FIXTURES` table in `crates/hya-core/tests/token_accounting.rs`.
+# Mirrors the `FIXTURES` table in `crates/hya-engine/tests/token_accounting.rs`.
 TEST_FIXTURES = {
     "rust_code": (
         "pub fn resolved_threshold(cfg: &CompactionConfig, max_context: Option<u32>) -> usize {\n"

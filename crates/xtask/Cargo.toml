@@ -17,7 +17,7 @@ async-trait = { workspace = true }
 futures = { workspace = true }
 hya-app = { workspace = true }
 hya-bundle = { workspace = true }
-hya-core = { workspace = true }
+hya-engine = { workspace = true }
 hya-proto = { workspace = true }
 hya-provider = { workspace = true }
 hya-store = { workspace = true, features = ["lifecycle-bench"] }

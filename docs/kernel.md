@@ -145,6 +145,8 @@ not select the kernel alone.
 
 ## How full mode runs on the kernel
 
+Full mode is the `hya-engine` crate (`SessionEngine` and everything behind
+the server and CLI); the kernel and `CoreError` are all of `hya-core`.
 Full-mode turns run the same kernel loop as `--bare`; there is no second
 round loop. Each round reads the projection, lets the harness rewrite it,
 builds the request with `kernel::request` from the (re-read) projection,

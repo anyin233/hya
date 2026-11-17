@@ -12,7 +12,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use hya_core::SessionEngine;
+use hya_engine::SessionEngine;
 use hya_server::{
     PROVIDER_CONTROL_FAILURE, PROVIDER_INVALID_REQUEST, PROVIDER_NOT_FOUND, ProviderChange,
     ProviderControl, ProviderControlError, ProviderControlFuture, ProviderDiscoveryReport,

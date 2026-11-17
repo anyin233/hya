@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use hya_core::{AgentSpec, SessionEngine};
+use hya_engine::{AgentSpec, SessionEngine};
 use hya_tool::{AskRequest, FormatterStatus, QuestionRequest};
 use serde_json::Value;
 use tokio::sync::{broadcast, mpsc};
@@ -71,7 +71,7 @@ impl AppState {
     pub async fn stop_for_restart(
         &self,
         deadline: std::time::Duration,
-    ) -> Result<hya_core::TurnDrainReport, hya_core::CoreError> {
+    ) -> Result<hya_engine::TurnDrainReport, hya_engine::CoreError> {
         self.streams.close(crate::ShutdownReason::Restart);
         Ok(self.drain_server(deadline).await)
     }
@@ -86,10 +86,10 @@ impl AppState {
     /// Drain turns and reserved runs before cancelling and joining server
     /// services. Embedders drain their composition/resident owner first.
     pub async fn shutdown(&self) {
-        self.drain_server(hya_core::DRAIN_DEADLINE).await;
+        self.drain_server(hya_engine::DRAIN_DEADLINE).await;
     }
 
-    async fn drain_server(&self, deadline: std::time::Duration) -> hya_core::TurnDrainReport {
+    async fn drain_server(&self, deadline: std::time::Duration) -> hya_engine::TurnDrainReport {
         let until = tokio::time::Instant::now() + deadline;
         self.begin_shutdown();
         let report = self
@@ -552,7 +552,7 @@ impl ServerState {
                 self.engine.cancel_user_turn(*session);
                 if !self
                     .engine
-                    .wait_turn_idle(*session, hya_core::DRAIN_DEADLINE)
+                    .wait_turn_idle(*session, hya_engine::DRAIN_DEADLINE)
                     .await
                 {
                     return Err(crate::ApiError::unavailable(
@@ -562,7 +562,7 @@ impl ServerState {
             }
             Ok(())
         };
-        tokio::time::timeout(hya_core::DRAIN_DEADLINE, settle).await.map_err(|_| {
+        tokio::time::timeout(hya_engine::DRAIN_DEADLINE, settle).await.map_err(|_| {
             crate::ApiError::unavailable("session deletion timed out waiting for active writers; no sessions were deleted")
         })??;
         Ok(self.engine.delete_session(session).await?)

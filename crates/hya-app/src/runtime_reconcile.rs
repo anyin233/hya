@@ -5,8 +5,8 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use hya_bundle::{PreparedResource, PreparedSchema};
-use hya_core::runtime_registry::{RuntimeSourceSkill, SourceSchema};
-use hya_core::{
+use hya_engine::runtime_registry::{RuntimeSourceSkill, SourceSchema};
+use hya_engine::{
     RuntimeRefreshError, RuntimeRegistry, RuntimeSource, RuntimeSourceExport, RuntimeSourceId,
     RuntimeSourceKind, RuntimeSourceOwner,
 };
@@ -104,7 +104,7 @@ impl RuntimeExtensionsRefresh {
         catalogs: crate::ProjectScopeRefresh,
         reconciler: Arc<RuntimeReconciler>,
         pure: bool,
-    ) -> Result<Self, hya_core::CoreError> {
+    ) -> Result<Self, hya_engine::CoreError> {
         let config_file = crate::config::active_config_path();
         let applied = read_plugin_config(&config_file)?;
         Ok(Self {
@@ -117,11 +117,11 @@ impl RuntimeExtensionsRefresh {
     }
 }
 
-fn read_plugin_config(path: &Path) -> Result<Option<String>, hya_core::CoreError> {
+fn read_plugin_config(path: &Path) -> Result<Option<String>, hya_engine::CoreError> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(hya_core::CoreError::Invalid(format!(
+        Err(error) => Err(hya_engine::CoreError::Invalid(format!(
             "read plugin config {}: {error}",
             path.display()
         ))),
@@ -129,7 +129,7 @@ fn read_plugin_config(path: &Path) -> Result<Option<String>, hya_core::CoreError
 }
 
 impl RuntimeExtensionsRefresh {
-    async fn refresh_plugins(&self, explicit: bool) -> Result<(), hya_core::CoreError> {
+    async fn refresh_plugins(&self, explicit: bool) -> Result<(), hya_engine::CoreError> {
         if self.pure {
             return Ok(());
         }
@@ -142,7 +142,7 @@ impl RuntimeExtensionsRefresh {
                 // Remember failed inputs too; only edits or explicit refresh retry.
                 *applied = next.clone();
                 crate::config::parse_plugin_config(next.as_deref().unwrap_or("")).map_err(|error| {
-                    hya_core::CoreError::Invalid(format!("load plugin config: {error:#}"))
+                    hya_engine::CoreError::Invalid(format!("load plugin config: {error:#}"))
                 })
             }
             Err(error) => Err(error),
@@ -155,12 +155,12 @@ impl RuntimeExtensionsRefresh {
         let plan = self
             .reconciler
             .replace_plugins(specs, explicit)
-            .map_err(|error| hya_core::CoreError::Invalid(error.to_string()))?;
+            .map_err(|error| hya_engine::CoreError::Invalid(error.to_string()))?;
         let result = RuntimeMcpControl::new(self.reconciler.clone())
             .reconcile_plan(plan, tokio_util::sync::CancellationToken::new())
             .await
             .map(|_| ())
-            .map_err(|error| hya_core::CoreError::Invalid(error.to_string()));
+            .map_err(|error| hya_engine::CoreError::Invalid(error.to_string()));
         if let Some(error) = config_error {
             return Err(error);
         }
@@ -169,11 +169,11 @@ impl RuntimeExtensionsRefresh {
 }
 
 #[async_trait::async_trait]
-impl hya_core::RuntimeCatalogRefresh for RuntimeExtensionsRefresh {
+impl hya_engine::RuntimeCatalogRefresh for RuntimeExtensionsRefresh {
     async fn refresh_if_changed(
         &self,
         runtime: &RuntimeRegistry,
-    ) -> Result<bool, hya_core::CoreError> {
+    ) -> Result<bool, hya_engine::CoreError> {
         let before = runtime.effective_manifest().generation;
         let catalogs = self.catalogs.refresh_if_changed(runtime).await;
         let plugins = self.refresh_plugins(false).await;
@@ -185,7 +185,7 @@ impl hya_core::RuntimeCatalogRefresh for RuntimeExtensionsRefresh {
     async fn refresh_explicit(
         &self,
         runtime: &RuntimeRegistry,
-    ) -> Result<bool, hya_core::CoreError> {
+    ) -> Result<bool, hya_engine::CoreError> {
         let before = runtime.effective_manifest().generation;
         let catalogs = self.catalogs.refresh_explicit(runtime).await;
         let plugins = self.refresh_plugins(true).await;
@@ -197,16 +197,16 @@ impl hya_core::RuntimeCatalogRefresh for RuntimeExtensionsRefresh {
     async fn refresh_scope(
         &self,
         runtime: &RuntimeRegistry,
-        scope: &hya_core::CatalogScope,
-    ) -> Result<bool, hya_core::CoreError> {
+        scope: &hya_engine::CatalogScope,
+    ) -> Result<bool, hya_engine::CoreError> {
         self.catalogs.refresh_scope(runtime, scope).await
     }
 
     async fn refresh_scope_explicit(
         &self,
         runtime: &RuntimeRegistry,
-        scope: &hya_core::CatalogScope,
-    ) -> Result<bool, hya_core::CoreError> {
+        scope: &hya_engine::CatalogScope,
+    ) -> Result<bool, hya_engine::CoreError> {
         self.catalogs.refresh_scope_explicit(runtime, scope).await
     }
 }
@@ -237,7 +237,7 @@ pub(crate) struct PreparedSource {
     skills: Vec<RuntimeSourceSkill>,
     resources: BTreeMap<String, Value>,
     schemas: Vec<SourceSchema>,
-    hooks: Option<Arc<dyn hya_core::hooks::HookDispatcher>>,
+    hooks: Option<Arc<dyn hya_engine::hooks::HookDispatcher>>,
 }
 
 pub(crate) struct PreparedFailure {
@@ -1403,7 +1403,7 @@ mod tests {
     use hya_bundle::{
         AgentRole, Bundle, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, ResourceView,
     };
-    use hya_core::{AgentCatalog, RuntimeRegistry};
+    use hya_engine::{AgentCatalog, RuntimeRegistry};
     use hya_mcp::McpServerConfig;
     use hya_plugin::config::PluginSpec;
     use hya_plugin::messages::PluginKindWire;
@@ -1419,7 +1419,7 @@ mod tests {
 
     struct RefreshHarness {
         root: std::path::PathBuf,
-        engine: hya_core::SessionEngine,
+        engine: hya_engine::SessionEngine,
         reconciler: Arc<RuntimeReconciler>,
         refresh: Arc<super::RuntimeExtensionsRefresh>,
     }
@@ -1446,12 +1446,12 @@ mod tests {
             });
             let (permission, _) =
                 hya_tool::PermissionPlane::new(hya_tool::PermissionRules::default());
-            let engine = hya_core::SessionEngine::new(
+            let engine = hya_engine::SessionEngine::new(
                 hya_store::SessionStore::connect_memory().await?,
                 Arc::new(hya_provider::ProviderRouter::new()),
                 registry,
                 permission,
-                hya_core::EventBus::default(),
+                hya_engine::EventBus::default(),
             )
             .with_catalog_refresh(refresh.clone());
             Ok(Self {
@@ -1500,11 +1500,11 @@ for line in sys.stdin:
                 .count()
         }
 
-        async fn bind(&self) -> anyhow::Result<hya_core::TurnBinding> {
+        async fn bind(&self) -> anyhow::Result<hya_engine::TurnBinding> {
             Ok(self
                 .engine
                 .bind_scope_runtime(
-                    &hya_core::CatalogScope::Directory(self.root.clone()),
+                    &hya_engine::CatalogScope::Directory(self.root.clone()),
                     &self.root,
                 )
                 .await?)
@@ -1562,7 +1562,10 @@ for line in sys.stdin:
         h.script("retry", true)?;
         let refreshed = h
             .engine
-            .refresh_bundles(&hya_core::CatalogScope::Directory(h.root.clone()), &h.root)
+            .refresh_bundles(
+                &hya_engine::CatalogScope::Directory(h.root.clone()),
+                &h.root,
+            )
             .await?;
         assert!(refreshed.errors.is_empty(), "{:?}", refreshed.errors);
         assert!(refreshed.binding.resolve_tool("retry__echo").is_some());
@@ -1602,7 +1605,10 @@ for line in sys.stdin:
         std::fs::write(h.root.join("config.yaml"), "plugins: [invalid")?;
         let refreshed = h
             .engine
-            .refresh_bundles(&hya_core::CatalogScope::Directory(h.root.clone()), &h.root)
+            .refresh_bundles(
+                &hya_engine::CatalogScope::Directory(h.root.clone()),
+                &h.root,
+            )
             .await?;
         assert!(!refreshed.errors.is_empty());
         assert_eq!(
@@ -1688,7 +1694,7 @@ for line in sys.stdin:
         h.bind().await?;
         let session = h
             .engine
-            .create(hya_core::CreateSession {
+            .create(hya_engine::CreateSession {
                 parent: None,
                 agent: hya_proto::AgentName::new("hya-main"),
                 model: hya_proto::ModelRef::new("hya/offline"),
@@ -1698,7 +1704,7 @@ for line in sys.stdin:
             })
             .await?;
         h.engine
-            .set_catalog_scope_cache_config(hya_core::CatalogScopeCacheConfig {
+            .set_catalog_scope_cache_config(hya_engine::CatalogScopeCacheConfig {
                 max_scopes: 0,
                 idle_ttl: std::time::Duration::ZERO,
             });
@@ -1741,32 +1747,32 @@ for line in sys.stdin:
     struct HookedSidecar;
 
     #[async_trait]
-    impl hya_core::BoundSidecarFactory for HookedSidecar {
+    impl hya_engine::BoundSidecarFactory for HookedSidecar {
         async fn start(
             &self,
-            _: hya_core::SidecarStart,
-        ) -> Result<Box<dyn hya_core::SidecarHandle>, hya_core::CoreError> {
+            _: hya_engine::SidecarStart,
+        ) -> Result<Box<dyn hya_engine::SidecarHandle>, hya_engine::CoreError> {
             Ok(Box::new(HookedSidecar))
         }
     }
 
     #[async_trait]
-    impl hya_core::SidecarHandle for HookedSidecar {
-        async fn ready(&mut self) -> Result<(), hya_core::CoreError> {
+    impl hya_engine::SidecarHandle for HookedSidecar {
+        async fn ready(&mut self) -> Result<(), hya_engine::CoreError> {
             Ok(())
         }
 
-        async fn shutdown(&mut self) -> Result<(), hya_core::CoreError> {
+        async fn shutdown(&mut self) -> Result<(), hya_engine::CoreError> {
             Ok(())
         }
 
-        fn hook_dispatcher(&self) -> Option<Arc<dyn hya_core::HookDispatcher>> {
-            Some(Arc::new(hya_core::hooks::NoopHookHost))
+        fn hook_dispatcher(&self) -> Option<Arc<dyn hya_engine::HookDispatcher>> {
+            Some(Arc::new(hya_engine::hooks::NoopHookHost))
         }
     }
 
     async fn assert_global_events_with_child_sidecar(resident: bool) -> anyhow::Result<()> {
-        use hya_core::{AgentSpec, CreateSession, ResidentSupervisor, SessionEngine};
+        use hya_engine::{AgentSpec, CreateSession, ResidentSupervisor, SessionEngine};
         use hya_proto::{Event, FinishCause, ModelRef, Role, SessionKind};
         use std::time::Duration;
         use tokio_util::sync::CancellationToken;
@@ -1814,7 +1820,7 @@ for line in sys.stdin:
             ),
             runtime,
             permission,
-            hya_core::EventBus::default(),
+            hya_engine::EventBus::default(),
         ));
         let mut live = engine.bus().subscribe();
         let root_agent = AgentSpec {
@@ -1994,7 +2000,7 @@ for line in sys.stdin:
             .await?;
         let session = h
             .engine
-            .create(hya_core::CreateSession {
+            .create(hya_engine::CreateSession {
                 parent: None,
                 agent: hya_proto::AgentName::new("hya-main"),
                 model: hya_proto::ModelRef::new("hya/offline"),
@@ -2007,7 +2013,7 @@ for line in sys.stdin:
         assert!(
             h.engine
                 .runtime_registry()
-                .scope_overlay(&hya_core::ScopeKey::Project(project.id))
+                .scope_overlay(&hya_engine::ScopeKey::Project(project.id))
                 .is_some()
         );
         let pid = std::fs::read_to_string(h.root.join("global.starts"))?
@@ -2025,13 +2031,13 @@ for line in sys.stdin:
         assert!(
             h.engine
                 .runtime_registry()
-                .scope_in_use(&hya_core::ScopeKey::Project(project.id))
+                .scope_in_use(&hya_engine::ScopeKey::Project(project.id))
         );
         drop(retained);
         assert!(
             !h.engine
                 .runtime_registry()
-                .scope_in_use(&hya_core::ScopeKey::Project(project.id))
+                .scope_in_use(&hya_engine::ScopeKey::Project(project.id))
         );
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
             loop {
@@ -2165,7 +2171,7 @@ for line in sys.stdin:
     }
 
     struct CloseCounter(Arc<AtomicUsize>);
-    impl hya_core::RuntimeSourceOwner for CloseCounter {}
+    impl hya_engine::RuntimeSourceOwner for CloseCounter {}
 
     impl Drop for CloseCounter {
         fn drop(&mut self) {
@@ -2890,8 +2896,10 @@ for line in sys.stdin:
         let source = super::prepared_static_bundle_source(bundle_id, &[prepared], &valid)?
             .into_runtime_source();
         let published = registry.refresh(|candidate| {
-            candidate
-                .replace_sources_of_kind(hya_core::RuntimeSourceKind::Bundle, vec![source.clone()])
+            candidate.replace_sources_of_kind(
+                hya_engine::RuntimeSourceKind::Bundle,
+                vec![source.clone()],
+            )
         })?;
         assert_eq!(published, registry.effective_manifest().generation);
         let source_manifest = registry

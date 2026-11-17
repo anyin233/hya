@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use hya_proto::AgentName;
 use std::sync::Arc;
 
-use hya_core::{
+use hya_engine::{
     AgentSpec, CoreError, PromptEnv, discover_context_files, render_environment_and_context, today,
 };
 use hya_proto::SessionId;
@@ -200,7 +200,7 @@ pub(crate) async fn shell_agent(
     st: &crate::ServerState,
     session: SessionId,
     req: &hya_api::v1::ShellTurn,
-) -> Result<hya_core::AgentSpec, crate::ApiError> {
+) -> Result<hya_engine::AgentSpec, crate::ApiError> {
     if let Some(model) = &req.model {
         let provider = model.provider_id.trim();
         let model_id = model.model_id.trim();

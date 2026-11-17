@@ -15,7 +15,7 @@ use axum::http::{Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use hya_api::v1 as pb;
 use hya_api::v1::bundle_api_server::BundleApi as _;
-use hya_core::{
+use hya_engine::{
     AgentSpec, ApiMethod, ApiPathTemplate, ApiScope, BundleApiProvider, BundleApiReply,
     BundleApiRequest, EventBus, RuntimeSource, RuntimeSourceId, SessionEngine, SourceApi,
 };
@@ -399,7 +399,7 @@ async fn host_side_failures_use_the_stable_error_codes() {
     assert_eq!(reply.status, StatusCode::BAD_REQUEST);
     assert_eq!(reply.json["error"]["code"], "bundle_api_bad_request");
 
-    let oversized = format!("\"{}\"", "x".repeat(hya_core::MAX_BUNDLE_API_BODY_BYTES));
+    let oversized = format!("\"{}\"", "x".repeat(hya_engine::MAX_BUNDLE_API_BODY_BYTES));
     let reply = send_raw(
         app,
         Method::POST,

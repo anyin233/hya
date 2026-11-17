@@ -85,7 +85,7 @@ Rules:
   marker matched the wrong agent, or none.
 
 Mailbox delivery only reaches **resident** teammates (`task` with
-`resident: true`): `hya-core::resident` injects a handle's unread inbox into its
+`resident: true`): `hya-engine::resident` injects a handle's unread inbox into its
 next turn as `[mail from <handle>] <body>` user prompts. There is no mailbox HTTP
 route, so the recipient's own next request is the only delivery oracle — see
 `crates/hya-e2e/tests/p16_swarm_mailbox.rs`.

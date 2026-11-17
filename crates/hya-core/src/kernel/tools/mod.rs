@@ -32,7 +32,7 @@ pub fn builtin() -> Vec<Arc<dyn Tool>> {
 }
 
 /// Schema of the `rewrite` tool, for a tool set the kernel loop intercepts it in.
-pub(crate) fn rewrite_schema() -> ToolSchema {
+pub fn rewrite_schema() -> ToolSchema {
     rewrite::Rewrite.schema()
 }
 

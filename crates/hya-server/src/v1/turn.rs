@@ -20,7 +20,7 @@ use crate::ServerState;
 use crate::runs::RunGuard;
 use hya_api::v1 as pb;
 use hya_api::v1::create_turn_request::Kind;
-use hya_core::attachments::PromptAttachment;
+use hya_engine::attachments::PromptAttachment;
 use hya_proto::{MessageId, ModelRef, SessionId};
 
 use super::V1Error;
@@ -30,7 +30,7 @@ use super::session::parse_session;
 /// fallible a turn needs runs before anything is admitted, so a failure
 /// admits nothing and a stop never waits on it.
 struct PreparedTurn {
-    agent: hya_core::AgentSpec,
+    agent: hya_engine::AgentSpec,
     guidance: Option<Arc<str>>,
     external_dirs: Vec<PathBuf>,
     explicit_model: Option<ModelRef>,
@@ -495,7 +495,7 @@ async fn create_turn(
     }
 }
 
-/// Validate a prompt's attachments ([`hya_core::attachments`]): image types
+/// Validate a prompt's attachments ([`hya_engine::attachments`]): image types
 /// only, 10 MiB each, 20 MiB per turn. Any failure is `invalid_argument`.
 fn prompt_attachments(
     attachments: Vec<pb::PromptAttachment>,
@@ -509,7 +509,7 @@ fn prompt_attachments(
             path: Some(attachment.path),
         })
         .collect::<Vec<_>>();
-    hya_core::attachments::validate_prompt_attachments(&mut attachments)
+    hya_engine::attachments::validate_prompt_attachments(&mut attachments)
         .map_err(|error| V1Error::invalid_argument(error.to_string()))?;
     Ok(attachments)
 }
@@ -519,7 +519,7 @@ fn prompt_attachments(
 async fn ensure_image_input(
     st: &ServerState,
     session: SessionId,
-    agent: &hya_core::AgentSpec,
+    agent: &hya_engine::AgentSpec,
 ) -> Result<(), V1Error> {
     let model = st.engine.root_turn_model(session, agent).await?;
     let image_input = st
@@ -621,7 +621,7 @@ async fn cancel_turn(
 mod admission_tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
-    use hya_core::{
+    use hya_engine::{
         AgentCatalog, AgentSpec, CreateSession, EventBus, RuntimeRegistry, SessionEngine,
     };
     use hya_proto::{AgentName, ModelRef};

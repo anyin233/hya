@@ -223,14 +223,14 @@ impl ApiError {
     }
 }
 
-impl From<hya_core::CoreError> for V1Error {
-    fn from(error: hya_core::CoreError) -> Self {
-        if let hya_core::CoreError::Store(error) = error {
+impl From<hya_engine::CoreError> for V1Error {
+    fn from(error: hya_engine::CoreError) -> Self {
+        if let hya_engine::CoreError::Store(error) = error {
             return error.into();
         }
         let code = match &error {
-            hya_core::CoreError::TurnAlreadyActive { .. } => Code::SessionBusy,
-            hya_core::CoreError::Invalid(_) => Code::InvalidArgument,
+            hya_engine::CoreError::TurnAlreadyActive { .. } => Code::SessionBusy,
+            hya_engine::CoreError::Invalid(_) => Code::InvalidArgument,
             _ => Code::Internal,
         };
         Self::new(code, error.to_string())
@@ -494,7 +494,7 @@ mod mail_error_tests {
             let message = error.to_string();
             for mapped in [
                 ApiError::from(error.clone()),
-                ApiError::from(hya_core::CoreError::Store(error)),
+                ApiError::from(hya_engine::CoreError::Store(error)),
             ] {
                 assert_eq!(mapped.code, expected);
                 assert_eq!(mapped.grpc_status().code(), grpc);

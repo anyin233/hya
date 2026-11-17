@@ -121,7 +121,7 @@ pub(crate) fn spawn_background_drivers(state: &ServerState) {
 }
 
 /// Relay every dropped catalog scope
-/// ([`hya_core::SessionEngine::invalidate_catalog_scope`]) as one live
+/// ([`hya_engine::SessionEngine::invalidate_catalog_scope`]) as one live
 /// `catalogUpdated {projectId}`; a lagged receiver may have missed any
 /// Project, so it publishes one global (empty `projectId`) notice. Holds
 /// only the receiver and the notice sender, so it ends with the engine.
@@ -132,7 +132,7 @@ fn spawn_catalog_scope_notices(state: &ServerState) {
     state.spawn_background(async move {
         loop {
             let project = match invalidations.recv().await {
-                Ok(hya_core::ScopeKey::Project(project)) => Some(project),
+                Ok(hya_engine::ScopeKey::Project(project)) => Some(project),
                 Ok(_) | Err(RecvError::Lagged(_)) => None,
                 Err(RecvError::Closed) => break,
             };

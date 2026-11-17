@@ -9,7 +9,7 @@ pub mod prompt;
 /// Projection-to-request conversion.
 pub mod request;
 mod rewrite;
-pub(crate) mod round;
+pub mod round;
 /// The kernel's five tools.
 pub mod tools;
 
@@ -29,8 +29,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::CoreError;
 use rewrite::Initiator;
-pub(crate) use rewrite::Rewriter;
-pub(crate) use round::{CompleteText, Failure, Round, ToolCall};
+pub use rewrite::Rewriter;
+pub use round::{CompleteText, Failure, Round, ToolCall};
 
 /// Agent name the kernel renders assistant messages with in requests.
 pub const AGENT: &str = "kernel";
@@ -102,7 +102,7 @@ pub struct Run<'a> {
 
 /// Executes one tool call and appends its `ToolResult` or `ToolError`.
 #[async_trait]
-pub(crate) trait ToolGate: Send {
+pub trait ToolGate: Send {
     /// Run `call` and record its outcome; an `Err` ends the run.
     async fn call(&mut self, call: ToolCall) -> Result<(), CoreError>;
     /// Account for `calls`, which a cancel left unrun.
@@ -114,7 +114,7 @@ pub(crate) trait ToolGate: Send {
 /// Bare mode's [`Bare`] is the kernel alone; full mode adds rebinding, hooks,
 /// model fallback, and retry.
 #[async_trait]
-pub(crate) trait Harness: ToolGate + Rewriter {
+pub trait Harness: ToolGate + Rewriter {
     /// The round's request for `projection`.
     async fn request(&mut self, projection: &Projection) -> Result<CompletionRequest, CoreError>;
     /// Open `request`'s stream and name the model serving it; `None` when a
@@ -254,19 +254,19 @@ impl Harness for Bare<'_> {
 }
 
 /// The run a round belongs to.
-pub(crate) struct Scope<'a> {
+pub struct Scope<'a> {
     /// Session event log.
-    pub(crate) store: &'a SessionStore,
+    pub store: &'a SessionStore,
     /// Event sink.
-    pub(crate) emit: &'a dyn Emit,
+    pub emit: &'a dyn Emit,
     /// Replaces each completed text part before it is persisted.
-    pub(crate) complete: Option<&'a dyn CompleteText>,
+    pub complete: Option<&'a dyn CompleteText>,
     /// Model routes; a round's route sizes a rewrite's recorded budget.
-    pub(crate) provider: &'a ProviderRouter,
+    pub provider: &'a ProviderRouter,
     /// Session of the run.
-    pub(crate) session: SessionId,
+    pub session: SessionId,
     /// Assistant message of the run.
-    pub(crate) message: MessageId,
+    pub message: MessageId,
 }
 
 /// Execute a round's calls in order: `rewrite` in the kernel, every other
@@ -354,7 +354,7 @@ pub async fn run(run: Run<'_>) -> Result<FinishReason, CoreError> {
 ///
 /// Returns the last round's finish (`Stop` when the harness is done), or
 /// `Cancelled`. The caller finishes the assistant message.
-pub(crate) async fn drive(
+pub async fn drive(
     scope: &Scope<'_>,
     harness: &mut dyn Harness,
     cancel: &CancellationToken,

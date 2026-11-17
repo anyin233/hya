@@ -8,7 +8,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use futures::stream;
-use hya_core::{
+use hya_engine::{
     AgentSpec, BoundSidecarFactory, CoreError, CreateSession, EventBus, SessionEngine,
     SidecarEnvironment, SidecarHandle, SidecarStart, TurnBinding,
 };

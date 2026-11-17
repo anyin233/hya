@@ -42,10 +42,10 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use clap::Parser;
-use hya_core::completion::{PluginGoalEvaluator, render_transcript};
-use hya_core::hooks::HookDispatcher;
-use hya_core::loop_mode::{LoopConfig, ModelLoopPlanner, ModelLoopVerifier, run_loop};
-use hya_core::{
+use hya_engine::completion::{PluginGoalEvaluator, render_transcript};
+use hya_engine::hooks::HookDispatcher;
+use hya_engine::loop_mode::{LoopConfig, ModelLoopPlanner, ModelLoopVerifier, run_loop};
+use hya_engine::{
     GoalEvaluator, HookChain, HookLoopPlanner, HookLoopVerifier, ModelGoalEvaluator, RunOutcome,
     SafetyCaps, TurnBinding, run_goal,
 };
@@ -311,7 +311,7 @@ impl StopSignal {
 /// every in-flight turn in every session is cancelled with cause
 /// `user_cancel` (SIGINT) or `shutdown` (SIGTERM) and closes its messages,
 /// members go terminal, and `work` — still polled — observes the cancel and
-/// returns. The drain is bounded by [`hya_core::DRAIN_DEADLINE`]; a second
+/// returns. The drain is bounded by [`hya_engine::DRAIN_DEADLINE`]; a second
 /// SIGINT during the drain exits immediately (crash recovery closes what is
 /// left on the next start).
 async fn run_until_stopped<T>(
@@ -478,11 +478,11 @@ async fn cmd_loop(
             // providers may force a legitimate stop; without registrations the
             // dispatcher answers `None` and the gate falls through untouched.
             let evaluator_dispatcher = goal_loop_hook_chain(&binding, agent.name.as_str());
-            let verifier_fallback: Arc<dyn hya_core::LoopVerifier> = Arc::new(
+            let verifier_fallback: Arc<dyn hya_engine::LoopVerifier> = Arc::new(
                 ModelLoopVerifier::new(Arc::new(evaluator_router.clone()), ModelRef::new(&evaluator_model))
                     .with_system_prompt(binding.bundle_skill_content("hya/goal-loop", "loop-verifier-prompt").map(skill_prompt_body).unwrap_or("You are an independent loop verifier. You have no stake in the work and no tools.")),
             );
-            let planner_fallback: Arc<dyn hya_core::LoopPlanner> = Arc::new(
+            let planner_fallback: Arc<dyn hya_engine::LoopPlanner> = Arc::new(
                 ModelLoopPlanner::new(Arc::new(evaluator_router), ModelRef::new(&evaluator_model))
                     .with_system_prompt(
                         binding
@@ -540,7 +540,7 @@ fn goal_loop_hook_chain(binding: &TurnBinding, stable_agent_id: &str) -> Arc<dyn
         .is_some_and(|agent| agent.origin.bundle_id() == Some("hya/goal-loop"));
     // The goal-loop owner is appended unfiltered below; retain global/plugin hooks.
     let selected = binding.bundle_hooks_for_agent(if active_is_goal_loop {
-        hya_core::MAIN_AGENT_ID
+        hya_engine::MAIN_AGENT_ID
     } else {
         stable_agent_id
     });
@@ -891,7 +891,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hya_core::hooks::NoopHookHost;
+    use hya_engine::hooks::NoopHookHost;
 
     #[test]
     fn evaluator_hook_order_is_global_agentless_selected_intelligent_and_deduplicated() {
@@ -955,7 +955,7 @@ mod tests {
         .unwrap();
         let engine = built.engine();
         let root = engine
-            .create(hya_core::CreateSession {
+            .create(hya_engine::CreateSession {
                 parent: None,
                 agent: agent.name.clone(),
                 model: agent.model.clone(),

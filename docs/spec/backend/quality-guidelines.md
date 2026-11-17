@@ -268,7 +268,7 @@ let (engine, ..) = build_session_engine(store, router, &model, mcp, plugins).awa
 
 - Trigger: changing tool, skill, MCP, prompt-discovery, or runtime-refresh
   behavior visible to an admitted assistant or direct-shell turn.
-- Applies to `hya-core::RuntimeRegistry`, `TurnBinding`, startup/deferred
+- Applies to `hya-engine::RuntimeRegistry`, `TurnBinding`, startup/deferred
   candidate construction in `hya-app`, and the lightweight binding event in
   `hya-proto`.
 
@@ -795,7 +795,7 @@ const lifecycle = resolveLifecyclePresentation(node)
 - A record-only variant must not change reduced state. It still advances
   `last_seq`; assert on `projection.session` / `.team`, not the whole `Projection`.
 - Compile-driven site list (the build enumerates these; do not hand-maintain):
-  `hya-core/src/engine/text_complete.rs` and the v1 curated-stream mapping in
+  `hya-engine/src/engine/text_complete.rs` and the v1 curated-stream mapping in
   `hya-server/src/v1/convert.rs` (`stream_event`). A new variant that should
   reach clients also needs a `StreamEvent` payload mapping plus a reducer
   decision there.
@@ -895,8 +895,8 @@ visible and fail closed.
 
 - Trigger: any change to what the turn loop sends the model — compaction
   thresholds, eviction, summarization, or token accounting.
-- Applies to `crates/hya-core/src/compaction.rs` and the reduction block in
-  `crates/hya-core/src/engine/turn.rs`.
+- Applies to `crates/hya-engine/src/compaction.rs` and the reduction block in
+  `crates/hya-engine/src/engine/turn.rs`.
 
 ### 2. Contracts
 

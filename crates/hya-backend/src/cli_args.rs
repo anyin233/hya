@@ -430,12 +430,12 @@ pub(crate) enum Command {
 
 /// Resolve the effective loop budget from the parsed flags: `--budget`
 /// outranks the `--max-iterations` alias, the default mirrors
-/// [`hya_core::LoopConfig::default`], and every request is clamped into the
+/// [`hya_engine::LoopConfig::default`], and every request is clamped into the
 /// range `validate_budget` enforces.
 #[must_use]
 pub(crate) fn loop_budget(budget: Option<u32>, max_iterations: Option<u32>) -> u32 {
-    let default = hya_core::LoopConfig::default().budget;
-    hya_core::loop_mode::clamp_budget(budget.or(max_iterations).unwrap_or(default))
+    let default = hya_engine::LoopConfig::default().budget;
+    hya_engine::loop_mode::clamp_budget(budget.or(max_iterations).unwrap_or(default))
 }
 
 /// Build the deterministic loop predicate from `--while`/`--until`: exactly
@@ -444,20 +444,20 @@ pub(crate) fn build_loop_predicate(
     while_command: Option<String>,
     until_command: Option<String>,
     workdir: &std::path::Path,
-) -> Result<Option<hya_core::loop_mode::LoopPredicate>, String> {
+) -> Result<Option<hya_engine::loop_mode::LoopPredicate>, String> {
     match (while_command, until_command) {
         (Some(_), Some(_)) => Err(
             "--while and --until are mutually exclusive; give exactly one loop condition"
                 .to_string(),
         ),
-        (Some(command), None) => Ok(Some(hya_core::loop_mode::LoopPredicate::new(
+        (Some(command), None) => Ok(Some(hya_engine::loop_mode::LoopPredicate::new(
             command,
-            hya_core::loop_mode::PredicateMode::While,
+            hya_engine::loop_mode::PredicateMode::While,
             workdir.to_path_buf(),
         ))),
-        (None, Some(command)) => Ok(Some(hya_core::loop_mode::LoopPredicate::new(
+        (None, Some(command)) => Ok(Some(hya_engine::loop_mode::LoopPredicate::new(
             command,
-            hya_core::loop_mode::PredicateMode::Until,
+            hya_engine::loop_mode::PredicateMode::Until,
             workdir.to_path_buf(),
         ))),
         (None, None) => Ok(None),
@@ -941,7 +941,7 @@ mod tests {
 
     #[test]
     fn loop_budget_resolves_alias_default_and_clamps() {
-        use hya_core::loop_mode::{LoopConfig, validate_budget};
+        use hya_engine::loop_mode::{LoopConfig, validate_budget};
         // Default mirrors `LoopConfig::default().budget`.
         assert_eq!(super::loop_budget(None, None), LoopConfig::default().budget);
         // `--budget` outranks the `--max-iterations` alias.
@@ -968,7 +968,7 @@ mod tests {
             super::build_loop_predicate(Some("test -f x".to_string()), None, &workdir).unwrap();
         assert!(while_only.is_some(), "--while builds a predicate");
         let predicate = while_only.unwrap();
-        assert_eq!(predicate.mode, hya_core::loop_mode::PredicateMode::While);
+        assert_eq!(predicate.mode, hya_engine::loop_mode::PredicateMode::While);
         assert_eq!(predicate.command, "test -f x");
         assert_eq!(predicate.workdir, workdir);
 
@@ -976,7 +976,7 @@ mod tests {
             super::build_loop_predicate(None, Some("false".to_string()), &workdir).unwrap();
         assert_eq!(
             until_only.unwrap().mode,
-            hya_core::loop_mode::PredicateMode::Until
+            hya_engine::loop_mode::PredicateMode::Until
         );
 
         assert!(

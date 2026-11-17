@@ -10,8 +10,10 @@ use hya_bundle::{
     AgentRole, Bundle, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedResource,
     PreparedTuiExtension, ResourceView,
 };
-use hya_core::runtime_registry::RuntimeSourceSkill;
-use hya_core::{AgentCatalog, RuntimeRegistry, RuntimeSource, RuntimeSourceId, RuntimeSourceKind};
+use hya_engine::runtime_registry::RuntimeSourceSkill;
+use hya_engine::{
+    AgentCatalog, RuntimeRegistry, RuntimeSource, RuntimeSourceId, RuntimeSourceKind,
+};
 use hya_proto::AgentName;
 use hya_tool::{SkillCatalogEntry, ToolRegistry};
 
@@ -174,7 +176,7 @@ pub fn test_agents() -> Vec<AgentFixture> {
 fn prepared_bundles(agents: &[AgentFixture]) -> Vec<Bundle> {
     agents
         .iter()
-        .filter(|agent| hya_core::preset_agent(agent.stable_id).is_none())
+        .filter(|agent| hya_engine::preset_agent(agent.stable_id).is_none())
         .map(|agent| Bundle {
             check: None,
             format_version: 4,

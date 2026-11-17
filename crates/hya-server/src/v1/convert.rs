@@ -411,7 +411,7 @@ fn usage_totals(totals: &hya_proto::UsageTotals) -> pb::TokenUsage {
 /// never carry the bytes (`data` stays empty); they live in the session blob
 /// table and only go to the model.
 fn attachment_parts(files: &[serde_json::Value]) -> Vec<pb::PartInfo> {
-    hya_core::attachments::recorded_attachments(files)
+    hya_engine::attachments::recorded_attachments(files)
         .into_iter()
         .map(|attachment| pb::PartInfo {
             id: attachment.part,

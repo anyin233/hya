@@ -9,7 +9,7 @@ use futures::StreamExt;
 
 use hya_api::v1 as pb;
 use hya_bundle::BundleCatalog;
-use hya_core::{AgentSpec, EventBus, RuntimeRegistry, SessionEngine};
+use hya_engine::{AgentSpec, EventBus, RuntimeRegistry, SessionEngine};
 use hya_proto::{AgentName, FinishReason, ModelRef};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_sdk_v1::{V1Sdk, V1SessionMirror};
@@ -48,7 +48,7 @@ async fn state() -> AppState {
 /// Minimal runtime for the in-process engine: the builtin agent catalog.
 fn test_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegistry> {
     let catalog = BundleCatalog::from_prepared(&[]).expect("sdk test catalog");
-    let catalog = hya_core::AgentCatalog::new(Arc::new(catalog)).expect("sdk agent catalog");
+    let catalog = hya_engine::AgentCatalog::new(Arc::new(catalog)).expect("sdk agent catalog");
     Arc::new(RuntimeRegistry::from_snapshot(
         tools.snapshot(),
         Arc::new(catalog),

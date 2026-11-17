@@ -20,7 +20,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use hya_core::{RuntimeSource, RuntimeSourceId};
+use hya_engine::{RuntimeSource, RuntimeSourceId};
 use hya_plugin::{HostInfo, PluginHost};
 
 use crate::runtime_reconcile::prepared_plugin_host;

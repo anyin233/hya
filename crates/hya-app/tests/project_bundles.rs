@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use hya_core::{
+use hya_engine::{
     CatalogScope, EventBus, RuntimeCatalogRefresh, RuntimeRegistry, RuntimeSourceId, SessionEngine,
     TurnBinding,
 };
@@ -242,7 +242,7 @@ async fn unreadable_registry_row_does_not_block_installed_or_project_sources_on_
         .unwrap();
     let session = h
         .engine
-        .create(hya_core::CreateSession {
+        .create(hya_engine::CreateSession {
             parent: None,
             agent: hya_proto::AgentName::new("hya-main"),
             model: ModelRef::new("dev/echo"),
@@ -1180,7 +1180,7 @@ async fn project_model_and_effort_reach_the_actual_request() {
         .unwrap();
     let agent = hya_app::agent_base_with_model("p/fallback", None);
     let session = engine
-        .create(hya_core::CreateSession {
+        .create(hya_engine::CreateSession {
             parent: None,
             agent: hya_proto::AgentName::new("tools-agent"),
             model: ModelRef::new("p/fallback"),

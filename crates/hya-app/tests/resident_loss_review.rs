@@ -3,7 +3,7 @@
 mod support;
 
 use async_trait::async_trait;
-use hya_core::{BoundSidecarFactory, CoreError, SidecarHandle, SidecarStart};
+use hya_engine::{BoundSidecarFactory, CoreError, SidecarHandle, SidecarStart};
 use hya_proto::{ArchiveReason, Event, FinishReason, MailEndpoint, MailKind, ReportOutcome, Role};
 use serde_json::json;
 use std::sync::{
@@ -219,11 +219,11 @@ async fn report_after_consumed_progress(failed: bool) {
         gate: root_gate.clone(),
         path: h.dir.join("f4-control"),
     });
-    let source = hya_core::RuntimeSource::new(
-        hya_core::RuntimeSourceId::plugin("f4-control"),
+    let source = hya_engine::RuntimeSource::new(
+        hya_engine::RuntimeSourceId::plugin("f4-control"),
         [64; 32],
         Arc::new(()),
-        vec![hya_core::RuntimeSourceExport::tool(
+        vec![hya_engine::RuntimeSourceExport::tool(
             "m4__blocking_write",
             "m4__blocking_write",
             Vec::new(),
@@ -346,11 +346,11 @@ async fn f5_activation_default_health_rejects_a_cancelled_loss_token() {
 }
 
 fn register_blocking_write(h: &Harness, gate: Arc<Gate>) {
-    let source = hya_core::RuntimeSource::new(
-        hya_core::RuntimeSourceId::plugin("f1-control"),
+    let source = hya_engine::RuntimeSource::new(
+        hya_engine::RuntimeSourceId::plugin("f1-control"),
         [61; 32],
         Arc::new(()),
-        vec![hya_core::RuntimeSourceExport::tool(
+        vec![hya_engine::RuntimeSourceExport::tool(
             "m4__blocking_write",
             "m4__blocking_write",
             Vec::new(),
@@ -507,13 +507,13 @@ async fn f1_report_in_a_turn_interrupted_by_loss_still_fails() {
 }
 
 struct CachedLossFactory {
-    engine: std::sync::Weak<hya_core::SessionEngine>,
+    engine: std::sync::Weak<hya_engine::SessionEngine>,
     actor: Arc<std::sync::Mutex<Option<hya_proto::SessionId>>>,
     starts: Arc<AtomicUsize>,
     idle: Arc<Notify>,
 }
 struct CachedLossHandle {
-    engine: std::sync::Weak<hya_core::SessionEngine>,
+    engine: std::sync::Weak<hya_engine::SessionEngine>,
     actor: Arc<std::sync::Mutex<Option<hya_proto::SessionId>>>,
     first: bool,
     armed: AtomicBool,

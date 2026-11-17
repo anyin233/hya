@@ -251,11 +251,11 @@ the omp budgets — is what the ladder relies on, and that is what ships.
 
 | Concern | Location |
 | --- | --- |
-| Rungs, wire names, order parsing, snapcompact archive, handoff plan | [`crates/hya-core/src/compaction.rs`](../crates/hya-core/src/compaction.rs) |
-| Ladder walk in the turn loop | [`crates/hya-core/src/engine/turn.rs`](../crates/hya-core/src/engine/turn.rs) |
+| Rungs, wire names, order parsing, snapcompact archive, handoff plan | [`crates/hya-engine/src/compaction.rs`](../crates/hya-engine/src/compaction.rs) |
+| Ladder walk in the turn loop | [`crates/hya-engine/src/engine/turn.rs`](../crates/hya-engine/src/engine/turn.rs) |
 | Config file/env resolution | [`crates/hya-app/src/config.rs`](../crates/hya-app/src/config.rs) |
 | Wire events and strategies | [`crates/hya-proto/src/event.rs`](../crates/hya-proto/src/event.rs) |
-| Artifact spill sink | [`crates/hya-core/src/engine/spill.rs`](../crates/hya-core/src/engine/spill.rs), [`crates/hya-tool/src/handle/`](../crates/hya-tool/src/handle/) |
+| Artifact spill sink | [`crates/hya-engine/src/engine/spill.rs`](../crates/hya-engine/src/engine/spill.rs), [`crates/hya-tool/src/handle/`](../crates/hya-tool/src/handle/) |
 
 Marker publication is atomic: each persisted reduction writes its completed
 system marker and `ContextCompacted` range event in one transaction, then

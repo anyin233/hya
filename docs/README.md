@@ -21,7 +21,7 @@ govern sessions, Projects, subagents, and Workflows:
 - **[Project Structure](project-structure.md)** — Repository layout, all 21 workspace crates + 5 native tool-family crates, 28 canonical builtin tools, 13 first-party bundles, and dependency direction.
 - **[Domain Glossary (`CONTEXT.md`)](../CONTEXT.md)** — Canonical domain terminology across `hya-proto`, `hya-core`, Projects, Relay, Workflows, and TUI.
 - **Core Subsystem Specifications:**
-  - [Runtime (`hya-core`)](architecture/runtime.md) — `SessionEngine`, publish seams, `TurnBinding`, Goal/Loop drivers, file snapshots & revert, and workspace roots.
+  - [Runtime (`hya-engine`)](architecture/runtime.md) — `SessionEngine`, publish seams, `TurnBinding`, Goal/Loop drivers, file snapshots & revert, and workspace roots.
   - [Event Model (`hya-proto`)](architecture/event-model.md) — Strong IDs, `EventSeq` (`seq = 0` live vs `seq > 0` durable), full `Event` wire catalog, and deterministic `Projection` reducer.
   - [Storage (`hya-store`)](architecture/storage.md) — SQLite WAL schema (`0001_init.sql`), atomic batch appends, `projection_snapshot`, `pending_resume`, and `bundle_registry`.
   - [Subagent Orchestration](architecture/subagent-orchestration.md) — Episodic resident actors, `report` / `handoff` / `archive` / downward-DM revival, and vertical `#announce` / `#DM` channels.
