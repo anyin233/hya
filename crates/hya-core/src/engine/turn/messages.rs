@@ -46,6 +46,21 @@ pub(super) fn system_prompt(
     }
 }
 
+/// Lowercase hex SHA-256 digests of a request's system prompt text and of its
+/// JSON-serialized tool schema list.
+pub(super) fn prompt_digests(
+    system: &str,
+    tools: &[hya_proto::ToolSchema],
+) -> Result<(String, String), crate::error::CoreError> {
+    use sha2::{Digest, Sha256};
+    let tools = serde_json::to_vec(tools)
+        .map_err(|error| crate::error::CoreError::Invalid(format!("tool schemas: {error}")))?;
+    Ok((
+        format!("{:x}", Sha256::digest(system.as_bytes())),
+        format!("{:x}", Sha256::digest(tools)),
+    ))
+}
+
 /// Effort for a cross-model fallback attempt: the candidate's own `#variant`
 /// wins; otherwise the effort resolved for the preferred model carries over.
 ///

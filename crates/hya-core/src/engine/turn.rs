@@ -34,7 +34,8 @@ mod tool_gate;
 use crate::agent_catalog::AgentDefinition;
 pub use messages::advertise_tool;
 use messages::{
-    AttachmentData, attachment_blobs, filtered_tool_schemas, projection_to_messages, system_prompt,
+    AttachmentData, attachment_blobs, filtered_tool_schemas, projection_to_messages,
+    prompt_digests, system_prompt,
 };
 
 /// Human-answer tools cannot be useful once their host receiver is gone.
@@ -989,16 +990,6 @@ impl SessionEngine {
             )
             .await?;
             drop(message_guard);
-            self.emit_for_actor(
-                actor_claim,
-                session,
-                Event::TurnBindingRecorded {
-                    session,
-                    message,
-                    generation: binding.generation(),
-                },
-            )
-            .await?;
 
             let execution = TurnExecution {
                 binding,
@@ -1076,6 +1067,29 @@ impl SessionEngine {
             max_output_tokens: Some(self.compaction.summary_max_tokens),
             ..options
         }
+    }
+
+    /// Record the turn's runtime generation and prompt digests.
+    async fn emit_turn_binding(
+        &self,
+        actor_claim: Option<&ActorClaim>,
+        session: SessionId,
+        message: MessageId,
+        binding: &TurnBinding,
+        (system_sha256, tools_sha256): &(String, String),
+    ) -> Result<(), CoreError> {
+        self.emit_for_actor(
+            actor_claim,
+            session,
+            Event::TurnBindingRecorded {
+                session,
+                message,
+                generation: binding.generation(),
+                system_sha256: system_sha256.clone(),
+                tools_sha256: tools_sha256.clone(),
+            },
+        )
+        .await
     }
 
     /// Re-read the transcript after a rung replaced it, and re-count it.
@@ -1259,6 +1273,13 @@ impl SessionEngine {
                 .unwrap_or(0),
             None => 0,
         };
+        // Digests of the system prompt and tool list, recorded with the
+        // binding at turn start and again whenever a round's differ.
+        let tools = self.offered_tools(resources, depth);
+        let mut recorded_digests =
+            prompt_digests(&system_prompt(&live_agent, &tools, depth), &tools)?;
+        self.emit_turn_binding(actor_claim, session, message, binding, &recorded_digests)
+            .await?;
         // Steer mailbox (fix for the unread-mail blindness): unread mail is
         // surfaced inside tool results, mid-turn, without breaking the model's
         // chain of thought. Snapshot the durable backlog once, then follow the
@@ -1418,13 +1439,15 @@ impl SessionEngine {
                 .await?
                 .effort;
             let tools = self.offered_tools(resources, depth);
-            let request = crate::kernel::request::from_messages(
-                messages,
-                &system_prompt(&live_agent, &tools, depth),
-                tools,
-                &model,
-                effort,
-            );
+            let system = system_prompt(&live_agent, &tools, depth);
+            let digests = prompt_digests(&system, &tools)?;
+            if digests != recorded_digests {
+                self.emit_turn_binding(actor_claim, session, message, binding, &digests)
+                    .await?;
+                recorded_digests = digests;
+            }
+            let request =
+                crate::kernel::request::from_messages(messages, &system, tools, &model, effort);
             let request = if let Some(hooks) = self.active_hook_dispatcher(session) {
                 let root_session = self
                     .request_root_session(session, &mut root_session_cache)

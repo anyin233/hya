@@ -237,8 +237,11 @@ async fn admitted_turn_rebinds_at_round_boundaries_for_prompt_schema_skill_and_d
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(first_bindings.len(), 1);
+    // The rebind changed the prompt and tools, so round 2 records the new
+    // generation with its digests.
+    assert_eq!(first_bindings.len(), 2);
     assert!(first_bindings[0].get() < published.get());
+    assert_eq!(first_bindings[1], published);
 
     engine
         .admit_user_prompt(session, "second".to_string())
@@ -270,5 +273,5 @@ async fn admitted_turn_rebinds_at_round_boundaries_for_prompt_schema_skill_and_d
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(bindings, vec![first_bindings[0], published]);
+    assert_eq!(bindings, vec![first_bindings[0], published, published]);
 }
