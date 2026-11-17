@@ -9,9 +9,9 @@ use crate::kernel::Emit;
 use crate::kernel::round::{self, Failure, Round};
 
 /// [`Emit`] for one turn's writer: appends under its actor claim.
-struct TurnEmit<'a> {
-    engine: &'a SessionEngine,
-    actor_claim: Option<&'a ActorClaim>,
+pub(super) struct TurnEmit<'a> {
+    pub(super) engine: &'a SessionEngine,
+    pub(super) actor_claim: Option<&'a ActorClaim>,
 }
 
 #[async_trait]
