@@ -28,7 +28,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::CoreError;
 use rewrite::Initiator;
-use round::ToolCall;
+pub(crate) use round::ToolCall;
 
 /// Agent name the kernel renders assistant messages with in requests.
 pub const AGENT: &str = "kernel";
@@ -98,6 +98,107 @@ pub struct Run<'a> {
     pub cancel: &'a CancellationToken,
 }
 
+/// Executes one tool call and appends its `ToolResult` or `ToolError`.
+#[async_trait]
+pub(crate) trait ToolGate: Send {
+    /// Run `call` and record its outcome; an `Err` ends the run.
+    async fn call(&mut self, call: ToolCall) -> Result<(), CoreError>;
+}
+
+/// Bare-mode [`ToolGate`]: looks the tool up by name and executes it.
+struct BareGate<'a> {
+    emit: &'a dyn Emit,
+    tools: &'a [Arc<dyn Tool>],
+    ctx: &'a ToolCtx,
+    cancel: &'a CancellationToken,
+    session: SessionId,
+    message: MessageId,
+}
+
+#[async_trait]
+impl ToolGate for BareGate<'_> {
+    async fn call(&mut self, mut call: ToolCall) -> Result<(), CoreError> {
+        let started = Instant::now();
+        let outcome = match self.tools.iter().find(|tool| tool.name() == call.name) {
+            None => Err(format!("unknown tool: {}", call.name)),
+            Some(tool) => tokio::select! {
+                biased;
+                () = self.cancel.cancelled() => Err("cancelled".to_string()),
+                result = tool.execute(self.ctx, std::mem::take(&mut call.input)) => {
+                    result.map_err(|error| error.to_string())
+                }
+            },
+        };
+        let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.emit
+            .emit(
+                self.session,
+                vec![tool_event(
+                    self.session,
+                    self.message,
+                    &call,
+                    outcome,
+                    time_ms,
+                )],
+            )
+            .await
+    }
+}
+
+/// The run a round of tool calls belongs to.
+pub(crate) struct Scope<'a> {
+    /// Session event log.
+    pub(crate) store: &'a SessionStore,
+    /// Event sink.
+    pub(crate) emit: &'a dyn Emit,
+    /// Model routes; the round's route sizes a rewrite's recorded budget.
+    pub(crate) provider: &'a ProviderRouter,
+    /// Model of the round.
+    pub(crate) model: &'a ModelRef,
+    /// Session of the run.
+    pub(crate) session: SessionId,
+    /// Assistant message of the run.
+    pub(crate) message: MessageId,
+}
+
+/// Execute a round's calls in order: `rewrite` in the kernel, every other
+/// call through `gate`. When `cancel` fires, stops after the current call and
+/// returns the calls that did not run.
+pub(crate) async fn execute_calls(
+    scope: &Scope<'_>,
+    gate: &mut dyn ToolGate,
+    calls: Vec<ToolCall>,
+    cancel: &CancellationToken,
+) -> Result<Vec<ToolCall>, CoreError> {
+    let mut calls = calls.into_iter();
+    while let Some(call) = calls.next() {
+        if call.name == tools::REWRITE {
+            let started = Instant::now();
+            let outcome = model_rewrite(scope, &call).await?;
+            let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            scope
+                .emit
+                .emit(
+                    scope.session,
+                    vec![tool_event(
+                        scope.session,
+                        scope.message,
+                        &call,
+                        outcome,
+                        time_ms,
+                    )],
+                )
+                .await?;
+        } else {
+            gate.call(call).await?;
+        }
+        if cancel.is_cancelled() {
+            return Ok(calls.collect());
+        }
+    }
+    Ok(Vec::new())
+}
+
 /// Run model rounds and tool calls until a round ends without tool calls.
 ///
 /// Returns that round's finish, or `Cancelled`. The caller finishes the
@@ -118,6 +219,22 @@ pub async fn run(run: Run<'_>) -> Result<FinishReason, CoreError> {
     let schemas: Vec<_> = tools.iter().map(|tool| tool.schema()).collect();
     let agent = AgentName::new(AGENT);
     let attachments = request::AttachmentData::new();
+    let scope = Scope {
+        store,
+        emit,
+        provider,
+        model,
+        session,
+        message,
+    };
+    let mut gate = BareGate {
+        emit,
+        tools,
+        ctx,
+        cancel,
+        session,
+        message,
+    };
     let mut step = 0;
     loop {
         if cancel.is_cancelled() {
@@ -182,31 +299,10 @@ pub async fn run(run: Run<'_>) -> Result<FinishReason, CoreError> {
         if round.tool_calls.is_empty() {
             return Ok(round.finish);
         }
-        for (at, call) in round.tool_calls.iter().enumerate() {
-            let started = Instant::now();
-            let outcome = if call.name == tools::REWRITE {
-                model_rewrite(store, emit, provider, model, session, message, call).await?
-            } else {
-                match tools.iter().find(|tool| tool.name() == call.name) {
-                    None => Err(format!("unknown tool: {}", call.name)),
-                    Some(tool) => tokio::select! {
-                        biased;
-                        () = cancel.cancelled() => {
-                            cancel_calls(emit, session, message, &round.tool_calls[at..]).await?;
-                            return Ok(FinishReason::Cancelled);
-                        }
-                        result = tool.execute(ctx, call.input.clone()) => {
-                            result.map_err(|error| error.to_string())
-                        }
-                    },
-                }
-            };
-            let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-            emit.emit(
-                session,
-                vec![tool_event(session, message, call, outcome, time_ms)],
-            )
-            .await?;
+        let unrun = execute_calls(&scope, &mut gate, round.tool_calls, cancel).await?;
+        if cancel.is_cancelled() {
+            cancel_calls(emit, session, message, &unrun).await?;
+            return Ok(FinishReason::Cancelled);
         }
         step += 1;
     }
@@ -214,24 +310,22 @@ pub async fn run(run: Run<'_>) -> Result<FinishReason, CoreError> {
 
 /// Run the model's `rewrite` call: its result, or why it failed.
 async fn model_rewrite(
-    store: &SessionStore,
-    emit: &dyn Emit,
-    provider: &ProviderRouter,
-    model: &ModelRef,
-    session: SessionId,
-    message: MessageId,
+    scope: &Scope<'_>,
     call: &ToolCall,
 ) -> Result<Result<serde_json::Value, String>, CoreError> {
     if let Err(error) = tools::rewrite::check(&call.input) {
         return Ok(Err(error.to_string()));
     }
-    let projection = store.read_projection_shared(session).await?;
-    let budget = rewrite::pressure(&projection, provider.capabilities(model).as_ref());
-    let removed = rewrite::commit_rewrite(
-        emit,
+    let projection = scope.store.read_projection_shared(scope.session).await?;
+    let budget = rewrite::pressure(
         &projection,
-        session,
-        message,
+        scope.provider.capabilities(scope.model).as_ref(),
+    );
+    let removed = rewrite::commit_rewrite(
+        scope.emit,
+        &projection,
+        scope.session,
+        scope.message,
         Initiator::Model,
         budget,
     )

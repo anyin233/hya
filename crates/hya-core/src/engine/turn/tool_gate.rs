@@ -1,0 +1,491 @@
+//! The full mode's [`ToolGate`]: hooks, permissions, tool context, file
+//! snapshots, output capping, and steer notices around each tool call.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use hya_proto::{Event, MessageId, SessionId, ToolCallId, ToolSchema};
+use hya_store::ActorClaim;
+use hya_tool::{AgentDef, ReportLatch, ToolCtx, ToolError};
+
+use super::super::roots::SessionWorkspace;
+use super::super::shell::BashArtifactGuard;
+use super::super::steer::SteerMailbox;
+use super::super::tool_error::{tool_error_message_value, tool_error_value};
+use super::super::{AgentSpec, SessionEngine, authorize_tool_call};
+use super::messages::hidden_behind;
+use crate::TurnBinding;
+use crate::error::CoreError;
+use crate::hooks::{
+    HookDispatcher, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
+    ToolExecuteBeforeOutcome, ToolOutcomeNative, activation_hook_for,
+};
+use crate::kernel::{ToolCall, ToolGate};
+use crate::runtime_registry::CompiledResourceView;
+
+/// One round's tool calls of a full-mode turn.
+pub(super) struct TurnToolGate<'a> {
+    pub(super) engine: &'a SessionEngine,
+    pub(super) session: SessionId,
+    pub(super) message: MessageId,
+    pub(super) binding: &'a TurnBinding,
+    pub(super) resources: &'a Arc<CompiledResourceView>,
+    pub(super) agents: &'a Arc<[AgentDef]>,
+    pub(super) agent: &'a AgentSpec,
+    pub(super) depth: u32,
+    pub(super) external_dirs: &'a [PathBuf],
+    pub(super) workspace: &'a SessionWorkspace,
+    pub(super) actor_claim: Option<&'a ActorClaim>,
+    pub(super) guidance: &'a Option<Arc<str>>,
+    pub(super) cancel: &'a tokio_util::sync::CancellationToken,
+    /// Set when a `report` of this turn is accepted.
+    pub(super) report_latch: &'a ReportLatch,
+    /// Engine handle for nested tool calls, cloned once per turn on first use.
+    pub(super) nested_engine: &'a mut Option<Arc<SessionEngine>>,
+    pub(super) steer: &'a mut SteerMailbox,
+    pub(super) parent_session: Option<SessionId>,
+    /// Tool schemas the round's request offered.
+    pub(super) offered: &'a [ToolSchema],
+}
+
+#[async_trait::async_trait]
+impl ToolGate for TurnToolGate<'_> {
+    async fn call(&mut self, mut tc: ToolCall) -> Result<(), CoreError> {
+        let &mut Self {
+            engine,
+            session,
+            message,
+            binding,
+            resources,
+            agents,
+            agent: live_agent,
+            depth,
+            external_dirs,
+            workspace,
+            actor_claim,
+            guidance,
+            cancel,
+            report_latch,
+            ref mut nested_engine,
+            ref mut steer,
+            parent_session,
+            offered,
+        } = self;
+        engine.validate_actor_claim(actor_claim).await?;
+        let activation_hooks = activation_hook_for(session);
+        let hook_context = ToolHookContext {
+            session,
+            message,
+            call: tc.call,
+            tool: &tc.name,
+        };
+        if engine.hooks.is_some() || activation_hooks.is_some() {
+            let input = apply_tool_execute_before_hooks(
+                engine.hooks.as_ref(),
+                activation_hooks.as_ref(),
+                &hook_context,
+                std::mem::take(&mut tc.input),
+            )
+            .await;
+            if activation_hooks
+                .as_ref()
+                .is_some_and(|hooks| !hooks.is_healthy())
+            {
+                return Err(CoreError::Cancelled);
+            }
+            match input {
+                Ok(input) => tc.input = input,
+                Err(reason) => {
+                    let message_text = format!("blocked by plugin: {reason}");
+                    engine
+                        .emit_for_actor(
+                            actor_claim,
+                            session,
+                            Event::ToolError {
+                                session,
+                                message,
+                                part: tc.part,
+                                call: tc.call,
+                                value: Some(tool_error_message_value("blocked", &message_text)),
+                                message_text,
+                            },
+                        )
+                        .await?;
+                    return Ok(());
+                }
+            }
+        }
+        let input_for_after =
+            (engine.hooks.is_some() || activation_hooks.is_some()).then(|| tc.input.clone());
+        let todo_tool = super::super::todos::is_todo_tool(tc.name.as_str());
+        if todo_tool {
+            engine.restore_todo_plane(session).await;
+        }
+        let started = std::time::Instant::now();
+        let mut file_capture = super::super::file_snapshot::FileCapture::None;
+        let behind = hidden_behind(
+            resources,
+            depth,
+            engine.exclusive_tool.as_deref(),
+            engine.interaction.is_available(),
+            tc.name.as_str(),
+        );
+        let collect_tool = async {
+            Ok::<_, CoreError>(match (behind, resources.resolve_tool(&tc.name)) {
+                (Some(exclusive), Some(_)) => (
+                    Err(ToolError::Other(format!(
+                        "`{}` is not offered here: call it from a `{exclusive}` program",
+                        tc.name
+                    ))),
+                    hya_tool::ToolResultPolicy::Default,
+                ),
+                (_, Some(resolved)) => {
+                    let result_policy = resolved.tool.result_policy();
+                    let permission = engine
+                        .tool_call_permission(
+                            binding,
+                            session,
+                            &live_agent.name,
+                            external_dirs,
+                            &workspace.grant_scope,
+                            activation_hooks.as_ref(),
+                        )
+                        .await?;
+                    let authorized = {
+                        authorize_tool_call(&resolved, &tc.input, permission, message, tc.call)
+                            .await
+                    };
+                    let result = match authorized {
+                        Ok(permission) => {
+                            let channel_policy = crate::ChannelPolicy::from_binding(binding)?
+                                .snapshot_for(live_agent.name.as_str());
+                            let mut ctx = ToolCtx {
+                                nested: hya_tool::NestedToolPlane::disconnected(),
+                                workflows: engine
+                                    .workflows
+                                    .for_binding(binding)
+                                    .for_session_with_agents(session, agents.clone()),
+                                permission,
+                                interaction: engine.interaction.for_session(session),
+                                spawner: engine
+                                    .spawner
+                                    .for_binding(binding)
+                                    .for_session_with_agents_and_guidance(
+                                        session,
+                                        agents.clone(),
+                                        guidance.clone(),
+                                    ),
+                                operation: hya_tool::ToolOperation::from_tool_call(tc.call)
+                                    .with_actor_claim(actor_claim.copied()),
+                                mailbox: engine
+                                    .mailbox
+                                    .for_session_with_actor(session, actor_claim.copied())
+                                    .with_channel_policy(channel_policy),
+                                lifecycle: engine
+                                    .lifecycle
+                                    .for_session_with_actor(session, actor_claim.copied())
+                                    .with_channel_policy(channel_policy)
+                                    .with_report_latch(report_latch.clone()),
+                                project_activity: engine.project_activity.for_session(session),
+                                session: Some(session),
+                                parent_session,
+                                todo: engine.todo.clone(),
+                                skills: resources.skill_plane(),
+                                artifacts: engine.artifacts.clone(),
+                                agents: agents.clone(),
+                                websearch: engine.websearch.clone(),
+                                lsp: engine.lsp.clone(),
+                                formatter: engine.formatter.clone(),
+                                workdir: binding.workdir().to_path_buf(),
+                                roots: workspace.roots.clone(),
+                                cancel: cancel.clone(),
+                            };
+                            let nested = super::super::nested_tools::TurnNestedTools {
+                                engine: Arc::clone(
+                                    nested_engine.get_or_insert_with(|| Arc::new(engine.clone())),
+                                ),
+                                binding: binding.clone(),
+                                resources: Arc::clone(resources),
+                                agent: live_agent.name.clone(),
+                                session,
+                                message,
+                                actor_claim: actor_claim.copied(),
+                                external_dirs: external_dirs.into(),
+                                grant_scope: workspace.grant_scope.clone(),
+                                activation_hooks: activation_hooks.clone(),
+                                caller: resolved.tool.name().to_string(),
+                                base: ctx.clone(),
+                            };
+                            ctx.nested = hya_tool::NestedToolPlane::new(Arc::new(nested));
+                            // Permission and plugin hooks can await. Recheck at the
+                            // actual dispatch boundary so takeover cannot turn a
+                            // previously valid resident into an unfenced launch.
+                            engine.validate_actor_claim(actor_claim).await?;
+                            file_capture = Box::pin(super::super::file_snapshot::capture_before(
+                                resolved.tool.name(),
+                                &tc.input,
+                                binding.workdir(),
+                            ))
+                            .await;
+                            engine.validate_actor_claim(actor_claim).await?;
+                            resolved.tool.execute(&ctx, tc.input).await
+                        }
+                        Err(error) => Err(error),
+                    };
+                    (result, result_policy)
+                }
+                (_, None) => (
+                    Err(ToolError::Other(format!("unknown tool: {}", tc.name))),
+                    hya_tool::ToolResultPolicy::Default,
+                ),
+            })
+        };
+        let (result, result_policy) = tokio::select! {
+            biased;
+            () = cancel.cancelled() => (Err(ToolError::Cancelled), hya_tool::ToolResultPolicy::Default),
+            result = collect_tool => result?,
+        };
+        Box::pin(engine.record_file_changes(actor_claim, session, message, tc.call, file_capture))
+            .await?;
+        let mut artifact_guard =
+            BashArtifactGuard::capture(tc.name.as_str(), result.as_ref().ok(), binding.workdir());
+        let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        engine.validate_actor_claim(actor_claim).await?;
+        let result = if !cancel.is_cancelled()
+            && !matches!(&result, Err(ToolError::Cancelled))
+            && (engine.hooks.is_some() || activation_hooks.is_some())
+        {
+            let was_permission_err = matches!(&result, Err(ToolError::Permission(_)));
+            let mut native = match &result {
+                Ok(output) => ToolOutcomeNative::Ok {
+                    output: output.clone(),
+                    time_ms,
+                },
+                Err(e) => ToolOutcomeNative::Err {
+                    message: e.to_string(),
+                },
+            };
+            let original_native = native.clone();
+            native = apply_tool_execute_after_hooks(
+                engine.hooks.as_ref(),
+                activation_hooks.as_ref(),
+                &hook_context,
+                input_for_after.unwrap_or_default(),
+                native,
+            )
+            .await;
+            if activation_hooks
+                .as_ref()
+                .is_some_and(|hooks| !hooks.is_healthy())
+            {
+                return Err(CoreError::Cancelled);
+            }
+            if was_permission_err || native == original_native {
+                result
+            } else {
+                match native {
+                    ToolOutcomeNative::Ok { output, .. } => Ok(output),
+                    ToolOutcomeNative::Err { message } => Err(ToolError::Other(message)),
+                }
+            }
+        } else {
+            result
+        };
+        let mail_mark = engine.mail_mark(session);
+        let (event, retains_artifact) = match result {
+            Ok(mut output) => {
+                artifact_guard.remove_unowned_path(&mut output);
+                if !artifact_guard.retained_by(&output) {
+                    artifact_guard.discard()?;
+                }
+                // Cap every tool (builtin/MCP/plugin) after hooks and
+                // immediately before durable Event publication. Whatever
+                // the cap drops is preserved as an artifact first, so a
+                // truncated result stays reachable without re-running the
+                // tool that produced it.
+                let mut output = hya_tool::cap_tool_output_spilling(
+                    output,
+                    result_policy,
+                    &engine.artifacts.store(binding.workdir()),
+                    tc.name.as_str(),
+                );
+                // Steer (ADR-0016 follow-up): unread team mail rides the
+                // tail of this tool result so a long turn stays aware
+                // of new messages without breaking the model's flow.
+                // Not once a report was accepted: this turn takes no
+                // further round, so mail arriving now stays unread
+                // and wakes the member for a new episode instead.
+                // Deadline notices use the same result tail and commit.
+                if !report_latch.is_set() {
+                    if let Some(notice) = steer.drain(engine).await? {
+                        append_steer_notice(&mut output, &notice);
+                    }
+                    if let Some(deadline) = hya_tool::deadline::current() {
+                        if let Some(stage) = deadline.take_notice(session) {
+                            let policy = crate::ChannelPolicy::from_binding(binding)?
+                                .snapshot_for(live_agent.name.as_str());
+                            let can_report = parent_session.is_some()
+                                && engine.lifecycle.is_connected()
+                                && crate::lifecycle::report_allowed(policy)
+                                && offered.iter().any(|tool| tool.name.as_str() == "report");
+                            let notice = deadline.notice(stage, can_report);
+                            append_steer_notice(&mut output, &format!("\n\n{notice}"));
+                        } else if let Some(clock) = deadline.take_clock(session) {
+                            append_steer_notice(&mut output, &format!("\n\n{clock}"));
+                        }
+                    }
+                }
+                let retains_artifact = artifact_guard.retained_by(&output);
+                (
+                    Event::ToolResult {
+                        session,
+                        message,
+                        part: tc.part,
+                        call: tc.call,
+                        output,
+                        time_ms,
+                    },
+                    retains_artifact,
+                )
+            }
+            Err(e) => {
+                artifact_guard.discard()?;
+                (
+                    Event::ToolError {
+                        session,
+                        message,
+                        part: tc.part,
+                        call: tc.call,
+                        value: Some(tool_error_value(&e)),
+                        message_text: e.to_string(),
+                    },
+                    false,
+                )
+            }
+        };
+        let todo_output = match &event {
+            Event::ToolResult { output, .. } if todo_tool => Some(output.clone()),
+            _ => None,
+        };
+        let (acknowledgement, consumed_incoming) = steer
+            .take_acknowledgement()
+            .map_or((None, false), |(event, incoming)| (Some(event), incoming));
+        let envelopes = engine
+            .store
+            .commit_tool_result_with_mail(actor_claim, session, event, acknowledgement)
+            .await?;
+        for envelope in envelopes {
+            engine.publish_envelope(envelope);
+        }
+        engine.notify_mail_consumed(session, mail_mark, consumed_incoming);
+        // A todo tool's result carries the whole list; record the
+        // change so the projection (and `todoUpdated`) follow it.
+        if let Some(output) = todo_output
+            && let Some(todos) = engine.changed_todos(session, &output).await
+        {
+            engine
+                .emit_for_actor(actor_claim, session, Event::TodosUpdated { session, todos })
+                .await?;
+        }
+        if retains_artifact {
+            artifact_guard.disarm();
+        } else {
+            artifact_guard.discard()?;
+        }
+        Ok(())
+    }
+}
+
+struct ToolHookContext<'a> {
+    session: SessionId,
+    message: MessageId,
+    call: ToolCallId,
+    tool: &'a str,
+}
+
+async fn apply_tool_execute_before_hooks(
+    global: Option<&Arc<dyn HookDispatcher>>,
+    activation: Option<&Arc<dyn HookDispatcher>>,
+    context: &ToolHookContext<'_>,
+    mut input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    for hooks in [global, activation].into_iter().flatten() {
+        match hooks
+            .tool_execute_before(ToolExecuteBeforeInput {
+                session: context.session,
+                message: context.message,
+                call: context.call,
+                tool: context.tool.to_string(),
+                input,
+            })
+            .await
+        {
+            ToolExecuteBeforeOutcome::Continue { input: next } => input = next,
+            ToolExecuteBeforeOutcome::Veto { reason } => return Err(reason),
+        }
+    }
+    Ok(input)
+}
+
+async fn apply_tool_execute_after_hooks(
+    global: Option<&Arc<dyn HookDispatcher>>,
+    activation: Option<&Arc<dyn HookDispatcher>>,
+    context: &ToolHookContext<'_>,
+    input: serde_json::Value,
+    mut result: ToolOutcomeNative,
+) -> ToolOutcomeNative {
+    for hooks in [global, activation].into_iter().flatten() {
+        let ToolExecuteAfterOutcome::Continue { result: next } = hooks
+            .tool_execute_after(ToolExecuteAfterInput {
+                session: context.session,
+                message: context.message,
+                call: context.call,
+                tool: context.tool.to_string(),
+                input: input.clone(),
+                result,
+            })
+            .await;
+        result = next;
+    }
+    result
+}
+
+/// Splice a steer notice into a tool result's model-facing text.
+fn append_steer_notice(output: &mut serde_json::Value, notice: &str) {
+    let serde_json::Value::Object(object) = output else {
+        *output = serde_json::json!({
+            "result": std::mem::take(output),
+            "steer": notice.trim_start(),
+        });
+        return;
+    };
+    let (key, updated) = match (object.get("output"), object.get("steer")) {
+        (Some(serde_json::Value::String(text)), _) => ("output", format!("{text}{notice}")),
+        (_, Some(serde_json::Value::String(text))) => ("steer", format!("{text}{notice}")),
+        _ => ("steer", notice.trim_start().to_string()),
+    };
+    object.insert(key.to_string(), serde_json::Value::String(updated));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::append_steer_notice;
+
+    #[test]
+    fn steer_notices_on_one_result_accumulate() {
+        for (mut output, key, expected) in [
+            (
+                serde_json::json!({"output":"ok"}),
+                "output",
+                "ok\n\nmail\n\ntime",
+            ),
+            (serde_json::json!({"title":"t"}), "steer", "mail\n\ntime"),
+            (serde_json::json!({"output":42}), "steer", "mail\n\ntime"),
+            (serde_json::json!("ok"), "steer", "mail\n\ntime"),
+        ] {
+            append_steer_notice(&mut output, "\n\nmail");
+            append_steer_notice(&mut output, "\n\ntime");
+            assert_eq!(output[key], expected);
+        }
+    }
+}
