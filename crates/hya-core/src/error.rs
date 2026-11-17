@@ -8,7 +8,7 @@ use thiserror::Error;
 #[derive(Clone, Error, Debug)]
 pub enum CoreError {
     /// Bundle catalog or package resolution failed: the engine's
-    /// `hya_bundle::BundleError`, which this crate does not link.
+    /// `hya_bundle::BundleError`.
     #[error(transparent)]
     Bundle(Arc<dyn std::error::Error + Send + Sync>),
     /// Model provider transport or protocol failure (shared via `Arc` for clone).

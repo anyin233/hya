@@ -25,6 +25,32 @@ The release asset stores each trusted family package under `bundles/` beside
 `bin/`. Installed third-party bundles do not gain in-process execution by
 declaring a library resource.
 
+Internal bundles are first-party native libraries that carry full-mode
+features out of the kernel ([Kernel](kernel.md)). Their sources live under
+`bundles/internal/<name>` (`bundle.yaml` plus a `native/` crate with
+`crate-type = ["rlib", "cdylib"]` that links only `hya-tool` and
+`hya-proto`), and `hya_bundle::INTERNAL_BUNDLES` lists them (empty in this
+build; every entry is also in `FIRST_PARTY_BUNDLES`). Full mode loads them with
+`hya_core::bundles::load_internal()`, which calls
+`hya_tool::native_bundle::load(identity)` for each: identity `hya/<name>` maps
+to library stem `hya_<name>` and package `hya-<name>.hyabundle`, the same
+lookup and ABI check as the tool families. `hya exec --bare` loads none. An
+internal bundle exports the same `abi_v1`, `share_deadline_v1`,
+`with_runtime_v1`, and `register_v1` symbols (registering no tools is
+allowed), plus the optional
+
+```rust
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hya_tool_bundle_register_rewriters_v1(
+    out: *mut Vec<Arc<dyn hya_tool::Rewriter>>,
+)
+```
+
+which pushes its [rewriters](kernel.md#rewrite-contract). A library without
+the symbol registers none. The host wraps each rewriter so its futures are
+polled through `with_runtime_v1`, like tools. A native bundle without
+`exposure.yaml` is packaged with its library and no tool resources.
+
 ## Prepared install format
 
 Each package stores one complete `Bundle` with `format_version: 4` (`u32`).
@@ -223,6 +249,9 @@ trusted identities:
 | `hya/goal-loop`, `hya/plan-impl-review` | `bundles/first-party/<name>` | First-party AgentSet and Workflow bundles |
 | `hya/basic-tui-components` | `bundles/first-party/basic-tui-components` | Built-in TUI Sessions, Todos, Projects and Context surfaces |
 | `hya/code-mode` | `bundles/first-party/code-mode` | The `code-mode__run` tool. Shipped disabled; `tools.code.mode` enables it ([Code mode](code-mode.md)) |
+
+In-tree sources are searched in the `presets`, `first-party`, and `internal`
+groups, in that order.
 
 The former `hya/subagents` bundle and `hya-release` agent have been removed.
 
