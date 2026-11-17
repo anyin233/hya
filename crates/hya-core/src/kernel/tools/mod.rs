@@ -31,6 +31,11 @@ pub fn builtin() -> Vec<Arc<dyn Tool>> {
     ]
 }
 
+/// Schema of the `rewrite` tool, for a tool set the kernel loop intercepts it in.
+pub(crate) fn rewrite_schema() -> ToolSchema {
+    rewrite::Rewrite.schema()
+}
+
 fn schema(name: &str, description: &str, input_schema: serde_json::Value) -> ToolSchema {
     ToolSchema {
         name: ToolName::new(name),
