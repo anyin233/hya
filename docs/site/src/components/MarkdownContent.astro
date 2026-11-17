@@ -1,0 +1,31 @@
+---
+import MarkdownContent from '@astrojs/starlight/components/MarkdownContent.astro';
+---
+
+<MarkdownContent><slot /></MarkdownContent>
+
+<script>
+  const diagrams = document.querySelectorAll<HTMLElement>('pre.mermaid');
+  if (diagrams.length) {
+    const { default: mermaid } = await import('mermaid');
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'strict',
+      theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default',
+    });
+    await mermaid.run({ nodes: diagrams });
+  }
+</script>
+
+<style is:global>
+  .sl-markdown-content .mermaid {
+    overflow-x: auto;
+    background: var(--sl-color-bg-sidebar);
+    border: 1px solid var(--sl-color-hairline-light);
+    border-radius: 0.5rem;
+    padding: 1rem;
+    text-align: center;
+  }
+
+  .mermaid svg { max-width: none; }
+</style>

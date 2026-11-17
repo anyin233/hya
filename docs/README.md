@@ -9,6 +9,9 @@ relay access.
 The documentation is organized into **three core categories**, followed by
 protocol, bundle/extension, and contributor references.
 
+For the searchable Starlight website, local serving commands, and GitHub Pages
+deployment, see [Documentation Website](docs-site.md).
+
 ---
 
 ## 1. Design Philosophy & Architecture (`的设计理念与架构`)
