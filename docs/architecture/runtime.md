@@ -370,7 +370,9 @@ through in-turn steering is not replayed as a separate lead turn.
 After prompt admission succeeds, a root turn resolves the session workdir,
 refreshes its skill candidate if the logical view changed, and captures one
 `TurnBinding`. It then records `MessageStarted` and
-`TurnBindingRecorded { generation }`. The binding retains an `Arc` to the
+`TurnBindingRecorded { generation, system_sha256, tools_sha256 }` (digests
+of the system prompt and tool list; a round whose digests differ, as after a
+mid-turn rebind, records the event again). The binding retains an `Arc` to the
 complete immutable runtime snapshot for the entire assistant turn.
 
 ### Per-round sequence

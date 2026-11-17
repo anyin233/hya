@@ -276,7 +276,7 @@ let (engine, ..) = build_session_engine(store, router, &model, mcp, plugins).awa
 
 - `RuntimeRegistry::bind_turn(workdir) -> Result<TurnBinding, RuntimeRefreshError>`.
 - `RuntimeRegistry::refresh(|candidate| ...) -> Result<ConfigGeneration, RuntimeRefreshError>`.
-- `Event::TurnBindingRecorded { session, message, generation }`.
+- `Event::TurnBindingRecorded { session, message, generation, system_sha256, tools_sha256 }`.
 - `MessageProjection.config_generation: Option<ConfigGeneration>`.
 
 ### 3. Contracts
