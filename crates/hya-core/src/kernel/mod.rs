@@ -9,7 +9,7 @@ pub mod prompt;
 /// Projection-to-request conversion.
 pub mod request;
 mod rewrite;
-mod round;
+pub(crate) mod round;
 /// The kernel's five tools.
 pub mod tools;
 
@@ -158,18 +158,18 @@ pub async fn run(run: Run<'_>) -> Result<FinishReason, CoreError> {
             }],
         )
         .await?;
-        let round = match round::collect(emit, session, message, step, model, stream, cancel).await
-        {
-            Ok(round) => round,
-            Err(error) => {
-                emit.emit(
-                    session,
-                    vec![step_finished(session, message, step, FinishReason::Error)],
-                )
-                .await?;
-                return Err(error);
-            }
-        };
+        let round =
+            match round::collect(emit, None, session, message, step, model, stream, cancel).await {
+                Ok(round) => round,
+                Err(round::Failure { error, .. }) => {
+                    emit.emit(
+                        session,
+                        vec![step_finished(session, message, step, FinishReason::Error)],
+                    )
+                    .await?;
+                    return Err(error);
+                }
+            };
         emit.emit(
             session,
             vec![step_finished(session, message, step, round.finish)],

@@ -1,106 +1,14 @@
-use std::collections::BTreeMap;
-
-use hya_proto::{Event, MessageId, PartId, SessionId};
+use async_trait::async_trait;
+use hya_proto::{MessageId, PartId, SessionId};
 
 use super::SessionEngine;
 use crate::hooks::{TextCompleteInput, TextCompleteOutcome};
+use crate::kernel::round::CompleteText;
 
-#[derive(Default)]
-pub(super) struct TextPartAccumulator {
-    parts: BTreeMap<PartId, String>,
-}
-
-impl TextPartAccumulator {
-    pub(super) fn apply(&mut self, event: &Event) -> Option<(PartId, String)> {
-        match event {
-            Event::TextStart { part, .. } => {
-                self.parts.insert(*part, String::new());
-                None
-            }
-            Event::TextDelta { part, delta, .. } => {
-                if let Some(text) = self.parts.get_mut(part) {
-                    text.push_str(delta);
-                }
-                None
-            }
-            Event::TextEnd { part, .. } => self.parts.get(part).map(|text| (*part, text.clone())),
-            Event::SessionCreated { .. }
-            | Event::SessionTitled { .. }
-            | Event::SessionMetadataSet { .. }
-            | Event::SessionAgentModelOverrideSet { .. }
-            | Event::SessionPermissionModeSet { .. }
-            | Event::SessionArchived { .. }
-            | Event::SessionUnarchived { .. }
-            | Event::SessionEphemeralSet { .. }
-            | Event::AgentSwitched { .. }
-            | Event::ModelSwitched { .. }
-            | Event::SessionStatus { .. }
-            | Event::CommandExecuted { .. }
-            | Event::WorkflowSelected { .. }
-            | Event::WorkflowRunStarted { .. }
-            | Event::WorkflowStageStarted { .. }
-            | Event::WorkflowStageMemberLinked { .. }
-            | Event::WorkflowStageRouteOutcome { .. }
-            | Event::WorkflowStageFinished { .. }
-            | Event::WorkflowRunFinished { .. }
-            | Event::MessageStarted { .. }
-            | Event::TurnBindingRecorded { .. }
-            | Event::UserPromptContextRecorded { .. }
-            | Event::MessageFinished { .. }
-            | Event::PartDeleted { .. }
-            | Event::StepStarted { .. }
-            | Event::StepFinished { .. }
-            | Event::TextReplace { .. }
-            | Event::ReasoningStart { .. }
-            | Event::ReasoningDelta { .. }
-            | Event::ReasoningEnd { .. }
-            | Event::ReasoningReplace { .. }
-            | Event::ToolInputStart { .. }
-            | Event::ToolInputDelta { .. }
-            | Event::ToolCallRequested { .. }
-            | Event::ToolResult { .. }
-            | Event::ToolError { .. }
-            | Event::ToolPartUpdated { .. }
-            | Event::MemberSpawned { .. }
-            | Event::MemberStatusChanged { .. }
-            | Event::MemberFinished { .. }
-            | Event::AgentRegistered { .. }
-            | Event::AgentActivityChanged { .. }
-            | Event::ResidentWorkStarted { .. }
-            | Event::ResidentWorkFinished { .. }
-            | Event::AgentHeartbeat { .. }
-            | Event::MailSent { .. }
-            | Event::ChannelJoined { .. }
-            | Event::ChannelCreated { .. }
-            | Event::SubagentReported { .. }
-            | Event::HandoffCommitted { .. }
-            | Event::AgentArchived { .. }
-            | Event::AgentRestarted { .. }
-            | Event::MailConsumed { .. }
-            | Event::ContextCompacted { .. }
-            | Event::SessionForked { .. }
-            | Event::ContextEvicted { .. }
-            | Event::ContextStatus { .. }
-            | Event::UsageRecorded { .. }
-            | Event::TodosUpdated { .. }
-            | Event::FilesChanged { .. }
-            | Event::SessionReverted { .. }
-            | Event::SessionUnreverted { .. }
-            | Event::Error { .. } => None,
-        }
-    }
-
-    pub(super) fn replace(&mut self, part: PartId, text: String) {
-        self.parts.insert(part, text);
-    }
-
-    pub(super) fn text(&self, part: PartId) -> Option<String> {
-        self.parts.get(&part).cloned()
-    }
-}
-
-impl SessionEngine {
-    pub(super) async fn complete_text_part(
+/// The `text.complete` hook, applied by the kernel round to each text part.
+#[async_trait]
+impl CompleteText for SessionEngine {
+    async fn complete(
         &self,
         session: SessionId,
         message: MessageId,
