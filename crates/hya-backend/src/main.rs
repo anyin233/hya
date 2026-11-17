@@ -12,6 +12,7 @@
 
 mod agent_cmd;
 mod auth_cmd;
+mod bare;
 mod bridge;
 mod bundle_cmd;
 mod cli_args;
@@ -695,10 +696,23 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             );
             Ok(())
         }
+        Some(Command::Exec { bare: true, .. }) if pure => {
+            // `conflicts_with` does not see a global `--pure` given before `exec`.
+            <Cli as clap::CommandFactory>::command()
+                .error(
+                    clap::error::ErrorKind::ArgumentConflict,
+                    "the argument '--bare' cannot be used with '--pure'",
+                )
+                .exit()
+        }
+        Some(Command::Exec {
+            prompt, bare: true, ..
+        }) => bare::exec_entry(prompt, model, &db).await,
         Some(Command::Exec {
             prompt,
             json,
             time_budget,
+            bare: false,
         }) => exec_entry(prompt, model, &db, yolo, json, pure, time_budget).await,
         Some(Command::Serve {
             action: Some(action),

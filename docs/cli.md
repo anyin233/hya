@@ -752,9 +752,11 @@ stdout; `--db` keeps the event log in SQLite.
 hya exec --bare "say hi" --db /tmp/x.db
 ```
 
-`--bare` conflicts with `--pure`, `--time-budget`, and routing to a running
-server (including a server holding the selected database); it errors out
-instead of routing the run. Use another database or stop that server first.
+`--bare` conflicts with `--pure`, `--time-budget`, and `--json` (a usage
+error). It always runs in process against `--db`: when a running server holds
+that database it exits 75 instead of routing the run. Use another database or
+stop that server first. The model is `--model` or the configured default; the
+working directory is the cwd.
 See [Kernel](kernel.md) for tool contracts, rewrite rules, and the differences
 from full mode.
 
