@@ -18,7 +18,7 @@ For visual dependency and runtime flow diagrams, see
 | [`../CONTEXT.md`](../CONTEXT.md) | Ubiquitous domain glossary across runtime, store, tools, Projects, Relay, Workflows, and TUI. |
 | [`../proto/hya/v1`](../proto/hya/v1), [`../proto/hya/relay/v1`](../proto/hya/relay/v1) | Canonical protobuf IDLs for the `hya.v1` client/server contract (18 services, 107 RPCs) and the `hya.relay.v1` rendezvous protocol. |
 | [`../crates`](../crates) | 21 Rust crates: runtime, providers, tools, MCP, plugins, store, server, SDK, relay, updater, unified `hya` binary, E2E harness, and `xtask`. |
-| [`../bundles/presets`](../bundles/presets), [`../bundles/first-party`](../bundles/first-party) | The 13 trusted first-party bundles (including the 5 native Rust tool-family library crates under `bundles/presets/*-tools/native`). |
+| [`../bundles/presets`](../bundles/presets), [`../bundles/first-party`](../bundles/first-party), [`../bundles/internal`](../bundles/internal) | The 14 trusted first-party bundles (including the 5 native Rust tool-family library crates under `bundles/presets/*-tools/native` and the internal `hya/compaction` library crate under `bundles/internal/compaction/native`). |
 | [`../bundles/extra`](../bundles/extra), [`../bundles/examples`](../bundles/examples) | Optional installable `hya-extra/*` bundles (`zvec-grep`, `scout`, `jev-model-router`, `model-fallback`, `token-summary`) and WorkflowBundle examples (`argus-example`). |
 | [`../packages/hya-tui`](../packages/hya-tui) | Interactive Bun/OpenTUI terminal frontend over `hya.v1` HTTP/JSON+SSE or direct gRPC (shipped as `lib/hya/tui`). |
 | [`../packages/hya-tui-web`](../packages/hya-tui-web) | Generic real-PTY + xterm.js browser WebUI host and `tui-exp` / Playwright terminal test harness (shipped as `lib/hya/tui-web`). |
@@ -27,7 +27,7 @@ For visual dependency and runtime flow diagrams, see
 | [`../scripts/hya-install.sh`](../scripts/hya-install.sh), [`../install.sh`](../install.sh) | Hosted release installer (also embedded in `hya update`) and local source-checkout installer. |
 | [`../docs`](../docs) | Architecture, user/configuration guides, diagrams, generated `hya.v1` protocol specs, ADRs, and developer guidelines. |
 
-## Rust Crates (`crates/` & Native Tool Families)
+## Rust Crates (`crates/` & Native Bundles)
 
 | Crate | Source | Responsibility |
 | --- | --- | --- |
@@ -37,15 +37,16 @@ For visual dependency and runtime flow diagrams, see
 | `hya-provider` | [`../crates/hya-provider`](../crates/hya-provider) | `Provider`/`Protocol`/`Decoder` traits, `ProviderRouter`, HTTP/SSE client, OpenAI Chat/Responses/Codex, Grok Build, Anthropic, Google Gemini, scripted `FakeProvider`, and offline `DevProvider`. |
 | `hya-tool` | [`../crates/hya-tool`](../crates/hya-tool) | `Tool` trait, 28-name canonical `ToolRegistry` + hidden aliases, native dylib loader, the `Rewriter` contract and host services for native bundles, token estimation, `PermissionPlane`, `ProjectScope` multi-root containment, output caps, and session planes (`Interaction`, `Spawner`, `Todo`, `Skill`, `WebSearch`, `Lsp`, `Formatter`, `Workflow`, `Mailbox`). |
 | `hya-*-tools` (5 crates) | [`../bundles/presets`](../bundles/presets) | Concrete Rust implementations of the 28 builtin tools across `hya-base-tools`, `hya-extended-tools`, `hya-channel-tools`, `hya-network-tools`, and `hya-todo-tools`. |
+| `hya-compaction` | [`../bundles/internal/compaction/native`](../bundles/internal/compaction/native) | The `hya/compaction` internal bundle: the five-mechanism compaction ladder and the `/summarize` fold as a native `Rewriter`. |
 | `hya-mcp` | [`../crates/hya-mcp`](../crates/hya-mcp) | MCP stdio/HTTP client & manager, desired/observed/effective reconciliation, and `mcp__<server>__<tool>` bridge into `hya-tool`. |
 | `hya-plugin` | [`../crates/hya-plugin`](../crates/hya-plugin) | Out-of-process NDJSON JSON-RPC 2.0 plugin host (`PluginHost`, `PluginConn`), manifest/config loading, tool/command/hook/permission bridges. |
 | `hya-plugin-bun` | [`../crates/hya-plugin-bun`](../crates/hya-plugin-bun) | `BUN_ADAPTER_VERSION` + `adapter/` Bun runtime loading JS bundle extensions (`--bundle-extension` / `--extension`). |
 | `hya-plugin-claude` | [`../crates/hya-plugin-claude`](../crates/hya-plugin-claude) | Claude Code plugin directory / marketplace importer and runtime bridge (`hya bundle install --claude`). |
 | `hya-store` | [`../crates/hya-store`](../crates/hya-store) | SQLite WAL session store (`event_log`, `session`, `project`/`project_root`, `saved_permission`, `resident_actor_claim`, `pending_resume`, `projection_snapshot`, `file_blob`) plus separate `bundle_registry` DB. |
-| `hya-bundle` | [`../crates/hya-bundle`](../crates/hya-bundle) | Unified `kind: Bundle` (prepared format v4) source parser, validator, deterministic `.hyabundle` 7z packager, 13 first-party bundle loaders, and `BundleCatalog`. |
+| `hya-bundle` | [`../crates/hya-bundle`](../crates/hya-bundle) | Unified `kind: Bundle` (prepared format v4) source parser, validator, deterministic `.hyabundle` 7z packager, 14 first-party bundle loaders, and `BundleCatalog`. |
 | `hya-workflow` | [`../crates/hya-workflow`](../crates/hya-workflow) | `*.hya.md` Workflow parser, graph validator (`flowchart TD`), normalization, topological levels, model assignments, and canonical revisions. |
 | `hya-core` | [`../crates/hya-core`](../crates/hya-core) | The three-primitive kernel (`kernel`, run alone by `hya exec --bare`), the internal native bundle loader (`bundles`), and the shared `CoreError`. |
-| `hya-engine` | [`../crates/hya-engine`](../crates/hya-engine) | Full-mode session engine on the kernel: `SessionEngine`, turn admission/streaming rounds, 5-mechanism compaction, file snapshots/revert/fork, `ResidentSupervisor` episodic actors, vertical channel service, `SubagentGovernor`, Goal/Loop drivers, durable Workflow execution, and `RuntimeRegistry` / `CatalogScope` overlays. |
+| `hya-engine` | [`../crates/hya-engine`](../crates/hya-engine) | Full-mode session engine on the kernel: `SessionEngine`, turn admission/streaming rounds, compaction settings and summarizer (the ladder is the `hya/compaction` bundle), file snapshots/revert/fork, `ResidentSupervisor` episodic actors, vertical channel service, `SubagentGovernor`, Goal/Loop drivers, durable Workflow execution, and `RuntimeRegistry` / `CatalogScope` overlays. |
 | `hya-app` | [`../crates/hya-app`](../crates/hya-app) | Runtime composition: `config.yaml` + auth/OAuth, model cache merge, MCP/plugin/LSP/formatter wiring, per-Project `.hya/bundles` & `.hya/plugins` watchers, `WorkflowControl`, and `HyaRuntime` / `BuiltSessionEngine`. |
 | `hya-server` | [`../crates/hya-server`](../crates/hya-server) | Single-port `/v1` HTTP/JSON+SSE+WS router + `V1Grpc` tonic dispatcher, Host allowlist guard, Projects & session placement, ephemeral session reaper, and `relay_host` connector. |
 | `hya-sdk-v1` | [`../crates/hya-sdk-v1`](../crates/hya-sdk-v1) | Typed Rust client SDK over `hya.v1`: bootstrap, sessions, event-driven turns, live SSE `StreamFrame` subscription, `V1SessionMirror`, and `Client` harness helpers. |

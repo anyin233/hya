@@ -417,7 +417,7 @@ engine.refresh_runtime(|candidate| {
   (`ubuntu-22.04`), `aarch64-unknown-linux-gnu` (`ubuntu-22.04-arm`),
   `aarch64-apple-darwin` (`macos-15`).
 - Unified archive per target: `hya-<version>-<target>.tar.gz` with `bin/hya`,
-  the thirteen first-party bundles, the Argus example bundle, Bun,
+  the fourteen first-party bundles, the Argus example bundle, Bun,
   `lib/hya/bun-adapter`, `lib/hya/tui`, `lib/hya/tui-web`, and
   `lib/hya/tui-sdk`.
 - Installer: releases publish no installer script. `scripts/hya-install.sh`
@@ -452,7 +452,7 @@ cargo run -p xtask -- release-rehearsal \
 - Third-party release actions are pinned to immutable commit SHAs.
 - The publishing job uses the `release` environment so repository settings can
   require manual approval.
-- Unified release payload includes `bin/hya`, the thirteen first-party bundles
+- Unified release payload includes `bin/hya`, the fourteen first-party bundles
   under `bundles/`, the Argus example bundle, Bun, and production
   `lib/hya/{bun-adapter,tui,tui-web,tui-sdk}`.
 - The rehearsal requires the explicit `--no-publish` guard, builds and packages
@@ -905,8 +905,9 @@ visible and fail closed.
   recent assistant message. After any request-local edit (tool-output eviction,
   message rewriting) that number is stale: re-measuring reports no saving.
   Carry one running count and apply each reduction as a delta instead.
-- The turn loop measures the request first and then calls `fold_prefix`, which
-  never re-derives the decision from a transcript it has already edited.
+- The compaction ladder (`hya/compaction`) measures the request first and then
+  folds the cut it planned, never re-deriving the decision from a transcript it
+  has already edited.
 - Reductions never rewrite logged content. Tool-output eviction appends its
   notices in `ContextEvicted`, so the event log stays a sufficient statistic
   for offline reconstruction (see 0.34.15) and for the next request.

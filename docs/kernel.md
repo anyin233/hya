@@ -155,7 +155,7 @@ plugs into that loop at fixed points:
 
 | Point | Bare mode | Full mode |
 | --- | --- | --- |
-| Before the round (`Harness::before_round`) | 80% harness rewrite (`HarnessRewriter`) | Re-validate the actor claim, rebind a Root turn to a new runtime generation, resolve the round's model, then walk the [compaction ladder](compaction.md) |
+| Before the round (`Harness::before_round`) | 80% harness rewrite (`HarnessRewriter`) | Re-validate the actor claim, rebind a Root turn to a new runtime generation, resolve the round's model, then run the engine's rewriter: the [compaction ladder](compaction.md) of the `hya/compaction` internal bundle |
 | Request | Kernel prompt and five tools | The agent's system prompt, filtered tool schemas plus `rewrite`, and reasoning effort, then the `chat.params` hook |
 | Opening the stream | The given model | Cross-model fallback or the Workflow route, under a governor stream permit |
 | Failed round | Ends the run | Retried up to twice when it failed before any text or tool call on a link error |
@@ -181,13 +181,24 @@ The contract a rewriter is written against lives in `hya-tool`
 | --- | --- | --- |
 | `Rewriter { before_round(cx), rewrite_now(cx) }` | the kernel's `HarnessRewriter` (bare mode); internal bundles | Rewrite before a round when needed, or now (`/summarize`); `Ok(true)` when the log changed. Stateless (`&self`) |
 | `RewriteCtx` | the host, per call | Session, assistant message, round model and its `ModelWindow` (window, usage reporting, reasoning replay), projection, system-and-tools `overhead_tokens`, workdir, the rewriter's JSON `config`, and the services below |
-| `SessionLog { projection, append }` | `kernel::Scope` over the run's `Emit` (bare: store; full mode: the actor-claimed emit) | Read the projection, append one event batch |
-| `Transcript { messages(projection) }` | bare: the kernel agent's rendering; full mode: the agent's rendering with prompt images | The messages a round sends for a projection |
-| `ModelHost { fold_agent, complete, compact_window }` | full mode only (`None` in bare) | The fixed agent that folds context; one non-streaming side call whose usage the host records; route-native `/responses/compact` |
+| `SessionLog { projection, append }` | bare: `kernel::Scope` over the store; full mode: the turn's actor-claimed emit | Read the projection, append one event batch |
+| `Transcript { messages(projection) }` | bare: the kernel agent's rendering; full mode: the agent's rendering with the round's prompt images (`/summarize`: the current episode) | The messages a round sends for a projection |
+| `ModelHost { fold_agent, has_summarizer, summarize, compact_window }` | full mode only (`None` in bare) | The fixed agent that folds context (Compaction, or Summary for `/summarize`); the engine's summarizer, which renders the summary or handoff prompt and records the call's usage; route-native `/responses/compact` |
 | `CompactionHooks { before, after }` | full mode only (`SessionEngine`) | The `compaction.before` (overflow) and `compaction.after` hook points |
 
-The kernel's `Harness::before_round` builds the context and calls the
-rewriter; full mode still walks the in-tree compaction ladder there.
+The harness's `before_round` builds the context and calls the rewriter.
+Full mode's rewriter is the first one the internal bundles register (today
+`hya/compaction`, [Compaction](compaction.md)); `SessionEngine::new` loads
+them once per process with `hya_core::bundles::load_internal()` and panics
+when a listed bundle's library cannot be loaded, as a missing tool family
+does. When no internal bundle registers a rewriter, full mode uses the
+kernel's `HarnessRewriter`: the 80% rewrite of bare mode, with no ladder,
+no `ContextStatus`, and `/summarize` removing everything before the
+session's newest message. Full mode's `config` is the engine's
+`CompactionConfig` plus the token-accounting mode, as JSON. A host failure
+reaches the rewriter as a `ToolError`; the host keeps the original
+`CoreError` and a failed rewrite ends the turn with it (for example a stale
+actor claim or a missing fold agent).
 Token estimation (`hya_tool::tokens`) is shared by host and bundles, and the
 reasoning replay policy and compacted-context markers it and the request
 encoders read are in `hya_proto::context`.

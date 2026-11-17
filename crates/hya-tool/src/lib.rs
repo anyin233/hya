@@ -113,8 +113,8 @@ pub use project_activity::{
 };
 pub use project_scope::ProjectScope;
 pub use rewrite::{
-    CompactionHooks, FoldAgent, ModelCall, ModelHost, ModelWindow, RewriteCtx, Rewriter,
-    SessionLog, Transcript,
+    CompactionHooks, FoldAgent, ModelHost, ModelWindow, RewriteCtx, Rewriter, SessionLog,
+    SummaryCall, Transcript,
 };
 pub use skill::{SkillError, SkillInfo, SkillPlane};
 pub use skill_catalog::{

@@ -18,7 +18,7 @@ event log, how crates and runtime planes fit together, and what invariants
 govern sessions, Projects, subagents, and Workflows:
 
 - **[Design Philosophy & Architecture Overview](architecture/overview.md)** — The seven core architectural pillars, layer boundaries, and end-to-end turn lifecycle.
-- **[Project Structure](project-structure.md)** — Repository layout, all 21 workspace crates + 5 native tool-family crates, 28 canonical builtin tools, 13 first-party bundles, and dependency direction.
+- **[Project Structure](project-structure.md)** — Repository layout, all 21 workspace crates + 6 native bundle crates, 28 canonical builtin tools, 14 first-party bundles, and dependency direction.
 - **[Domain Glossary (`CONTEXT.md`)](../CONTEXT.md)** — Canonical domain terminology across `hya-proto`, `hya-core`, Projects, Relay, Workflows, and TUI.
 - **Core Subsystem Specifications:**
   - [Runtime (`hya-engine`)](architecture/runtime.md) — `SessionEngine`, publish seams, `TurnBinding`, Goal/Loop drivers, file snapshots & revert, and workspace roots.

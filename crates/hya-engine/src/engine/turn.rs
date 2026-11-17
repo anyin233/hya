@@ -1,4 +1,4 @@
-use hya_proto::{AgentName, Event, FinishReason, Message, MessageId, ModelRef, Role, SessionId};
+use hya_proto::{AgentName, Event, FinishReason, MessageId, ModelRef, Role, SessionId};
 use hya_provider::{CompletionRequest, EventStream, ProviderError};
 use hya_store::ActorClaim;
 use hya_tool::{Action, AgentDef, Mode, PermissionPlane, ResolvedTool, Rule};
@@ -11,7 +11,6 @@ use super::turn_gate::{TurnLease, scope_held_turn};
 use super::{
     AgentSpec, SessionEngine, agent_roster, agent_with_bound_skills, agent_with_guidance_layer,
     effective_agent_for_binding_with_sidecar_tools, session_workdir,
-    summarize_options_from_definition,
 };
 use crate::error::CoreError;
 use crate::hooks::{
@@ -24,14 +23,12 @@ use crate::workflow::WorkflowTurnRoute;
 use crate::{AgentResourcePolicy, TurnBinding};
 
 mod harness;
-mod ladder;
 pub(super) mod messages;
-mod rewrite_host;
+pub(super) mod rewrite_host;
 mod tool_gate;
 
-use crate::agent_catalog::AgentDefinition;
 pub use messages::advertise_tool;
-use messages::{AttachmentData, attachment_blobs, filtered_tool_schemas, projection_to_messages};
+use messages::{AttachmentData, attachment_blobs, filtered_tool_schemas};
 
 /// Human-answer tools cannot be useful once their host receiver is gone.
 pub(super) fn tool_available(name: &str, interaction_available: bool) -> bool {
@@ -1040,33 +1037,6 @@ impl SessionEngine {
         outcome
     }
 
-    /// Summarize options for one folding attempt, anchored on the transcript as
-    /// it stands right now.
-    ///
-    /// Rebuilt per rung rather than shared, because `previous_summary` reads the
-    /// transcript and by the time the ladder escalates the transcript is no
-    /// longer the one the earlier rung saw.
-    fn folding_options(
-        &self,
-        definition: &AgentDefinition<'_>,
-        binding: &TurnBinding,
-        messages: &[Message],
-    ) -> crate::compaction::SummarizeOptions {
-        let options = summarize_options_from_definition(
-            definition,
-            &self.model_categories,
-            binding.agent_model_preference(definition.stable_id),
-            &|candidate| self.provider_router().resolve(candidate).is_some(),
-        );
-        // Anchor on whatever summary the session already carries, and give the
-        // call room for the full section template.
-        crate::compaction::SummarizeOptions {
-            previous_summary: crate::compaction::previous_summary(messages),
-            max_output_tokens: Some(self.compaction.summary_max_tokens),
-            ..options
-        }
-    }
-
     /// Record the turn's runtime generation and prompt digests.
     async fn emit_turn_binding(
         &self,
@@ -1088,32 +1058,6 @@ impl SessionEngine {
             },
         )
         .await
-    }
-
-    /// Re-read the transcript after a rung replaced it, and re-count it.
-    ///
-    /// Outputs spilled earlier stay spilled: the projection carries their
-    /// notices.
-    ///
-    /// The count is estimated rather than measured on purpose. A provider's
-    /// reported usage describes the prompt it was sent, and after compaction that
-    /// prompt no longer exists; trusting the stale anchor would report the
-    /// pre-compaction size and escalate the ladder straight past the rung that
-    /// had just worked.
-    async fn reload_after_compaction(
-        &self,
-        session: SessionId,
-        agent: &AgentSpec,
-        model: &ModelRef,
-        reasoning_policy: hya_provider::ReasoningReplayPolicy,
-    ) -> Result<(Vec<Message>, usize), CoreError> {
-        let projection = self.store.read_projection_shared(session).await?;
-        let attachments = self.attachment_data(session, &projection).await?;
-        let messages = projection_to_messages(agent, &projection, model, &attachments);
-        let tokens = self
-            .token_accounting
-            .estimate_with_reasoning_policy(&messages, reasoning_policy);
-        Ok((messages, tokens))
     }
 
     /// Load the prompt images the next request sends (see

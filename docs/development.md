@@ -427,7 +427,7 @@ remaining argument is forwarded verbatim. The currently supported tasks are
 | `package-bundle` | Validates a source directory and atomically writes the canonical deterministic public `.hyabundle` package. |
 | `package-native-tool-bundle` | Adds a built target-specific Rust executable and exact policy tool declarations to one tool-family source, then writes a deterministic public package. |
 | `package-native-tool-library` | Adds a built tool-family dynamic library and exact policy tool declarations to one tool-family source, then writes a deterministic public package. |
-| `stage-first-party-bundles` | Packages the thirteen trusted first-party bundles into a backend package's `<package-root>/bundles/` and fails if any bundle version differs from the backend release version. With `--target` and `--assets`, it also writes versioned standalone release assets. |
+| `stage-first-party-bundles` | Packages the fourteen trusted first-party bundles into a backend package's `<package-root>/bundles/` and fails if any bundle version differs from the backend release version. With `--target` and `--assets`, it also writes versioned standalone release assets. |
 | `release-rehearsal` | Runs the pinned, non-publishing unified release build/package/smoke rehearsal for one target. It checks the unified aggregate version contract, then builds, packages, and smokes the `hya` binary, Bun, Bun adapter, TUI/WebUI/TUI-SDK assets and production dependencies, first-party bundles, Argus example, checksums, and unified installer contract. Run it on a host of that target (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`). |
 
 ```sh

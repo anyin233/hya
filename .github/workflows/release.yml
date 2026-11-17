@@ -107,7 +107,7 @@ jobs:
           cargo build --release --locked -p hya-backend --bins --target "$TARGET"
           cargo build --release --locked -p hya-todo-tools --lib --target "$TARGET"
           cargo build --release --locked -p hya-extended-tools --lib --target "$TARGET"
-          cargo build --release --locked -p hya-base-tools -p hya-network-tools -p hya-channel-tools --lib --target "$TARGET"
+          cargo build --release --locked -p hya-base-tools -p hya-network-tools -p hya-channel-tools -p hya-compaction --lib --target "$TARGET"
           cargo build --locked -p xtask
       - name: Package unified release asset
         if: github.ref_type == 'tag'
