@@ -1158,6 +1158,7 @@ dependencies = [
  "hya-todo-tools",
  "hya-tool",
  "hya-workflow",
+ "libc",
  "serde",
  "serde_json",
  "serde_norway",
