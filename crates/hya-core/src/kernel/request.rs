@@ -18,11 +18,31 @@ pub fn request(
     attachments: &AttachmentData,
     reasoning: Option<ReasoningEffort>,
 ) -> CompletionRequest {
+    from_messages(
+        projection_to_messages(agent, projection, model, attachments),
+        system,
+        tools,
+        model,
+        reasoning,
+    )
+}
+
+/// Build a model request from already-rendered messages.
+///
+/// Full mode sends messages its compaction ladder reduced in memory (sticky
+/// evictions), which the projection does not record yet.
+pub fn from_messages(
+    messages: Vec<Message>,
+    system: &str,
+    tools: Vec<hya_proto::ToolSchema>,
+    model: &ModelRef,
+    reasoning: Option<ReasoningEffort>,
+) -> CompletionRequest {
     CompletionRequest {
         tools,
         model: model.clone(),
         system: Some(system.to_string()),
-        messages: projection_to_messages(agent, projection, model, attachments),
+        messages,
         temperature: None,
         max_output_tokens: None,
         reasoning,

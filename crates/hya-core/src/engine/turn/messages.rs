@@ -1,5 +1,5 @@
 use hya_proto::{Message, ModelRef, Projection, Role};
-use hya_provider::{CompletionRequest, ReasoningEffort};
+use hya_provider::ReasoningEffort;
 
 use crate::engine::AgentSpec;
 use crate::runtime_registry::CompiledResourceView;
@@ -28,35 +28,21 @@ pub(super) fn projection_to_messages(
     crate::kernel::request::projection_to_messages(&agent.name, projection, model, attachments)
 }
 
-/// `reasoning` is the already-resolved effort ([`crate::SessionEngine::effective_effort`]).
-pub(super) fn request_from_messages(
+/// The agent's system prompt plus the team quick reference for exactly the
+/// coordination tools in `tools` (harness-allocated per agent and depth).
+pub(super) fn system_prompt(
     agent: &AgentSpec,
-    messages: Vec<Message>,
-    tools: Vec<hya_proto::ToolSchema>,
-    model: &ModelRef,
+    tools: &[hya_proto::ToolSchema],
     depth: u32,
-    reasoning: Option<ReasoningEffort>,
-) -> CompletionRequest {
-    // The team quick reference teaches exactly the coordination tools this
-    // request advertises (harness-allocated per agent and depth).
+) -> String {
     let reference = crate::prompt::team_quick_reference(
         |name| tools.iter().any(|schema| schema.name.as_str() == name),
         depth,
     );
-    let system = match reference {
+    match reference {
         Some(reference) if agent.system_prompt.trim().is_empty() => reference,
         Some(reference) => format!("{}\n\n{reference}", agent.system_prompt.trim_end()),
         None => agent.system_prompt.clone(),
-    };
-    CompletionRequest {
-        tools,
-        model: model.clone(),
-        system: Some(system),
-        messages,
-        temperature: None,
-        max_output_tokens: None,
-        reasoning,
-        headers: Default::default(),
     }
 }
 
