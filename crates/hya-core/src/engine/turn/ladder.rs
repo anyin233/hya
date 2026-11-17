@@ -1,5 +1,5 @@
-//! The full mode's [`Rewriter`]: the compaction ladder walked before each
-//! round over the projected transcript. Every change it makes to what the
+//! The compaction ladder the full mode's `Rewriter` walks before each round
+//! over the projected transcript. Every change it makes to what the
 //! request sends is an event, so the request is rebuilt from the projection.
 
 use hya_proto::{
@@ -19,7 +19,6 @@ use crate::hooks::{
     CompactionAfterInput, CompactionBeforeInput, CompactionResolution, CompactionTrigger,
     resolve_compaction_decision,
 };
-use crate::kernel::Rewriter;
 use crate::runtime_registry::CompiledResourceView;
 
 /// Range endpoints for a compaction that folded the entire input window.
@@ -64,9 +63,9 @@ pub(super) struct CompactionLadder<'a> {
     pub(super) attachments: &'a AttachmentData,
 }
 
-#[async_trait::async_trait]
-impl Rewriter for CompactionLadder<'_> {
-    async fn before_round(&mut self, projection: &Projection) -> Result<bool, CoreError> {
+impl CompactionLadder<'_> {
+    /// Walk the ladder over `projection`; `true` when the log changed.
+    pub(super) async fn walk(&mut self, projection: &Projection) -> Result<bool, CoreError> {
         let &mut Self {
             engine,
             session,
