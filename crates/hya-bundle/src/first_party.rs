@@ -28,12 +28,13 @@ pub const FIRST_PARTY_BUNDLES: &[&str] = &[
     "hya/plan-impl-review",
     "hya/basic-tui-components",
     "hya/code-mode",
+    "hya/compaction",
 ];
 
 /// First-party bundles in the `internal` group: native libraries that carry
 /// full-mode features out of the kernel (ADR-0033). Every entry is also in
 /// [`FIRST_PARTY_BUNDLES`]; bare mode loads none of them.
-pub const INTERNAL_BUNDLES: &[&str] = &[];
+pub const INTERNAL_BUNDLES: &[&str] = &["hya/compaction"];
 
 /// In-tree source groups searched for a first-party bundle directory.
 const SOURCE_GROUPS: &[&str] = &["presets", "first-party", "internal"];

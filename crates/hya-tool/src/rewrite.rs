@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use hya_proto::context::ReasoningReplayPolicy;
-use hya_proto::{Event, Message, MessageId, ModelRef, Projection, SessionId, UsagePurpose};
+use hya_proto::{Event, Message, MessageId, ModelRef, Projection, SessionId};
 use serde_json::Value;
 
 use crate::ToolError;
@@ -54,21 +54,22 @@ pub struct FoldAgent {
     pub reasoning: Option<String>,
 }
 
-/// One non-streaming side call.
-#[derive(Clone, Debug)]
-pub struct ModelCall {
-    /// Model to call; `None` uses the host's summarizer model.
+/// One summary the host's summarizer writes.
+#[derive(Clone, Debug, Default)]
+pub struct SummaryCall {
+    /// Model to call; `None` uses the summarizer's own model.
     pub model: Option<ModelRef>,
     /// System prompt.
     pub system: Option<String>,
-    /// Request messages.
-    pub messages: Vec<Message>,
-    /// Output cap.
-    pub max_output_tokens: Option<u32>,
     /// Reasoning effort (`ReasoningEffort` spelling).
     pub reasoning: Option<String>,
-    /// What the recorded usage is billed as.
-    pub purpose: UsagePurpose,
+    /// The summary this one updates, when the session has one.
+    pub previous_summary: Option<String>,
+    /// Output cap.
+    pub max_output_tokens: Option<u32>,
+    /// Write a handoff document over the messages verbatim instead of a
+    /// summary of them.
+    pub handoff: bool,
 }
 
 /// Model calls a rewriter makes through the host.
@@ -77,9 +78,18 @@ pub trait ModelHost: Send + Sync {
     /// The agent that folds context for this rewrite; `Err` when its
     /// definition is missing.
     fn fold_agent(&self) -> Result<FoldAgent, ToolError>;
-    /// Run `call` and return its text. The host records the call's usage on
-    /// `session`, also when the call fails.
-    async fn complete(&self, session: SessionId, call: ModelCall) -> Result<String, ToolError>;
+    /// Whether the host has a summarizer; without one [`Self::summarize`]
+    /// fails.
+    fn has_summarizer(&self) -> bool;
+    /// Summarize `messages` with the host's summarizer, which renders the
+    /// prompt. The host bills the call's usage to `session` as compaction,
+    /// also when the call fails.
+    async fn summarize(
+        &self,
+        session: SessionId,
+        messages: &[Message],
+        call: SummaryCall,
+    ) -> Result<String, ToolError>;
     /// Compact `messages` with the route's native compaction
     /// (`/responses/compact`), as the marker body to commit; `None` when the
     /// route has none.
@@ -105,7 +115,8 @@ pub trait CompactionHooks: Send + Sync {
 pub struct RewriteCtx<'a> {
     /// Session being rewritten.
     pub session: SessionId,
-    /// The turn's assistant message.
+    /// The turn's assistant message; for [`Rewriter::rewrite_now`], the
+    /// session's newest message.
     pub message: MessageId,
     /// The round's model.
     pub model: &'a ModelRef,

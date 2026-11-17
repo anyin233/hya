@@ -82,13 +82,15 @@ fn host_target(root: &Path) -> Result<String> {
         .context("rustc -vV did not report a host target")
 }
 const BINARY_NAME: &str = "hya";
-/// Crates whose release `cdylib` the native tool-family bundles package.
-const TOOL_FAMILY_CRATES: [&str; 5] = [
+/// Crates whose release `cdylib` the native bundles (tool families and
+/// internal bundles) package.
+const NATIVE_BUNDLE_CRATES: [&str; 6] = [
     "hya-base-tools",
     "hya-extended-tools",
     "hya-network-tools",
     "hya-channel-tools",
     "hya-todo-tools",
+    "hya-compaction",
 ];
 const BUN_ADAPTER: &str = "crates/hya-plugin-bun/adapter";
 const ARGUS_PACKAGE_SCRIPT: &str = "scripts/package-argus-example.sh";
@@ -561,12 +563,12 @@ fn prepare_and_build(root: &Path, target: &str) -> Result<()> {
     run_checked(OsStr::new("cargo"), &args, root, &[], &[])
         .context("run locked release build for hya-backend")?;
     let mut libraries = arg_list(&["build", "--release", "--locked"]);
-    for family in TOOL_FAMILY_CRATES {
-        libraries.extend(["-p".to_owned(), family.to_owned()]);
+    for library in NATIVE_BUNDLE_CRATES {
+        libraries.extend(["-p".to_owned(), library.to_owned()]);
     }
     libraries.extend(["--lib".to_owned(), "--target".to_owned(), target.to_owned()]);
     run_checked(OsStr::new("cargo"), &libraries, root, &[], &[])
-        .context("run locked release build for the native tool libraries")?;
+        .context("run locked release build for the native bundle libraries")?;
     Ok(())
 }
 

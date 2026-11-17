@@ -16,7 +16,7 @@ and directory map, see [Project Structure](../../project-structure.md).
 
 | Guide | Description | Status |
 |-------|-------------|--------|
-| [Project Structure](../../project-structure.md) | Workspace crate layout, 28 builtin tools, 12 first-party bundles, and dependency DAG | Current |
+| [Project Structure](../../project-structure.md) | Workspace crate layout, 28 builtin tools, 14 first-party bundles, and dependency DAG | Current |
 | [Database Guidelines](./database-guidelines.md) | SQLite, event-log, admission, and migration contracts | Current |
 | [Error Handling](./error-handling.md) | Typed store/core/tool errors and fail-closed patterns | Current |
 | [Quality Guidelines](./quality-guidelines.md) | Executable backend quality and release contracts | Current |

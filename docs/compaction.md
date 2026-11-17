@@ -8,6 +8,15 @@ brings the transcript back under the threshold; a mechanism that is
 unavailable (an unsupported route, no summarizer wired) or fails advances to
 the next one.
 
+The ladder is the `hya/compaction` internal bundle
+(`bundles/internal/compaction`), a native library full mode loads at startup
+and runs as its [rewriter](kernel.md#rewrite-contract) before every round and
+for `/summarize`. The host keeps the settings it passes the bundle
+(`CompactionConfig`), the summarizer the bundle calls back into, and the
+terminal handoff. Without the bundle, full mode falls back to the kernel's
+80% rewrite (see [Kernel](kernel.md#rewrite-contract)); `hya exec --bare`
+never loads it.
+
 This page is the canonical reference for the mechanism set, the walk
 semantics, the configuration surface, and the wire records each mechanism
 emits. Thresholds and token accounting are configured alongside; see
@@ -251,11 +260,12 @@ the omp budgets — is what the ladder relies on, and that is what ships.
 
 | Concern | Location |
 | --- | --- |
-| Rungs, wire names, order parsing, snapcompact archive, handoff plan | [`crates/hya-engine/src/compaction.rs`](../crates/hya-engine/src/compaction.rs) |
-| Ladder walk in the turn loop | [`crates/hya-engine/src/engine/turn.rs`](../crates/hya-engine/src/engine/turn.rs) |
+| Ladder walk, rungs, fold and step cuts, snapcompact archive, `/summarize` fold | [`bundles/internal/compaction/native/src/`](../bundles/internal/compaction/native/src/) (`ladder.rs`, `fold.rs`, `evict.rs`, `snap.rs`, `config.rs`) |
+| Rewriter context, summarizer and hook services, error mapping | [`crates/hya-engine/src/engine/turn/rewrite_host.rs`](../crates/hya-engine/src/engine/turn/rewrite_host.rs), [`harness.rs`](../crates/hya-engine/src/engine/turn/harness.rs) |
+| Settings, wire names, order parsing, summarizer prompts | [`crates/hya-engine/src/compaction.rs`](../crates/hya-engine/src/compaction.rs) |
 | Config file/env resolution | [`crates/hya-app/src/config.rs`](../crates/hya-app/src/config.rs) |
 | Wire events and strategies | [`crates/hya-proto/src/event.rs`](../crates/hya-proto/src/event.rs) |
-| Artifact spill sink | [`crates/hya-engine/src/engine/spill.rs`](../crates/hya-engine/src/engine/spill.rs), [`crates/hya-tool/src/handle/`](../crates/hya-tool/src/handle/) |
+| Artifact spill sink | [`bundles/internal/compaction/native/src/evict.rs`](../bundles/internal/compaction/native/src/evict.rs), [`crates/hya-tool/src/handle/`](../crates/hya-tool/src/handle/) |
 
 Marker publication is atomic: each persisted reduction writes its completed
 system marker and `ContextCompacted` range event in one transaction, then

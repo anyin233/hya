@@ -31,7 +31,8 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::CoreError;
-use rewrite::{HarnessRewriter, Initiator};
+pub use rewrite::HarnessRewriter;
+use rewrite::Initiator;
 pub use round::{CompleteText, Failure, Round, ToolCall};
 
 /// Agent name the kernel renders assistant messages with in requests.

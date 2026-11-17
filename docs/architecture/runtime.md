@@ -387,8 +387,9 @@ full-mode harness (`TurnHarness` in
 2. Read the current projection from the store.
 3. Before the round: validate the actor claim (if any); check activation-hook
    health (`is_healthy`), unhealthy → `CoreError::Cancelled`; rebind a Root
-   turn after its first round; resolve the round's model; walk the compaction
-   ladder (see [Compaction and Summaries](#compaction-and-summaries)). When the
+   turn after its first round; resolve the round's model; run the engine's
+   rewriter, the compaction ladder of the `hya/compaction` internal bundle
+   (see [Compaction and Summaries](#compaction-and-summaries)). When the
    ladder changed the log, check the cancel token again and re-read the
    projection.
 4. Build the request with `kernel::request` from the agent's system prompt,
@@ -1159,8 +1160,11 @@ or tokenized for billing.
 
 ## Compaction and Summaries
 
-Compaction lives in [`compaction.rs`](../../crates/hya-engine/src/compaction.rs)
-and is walked from the turn loop. The mechanism set, the configurable firing
+The ladder is the `hya/compaction` internal bundle
+([`bundles/internal/compaction/native`](../../bundles/internal/compaction/native)),
+run as the engine's rewriter before each round and for `/compact`; the host
+keeps its settings and the summarizer in
+[`compaction.rs`](../../crates/hya-engine/src/compaction.rs). The mechanism set, the configurable firing
 order, thresholds, and wire records are documented canonically in
 [Compaction](../compaction.md); this section records the runtime contracts.
 
@@ -1222,7 +1226,7 @@ Default order: `shake, remote, soft, snapcompact, handoff`.
    behind `HYA_COMPACTED_CONTEXT` + `<<<RESPONSES_COMPACT_ITEMS>>>` via
    `format_responses_compact_system`; later `/responses` requests re-inject
    the items verbatim.
-4. `soft` folds the prefix through `fold_prefix`/`ModelSummarizer` behind the
+4. `soft` folds the prefix through the host summarizer (`ModelSummarizer`) behind the
    same marker; `snapcompact` commits a local deterministic archive of the
    folded prefix (no model call); `handoff` commits a model-written handoff
    document over the whole transcript. All three emit `ContextCompacted`

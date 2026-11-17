@@ -12,6 +12,8 @@ workspace = true
 
 [dependencies]
 hya-bundle = { workspace = true }
+# Built for its `cdylib`: the internal `hya/compaction` bundle loaded at runtime.
+hya-compaction = { workspace = true }
 hya-core = { workspace = true }
 hya-proto = { workspace = true }
 hya-provider = { workspace = true }

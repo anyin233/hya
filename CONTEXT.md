@@ -93,11 +93,12 @@ extensions (`tui:`). Historically split shapes are referred to by role as
 (one Workflow + reachable Agent closure).
 
 **First-party bundle (Preset)**:
-One of the twelve trusted bundles shipped with the backend (`hya/base-tools`,
+One of the fourteen trusted bundles shipped with the backend (`hya/base-tools`,
 `hya/extended-tools`, `hya/network-tools`, `hya/channel-tools`,
 `hya/todo-tools`, `hya/core-agents`, `hya/core-skills`, `hya/core-commands`,
 `hya/agent-channels`, `hya/goal-loop`, `hya/plan-impl-review`,
-`hya/basic-tui-components`). Loaded from in-tree sources in Cargo builds or
+`hya/basic-tui-components`, `hya/code-mode`, and the internal bundle
+`hya/compaction`). Loaded from in-tree sources in Cargo builds or
 `<prefix>/bundles/hya-*.hyabundle` in installed layouts.
 
 **Agent catalog**:

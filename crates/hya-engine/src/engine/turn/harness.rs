@@ -15,7 +15,7 @@ use hya_proto::{
 };
 use hya_provider::{CompletionRequest, EventStream, ProviderError};
 use hya_store::ActorClaim;
-use hya_tool::{AgentDef, ReportLatch};
+use hya_tool::{AgentDef, ReportLatch, RewriteCtx};
 use tokio::sync::OwnedSemaphorePermit;
 use tokio_util::sync::CancellationToken;
 
@@ -23,11 +23,11 @@ use super::super::roots::SessionWorkspace;
 use super::super::steer::SteerMailbox;
 use super::super::stream_round::TurnEmit;
 use super::super::{
-    AgentSpec, SessionEngine, agent_roster, effective_agent_for_binding_with_sidecar_tools,
-    session_workdir,
+    AgentSpec, FixedSystemAgent, SessionEngine, agent_roster,
+    effective_agent_for_binding_with_sidecar_tools, session_workdir,
 };
-use super::ladder::CompactionLadder;
 use super::messages::{AttachmentData, prompt_digests, system_prompt};
+use super::rewrite_host::{HostErrors, TurnLog, TurnModels, TurnTranscript};
 use super::tool_gate::TurnToolGate;
 use super::{
     RequestLineage, TurnExecution, TurnRebindInputs, workflow_failure_class,
@@ -345,8 +345,8 @@ impl ToolGate for TurnHarness<'_> {
 #[async_trait]
 impl Harness for TurnHarness<'_> {
     /// Re-validate the actor claim, rebind (Root, after the first round),
-    /// resolve the round's model and attachments, then walk the compaction
-    /// ladder.
+    /// resolve the round's model and attachments, then run the engine's
+    /// rewriter (the `hya/compaction` ladder).
     async fn before_round(&mut self, projection: &Projection) -> Result<bool, CoreError> {
         let engine = self.engine;
         engine.validate_actor_claim(self.actor_claim).await?;
@@ -373,19 +373,60 @@ impl Harness for TurnHarness<'_> {
         );
         self.parent_session = projection.session.parent;
         self.attachments = engine.attachment_data(self.session, projection).await?;
-        CompactionLadder {
+        // What the system prompt and tools cost: a request with no messages.
+        let tools = engine.offered_tools(&self.resources, self.depth);
+        let template = kernel::request::request(
+            &Projection::default(),
+            &system_prompt(&self.live_agent, &tools, self.depth),
+            tools,
+            &self.model,
+            &self.live_agent.name,
+            &self.attachments,
+            None,
+        );
+        let overhead_tokens = engine.token_accounting.estimate_request(
+            &template.messages,
+            template.system.as_deref(),
+            &template.tools,
+            engine
+                .provider_router()
+                .reasoning_replay_policy(&self.model),
+        );
+        let errors = HostErrors::default();
+        let config = engine.rewriter_config();
+        let log = TurnLog {
             engine,
-            session: self.session,
+            actor_claim: self.actor_claim,
+            errors: &errors,
+        };
+        let transcript = TurnTranscript {
             agent: &self.live_agent,
             model: &self.model,
-            binding: &self.binding,
-            resources: &self.resources,
-            depth: self.depth,
-            actor_claim: self.actor_claim,
             attachments: &self.attachments,
-        }
-        .walk(projection)
-        .await
+        };
+        let models = TurnModels {
+            engine,
+            actor_claim: self.actor_claim,
+            binding: &self.binding,
+            fold: FixedSystemAgent::Compaction,
+            errors: &errors,
+        };
+        let cx = RewriteCtx {
+            session: self.session,
+            message: self.message,
+            model: &self.model,
+            projection,
+            window: engine.model_window(&self.model),
+            overhead_tokens,
+            workdir: &session_workdir(&self.live_agent, projection),
+            config: &config,
+            log: &log,
+            transcript: &transcript,
+            models: Some(&models),
+            hooks: Some(engine),
+        };
+        let result = engine.rewriter.before_round(cx).await;
+        result.map_err(|error| errors.into_error(error))
     }
 
     async fn request(&mut self, projection: &Projection) -> Result<CompletionRequest, CoreError> {

@@ -75,7 +75,6 @@ mod session_hooks;
 mod session_state;
 mod session_title;
 mod shell;
-mod spill;
 mod steer;
 mod stream_round;
 mod summary;
@@ -399,6 +398,8 @@ pub struct SessionEngine {
     summarizer: Option<Arc<dyn Summarizer>>,
     compaction: CompactionConfig,
     token_accounting: TokenAccounting,
+    /// Rewrites the Context before each round and on `/summarize`.
+    rewriter: Arc<dyn hya_tool::Rewriter>,
     hooks: Option<Arc<dyn HookDispatcher>>,
     /// Captured per-session lifecycle/event hooks ([`session_hooks`]).
     session_bundle_hooks: Arc<RwLock<session_hooks::SessionHookMap>>,
@@ -460,6 +461,7 @@ impl Clone for SessionEngine {
             summarizer: self.summarizer.clone(),
             compaction: self.compaction,
             token_accounting: self.token_accounting.clone(),
+            rewriter: Arc::clone(&self.rewriter),
             hooks: self.hooks.clone(),
             session_bundle_hooks: Arc::clone(&self.session_bundle_hooks),
             session_channel_policies: Arc::clone(&self.session_channel_policies),
@@ -628,6 +630,7 @@ impl SessionEngine {
             summarizer: None,
             compaction: CompactionConfig::default(),
             token_accounting: TokenAccounting::default(),
+            rewriter: internal_rewriter(),
             hooks: None,
             session_bundle_hooks: Arc::new(RwLock::new(HashMap::new())),
             session_channel_policies: Arc::new(RwLock::new(HashMap::new())),
@@ -2169,6 +2172,29 @@ fn fixed_system_agent(
         .ok_or_else(|| CoreError::AgentDefinitionMissing {
             agent_id: stable_id.to_string(),
         })
+}
+
+/// The rewriter of full-mode turns: the first one the internal bundles
+/// register (`hya/compaction`), or the kernel's [`HarnessRewriter`] when none
+/// does. Loaded once per process.
+///
+/// # Panics
+///
+/// When an internal bundle's library cannot be found or loaded, as a missing
+/// tool family does.
+///
+/// [`HarnessRewriter`]: hya_core::kernel::HarnessRewriter
+fn internal_rewriter() -> Arc<dyn hya_tool::Rewriter> {
+    static REWRITER: std::sync::OnceLock<Arc<dyn hya_tool::Rewriter>> = std::sync::OnceLock::new();
+    Arc::clone(REWRITER.get_or_init(|| {
+        let loaded = hya_core::bundles::load_internal()
+            .unwrap_or_else(|error| panic!("load internal bundles: {error}"));
+        loaded
+            .rewriters
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| Arc::new(hya_core::kernel::HarnessRewriter))
+    }))
 }
 
 /// Build summarize options from a fixed system definition and bound preference.
