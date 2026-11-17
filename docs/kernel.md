@@ -10,8 +10,8 @@ hya exec --bare "say hi" --db /tmp/x.db
 ```
 
 The working directory is the caller's cwd. `--bare` conflicts with `--pure`,
-`--time-budget`, and routing to a running server; these combinations error
-out. See the [CLI reference](cli.md#hya-exec).
+`--time-budget`, `--json`, and routing to a running server; these
+combinations error out. See the [CLI reference](cli.md#--bare).
 
 ## Three primitives
 

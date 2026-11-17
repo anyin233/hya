@@ -265,6 +265,11 @@ pub(crate) enum Command {
         /// time left.
         #[arg(long, value_name = "SECS", value_parser = clap::value_parser!(u64).range(1..))]
         time_budget: Option<u64>,
+        /// Run the three-primitive kernel alone: five built-in tools, its
+        /// minimal system prompt, no bundles or permission checks. Prints
+        /// the final text. Always runs in process against `--db`.
+        #[arg(long, conflicts_with_all = ["pure", "time_budget", "json"])]
+        bare: bool,
     },
     /// Start the HTTP + SSE server.
     Serve {
