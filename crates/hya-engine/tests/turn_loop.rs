@@ -631,13 +631,9 @@ async fn local_compaction_persists_and_is_not_repeated_next_round() {
     let (marker_id, strategy, from_message, to_message, folded_count, threshold) = records[0];
     assert_eq!(strategy, hya_proto::CompactionStrategy::LocalSummarizer);
     // The record carries the RESOLVED threshold (window-scaled, clamped to the
-    // floor), not the flat configured fallback — that is the number that
-    // actually drove the decision.
-    assert_eq!(
-        threshold,
-        hya_engine::MIN_RESOLVED_THRESHOLD as u64,
-        "records the threshold in force"
-    );
+    // floor of 1,000 tokens), not the flat configured fallback — that is the
+    // number that actually drove the decision.
+    assert_eq!(threshold, 1_000, "records the threshold in force");
 
     // AC1: the recorded output message really is the marker System message.
     let projection = hya_proto::Projection::from_events(&envelopes);

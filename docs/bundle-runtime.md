@@ -29,9 +29,10 @@ Internal bundles are first-party native libraries that carry full-mode
 features out of the kernel ([Kernel](kernel.md)). Their sources live under
 `bundles/internal/<name>` (`bundle.yaml` plus a `native/` crate with
 `crate-type = ["rlib", "cdylib"]` that links only `hya-tool` and
-`hya-proto`), and `hya_bundle::INTERNAL_BUNDLES` lists them (empty in this
-build; every entry is also in `FIRST_PARTY_BUNDLES`). Full mode loads them with
-`hya_core::bundles::load_internal()`, which calls
+`hya-proto`), and `hya_bundle::INTERNAL_BUNDLES` lists them (`hya/compaction`,
+the [compaction ladder](compaction.md); every entry is also in
+`FIRST_PARTY_BUNDLES`). Full mode loads them once per process, when the first
+`SessionEngine` is built, with `hya_core::bundles::load_internal()`, which calls
 `hya_tool::native_bundle::load(identity)` for each: identity `hya/<name>` maps
 to library stem `hya_<name>` and package `hya-<name>.hyabundle`, the same
 lookup and ABI check as the tool families. `hya exec --bare` loads none. An
@@ -236,7 +237,7 @@ unknown id `not_found` (404), an immutable bundle or a conflict that
 
 Hya's own tools, agents, Skills, commands, channel policy and workflows are
 bundles that the backend loads when it starts. None of their content is
-compiled into the binary. `hya_bundle::FIRST_PARTY_BUNDLES` lists the thirteen
+compiled into the binary. `hya_bundle::FIRST_PARTY_BUNDLES` lists the fourteen
 trusted identities:
 
 | Identity | Source | Supplies |
@@ -249,6 +250,7 @@ trusted identities:
 | `hya/goal-loop`, `hya/plan-impl-review` | `bundles/first-party/<name>` | First-party AgentSet and Workflow bundles |
 | `hya/basic-tui-components` | `bundles/first-party/basic-tui-components` | Built-in TUI Sessions, Todos, Projects and Context surfaces |
 | `hya/code-mode` | `bundles/first-party/code-mode` | The `code-mode__run` tool. Shipped disabled; `tools.code.mode` enables it ([Code mode](code-mode.md)) |
+| `hya/compaction` | `bundles/internal/compaction` | Internal bundle: the full-mode [compaction ladder](compaction.md) as a native rewriter |
 
 In-tree sources are searched in the `presets`, `first-party`, and `internal`
 groups, in that order.
@@ -280,14 +282,14 @@ A release builds each supported target natively: `x86_64-unknown-linux-gnu`,
 `aarch64-unknown-linux-gnu`, and `aarch64-apple-darwin`. It publishes:
 
 - One unified archive per target, `hya-<version>-<target>.tar.gz`, holding
-  `bin/hya`, `bundles/hya-<name>.hyabundle` for all thirteen bundles, the Argus
+  `bin/hya`, `bundles/hya-<name>.hyabundle` for all fourteen bundles, the Argus
   example bundle, Bun (`lib/hya/bin/bun`), `lib/hya/bun-adapter`, `lib/hya/tui`
   (including the target's `@opentui/core-<platform>` native package and
   precompiled `dist/app.js`), `lib/hya/tui-sdk`, and `lib/hya/tui-web` with its
   `web/` page.
 - One standalone asset per bundle, byte-identical to the archived copy:
-  `hya-<name>-<version>-<target>.hyabundle` for the five native tool families
-  on each target, and `hya-<name>-<version>.hyabundle` once for the eight
+  `hya-<name>-<version>-<target>.hyabundle` for the six native bundles (five
+  tool families and `hya/compaction`) on each target, and `hya-<name>-<version>.hyabundle` once for the eight
   platform-independent bundles. The release fails if two targets built a
   platform-independent bundle with different bytes. To replace a bundle in an
   installed layout, save the asset as `<prefix>/bundles/hya-<name>.hyabundle`.

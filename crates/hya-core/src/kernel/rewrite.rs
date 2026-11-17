@@ -24,9 +24,10 @@ pub(super) enum Initiator {
     Harness,
 }
 
-/// The kernel's own rewriter (bare mode): removes everything before the next
-/// step once the last round filled [`TRIGGER_PERCENT`] of the window.
-pub(super) struct HarnessRewriter;
+/// The kernel's own rewriter: removes everything before the next step once
+/// the last round filled 80% of the window. Bare mode uses it, and so does
+/// full mode when no internal bundle registers a rewriter.
+pub struct HarnessRewriter;
 
 #[async_trait]
 impl Rewriter for HarnessRewriter {

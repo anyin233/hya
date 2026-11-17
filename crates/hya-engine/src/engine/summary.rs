@@ -1,18 +1,17 @@
 use hya_proto::{
-    AgentName, CompactionStrategy, Event, Message, MessageId, ModelRef, PartProjection, Projection,
-    Role, SessionId, UsagePurpose,
+    AgentName, Message, MessageId, ModelRef, PartProjection, Projection, Role, SessionId,
 };
+use hya_tool::RewriteCtx;
 
-use super::SessionEngine;
-use super::{
-    FixedSystemAgent, fixed_system_agent, projection_workdir, summarize_options_from_definition,
-};
+use super::turn::rewrite_host::{EpisodeTranscript, HostErrors, TurnLog, TurnModels};
+use super::{FixedSystemAgent, SessionEngine, fixed_system_agent, projection_workdir};
 use crate::error::CoreError;
 
 use hya_provider::COMPACT_CONTEXT_MARKER;
 
 impl SessionEngine {
-    /// Produce a summary message for the session via the summarizer.
+    /// Fold the session's current episode into one summary behind a marker,
+    /// through the engine's rewriter (`hya/compaction`); returns the marker.
     pub async fn summarize_session(&self, session: SessionId) -> Result<MessageId, CoreError> {
         let _lease = self
             .begin_turn(session, &tokio_util::sync::CancellationToken::new())
@@ -28,59 +27,63 @@ impl SessionEngine {
         })?;
         // Bind once from the persisted session workdir; exact-lookup only.
         let binding = self.bind_session_runtime(session, &workdir).await?;
-        let definition = fixed_system_agent(&binding, FixedSystemAgent::Summary)?;
-        let options = summarize_options_from_definition(
-            &definition,
-            &self.model_categories,
-            binding.agent_model_preference(definition.stable_id),
-            &|model| self.provider_router().resolve(model).is_some(),
-        );
-        let messages = summary_messages(&projection)?;
-        let usage = crate::compaction::UsageCollector::default();
-        let options = crate::compaction::SummarizeOptions {
-            previous_summary: crate::compaction::previous_summary(&messages).or_else(|| {
-                projection
-                    .session
-                    .handoff
-                    .as_ref()
-                    .map(|handoff| handoff.doc.clone())
-            }),
-            max_output_tokens: Some(self.compaction.summary_max_tokens),
-            usage: Some(usage.clone()),
-            ..options
+        fixed_system_agent(&binding, FixedSystemAgent::Summary)?;
+        if self.summarizer.is_none() {
+            return Err(CoreError::Invalid("summarizer not configured".to_string()));
+        }
+        let model = projection
+            .session
+            .model
+            .clone()
+            .unwrap_or_else(|| ModelRef::new("unknown"));
+        let errors = HostErrors::default();
+        let config = self.rewriter_config();
+        let log = TurnLog {
+            engine: self,
+            actor_claim: None,
+            errors: &errors,
         };
-        drop(projection);
-        let summarizer = self
-            .summarizer
-            .as_ref()
-            .ok_or_else(|| CoreError::Invalid("summarizer not configured".to_string()))?;
-        let summary = summarizer.summarize(&messages, options).await;
-        self.record_side_call_usage(None, session, UsagePurpose::Compaction, &usage)
-            .await;
-        let summary = summary?;
-        // Behind the marker, not merely appended. Without it `compacted_messages`
-        // never finds a cut point, so the summarized history stays in the
-        // transcript and `/compact` *grows* the context it was asked to shrink.
-        let folded = messages.first().zip(messages.last()).map(|(first, last)| {
-            (
-                first.id(),
-                last.id(),
-                u32::try_from(messages.len()).unwrap_or(u32::MAX),
-            )
-        });
-        let marker = self
-            .commit_compaction(
-                None,
-                session,
-                format!("{COMPACT_CONTEXT_MARKER}\n{summary}"),
-                CompactionStrategy::LocalSummarizer,
-                folded,
-                None,
-                u64::try_from(self.token_accounting.estimate(&messages)).unwrap_or(u64::MAX),
-                0,
-            )
-            .await?;
-        Ok(marker)
+        let models = TurnModels {
+            engine: self,
+            actor_claim: None,
+            binding: &binding,
+            fold: FixedSystemAgent::Summary,
+            errors: &errors,
+        };
+        let cx = RewriteCtx {
+            session,
+            message: projection
+                .session
+                .messages
+                .last()
+                .map_or_else(MessageId::new, |message| message.id),
+            model: &model,
+            projection: &projection,
+            window: self.model_window(&model),
+            overhead_tokens: 0,
+            workdir: &workdir,
+            config: &config,
+            log: &log,
+            transcript: &EpisodeTranscript,
+            models: Some(&models),
+            hooks: Some(self),
+        };
+        let changed = self.rewriter.rewrite_now(cx).await;
+        if !changed.map_err(|error| errors.into_error(error))? {
+            return Err(CoreError::Invalid("nothing to summarize".to_string()));
+        }
+        // The marker is the newest system message: the turn lease keeps
+        // every other writer out.
+        self.store
+            .read_projection_shared(session)
+            .await?
+            .session
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == Role::System)
+            .map(|message| message.id)
+            .ok_or_else(|| CoreError::Invalid("summary marker missing".to_string()))
     }
 }
 
@@ -145,72 +148,4 @@ fn collect_text(parts: &[PartProjection]) -> String {
         }
     }
     out
-}
-
-impl SessionEngine {
-    /// Persist the marker and its fold range before publishing either.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) async fn commit_compaction(
-        &self,
-        actor_claim: Option<&hya_store::ActorClaim>,
-        session: SessionId,
-        content: String,
-        strategy: CompactionStrategy,
-        folded: Option<(MessageId, MessageId, u32)>,
-        step_cut: Option<hya_proto::StepCut>,
-        input_tokens_est: u64,
-        threshold: u64,
-    ) -> Result<MessageId, CoreError> {
-        let message = MessageId::new();
-        let part = hya_proto::PartId::new();
-        let mut events = vec![
-            Event::MessageStarted {
-                session,
-                message,
-                role: Role::System,
-                agent: None,
-                model: None,
-            },
-            Event::TextStart {
-                session,
-                message,
-                part,
-            },
-            Event::TextDelta {
-                session,
-                message,
-                part,
-                delta: content,
-            },
-            Event::TextEnd {
-                session,
-                message,
-                part,
-            },
-            Event::MessageFinished {
-                session,
-                message,
-                role: Role::System,
-                finish: hya_proto::FinishReason::Stop,
-                tokens: None,
-                cause: None,
-            },
-        ];
-        if let Some((from_message, to_message, folded_count)) = folded {
-            events.push(Event::ContextCompacted {
-                session,
-                message,
-                strategy,
-                from_message,
-                to_message,
-                folded_count,
-                input_tokens_est,
-                threshold,
-                step_cut,
-            });
-        }
-        self.emit_batch_for_actor(actor_claim, session, events)
-            .await?;
-        Ok(message)
-    }
 }
