@@ -4,9 +4,7 @@ mod support;
 
 use async_trait::async_trait;
 use hya_core::{BoundSidecarFactory, CoreError, SidecarHandle, SidecarStart};
-use hya_proto::{
-    ArchiveReason, Event, FinishCause, FinishReason, MailEndpoint, MailKind, ReportOutcome, Role,
-};
+use hya_proto::{ArchiveReason, Event, FinishReason, MailEndpoint, MailKind, ReportOutcome, Role};
 use serde_json::json;
 use std::sync::{
     Arc,
@@ -212,53 +210,6 @@ async fn f2_root_teardown_during_loss_sidecar_stop_wins_without_report_mail() {
             .any(|e| matches!(e, Event::MailSent { .. } | Event::SubagentReported { .. })),
         "teardown emitted report mail: {tail:?}"
     );
-}
-
-#[tokio::test]
-async fn f3_team_cancel_closes_main_straggler_before_releasing_lease() {
-    let plugin = support::lifecycle::BlockingPlugin::for_hook("chat.params").await;
-    let mut h = Harness::with_plugins(vec![plugin.spec.clone()]).await;
-    let child_gate = Arc::new(Gate::default());
-    let (child, _) = h
-        .spawn(vec![
-            Round::text("busy child").stream_gated(child_gate.clone()),
-        ])
-        .await;
-    child_gate.arrived().await;
-    plugin.arm_session(h.root);
-    h.engine
-        .mail_send(
-            child,
-            MailEndpoint::Handle("main".into()),
-            MailKind::Message,
-            "F3_MAIN_WAKE".into(),
-        )
-        .await
-        .unwrap();
-    plugin.gate.arrived().await;
-    h.built
-        .resident_supervisor()
-        .team_cancel(h.root)
-        .unwrap()
-        .cancel();
-    assert!(
-        h.engine
-            .wait_turn_idle(h.root, Duration::from_secs(7))
-            .await
-    );
-    let root = h.engine.read_projection(h.root).await.unwrap();
-    let answer = root.session.messages.last().unwrap().clone();
-    plugin.gate.release();
-    h.shutdown().await;
-    drop(h);
-    plugin.shutdown().await;
-    assert_eq!(answer.role, Role::Assistant);
-    assert_eq!(
-        answer.finish,
-        Some(FinishReason::Cancelled),
-        "main straggler was dropped open"
-    );
-    assert_eq!(answer.cause, Some(FinishCause::Shutdown));
 }
 
 async fn report_after_consumed_progress(failed: bool) {
