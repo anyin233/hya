@@ -12,7 +12,6 @@ mod response_decoder;
 mod responses;
 
 pub use decoder::OpenAiChatDecoder;
-pub(crate) use decoder::REASONING_CONTENT_TYPE;
 pub use response_decoder::OpenAiResponsesDecoder;
 pub(crate) use responses::GrokBuildProtocol;
 pub use responses::{
@@ -20,8 +19,6 @@ pub use responses::{
     encode_input_items, format_responses_compact_system, parse_responses_compact_items,
 };
 
-/// Marker written by older chat decoders; historical sessions still replay it.
-pub(crate) const LEGACY_CHAT_REASONING_MARKER: &str = "openai_chat_reasoning_content";
 /// OpenAI Chat Completions request encoder + SSE decoder factory.
 pub struct OpenAiChatProtocol;
 

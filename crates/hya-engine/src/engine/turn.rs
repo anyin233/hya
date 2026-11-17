@@ -26,6 +26,7 @@ use crate::{AgentResourcePolicy, TurnBinding};
 mod harness;
 mod ladder;
 pub(super) mod messages;
+mod rewrite_host;
 mod tool_gate;
 
 use crate::agent_catalog::AgentDefinition;
@@ -370,9 +371,12 @@ impl SessionEngine {
         let Some(capabilities) = router.capabilities(&request.model) else {
             return Ok(()); // The router reports unknown models through its normal path.
         };
-        let tokens = self
-            .token_accounting
-            .estimate_request(request, router.reasoning_replay_policy(&request.model));
+        let tokens = self.token_accounting.estimate_request(
+            &request.messages,
+            request.system.as_deref(),
+            &request.tools,
+            router.reasoning_replay_policy(&request.model),
+        );
         let required = tokens.saturating_add(request.max_output_tokens.unwrap_or(0) as usize);
         if capabilities.max_context > 0 && required > capabilities.max_context as usize {
             return Err(ProviderError::Incompatible(format!(

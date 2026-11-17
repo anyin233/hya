@@ -469,16 +469,16 @@ impl ToolRegistry {
     /// library cannot be loaded or disagrees with its bundle policy.
     #[must_use]
     pub fn from_tool_families(identities: &[&str]) -> Self {
-        const STEMS: [(&str, &str); 5] = [
-            ("hya_base_tools", "hya/base-tools"),
-            ("hya_extended_tools", "hya/extended-tools"),
-            ("hya_channel_tools", "hya/channel-tools"),
-            ("hya_network_tools", "hya/network-tools"),
-            ("hya_todo_tools", "hya/todo-tools"),
+        const FAMILIES: [&str; 5] = [
+            "hya/base-tools",
+            "hya/extended-tools",
+            "hya/channel-tools",
+            "hya/network-tools",
+            "hya/todo-tools",
         ];
         for identity in identities {
             assert!(
-                STEMS.iter().any(|(_, known)| known == identity),
+                FAMILIES.contains(identity),
                 "unknown tool family {identity}"
             );
         }
@@ -487,12 +487,13 @@ impl ToolRegistry {
         let _ = crate::base_tools::tool_bundle_presets();
         let registry = Self::empty();
         let mut implementations: HashMap<(&'static str, String), Arc<dyn Tool>> = HashMap::new();
-        for (stem, identity) in STEMS {
+        for identity in FAMILIES {
             if !identities.contains(&identity) {
                 continue;
             }
-            let tools = crate::native_bundle::load_family(stem)
-                .unwrap_or_else(|error| panic!("load {identity}: {error}"));
+            let tools = crate::native_bundle::load(identity)
+                .unwrap_or_else(|error| panic!("load {identity}: {error}"))
+                .tools;
             let names = tools
                 .iter()
                 .map(|tool| tool.name().to_string())
@@ -528,9 +529,8 @@ impl ToolRegistry {
             .filter(|preset| identities.contains(&preset.identity()))
             .collect::<Vec<_>>();
         for preset in &loaded {
-            let identity = STEMS
-                .iter()
-                .map(|(_, identity)| *identity)
+            let identity = FAMILIES
+                .into_iter()
                 .find(|identity| *identity == preset.identity())
                 .unwrap_or_else(|| panic!("unknown tool family {}", preset.identity()));
             for exposure in preset.tools() {

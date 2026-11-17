@@ -18,18 +18,20 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use hya_proto::{
-    AgentName, Envelope, Event, EventSeq, FinishReason, MessageId, ModelRef, Projection, SessionId,
-    ToolSchema,
+    AgentName, Envelope, Event, EventSeq, FinishReason, Message, MessageId, ModelRef, Projection,
+    SessionId, ToolSchema,
 };
 use hya_provider::{CompletionRequest, EventStream, ProviderRouter};
 use hya_store::SessionStore;
-use hya_tool::{Tool, ToolCtx};
-use serde_json::json;
+use hya_tool::tokens::TokenAccounting;
+use hya_tool::{
+    ModelWindow, RewriteCtx, Rewriter, SessionLog, Tool, ToolCtx, ToolError, Transcript,
+};
+use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::CoreError;
-use rewrite::Initiator;
-pub use rewrite::Rewriter;
+use rewrite::{HarnessRewriter, Initiator};
 pub use round::{CompleteText, Failure, Round, ToolCall};
 
 /// Agent name the kernel renders assistant messages with in requests.
@@ -109,12 +111,15 @@ pub trait ToolGate: Send {
     async fn cancelled(&mut self, calls: Vec<ToolCall>) -> Result<(), CoreError>;
 }
 
-/// What a harness supplies around the kernel's rounds: each round's request
-/// and stream, whether a failed round is retried, and when the run stops.
-/// Bare mode's [`Bare`] is the kernel alone; full mode adds rebinding, hooks,
-/// model fallback, and retry.
+/// What a harness supplies around the kernel's rounds: the rewrite before
+/// each round, each round's request and stream, whether a failed round is
+/// retried, and when the run stops. Bare mode's [`Bare`] is the kernel alone;
+/// full mode adds rebinding, hooks, model fallback, and retry.
 #[async_trait]
-pub trait Harness: ToolGate + Rewriter {
+pub trait Harness: ToolGate {
+    /// Rewrite the Context before the round `projection` would send, if
+    /// needed; `true` when the log changed.
+    async fn before_round(&mut self, projection: &Projection) -> Result<bool, CoreError>;
     /// The round's request for `projection`.
     async fn request(&mut self, projection: &Projection) -> Result<CompletionRequest, CoreError>;
     /// Open `request`'s stream and name the model serving it; `None` when a
@@ -192,30 +197,57 @@ impl ToolGate for Bare<'_> {
     }
 }
 
-/// Removes everything before the next step once the last round filled the
-/// kernel's trigger share of the window.
+/// Bare mode's transcript: the kernel agent's view of the projection.
 #[async_trait]
-impl Rewriter for Bare<'_> {
-    async fn before_round(&mut self, projection: &Projection) -> Result<bool, CoreError> {
-        let scope = self.scope;
-        let budget =
-            rewrite::pressure(projection, scope.provider.capabilities(self.model).as_ref());
-        Ok(budget.is_some_and(|(used, threshold)| used > threshold)
-            && rewrite::commit_rewrite(
-                scope.emit,
-                projection,
-                scope.session,
-                scope.message,
-                Initiator::Harness,
-                budget,
-            )
-            .await?
-            .is_some())
+impl Transcript for Bare<'_> {
+    async fn messages(&self, projection: &Projection) -> Result<Vec<Message>, ToolError> {
+        Ok(request::projection_to_messages(
+            &self.agent,
+            projection,
+            self.model,
+            &self.attachments,
+        ))
     }
 }
 
 #[async_trait]
 impl Harness for Bare<'_> {
+    /// [`HarnessRewriter`] on the round's model window; no side model calls
+    /// or hooks.
+    async fn before_round(&mut self, projection: &Projection) -> Result<bool, CoreError> {
+        let scope = self.scope;
+        let replay = scope.provider.reasoning_replay_policy(self.model);
+        let window = scope
+            .provider
+            .capabilities(self.model)
+            .map(|caps| ModelWindow {
+                max_context: caps.max_context,
+                usage_reporting: caps.usage_reporting,
+                reasoning_replay: replay,
+            });
+        let overhead_tokens = TokenAccounting::default().estimate_request(
+            &[],
+            Some(self.system),
+            &self.schemas,
+            replay,
+        );
+        let cx = RewriteCtx {
+            session: scope.session,
+            message: scope.message,
+            model: self.model,
+            projection,
+            window,
+            overhead_tokens,
+            workdir: &self.ctx.workdir,
+            config: &Value::Null,
+            log: scope,
+            transcript: &*self,
+            models: None,
+            hooks: None,
+        };
+        Ok(HarnessRewriter.before_round(cx).await?)
+    }
+
     async fn request(&mut self, projection: &Projection) -> Result<CompletionRequest, CoreError> {
         Ok(request::request(
             projection,
@@ -253,7 +285,8 @@ impl Harness for Bare<'_> {
     }
 }
 
-/// The run a round belongs to.
+/// The run a round belongs to. As a [`SessionLog`] it reads the store and
+/// appends through the run's [`Emit`].
 pub struct Scope<'a> {
     /// Session event log.
     pub store: &'a SessionStore,
@@ -267,6 +300,23 @@ pub struct Scope<'a> {
     pub session: SessionId,
     /// Assistant message of the run.
     pub message: MessageId,
+}
+
+#[async_trait]
+impl SessionLog for Scope<'_> {
+    async fn projection(&self, session: SessionId) -> Result<Arc<Projection>, ToolError> {
+        self.store
+            .read_projection_shared(session)
+            .await
+            .map_err(|error| ToolError::Other(error.to_string()))
+    }
+
+    async fn append(&self, session: SessionId, events: Vec<Event>) -> Result<(), ToolError> {
+        self.emit
+            .emit(session, events)
+            .await
+            .map_err(|error| ToolError::Other(error.to_string()))
+    }
 }
 
 /// Execute a round's calls in order: `rewrite` in the kernel, every other
@@ -450,16 +500,27 @@ async fn model_rewrite(
         return Ok(Err(error.to_string()));
     }
     let projection = scope.store.read_projection_shared(scope.session).await?;
-    let budget = rewrite::pressure(&projection, scope.provider.capabilities(model).as_ref());
-    let removed = rewrite::commit_rewrite(
-        scope.emit,
+    let budget = rewrite::pressure(
+        &projection,
+        scope
+            .provider
+            .capabilities(model)
+            .map(|caps| caps.max_context),
+    );
+    let rewrite = rewrite::rewrite_events(
         &projection,
         scope.session,
         scope.message,
         Initiator::Model,
         budget,
-    )
-    .await?;
+    )?;
+    let removed = match rewrite {
+        Some((events, removed)) => {
+            scope.emit.emit(scope.session, events).await?;
+            Some(removed)
+        }
+        None => None,
+    };
     Ok(match removed {
         Some(removed) => Ok(json!({
             "removed_messages": removed,

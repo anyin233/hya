@@ -52,12 +52,17 @@ pub mod permission;
 pub mod project_activity;
 /// Project-root path boundary shared by the builtin file tools (ADR-0026).
 pub mod project_scope;
+/// The rewrite contract between the host and a native bundle, and the host
+/// services a rewriter calls.
+pub mod rewrite;
 mod skill;
 mod skill_catalog;
 /// Subagent spawn plane and request types used by the `task` tool.
 pub mod spawn;
 /// In-memory per-session todo list plane and the `todo__` tool group.
 pub mod todo;
+/// Token accounting: how much of the context window a transcript occupies.
+pub mod tokens;
 /// Tool trait, registry, and permission class metadata.
 pub mod tool;
 mod websearch;
@@ -107,6 +112,10 @@ pub use project_activity::{
     ProjectActivityRequestMsg, ProjectActivityResult, ProjectActivitySession,
 };
 pub use project_scope::ProjectScope;
+pub use rewrite::{
+    CompactionHooks, FoldAgent, ModelCall, ModelHost, ModelWindow, RewriteCtx, Rewriter,
+    SessionLog, Transcript,
+};
 pub use skill::{SkillError, SkillInfo, SkillPlane};
 pub use skill_catalog::{
     ParsedSkill, SkillCatalogEntry, SkillCatalogOrigin, builtin_skills, core_skills_preset_bytes,

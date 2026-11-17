@@ -5,9 +5,7 @@ use serde_json::{Value, json};
 
 use crate::{Decoder, ProviderError};
 
-/// `provider_data` marking a reasoning part streamed as chat
-/// `delta.reasoning_content`; the chat encoder replays exactly these parts.
-pub(crate) const REASONING_CONTENT_TYPE: &str = "reasoning_content";
+use hya_proto::context::REASONING_CONTENT_TYPE;
 
 use crate::wire::ToolAsm;
 

@@ -6,13 +6,7 @@ use crate::media::image_url;
 use crate::wire::{ToolImages, tool_input, tool_result};
 use crate::{CompletionRequest, Decoder, Protocol, ProviderError, ReasoningEffort};
 
-/// System-message prefix written by the engine after a successful
-/// `POST /responses/compact`. The JSON array that follows is the canonical
-/// next input window and must be re-injected verbatim.
-pub const RESPONSES_COMPACT_ITEMS_MARKER: &str = "<<<RESPONSES_COMPACT_ITEMS>>>";
-
-/// Shared with `hya-engine` compaction injects (`HYA_COMPACTED_CONTEXT`).
-pub const COMPACT_CONTEXT_MARKER: &str = "HYA_COMPACTED_CONTEXT";
+pub use hya_proto::context::{COMPACT_CONTEXT_MARKER, RESPONSES_COMPACT_ITEMS_MARKER};
 
 /// OpenAI Responses API request encoder + stream decoder factory.
 pub struct OpenAiResponsesProtocol;

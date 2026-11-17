@@ -39,7 +39,7 @@ use crate::hooks::{
     ChatParamsInput, ChatParamsOutcome, HookChain, HookDispatcher, activation_hook_for,
     replace_activation_hooks,
 };
-use crate::kernel::{self, Failure, Harness, Rewriter, Round, ToolCall, ToolGate};
+use crate::kernel::{self, Failure, Harness, Round, ToolCall, ToolGate};
 use crate::runtime_registry::CompiledResourceView;
 use crate::workflow::WorkflowTurnRoute;
 
@@ -309,11 +309,44 @@ impl TurnHarness<'_> {
     }
 }
 
-/// Before each round: re-validate the actor claim, rebind (Root, after the
-/// first round), resolve the round's model and attachments, then walk the
-/// compaction ladder.
 #[async_trait]
-impl Rewriter for TurnHarness<'_> {
+impl ToolGate for TurnHarness<'_> {
+    async fn call(&mut self, call: ToolCall) -> Result<(), CoreError> {
+        TurnToolGate {
+            engine: self.engine,
+            session: self.session,
+            message: self.message,
+            binding: &self.binding,
+            resources: &self.resources,
+            agents: &self.agents,
+            agent: &self.live_agent,
+            depth: self.depth,
+            external_dirs: self.external_dirs,
+            workspace: &self.workspace,
+            actor_claim: self.actor_claim,
+            guidance: &self.guidance,
+            cancel: self.cancel,
+            report_latch: &self.report_latch,
+            nested_engine: &mut self.nested_engine,
+            steer: &mut self.steer,
+            parent_session: self.parent_session,
+            offered: &self.offered,
+        }
+        .call(call)
+        .await
+    }
+
+    /// Unrun calls stay open; the turn end closes them as `CANCELLED`.
+    async fn cancelled(&mut self, _calls: Vec<ToolCall>) -> Result<(), CoreError> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Harness for TurnHarness<'_> {
+    /// Re-validate the actor claim, rebind (Root, after the first round),
+    /// resolve the round's model and attachments, then walk the compaction
+    /// ladder.
     async fn before_round(&mut self, projection: &Projection) -> Result<bool, CoreError> {
         let engine = self.engine;
         engine.validate_actor_claim(self.actor_claim).await?;
@@ -354,43 +387,7 @@ impl Rewriter for TurnHarness<'_> {
         .walk(projection)
         .await
     }
-}
 
-#[async_trait]
-impl ToolGate for TurnHarness<'_> {
-    async fn call(&mut self, call: ToolCall) -> Result<(), CoreError> {
-        TurnToolGate {
-            engine: self.engine,
-            session: self.session,
-            message: self.message,
-            binding: &self.binding,
-            resources: &self.resources,
-            agents: &self.agents,
-            agent: &self.live_agent,
-            depth: self.depth,
-            external_dirs: self.external_dirs,
-            workspace: &self.workspace,
-            actor_claim: self.actor_claim,
-            guidance: &self.guidance,
-            cancel: self.cancel,
-            report_latch: &self.report_latch,
-            nested_engine: &mut self.nested_engine,
-            steer: &mut self.steer,
-            parent_session: self.parent_session,
-            offered: &self.offered,
-        }
-        .call(call)
-        .await
-    }
-
-    /// Unrun calls stay open; the turn end closes them as `CANCELLED`.
-    async fn cancelled(&mut self, _calls: Vec<ToolCall>) -> Result<(), CoreError> {
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl Harness for TurnHarness<'_> {
     async fn request(&mut self, projection: &Projection) -> Result<CompletionRequest, CoreError> {
         let engine = self.engine;
         let session = self.session;
