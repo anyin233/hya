@@ -3,14 +3,14 @@
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use hya_core::{CoreError, SidecarHandle, SidecarStart};
+use hya_engine::{CoreError, SidecarHandle, SidecarStart};
 use hya_tool::ResolvedTool;
 use tokio_util::task::TaskTracker;
 
 use crate::config::PluginSpec;
 use crate::messages::{HookName, HookRegistration};
 use crate::{HostInfo, PluginHost, PreparedPlugin};
-use hya_core::TurnBinding;
+use hya_engine::TurnBinding;
 use hya_tool::ToolPermission;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::OpenOptions;
@@ -21,7 +21,7 @@ pub struct ActivationBindings {
     /// Tools exposed to the activated agent.
     pub tools: Arc<[ResolvedTool]>,
     /// Hooks exposed to the activated agent.
-    pub hooks: Option<Arc<dyn hya_core::hooks::HookDispatcher>>,
+    pub hooks: Option<Arc<dyn hya_engine::hooks::HookDispatcher>>,
 }
 
 /// Initialize one private activation, validate its selected exports, and retain its process owner.
@@ -113,7 +113,7 @@ struct BundleSidecarHandle {
     loss: tokio_util::sync::CancellationToken,
     activation_dir: Option<PathBuf>,
     tools: Arc<[ResolvedTool]>,
-    hooks: Option<Arc<dyn hya_core::hooks::HookDispatcher>>,
+    hooks: Option<Arc<dyn hya_engine::hooks::HookDispatcher>>,
 }
 
 impl BundleSidecarHandle {
@@ -185,7 +185,7 @@ impl SidecarHandle for BundleSidecarHandle {
         Arc::clone(&self.tools)
     }
 
-    fn hook_dispatcher(&self) -> Option<Arc<dyn hya_core::hooks::HookDispatcher>> {
+    fn hook_dispatcher(&self) -> Option<Arc<dyn hya_engine::hooks::HookDispatcher>> {
         self.hooks.clone()
     }
 }
@@ -218,8 +218,12 @@ pub fn materialize_bundle_sidecar_resources(
             agent_id: stable_agent_id.to_string(),
         })?;
 
-    binding.has_selected_bundle_sidecar_capability(stable_agent_id)?;
-    let policy = binding.agent_resource_policy(stable_agent_id)?;
+    binding
+        .has_selected_bundle_sidecar_capability(stable_agent_id)
+        .map_err(CoreError::bundle)?;
+    let policy = binding
+        .agent_resource_policy(stable_agent_id)
+        .map_err(CoreError::bundle)?;
     let catalog = binding.bundle_catalog();
     let mut resources = BTreeMap::new();
     let mut entrypoints = BTreeMap::new();
@@ -232,8 +236,9 @@ pub fn materialize_bundle_sidecar_resources(
         (hya_bundle::ExportKind::Hook, policy.canonical_hook_ids()),
     ] {
         for stable_id in selected_ids {
-            let (owner_bundle_id, resource) =
-                catalog.resolve_resource_entry(bundle_id, kind, stable_id)?;
+            let (owner_bundle_id, resource) = catalog
+                .resolve_resource_entry(bundle_id, kind, stable_id)
+                .map_err(CoreError::bundle)?;
             let extensions = catalog
                 .bundle_resources(owner_bundle_id, hya_bundle::ExportKind::Extension)
                 .ok_or_else(|| {
@@ -407,7 +412,9 @@ pub fn bind_bundle_sidecar_tools(
         .ok_or_else(|| CoreError::AgentDefinitionMissing {
             agent_id: stable_agent_id.to_string(),
         })?;
-    let policy = binding.agent_resource_policy(stable_agent_id)?;
+    let policy = binding
+        .agent_resource_policy(stable_agent_id)
+        .map_err(CoreError::bundle)?;
     let selected = policy
         .selected_bundle_tool_ids()
         .iter()
@@ -417,7 +424,8 @@ pub fn bind_bundle_sidecar_tools(
                 .resolve_resource_entry(bundle_id, hya_bundle::ExportKind::Tool, stable_id)
                 .map(|(_, resource)| resource)
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(CoreError::bundle)?;
     let expected =
         bundle_sidecar_module_resources(binding, stable_agent_id, hya_bundle::ExportKind::Tool)?;
     let declarations = &plugin.contributions().tools;
@@ -463,7 +471,9 @@ fn bundle_sidecar_module_resources<'a>(
     stable_agent_id: &str,
     kind: hya_bundle::ExportKind,
 ) -> Result<Vec<&'a hya_bundle::PreparedResource>, CoreError> {
-    let policy = binding.agent_resource_policy(stable_agent_id)?;
+    let policy = binding
+        .agent_resource_policy(stable_agent_id)
+        .map_err(CoreError::bundle)?;
     let (bundle_id, _) = binding
         .bundle_catalog()
         .resolve_agent_entry(stable_agent_id)
@@ -481,7 +491,8 @@ fn bundle_sidecar_module_resources<'a>(
         for id in ids {
             let (_, resource) = binding
                 .bundle_catalog()
-                .resolve_resource_entry(bundle_id, kind, id)?;
+                .resolve_resource_entry(bundle_id, kind, id)
+                .map_err(CoreError::bundle)?;
             paths.insert(resource.source_path.as_str());
         }
     }

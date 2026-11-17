@@ -1,6 +1,6 @@
 //! `hya update`: reinstall the running prefix from the published releases.
 //!
-//! This crate must not depend on `hya-core`, `hya-plugin`, `hya-mcp`,
+//! This crate must not depend on `hya-core`, `hya-engine`, `hya-plugin`, `hya-mcp`,
 //! `hya-bundle`, `hya-app`, or session storage: `hya` dispatches `update`
 //! before it composes any runtime.
 //!

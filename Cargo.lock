@@ -1025,7 +1025,7 @@ dependencies = [
  "hya-base-tools",
  "hya-bundle",
  "hya-channel-tools",
- "hya-core",
+ "hya-engine",
  "hya-extended-tools",
  "hya-mcp",
  "hya-network-tools",
@@ -1070,6 +1070,7 @@ dependencies = [
  "hya-app",
  "hya-bundle",
  "hya-core",
+ "hya-engine",
  "hya-plugin-claude",
  "hya-proto",
  "hya-provider",
@@ -1145,11 +1146,54 @@ name = "hya-core"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "futures",
+ "hya-proto",
+ "hya-provider",
+ "hya-store",
+ "hya-tool",
+ "libc",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "hya-e2e"
+version = "0.0.0"
+dependencies = [
+ "axum 0.7.9",
+ "base64 0.22.1",
+ "futures",
+ "hya-api",
+ "hya-bundle",
+ "hya-engine",
+ "hya-proto",
+ "hya-sdk-v1",
+ "libc",
+ "rcgen",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+]
+
+[[package]]
+name = "hya-engine"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "futures",
  "hya-base-tools",
  "hya-bundle",
  "hya-channel-tools",
+ "hya-core",
  "hya-extended-tools",
  "hya-network-tools",
  "hya-proto",
@@ -1169,29 +1213,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
-]
-
-[[package]]
-name = "hya-e2e"
-version = "0.0.0"
-dependencies = [
- "axum 0.7.9",
- "base64 0.22.1",
- "futures",
- "hya-api",
- "hya-bundle",
- "hya-core",
- "hya-proto",
- "hya-sdk-v1",
- "libc",
- "rcgen",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
 ]
 
 [[package]]
@@ -1245,7 +1266,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "hya-bundle",
- "hya-core",
+ "hya-engine",
  "hya-mcp",
  "hya-proto",
  "hya-provider",
@@ -1347,7 +1368,7 @@ dependencies = [
  "http-body-util",
  "hya-api",
  "hya-bundle",
- "hya-core",
+ "hya-engine",
  "hya-proto",
  "hya-provider",
  "hya-server",
@@ -1373,7 +1394,7 @@ dependencies = [
  "http-body-util",
  "hya-api",
  "hya-bundle",
- "hya-core",
+ "hya-engine",
  "hya-mcp",
  "hya-proto",
  "hya-provider",
@@ -4016,7 +4037,7 @@ dependencies = [
  "futures",
  "hya-app",
  "hya-bundle",
- "hya-core",
+ "hya-engine",
  "hya-proto",
  "hya-provider",
  "hya-store",

@@ -532,11 +532,11 @@ async fn harness_blocking_tool_writes_only_when_released() {
         gate: gate.clone(),
         path: path.clone(),
     });
-    let source = hya_core::RuntimeSource::new(
-        hya_core::RuntimeSourceId::plugin("m4-test-tool"),
+    let source = hya_engine::RuntimeSource::new(
+        hya_engine::RuntimeSourceId::plugin("m4-test-tool"),
         [43; 32],
         Arc::new(()),
-        vec![hya_core::RuntimeSourceExport::tool(
+        vec![hya_engine::RuntimeSourceExport::tool(
             "m4__blocking_write",
             "m4__blocking_write",
             Vec::new(),
@@ -1098,7 +1098,7 @@ async fn i13_capacity_is_a_live_member_lease_across_root_turns() {
         assert!(
             matches!(
                 revive,
-                Err(hya_core::CoreError::Store(
+                Err(hya_engine::CoreError::Store(
                     hya_store::StoreError::CapacityExceeded { .. }
                 ))
             ),
@@ -1808,7 +1808,7 @@ async fn e7_member_revert_and_unrevert_are_refused() {
         let before = h.engine.replay(child).await.unwrap().len();
         let error = h
             .engine
-            .revert_session(child, hya_core::RevertTarget::LastUserMessage)
+            .revert_session(child, hya_engine::RevertTarget::LastUserMessage)
             .await
             .unwrap_err();
         assert!(
@@ -1830,7 +1830,7 @@ async fn e7_roots_and_never_registered_children_keep_client_mutations() {
     let mut h = Harness::new().await;
     let child = h
         .engine
-        .create(hya_core::CreateSession {
+        .create(hya_engine::CreateSession {
             parent: Some(h.root),
             agent: h.agent.name.clone(),
             model: h.agent.model.clone(),
@@ -1854,7 +1854,7 @@ async fn e7_roots_and_never_registered_children_keep_client_mutations() {
             .await
             .unwrap();
         h.engine
-            .revert_session(session, hya_core::RevertTarget::LastUserMessage)
+            .revert_session(session, hya_engine::RevertTarget::LastUserMessage)
             .await
             .unwrap();
         h.engine.unrevert_session(session).await.unwrap();
@@ -3017,23 +3017,25 @@ struct LateLossSidecar {
 }
 
 #[async_trait::async_trait]
-impl hya_core::BoundSidecarFactory for LateLossSidecar {
+impl hya_engine::BoundSidecarFactory for LateLossSidecar {
     async fn start(
         &self,
-        _: hya_core::SidecarStart,
-    ) -> Result<Box<dyn hya_core::SidecarHandle>, hya_core::CoreError> {
+        _: hya_engine::SidecarStart,
+    ) -> Result<Box<dyn hya_engine::SidecarHandle>, hya_engine::CoreError> {
         Ok(Box::new(self.clone()))
     }
 }
 #[async_trait::async_trait]
-impl hya_core::SidecarHandle for LateLossSidecar {
-    async fn ready(&mut self) -> Result<(), hya_core::CoreError> {
+impl hya_engine::SidecarHandle for LateLossSidecar {
+    async fn ready(&mut self) -> Result<(), hya_engine::CoreError> {
         Ok(())
     }
-    async fn shutdown(&mut self) -> Result<(), hya_core::CoreError> {
+    async fn shutdown(&mut self) -> Result<(), hya_engine::CoreError> {
         self.stopped.notify_one();
         if self.fail_stop {
-            return Err(hya_core::CoreError::Invalid("late loss stop failed".into()));
+            return Err(hya_engine::CoreError::Invalid(
+                "late loss stop failed".into(),
+            ));
         }
         Ok(())
     }
@@ -3317,7 +3319,7 @@ async fn m46_review_s6_promptless_catalog_agent_keeps_host_base_after_revive() {
         "review-promptless",
         vec![hya_bundle::SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: test/review-promptless, version: 1.0.0, publisher: test }\nagents:\n  - id: review-worker\n    role: subagent\n")],
     )).unwrap();
-    let catalog = hya_core::AgentCatalog::new(Arc::new(
+    let catalog = hya_engine::AgentCatalog::new(Arc::new(
         hya_bundle::BundleCatalog::from_verified_catalogs(&[&package]).unwrap(),
     ))
     .unwrap();
@@ -3863,11 +3865,11 @@ async fn review_w3_stage_failure_output_is_the_report_text() {
     ))
     .unwrap();
     let binding = h.engine.bind_session_runtime(h.root, &h.dir).await.unwrap();
-    let report = hya_core::run_workflow(
+    let report = hya_engine::run_workflow(
         h.engine.clone(),
         h.root,
         &workflow,
-        hya_core::WorkflowRunContext {
+        hya_engine::WorkflowRunContext {
             binding,
             caller: "hya-main".into(),
             base_agent: h.agent.clone(),
@@ -4122,7 +4124,7 @@ async fn o1_with_built_engine_starts_recovery_before_the_body() {
     .unwrap();
     let built = std::mem::replace(&mut h.built, replacement);
     let count = hya_app::with_built_session_engine(built, |built| {
-        std::future::ready(Ok::<_, hya_core::CoreError>(
+        std::future::ready(Ok::<_, hya_engine::CoreError>(
             built.resident_supervisor().episode_count(),
         ))
     })

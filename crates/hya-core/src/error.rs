@@ -1,4 +1,4 @@
-//! Runtime failures returned by [`crate::SessionEngine`] and orchestration helpers.
+//! Runtime failures returned by the kernel and by the session engine built on it.
 
 use std::sync::Arc;
 
@@ -7,9 +7,10 @@ use thiserror::Error;
 /// Top-level error for session/turn/orchestration paths.
 #[derive(Clone, Error, Debug)]
 pub enum CoreError {
-    /// Bundle catalog or package resolution failed.
+    /// Bundle catalog or package resolution failed: the engine's
+    /// `hya_bundle::BundleError`, which this crate does not link.
     #[error(transparent)]
-    Bundle(#[from] hya_bundle::BundleError),
+    Bundle(Arc<dyn std::error::Error + Send + Sync>),
     /// Model provider transport or protocol failure (shared via `Arc` for clone).
     #[error(transparent)]
     Provider(Arc<hya_provider::ProviderError>),
@@ -19,9 +20,10 @@ pub enum CoreError {
     /// SQLite store / projection failure.
     #[error(transparent)]
     Store(#[from] hya_store::StoreError),
-    /// Runtime candidate publication or refresh failed.
+    /// Runtime candidate publication or refresh failed: the engine's
+    /// `RuntimeRefreshError`.
     #[error(transparent)]
-    RuntimeRefresh(#[from] crate::RuntimeRefreshError),
+    RuntimeRefresh(Arc<dyn std::error::Error + Send + Sync>),
     /// Cooperative cancellation (turn token or takeover).
     #[error("cancelled")]
     Cancelled,
@@ -58,6 +60,18 @@ pub enum CoreError {
         /// The busy session.
         session: hya_proto::SessionId,
     },
+}
+
+impl CoreError {
+    /// Wrap a bundle catalog or package error as [`CoreError::Bundle`].
+    pub fn bundle(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Bundle(Arc::new(error))
+    }
+
+    /// Wrap a runtime refresh error as [`CoreError::RuntimeRefresh`].
+    pub fn runtime_refresh(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::RuntimeRefresh(Arc::new(error))
+    }
 }
 
 impl From<hya_provider::ProviderError> for CoreError {

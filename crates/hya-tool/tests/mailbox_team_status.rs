@@ -4,7 +4,7 @@
 //! status and harness-heartbeat freshness (ADR-0002 liveness), so the parent
 //! can tell a busy child that is progressing from one that has stalled. The
 //! plane is answered by a canned service loop — the engine-side rows are
-//! covered by `hya-core`'s report tests.
+//! covered by `hya-engine`'s report tests.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 

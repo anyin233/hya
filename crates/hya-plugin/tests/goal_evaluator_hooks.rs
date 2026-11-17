@@ -8,9 +8,9 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use hya_core::completion::PluginGoalEvaluator;
-use hya_core::hooks::{GoalEvaluateReply, HookDispatcher};
-use hya_core::{CoreError, GoalEvaluator, Verdict};
+use hya_engine::completion::PluginGoalEvaluator;
+use hya_engine::hooks::{GoalEvaluateReply, HookDispatcher};
+use hya_engine::{CoreError, GoalEvaluator, Verdict};
 use hya_plugin::PluginHost;
 use hya_plugin::config::PluginSpec;
 use hya_plugin::messages::{HookName, HostInfo, PluginKindWire};

@@ -11,7 +11,7 @@ use super::Json;
 
 use crate::ServerState;
 use hya_api::v1 as pb;
-use hya_core::CreateSession;
+use hya_engine::CreateSession;
 use hya_proto::SessionId;
 
 use super::V1Error;
@@ -308,12 +308,12 @@ async fn projection_info_at(
             .map(|value| value.as_str().to_string())
             .unwrap_or_default();
         info.effort_source = match source {
-            hya_core::EffortSource::Suffix => pb::EffortSource::Suffix,
-            hya_core::EffortSource::Agent => pb::EffortSource::Agent,
-            hya_core::EffortSource::Preference => pb::EffortSource::Preference,
-            hya_core::EffortSource::ModelDefault => pb::EffortSource::ModelDefault,
-            hya_core::EffortSource::GlobalDefault => pb::EffortSource::GlobalDefault,
-            hya_core::EffortSource::None => pb::EffortSource::None,
+            hya_engine::EffortSource::Suffix => pb::EffortSource::Suffix,
+            hya_engine::EffortSource::Agent => pb::EffortSource::Agent,
+            hya_engine::EffortSource::Preference => pb::EffortSource::Preference,
+            hya_engine::EffortSource::ModelDefault => pb::EffortSource::ModelDefault,
+            hya_engine::EffortSource::GlobalDefault => pb::EffortSource::GlobalDefault,
+            hya_engine::EffortSource::None => pb::EffortSource::None,
         } as i32;
     }
     info.busy = st.is_busy(session);
@@ -394,7 +394,7 @@ async fn update_session(
     // Validate the mode before applying any other field, so an unknown mode
     // leaves the session unchanged.
     if let Some(mode) = request.permission_mode.as_deref()
-        && hya_core::SessionPermissionMode::parse(mode).is_none()
+        && hya_engine::SessionPermissionMode::parse(mode).is_none()
     {
         return Err(V1Error::invalid_argument(format!(
             "unknown permission mode: {mode:?}"
@@ -456,10 +456,10 @@ async fn update_session(
             .set_permission_mode(session, &mode)
             .await
             .map_err(|error| match error {
-                hya_core::CoreError::Invalid(message) => V1Error::invalid_argument(message),
+                hya_engine::CoreError::Invalid(message) => V1Error::invalid_argument(message),
                 other => V1Error::from(other),
             })?;
-        if mode == hya_core::permission_mode::YOLO {
+        if mode == hya_engine::permission_mode::YOLO {
             // The tree now bypasses every check: let the calls already
             // waiting for an answer continue as if allowed once.
             st.permission_requests.allow_tree_once(root).await;
@@ -487,9 +487,9 @@ async fn update_session(
     Ok(Json(projection_info(&st, session).await?))
 }
 
-fn archive_error(error: hya_core::CoreError) -> V1Error {
+fn archive_error(error: hya_engine::CoreError) -> V1Error {
     match error {
-        hya_core::CoreError::Invalid(message) => V1Error::invalid_argument(message),
+        hya_engine::CoreError::Invalid(message) => V1Error::invalid_argument(message),
         other => V1Error::from(other),
     }
 }
@@ -547,20 +547,20 @@ async fn fork_session(
     // A fork taken from an unused ephemeral session keeps the source.
     st.engine.set_session_ephemeral(source, false).await?;
     let at = if !request.message_id.is_empty() {
-        hya_core::ForkAt::Message(parse_message(&request.message_id)?)
+        hya_engine::ForkAt::Message(parse_message(&request.message_id)?)
     } else if request.until_seq > 0 {
-        hya_core::ForkAt::UntilSeq(request.until_seq)
+        hya_engine::ForkAt::UntilSeq(request.until_seq)
     } else {
-        hya_core::ForkAt::Head
+        hya_engine::ForkAt::Head
     };
-    let before = hya_core::fork_cut(&envs, &projection, at).map_err(|error| match error {
-        hya_core::ForkError::MessageNotFound(_) => {
+    let before = hya_engine::fork_cut(&envs, &projection, at).map_err(|error| match error {
+        hya_engine::ForkError::MessageNotFound(_) => {
             V1Error::new(hya_api::error::Code::NotFound, error.to_string())
         }
-        hya_core::ForkError::NotUserMessage(_) => V1Error::invalid_argument(error.to_string()),
+        hya_engine::ForkError::NotUserMessage(_) => V1Error::invalid_argument(error.to_string()),
     })?;
     let prompt_text = match at {
-        hya_core::ForkAt::Message(cut) => projection
+        hya_engine::ForkAt::Message(cut) => projection
             .session
             .messages
             .iter()
@@ -622,7 +622,9 @@ fn fork_title(source: &hya_proto::Projection, id: hya_proto::SessionId) -> Strin
         .title
         .as_deref()
         .map(str::trim)
-        .filter(|title| !title.is_empty() && !hya_core::title::is_default_or_fallback_title(title));
+        .filter(|title| {
+            !title.is_empty() && !hya_engine::title::is_default_or_fallback_title(title)
+        });
     match title {
         Some(title) if title.ends_with(SUFFIX) => title.to_owned(),
         Some(title) => format!("{title}{SUFFIX}"),
@@ -654,12 +656,12 @@ async fn compact_session(
                     .to_owned(),
             }))
         }
-        Err(hya_core::CoreError::Invalid(message)) if message == "summarizer not configured" => {
+        Err(hya_engine::CoreError::Invalid(message)) if message == "summarizer not configured" => {
             Err(V1Error::unavailable(
                 "compaction summarizer is not configured",
             ))
         }
-        Err(hya_core::CoreError::Invalid(message)) if message == "session not found" => {
+        Err(hya_engine::CoreError::Invalid(message)) if message == "session not found" => {
             Err(V1Error::session_not_found(&id))
         }
         Err(other) => Err(V1Error::from(other)),
@@ -675,10 +677,10 @@ async fn summarize_session(
         Ok(summary) => Ok(Json(pb::SummarizeSessionResponse {
             summary_message: summary.to_string(),
         })),
-        Err(hya_core::CoreError::Invalid(message)) if message == "session not found" => {
+        Err(hya_engine::CoreError::Invalid(message)) if message == "session not found" => {
             Err(V1Error::session_not_found(&id))
         }
-        Err(hya_core::CoreError::Invalid(message)) if message == "summarizer not configured" => {
+        Err(hya_engine::CoreError::Invalid(message)) if message == "summarizer not configured" => {
             Err(V1Error::unavailable("summarizer is not configured"))
         }
         Err(other) => Err(V1Error::from(other)),
@@ -699,9 +701,9 @@ async fn revert_session(
         ));
     }
     let target = if request.message_id.is_empty() {
-        hya_core::RevertTarget::LastUserMessage
+        hya_engine::RevertTarget::LastUserMessage
     } else {
-        hya_core::RevertTarget::Message(parse_message(&request.message_id)?)
+        hya_engine::RevertTarget::Message(parse_message(&request.message_id)?)
     };
     if st.is_busy(session) {
         return Err(V1Error::session_busy());
@@ -761,15 +763,15 @@ async fn steer_subagent(
 
 /// A refusal the caller can act on (not a subagent, already archived, empty
 /// text) is `invalid_argument`; anything else keeps the default mapping.
-fn subagent_error(error: hya_core::CoreError) -> V1Error {
+fn subagent_error(error: hya_engine::CoreError) -> V1Error {
     match error {
-        hya_core::CoreError::Invalid(message) => V1Error::invalid_argument(message),
+        hya_engine::CoreError::Invalid(message) => V1Error::invalid_argument(message),
         other => other.into(),
     }
 }
 
-fn revert_error(error: hya_core::RevertError) -> V1Error {
-    use hya_core::RevertError as E;
+fn revert_error(error: hya_engine::RevertError) -> V1Error {
+    use hya_engine::RevertError as E;
     match error {
         E::SessionNotFound => {
             V1Error::new(hya_api::error::Code::SessionNotFound, error.to_string())

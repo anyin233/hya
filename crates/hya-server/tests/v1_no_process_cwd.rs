@@ -15,7 +15,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
-use hya_core::{AgentSpec, EventBus, SessionEngine};
+use hya_engine::{AgentSpec, EventBus, SessionEngine};
 use hya_proto::{AgentName, FinishReason, ModelRef};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_server::{AppState, router};

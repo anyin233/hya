@@ -1,6 +1,6 @@
 //! Real app-wired task lifecycle measurements with an offline scripted provider.
 use anyhow::{Context, bail};
-use hya_core::{
+use hya_engine::{
     AgentSpec, BoundSpawnSender, CategoryRegistry, CreateSession, EventBus, ResidentSupervisor,
     RuntimeRegistry, SessionEngine, SubagentGovernor, SubagentLimits,
 };
@@ -154,7 +154,7 @@ fn runtime() -> anyhow::Result<Arc<RuntimeRegistry>> {
     let catalog = BundleCatalog::from_verified_catalogs(&packages.iter().collect::<Vec<_>>())?;
     Ok(Arc::new(RuntimeRegistry::from_snapshot(
         ToolRegistry::builtins().snapshot(),
-        Arc::new(hya_core::AgentCatalog::new(Arc::new(catalog))?),
+        Arc::new(hya_engine::AgentCatalog::new(Arc::new(catalog))?),
     )))
 }
 
@@ -197,7 +197,7 @@ async fn sample_in(n: usize, dir: &std::path::Path) -> anyhow::Result<Vec<Row>> 
             permission,
             bus,
         )
-        .with_handle_rng(Box::new(hya_core::handle_naming::SplitMix64::seeded(0)))
+        .with_handle_rng(Box::new(hya_engine::handle_naming::SplitMix64::seeded(0)))
         .with_spawn_sender(sender)
         .with_governor(SubagentGovernor::new(SubagentLimits {
             max_concurrency: 100,

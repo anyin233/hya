@@ -2,7 +2,7 @@
 //!
 //! This crate owns the JSON-RPC 2.0 stdio protocol, the per-plugin client, the
 //! [`PluginHost`] manager, and the bridges that implement the engine-facing
-//! `hya_core::HookDispatcher` and `hya_tool::PermissionInterceptor` traits.
+//! `hya_engine::HookDispatcher` and `hya_tool::PermissionInterceptor` traits.
 //!
 //! External plugin authors implement the wire ABI documented in
 //! `docs/plugin-protocol.md` (and mirrored by [`messages`] / [`protocol`]).

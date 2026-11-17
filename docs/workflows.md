@@ -382,7 +382,7 @@ run without `name` uses the Session's selected Workflow.
 path. It returns a read-only `CompiledWorkflow` with metadata, normalized
 Stages and levels, automatic join rendering, and a canonical revision.
 
-`hya-core::run_workflow` accepts only a `CompiledWorkflow` plus a resolved
+`hya-engine::run_workflow` accepts only a `CompiledWorkflow` plus a resolved
 `WorkflowRunContext`. It does not parse source or rebuild the plan.
 
 Execution owns the team's activity until the run settles. Stage handoffs cannot

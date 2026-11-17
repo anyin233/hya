@@ -97,7 +97,7 @@ task(members[]) → bounded SpawnerPlane (full → overloaded)
 → reply with running handles
 ```
 
-Spawn authorization and model/effort resolution live in `hya_core::resident`:
+Spawn authorization and model/effort resolution live in `hya_engine::resident`:
 `resolve_spawn_member(&ResolveSpawnMemberCtx, SpawnMember)` returns the resolved
 child specification, roster, resource policy and bound sidecar factory without
 writing durable state. `resolve_main_activation_context` resolves the team's root
@@ -110,8 +110,8 @@ root across turns and restart. Idle and parked residents consume a lease;
 archive releases it, and revival checks one additional lease inside its
 transaction. Workflow preflight checks remaining capacity without reserving it.
 
-Depth is a constant `MAX_SUBAGENT_DEPTH = 2` in `hya-core`
-(`crates/hya-core/src/lib.rs` re-export). The `subagent.max_depth` config key
+Depth is a constant `MAX_SUBAGENT_DEPTH = 2` in `hya-engine`
+(`crates/hya-engine/src/lib.rs` re-export). The `subagent.max_depth` config key
 is removed; `SubagentLimits` keeps concurrency/budget fields only.
 
 Mandatory parent mail bypasses bundle wake restrictions only when its sender is
@@ -144,7 +144,7 @@ A member's canonical handle is its parent's path plus a **leaf**
   `name` parameter was removed and a call that still passes it fails with an
   `input` error.
 - `operator` is ONE name drawn uniformly at random from the checked-in
-  Arknights operator list `crates/hya-core/src/handle_names.txt` (419 names,
+  Arknights operator list `crates/hya-engine/src/handle_names.txt` (419 names,
   1–26 characters, lowercase ASCII, `^[a-z0-9]+(-[a-z0-9]+)*$`), embedded
   with `include_str!` — no network access at build or run time.
 
@@ -643,7 +643,7 @@ The transient executor, member evidence envelopes and their exports are deleted.
 ## 11. Deletions (exhaustive)
 
 - `run_team`, `run_pre_admitted_team*` variants, blocking joins
-  (`crates/hya-core/src/subagent.rs` is deleted; `actor/` owns episodes).
+  (`crates/hya-engine/src/subagent.rs` is deleted; `actor/` owns episodes).
 - `TeamEvidenceEnvelope`, `project_envelope*`, evidence system messages.
 - `uses_durable_admission_owner` routing and
   `ForegroundTransientAdmissionOwner` foreground/background reply modes (the
@@ -705,7 +705,7 @@ workspace suite.
 
 ## 14. Test surface impact
 
-- `crates/hya-core/tests/turn_loop.rs`, resident/subagent unit seams: re-based
+- `crates/hya-engine/tests/turn_loop.rs`, resident/subagent unit seams: re-based
   on episode semantics (arm/report/archive/revive cycles, gate rejections,
   degraded handoffs).
 - `crates/hya-app/tests/spawn_admission.rs`, `nested_spawn_tree.rs`: unified
@@ -895,7 +895,7 @@ Public command-prompt admission uses the same guard as text prompts.
 ### Startup recovery composition
 
 Before constructing the engine, composition calls
-`hya_core::resident::recover_resident_claims(&SessionStore, OwnerRunId)` to fence
+`hya_engine::resident::recover_resident_claims(&SessionStore, OwnerRunId)` to fence
 active claims in store order. After constructing its configured engine, it calls
 `ResidentSupervisor::start_with_recovery(Arc<SessionEngine>, OwnerRunId,
 &AgentSpec, Vec<RecoveredActorClaim>)`. Core terminalizes interrupted member work,

@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use hya_core::hooks::{CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, HookDispatcher};
+use hya_engine::hooks::{CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, HookDispatcher};
 use hya_plugin::PluginHost;
 use hya_plugin::config::PluginSpec;
 use hya_plugin::messages::{HostInfo, PluginKindWire};

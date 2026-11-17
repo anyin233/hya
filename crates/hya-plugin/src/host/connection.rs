@@ -15,7 +15,7 @@ use super::{EVENT_CHANNEL_CAP, LiveClient, PluginConn, canonical_initialize, val
 pub(super) async fn connect_one(
     spec: PluginSpec,
     host: HostInfo,
-    host_reads: Option<Arc<dyn hya_core::HostSessionReads>>,
+    host_reads: Option<Arc<dyn hya_engine::HostSessionReads>>,
 ) -> Result<Arc<PluginConn>, PluginError> {
     let timeout = spec
         .timeout_ms

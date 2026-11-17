@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use hya_bundle::{BundleCatalog, PreparedBundleSchemas, PreparedCatalog};
-use hya_core::{
+use hya_engine::{
     AgentCatalog, CoreError, RuntimeCatalogRefresh, RuntimeRegistry, RuntimeSource,
     RuntimeSourceKind, ScopeKey,
 };
@@ -205,7 +205,7 @@ pub(crate) async fn compose(
     disabled: &BTreeSet<String>,
     resolver: &BundleConfigResolver,
     cache: &SourceCache,
-    reads: Option<&Arc<dyn hya_core::HostSessionReads>>,
+    reads: Option<&Arc<dyn hya_engine::HostSessionReads>>,
 ) -> Result<Composition, CoreError> {
     let single = |catalog: &&PreparedCatalog| {
         catalog
@@ -267,9 +267,9 @@ pub(crate) async fn compose(
         })
         .collect::<Vec<_>>();
     prepared_catalog_refs.extend(first_party);
-    let bundles = Arc::new(BundleCatalog::from_verified_catalogs(
-        &prepared_catalog_refs,
-    )?);
+    let bundles = Arc::new(
+        BundleCatalog::from_verified_catalogs(&prepared_catalog_refs).map_err(CoreError::bundle)?,
+    );
     let mut schema_rows = Vec::new();
     for catalog in &prepared_catalog_refs {
         schema_rows.extend(catalog.schemas().iter().cloned());
@@ -355,7 +355,7 @@ pub struct InstalledBundleRefresh {
     sources: Arc<SourceCache>,
     base: std::sync::Mutex<Arc<BaseCatalogs>>,
     /// Read-only host services behind bundle process capabilities.
-    host_reads: Option<Arc<dyn hya_core::HostSessionReads>>,
+    host_reads: Option<Arc<dyn hya_engine::HostSessionReads>>,
     /// `tools.code.mode` is not `normal`: publish the code-mode bundle.
     code_mode: bool,
 }
@@ -397,7 +397,7 @@ impl InstalledBundleRefresh {
     /// Back bundle process capabilities (`session.usage`, for tool calls and
     /// bundle API requests) with these read-only host services.
     #[must_use]
-    pub fn with_host_reads(mut self, reads: Arc<dyn hya_core::HostSessionReads>) -> Self {
+    pub fn with_host_reads(mut self, reads: Arc<dyn hya_engine::HostSessionReads>) -> Self {
         self.host_reads = Some(reads);
         self
     }
@@ -428,7 +428,7 @@ impl InstalledBundleRefresh {
     }
 
     /// Read-only host services for bundle processes.
-    pub(crate) fn host_reads(&self) -> Option<&Arc<dyn hya_core::HostSessionReads>> {
+    pub(crate) fn host_reads(&self) -> Option<&Arc<dyn hya_engine::HostSessionReads>> {
         self.host_reads.as_ref()
     }
 
@@ -629,16 +629,22 @@ impl InstalledBundleRefresh {
                 .filter(|catalog| !disabled.contains(&catalog.bundles()[0].identity().id)),
         );
         let composition = Composition {
-            bundles: Arc::new(BundleCatalog::from_verified_catalogs(&catalogs)?),
+            bundles: Arc::new(
+                BundleCatalog::from_verified_catalogs(&catalogs).map_err(CoreError::bundle)?,
+            ),
             sources,
             watched,
         };
         let static_sources = composition.runtime_sources();
-        let agent_catalog = Arc::new(AgentCatalog::new(Arc::clone(&composition.bundles))?);
-        runtime.refresh(|candidate| {
-            candidate.replace_catalog(Arc::clone(&agent_catalog));
-            candidate.replace_sources_of_kind(RuntimeSourceKind::Bundle, static_sources.clone())
-        })?;
+        let agent_catalog = Arc::new(
+            AgentCatalog::new(Arc::clone(&composition.bundles)).map_err(CoreError::bundle)?,
+        );
+        runtime
+            .refresh(|candidate| {
+                candidate.replace_catalog(Arc::clone(&agent_catalog));
+                candidate.replace_sources_of_kind(RuntimeSourceKind::Bundle, static_sources.clone())
+            })
+            .map_err(CoreError::runtime_refresh)?;
         self.sources
             .commit_base(composition.sources, &runtime.scope_keys());
         *watched_configs = composition.watched;

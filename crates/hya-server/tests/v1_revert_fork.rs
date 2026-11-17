@@ -13,7 +13,7 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
-use hya_core::{AgentSpec, EventBus, SessionEngine};
+use hya_engine::{AgentSpec, EventBus, SessionEngine};
 use hya_proto::{AgentName, FinishReason, ModelRef, SessionId};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_server::{AppState, router};
@@ -472,7 +472,7 @@ async fn a_fork_keeps_its_source_project_and_kind() {
     ] {
         let source = fx
             .engine
-            .create(hya_core::CreateSession {
+            .create(hya_engine::CreateSession {
                 parent: None,
                 agent: AgentName::new("build"),
                 model: ModelRef::new("fake"),

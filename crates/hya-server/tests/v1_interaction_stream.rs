@@ -13,7 +13,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use futures::StreamExt;
 use http_body_util::BodyExt;
-use hya_core::{AgentSpec, EventBus, SessionEngine};
+use hya_engine::{AgentSpec, EventBus, SessionEngine};
 use hya_proto::PermissionRequestId;
 use hya_proto::{AgentName, ModelRef, QuestionRequestId, SessionId};
 use hya_provider::{FakeProvider, ProviderRouter};
@@ -520,7 +520,7 @@ async fn question_listing_matches_the_question_requested_frame() {
 }
 
 async fn session_tree(state: &AppState) -> (SessionId, SessionId, SessionId) {
-    let create = |parent| hya_core::CreateSession {
+    let create = |parent| hya_engine::CreateSession {
         parent,
         agent: AgentName::new("build"),
         model: ModelRef::new("fake"),

@@ -1,0 +1,458 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
+//! `AgentCatalog` joins compiled-in built-ins with installed AgentBundles.
+//!
+//! Call sites resolve through one seam and read the origin off the result;
+//! they never branch on "is this a bundle".
+
+use std::sync::Arc;
+
+use hya_bundle::{
+    AgentRole, Bundle, BundleCatalog, BundleError, BundleIdentity, ModelPolicy, PreparedAgent,
+    ResourceView,
+};
+use hya_engine::{AgentCatalog, AgentOrigin, core_agents_preset};
+use hya_proto::AgentName;
+
+/// One installed bundle holding one agent with the given spawn graph.
+fn installed(bundle_id: &str, agent_id: &str, can_spawn: &[&str]) -> Bundle {
+    Bundle {
+        check: None,
+        format_version: 4,
+        identity: BundleIdentity {
+            id: bundle_id.to_string(),
+            version: "1.0.0".to_string(),
+            publisher: "tests".to_string(),
+        },
+        namespace: None,
+        digest: format!("digest-{bundle_id}"),
+        agents: vec![PreparedAgent {
+            private: false,
+            id: AgentName::new(agent_id),
+            description: Some(format!("{agent_id} description")),
+            role: AgentRole::Subagent,
+            color: None,
+            prompt: Some(format!("{agent_id} prompt")),
+            prompt_source: None,
+            prompt_digest: None,
+            model_policy: ModelPolicy::default(),
+            workdir: None,
+            resource_view: ResourceView::default(),
+            can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
+            hook_refs: Vec::new(),
+            advertise: Vec::new(),
+            handoff: hya_bundle::HandoffPolicy::Model,
+        }],
+        tools: Vec::new(),
+        skills: Vec::new(),
+        mcp: Vec::new(),
+        hooks: Vec::new(),
+        extensions: Vec::new(),
+        tui: None,
+
+        workflow: None,
+        channels: vec![],
+        schemas: vec![],
+        process: None,
+        apis: vec![],
+        permission_modes: vec![],
+    }
+}
+
+fn catalog(bundles: &[Bundle]) -> AgentCatalog {
+    let bundles = BundleCatalog::from_prepared(bundles).expect("bundle catalog");
+    AgentCatalog::new(Arc::new(bundles)).expect("agent catalog")
+}
+
+fn empty_catalog() -> AgentCatalog {
+    catalog(&[])
+}
+
+#[test]
+fn core_agents_are_backed_by_the_verified_embedded_preset() {
+    let preset = core_agents_preset().expect("embedded core-agents preset");
+    assert_eq!(preset.bundle_id(), "hya/core-agents");
+    assert!(!preset.prepared_bytes().is_empty());
+    assert_eq!(preset.digest().len(), 64);
+
+    let catalog = empty_catalog();
+    let preset_ids = preset
+        .agents()
+        .iter()
+        .map(|agent| agent.id.as_str())
+        .collect::<Vec<_>>();
+    let catalog_ids = catalog
+        .all()
+        .iter()
+        .map(|agent| agent.stable_id)
+        .collect::<Vec<_>>();
+    assert_eq!(catalog_ids, preset_ids);
+
+    for definition in catalog.all() {
+        assert!(matches!(definition.origin, AgentOrigin::Builtin));
+        assert!(definition.model_policy.model.is_none());
+        assert!(definition.model_policy.category.is_none());
+        assert!(definition.model_policy.reasoning.is_none());
+    }
+}
+
+#[test]
+fn core_agents_resolve_through_their_preset_qualified_identity() {
+    let catalog = empty_catalog();
+    let bare = catalog.resolve("hya-main").expect("bare preset agent");
+    let qualified = catalog
+        .resolve("bundle:hya/core-agents/agent/hya-main")
+        .expect("qualified preset agent");
+    assert_eq!(bare, qualified);
+    assert_eq!(qualified.origin, AgentOrigin::Builtin);
+}
+
+#[test]
+fn resolves_builtins_with_zero_installed_bundles() {
+    let catalog = empty_catalog();
+    for id in [
+        "hya-main",
+        "hya-plan",
+        "hya-scout",
+        "hya-task",
+        "hya-reviewer",
+        "hya-title",
+    ] {
+        let definition = catalog.resolve(id).unwrap_or_else(|| panic!("{id}"));
+        assert_eq!(definition.stable_id, id);
+        assert_eq!(definition.origin, AgentOrigin::Builtin);
+    }
+}
+
+#[test]
+fn resolves_a_bundle_agent_and_reports_its_bundle_origin() {
+    let catalog = catalog(&[installed("acme/reviewer", "acme-reviewer", &[])]);
+    let definition = catalog.resolve("acme-reviewer").expect("bundle agent");
+    assert_eq!(
+        definition.origin,
+        AgentOrigin::Bundle {
+            bundle_id: "acme/reviewer"
+        }
+    );
+    assert_eq!(definition.origin.bundle_id(), Some("acme/reviewer"));
+    assert!(!matches!(definition.origin, AgentOrigin::Builtin));
+}
+
+#[test]
+fn resolves_a_bundle_agent_by_qualified_reference() {
+    let catalog = catalog(&[installed("acme/reviewer", "acme-reviewer", &[])]);
+    let definition = catalog
+        .resolve("bundle:acme/reviewer/agent/acme-reviewer")
+        .expect("qualified reference");
+    assert_eq!(definition.stable_id, "acme-reviewer");
+}
+
+#[test]
+fn an_installed_bundle_may_not_shadow_a_builtin_agent_id() {
+    let bundles = BundleCatalog::from_prepared(&[installed("acme/impostor", "hya-main", &[])])
+        .expect("bundle catalog");
+    let error = AgentCatalog::new(Arc::new(bundles)).expect_err("shadowing must be rejected");
+    assert_eq!(
+        error,
+        BundleError::BuiltinAgentIdShadowed {
+            bundle_id: "acme/impostor".to_string(),
+            agent_id: "hya-main".to_string(),
+        }
+    );
+}
+
+#[test]
+fn installing_a_bundle_makes_its_agent_spawnable_by_a_builtin() {
+    let before = empty_catalog();
+    assert!(
+        !before
+            .spawnable("hya-main")
+            .expect("roster")
+            .iter()
+            .any(|agent| agent.stable_id == "acme-reviewer")
+    );
+
+    let after = catalog(&[installed("acme/reviewer", "acme-reviewer", &[])]);
+    let roster = after.spawnable("hya-main").expect("roster");
+    assert!(
+        roster
+            .iter()
+            .any(|agent| agent.stable_id == "acme-reviewer"),
+        "installing a bundle must not require editing any builtin definition"
+    );
+    assert!(after.resolve_spawn("hya-main", "acme-reviewer").is_ok());
+}
+
+#[test]
+fn reserved_system_agents_stay_unspawnable_by_ordinary_agents() {
+    let catalog = catalog(&[installed("acme/reviewer", "acme-reviewer", &[])]);
+    for reserved in ["hya-compaction", "hya-summary", "hya-title"] {
+        assert!(
+            !catalog
+                .spawnable("hya-main")
+                .expect("roster")
+                .iter()
+                .any(|agent| agent.stable_id == reserved),
+            "`{reserved}` must not appear in an ordinary roster"
+        );
+        assert!(
+            matches!(
+                catalog.resolve_spawn("hya-main", reserved),
+                Err(BundleError::AgentSpawnNotAllowed { .. })
+            ),
+            "`{reserved}` must not be spawnable"
+        );
+        assert!(
+            catalog.spawnable(reserved).expect("roster").is_empty(),
+            "`{reserved}` must spawn nothing"
+        );
+    }
+}
+
+#[test]
+fn a_bundle_agent_spawns_only_what_it_lists() {
+    let catalog = catalog(&[
+        installed("acme/lead", "acme-lead", &["hya-scout", "acme-helper"]),
+        installed("acme/helper", "acme-helper", &[]),
+    ]);
+    let roster = catalog.spawnable("acme-lead").expect("roster");
+    let ids = roster
+        .iter()
+        .map(|agent| agent.stable_id)
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec!["hya-scout", "acme-helper"]);
+
+    assert!(catalog.resolve_spawn("acme-lead", "hya-scout").is_ok());
+    assert!(catalog.resolve_spawn("acme-lead", "acme-helper").is_ok());
+    assert!(matches!(
+        catalog.resolve_spawn("acme-lead", "hya-task"),
+        Err(BundleError::AgentSpawnNotAllowed { .. })
+    ));
+}
+
+#[test]
+fn a_missing_can_spawn_target_is_skipped_in_the_roster_but_errors_on_spawn() {
+    // Bundles install independently. A dangling target must not brick the caller.
+    let catalog = catalog(&[installed(
+        "acme/lead",
+        "acme-lead",
+        &["hya-scout", "not-installed"],
+    )]);
+    let ids = catalog
+        .spawnable("acme-lead")
+        .expect("roster")
+        .iter()
+        .map(|agent| agent.stable_id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ids,
+        vec!["hya-scout"],
+        "an uninstalled target is skipped, not fatal"
+    );
+    assert!(matches!(
+        catalog.resolve_spawn("acme-lead", "not-installed"),
+        Err(BundleError::UnknownAgentId { .. })
+    ));
+}
+
+#[test]
+fn an_unknown_caller_is_an_error() {
+    let catalog = empty_catalog();
+    assert!(matches!(
+        catalog.spawnable("no-such-agent"),
+        Err(BundleError::UnknownAgentId { .. })
+    ));
+}
+
+#[test]
+fn the_ordinary_roster_holds_every_builtin_and_bundle_agent_sorted() {
+    let catalog = catalog(&[
+        installed("acme/zeta", "acme-zeta", &[]),
+        installed("acme/alpha", "acme-alpha", &[]),
+    ]);
+    let ids = catalog
+        .spawnable("hya-main")
+        .expect("roster")
+        .iter()
+        .map(|agent| agent.stable_id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ids,
+        vec![
+            "acme-alpha",
+            "acme-zeta",
+            "hya-main",
+            "hya-plan",
+            "hya-reviewer",
+            "hya-scout",
+            "hya-task",
+        ]
+    );
+}
+
+#[test]
+fn the_builtin_digest_is_stable_across_catalogs() {
+    let empty = empty_catalog();
+    let populated = catalog(&[installed("acme/reviewer", "acme-reviewer", &[])]);
+    assert_eq!(
+        empty.builtin_digest(),
+        populated.builtin_digest(),
+        "installed bundles must not perturb the builtin roster digest"
+    );
+}
+
+#[test]
+fn agent_set_members_use_bundle_origin_and_existing_spawn_authorization() {
+    let prepared = hya_bundle::prepare_package(hya_bundle::BundleSource::new(
+        "set-runtime",
+        vec![hya_bundle::SourceFile::new(
+            "bundle.yaml",
+            br#"kind: Bundle
+identity: { id: acme/team, version: 1.0.0, publisher: acme }
+agents:
+  - { id: team-lead, role: main, can_spawn: [team-worker] }
+  - { id: team-worker, role: subagent }
+"#,
+        )],
+    ))
+    .expect("prepare");
+    let bundles = BundleCatalog::from_verified_catalogs(&[&prepared]).expect("verified catalog");
+    let catalog = AgentCatalog::new(Arc::new(bundles)).expect("runtime catalog");
+    let worker = catalog
+        .resolve_spawn("team-lead", "team-worker")
+        .expect("allowed spawn");
+    assert_eq!(
+        worker.origin,
+        AgentOrigin::Bundle {
+            bundle_id: "acme/team"
+        }
+    );
+    assert!(matches!(
+        catalog.resolve_spawn("team-worker", "team-lead"),
+        Err(BundleError::AgentSpawnNotAllowed { .. })
+    ));
+    assert!(
+        catalog
+            .resolve("bundle:acme/team/agent/team-worker")
+            .is_some()
+    );
+}
+
+#[test]
+fn core_agents_preset_is_the_runtime_loaded_first_party_bundle() {
+    let preset = core_agents_preset().expect("core-agents preset");
+    let catalog = hya_bundle::first_party_bundle("hya/core-agents").expect("load core-agents");
+    assert!(std::ptr::eq(preset.prepared_bytes(), catalog.bytes()));
+    assert_eq!(preset.digest(), catalog.digest());
+}
+
+#[test]
+fn private_agents_require_workflow_or_explicit_spawn_authorization() {
+    let mut helper = installed("acme/helper", "acme-helper", &[]);
+    helper.agents[0].private = true;
+    let catalog = catalog(&[
+        helper,
+        installed("acme/lead", "acme-lead", &["acme-helper"]),
+        installed("acme/other", "acme-other", &[]),
+    ]);
+    for builtin in [
+        "hya-main",
+        "hya-task",
+        "bundle:hya/core-agents/agent/hya-main",
+    ] {
+        assert!(
+            !catalog
+                .spawnable(builtin)
+                .unwrap()
+                .iter()
+                .any(|a| a.stable_id == "acme-helper")
+        );
+        for reference in ["acme-helper", "bundle:acme/helper/agent/acme-helper"] {
+            assert!(matches!(
+                catalog.resolve_spawn(builtin, reference),
+                Err(BundleError::AgentSpawnNotAllowed { .. })
+            ));
+            assert!(
+                catalog
+                    .resolve_workflow_agent(builtin, reference)
+                    .unwrap()
+                    .private
+            );
+        }
+    }
+    assert!(
+        !catalog
+            .selectable()
+            .iter()
+            .any(|a| a.stable_id == "acme-helper")
+    );
+    assert!(
+        catalog
+            .all()
+            .iter()
+            .any(|a| a.stable_id == "acme-helper" && a.private)
+    );
+    assert_eq!(
+        catalog.spawnable("acme-lead").unwrap()[0].stable_id,
+        "acme-helper"
+    );
+    assert!(catalog.resolve_spawn("acme-lead", "acme-helper").is_ok());
+    assert!(
+        catalog
+            .resolve_workflow_agent("acme-lead", "acme-helper")
+            .is_ok()
+    );
+    assert!(matches!(
+        catalog.resolve_workflow_agent("acme-other", "acme-helper"),
+        Err(BundleError::AgentSpawnNotAllowed { .. })
+    ));
+    for reserved in ["hya-title", "hya-summary", "hya-compaction"] {
+        assert!(matches!(
+            catalog.resolve_workflow_agent(reserved, "acme-helper"),
+            Err(BundleError::AgentSpawnNotAllowed { .. })
+        ));
+        assert!(matches!(
+            catalog.resolve_workflow_agent("hya-main", reserved),
+            Err(BundleError::AgentSpawnNotAllowed { .. })
+        ));
+    }
+    assert!(matches!(
+        catalog.resolve_workflow_agent("hya-main", "missing"),
+        Err(BundleError::UnknownAgentId { .. })
+    ));
+    assert!(matches!(
+        catalog.resolve_workflow_agent("missing", "acme-helper"),
+        Err(BundleError::UnknownAgentId { .. })
+    ));
+}
+
+#[test]
+fn first_party_workflow_agents_are_private() {
+    for bundle_id in ["hya/goal-loop", "hya/plan-impl-review"] {
+        let prepared = hya_bundle::first_party_bundle(bundle_id).unwrap();
+        let bundles = BundleCatalog::from_verified_catalogs(&[prepared]).unwrap();
+        let catalog = AgentCatalog::new(Arc::new(bundles)).unwrap();
+        let agents = prepared.bundles()[0].agents();
+        assert!(!agents.is_empty());
+        for agent in agents {
+            assert!(agent.private, "{} must be workflow-private", agent.id);
+            assert!(
+                catalog
+                    .resolve_spawn("hya-main", agent.id.as_str())
+                    .is_err()
+            );
+            assert!(
+                catalog
+                    .resolve_workflow_agent("hya-main", agent.id.as_str())
+                    .is_ok()
+            );
+        }
+        if bundle_id == "hya/goal-loop" {
+            assert!(
+                catalog
+                    .resolve_spawn("hya-goal-guide", "hya-goal-verifier")
+                    .is_ok()
+            );
+        }
+    }
+}

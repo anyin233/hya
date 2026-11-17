@@ -27,7 +27,7 @@ pub(super) enum Initiator {
 
 /// Rewrites the Context before a round when it must shrink.
 #[async_trait]
-pub(crate) trait Rewriter: Send {
+pub trait Rewriter: Send {
     /// Rewrite before the round `projection` would send, if needed; `true`
     /// when the log changed.
     async fn before_round(&mut self, projection: &Projection) -> Result<bool, CoreError>;

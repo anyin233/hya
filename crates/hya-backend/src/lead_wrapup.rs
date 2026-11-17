@@ -7,7 +7,7 @@
 //! In a budgeted run the deadline bounds this: past the grace no turn starts,
 //! and in the final window one ignored notice ends the run.
 
-use hya_core::{AgentSpec, CoreError, ResidentSupervisor, SessionEngine};
+use hya_engine::{AgentSpec, CoreError, ResidentSupervisor, SessionEngine};
 use hya_proto::{
     FinishReason, MessageId, PartProjection, Projection, Role, RosterEntry, RosterStatus,
     SessionId, TodoItem, TodoStatus, scope,
@@ -693,12 +693,12 @@ mod tests {
             spawned: false.into(),
         });
         let catalog = Arc::new(
-            hya_core::AgentCatalog::new(Arc::new(
+            hya_engine::AgentCatalog::new(Arc::new(
                 hya_bundle::BundleCatalog::from_prepared(&[]).unwrap(),
             ))
             .unwrap(),
         );
-        let runtime = Arc::new(hya_core::RuntimeRegistry::new(
+        let runtime = Arc::new(hya_engine::RuntimeRegistry::new(
             hya_tool::ToolRegistry::builtins(),
             catalog,
         ));
@@ -708,7 +708,7 @@ mod tests {
             Arc::new(ProviderRouter::new().with(provider.clone())),
             runtime,
             permission,
-            hya_core::EventBus::default(),
+            hya_engine::EventBus::default(),
         ));
         let agent = AgentSpec {
             name: hya_proto::AgentName::new("hya-task"),
@@ -718,7 +718,7 @@ mod tests {
             reasoning: None,
         };
         let root = engine
-            .create(hya_core::CreateSession {
+            .create(hya_engine::CreateSession {
                 parent: None,
                 agent: agent.name.clone(),
                 model: agent.model.clone(),

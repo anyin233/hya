@@ -26,6 +26,7 @@ hya-channel-tools = { path = "bundles/presets/channel-tools/native" }
 hya-network-tools = { path = "bundles/presets/network-tools/native" }
 hya-store = { path = "crates/hya-store" }
 hya-core = { path = "crates/hya-core" }
+hya-engine = { path = "crates/hya-engine" }
 hya-workflow = { path = "crates/hya-workflow" }
 hya-server = { path = "crates/hya-server" }
 hya-mcp = { path = "crates/hya-mcp" }

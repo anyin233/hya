@@ -15,7 +15,7 @@ hya-bundle = { workspace = true }
 hya-mcp = { workspace = true }
 hya-proto = { workspace = true }
 hya-provider = { workspace = true }
-hya-core = { workspace = true }
+hya-engine = { workspace = true }
 hya-tool = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }

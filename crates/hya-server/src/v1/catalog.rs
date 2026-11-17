@@ -126,9 +126,9 @@ async fn refresh_scope(
     }
     Ok(pb::RefreshBundlesResponse {
         scope: match place.scope() {
-            hya_core::CatalogScope::Global => "global",
-            hya_core::CatalogScope::Directory(_) => "directory",
-            hya_core::CatalogScope::Project { .. } => "project",
+            hya_engine::CatalogScope::Global => "global",
+            hya_engine::CatalogScope::Directory(_) => "directory",
+            hya_engine::CatalogScope::Project { .. } => "project",
         }
         .to_string(),
         generation: binding.generation().get(),
@@ -137,14 +137,14 @@ async fn refresh_scope(
             .errors
             .iter()
             .flat_map(|error| match error {
-                hya_core::CoreError::BundleRefresh(errors) => errors
+                hya_engine::CoreError::BundleRefresh(errors) => errors
                     .iter()
                     .map(|(id, message)| pb::BundleRefreshError {
                         bundle_id: id.clone(),
                         message: message.clone(),
                     })
                     .collect(),
-                hya_core::CoreError::BundleRuntime { bundle_id, source } => {
+                hya_engine::CoreError::BundleRuntime { bundle_id, source } => {
                     vec![pb::BundleRefreshError {
                         bundle_id: bundle_id.clone(),
                         message: source.to_string(),
@@ -768,11 +768,11 @@ async fn list_permission_modes(
         Some(session) => st.engine.session_permission_modes(session).await?,
         None => {
             let place = catalog_scope(&st, &request.directory).await?;
-            if matches!(place.scope(), hya_core::CatalogScope::Global) {
+            if matches!(place.scope(), hya_engine::CatalogScope::Global) {
                 // Q7: the global view is the base catalog only.
                 st.engine.permission_modes().await
             } else {
-                let mut modes = hya_core::permission_mode::builtin_permission_modes();
+                let mut modes = hya_engine::permission_mode::builtin_permission_modes();
                 modes.extend(place.bind(&st).await?.published_permission_modes());
                 modes
             }

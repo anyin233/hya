@@ -11,7 +11,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use hya_api::v1 as pb;
-use hya_core::{AgentSpec, EventBus, SessionEngine};
+use hya_engine::{AgentSpec, EventBus, SessionEngine};
 use hya_proto::{AgentName, FinishReason, ModelRef};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_server::{AppState, V1Grpc, router};
@@ -944,7 +944,7 @@ async fn every_list_rpc_has_http_grpc_page_parity() {
     assert_eq!(covered, expected);
 }
 
-use hya_core::TurnBinding;
+use hya_engine::TurnBinding;
 use hya_server::{
     AgentModelControl, AgentModelControlError, AgentModelControlFuture, AgentModelIdentity,
     AgentModelState,

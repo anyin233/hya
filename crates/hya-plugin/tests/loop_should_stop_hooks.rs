@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use hya_core::hooks::HookDispatcher;
+use hya_engine::hooks::HookDispatcher;
 use hya_plugin::PluginHost;
 use hya_plugin::config::PluginSpec;
 use hya_plugin::messages::{HookName, HostInfo, PluginKindWire};

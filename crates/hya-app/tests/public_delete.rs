@@ -13,7 +13,7 @@ use axum::{
 use http_body_util::BodyExt;
 use hya_api::v1 as pb;
 use hya_app::{InvocationPolicy, WebSearchConfig, agent_with_model, build_session_engine};
-use hya_core::CreateSession;
+use hya_engine::CreateSession;
 use hya_proto::{MessageId, ModelRef, SessionId};
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, Provider, ProviderError, ProviderRouter,

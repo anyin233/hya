@@ -17,7 +17,7 @@
 //!
 //! Tool authors implement [`Tool`] and register with [`ToolRegistry`]. Security
 //! reviewers should start with [`PermissionPlane`], [`Action`], and
-//! [`Resource`]. Downstream crates (`hya-core`, `hya-app`) wire planes and run
+//! [`Resource`]. Downstream crates (`hya-engine`, `hya-app`) wire planes and run
 //! tools; this crate stays free of the session engine.
 
 mod agents;

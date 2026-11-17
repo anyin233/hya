@@ -278,7 +278,7 @@ flowchart TB
         Canon --> Outside
     end
 
-    subgraph CatalogOverlay["Lazy LRU/TTL ScopeOverlay (hya-core::CatalogScope)"]
+    subgraph CatalogOverlay["Lazy LRU/TTL ScopeOverlay (hya-engine::CatalogScope)"]
         Tier1["Project Tier (Root 1 wins over Root 2)<br/>&lt;root&gt;/.hya/bundles · &lt;root&gt;/.hya/plugins<br/>&lt;root&gt;/.hya/skills · commands · AGENTS.md"]
         Tier2["User Installed Tier<br/>bundle_registry.db + config.yaml mcp/plugins"]
         Tier3["Trusted First-Party Tier<br/>12 Preset Bundles (core-agents, 5x *-tools, ...)"]

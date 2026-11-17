@@ -13,31 +13,41 @@ use super::Emit;
 use crate::error::CoreError;
 
 /// A tool call the model requested in a round.
-pub(crate) struct ToolCall {
-    pub(crate) part: PartId,
-    pub(crate) call: ToolCallId,
-    pub(crate) name: String,
-    pub(crate) input: serde_json::Value,
+pub struct ToolCall {
+    /// Part that carries the call.
+    pub part: PartId,
+    /// Provider call id the result pairs with.
+    pub call: ToolCallId,
+    /// Requested tool name.
+    pub name: String,
+    /// Arguments as the model sent them.
+    pub input: serde_json::Value,
 }
 
 /// What a completed round asks for next.
-pub(crate) struct Round {
-    pub(crate) tool_calls: Vec<ToolCall>,
-    pub(crate) finish: FinishReason,
-    pub(crate) tokens: Option<TokenUsage>,
+pub struct Round {
+    /// Calls to run, in stream order.
+    pub tool_calls: Vec<ToolCall>,
+    /// Why the stream ended.
+    pub finish: FinishReason,
+    /// Usage the provider reported for the round.
+    pub tokens: Option<TokenUsage>,
 }
 
 /// A round that failed, with whether the model had already produced output.
-pub(crate) struct Failure {
-    pub(crate) error: CoreError,
-    pub(crate) saw_tool_call: bool,
-    pub(crate) saw_text: bool,
+pub struct Failure {
+    /// Why the round failed.
+    pub error: CoreError,
+    /// The model had requested a tool call.
+    pub saw_tool_call: bool,
+    /// The model had produced text.
+    pub saw_text: bool,
 }
 
 /// Replaces a completed text part before it is persisted (the full mode's
 /// `text.complete` hook).
 #[async_trait]
-pub(crate) trait CompleteText: Send + Sync {
+pub trait CompleteText: Send + Sync {
     /// The replacement for `text`, or `None` to keep it.
     async fn complete(
         &self,
@@ -81,7 +91,7 @@ struct Drained {
 /// Recording on the failure path is best-effort and never masks the round's
 /// own error.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn collect(
+pub async fn collect(
     emit: &dyn Emit,
     complete: Option<&dyn CompleteText>,
     session: SessionId,

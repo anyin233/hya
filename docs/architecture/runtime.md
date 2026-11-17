@@ -1,8 +1,8 @@
 # Runtime
 
-The runtime lives in [`../../crates/hya-core`](../../crates/hya-core). Its
+The runtime lives in [`../../crates/hya-engine`](../../crates/hya-engine). Its
 central type is `SessionEngine` in
-[`engine.rs`](../../crates/hya-core/src/engine.rs).
+[`engine.rs`](../../crates/hya-engine/src/engine.rs).
 
 ## `SessionEngine`
 
@@ -53,7 +53,7 @@ dispatches to global hooks (`HookDispatcher::dispatch_event`), then activation
 ### `AgentSpec`
 
 `AgentSpec` is the resolved agent for one turn
-([`crates/hya-core/src/engine.rs`](../../crates/hya-core/src/engine.rs)). It is
+([`crates/hya-engine/src/engine.rs`](../../crates/hya-engine/src/engine.rs)). It is
 what a `TurnBinding`'s agent resolution produces and what the server holds as
 its process-level default for new sessions:
 
@@ -189,7 +189,7 @@ clients starting in one directory share a Project.
 
 Every turn resolves the session's workspace roots once, at turn start, and
 hands them to each tool call as `ToolCtx::roots` (`SessionEngine::session_roots`,
-[`engine/roots.rs`](../../crates/hya-core/src/engine/roots.rs)). Shell turns
+[`engine/roots.rs`](../../crates/hya-engine/src/engine/roots.rs)). Shell turns
 resolve them the same way. They are read from the store fresh per turn, so a
 Project rename or root replacement applies to the next turn, never mid-turn.
 
@@ -226,7 +226,7 @@ consumers must not expect one per user message. When present, that metadata is
 replayed through the projection and provider request builder.
 
 `admit_user_prompt_with_attachments(session, message, text, attachments)`
-admits a prompt with images under the caller's message id ([`attachments.rs`](../../crates/hya-core/src/attachments.rs)):
+admits a prompt with images under the caller's message id ([`attachments.rs`](../../crates/hya-engine/src/attachments.rs)):
 it validates them (PNG/JPEG/GIF/WebP by signature, 10 MiB each, 20 MiB per
 turn), then in **one** store transaction
 (`SessionStore::append_events_with_blobs`) writes each image to the session's
@@ -328,7 +328,7 @@ A session is one agent, and **an agent runs at most one turn at any time**.
 This is an engine invariant, not a convention: every entry point above, shell
 turns (`run_shell`), and resident actor wakes funnel through the engine's
 per-session turn gate
-([`engine/turn_gate.rs`](../../crates/hya-core/src/engine/turn_gate.rs))
+([`engine/turn_gate.rs`](../../crates/hya-engine/src/engine/turn_gate.rs))
 and hold its `TurnLease` for the whole turn — from before the first
 `MessageStarted` until the turn's `MessageFinished`, sidecar cleanup, and
 root-admission finalization. Separate sessions hold separate leases, so team
@@ -343,7 +343,7 @@ each other and with their lead.
 | nested same-session `run_turn*` from inside the holding task | — | `CoreError::TurnAlreadyActive` instead of self-deadlock |
 | any claim after a drain began | — | refused: `CoreError::Cancelled` (non-blocking) or `Ok(Cancelled)` with no turn (queued) |
 
-Interface (all on `SessionEngine`, exported from `hya_core`):
+Interface (all on `SessionEngine`, exported from `hya_engine`):
 
 ```rust
 pub fn try_begin_turn(&self, session: SessionId) -> Result<TurnLease, CoreError>;
@@ -380,7 +380,7 @@ complete immutable runtime snapshot for the entire assistant turn.
 Each round runs **in this order**: the kernel loop (`kernel::drive` in
 [`kernel/mod.rs`](../../crates/hya-core/src/kernel/mod.rs)) with the
 full-mode harness (`TurnHarness` in
-[`engine/turn/harness.rs`](../../crates/hya-core/src/engine/turn/harness.rs)):
+[`engine/turn/harness.rs`](../../crates/hya-engine/src/engine/turn/harness.rs)):
 
 1. Check the cancel token; if cancelled, return (the turn end records
    `MessageFinished` with `FinishReason::Cancelled`).
@@ -450,7 +450,7 @@ Depth is derived from the session parent chain:
 General work cannot borrow from the reserved pool, so root progress never
 queues behind background subagent work.
 
-Defaults (see [`orchestrator.rs`](../../crates/hya-core/src/orchestrator.rs)):
+Defaults (see [`orchestrator.rs`](../../crates/hya-engine/src/orchestrator.rs)):
 
 - `DEFAULT_GENERAL_STREAM_PERMITS = 100` (`max_concurrency` normalized to
   `1..=100`)
@@ -507,7 +507,7 @@ and audit event.
 #### Catalog scopes (internal)
 
 `RuntimeRegistry` keeps one base snapshot plus, per published overlay, one
-scope snapshot (`hya_core::catalog_scope`). A `CatalogScope` names what a
+scope snapshot (`hya_engine::catalog_scope`). A `CatalogScope` names what a
 turn binds:
 
 | Scope | Key (`ScopeKey`) | Binds |
@@ -938,7 +938,7 @@ Invariant (see [Event Model — End-event invariant](event-model.md#end-event-in
 every assistant message ends with exactly one `MessageFinished`, every
 non-terminal tool part reaches a terminal state, and every member reaches a
 terminal status. Implemented in
-[`engine/turn_end.rs`](../../crates/hya-core/src/engine/turn_end.rs).
+[`engine/turn_end.rs`](../../crates/hya-engine/src/engine/turn_end.rs).
 
 ### A turn closes its own message
 
@@ -1159,7 +1159,7 @@ or tokenized for billing.
 
 ## Compaction and Summaries
 
-Compaction lives in [`compaction.rs`](../../crates/hya-core/src/compaction.rs)
+Compaction lives in [`compaction.rs`](../../crates/hya-engine/src/compaction.rs)
 and is walked from the turn loop. The mechanism set, the configurable firing
 order, thresholds, and wire records are documented canonically in
 [Compaction](../compaction.md); this section records the runtime contracts.
@@ -1323,7 +1323,7 @@ stream permit is taken.
 
 A fork is a new root session that starts with a copy of another session's
 transcript. `POST /v1/sessions/{session}/fork` (`ForkSession`) resolves the
-cut with `hya_core::fork_cut` over the source's **visible** messages
+cut with `hya_engine::fork_cut` over the source's **visible** messages
 (messages hidden by a pending revert are never copied):
 
 | Request | Cut | The fork holds |
@@ -1368,7 +1368,7 @@ with hya's event log in place of opencode's git snapshot directory.
 
 After authorizing a tool call and before running it, the engine captures the
 prior state of the files it may change
-([`file_snapshot.rs`](../../crates/hya-core/src/engine/file_snapshot.rs));
+([`file_snapshot.rs`](../../crates/hya-engine/src/engine/file_snapshot.rs));
 after the call it keeps the prior content of each file that actually changed
 as a per-session blob (`file_blob` table, keyed by sha256) and appends one
  `files_changed { message, call, files: [{path, before, observed}] }` for that call.
@@ -1451,7 +1451,7 @@ back to its recorded state.
 
 ## Hooks
 
-[`hooks.rs`](../../crates/hya-core/src/hooks.rs) defines `HookDispatcher`, the
+[`hooks.rs`](../../crates/hya-engine/src/hooks.rs) defines `HookDispatcher`, the
 runtime hook boundary used by `hya-plugin` and activation sidecars.
 
 ### `HookDispatcher` methods
@@ -1522,7 +1522,7 @@ turn is cancelled rather than silently continuing without the sidecar's hooks
 
 ## Goal Mode
 
-Goal mode lives in [`completion.rs`](../../crates/hya-core/src/completion.rs).
+Goal mode lives in [`completion.rs`](../../crates/hya-engine/src/completion.rs).
 It uses three pieces:
 
 - `IterationDriver`: generic loop runner with safety caps. Wrap-up errors
@@ -1551,7 +1551,7 @@ rather than causing an unbounded loop.
 
 ## Loop Mode
 
-Loop mode lives in [`loop_mode.rs`](../../crates/hya-core/src/loop_mode.rs).
+Loop mode lives in [`loop_mode.rs`](../../crates/hya-engine/src/loop_mode.rs).
 It is a lower-level planner/verifier loop:
 
 - `LoopVerifier` grades transcript evidence.
@@ -1573,10 +1573,10 @@ The current CLI exposes both goal mode (`hya -p`) and loop mode (`hya loop --tar
 
 Team-related code is split across:
 
-- [`actor/`](../../crates/hya-core/src/actor/mod.rs) (all member episodes)
-- [`mailbox.rs`](../../crates/hya-core/src/mailbox.rs) and [`engine/mailbox.rs`](../../crates/hya-core/src/engine/mailbox.rs)
-- [`workspace.rs`](../../crates/hya-core/src/workspace.rs)
-- [`category.rs`](../../crates/hya-core/src/category.rs)
+- [`actor/`](../../crates/hya-engine/src/actor/mod.rs) (all member episodes)
+- [`mailbox.rs`](../../crates/hya-engine/src/mailbox.rs) and [`engine/mailbox.rs`](../../crates/hya-engine/src/engine/mailbox.rs)
+- [`workspace.rs`](../../crates/hya-engine/src/workspace.rs)
+- [`category.rs`](../../crates/hya-engine/src/category.rs)
 
 There is no `team.rs` and no in-memory `TeamControlPlane`. Every spawned subagent
 is an episodic resident actor ([ADR-0015](../adr/0015-unified-resident-subagent-lifecycle.md)),

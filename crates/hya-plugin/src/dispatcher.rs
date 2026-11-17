@@ -4,8 +4,8 @@
 //! fails open).
 
 use async_trait::async_trait;
-use hya_core::CoreError;
-use hya_core::hooks::{
+use hya_engine::CoreError;
+use hya_engine::hooks::{
     AgentSpawnInput, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
     CommandExecuteBeforeOutcome, CompactionAfterInput, CompactionBeforeInput, CompactionDecision,
     CompactionTrigger, GoalEvaluateReply, HookDispatcher, MessageUserBeforeInput,
@@ -13,7 +13,7 @@ use hya_core::hooks::{
     SessionLifecycleInput, TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput,
     ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
 };
-use hya_core::loop_mode::{EvidenceQuality, PlannerOutput, VerifierVerdict};
+use hya_engine::loop_mode::{EvidenceQuality, PlannerOutput, VerifierVerdict};
 use hya_proto::Envelope;
 use hya_provider::{CompletionRequest, ReasoningEffort};
 use hya_tool::{Action, Decision, Resource};
@@ -60,7 +60,7 @@ impl HookDispatcher for PluginHost {
 
     async fn permission_approve(
         &self,
-        input: hya_core::hooks::PermissionApproveInput,
+        input: hya_engine::hooks::PermissionApproveInput,
     ) -> Option<Decision> {
         PluginHost::permission_approve(self, input).await
     }

@@ -12,7 +12,7 @@ const BARE_PROVIDER: &str = "hya";
 
 use axum::http::StatusCode;
 use hya_bundle::BundleError;
-use hya_core::{CoreError, TurnBinding};
+use hya_engine::{CoreError, TurnBinding};
 use hya_proto::{AgentName, ModelRef};
 
 use crate::{ApiError, ServerState};
@@ -69,7 +69,7 @@ fn resolve_agent_from_binding(
             .unwrap_or_else(|| st.agent.name.as_str().to_string()),
     };
     let agent = binding.resolve_agent(&candidate).ok_or_else(|| {
-        ApiError::from(CoreError::from(BundleError::UnknownAgentId {
+        ApiError::from(CoreError::bundle(BundleError::UnknownAgentId {
             agent_id: candidate,
         }))
     })?;

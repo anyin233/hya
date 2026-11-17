@@ -37,7 +37,7 @@ This does not reopen the AgentBundle schema; the prepared package union
 dispatches the two kinds explicitly.
 
 **Core built-in Agents stay outside AgentBundle.** They remain Rust constants
-under `crates/hya-core/src/builtin_agents/`. A build-prepared, read-only
+under `crates/hya-engine/src/builtin_agents/`. A build-prepared, read-only
 first-party WorkflowBundle can contribute its own Workflow Agents through the
 ordinary bundle catalog. `AgentCatalog` joins the compiled-in roster with the
 bundle catalog behind one resolution seam, and rejects any bundle Agent that

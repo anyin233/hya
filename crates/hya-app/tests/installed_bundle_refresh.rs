@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_bundle::{BundleSource, SourceFile, prepare_package};
-use hya_core::{CreateSession, EventBus, RuntimeRegistry, RuntimeSourceId, SessionEngine};
+use hya_engine::{CreateSession, EventBus, RuntimeRegistry, RuntimeSourceId, SessionEngine};
 use hya_proto::{AgentName, ModelRef};
 use hya_provider::ProviderRouter;
 use hya_store::{BundleInstallCandidate, BundleInstallOutcome, BundleRegistry, SessionStore};
@@ -804,7 +804,7 @@ extensions:
         .unwrap();
     let error = refresh.refresh_if_changed(&runtime).await.unwrap_err();
     assert!(
-        matches!(error, hya_core::CoreError::BundleRefresh(ref errors) if errors.len() == 1 && errors[0].0 == "acme/old-process"),
+        matches!(error, hya_engine::CoreError::BundleRefresh(ref errors) if errors.len() == 1 && errors[0].0 == "acme/old-process"),
         "{error}"
     );
     assert!(!refresh.refresh_if_changed(&runtime).await.unwrap());
@@ -818,7 +818,7 @@ extensions:
             .any(|bundle| bundle.identity().id == "acme/healthy")
     );
     assert!(
-        hya_core::RuntimeCatalogRefresh::refresh_explicit(&refresh, &runtime)
+        hya_engine::RuntimeCatalogRefresh::refresh_explicit(&refresh, &runtime)
             .await
             .is_err()
     );
@@ -928,7 +928,7 @@ for line in sys.stdin:
     registry.uninstall("acme/hook-files").await.unwrap();
     refresh.refresh_if_changed(&runtime).await.unwrap();
     let reply = retained_hooks[0]
-        .tool_execute_before(hya_core::hooks::ToolExecuteBeforeInput {
+        .tool_execute_before(hya_engine::hooks::ToolExecuteBeforeInput {
             session: hya_proto::SessionId::new(),
             message: hya_proto::MessageId::new(),
             call: hya_proto::ToolCallId::new(),
@@ -937,10 +937,10 @@ for line in sys.stdin:
         })
         .await;
     match reply {
-        hya_core::hooks::ToolExecuteBeforeOutcome::Continue { input } => {
+        hya_engine::hooks::ToolExecuteBeforeOutcome::Continue { input } => {
             assert_eq!(input["marker"], "RETAINED_HOOK_FILES")
         }
-        hya_core::hooks::ToolExecuteBeforeOutcome::Veto { reason } => {
+        hya_engine::hooks::ToolExecuteBeforeOutcome::Veto { reason } => {
             panic!("retained hook lost packaged files: {reason}")
         }
     }
@@ -1036,7 +1036,7 @@ resources:
     assert!(!refresh.refresh_if_changed(&runtime).await.unwrap());
     assert_eq!(describe(), expected("absent"));
     assert!(
-        hya_core::RuntimeCatalogRefresh::refresh_explicit(&refresh, &runtime)
+        hya_engine::RuntimeCatalogRefresh::refresh_explicit(&refresh, &runtime)
             .await
             .unwrap()
     );
@@ -1046,7 +1046,7 @@ resources:
     assert!(!refresh.refresh_if_changed(&runtime).await.unwrap());
     assert_eq!(describe(), expected("mode: first"));
     assert!(
-        hya_core::RuntimeCatalogRefresh::refresh_explicit(&refresh, &runtime)
+        hya_engine::RuntimeCatalogRefresh::refresh_explicit(&refresh, &runtime)
             .await
             .unwrap()
     );

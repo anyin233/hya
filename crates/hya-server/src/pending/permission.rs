@@ -366,7 +366,7 @@ async fn tree_is_yolo(store: &SessionStore, session: SessionId) -> bool {
     };
     store
         .with_projection(root, |projection| {
-            projection.session.permission_mode.as_deref() == Some(hya_core::permission_mode::YOLO)
+            projection.session.permission_mode.as_deref() == Some(hya_engine::permission_mode::YOLO)
         })
         .await
         .unwrap_or(false)
@@ -784,7 +784,7 @@ mod shutdown_test_support;
 mod shutdown_order_tests {
     use super::*;
     use axum::{body::Body, http::Request};
-    use hya_core::{AgentSpec, CreateSession, EventBus, SessionEngine};
+    use hya_engine::{AgentSpec, CreateSession, EventBus, SessionEngine};
     use hya_proto::{AgentName, FinishCause, FinishReason, ModelRef, Role};
     use hya_provider::{Capabilities, CompletionRequest, EventStream, Provider, ProviderError};
     use hya_provider::{FakeProvider, FakeStep, ProviderRouter};

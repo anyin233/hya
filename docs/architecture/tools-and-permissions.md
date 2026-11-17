@@ -538,7 +538,7 @@ even inside an already-approved tool call. Canonicalization costs a few
 `SessionEngine::run_turn_with_external_dirs` (and the guidance/claim variants)
 layers temporary allow rules onto the session permission snapshot for that turn
 only
-([`turn.rs`](../../crates/hya-core/src/engine/turn.rs)):
+([`turn.rs`](../../crates/hya-engine/src/engine/turn.rs)):
 
 ```text
 Rule { action: ExternalDirectory, resource: "<dir>/*", mode: Allow }
@@ -559,7 +559,7 @@ Failed tools become `Event::ToolError` with a structured value:
 ```
 
 Mapping from `ToolError` to the wire `type` string
-([`tool_error.rs`](../../crates/hya-core/src/engine/tool_error.rs)):
+([`tool_error.rs`](../../crates/hya-engine/src/engine/tool_error.rs)):
 
 | Variant | Wire `type` |
 | --- | --- |
@@ -580,11 +580,11 @@ A fourteenth wire `type` is **not** a `ToolError` variant: when a
 `Event::ToolError` with `value` built as
 `tool_error_message_value("blocked", …)` and message text
 `blocked by plugin: <reason>`
-([`turn.rs`](../../crates/hya-core/src/engine/turn.rs)). Clients that switch on
+([`turn.rs`](../../crates/hya-engine/src/engine/turn.rs)). Clients that switch on
 this string should treat the thirteen `ToolError` mappings **and** `blocked` as
 first-class. `permission` errors are protected from rewriting by
 `tool.execute.after` hooks; other outcomes may be rewritten by those hooks
-([`turn.rs`](../../crates/hya-core/src/engine/turn.rs)).
+([`turn.rs`](../../crates/hya-engine/src/engine/turn.rs)).
 
 ### Session permission modes
 
@@ -629,7 +629,7 @@ only when it declares any, so bundles without modes keep their fingerprint.
 A direct shell turn (`SessionEngine::run_shell`, the v1 `ShellTurn` behind the
 TUI's `!command`) runs a command the user typed. Its call plane is derived as
 above and then gets `UserShellApproval`
-([`engine/shell.rs`](../../crates/hya-core/src/engine/shell.rs)) prepended as
+([`engine/shell.rs`](../../crates/hya-engine/src/engine/shell.rs)) prepended as
 the outermost interceptor: it answers `AllowOnce` for `Bash` and `Tool`
 checks, so the user is never asked about their own command in any mode, and
 the activation `permission.ask` hooks, the plugin `PermissionBridge`, and a

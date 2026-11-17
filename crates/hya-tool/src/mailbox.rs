@@ -1,10 +1,10 @@
 //! Event-sourced mailbox/channel plane + the model-facing comms tools (ADR-0001).
 //!
 //! Mirrors the [`SpawnerPlane`](crate::spawn::SpawnerPlane) idiom: the plane is a
-//! channel handle held on `ToolCtx`; the backing service (owned by `hya-core`,
+//! channel handle held on `ToolCtx`; the backing service (owned by `hya-engine`,
 //! which has the store + projection) receives requests, appends the relevant
 //! `Event` to the team-root log, and replies. `hya-tool` never depends on
-//! `hya-core`, so all engine access flows over this channel.
+//! `hya-engine`, so all engine access flows over this channel.
 //!
 //! Team scoping: every request carries the acting agent's `SessionId`. The
 //! service resolves it to the team root (session lineage) and the acting handle,
@@ -49,7 +49,7 @@ pub struct ChannelInfo {
 
 /// A request from a comms tool to the mailbox service. `reply` carries either the
 /// typed result or rejection. Send replies preserve capacity overload; other
-/// replies carry human-readable errors, without depending on `hya-core`.
+/// replies carry human-readable errors, without depending on `hya-engine`.
 pub enum MailboxRequest {
     /// Deliver private mail to a vertical peer (parent or direct child).
     Send {

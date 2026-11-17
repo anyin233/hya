@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use hya_core::hooks::{
+use hya_engine::hooks::{
     HookDispatcher, ModelFailureClass, ModelFallbackInput, ModelFallbackOutcome,
 };
 use hya_plugin::PluginHost;

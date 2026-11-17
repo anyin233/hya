@@ -48,8 +48,8 @@ fn list_text() -> anyhow::Result<String> {
         text.push_str(agent.selector_mode());
         text.push(')');
         text.push_str(match agent.origin {
-            hya_core::AgentOrigin::Builtin => " [builtin]\n",
-            hya_core::AgentOrigin::Bundle { .. } => " [bundle]\n",
+            hya_engine::AgentOrigin::Builtin => " [builtin]\n",
+            hya_engine::AgentOrigin::Bundle { .. } => " [bundle]\n",
         });
         if let Some(description) = agent.description.filter(|text| !text.is_empty()) {
             text.push_str("  ");

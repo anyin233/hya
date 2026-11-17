@@ -77,7 +77,7 @@ pub(crate) enum WorkflowCliCommand {
 /// Inspect prepared data only: no providers, native tools, MCP or plugin processes.
 async fn catalog(db: &str) -> anyhow::Result<hya_app::WorkflowCatalog> {
     use hya_app::{WorkflowCatalog, WorkflowCatalogRoots, bundle_admin};
-    use hya_core::{AgentCatalog, CatalogScope, RuntimeRegistry};
+    use hya_engine::{AgentCatalog, CatalogScope, RuntimeRegistry};
     use std::collections::BTreeSet;
     use std::sync::Arc;
 

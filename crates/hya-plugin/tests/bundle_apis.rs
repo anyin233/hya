@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use hya_core::bundle_apis::{SessionUsageReport, UsageReport};
-use hya_core::{
+use hya_engine::bundle_apis::{SessionUsageReport, UsageReport};
+use hya_engine::{
     ApiMethod, BundleApiProvider, BundleApiRequest, CoreError, HostSessionReads, UsageScope,
 };
 use hya_plugin::PluginHost;

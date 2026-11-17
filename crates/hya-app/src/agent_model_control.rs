@@ -1,7 +1,7 @@
 //! Durable control for per-Agent base-model preferences.
 //!
 //! The control owns the boundary between the owner-fenced auxiliary store and
-//! the immutable preference view captured by [`hya_core::TurnBinding`]. Core
+//! the immutable preference view captured by [`hya_engine::TurnBinding`]. Core
 //! remains the execution-policy owner; the control retains the same category
 //! registry only to project the effective server/TUI default before root
 //! Session creation.
@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use hya_core::{
+use hya_engine::{
     AgentModelConfiguration, AgentOrigin, CategoryRegistry, RuntimeRegistry, SessionEngine,
     TurnBinding, resolve_configured_agent_model,
 };
@@ -744,7 +744,7 @@ fn project_agent_model(
     models: &[hya_provider::ProviderModel],
     base_model: &ModelRef,
     preference_model: Option<&ModelRef>,
-    agent: hya_core::AgentDefinition<'_>,
+    agent: hya_engine::AgentDefinition<'_>,
 ) -> hya_server::AgentModelState {
     let configuration = binding
         .configured_agent_model(agent.stable_id)
@@ -799,7 +799,7 @@ fn effective_model_for_definition(
     router: &ProviderRouter,
     base_model: &ModelRef,
     preference: Option<&ModelRef>,
-    agent: &hya_core::AgentDefinition<'_>,
+    agent: &hya_engine::AgentDefinition<'_>,
 ) -> ModelRef {
     if agent.model_policy.model.is_some() || agent.model_policy.category.is_some() {
         return resolve_configured_agent_model(&agent.model_policy, categories, &|model| {

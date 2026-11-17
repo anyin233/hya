@@ -122,7 +122,7 @@ mail bodies) is echoed back into the *caller's* history too. With no routes
 registered, dispatch is unchanged, so single-agent scenarios are unaffected.
 
 Mail delivery has no HTTP surface, and only **resident** agents receive it
-(`hya-core::resident` injects a handle's unread inbox as `[mail from …]` user
+(`hya-engine::resident` injects a handle's unread inbox as `[mail from …]` user
 prompts). The recipient's own next model request is therefore the only honest
 delivery oracle — see the module docs of `tests/p16_swarm_mailbox.rs` for the
 ordering rules that keep those scenarios deterministic.
@@ -143,7 +143,7 @@ replace these.
 | ID | Title | Path |
 | --- | --- | --- |
 | I.nested | Nested spawn tree | `crates/hya-app/tests/nested_spawn_tree.rs` |
-| I.subagent | Subagent/resident core | `crates/hya-core/tests/subagent.rs` |
+| I.subagent | Subagent/resident core | `crates/hya-engine/tests/subagent.rs` |
 | I.v1_api | v1 HTTP contract | `crates/hya-server/tests/v1_api.rs` |
 | I.v1_grpc_parity | v1 HTTP/gRPC parity | `crates/hya-server/tests/v1_grpc_parity.rs` |
 | I.bundle_cli | Bundle CLI | `crates/hya-backend/tests/bundle_cli.rs` |

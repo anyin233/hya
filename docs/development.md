@@ -451,7 +451,7 @@ Use this guide when deciding where a change belongs:
 | New builtin tool implementation | Owning source under `bundles/presets/<family>-tools/native` |
 | Tool trait, loader, runtime plane, or permission action | `hya-tool` |
 | Persistence, replay, migrations, usage projection | `hya-store` |
-| Turn-loop behavior, goal/loop/team/worktree runtime logic | `hya-core` |
+| Turn-loop behavior, goal/loop/team/worktree runtime logic | `hya-engine` |
 | HTTP route or SSE behavior | `hya-server` |
 | `hya.v1` contract change (proto message/rpc, error code, HTTP binding) | `hya-api` — edit `proto/hya/v1/*.proto`, then regenerate with `cargo run -p xtask -- gen-api` |
 | Typed Rust HTTP integration | `hya-sdk-v1` (`Client` for tooling; `V1Sdk` for frontends) |
@@ -607,7 +607,7 @@ CoreError>` uses the same final drain/join sequence with the caller's deadline
 and a `restart` stream-close reason. Server services are joined after the drain
 wait, including when that wait reaches its deadline.
 
-`HyaRuntime::shutdown(&mut self) -> Result<(), hya_core::CoreError>` performs
+`HyaRuntime::shutdown(&mut self) -> Result<(), hya_engine::CoreError>` performs
 all three steps; the CLI serve path follows the same order. For example:
 
 ```rust,ignore

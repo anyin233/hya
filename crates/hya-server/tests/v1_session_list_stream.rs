@@ -16,7 +16,7 @@ use axum::http::{Method, Request, StatusCode, header};
 use futures::StreamExt;
 use http_body_util::BodyExt;
 use hya_api::v1 as pb;
-use hya_core::{AgentSpec, EventBus, SessionEngine};
+use hya_engine::{AgentSpec, EventBus, SessionEngine};
 use hya_proto::{AgentName, Event, FinishReason, MessageId, ModelRef, PartId, Role, SessionId};
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, Provider, ProviderError, ProviderRouter,
@@ -559,9 +559,9 @@ async fn delete_live_team_joins_episodes(grpc: bool) {
     let gate = Arc::new(Semaphore::new(0));
     let state = state(gate.clone()).await;
     let engine = state.engine.clone();
-    let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
+    let supervisor = hya_engine::ResidentSupervisor::start(engine.clone());
     let root = engine
-        .create(hya_core::CreateSession {
+        .create(hya_engine::CreateSession {
             parent: None,
             agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
@@ -688,7 +688,7 @@ async fn public_delete(state: AppState, session: SessionId, grpc: bool) -> Resul
 
 async fn spawn_member(
     engine: &SessionEngine,
-    supervisor: &hya_core::ResidentSupervisor,
+    supervisor: &hya_engine::ResidentSupervisor,
     parent: SessionId,
 ) -> (SessionId, String) {
     let agent = AgentSpec {
@@ -725,7 +725,7 @@ async fn member_delete_is_refused(grpc: bool, archived: bool) {
     let gate = Arc::new(Semaphore::new(0));
     let state = state(gate).await;
     let engine = state.engine.clone();
-    let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
+    let supervisor = hya_engine::ResidentSupervisor::start(engine.clone());
     let app = router(state.clone());
     let root: SessionId = create(&app, None).await.parse().unwrap();
     let (child, handle) = spawn_member(&engine, &supervisor, root).await;
@@ -789,7 +789,7 @@ async fn delete_inflight_root(grpc: bool, title: bool) {
         .await
         .with_auto_title(title);
     let engine = state.engine.clone();
-    let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
+    let supervisor = hya_engine::ResidentSupervisor::start(engine.clone());
     let app = router(state.clone());
     let root: SessionId = create(&app, None).await.parse().unwrap();
     let (status, body) = call(

@@ -10,11 +10,11 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use hya_bundle::BundleCatalog;
-use hya_core::agent_catalog::AgentCatalog;
-use hya_core::resident::{
+use hya_engine::agent_catalog::AgentCatalog;
+use hya_engine::resident::{
     ResolveSpawnMemberCtx, resolve_main_activation_context, resolve_spawn_member,
 };
-use hya_core::{
+use hya_engine::{
     AgentSpec, BoundSidecarFactory, BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest,
     BoundWorkflowSender, CategoryRegistry, CoreError, DRAIN_DEADLINE, EventBus, ModelSummarizer,
     PromptEnv, ResidentSupervisor, RuntimeRegistry, RuntimeSourceKind, SessionEngine,
@@ -24,7 +24,7 @@ use hya_core::{
 };
 
 // Single discovery/date implementation lives in hya-core; re-export for callers.
-pub use hya_core::{discover_context_files, today};
+pub use hya_engine::{discover_context_files, today};
 use hya_mcp::McpServerConfig;
 use hya_plugin::activation::{
     bind_bundle_sidecar_tools, materialize_bundle_sidecar_resources, validate_bundle_sidecar_hooks,
@@ -142,8 +142,9 @@ impl SidecarEnvironment for BundleSidecarEnvironment {
         if definition.origin.is_builtin() {
             return Ok(None);
         }
-        let has_selected_sidecar_capability =
-            binding.has_selected_bundle_sidecar_capability(stable_agent_id)?;
+        let has_selected_sidecar_capability = binding
+            .has_selected_bundle_sidecar_capability(stable_agent_id)
+            .map_err(CoreError::bundle)?;
         if !has_selected_sidecar_capability {
             return Ok(None);
         }
@@ -273,7 +274,7 @@ impl BoundSidecarFactory for BundleSidecarFactory {
                 }
                 let hooks = self
                     .binding
-                    .sidecar_hook_view(&self.stable_agent_id, host.clone())?;
+                    .sidecar_hook_view(&self.stable_agent_id, host.clone()).map_err(CoreError::bundle)?;
                 Ok(hya_plugin::activation::ActivationBindings { tools, hooks })
             },
         ).await?;
@@ -295,7 +296,9 @@ fn validate_bundle_sidecar_skills(
     stable_agent_id: &str,
     contributions: &PluginContributionSet,
 ) -> Result<(), CoreError> {
-    let policy = binding.agent_resource_policy(stable_agent_id)?;
+    let policy = binding
+        .agent_resource_policy(stable_agent_id)
+        .map_err(CoreError::bundle)?;
     let bundle_id = policy.bundle_id().ok_or_else(|| {
         CoreError::Invalid(format!(
             "bundle sidecar agent `{stable_agent_id}` has no owning bundle"
@@ -317,7 +320,7 @@ fn validate_bundle_sidecar_skills(
 /// Built-in root-session agent id used when neither an explicit override nor
 /// config `default_agent` selects one. Matches `serve`'s own fallback
 /// (`ServerState.default_agent`, then this same built-in agent).
-pub const BUILTIN_DEFAULT_AGENT_ID: &str = hya_core::MAIN_AGENT_ID;
+pub const BUILTIN_DEFAULT_AGENT_ID: &str = hya_engine::MAIN_AGENT_ID;
 
 /// Agent base only — for HTTP/SSE server and interactive TUI AppState assembly.
 ///
@@ -419,7 +422,7 @@ pub async fn resolve_headless_agent_name(
         .resolve_agent(candidate)
         .map(|definition| AgentName::new(definition.stable_id))
         .ok_or_else(|| {
-            CoreError::from(hya_bundle::BundleError::UnknownAgentId {
+            CoreError::bundle(hya_bundle::BundleError::UnknownAgentId {
                 agent_id: candidate.to_string(),
             })
         })
@@ -1167,7 +1170,7 @@ async fn build_session_engine_with_mcp_defer(
         .await
         .context("recover nonterminal Workflows before spawn readiness")?;
     let recovered_claims =
-        hya_core::resident::recover_resident_claims(&store, owner_run_id).await?;
+        hya_engine::resident::recover_resident_claims(&store, owner_run_id).await?;
     crate::startup_trace::mark("store_recovery", None);
     let (websearch, invocation_policy, settings) = tool_config;
     let router = Arc::new(router);
@@ -1215,7 +1218,7 @@ async fn build_session_engine_with_mcp_defer(
             InstalledBundleRefresh::new(bundle_registry_path())
                 .with_code_mode(settings.code_mode() != config::CodeMode::Normal)
                 .with_io_tasks(lifecycle.io_tasks.clone())
-                .with_host_reads(Arc::new(hya_core::StoreSessionReads::new(store.clone()))),
+                .with_host_reads(Arc::new(hya_engine::StoreSessionReads::new(store.clone()))),
         ))
         .with_project_plugins(project_plugins),
         reconciler.clone(),
