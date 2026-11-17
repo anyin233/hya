@@ -40,7 +40,7 @@ use crate::agent_catalog::AgentDefinition;
 pub use messages::advertise_tool;
 use messages::{
     AttachmentData, attachment_blobs, filtered_tool_schemas, hidden_behind, projection_to_messages,
-    request_from_messages,
+    system_prompt,
 };
 
 /// Human-answer tools cannot be useful once their host receiver is gone.
@@ -1513,17 +1513,17 @@ impl SessionEngine {
                 usage_reporting,
                 reasoning_policy,
             );
-            let template = request_from_messages(
-                &live_agent,
-                Vec::new(),
-                filtered_tool_schemas(
-                    resources,
-                    self.interaction.is_available(),
-                    depth,
-                    self.exclusive_tool.as_deref(),
-                ),
-                &model,
+            let tools = filtered_tool_schemas(
+                resources,
+                self.interaction.is_available(),
                 depth,
+                self.exclusive_tool.as_deref(),
+            );
+            let template = crate::kernel::request::from_messages(
+                Vec::new(),
+                &system_prompt(&live_agent, &tools, depth),
+                tools,
+                &model,
                 None,
             );
             let request_overhead = self
@@ -1956,17 +1956,17 @@ impl SessionEngine {
                 )
                 .await?
                 .effort;
-            let request = request_from_messages(
-                &live_agent,
-                messages,
-                filtered_tool_schemas(
-                    resources,
-                    self.interaction.is_available(),
-                    depth,
-                    self.exclusive_tool.as_deref(),
-                ),
-                &model,
+            let tools = filtered_tool_schemas(
+                resources,
+                self.interaction.is_available(),
                 depth,
+                self.exclusive_tool.as_deref(),
+            );
+            let request = crate::kernel::request::from_messages(
+                messages,
+                &system_prompt(&live_agent, &tools, depth),
+                tools,
+                &model,
                 effort,
             );
             let request = if let Some(hooks) = self.active_hook_dispatcher(session) {
