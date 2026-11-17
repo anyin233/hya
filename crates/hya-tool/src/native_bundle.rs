@@ -1,4 +1,5 @@
-//! Lockstep dynamic-library loader for first-party tool bundles.
+//! Lockstep dynamic-library loader for first-party native bundles: tool
+//! families and internal bundles.
 //!
 //! Rust trait objects do not have a stable cross-compiler ABI. These libraries
 //! are built from the same workspace and toolchain as the host. The loader
@@ -19,7 +20,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
-use crate::{Tool, ToolCtx, ToolError, ToolResultPolicy};
+use crate::{RewriteCtx, Rewriter, Tool, ToolCtx, ToolError, ToolResultPolicy};
 
 type RuntimeEntry = unsafe extern "C" fn(
     *const libc::c_void,
@@ -27,20 +28,20 @@ type RuntimeEntry = unsafe extern "C" fn(
     *mut libc::c_void,
 );
 
-type NativeFuture<'a> = Pin<Box<dyn Future<Output = Result<Value, ToolError>> + Send + 'a>>;
+type NativeFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ToolError>> + Send + 'a>>;
 
-struct NativePollState {
-    // The callback runs synchronously before `execute` releases these values.
-    future: *mut NativeFuture<'static>,
+struct NativePollState<T> {
+    // The callback runs synchronously before the poll releases these values.
+    future: *mut NativeFuture<'static, T>,
     context: *mut Context<'static>,
-    result: Option<Poll<Result<Value, ToolError>>>,
+    result: Option<Poll<Result<T, ToolError>>>,
 }
 
-unsafe extern "C" fn poll_native_future(state: *mut libc::c_void) {
+unsafe extern "C" fn poll_native_future<T>(state: *mut libc::c_void) {
     // SAFETY: `with_runtime_v1` invokes this callback synchronously while the
     // caller's future, context, and state are live. Their erased lifetimes are
     // never retained beyond this call.
-    let state = unsafe { &mut *state.cast::<NativePollState>() };
+    let state = unsafe { &mut *state.cast::<NativePollState<T>>() };
     // SAFETY: the synchronous callback owns exclusive access for this poll.
     let future = unsafe { &mut *state.future };
     let context = unsafe { &mut *state.context };
@@ -146,14 +147,14 @@ async fn execute_with_handle(
     result?
 }
 
-async fn poll_with_runtime(
-    mut future: NativeFuture<'_>,
+async fn poll_with_runtime<T>(
+    mut future: NativeFuture<'_, T>,
     with_runtime: RuntimeEntry,
     handle: &tokio::runtime::Handle,
-) -> Result<Value, ToolError> {
+) -> Result<T, ToolError> {
     std::future::poll_fn(|context| {
         let mut state = NativePollState {
-            future: (&mut future as *mut NativeFuture<'_>).cast::<NativeFuture<'static>>(),
+            future: (&mut future as *mut NativeFuture<'_, T>).cast::<NativeFuture<'static, T>>(),
             context: (context as *mut Context<'_>).cast::<Context<'static>>(),
             result: None,
         };
@@ -162,8 +163,8 @@ async fn poll_with_runtime(
         unsafe {
             (with_runtime)(
                 (handle as *const tokio::runtime::Handle).cast(),
-                poll_native_future,
-                (&mut state as *mut NativePollState).cast(),
+                poll_native_future::<T>,
+                (&mut state as *mut NativePollState<T>).cast(),
             );
         }
         state.result.unwrap_or_else(|| {
@@ -173,6 +174,32 @@ async fn poll_with_runtime(
         })
     })
     .await
+}
+
+/// A bundle's [`Rewriter`], polled inside the bundle's Tokio runtime.
+struct NativeRewriter {
+    inner: Arc<dyn Rewriter>,
+    with_runtime: RuntimeEntry,
+}
+
+#[async_trait]
+impl Rewriter for NativeRewriter {
+    async fn before_round(&self, cx: RewriteCtx<'_>) -> Result<bool, ToolError> {
+        let handle = host_handle()?;
+        poll_with_runtime(self.inner.before_round(cx), self.with_runtime, &handle).await
+    }
+
+    async fn rewrite_now(&self, cx: RewriteCtx<'_>) -> Result<bool, ToolError> {
+        let handle = host_handle()?;
+        poll_with_runtime(self.inner.rewrite_now(cx), self.with_runtime, &handle).await
+    }
+}
+
+/// The host runtime a rewriter is polled from (the kernel loop runs in one).
+fn host_handle() -> Result<tokio::runtime::Handle, ToolError> {
+    tokio::runtime::Handle::try_current().map_err(|error| {
+        ToolError::Other(format!("native rewriter needs a Tokio runtime: {error}"))
+    })
 }
 
 /// Enter the bundle's Tokio runtime while polling one native tool future.
@@ -228,10 +255,12 @@ pub unsafe fn share_deadline_v1(cell: *const libc::c_void) {
     crate::deadline::adopt(unsafe { &*cell.cast() });
 }
 
-/// Digest of the lockstep Rust tool ABI required by built-in bundle libraries.
+/// Digest of the lockstep Rust ABI required by first-party bundle libraries.
 ///
 /// Bundle libraries call this from their own linked copy of `hya-tool` before
-/// the host transfers a `Vec<Arc<dyn Tool>>` through the registration symbol.
+/// the host transfers a `Vec<Arc<dyn Tool>>` or `Vec<Arc<dyn Rewriter>>`
+/// through a registration symbol. It covers every source file whose types
+/// cross the boundary.
 #[must_use]
 pub fn abi_digest_v1() -> [u8; 32] {
     let mut hash = Sha256::new();
@@ -243,16 +272,18 @@ pub fn abi_digest_v1() -> [u8; 32] {
     hash.update(std::mem::align_of::<ToolCtx>().to_be_bytes());
     hash.update(std::mem::size_of::<ToolError>().to_be_bytes());
     hash.update(std::mem::size_of::<Arc<dyn Tool>>().to_be_bytes());
+    hash.update(std::mem::size_of::<Arc<dyn Rewriter>>().to_be_bytes());
     hash.update(std::mem::size_of::<tokio::runtime::Handle>().to_be_bytes());
     hash.update(std::mem::align_of::<tokio::runtime::Handle>().to_be_bytes());
     hash.update(include_bytes!("tool.rs"));
     hash.update(include_bytes!("deadline.rs"));
+    hash.update(include_bytes!("rewrite.rs"));
+    hash.update(include_bytes!("tokens.rs"));
     hash.finalize().into()
 }
 
-static LIBRARIES: OnceLock<Mutex<HashMap<&'static str, usize>>> = OnceLock::new();
-static LIBRARY_SOURCES: OnceLock<Mutex<HashMap<&'static str, std::path::PathBuf>>> =
-    OnceLock::new();
+static LIBRARIES: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+static LIBRARY_SOURCES: OnceLock<Mutex<HashMap<String, std::path::PathBuf>>> = OnceLock::new();
 
 /// Return the source paths selected for native libraries loaded by this process.
 #[must_use]
@@ -266,16 +297,38 @@ pub fn loaded_library_sources() -> Vec<std::path::PathBuf> {
         .collect()
 }
 
-pub(crate) fn load_family(stem: &'static str) -> Result<Vec<Arc<dyn Tool>>, String> {
+/// What one native bundle library registers with the host.
+pub struct Registrations {
+    /// Tools from `hya_tool_bundle_register_v1`, possibly none.
+    pub tools: Vec<Arc<dyn Tool>>,
+    /// Rewriters from the optional `hya_tool_bundle_register_rewriters_v1`.
+    pub rewriters: Vec<Arc<dyn Rewriter>>,
+}
+
+/// Load the native library of the first-party bundle `identity`
+/// (`hya/<name>`, library stem `hya_<name>`) and collect its registrations.
+///
+/// The library stays mapped for the process; later calls reuse it and
+/// register fresh objects.
+///
+/// # Errors
+///
+/// Returns why the library could not be found, verified, or loaded, or a
+/// missing required symbol.
+pub fn load(identity: &str) -> Result<Registrations, String> {
+    let name = identity
+        .strip_prefix("hya/")
+        .ok_or_else(|| format!("native bundle identity {identity} lacks hya/"))?;
+    let stem = format!("hya_{}", name.replace('-', "_"));
     let libraries = LIBRARIES.get_or_init(|| Mutex::new(HashMap::new()));
     let handle = {
         let mut libraries = libraries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match libraries.get(stem) {
+        match libraries.get(&stem) {
             Some(handle) => *handle,
             None => {
-                let loaded = open_library(stem)?;
+                let loaded = open_library(&stem)?;
                 let share = symbol(loaded, b"hya_tool_bundle_share_deadline_v1\0")?;
                 // SAFETY: this checked bundle symbol takes the host's cell.
                 let share: unsafe extern "C" fn(*const libc::c_void) =
@@ -299,15 +352,34 @@ pub(crate) fn load_family(stem: &'static str) -> Result<Vec<Arc<dyn Tool>>, Stri
     // SAFETY: `tools` is a live Vec with the exact type expected by the
     // matching, lockstep bundle library.
     unsafe { register(&mut tools) };
-    Ok(tools
-        .into_iter()
-        .map(|inner| {
-            Arc::new(NativeTool {
-                inner,
-                with_runtime,
-            }) as Arc<dyn Tool>
-        })
-        .collect())
+    let mut rewriters = Vec::new();
+    if let Some(register) = optional_symbol(handle, b"hya_tool_bundle_register_rewriters_v1\0") {
+        // SAFETY: as for the tool registration symbol above.
+        let register: unsafe extern "C" fn(*mut Vec<Arc<dyn Rewriter>>) =
+            unsafe { std::mem::transmute(register) };
+        // SAFETY: `rewriters` is a live Vec of the type the lockstep library expects.
+        unsafe { register(&mut rewriters) };
+    }
+    Ok(Registrations {
+        tools: tools
+            .into_iter()
+            .map(|inner| {
+                Arc::new(NativeTool {
+                    inner,
+                    with_runtime,
+                }) as Arc<dyn Tool>
+            })
+            .collect(),
+        rewriters: rewriters
+            .into_iter()
+            .map(|inner| {
+                Arc::new(NativeRewriter {
+                    inner,
+                    with_runtime,
+                }) as Arc<dyn Rewriter>
+            })
+            .collect(),
+    })
 }
 
 #[cfg(unix)]
@@ -345,7 +417,7 @@ fn library_source(parent: &std::path::Path, filename: &str, stem: &str) -> Optio
 }
 
 #[cfg(unix)]
-fn open_library(stem: &'static str) -> Result<usize, String> {
+fn open_library(stem: &str) -> Result<usize, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let parent = executable
         .parent()
@@ -362,7 +434,7 @@ fn open_library(stem: &'static str) -> Result<usize, String> {
                 .get_or_init(|| Mutex::new(HashMap::new()))
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert(stem, path.clone());
+                .insert(stem.to_string(), path.clone());
             load_checked(stem, &path)
         }
         Some(LibrarySource::Package(package)) => {
@@ -370,7 +442,7 @@ fn open_library(stem: &'static str) -> Result<usize, String> {
                 .get_or_init(|| Mutex::new(HashMap::new()))
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert(stem, package.clone());
+                .insert(stem.to_string(), package.clone());
             let extracted = extract_packaged_library(parent, &package, stem, &filename)?;
             load_extracted(stem, &extracted)
         }
@@ -492,21 +564,24 @@ fn extract_packaged_library(
             package.display()
         ));
     }
-    let expected = crate::base_tools::tool_bundle_presets()
-        .iter()
-        .find(|preset| preset.identity() == identity)
-        .ok_or_else(|| format!("unknown native tool family {identity}"))?;
+    // A tool family's package must declare exactly its preset's tools; an
+    // internal bundle is not a preset.
     let declared = bundle
         .tools()
         .iter()
         .map(|tool| tool.local_id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    let exposed = expected
-        .tools()
+    let exposed = crate::base_tools::tool_bundle_presets()
         .iter()
-        .map(|tool| tool.name())
-        .collect::<std::collections::BTreeSet<_>>();
-    if declared != exposed {
+        .find(|preset| preset.identity() == identity)
+        .map(|preset| {
+            preset
+                .tools()
+                .iter()
+                .map(|tool| tool.name())
+                .collect::<std::collections::BTreeSet<_>>()
+        });
+    if exposed.is_some_and(|exposed| declared != exposed) {
         return Err(format!(
             "{} declares a different tool set",
             package.display()
@@ -653,6 +728,11 @@ fn symbol(handle: usize, name: &[u8]) -> Result<usize, String> {
 #[cfg(not(unix))]
 fn symbol(_handle: usize, _name: &[u8]) -> Result<usize, String> {
     Err("native tool bundle symbol lookup requires Unix".to_string())
+}
+
+/// A symbol the library may leave out.
+fn optional_symbol(handle: usize, name: &[u8]) -> Option<usize> {
+    symbol(handle, name).ok()
 }
 
 #[cfg(all(test, unix))]

@@ -7,6 +7,9 @@
 /// Opt-in lifecycle copy counters; absent from product builds.
 #[cfg(feature = "lifecycle-bench")]
 pub mod bench;
+/// Reasoning replay and compacted-context markers shared by token accounting
+/// and the request encoders.
+pub mod context;
 
 /// Canonical streaming `Event` enum and ordered `Envelope` unit for the log and bus.
 pub mod event;
