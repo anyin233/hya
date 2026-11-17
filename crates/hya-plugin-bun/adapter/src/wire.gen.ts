@@ -296,6 +296,8 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly session: SessionId
   readonly message: MessageId
   readonly generation: ConfigGeneration
+  readonly system_sha256?: string
+  readonly tools_sha256?: string
 }) |
 ({ readonly type: "user_prompt_context_recorded" } & {
   readonly session: SessionId
@@ -1189,7 +1191,7 @@ export function isEvent(value: unknown): value is Event {
     (isRecord(value) && value["type"] === "workflow_stage_finished" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("run" in value && isWorkflowRunId(value["run"])) && ("stage" in value && typeof value["stage"] === "string") && ("status" in value && isWorkflowStageStatus(value["status"]))) ||
     (isRecord(value) && value["type"] === "workflow_run_finished" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("run" in value && isWorkflowRunId(value["run"])) && ("status" in value && isWorkflowRunStatus(value["status"])) && (value["error"] === undefined || (value["error"] === null || typeof value["error"] === "string"))) ||
     (isRecord(value) && value["type"] === "message_started" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("role" in value && isRole(value["role"])) && (value["agent"] === undefined || (value["agent"] === null || isAgentName(value["agent"]))) && (value["model"] === undefined || (value["model"] === null || isModelRef(value["model"])))) ||
-    (isRecord(value) && value["type"] === "turn_binding_recorded" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("generation" in value && isConfigGeneration(value["generation"]))) ||
+    (isRecord(value) && value["type"] === "turn_binding_recorded" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("generation" in value && isConfigGeneration(value["generation"])) && (value["system_sha256"] === undefined || typeof value["system_sha256"] === "string") && (value["tools_sha256"] === undefined || typeof value["tools_sha256"] === "string")) ||
     (isRecord(value) && value["type"] === "user_prompt_context_recorded" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("files" in value && (Array.isArray(value["files"]) && value["files"].every((item: unknown) => true))) && ("agents" in value && (Array.isArray(value["agents"]) && value["agents"].every((item: unknown) => true)))) ||
     (isRecord(value) && value["type"] === "message_finished" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("role" in value && isRole(value["role"])) && ("finish" in value && isFinishReason(value["finish"])) && (value["tokens"] === undefined || (value["tokens"] === null || isTokenUsage(value["tokens"]))) && (value["cause"] === undefined || (value["cause"] === null || isFinishCause(value["cause"])))) ||
     (isRecord(value) && value["type"] === "part_deleted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"]))) ||

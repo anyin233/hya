@@ -298,7 +298,9 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<ModelRef>,
     },
-    /// Records which immutable runtime snapshot (`ConfigGeneration`) ran this assistant turn.
+    /// Records which immutable runtime snapshot (`ConfigGeneration`) ran this
+    /// assistant turn, with digests of the system prompt and tool list its
+    /// requests send. Emitted again mid-turn when either digest changes.
     TurnBindingRecorded {
         /// Session this event belongs to.
         session: SessionId,
@@ -306,6 +308,15 @@ pub enum Event {
         message: MessageId,
         /// Lightweight generation identity (registry contents stay outside the log).
         generation: ConfigGeneration,
+        /// Lowercase hex SHA-256 of the system prompt text the turn's requests
+        /// send. Empty for turns that send no model request (shell, fork) and
+        /// in logs written before this field.
+        #[serde(default)]
+        system_sha256: String,
+        /// Lowercase hex SHA-256 of the JSON-serialized tool schema list the
+        /// turn's requests offer. Empty where `system_sha256` is.
+        #[serde(default)]
+        tools_sha256: String,
     },
     /// `@file` / `@agent` prompt context; engine emits nothing when both vectors are empty.
     UserPromptContextRecorded {
@@ -1259,6 +1270,8 @@ mod tests {
             session,
             message,
             generation: ConfigGeneration::INITIAL,
+            system_sha256: "a".repeat(64),
+            tools_sha256: "b".repeat(64),
         };
         let encoded = serde_json::to_string(&binding).expect("encode turn binding");
         let decoded: Event = serde_json::from_str(&encoded).expect("decode turn binding");
@@ -1289,7 +1302,8 @@ mod tests {
             .first()
             .expect("projected assistant message");
         assert_eq!(projected.config_generation, Some(ConfigGeneration::INITIAL));
-        assert!(!encoded.contains("tools"));
+        // Registry contents stay out of the log; only their digests ride along.
+        assert!(!encoded.contains("\"tools\""));
         assert!(!encoded.contains("skills"));
     }
 

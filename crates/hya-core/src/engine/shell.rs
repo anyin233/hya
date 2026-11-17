@@ -282,6 +282,8 @@ impl SessionEngine {
                         session,
                         message,
                         generation: binding.generation(),
+                        system_sha256: String::new(),
+                        tools_sha256: String::new(),
                     },
                 )
                 .await?;
