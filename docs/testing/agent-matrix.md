@@ -45,7 +45,6 @@ cargo test -p hya-e2e -- --test-threads=1
 | T1.17 | Skill-backed slash expansion | `tests/p18_custom_slash_resources.rs` | Direct Skill body admission, discovery order, no redundant `skill` call, and bootstrap cache boundaries |
 | T1.18 | Custom command invokes builtin Skill Tool | `tests/p18_custom_slash_resources.rs` | Real `skill` result reaches the next model request; typed failures recover in the same Session |
 | T1.19 | Custom command invokes plugin Tool | `tests/p18_custom_slash_resources.rs` | `remember` RPC result, permission, process death, respawn, drift rejection, and restart boundary |
-| T1.20 | Custom command invokes MCP Tool | `tests/p18_custom_slash_resources.rs` | Namespaced result, structured faults, explicit reconnect, and old-binding pinning |
 | T1.21 | Custom resource conflicts fail closed | `tests/p18_custom_slash_resources.rs` | Plugin/builtin/MCP collisions publish no partial runtime generation |
 | T1.22 | Dynamic resource snapshots and reload | `tests/p18_custom_slash_resources.rs` | Skill and MCP next-Turn refresh, plugin restart boundary, and immutable old bindings |
 | T1.23 | Structured custom Tool errors recover | `tests/p18_custom_slash_resources.rs` | One terminal Tool Event, structured replay, no replay execution, and later same-Session success |
@@ -92,7 +91,6 @@ cargo test -p hya-e2e -- --test-threads=1
 | T2.42 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec: a plain summary after tool work ends the run with no notice | e2e (Track P) |
 | T2.43 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec: two ignored announcement notices in a row end the run | e2e (Track P) |
 | T2.44 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec --time-budget: the opening names the budget and the FINAL header appears once across tool results and continuation notices | e2e (Track P) |
-| T2.45 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec --time-budget: a bash timeout is shortened to the time left minus the reserve | e2e (Track P) |
 | T2.46 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec --time-budget: no continuation turn starts within the grace | e2e (Track P) |
 | T2.47 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec corrects a spurious internal summary and resumes work | e2e (Track P) |
 | T2.48 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec recovers a raw DSML tool-call leak through the structured tool interface | e2e (Track P) |

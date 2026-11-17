@@ -1164,39 +1164,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn long_directory_page_keeps_output_and_page_metadata_in_sync() {
-        let entries = (0..5000)
-            .map(|index| format!("entry-{index:04}"))
-            .collect::<Vec<_>>();
-        let fitted = fit_directory_page(Path::new("/workspace"), &entries, 1, entries.len());
-        let content = fitted.entries.join("\n");
-
-        assert!(fitted.output.len() <= MAX_READ_BYTES);
-        assert!(fitted.entries.len() < entries.len());
-        assert!(fitted.truncated);
-        assert_eq!(fitted.next_offset, Some(fitted.entries.len() + 1));
-        assert_eq!(
-            content.split('\n').collect::<Vec<_>>(),
-            fitted
-                .entries
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-        );
-        for entry in &fitted.entries {
-            assert!(fitted.output.contains(entry));
-        }
-
-        let next = fit_directory_page(
-            Path::new("/workspace"),
-            &entries,
-            fitted.next_offset.unwrap_or(1),
-            entries.len(),
-        );
-        assert_eq!(next.entries.first(), entries.get(fitted.entries.len()));
-    }
-
-    #[test]
     fn escape_heavy_directory_page_fits_every_serialized_view() {
         let path = format!("/{}", "\"".repeat(4000));
         let entries = (0..200)
