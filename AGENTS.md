@@ -11,7 +11,7 @@ cross-session recovery, keep `task_plan.md`, `findings.md`, and `progress.md` in
 - Record phase status, decisions, blockers, and verification results as work
   progresses. Recover context from these files when resuming.
 - Use the installed skill when available; the Markdown files remain usable
-  directly without a plugin or CLI. No content-hash approval gate is required.
+  directly without a plugin or CLI.
 - Before editing a layer, read its guideline index under `docs/spec/backend/`;
   consult `docs/spec/guides/index.md` for cross-layer changes and code-reuse
   decisions.
@@ -27,7 +27,7 @@ cross-session recovery, keep `task_plan.md`, `findings.md`, and `progress.md` in
 
 ## Commit Rule
 
-- When the user explicitly asks for commits, create one git commit per atomic change before reporting done; for verified feature work, commit and push the atomic change before reporting done.
+- When the user explicitly asks for commits, create one git commit per atomic change before reporting done.
 - Stage only the files for that atomic change; never sweep in unrelated workspace changes.
 - Use one-line semantic commit messages with no agent or AI attribution.
 - Run applicable checks when possible and report failed or unavailable checks. Verification limits do not block a user-requested commit or push.
