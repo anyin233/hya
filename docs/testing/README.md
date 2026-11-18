@@ -6,7 +6,7 @@ process E2E when an in-process suite already owns them.
 
 | Track | What runs | When to use |
 | --- | --- | --- |
-| **I** (in-process) | Crate `#[test]` / integration tests with `FakeProvider`, in-memory store, Axum router | Engine rules, projection, permissions math, `hya.v1` route shapes and HTTP/gRPC parity (`crates/hya-server/tests/v1_api.rs`, `v1_grpc_parity.rs`) |
+| **I** (in-process) | Crate `#[test]` / integration tests with `FakeProvider`, in-memory store, Axum router | Engine rules, projection, permissions math, `hya.v1` route shapes and HTTP/gRPC parity (`crates/hya-server/tests/it/v1_api.rs`, `v1_grpc_parity.rs`) |
 | **P** (process) | Real `hya serve` + scripted OpenAI-compatible **FakeLlm** (`crates/hya-e2e`), driven entirely through the v1 client | Product path: config → HTTP provider → tools → sessions → MCP/skills/subagents/hyabundle |
 | **TUI** (terminal & browser) | `packages/hya-tui` unit tests + `packages/hya-tui-web/tui-exp` headless Bun PTY + optional Playwright Chromium E2E (`packages/hya-tui-web/e2e/*.spec.ts`) | Interactive OpenTUI rendering, keybindings, resize, sessions, Projects, and WebUI PTY host ([tui-web.md](../tui-web.md)) |
 
@@ -75,7 +75,7 @@ for the agent surface you changed:
 
 ```sh
 cargo build -p hya-backend --bin hya
-cargo test -p hya-e2e --test <pNN_scenario> -- --test-threads=1
+cargo test -p hya-e2e --test it <pNN_scenario>:: -- --test-threads=1
 ```
 
 ## Coverage

@@ -15,7 +15,7 @@ use hya_tool::{
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
-#[path = "../../../tests/runtime_registry_moved/support.rs"]
+#[path = "../../../tests/it/runtime_registry_moved/support.rs"]
 mod support;
 use support::*;
 

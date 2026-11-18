@@ -776,7 +776,7 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "../../tests/support/mod.rs"]
+#[path = "../../tests/it/support/mod.rs"]
 mod shutdown_test_support;
 
 #[cfg(test)]

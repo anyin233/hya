@@ -186,8 +186,15 @@ cargo build -p hya-backend --bin hya
 ```
 
 `cargo fmt --all --check` is cheap and stays workspace-wide. While iterating,
-narrow further with `cargo test -p <crate> --test <name>` or a test-name
+narrow further with `cargo test -p <crate> --test it <module>::` or a test-name
 filter; run the affected crates' full tests before landing.
+
+Each crate's integration tests are one binary: `tests/it/main.rs` lists one
+module per area (`tests/it/<module>.rs`), with shared helpers in
+`tests/it/support/`. A new integration test goes into a module there, because
+every extra file directly under `tests/` is another binary to compile and link.
+Only a test that changes process-wide state (environment variables, the working
+directory, a process-global setting) stays a file of its own under `tests/`.
 
 Any workspace-wide `cargo test` must pass `--exclude hya-e2e` (as CI does):
 Track P spawns real backend processes and must not run multi-threaded.
@@ -202,7 +209,7 @@ binary and always runs single-threaded:
 
 ```sh
 cargo build -p hya-backend --bin hya
-cargo test -p hya-e2e --test <pNN_scenario> -- --test-threads=1
+cargo test -p hya-e2e --test it <pNN_scenario>:: -- --test-threads=1
 cargo clippy -p hya-e2e --all-targets -- -D warnings
 ```
 

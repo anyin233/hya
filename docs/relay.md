@@ -911,7 +911,7 @@ wrong open token), `Unavailable`
 
 ### Conformance
 
-`crates/hya-relay/tests/conformance.rs` runs a real `RelayServer` behind
+`crates/hya-relay/tests/it/conformance.rs` runs a real `RelayServer` behind
 in-process intermediaries (`tests/support/hops.rs`) and, in every case,
 drives a full splice through `RelayClient`: a backend with a
 reconnecting host control stream accepts the stream as the Noise
@@ -948,7 +948,7 @@ Which cases stand for each first-class deployment:
 | `tailscale serve` / `funnel` | (b) + (h) |
 
 The process-level golden path lives in the Track P suite:
-`crates/hya-e2e/tests/p38_relay.rs` runs a real `hya proxy`,
+`crates/hya-e2e/tests/it/p38_relay.rs` runs a real `hya proxy`,
 `hya serve --relay` (with the FakeLlm provider), and `hya bridge` over each
 pinned binding and once over TLS, drives the API (Projects, tool reads with a permission ask,
 SSE, PTY, rotation, shutdown) through the bridge only, and asserts that a
@@ -1139,7 +1139,7 @@ which cuts every stream of it at the proxy.
 
 `hya proxy` needs only one inbound TCP port and speaks both bindings on it
 (see [Bindings](#bindings)), so any of these fronts work; the intermediary
-conformance suite (`crates/hya-relay/tests/conformance.rs`) is the CI proof
+conformance suite (`crates/hya-relay/tests/it/conformance.rs`) is the CI proof
 that each shape works, and each recipe below ends with the matching `hya
 relay doctor` command. These four are first-class (ADR-0025 D9); anything
 that behaves like "an HTTPS hop that may be HTTP/1.1-only, may cut idle

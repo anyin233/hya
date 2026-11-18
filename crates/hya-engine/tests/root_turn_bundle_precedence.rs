@@ -6,6 +6,7 @@
 //! from the turn's captured TurnBinding catalog. Bundle model/category defaults
 //! and prepared workdirs are not per-turn overrides; session model/workdir win.
 
+#[path = "it/support/mod.rs"]
 mod support;
 
 use std::ffi::OsString;

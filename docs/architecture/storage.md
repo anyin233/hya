@@ -486,18 +486,18 @@ the cache's Arc and never publish their uncommitted view.
 **Invalidation.** Bump `hya_proto::PROJECTION_REDUCER_VERSION` whenever
 `Projection::apply` can fold the same events differently or the projection's
 shape changes. The `reducer_fingerprint_pins_the_version` test in
-`crates/hya-proto/tests/projection_snapshot.rs` hashes the reducer's output
+`crates/hya-proto/tests/it/projection_snapshot.rs` hashes the reducer's output
 over generated logs and fails until the bump (and the new fingerprint) is
 recorded. Older snapshots are then ignored and rebuilt lazily. A process
 running a binary with the same schema baseline but an older reducer ignores
 newer snapshots the same way; the rows are rewritten by whichever reducer
 reads next. The schema boundary above still rejects pre-reset databases.
 
-**Equivalence tests.** `crates/hya-proto/tests/projection_snapshot.rs`
+**Equivalence tests.** `crates/hya-proto/tests/it/projection_snapshot.rs`
 checks `decode(encode(fold(prefix))) + tail == fold(all)` at every split of
 generated logs (streaming, usage records and legacy totals, part
 deletion, compaction markers, forks, re-emitted Workflow run starts, team
-traffic). `crates/hya-store/tests/projection_cache.rs` checks warm and
+traffic). `crates/hya-store/tests/it/projection_cache.rs` checks warm and
 restarted reads against a full replay across interleaved appends, reducer
 version changes, undecodable and unanchored snapshots, and deletes; a unit
 test checks that a rolled-back transaction fold never reaches the cache.
@@ -521,7 +521,7 @@ The first read of a session that has no snapshot yet still folds its whole
 log once (1.1 s for a 190k-event log in a debug build). Reproduce with
 `cargo run -p xtask -- startup-bench --db <copy.db> --timeout-secs 300`
 (phase waterfall) and the ignored equivalence bench
-`HYA_PROJECTION_CACHE_DB=<db> cargo test -p hya-store --test projection_cache -- --ignored --nocapture`,
+`HYA_PROJECTION_CACHE_DB=<db> cargo test -p hya-store --test it projection_cache:: -- --ignored --nocapture`,
 which also asserts that every session's cold, snapshot, and warm reads equal
 its full replay.
 
