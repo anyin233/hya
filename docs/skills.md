@@ -163,11 +163,12 @@ Skill catalog exposes
 
 ## How skills surface to the model
 
-Discovered skills contribute a system-prompt section of the form “these skills
-are available on demand; read the named SKILL.md when relevant”, listing each
-`name: description`. The body is loaded when the model invokes the `skill` tool
-(or equivalent). There is no per-skill tool gate from `allowed-tools` at that
-point.
+At its first model turn, a full-mode session records the directory skill
+index visible to its agent. The index lists each `name: description`, including
+the built-in fallback entries. Later requests reuse the recorded list. Start a
+new session to see directory changes in the index. The `skill` tool uses the
+current turn's catalog when loading a skill body. There is no per-skill tool
+gate from `allowed-tools` at that point.
 
 When an agent’s resource view selects harness skills, it must also select the
 `skill` tool facade; otherwise the view is rejected. See
