@@ -36,7 +36,6 @@ pub(super) struct TurnToolGate<'a> {
     pub(super) resources: &'a Arc<CompiledResourceView>,
     pub(super) agents: &'a Arc<[AgentDef]>,
     pub(super) agent: &'a AgentSpec,
-    pub(super) depth: u32,
     pub(super) external_dirs: &'a [PathBuf],
     pub(super) workspace: &'a SessionWorkspace,
     pub(super) actor_claim: Option<&'a ActorClaim>,
@@ -63,7 +62,6 @@ impl TurnToolGate<'_> {
             resources,
             agents,
             agent: live_agent,
-            depth,
             external_dirs,
             workspace,
             actor_claim,
@@ -124,13 +122,7 @@ impl TurnToolGate<'_> {
         let started = std::time::Instant::now();
         let mut file_capture = FileCapture::default();
         let nested_stamps = Arc::new(Mutex::new(BTreeMap::new()));
-        let behind = hidden_behind(
-            resources,
-            depth,
-            engine.exclusive_tool.as_deref(),
-            engine.interaction.is_available(),
-            tc.name.as_str(),
-        );
+        let behind = hidden_behind(offered, engine.exclusive_tool.as_deref(), tc.name.as_str());
         let collect_tool = async {
             Ok::<_, CoreError>(match (behind, resources.resolve_tool(&tc.name)) {
                 (Some(exclusive), Some(_)) => (
