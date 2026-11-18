@@ -1017,6 +1017,46 @@ impl Tool for ShellWithConcurrentEdit {
 }
 
 #[tokio::test]
+async fn shell_edits_outside_git_are_the_commands_own_observation() {
+    let fx = fixture(
+        "file-shell-no-git",
+        FakeProvider::scripted_turns(vec![
+            call("write", json!({"path": "a.txt", "content": "hello\n"})),
+            call("bash", json!({"command": "printf 'shell\\n' >> a.txt"})),
+            call("read", json!({"path": "a.txt"})),
+            text("done"),
+        ]),
+    )
+    .await;
+    fx.turn("write, append, and read", &CancellationToken::new())
+        .await
+        .unwrap();
+
+    let a = fx.dir.join("a.txt");
+    let log = fx.log().await;
+    assert!(
+        !log.iter()
+            .any(|event| matches!(event, Event::FilesObserved { external: true, .. })),
+        "{log:?}"
+    );
+    let own: Vec<&Path> = log
+        .iter()
+        .filter_map(|event| match event {
+            Event::FilesObserved {
+                external: false,
+                files,
+                ..
+            } => Some(files.iter().map(|file| Path::new(&file.path))),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    // write, bash (no Git: stat of the known file), read.
+    assert_eq!(own, [a.as_path(), a.as_path(), a.as_path()]);
+    assert_eq!(std::fs::read_to_string(&a).unwrap(), "hello\nshell\n");
+}
+
+#[tokio::test]
 async fn outside_edits_during_a_shell_call_are_recorded_as_its_changes() {
     let mut fx = fixture(
         "file-sleep",
