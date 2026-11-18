@@ -3,13 +3,13 @@
 use async_trait::async_trait;
 use hya_proto::context::{COMPACT_CONTEXT_MARKER, marker_goal};
 use hya_proto::{
-    CompactionStrategy, Event, FinishReason, MessageId, PartId, Projection, Role, SessionId,
-    StepCut, TodoItem,
+    CompactionStrategy, Event, MessageId, Projection, Role, SessionId, StepCut, TodoItem,
 };
 use hya_tool::tokens::TokenAccounting;
 use hya_tool::{RewriteCtx, Rewriter, ToolError};
 
 use super::request::{collect_text, compacted_messages, is_marker};
+use super::round::system_message_events;
 use crate::error::CoreError;
 
 /// Share of `max_context` (percent) the last round may fill before the
@@ -125,7 +125,7 @@ pub async fn goal_checkpoint(cx: RewriteCtx<'_>) -> Result<bool, ToolError> {
     cx.log
         .append(
             cx.session,
-            marker_events(cx.session, MessageId::new(), text),
+            system_message_events(cx.session, MessageId::new(), text),
         )
         .await?;
     Ok(true)
@@ -214,7 +214,7 @@ pub(super) fn rewrite_events(
     let (input_tokens_est, threshold) = budget.unwrap_or((0, 0));
     let marker = MessageId::new();
     let todos = projection.session.todos.as_deref().unwrap_or_default();
-    let mut events = marker_events(session, marker, marker_text(initiator, &users, todos));
+    let mut events = system_message_events(session, marker, marker_text(initiator, &users, todos));
     events.push(Event::ContextCompacted {
         session,
         message: marker,
@@ -246,41 +246,4 @@ fn marker_text(initiator: Initiator, users: &[String], todos: &[TodoItem]) -> St
     marker.push_str("\n\n");
     marker.push_str(&marker_goal(todos));
     marker
-}
-
-fn marker_events(session: SessionId, message: MessageId, text: String) -> Vec<Event> {
-    let part = PartId::new();
-    vec![
-        Event::MessageStarted {
-            session,
-            message,
-            role: Role::System,
-            agent: None,
-            model: None,
-        },
-        Event::TextStart {
-            session,
-            message,
-            part,
-        },
-        Event::TextDelta {
-            session,
-            message,
-            part,
-            delta: text,
-        },
-        Event::TextEnd {
-            session,
-            message,
-            part,
-        },
-        Event::MessageFinished {
-            session,
-            message,
-            role: Role::System,
-            finish: FinishReason::Stop,
-            tokens: None,
-            cause: None,
-        },
-    ]
 }

@@ -260,15 +260,16 @@ pub(crate) enum Command {
         /// Emit the event stream as JSONL instead of a rendered transcript.
         #[arg(long)]
         json: bool,
-        /// Wall-clock seconds this run may take (an outside harness kills it
-        /// then). Enables deadline notices and caps tool timeouts to the
-        /// time left.
+        /// Wall-clock budget in seconds for in-process runs, including --bare.
+        /// Enables deadline notices and caps tool timeouts. The outside harness
+        /// enforces the process deadline.
         #[arg(long, value_name = "SECS", value_parser = clap::value_parser!(u64).range(1..))]
         time_budget: Option<u64>,
         /// Run the three-primitive kernel alone with six built-in tools, its
         /// minimal system prompt, no bundles or permission checks. Prints
-        /// the final text. Always runs in process against `--db`.
-        #[arg(long, conflicts_with_all = ["pure", "time_budget", "json"])]
+        /// the final text. Supports --time-budget and always runs in process
+        /// against `--db`.
+        #[arg(long, conflicts_with_all = ["pure", "json"])]
         bare: bool,
     },
     /// Start the HTTP + SSE server.

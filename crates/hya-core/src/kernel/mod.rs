@@ -268,10 +268,24 @@ impl Harness for Bare<'_> {
             models: None,
             hooks: None,
         };
-        if HarnessRewriter.before_round(cx).await? {
+        let rewritten = HarnessRewriter.before_round(cx).await? || goal_checkpoint(cx).await?;
+        if let Some(deadline) = hya_tool::deadline::current()
+            && let Some(stage) = deadline.take_notice(scope.session)
+        {
+            scope
+                .emit
+                .emit(
+                    scope.session,
+                    round::system_message_events(
+                        scope.session,
+                        MessageId::new(),
+                        deadline.notice(stage, false),
+                    ),
+                )
+                .await?;
             return Ok(true);
         }
-        Ok(goal_checkpoint(cx).await?)
+        Ok(rewritten)
     }
 
     async fn request(&mut self, view: &View<'_>) -> Result<CompletionRequest, CoreError> {

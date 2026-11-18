@@ -57,10 +57,19 @@ pub fn projection_to_messages(
     let messages = compacted_messages(projection);
     let assistant = messages.iter().rfind(|row| row.role == Role::Assistant);
     let marker = messages.first().filter(|row| is_marker(row));
+    let bare = agent.as_str() == super::AGENT
+        && assistant.is_some_and(|row| row.config_generation.is_none());
+    let deadline_stage = |row: &MessageProjection| {
+        if !bare || row.role != Role::System {
+            return false;
+        }
+        let text = collect_text(&row.parts);
+        text.starts_with("HEADLESS RUN — TIME: ") || text.starts_with("HEADLESS RUN — FINAL ")
+    };
     messages
         .iter()
         .filter(|row| {
-            !is_goal_checkpoint(row)
+            !(is_goal_checkpoint(row) || deadline_stage(row))
                 || (marker.is_none_or(|marker| marker.id < row.id)
                     && assistant.is_some_and(|assistant| {
                         // The marker can move in the projection. These IDs are
@@ -85,6 +94,12 @@ pub fn projection_to_messages(
                 finish: m.finish,
                 tokens: m.tokens,
                 last_round: m.usage.as_ref().map(|usage| usage.last_round),
+            },
+            // Keep the changing clock in the conversation on providers that
+            // hoist system messages into the top-level instructions.
+            Role::System if deadline_stage(m) => Message::User {
+                id: m.id,
+                parts: map_parts(&m.parts),
             },
             Role::System => Message::System {
                 id: m.id,
