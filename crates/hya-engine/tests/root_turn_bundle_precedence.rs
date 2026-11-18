@@ -765,7 +765,7 @@ fn composed_base(workdir: PathBuf) -> AgentSpec {
 
 fn skill_header_count(system: &str) -> usize {
     system
-        .matches("These skills are available on demand; read the named SKILL.md when relevant:")
+        .matches("Skills found at session start; use the skill tool to load a current skill:")
         .count()
 }
 

@@ -92,6 +92,14 @@ pub enum Event {
         kind: SessionKind,
     },
 
+    /// Freeze the initial environment and workspace guidance for full-mode turns.
+    InitialContextRecorded {
+        /// Session this event belongs to.
+        session: SessionId,
+        /// Rendered initial context used in the system prompt.
+        text: String,
+    },
+
     /// Set or clear one temporary Agent model for the owning root Session tree.
     /// A `None` model removes the override; unrelated Agent entries remain.
     SessionAgentModelOverrideSet {
@@ -1203,6 +1211,7 @@ impl Event {
     pub fn session(&self) -> Option<SessionId> {
         match self {
             Event::SessionCreated { session, .. }
+            | Event::InitialContextRecorded { session, .. }
             | Event::SessionAgentModelOverrideSet { session, .. }
             | Event::SessionPermissionModeSet { session, .. }
             | Event::SessionTitled { session, .. }

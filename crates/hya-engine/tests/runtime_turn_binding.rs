@@ -108,9 +108,11 @@ fn schema_names(request: &CompletionRequest) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn admitted_turn_rebinds_at_round_boundaries_for_prompt_schema_skill_and_dispatch() {
+async fn initial_context_survives_round_rebind_and_next_turn() {
     let workdir = TestDir::new("turn-binding");
     workdir.write_skill("skill_n");
+    let agents_path = workdir.path().join("AGENTS.md");
+    std::fs::write(&agents_path, "INITIAL_PROJECT_INSTRUCTIONS").unwrap();
     let old_calls = Arc::new(AtomicUsize::new(0));
     let new_calls = Arc::new(AtomicUsize::new(0));
     let tools = ToolRegistry::builtins();
@@ -173,6 +175,11 @@ async fn admitted_turn_rebinds_at_round_boundaries_for_prompt_schema_skill_and_d
     let (call, first_request) = request_rx.recv().await.expect("first provider request");
     assert_eq!(call, 0);
 
+    let projection = engine.read_projection(session).await.unwrap();
+    let initial_context = projection.session.initial_context.unwrap();
+    assert!(initial_context.contains("INITIAL_PROJECT_INSTRUCTIONS"));
+    assert!(initial_context.contains("skill_n"));
+    std::fs::write(&agents_path, "UPDATED_PROJECT_INSTRUCTIONS").unwrap();
     workdir.remove_skill("skill_n");
     workdir.write_skill("skill_fresh");
     let published = engine
@@ -201,15 +208,11 @@ async fn admitted_turn_rebinds_at_round_boundaries_for_prompt_schema_skill_and_d
     let first_system = first_request.system.as_deref().unwrap_or_default();
     assert!(first_system.contains("skill_n"));
     assert!(!first_system.contains("skill_fresh"));
-    // ...and the mid-turn publication becomes visible at the round boundary
-    // (dynamic injection, D3): round 2 sees the new tool and skill.
+    // The binding and tool schema advance while the recorded prompt stays fixed.
     let second_schemas = schema_names(&second_round_request);
     assert!(second_schemas.contains(&"generation_n_plus_1".to_string()));
     assert!(!second_schemas.contains(&"generation_n".to_string()));
-    let second_system = second_round_request.system.as_deref().unwrap_or_default();
-
-    assert!(second_system.contains("skill_fresh"));
-    assert!(!second_system.contains("skill_n"));
+    assert_eq!(second_round_request.system, first_request.system);
     assert_eq!(old_calls.load(Ordering::Relaxed), 1);
     assert_eq!(new_calls.load(Ordering::Relaxed), 0);
 
@@ -237,8 +240,7 @@ async fn admitted_turn_rebinds_at_round_boundaries_for_prompt_schema_skill_and_d
             _ => None,
         })
         .collect::<Vec<_>>();
-    // The rebind changed the prompt and tools, so round 2 records the new
-    // generation with its digests.
+    // Round 2 records the new generation because the tool digest changed.
     assert_eq!(first_bindings.len(), 2);
     assert!(first_bindings[0].get() < published.get());
     assert_eq!(first_bindings[1], published);
@@ -259,14 +261,17 @@ async fn admitted_turn_rebinds_at_round_boundaries_for_prompt_schema_skill_and_d
     let schemas = schema_names(&next_turn_request);
     assert!(!schemas.contains(&"generation_n".to_string()));
     assert!(schemas.contains(&"generation_n_plus_1".to_string()));
-    let system = next_turn_request.system.as_deref().unwrap_or_default();
-    assert!(!system.contains("skill_n\n"));
-    assert!(system.contains("skill_fresh"));
+    assert_eq!(next_turn_request.system, first_request.system);
 
-    let bindings = engine
-        .replay(session)
-        .await
-        .unwrap()
+    let events = engine.replay(session).await.unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|entry| matches!(entry.event, Event::InitialContextRecorded { .. }))
+            .count(),
+        1,
+    );
+    let bindings = events
         .into_iter()
         .filter_map(|envelope| match envelope.event {
             Event::TurnBindingRecorded { generation, .. } => Some(generation),
