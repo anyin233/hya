@@ -1,47 +1,31 @@
 //! Full mode's side of the rewrite contract (`hya_tool::rewrite`): the
-//! services the rewriter (the `hya/compaction` bundle) calls back into.
+//! services the kernel's reduction and its extensions (the `hya/compaction`
+//! bundle) call back into.
 //!
 //! The contract carries host failures as `ToolError`. Each service here also
 //! records the original [`CoreError`] in [`HostErrors`], so a failed rewrite
-//! ends the turn with that error (a stale actor claim, a missing fold agent)
-//! rather than a flattened one.
+//! ends the turn with that error (a stale actor claim) rather than a
+//! flattened one.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
-use hya_proto::{Event, Message, ModelRef, Projection, SessionId, UsagePurpose};
-use hya_provider::ReasoningEffort;
+use hya_proto::{Event, Message, ModelRef, Projection, SessionId};
 use hya_store::ActorClaim;
-use hya_tool::{
-    CompactionHooks, FoldAgent, ModelHost, ModelWindow, SessionLog, SummaryCall, ToolError,
-    Transcript,
-};
+use hya_tool::{CompactionHooks, ModelHost, ModelWindow, SessionLog, ToolError, Transcript};
 
 use super::super::summary::summary_messages;
-use super::super::{AgentSpec, FixedSystemAgent, SessionEngine, fixed_system_agent};
+use super::super::{AgentSpec, SessionEngine};
 use super::messages::{AttachmentData, projection_to_messages};
-use crate::TurnBinding;
-use crate::compaction::{CompactionRung, SummarizeOptions, UsageCollector};
 use crate::error::CoreError;
-use crate::hooks::{
-    CompactionAfterInput, CompactionBeforeInput, CompactionResolution, CompactionTrigger,
-    resolve_compaction_decision,
-};
+use crate::hooks::{CompactionAfterInput, CompactionBeforeInput, CompactionTrigger};
 
 impl SessionEngine {
     /// The settings `RewriteCtx::config` carries to the compaction bundle:
-    /// thresholds, ladder order (rung wire names), and token accounting. A
-    /// non-finite fraction travels as `null`, which the bundle treats like
-    /// any fraction outside `(0, 1]`.
+    /// the kept tail and the token-accounting mode.
     pub(in crate::engine) fn rewriter_config(&self) -> serde_json::Value {
-        let config = &self.compaction;
         serde_json::json!({
-            "token_threshold": config.token_threshold,
-            "keep_recent": config.keep_recent,
-            "context_fraction": config.context_fraction,
-            "reserve_tokens": config.reserve_tokens,
-            "summary_max_tokens": config.summary_max_tokens,
-            "method_order": config.method_order.map(CompactionRung::wire_name),
+            "keep_recent": self.compaction.keep_recent,
             "token_accounting": self.token_accounting.mode().as_str(),
         })
     }
@@ -105,22 +89,19 @@ impl SessionLog for TurnLog<'_> {
 }
 
 /// The two compaction hook points of the session's active hook chain. The
-/// engine only rewrites on overflow, so a hook's skip is demoted and only a
-/// replacement of the summarizer instructions carries through.
+/// reduction runs only on overflow and has no summarizer prompt to replace,
+/// so a hook's reply is ignored.
 #[async_trait]
 impl CompactionHooks for SessionEngine {
-    async fn before(&self, session: SessionId, tokens: usize) -> Option<String> {
-        let hooks = self.active_hook_dispatcher(session)?;
-        let decision = hooks
-            .compaction_before(CompactionBeforeInput {
-                session,
-                trigger: CompactionTrigger::Overflow,
-                messages_token_estimate: tokens,
-            })
-            .await;
-        match resolve_compaction_decision(decision, CompactionTrigger::Overflow) {
-            CompactionResolution::Replace { instructions } => Some(instructions),
-            CompactionResolution::Proceed | CompactionResolution::Skip { .. } => None,
+    async fn before(&self, session: SessionId, tokens: usize) {
+        if let Some(hooks) = self.active_hook_dispatcher(session) {
+            hooks
+                .compaction_before(CompactionBeforeInput {
+                    session,
+                    trigger: CompactionTrigger::Overflow,
+                    messages_token_estimate: tokens,
+                })
+                .await;
         }
     }
 
@@ -136,80 +117,23 @@ impl CompactionHooks for SessionEngine {
     }
 }
 
-/// A rewrite's side model calls: the fixed agent that folds context, the
-/// engine's summarizer, and the route's native compaction, billed to the
-/// turn's actor.
+/// A rewrite's side model call, the route's native compaction.
 pub(in crate::engine) struct TurnModels<'a> {
     pub(in crate::engine) engine: &'a SessionEngine,
-    pub(in crate::engine) actor_claim: Option<&'a ActorClaim>,
-    pub(in crate::engine) binding: &'a TurnBinding,
-    /// Compaction before a round, Summary for `/summarize`.
-    pub(in crate::engine) fold: FixedSystemAgent,
     pub(in crate::engine) errors: &'a HostErrors,
 }
 
 #[async_trait]
 impl ModelHost for TurnModels<'_> {
-    fn fold_agent(&self) -> Result<FoldAgent, ToolError> {
-        let definition = fixed_system_agent(self.binding, self.fold)
-            .map_err(|error| self.errors.record(error))?;
-        let router = self.engine.provider_router();
-        let options = super::super::summarize_options_from_definition(
-            &definition,
-            &self.engine.model_categories,
-            self.binding.agent_model_preference(definition.stable_id),
-            &|model| router.resolve(model).is_some(),
-        );
-        Ok(FoldAgent {
-            model: options.model,
-            system: options.system,
-            reasoning: options.reasoning.map(|effort| effort.as_str().to_string()),
-        })
-    }
-
-    fn has_summarizer(&self) -> bool {
-        self.engine.summarizer.is_some()
-    }
-
-    async fn summarize(
-        &self,
-        session: SessionId,
-        messages: &[Message],
-        call: SummaryCall,
-    ) -> Result<String, ToolError> {
-        let summarizer = self.engine.summarizer.as_ref().ok_or_else(|| {
-            self.errors
-                .record(CoreError::Invalid("summarizer not configured".to_string()))
-        })?;
-        let usage = UsageCollector::default();
-        let options = SummarizeOptions {
-            system: call.system,
-            model: call.model,
-            reasoning: call.reasoning.as_deref().and_then(ReasoningEffort::parse),
-            previous_summary: call.previous_summary,
-            max_output_tokens: call.max_output_tokens,
-            handoff: call.handoff,
-            state_only: false,
-            usage: Some(usage.clone()),
-        };
-        let summary = summarizer.summarize(messages, options).await;
-        // Billed even when the call failed.
-        self.engine
-            .record_side_call_usage(self.actor_claim, session, UsagePurpose::Compaction, &usage)
-            .await;
-        summary.map_err(|error| self.errors.record(error))
-    }
-
     async fn compact_window(
         &self,
         model: &ModelRef,
         messages: &[Message],
-        system: Option<&str>,
     ) -> Result<Option<String>, ToolError> {
         let window = self
             .engine
             .provider_router()
-            .compact_if_supported(model, messages, system)
+            .compact_if_supported(model, messages, None)
             .await
             .map_err(|error| self.errors.record(error.into()))?;
         Ok(window.map(|window| hya_provider::format_responses_compact_system(&window.items)))

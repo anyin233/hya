@@ -19,7 +19,10 @@ use hya_provider::{
     Protocol, ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, Tool, ToolCtx, ToolError};
+use hya_tool::{
+    Action, Mode, ModelWindow, PermissionPlane, PermissionRules, Pressure, RewriteCtx, Rewriter,
+    Rule, SessionLog, Tool, ToolCtx, ToolError, Transcript,
+};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -767,6 +770,249 @@ async fn goal_checkpoint_stays_out_after_rewrite() {
         1
     );
     assert_paired(&log);
+}
+
+/// A reduction extension for [`kernel::before_round`]: records the pressure it
+/// is handed and, over the threshold, either folds every message before the
+/// turn's user message behind a small marker (`fold`) or appends a note,
+/// which changes the log without reducing the request.
+struct Probe {
+    fold: bool,
+    seen: std::sync::Mutex<Vec<Option<Pressure>>>,
+}
+
+#[async_trait::async_trait]
+impl Rewriter for Probe {
+    async fn before_round(&self, cx: RewriteCtx<'_>) -> Result<bool, ToolError> {
+        self.seen.lock().unwrap().push(cx.pressure);
+        if !cx.pressure.is_some_and(Pressure::over) {
+            return Ok(false);
+        }
+        let session = cx.session;
+        let messages = &cx.projection.session.messages;
+        let head = messages
+            .iter()
+            .rposition(|message| message.role == Role::User)
+            .unwrap();
+        let marker = MessageId::new();
+        let part = PartId::new();
+        let mut events = vec![
+            Event::MessageStarted {
+                session,
+                message: marker,
+                role: Role::System,
+                agent: None,
+                model: None,
+            },
+            Event::TextStart {
+                session,
+                message: marker,
+                part,
+            },
+            Event::TextDelta {
+                session,
+                message: marker,
+                part,
+                // Only a folding probe writes a marker, which cuts the request.
+                delta: if self.fold {
+                    format!("{COMPACT_CONTEXT_MARKER}\nfolded by the probe")
+                } else {
+                    "a note from the probe".to_string()
+                },
+            },
+            Event::TextEnd {
+                session,
+                message: marker,
+                part,
+            },
+            Event::MessageFinished {
+                session,
+                message: marker,
+                role: Role::System,
+                finish: FinishReason::Stop,
+                tokens: None,
+                cause: None,
+            },
+        ];
+        if self.fold {
+            events.push(Event::ContextCompacted {
+                session,
+                message: marker,
+                strategy: CompactionStrategy::Native,
+                from_message: messages[0].id,
+                to_message: messages[head - 1].id,
+                folded_count: u32::try_from(head).unwrap(),
+                input_tokens_est: 0,
+                threshold: 0,
+                step_cut: None,
+            });
+        }
+        cx.log.append(session, events).await?;
+        Ok(true)
+    }
+
+    async fn rewrite_now(&self, _cx: RewriteCtx<'_>) -> Result<bool, ToolError> {
+        Ok(false)
+    }
+}
+
+struct StoreLog<'a>(&'a SessionStore);
+
+#[async_trait::async_trait]
+impl SessionLog for StoreLog<'_> {
+    async fn projection(&self, session: SessionId) -> Result<Arc<Projection>, ToolError> {
+        Ok(self.0.read_projection_shared(session).await.unwrap())
+    }
+
+    async fn append(&self, session: SessionId, events: Vec<Event>) -> Result<(), ToolError> {
+        self.0.append_events(session, events).await.unwrap();
+        Ok(())
+    }
+}
+
+struct KernelTranscript(ModelRef);
+
+#[async_trait::async_trait]
+impl Transcript for KernelTranscript {
+    async fn messages(&self, projection: &Projection) -> Result<Vec<Message>, ToolError> {
+        Ok(kernel::request::projection_to_messages(
+            &AgentName::new(kernel::AGENT),
+            projection,
+            &self.0,
+            &AttachmentData::new(),
+        ))
+    }
+}
+
+/// A finished ~10k-token turn, then turn 2's user message and its started
+/// assistant message; `kernel::before_round` on that message with a 10k
+/// window (threshold 8,000) and a [`Probe`] as the only extension. Returns
+/// whether the log changed, the log, and the pressures the probe saw.
+async fn reduce_with(name: &str, fold: bool) -> (bool, Vec<Event>, Vec<Option<Pressure>>) {
+    let fx = fixture(
+        name,
+        FakeProvider::scripted_turns(vec![text(&"earlier detail ".repeat(5_000))]),
+    )
+    .await;
+    fx.turn("first", &CancellationToken::new()).await.unwrap();
+    let session = fx.session;
+    let user = MessageId::new();
+    let part = PartId::new();
+    let message = MessageId::new();
+    fx.store
+        .append_events(
+            session,
+            vec![
+                Event::MessageStarted {
+                    session,
+                    message: user,
+                    role: Role::User,
+                    agent: None,
+                    model: None,
+                },
+                Event::TextStart {
+                    session,
+                    message: user,
+                    part,
+                },
+                Event::TextDelta {
+                    session,
+                    message: user,
+                    part,
+                    delta: "second".to_string(),
+                },
+                Event::TextEnd {
+                    session,
+                    message: user,
+                    part,
+                },
+                Event::MessageFinished {
+                    session,
+                    message: user,
+                    role: Role::User,
+                    finish: FinishReason::Stop,
+                    tokens: None,
+                    cause: None,
+                },
+                Event::MessageStarted {
+                    session,
+                    message,
+                    role: Role::Assistant,
+                    agent: None,
+                    model: None,
+                },
+            ],
+        )
+        .await
+        .unwrap();
+    let projection = fx.store.read_projection_shared(session).await.unwrap();
+    let log = StoreLog(&fx.store);
+    let transcript = KernelTranscript(fx.model.clone());
+    let cx = RewriteCtx {
+        session,
+        message,
+        model: &fx.model,
+        projection: &projection,
+        window: Some(ModelWindow {
+            max_context: 10_000,
+            usage_reporting: false,
+            reasoning_replay: hya_proto::context::ReasoningReplayPolicy::None,
+        }),
+        overhead_tokens: 0,
+        pressure: None,
+        workdir: &fx.dir,
+        config: &serde_json::Value::Null,
+        log: &log,
+        transcript: &transcript,
+        models: None,
+        hooks: None,
+    };
+    let probe = Arc::new(Probe {
+        fold,
+        seen: Default::default(),
+    });
+    let extensions: Vec<Arc<dyn Rewriter>> = vec![probe.clone()];
+    let changed = kernel::before_round(cx, &extensions).await.unwrap();
+    let seen = probe.seen.lock().unwrap().clone();
+    (changed, fx.log().await, seen)
+}
+
+fn compactions(log: &[Event]) -> Vec<CompactionStrategy> {
+    log.iter()
+        .filter_map(|event| match event {
+            Event::ContextCompacted { strategy, .. } => Some(*strategy),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn an_extension_that_reduces_enough_spares_the_kernel_rewrite() {
+    let (changed, log, seen) = reduce_with("extension-enough", true).await;
+    assert!(changed);
+    assert_eq!(seen.len(), 1);
+    let pressure = seen[0].expect("a window gives a pressure");
+    assert_eq!(pressure.threshold, 8_000);
+    assert!(pressure.over(), "{pressure:?}");
+    assert_eq!(compactions(&log), [CompactionStrategy::Native]);
+}
+
+#[tokio::test]
+async fn the_kernel_rewrites_after_an_extension_that_did_not_reduce_enough() {
+    let (changed, log, seen) = reduce_with("extension-short", false).await;
+    assert!(changed);
+    assert!(seen[0].is_some_and(Pressure::over));
+    assert_eq!(compactions(&log), [CompactionStrategy::Rewrite]);
+    // The extension's change lands first, then the kernel's rewrite.
+    let probe_marker = log
+        .iter()
+        .position(|event| matches!(event, Event::TextDelta { delta, .. } if delta == "a note from the probe"))
+        .unwrap();
+    let rewrite = log
+        .iter()
+        .position(|event| matches!(event, Event::ContextCompacted { .. }))
+        .unwrap();
+    assert!(probe_marker < rewrite);
 }
 
 #[tokio::test]

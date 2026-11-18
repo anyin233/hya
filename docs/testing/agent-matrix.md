@@ -39,7 +39,7 @@ cargo test -p hya-e2e -- --test-threads=1
 | T1.11 | Session list + resume | `tests/p07_session_lifecycle.rs` | `GET /v1/sessions` shows active sessions; second prompt on same id |
 | T1.12 | Session transcript read | `tests/p12_context_api.rs` | Multi-turn user/assistant text in `GET /v1/sessions/{id}/messages` |
 | T1.13 | Project AGENTS.md guidance | `tests/p13_project_agents_context.rs` | Compat-guided FakeLlm request contains AGENTS body marker |
-| T1.14 | Compact / summarize | `tests/p14_compact_summarize.rs` | Compact injects summary into context; follow-up turn works |
+| T1.14 | Compact / summarize | `tests/p14_compact_summarize.rs` | Compact adds the rewrite marker with the removed user messages; follow-up turn works |
 | T1.15 | kernel todo + edit | `tests/p15_todo_and_edit.rs` | Todo route lists items, the bare model receives the rendered tool result, and edit rewrites a file |
 | T1.16 | Custom slash catalog and route expansion | `tests/p18_custom_slash_resources.rs` | Supported command sources, precedence, exact single-pass expansion, route parity, and literal fallback |
 | T1.17 | Skill-backed slash expansion | `tests/p18_custom_slash_resources.rs` | Direct Skill body admission, discovery order, no redundant `skill` call, and bootstrap cache boundaries |
@@ -98,7 +98,7 @@ cargo test -p hya-e2e -- --test-threads=1
 | T2.50 | [p41_code_mode.rs](../../crates/hya-e2e/tests/it/p41_code_mode.rs) | `tools.code.mode: only`: the first request offers `code-mode__run` alone and its description carries a section per hidden tool (`### read`, `### bash`); a program `return await tools.read(...)` puts the file text and the trace line `#1 L1 tools.read` into the follow-up request; a direct `read` call is refused with `` `read` is not offered here: call it from a `code-mode__run` program `` | e2e (Track P) |
 | T2.51 | [p41_code_mode.rs](../../crates/hya-e2e/tests/it/p41_code_mode.rs) | `tools.code.mode: with_tools`: `code-mode__run` is offered next to `read`, `bash`, `edit`; its description lists no hidden tool; a program's nested `tools.read` and a direct `read` both deliver the file text | e2e (Track P) |
 | T2.52 | [p41_code_mode.rs](../../crates/hya-e2e/tests/it/p41_code_mode.rs) | default mode: no `code-mode__run` in the offered tools; `hya bundle list` shows `hya/code-mode` as `disabled` | e2e (Track P) |
-| T2.53 | [p42_exec_step_fold.rs](../../crates/hya-e2e/tests/it/p42_exec_step_fold.rs) | headless exec, one turn of twelve ~11k-token `bash` steps (no reasoning) against a 120k window (`keep_recent` 1): old steps fold into the summary (the summarizer sees `STEP_0_BEGIN` and the prompt), the run exits 0 with `FINAL_ANSWER`, and the last request carries the latest summary, the prompt and the newest step but not `STEP_0_BEGIN` | e2e (Track P) |
+| T2.53 | [p42_exec_step_fold.rs](../../crates/hya-e2e/tests/it/p42_exec_step_fold.rs) | headless exec, one turn of twelve ~11k-token `bash` steps (no reasoning) against a 120k window (`keep_recent` 1): the kernel's Rewrite removes the old steps, the run exits 0 with `FINAL_ANSWER`, and the last request carries the rewrite marker, the prompt and the newest step but not `STEP_0_BEGIN` | e2e (Track P) |
 
 ### Built-in tool coverage
 

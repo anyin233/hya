@@ -36,21 +36,17 @@ use crate::{
 /// Closed set of fixed Harness system-operation agents.
 ///
 /// Exact catalog lookup only — not spawn, not roster, and not an arbitrary-ID
-/// bypass. Callers cannot pass an open string; only these three operations exist.
+/// bypass. Callers cannot pass an open string.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FixedSystemAgent {
-    Compaction,
     Title,
-    Summary,
 }
 
 impl FixedSystemAgent {
     /// Stable catalog id for this fixed system operation.
     const fn stable_id(self) -> &'static str {
         match self {
-            Self::Compaction => "hya-compaction",
             Self::Title => "hya-title",
-            Self::Summary => "hya-summary",
         }
     }
 }
@@ -396,8 +392,9 @@ pub struct SessionEngine {
     summarizer: Option<Arc<dyn Summarizer>>,
     compaction: CompactionConfig,
     token_accounting: TokenAccounting,
-    /// Rewrites the Context before each round and on `/summarize`.
-    rewriter: Arc<dyn hya_tool::Rewriter>,
+    /// Context-reduction extensions the kernel runs before its own Rewrite,
+    /// before each round and on `/summarize`.
+    rewriters: Arc<[Arc<dyn hya_tool::Rewriter>]>,
     hooks: Option<Arc<dyn HookDispatcher>>,
     /// Captured per-session lifecycle/event hooks ([`session_hooks`]).
     session_bundle_hooks: Arc<RwLock<session_hooks::SessionHookMap>>,
@@ -460,7 +457,7 @@ impl Clone for SessionEngine {
             summarizer: self.summarizer.clone(),
             compaction: self.compaction,
             token_accounting: self.token_accounting.clone(),
-            rewriter: Arc::clone(&self.rewriter),
+            rewriters: Arc::clone(&self.rewriters),
             hooks: self.hooks.clone(),
             session_bundle_hooks: Arc::clone(&self.session_bundle_hooks),
             session_channel_policies: Arc::clone(&self.session_channel_policies),
@@ -629,7 +626,7 @@ impl SessionEngine {
             summarizer: None,
             compaction: CompactionConfig::default(),
             token_accounting: TokenAccounting::default(),
-            rewriter: internal_rewriter(),
+            rewriters: internal_rewriters(),
             hooks: None,
             session_bundle_hooks: Arc::new(RwLock::new(HashMap::new())),
             session_channel_policies: Arc::new(RwLock::new(HashMap::new())),
@@ -2180,26 +2177,22 @@ fn fixed_system_agent(
         })
 }
 
-/// The rewriter of full-mode turns: the first one the internal bundles
-/// register (`hya/compaction`), or the kernel's [`HarnessRewriter`] when none
-/// does. Loaded once per process.
+/// The context-reduction extensions the internal bundles register
+/// (`hya/compaction`), in registration order; the kernel runs them before its
+/// own Rewrite. Loaded once per process.
 ///
 /// # Panics
 ///
 /// When an internal bundle's library cannot be found or loaded, as a missing
 /// tool family does.
-///
-/// [`HarnessRewriter`]: hya_core::kernel::HarnessRewriter
-fn internal_rewriter() -> Arc<dyn hya_tool::Rewriter> {
-    static REWRITER: std::sync::OnceLock<Arc<dyn hya_tool::Rewriter>> = std::sync::OnceLock::new();
-    Arc::clone(REWRITER.get_or_init(|| {
-        let loaded = hya_core::bundles::load_internal()
-            .unwrap_or_else(|error| panic!("load internal bundles: {error}"));
-        loaded
+fn internal_rewriters() -> Arc<[Arc<dyn hya_tool::Rewriter>]> {
+    static REWRITERS: std::sync::OnceLock<Arc<[Arc<dyn hya_tool::Rewriter>]>> =
+        std::sync::OnceLock::new();
+    Arc::clone(REWRITERS.get_or_init(|| {
+        hya_core::bundles::load_internal()
+            .unwrap_or_else(|error| panic!("load internal bundles: {error}"))
             .rewriters
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| Arc::new(hya_core::kernel::HarnessRewriter))
+            .into()
     }))
 }
 
@@ -2230,13 +2223,9 @@ pub(crate) fn summarize_options_from_definition(
             .reasoning
             .as_deref()
             .and_then(ReasoningEffort::parse),
-        // Anchoring, output budget, and handoff mode are per-call, not
-        // per-definition: the caller knows the transcript and the active
-        // compaction config.
+        // Anchoring and output budget are per-call, not per-definition.
         previous_summary: None,
         max_output_tokens: None,
-        handoff: false,
-        state_only: false,
         // Callers that bill a session attach their own collector.
         usage: None,
     }

@@ -711,7 +711,7 @@ where the reason identifies installation, catalog unavailability, or extension s
 | `/vim [on\|off]` | Turn vim mode in the input on or off, saved in the preferences file; `-- INSERT --` / `-- NORMAL --` on the metadata state (see [Vim mode](#vim-mode)). |
 | `/notifications [on\|off]` | Turn desktop notifications on or off, saved in the preferences file (see [Desktop notifications](#desktop-notifications)). |
 | `/compact` | Compact the session's context now (`CompactSession`); the controller status state shows `Compacting…`, then `Compacted · <strategy>`. |
-| `/summarize` | Summarize the session into a new message (`SummarizeSession`). |
+| `/summarize` | Remove earlier context now (`SummarizeSession`): the route's native compaction where it has one, otherwise the kernel's Rewrite, which keeps your messages and the todo list. |
 | `/undo` | Revert the last prompt: it and every later message leave the transcript, the files its tools changed are restored, and the prompt goes back into an empty input. Again = one prompt further back (see [Undo, redo, and fork](#undo-redo-and-fork)). |
 | `/redo` | Undo the pending `/undo` (messages and files come back); only until the next prompt, which makes the revert permanent. Use `/undo` and `/fork` for the other session operations. |
 | `/fork` | Pick where to fork the session (the latest message, or before one of its prompts); Enter creates the fork, switches to it, and puts the picked prompt in the input. |
@@ -1813,36 +1813,37 @@ still opens the full-panel view (same glyphs) for a longer list.
 
 **Compaction.** A `compactionApplied { untilSeq, strategy, message,
 foldedCount, manual }` frame renders as a muted transcript divider,
-`── context compacted · 12 messages · manual · local summary ──`: the number
-of messages folded behind the summary (omitted when the event has none),
+`── context compacted · 12 messages · manual · rewrite ──`: the number
+of messages folded behind the marker (omitted when the event has none),
 `manual` for a client-requested `/compact` (`CompactSession`) or
 `/summarize` (omitted for a compaction that fired mid-turn), and always the
 strategy in words (`state/format.ts` `strategyText()`): `native` (provider-
-native), `local_summarizer` → `local summary` (a model-written summary —
-also every manual compaction), `snap_compact` → `snapshot` (a local dense
-archive, no model call), `handoff` → `handoff` (a model-written handoff
-document), `rewrite` → `rewrite` (a kernel rewrite: earlier steps replaced
-by a summary). The divider sits right before `message`, the system message that
-holds the summary, once the transcript has it (until then, right after the
-newest message); the summary follows it as a muted notice, without the
-internal `HYA_COMPACTED_CONTEXT` marker line. For example, `/compact` after
-a short exchange shows:
+native) and `rewrite` → `rewrite` (the kernel's Rewrite: earlier context
+removed behind a marker; also every manual compaction). Older logs also
+carry `local_summarizer` → `local summary`, `snap_compact` → `snapshot` and
+`handoff` → `handoff`. The divider sits right before `message`, the system
+message that holds the marker, once the transcript has it (until then, right
+after the newest message); the marker text follows it as a muted notice,
+without the internal `HYA_COMPACTED_CONTEXT` marker line. A kernel Rewrite
+keeps the current turn's user message, so its marker sits before that
+message. For example, `/compact` after a short exchange shows:
 
 ```text
-── context compacted · 2 messages · manual · local summary ──
+── context compacted · 1 message · manual · rewrite ──
 
-Summary: the user asked for …
+[hya] Earlier context was removed by the harness. It stays in the session log and cannot be read back.
+…
 ```
 
 `/compact`'s controller status state reads the same way: `Compacting…`, then
-`Compacted · <strategy in words>` (e.g. `Compacted · local summary`).
+`Compacted · <strategy in words>` (e.g. `Compacted · rewrite`).
 
 **Compactions from before the session was opened.** Opening a session
 (at start with `--session`/`--continue`, `/open`, `/sessions`, a subagent's
 view) shows a divider for every compaction already in its history, at the
-same place: right before each summary message. These are derived from the
-transcript itself — every compaction appends its summary as a system
-message starting with `HYA_COMPACTED_CONTEXT` (all five mechanisms do) —
+same place: right before each marker message. These are derived from the
+transcript itself — every reduction that folds context appends a system
+message starting with `HYA_COMPACTED_CONTEXT` —
 so they cost no extra request. The strategy and folded count live only in
 the durable `CompactionApplied` event, which the TUI does not replay from
 the start of the log, so a history divider reads just:

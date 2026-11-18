@@ -28,10 +28,9 @@ bundle-qualified reference may use `bundle:hya/core-agents/agent/hya-main`;
 it resolves to the same definition as `hya-main`. An omitted or empty
 `subagent_type` on `task` selects `hya-task`. Ordinary core agents can spawn
 ordinary catalog agents, including agents from installed bundles; the
-read-only `hya-scout` cannot call `task`. `hya-compaction`, `hya-summary`, and
-`hya-title` are reserved for engine-owned operations: they are resolvable by
-exact id but excluded from selectors and spawn rosters and cannot spawn other
-agents.
+read-only `hya-scout` cannot call `task`. `hya-title` is reserved for an
+engine-owned operation: it is resolvable by exact id but excluded from
+selectors and spawn rosters and cannot spawn other agents.
 
 ### Built-in agents
 
@@ -45,8 +44,6 @@ on canonical `harness:tool/*` resources, not merely by prompt instructions.
 | `hya-task` | subagent (`task` default) | None | General-purpose focused work. |
 | `hya-scout` | subagent | Denies write, edit, apply_patch, bash, task, archive | Fast read-only research. |
 | `hya-reviewer` | subagent | Denies write, edit, apply_patch | Review patches and report findings. |
-| `hya-compaction` | reserved system subagent | Not selectable or spawnable | Context compaction. |
-| `hya-summary` | reserved system subagent | Not selectable or spawnable | Explicit summarization. |
 | `hya-title` | reserved system subagent | Not selectable or spawnable | Session titles. |
 
 ### Migrating agent ids
@@ -58,7 +55,8 @@ on canonical `harness:tool/*` resources, not merely by prompt instructions.
 | `general`, `hya-worker`, `hya-implementer`, `hya-tester`, `hya-docs` | `hya-task` |
 | `explore`, `hya-explorer` | `hya-scout` |
 | `hya-reviewer` | `hya-reviewer` |
-| `compaction`, `summary`, `title` | `hya-compaction`, `hya-summary`, `hya-title` respectively |
+| `title` | `hya-title` |
+| `compaction`, `summary`, `hya-compaction`, `hya-summary` | Removed (context reduction runs no agent; see [Compaction](compaction.md)) |
 | `hya-release` | Removed (no replacement) |
 
 Update custom `agents` keys, `default_agent`, and explicit spawn targets to

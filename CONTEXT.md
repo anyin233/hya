@@ -33,9 +33,12 @@ _Avoid_: observation injection, synthetic result
 **Rewrite**:
 The destructive primitive: it removes everything before the current step from
 the Context, logged as a system marker plus `ContextCompacted{strategy:
-rewrite}`. The harness starts one at 80% of the window; the model starts one
-with the `rewrite` tool. A marker repeats the current todo list. Removed text stays in the log and cannot be read back.
-_Avoid_: summarize, compaction (compaction is the full-mode bundle method)
+rewrite}`. The kernel starts one before a round when the request is still over
+80% of the window after its extensions ran, in bare and full mode; the model
+starts one with the `rewrite` tool. A marker repeats the removed user messages
+and the current todo list. Removed text stays in the log and cannot be read
+back.
+_Avoid_: summarize, compaction (compaction is the full-mode extension's steps)
 
 **Bare mode**:
 Running the kernel alone with `hya exec --bare`: no bundle, six tools (`bash`,
@@ -44,9 +47,11 @@ log. It has no permissions, hooks, or subagents.
 _Avoid_: minimal mode, safe mode
 
 **Internal bundle**:
-A first-party `.hyabundle` under `bundles/internal/` that carries a feature
-moved out of the kernel (compaction, permissions, ...). Full mode loads them;
-bare mode does not.
+A first-party `.hyabundle` under `bundles/internal/` that carries a full-mode
+feature outside the kernel. It extends the kernel and never replaces its
+logic: `hya/compaction` registers context-reduction steps (`shake`, `remote`)
+that run before the kernel's own Rewrite. Full mode loads them; bare mode does
+not.
 _Avoid_: plugin, module
 
 ## Sessions, Agents & Bundles

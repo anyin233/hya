@@ -519,8 +519,9 @@ async fn todo_tool_calls_stream_todo_updated_and_fold_into_the_todo_read() {
 }
 
 /// A manual compaction records the same `compactionApplied` the automatic
-/// strategies do: on the live stream and in `ListEvents`, naming the summary
-/// message and the folded count, flagged `manual`.
+/// strategies do: on the live stream and in `ListEvents`, naming the marker
+/// message and the folded count, flagged `manual`. On a route without native
+/// compaction it is the kernel's Rewrite.
 #[tokio::test(flavor = "multi_thread")]
 async fn manual_compaction_streams_and_records_compaction_applied() {
     let dir = tempdir("compact");
@@ -531,6 +532,10 @@ async fn manual_compaction_streams_and_records_compaction_applied() {
         ],
         vec![
             FakeStep::Text("two".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+        vec![
+            FakeStep::Text("three".to_string()),
             FakeStep::Finish(FinishReason::Stop),
         ],
     ]);
@@ -555,15 +560,16 @@ async fn manual_compaction_streams_and_records_compaction_applied() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     // The response names the strategy the recorded event carries.
-    assert_eq!(body["strategy"], json!("local_summarizer"), "{body}");
+    assert_eq!(body["strategy"], json!("rewrite"), "{body}");
 
     let frames = collector.await.unwrap();
     let applied = of_kind(frame_events(&frames), "compactionApplied");
     assert_eq!(applied.len(), 1, "{frames:#?}");
     let applied = &applied[0];
-    assert_eq!(applied["strategy"], json!("local_summarizer"), "{applied}");
+    assert_eq!(applied["strategy"], json!("rewrite"), "{applied}");
     assert_eq!(applied["manual"], json!(true), "{applied}");
-    assert_eq!(applied["foldedCount"], json!(4), "{applied}");
+    // Turn 1's two messages and turn 2's answer; turn 2's prompt is kept.
+    assert_eq!(applied["foldedCount"], json!(3), "{applied}");
 
     let (_, listed) = call(
         &app,
@@ -584,7 +590,9 @@ async fn manual_compaction_streams_and_records_compaction_applied() {
     let recorded = of_kind(list_events(&app, &session).await, "compactionApplied");
     assert_eq!(recorded, vec![applied.clone()]);
 
-    // gRPC CompactSession reports the same record.
+    // gRPC CompactSession reports the same record, after another turn gives
+    // it something to remove.
+    run_turn(&app, &session, "third").await;
     let channel = grpc_channel(state).await;
     let mut events = pb::events_client::EventsClient::new(channel.clone())
         .stream_session_events(pb::StreamSessionEventsRequest {
@@ -615,6 +623,6 @@ async fn manual_compaction_streams_and_records_compaction_applied() {
     .await
     .expect("compactionApplied over gRPC");
     assert!(applied.manual);
-    assert_eq!(applied.strategy, "local_summarizer");
+    assert_eq!(applied.strategy, "rewrite");
     let _ = std::fs::remove_dir_all(&dir);
 }

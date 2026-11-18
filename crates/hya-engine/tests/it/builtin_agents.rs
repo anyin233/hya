@@ -10,18 +10,16 @@ use hya_engine::builtin_agents::{builtin_agent_ids, core_agents_preset, preset_a
 
 /// Every built-in id, in the order the roster must expose them.
 const EXPECTED_IDS: &[&str] = &[
-    "hya-compaction",
     "hya-main",
     "hya-plan",
     "hya-reviewer",
     "hya-scout",
-    "hya-summary",
     "hya-task",
     "hya-title",
 ];
 
 /// Ids that ordinary agents must never be able to spawn.
-const RESERVED_IDS: &[&str] = &["hya-compaction", "hya-summary", "hya-title"];
+const RESERVED_IDS: &[&str] = &["hya-title"];
 
 /// Ids the selector must present as primary agents.
 const MAIN_IDS: &[&str] = &["hya-main", "hya-plan"];

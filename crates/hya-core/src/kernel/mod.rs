@@ -29,15 +29,13 @@ use hya_proto::{
 use hya_provider::{CompletionRequest, EventStream, ProviderRouter};
 use hya_store::SessionStore;
 use hya_tool::tokens::TokenAccounting;
-use hya_tool::{
-    ModelWindow, RewriteCtx, Rewriter, SessionLog, Tool, ToolCtx, ToolError, Transcript,
-};
+use hya_tool::{ModelWindow, RewriteCtx, SessionLog, Tool, ToolCtx, ToolError, Transcript};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::CoreError;
 use rewrite::Initiator;
-pub use rewrite::{HarnessRewriter, goal_checkpoint};
+pub use rewrite::{before_round, rewrite_now};
 pub use round::{CompleteText, Failure, Round, ToolCall};
 pub use view::View;
 
@@ -144,7 +142,7 @@ pub trait Harness: ToolGate {
 }
 
 /// Bare mode's [`Harness`]: the given prompt and tools on one model, the
-/// kernel's own rewrite trigger, no retry.
+/// kernel's own context reduction, no retry.
 struct Bare<'a> {
     scope: &'a Scope<'a>,
     model: &'a ModelRef,
@@ -235,8 +233,8 @@ impl Transcript for Bare<'_> {
 
 #[async_trait]
 impl Harness for Bare<'_> {
-    /// [`HarnessRewriter`] on the round's model window; no side model calls
-    /// or hooks.
+    /// The kernel's reduction with no extensions on the round's model window;
+    /// no side model calls or hooks.
     async fn before_round(&mut self, projection: &Projection) -> Result<bool, CoreError> {
         let scope = self.scope;
         let replay = scope.provider.reasoning_replay_policy(self.model);
@@ -261,6 +259,7 @@ impl Harness for Bare<'_> {
             projection,
             window,
             overhead_tokens,
+            pressure: None,
             workdir: &self.ctx.workdir,
             config: &Value::Null,
             log: scope,
@@ -268,7 +267,7 @@ impl Harness for Bare<'_> {
             models: None,
             hooks: None,
         };
-        let rewritten = HarnessRewriter.before_round(cx).await? || goal_checkpoint(cx).await?;
+        let rewritten = before_round(cx, &[]).await?;
         if let Some(deadline) = hya_tool::deadline::current()
             && let Some(stage) = deadline.take_notice(scope.session)
         {
@@ -570,7 +569,7 @@ async fn model_rewrite(
         return Ok(Err(error.to_string()));
     }
     let projection = scope.store.read_projection_shared(scope.session).await?;
-    let budget = rewrite::pressure(
+    let pressure = rewrite::recorded_pressure(
         &projection,
         scope
             .provider
@@ -582,7 +581,7 @@ async fn model_rewrite(
         scope.session,
         scope.message,
         Initiator::Model,
-        budget,
+        pressure,
     )?;
     let removed = match rewrite {
         Some((events, removed)) => {

@@ -43,72 +43,45 @@ pub struct ModelWindow {
     pub reasoning_replay: ReasoningReplayPolicy,
 }
 
-/// The agent that folds context for this rewrite: its model, prompt, and effort.
-#[derive(Clone, Debug, Default)]
-pub struct FoldAgent {
-    /// Model the agent's policy resolves to; `None` leaves the choice to the call.
-    pub model: Option<ModelRef>,
-    /// The agent's system prompt.
-    pub system: Option<String>,
-    /// The agent's reasoning effort (`ReasoningEffort` spelling).
-    pub reasoning: Option<String>,
-}
-
-/// One summary the host's summarizer writes.
-#[derive(Clone, Debug, Default)]
-pub struct SummaryCall {
-    /// Model to call; `None` uses the summarizer's own model.
-    pub model: Option<ModelRef>,
-    /// System prompt.
-    pub system: Option<String>,
-    /// Reasoning effort (`ReasoningEffort` spelling).
-    pub reasoning: Option<String>,
-    /// The summary this one updates, when the session has one.
-    pub previous_summary: Option<String>,
-    /// Output cap.
-    pub max_output_tokens: Option<u32>,
-    /// Write a handoff document over the messages verbatim instead of a
-    /// summary of them.
-    pub handoff: bool,
-}
-
 /// Model calls a rewriter makes through the host.
 #[async_trait]
 pub trait ModelHost: Send + Sync {
-    /// The agent that folds context for this rewrite; `Err` when its
-    /// definition is missing.
-    fn fold_agent(&self) -> Result<FoldAgent, ToolError>;
-    /// Whether the host has a summarizer; without one [`Self::summarize`]
-    /// fails.
-    fn has_summarizer(&self) -> bool;
-    /// Summarize `messages` with the host's summarizer, which renders the
-    /// prompt. The host bills the call's usage to `session` as compaction,
-    /// also when the call fails.
-    async fn summarize(
-        &self,
-        session: SessionId,
-        messages: &[Message],
-        call: SummaryCall,
-    ) -> Result<String, ToolError>;
-    /// Compact `messages` with the route's native compaction
+    /// Compact `messages` with `model`'s route-native compaction
     /// (`/responses/compact`), as the marker body to commit; `None` when the
     /// route has none.
     async fn compact_window(
         &self,
         model: &ModelRef,
         messages: &[Message],
-        system: Option<&str>,
     ) -> Result<Option<String>, ToolError>;
 }
 
 /// The two compaction hook points of the host's hook chain.
 #[async_trait]
 pub trait CompactionHooks: Send + Sync {
-    /// `compaction.before` for an overflow at `tokens`: replacement summarizer
-    /// instructions when a hook supplied them.
-    async fn before(&self, session: SessionId, tokens: usize) -> Option<String>;
-    /// `compaction.after` with the committed summary's estimated size.
+    /// `compaction.before` for an overflow at `tokens`.
+    async fn before(&self, session: SessionId, tokens: usize);
+    /// `compaction.after` with the committed marker's estimated size.
     async fn after(&self, session: SessionId, summary_tokens: usize);
+}
+
+/// The size of the request a round would send against the rewrite threshold.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Pressure {
+    /// Tokens the request occupies: the larger of the last recorded round's
+    /// `prompt + output` and an estimate of the request.
+    pub used: u64,
+    /// Tokens above which the context is reduced (80% of the window); `0`
+    /// for a reduction on request.
+    pub threshold: u64,
+}
+
+impl Pressure {
+    /// Whether the request is over the threshold.
+    #[must_use]
+    pub fn over(self) -> bool {
+        self.used > self.threshold
+    }
 }
 
 /// What a rewriter sees of the round it runs before.
@@ -127,6 +100,9 @@ pub struct RewriteCtx<'a> {
     pub window: Option<ModelWindow>,
     /// Estimated tokens of the system prompt and offered tool schemas.
     pub overhead_tokens: usize,
+    /// The request's size against the threshold, set by the kernel; `None`
+    /// without a window.
+    pub pressure: Option<Pressure>,
     /// The session's working directory (spill target).
     pub workdir: &'a Path,
     /// The host's settings for this rewriter, as JSON; the bundle owns their
@@ -142,13 +118,14 @@ pub struct RewriteCtx<'a> {
     pub hooks: Option<&'a dyn CompactionHooks>,
 }
 
-/// Rewrites the Context through the log; implemented by a native bundle or
-/// by the kernel's own harness trigger. Stateless: everything it needs is in
-/// the log or the context.
+/// A context-reduction extension a native bundle registers. The kernel calls
+/// every extension, in registration order, before its own rewrite.
+/// Stateless: everything it needs is in the log or the context.
 #[async_trait]
 pub trait Rewriter: Send + Sync {
-    /// Rewrite before the round, if needed; `true` when the log changed.
+    /// Runs before every round; reduces only when `cx.pressure` is over the
+    /// threshold. `true` when the log changed.
     async fn before_round(&self, cx: RewriteCtx<'_>) -> Result<bool, ToolError>;
-    /// Rewrite now, on request (`/summarize`); `true` when the log changed.
+    /// Reduce now, on request (`/summarize`); `true` when the log changed.
     async fn rewrite_now(&self, cx: RewriteCtx<'_>) -> Result<bool, ToolError>;
 }

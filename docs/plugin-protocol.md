@@ -659,8 +659,8 @@ and the failure is logged.
 
 | Wire name | Params (camelCase) | Outcome |
 | --- | --- | --- |
-| `compaction.before` | `{session, trigger, messagesTokenEstimate}`; `trigger` is `"overflow"` or `"proactive"` | `proceed` \| `skip{reason}` \| `replace{instructions}` — `replace` swaps the summarizer instructions; `skip` is honored only for proactive compaction and is demoted to `proceed` when compaction is overflow-forced |
-| `compaction.after` | `{session, summaryTokens}` | notification |
+| `compaction.before` | `{session, trigger, messagesTokenEstimate}`; `trigger` is `"overflow"` (the request is over 80% of the window) | `proceed` \| `skip{reason}` \| `replace{instructions}` — accepted and ignored: an overflow cannot be skipped, and no summarizer prompt exists to replace |
+| `compaction.after` | `{session, summaryTokens}`: the committed marker's estimated tokens, after the kernel's Rewrite or a `remote` fold | notification |
 | `session.start` | `{session}` | notification |
 | `session.end` | `{session}` | notification |
 | `agent.spawn` | `{parent, child}` | notification |

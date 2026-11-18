@@ -1,7 +1,7 @@
 //! Integration tests for `hya-engine`: the P5 injection-point hooks wired into
-//! the engine — `compaction.before`/`compaction.after` around the reduction
-//! ladder (fail-open), and best-effort `session.start`/`session.end`/
-//! `agent.spawn` notifications.
+//! the engine — `compaction.before`/`compaction.after` around the kernel's
+//! context reduction (fail-open), and best-effort `session.start`/
+//! `session.end`/`agent.spawn` notifications.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -131,24 +131,20 @@ impl HookDispatcher for ScriptedHook {
     }
 }
 
-/// Summarizer that records the system prompt it was handed, so a `Replace`
-/// decision's instructions are observable.
-struct RecordingSummarizer {
-    seen_system: Arc<Mutex<Vec<Option<String>>>>,
-}
+/// Context reduction never calls the summarizer; it only writes terminal
+/// handoffs, which these tests do not reach.
+struct NoSummarizer;
 
 #[async_trait]
-impl Summarizer for RecordingSummarizer {
+impl Summarizer for NoSummarizer {
     async fn summarize(
         &self,
         _messages: &[hya_proto::Message],
-        options: SummarizeOptions,
+        _options: SummarizeOptions,
     ) -> Result<String, hya_engine::CoreError> {
-        self.seen_system
-            .lock()
-            .unwrap()
-            .push(options.system.clone());
-        Ok("HOOKED SUMMARY".to_string())
+        Err(hya_engine::CoreError::Invalid(
+            "no summarizer in this test".to_string(),
+        ))
     }
 }
 
@@ -175,23 +171,21 @@ fn agent(dir: &Path) -> AgentSpec {
     }
 }
 
-/// An engine that compacts on the first turn: the fake route advertises a
-/// 200k window, so `context_fraction: 0.001` clamps to the 1000-token floor
-/// and three ~750-token prompts overflow it.
-async fn compacting_engine(
-    summarizer: Arc<dyn Summarizer>,
-    hooks: Arc<dyn HookDispatcher>,
-) -> Arc<SessionEngine> {
+/// An engine whose second turn is over the threshold: the fake route
+/// advertises a 40k window (threshold 32,000) and turn 1 answers with ~40k
+/// tokens, which turn 2's kernel rewrite removes.
+async fn compacting_engine(hooks: Arc<dyn HookDispatcher>) -> Arc<SessionEngine> {
     let provider = FakeProvider::scripted_turns(vec![
         vec![
-            FakeStep::Text("first".to_string()),
+            FakeStep::Text("detail across the earlier turn ".repeat(7_000)),
             FakeStep::Finish(FinishReason::Stop),
         ],
         vec![
             FakeStep::Text("second".to_string()),
             FakeStep::Finish(FinishReason::Stop),
         ],
-    ]);
+    ])
+    .with_max_context(40_000);
     let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
@@ -203,142 +197,101 @@ async fn compacting_engine(
             perm,
             EventBus::default(),
         )
-        .with_compaction(
-            summarizer,
-            CompactionConfig {
-                token_threshold: 1_000_000,
-                keep_recent: 1,
-                context_fraction: 0.001,
-                ..CompactionConfig::default()
-            },
-        )
         .with_hooks(hooks),
     )
+}
+
+/// Create a session and run turn 1 on `engine`; the next turn is over the
+/// threshold.
+async fn session_before_overflow(engine: &SessionEngine, dir: &Path) -> SessionId {
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    engine
+        .admit_user_prompt(session, "PROMPT_0".to_string())
+        .await
+        .unwrap();
+    engine
+        .run_turn(session, &agent(dir), CancellationToken::new())
+        .await
+        .unwrap();
+    engine
+        .admit_user_prompt(session, "PROMPT_1".to_string())
+        .await
+        .unwrap();
+    session
 }
 
 async fn context_compacted_count(engine: &SessionEngine, session: SessionId) -> usize {
     let envelopes = engine.replay(session).await.unwrap();
     envelopes
         .iter()
-        .filter(|e| matches!(e.event, Event::ContextCompacted { .. }))
+        .filter(|e| {
+            matches!(
+                e.event,
+                Event::ContextCompacted {
+                    strategy: hya_proto::CompactionStrategy::Rewrite,
+                    ..
+                }
+            )
+        })
         .count()
 }
 
-/// A `Replace` decision must steer the summarizer: the returned instructions
-/// become the summarizer prompt, and the compaction itself still completes.
+/// `compaction.before` runs before the kernel's rewrite on an overflow and
+/// `compaction.after` once it committed. There is no summarizer prompt to
+/// replace, so a `Replace` reply changes nothing.
 #[tokio::test]
-async fn compaction_replace_instructions_reach_the_summarizer() {
-    let seen_system = Arc::new(Mutex::new(Vec::new()));
-    let summarizer = Arc::new(RecordingSummarizer {
-        seen_system: seen_system.clone(),
-    });
+async fn compaction_hooks_surround_the_kernel_rewrite() {
     let hooks = ScriptedHook::with_decisions(vec![CompactionDecision::Replace {
         instructions: "SUMMARIZE AS LIMERICKS".to_string(),
     }]);
-    let engine = compacting_engine(summarizer, hooks.clone()).await;
+    let engine = compacting_engine(hooks.clone()).await;
     let dir = tempdir();
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("fake"),
-            workdir: dir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    for i in 0..3 {
-        engine
-            .admit_user_prompt(session, format!("PROMPT_{i} {}", "p".repeat(3000)))
-            .await
-            .unwrap();
-    }
-    let spec = agent(&dir);
+    let session = session_before_overflow(&engine, &dir).await;
     engine
-        .run_turn(session, &spec, CancellationToken::new())
+        .run_turn(session, &agent(&dir), CancellationToken::new())
         .await
         .unwrap();
 
-    assert!(
-        hooks
-            .calls()
-            .iter()
-            .any(|call| call.starts_with("compaction.before:Overflow")),
-        "the engine must consult compaction.before on an overflow-forced trigger"
-    );
-    let seen = seen_system.lock().unwrap().clone();
-    assert_eq!(
-        seen,
-        vec![Some("SUMMARIZE AS LIMERICKS".to_string())],
-        "the Replace instructions must replace the summarizer prompt"
-    );
-    assert_eq!(
-        context_compacted_count(&engine, session).await,
-        1,
-        "compaction must still complete under Replace"
-    );
-    assert!(
-        hooks
-            .calls()
-            .iter()
-            .any(|call| call.starts_with("compaction.after:")),
-        "compaction.after must be notified after the fold commits"
-    );
+    let calls: Vec<String> = hooks
+        .calls()
+        .into_iter()
+        .filter(|call| call.starts_with("compaction."))
+        .collect();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert_eq!(calls[0], "compaction.before:Overflow");
+    assert!(calls[1].starts_with("compaction.after:"), "{calls:?}");
+    assert_eq!(context_compacted_count(&engine, session).await, 1);
 }
 
-/// A `Skip` decision on an overflow-forced trigger is ignored: built-in
-/// compaction completes anyway, because honoring the skip would send the
-/// request out over its window.
+/// A `Skip` reply on an overflow-forced trigger is ignored: the rewrite
+/// completes anyway, because honoring the skip would send the request out
+/// over its window.
 #[tokio::test]
-async fn compaction_skip_on_overflow_falls_back_to_builtin() {
-    let seen_system = Arc::new(Mutex::new(Vec::new()));
-    let summarizer = Arc::new(RecordingSummarizer {
-        seen_system: seen_system.clone(),
-    });
+async fn compaction_skip_on_overflow_is_ignored() {
     let hooks = ScriptedHook::with_decisions(vec![CompactionDecision::Skip {
         reason: "hook asks to skip".to_string(),
     }]);
-    let engine = compacting_engine(summarizer, hooks.clone()).await;
+    let engine = compacting_engine(hooks.clone()).await;
     let dir = tempdir();
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("fake"),
-            workdir: dir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    for i in 0..3 {
-        engine
-            .admit_user_prompt(session, format!("PROMPT_{i} {}", "p".repeat(3000)))
-            .await
-            .unwrap();
-    }
-    let spec = agent(&dir);
+    let session = session_before_overflow(&engine, &dir).await;
     engine
-        .run_turn(session, &spec, CancellationToken::new())
+        .run_turn(session, &agent(&dir), CancellationToken::new())
         .await
         .unwrap();
-
-    let seen = seen_system.lock().unwrap().clone();
-    assert_eq!(
-        seen.len(),
-        1,
-        "the built-in summarizer must still run exactly once"
-    );
-    assert_ne!(
-        seen[0].as_deref(),
-        Some("hook asks to skip"),
-        "no Replace was requested, so the summarizer keeps the built-in prompt"
-    );
     assert_eq!(
         context_compacted_count(&engine, session).await,
         1,
-        "overflow-forced compaction must not be skippable by a hook"
+        "overflow-forced reduction must not be skippable by a hook"
     );
 }
 
@@ -347,9 +300,7 @@ async fn compaction_skip_on_overflow_falls_back_to_builtin() {
 #[tokio::test]
 async fn session_lifecycle_hooks_fire_best_effort() {
     let hooks: Arc<ScriptedHook> = ScriptedHook::default().into();
-    let summarizer = Arc::new(RecordingSummarizer {
-        seen_system: Arc::new(Mutex::new(Vec::new())),
-    });
+    let summarizer = Arc::new(NoSummarizer);
     let provider = FakeProvider::scripted_turns(vec![vec![
         FakeStep::Text("ok".to_string()),
         FakeStep::Finish(FinishReason::Stop),
@@ -395,9 +346,7 @@ async fn session_lifecycle_hooks_fire_best_effort() {
 #[tokio::test]
 async fn agent_spawn_hook_fires_on_member_registration() {
     let hooks: Arc<ScriptedHook> = ScriptedHook::default().into();
-    let summarizer = Arc::new(RecordingSummarizer {
-        seen_system: Arc::new(Mutex::new(Vec::new())),
-    });
+    let summarizer = Arc::new(NoSummarizer);
     let router = Arc::new(ProviderRouter::new().with(Arc::new(SelectiveFakeProvider)));
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let engine = Arc::new(
@@ -498,32 +447,10 @@ impl hya_provider::Provider for SelectiveFakeProvider {
 
 #[tokio::test]
 async fn compaction_commit_failure_is_atomic_and_fails_turn() {
-    let seen_system = Arc::new(Mutex::new(Vec::new()));
-    let summarizer = Arc::new(RecordingSummarizer {
-        seen_system: seen_system.clone(),
-    });
-    let hooks = ScriptedHook::with_decisions(vec![CompactionDecision::Replace {
-        instructions: "SUMMARIZE AS LIMERICKS".to_string(),
-    }]);
-    let engine = compacting_engine(summarizer, hooks.clone()).await;
+    let hooks = ScriptedHook::with_decisions(Vec::new());
+    let engine = compacting_engine(hooks.clone()).await;
     let dir = tempdir();
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("fake"),
-            workdir: dir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    for i in 0..3 {
-        engine
-            .admit_user_prompt(session, format!("PROMPT_{i} {}", "p".repeat(3000)))
-            .await
-            .unwrap();
-    }
+    let session = session_before_overflow(&engine, &dir).await;
 
     let mut tx = engine.store().begin_transaction().await.unwrap();
     sqlx::query("CREATE TRIGGER reject_compaction BEFORE INSERT ON event_log WHEN NEW.payload LIKE '%context_compacted%' BEGIN SELECT RAISE(ABORT, 'compaction commit rejected'); END")
@@ -546,53 +473,31 @@ async fn compaction_commit_failure_is_atomic_and_fails_turn() {
     assert!(!events.iter().any(|e| matches!(&e.event, Event::TextDelta { delta, .. } if delta.contains(hya_provider::COMPACT_CONTEXT_MARKER))));
 }
 
-/// SQLite's data_version on a separate connection advances once per writer
-/// transaction, independent of how many event rows that transaction appends.
-struct TransactionCountingSummarizer {
-    observer: tokio::sync::Mutex<sqlx::SqliteConnection>,
-    before: std::sync::atomic::AtomicI64,
-}
-
-#[async_trait]
-impl Summarizer for TransactionCountingSummarizer {
-    async fn summarize(
-        &self,
-        _messages: &[hya_proto::Message],
-        _options: SummarizeOptions,
-    ) -> Result<String, hya_engine::CoreError> {
-        let version: i64 = sqlx::query_scalar("PRAGMA data_version")
-            .fetch_one(&mut *self.observer.lock().await)
-            .await
-            .unwrap();
-        self.before
-            .store(version, std::sync::atomic::Ordering::SeqCst);
-        Ok("one committed summary".to_string())
-    }
-}
-
+/// `/summarize` commits its marker and `ContextCompacted` in one writer
+/// transaction: SQLite's `data_version`, read on a separate connection,
+/// advances once per writer transaction, however many rows it appends.
 #[tokio::test]
 async fn successful_compaction_is_one_transaction() {
     use sqlx::Connection;
-    use std::sync::atomic::{AtomicI64, Ordering};
     let dir = tempdir();
     let db = dir.join("events.db");
     let store = SessionStore::connect(db.to_str().unwrap()).await.unwrap();
-    let observer = sqlx::SqliteConnection::connect(&format!("sqlite://{}", db.display()))
+    let mut observer = sqlx::SqliteConnection::connect(&format!("sqlite://{}", db.display()))
         .await
         .unwrap();
-    let summarizer = Arc::new(TransactionCountingSummarizer {
-        observer: tokio::sync::Mutex::new(observer),
-        before: AtomicI64::new(0),
-    });
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let engine = SessionEngine::new(
         store,
-        Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted_turns(vec![])))),
+        Arc::new(
+            ProviderRouter::new().with(Arc::new(FakeProvider::scripted_turns(vec![vec![
+                FakeStep::Text("answer".to_string()),
+                FakeStep::Finish(FinishReason::Stop),
+            ]]))),
+        ),
         support::test_runtime(Arc::new(ToolRegistry::builtins())),
         perm,
         EventBus::default(),
-    )
-    .with_compaction(summarizer.clone(), CompactionConfig::default());
+    );
     let session = engine
         .create(CreateSession {
             parent: None,
@@ -608,12 +513,21 @@ async fn successful_compaction_is_one_transaction() {
         .admit_user_prompt(session, "summarize this".to_string())
         .await
         .unwrap();
-    let marker = engine.summarize_session(session).await.unwrap();
-    let after: i64 = sqlx::query_scalar("PRAGMA data_version")
-        .fetch_one(&mut *summarizer.observer.lock().await)
+    engine
+        .run_turn(session, &agent(&dir), CancellationToken::new())
         .await
         .unwrap();
-    assert_eq!(after - summarizer.before.load(Ordering::SeqCst), 1);
+    let version = "PRAGMA data_version";
+    let before: i64 = sqlx::query_scalar(version)
+        .fetch_one(&mut observer)
+        .await
+        .unwrap();
+    let marker = engine.summarize_session(session).await.unwrap();
+    let after: i64 = sqlx::query_scalar(version)
+        .fetch_one(&mut observer)
+        .await
+        .unwrap();
+    assert_eq!(after - before, 1);
     assert!(
         engine.replay(session).await.unwrap().iter().any(
             |e| matches!(e.event, Event::ContextCompacted { message, .. } if message == marker)
