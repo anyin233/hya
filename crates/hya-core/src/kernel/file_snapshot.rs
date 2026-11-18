@@ -180,6 +180,7 @@ impl FileCapture {
                     store,
                     session,
                     store.read_projection_shared(session).await?,
+                    BTreeMap::new(),
                     false,
                 )
                 .await
@@ -508,7 +509,7 @@ async fn git(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
 }
 
 /// Run an observational Git command without taking the index lock.
-pub async fn git_output(cwd: &Path, args: &[&str]) -> Option<std::process::Output> {
+async fn git_output(cwd: &Path, args: &[&str]) -> Option<std::process::Output> {
     let run = tokio::process::Command::new("git")
         .args(args)
         .current_dir(cwd)

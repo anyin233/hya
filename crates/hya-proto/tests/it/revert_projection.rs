@@ -100,6 +100,50 @@ fn files_changed_folds_onto_the_message_that_changed_them() {
 }
 
 #[test]
+fn file_revision_counts_the_workspace_record_events() {
+    let session = SessionId::new();
+    let mut seq = 0;
+    let (_, assistant, mut log) = turn(session, "one", &mut seq);
+    assert_eq!(Projection::from_events(&log).session.file_revision, 0);
+    let stamp = hya_proto::event::FileStamp {
+        path: "/w/a.txt".to_string(),
+        mtime_ns: Some(1),
+        size: Some(1),
+    };
+    log.push(env(
+        seq + 1,
+        Event::FilesObserved {
+            session,
+            external: true,
+            files: vec![stamp.clone()],
+        },
+    ));
+    log.push(env(
+        seq + 2,
+        Event::FilesChanged {
+            session,
+            message: assistant,
+            call: None,
+            files: vec![FileChange {
+                path: stamp.path.clone(),
+                before: FileState::Absent,
+                observed: false,
+            }],
+        },
+    ));
+    // An identical observation still advances the revision.
+    log.push(env(
+        seq + 3,
+        Event::FilesObserved {
+            session,
+            external: false,
+            files: vec![stamp],
+        },
+    ));
+    assert_eq!(Projection::from_events(&log).session.file_revision, 3);
+}
+
+#[test]
 fn revert_hides_the_target_and_later_messages_and_unrevert_restores_them() {
     let session = SessionId::new();
     let mut seq = 0;

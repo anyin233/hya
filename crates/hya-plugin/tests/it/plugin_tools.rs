@@ -372,6 +372,10 @@ impl hya_tool::NestedTools for FakeNested {
             _ => Err(hya_tool::ToolError::Other(format!("unknown tool: {name}"))),
         }
     }
+
+    async fn workspace_state(&self) -> Result<Option<String>, hya_tool::ToolError> {
+        Ok(Some("session:7".to_string()))
+    }
 }
 
 #[tokio::test]
@@ -461,44 +465,28 @@ for line in sys.stdin:
  else: result={}
  if 'id' in request: print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':result}),flush=True)
 "#;
-    let root = std::env::temp_dir().join(format!("hya-plugin-workspace-{}", SessionId::new()));
-    std::fs::create_dir(&root).unwrap();
     let mut bundle_spec = spec();
     bundle_spec.command = vec!["python3".into(), "-c".into(), script.into()];
     bundle_spec
         .env
         .insert("PATH".into(), std::env::var("PATH").unwrap());
-    let host = PluginHost::connect(bundle_spec.in_bundle(root.clone()), host_info(), None)
-        .await
-        .unwrap();
+    let host = PluginHost::connect(
+        bundle_spec.in_bundle(std::env::temp_dir()),
+        host_info(),
+        None,
+    )
+    .await
+    .unwrap();
     let mut ctx = ctx_with(SessionId::new());
-    ctx.workdir = root.clone();
     let tool = &host.tools()[0];
-    let outside = tool.execute(&ctx, json!({})).await.unwrap();
-    assert_eq!(outside["state"]["result"], json!({"state": null}));
-    assert_eq!(outside["invalid"]["error"]["code"], -32602);
+    // Without a turn (a disconnected plane) the state is unknown.
+    let detached = tool.execute(&ctx, json!({})).await.unwrap();
+    assert_eq!(detached["state"]["result"], json!({"state": null}));
+    assert_eq!(detached["invalid"]["error"]["code"], -32602);
 
-    let init = std::process::Command::new("git")
-        .args(["init", "--quiet", "--template=", "--initial-branch=main"])
-        .current_dir(&root)
-        .output()
-        .unwrap();
-    assert!(init.status.success(), "{init:?}");
-    std::fs::write(root.join("file"), "content").unwrap();
-    let inside = tool.execute(&ctx, json!({})).await.unwrap();
-    let state = inside["state"]["result"]["state"].as_str().unwrap();
-    assert_eq!(inside["state"]["result"].as_object().unwrap().len(), 1);
-    assert_eq!(state.len(), 64);
-    assert!(
-        state
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-    );
-    assert_eq!(
-        inside["state"]["result"],
-        tool.execute(&ctx, json!({})).await.unwrap()["state"]["result"]
-    );
-    assert_eq!(inside["invalid"]["error"]["code"], -32602);
+    ctx.nested = hya_tool::NestedToolPlane::new(std::sync::Arc::new(FakeNested));
+    let attached = tool.execute(&ctx, json!({})).await.unwrap();
+    assert_eq!(attached["state"]["result"], json!({"state": "session:7"}));
+    assert_eq!(attached["invalid"]["error"]["code"], -32602);
     host.shutdown().await.unwrap();
-    std::fs::remove_dir_all(root).unwrap();
 }

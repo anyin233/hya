@@ -1127,9 +1127,15 @@ The turn loop connects a plane for every model tool call:
     `ToolError::Cancelled` when the caller is cancelled;
   - it runs no `tool.execute.before`/`after` hooks and emits no
     `tool_call_requested`, `tool_result`, or `tool_error` event.
+- `workspace_state()` backs the `workspace.state` host capability: it
+  reconciles the session's workspace record with its native watch under the
+  turn's actor claim, counting the stamps of earlier nested calls as known,
+  and returns `"<session>:<file revision>"`, or `None` without a native watch
+  ([Workspace file observations](../kernel.md#workspace-file-observations)).
 
 Outside the turn loop (tests, direct tool use) a context carries
-`NestedToolPlane::disconnected()`, which lists nothing and fails every call.
+`NestedToolPlane::disconnected()`, which lists nothing, fails every call, and
+has no workspace state.
 
 `SessionEngine::with_exclusive_tool(Some(name))` makes such a tool the only
 one a model is offered: for every agent whose offered tools include `name`,
@@ -1146,6 +1152,7 @@ An agent that is not offered `name` is unaffected. [Code mode](../code-mode.md) 
 pub trait NestedTools: Send + Sync {
     fn list(&self) -> Vec<hya_proto::ToolSchema>;
     async fn call(&self, name: &str, input: serde_json::Value) -> Result<serde_json::Value, ToolError>;
+    async fn workspace_state(&self) -> Result<Option<String>, ToolError>;
 }
 
 impl NestedToolPlane {
@@ -1154,6 +1161,7 @@ impl NestedToolPlane {
     pub fn is_connected(&self) -> bool;
     pub fn list(&self) -> Vec<hya_proto::ToolSchema>;                 // empty when disconnected
     pub async fn call(&self, name: &str, input: Value) -> Result<Value, ToolError>;
+    pub async fn workspace_state(&self) -> Result<Option<String>, ToolError>; // None when disconnected
 }
 ```
 

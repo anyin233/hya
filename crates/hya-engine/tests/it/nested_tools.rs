@@ -89,6 +89,36 @@ impl Tool for Probe {
     }
 }
 
+/// Writes `input.write` through the nested plane, reads the workspace state
+/// twice, writes `input.outside` directly, and reads it again.
+struct Stater;
+
+#[async_trait]
+impl Tool for Stater {
+    fn name(&self) -> &str {
+        "stater"
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: ToolName::new("stater"),
+            description: "reads the workspace state".to_string(),
+            input_schema: json!({ "type": "object" }),
+            output_schema: None,
+        }
+    }
+
+    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
+        let write = json!({ "path": input["write"], "content": "nested\n" });
+        ctx.nested.call("write", write).await?;
+        let first = ctx.nested.workspace_state().await?;
+        let second = ctx.nested.workspace_state().await?;
+        std::fs::write(input["outside"].as_str().unwrap(), "outside\n").unwrap();
+        let third = ctx.nested.workspace_state().await?;
+        Ok(json!([first, second, third]))
+    }
+}
+
 /// One bundle agent with nested calls, file writes, and human-answer tools.
 fn catalog() -> Arc<AgentCatalog> {
     let bundle = Bundle {
@@ -116,6 +146,7 @@ fn catalog() -> Arc<AgentCatalog> {
                 allow: vec![
                     "harness:tool/nester".to_string(),
                     "harness:tool/probe".to_string(),
+                    "harness:tool/stater".to_string(),
                     "harness:tool/write".to_string(),
                     "harness:tool/ask_user".to_string(),
                     "harness:tool/plan_exit".to_string(),
@@ -146,6 +177,15 @@ fn catalog() -> Arc<AgentCatalog> {
     Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("valid agent catalog"))
 }
 
+/// The builtins plus the test tools the catalog's agent allows.
+fn tools() -> ToolRegistry {
+    let tools = ToolRegistry::builtins();
+    tools.register(Arc::new(Nester)).unwrap();
+    tools.register(Arc::new(Probe)).unwrap();
+    tools.register(Arc::new(Stater)).unwrap();
+    tools
+}
+
 fn nest(name: &str, input: Value) -> FakeStep {
     FakeStep::ToolCall {
         name: "nester".to_string(),
@@ -170,9 +210,7 @@ async fn nested_calls_run_in_the_callers_view_and_record_against_the_caller() {
         ],
         vec![FakeStep::Finish(FinishReason::Stop)],
     ]);
-    let tools = ToolRegistry::builtins();
-    tools.register(Arc::new(Nester)).unwrap();
-    tools.register(Arc::new(Probe)).unwrap();
+    let tools = tools();
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![
         Rule::new(Action::Tool, "nester", Mode::Allow),
         Rule::new(Action::Tool, "probe", Mode::Allow),
@@ -318,4 +356,102 @@ async fn nested_calls_run_in_the_callers_view_and_record_against_the_caller() {
     assert!(!denied.exists());
     // (e) The nested tool cannot nest further.
     assert_eq!(outcome(4)["ok"]["connected"], false);
+}
+
+#[tokio::test]
+async fn workspace_state_is_the_sessions_file_revision() {
+    let workdir = support::TestDir::new("nested-workspace-state");
+    let dir = workdir.path().to_path_buf();
+    let written = dir.join("a.txt");
+    let outside = dir.join("b.txt");
+    let provider = FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::ToolCall {
+                name: "stater".to_string(),
+                input: json!({ "write": written, "outside": outside }),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![FakeStep::Finish(FinishReason::Stop)],
+    ]);
+    let tools = tools();
+    let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![
+        Rule::new(Action::Tool, "stater", Mode::Allow),
+        Rule::new(Action::Edit, "**", Mode::Allow),
+    ]));
+    let engine = SessionEngine::new(
+        SessionStore::connect_memory().await.unwrap(),
+        Arc::new(ProviderRouter::new().with(Arc::new(provider))),
+        Arc::new(RuntimeRegistry::new(tools, catalog())),
+        permission,
+        EventBus::default(),
+    );
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("nesting-agent"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    engine
+        .admit_user_prompt(session, "state".to_string())
+        .await
+        .unwrap();
+    let agent = AgentSpec {
+        name: AgentName::new("nesting-agent"),
+        model: ModelRef::new("fake"),
+        system_prompt: String::new(),
+        workdir: dir.clone(),
+        reasoning: None,
+    };
+    engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+
+    let events: Vec<Event> = engine
+        .replay(session)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|envelope| envelope.event)
+        .collect();
+    let states = events
+        .iter()
+        .find_map(|event| match event {
+            Event::ToolResult { output, .. } => Some(output.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let external: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::FilesObserved {
+                external: true,
+                files,
+                ..
+            } => Some(files.clone()),
+            _ => None,
+        })
+        .collect();
+    if cfg!(target_os = "linux") {
+        let [first, second, third] = [0, 1, 2].map(|i| states[i].as_str().unwrap().to_string());
+        assert!(first.starts_with(&format!("{session}:")), "{first}");
+        // Reading again without a change returns the same value.
+        assert_eq!(first, second);
+        assert_ne!(second, third);
+        // The tool's own nested write is not an external change; the direct
+        // write is, and the reconcile recorded it during the call.
+        let [observed] = external.as_slice() else {
+            panic!("expected one external observation: {external:?}")
+        };
+        assert_eq!(observed.len(), 1, "{observed:?}");
+        assert_eq!(observed[0].path, outside.to_string_lossy());
+    } else {
+        assert_eq!(states, json!([null, null, null]));
+    }
 }
