@@ -34,8 +34,8 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::CoreError;
-pub use rewrite::HarnessRewriter;
 use rewrite::Initiator;
+pub use rewrite::{HarnessRewriter, goal_checkpoint};
 pub use round::{CompleteText, Failure, Round, ToolCall};
 pub use view::View;
 
@@ -259,7 +259,11 @@ impl Harness for Bare<'_> {
             models: None,
             hooks: None,
         };
-        Ok(HarnessRewriter.before_round(cx).await?)
+        if HarnessRewriter.before_round(cx).await? {
+            return Ok(true);
+        }
+        let max_context = window.map(|window| window.max_context);
+        Ok(goal_checkpoint(scope.session, projection, max_context, scope).await?)
     }
 
     async fn request(&mut self, view: &View<'_>) -> Result<CompletionRequest, CoreError> {

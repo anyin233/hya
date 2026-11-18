@@ -30,7 +30,11 @@ workdir up to `$HOME` and the date on each runtime rebuild.
 - **C2** g is a list of completion-criteria items (`TodoItem`,
   `Event::TodosUpdated`). There is no free-text scratchpad.
 - **C3** The model writes g of its own accord; the kernel never generates it.
-- **C4** g takes no part in stop decisions; the stop rules are unchanged.
+  It asks once per context epoch, when the window is 60% full, that the model
+  bring g up to date (a logged system message), because g is what survives a
+  Rewrite.
+- **C4** g takes no part in any stop decision, in the kernel loop or in the
+  headless `exec` wrap-up (which no longer continues a run for open todos).
 - **C5** g is `session.todos`, owned by the kernel. The `hya/todo-tools`
   bundle and the in-process `TodoPlane` are removed.
 - **C6** The record of w is the `FilesChanged` of the kernel `write`, `edit`

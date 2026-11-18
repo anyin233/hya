@@ -56,10 +56,12 @@ impl Args {
     }
 }
 
+/// `id` as given or as the list renders it (`#3`).
 fn index(items: &[TodoItem], id: &str) -> Result<usize, ToolError> {
+    let bare = id.strip_prefix('#').unwrap_or(id);
     items
         .iter()
-        .position(|item| item.id == id)
+        .position(|item| item.id == bare)
         .ok_or_else(|| ToolError::Input(format!("unknown todo id `{id}`")))
 }
 
@@ -83,7 +85,7 @@ impl Tool for Todo {
         let content = json!({"type": "string", "minLength": 1});
         super::schema(
             super::TODO,
-            "Record and update the task's completion criteria as session todos. Operations apply atomically in order. Returns the full list, including assigned ids. Pass an empty ops array to read it.",
+            "Record the task's completion criteria as session todos. Each item is a checkable end state (\"tests in tests/ pass\"), not an action. Write the list when the task is clear, and set an item's status as soon as it changes, not at the end. The current list is kept verbatim when earlier context is removed. Operations apply atomically in order. Returns the full list, including assigned ids. Pass an empty ops array to read it.",
             json!({
                 "type": "object",
                 "properties": {
@@ -128,5 +130,21 @@ impl Tool for Todo {
         Err(ToolError::Other(
             "todo runs only inside the kernel loop".to_string(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ids_are_accepted_as_the_list_renders_them() -> Result<(), Box<dyn std::error::Error>> {
+        let args: Args = serde_json::from_value(json!({"ops": [
+            {"op": "add", "content": "tests pass"},
+            {"op": "status", "id": "#1", "status": "completed"},
+        ]}))?;
+        let items = args.apply(Vec::new(), 0)?;
+        assert_eq!(items[0].status, TodoStatus::Completed);
+        Ok(())
     }
 }

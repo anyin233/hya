@@ -6,7 +6,7 @@ use hya_proto::{
     CompactionStrategy, Event, FinishReason, MessageId, PartId, Projection, Role, SessionId,
     StepCut, TodoItem,
 };
-use hya_tool::{RewriteCtx, Rewriter, ToolError};
+use hya_tool::{RewriteCtx, Rewriter, SessionLog, ToolError};
 
 use super::request::{collect_text, compacted_messages, is_marker};
 use crate::error::CoreError;
@@ -14,6 +14,13 @@ use crate::error::CoreError;
 /// Share of `max_context` (percent) the last round may fill before the
 /// harness rewrites.
 const TRIGGER_PERCENT: u64 = 80;
+
+/// Share of `max_context` (percent) at which the model is asked, once per
+/// context epoch, to bring its todo list up to date before a rewrite.
+const GOAL_CHECKPOINT_PERCENT: u64 = 60;
+
+/// Prefix of the goal-checkpoint notice; marks it in the transcript.
+const GOAL_CHECKPOINT: &str = "[hya] Goal checkpoint:";
 
 /// Who started a rewrite.
 #[derive(Clone, Copy, Debug)]
@@ -65,6 +72,38 @@ impl HarnessRewriter {
         cx.log.append(cx.session, events).await?;
         Ok(true)
     }
+}
+
+/// Ask the model, once since the last rewrite, to record the task's completion
+/// criteria and their status in its todo list, when the last round filled
+/// [`GOAL_CHECKPOINT_PERCENT`] of the window. The notice is a system message
+/// in the log, so the request stays a function of the View. Returns whether
+/// it was appended.
+pub async fn goal_checkpoint(
+    session: SessionId,
+    projection: &Projection,
+    max_context: Option<u32>,
+    log: &dyn SessionLog,
+) -> Result<bool, ToolError> {
+    let Some(window) = max_context.filter(|w| *w > 0) else {
+        return Ok(false);
+    };
+    let Some((used, _)) = pressure(projection, Some(window)) else {
+        return Ok(false);
+    };
+    if used * 100 < u64::from(window) * GOAL_CHECKPOINT_PERCENT
+        || compacted_messages(projection).iter().any(|row| {
+            row.role == Role::System && collect_text(&row.parts).starts_with(GOAL_CHECKPOINT)
+        })
+    {
+        return Ok(false);
+    }
+    let text = format!(
+        "{GOAL_CHECKPOINT} this context is {GOAL_CHECKPOINT_PERCENT}% full. When it fills, earlier context is removed; only the user messages and your todo list are kept verbatim. Use the todo tool now so the list holds this task's completion criteria, each a checkable end state, with its current status."
+    );
+    log.append(session, marker_events(session, MessageId::new(), text))
+        .await?;
+    Ok(true)
 }
 
 /// The latest recorded round's `prompt + output` tokens and the trigger
