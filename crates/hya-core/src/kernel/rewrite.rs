@@ -17,11 +17,15 @@ use crate::error::CoreError;
 const TRIGGER_PERCENT: u64 = 80;
 
 /// Share of `max_context` (percent) at which the model is asked, once per
-/// context epoch, to bring its todo list up to date before a rewrite.
+/// turn, to bring its todo list up to date before a rewrite.
 const GOAL_CHECKPOINT_PERCENT: u64 = 60;
 
 /// Prefix of the goal-checkpoint notice; marks it in the transcript.
 const GOAL_CHECKPOINT: &str = "[hya] Goal checkpoint:";
+
+pub(super) fn is_goal_checkpoint(message: &hya_proto::MessageProjection) -> bool {
+    message.role == Role::System && collect_text(&message.parts).starts_with(GOAL_CHECKPOINT)
+}
 
 /// Who started a rewrite.
 #[derive(Clone, Copy, Debug)]
@@ -75,7 +79,7 @@ impl HarnessRewriter {
     }
 }
 
-/// Ask the model, once since the last rewrite, to record the task's completion
+/// Ask the model, at most once per turn, to record the task's completion
 /// criteria and their status in its todo list, when the next request would
 /// fill [`GOAL_CHECKPOINT_PERCENT`] of the window, by the larger of the
 /// compaction ladder's count (usage plus estimated newer parts, prompt and
@@ -86,6 +90,20 @@ pub async fn goal_checkpoint(cx: RewriteCtx<'_>) -> Result<bool, ToolError> {
         return Ok(false);
     };
     let projection = cx.projection;
+    let visible = compacted_messages(projection);
+    if visible
+        .first()
+        .is_some_and(|row| is_marker(row) && row.id > cx.message)
+        || projection
+            .session
+            .messages
+            .iter()
+            .rev()
+            .take_while(|row| row.id != cx.message)
+            .any(is_goal_checkpoint)
+    {
+        return Ok(false);
+    }
     let messages = cx.transcript.messages(projection).await?;
     let used = TokenAccounting::default()
         .tokens_in_use_with_reasoning_policy(
@@ -98,15 +116,11 @@ pub async fn goal_checkpoint(cx: RewriteCtx<'_>) -> Result<bool, ToolError> {
     // The kernel's own trigger reads the last reported round instead.
     let used =
         pressure(projection, Some(window.max_context)).map_or(used, |(last, _)| last.max(used));
-    if used * 100 < u64::from(window.max_context) * GOAL_CHECKPOINT_PERCENT
-        || compacted_messages(projection).iter().any(|row| {
-            row.role == Role::System && collect_text(&row.parts).starts_with(GOAL_CHECKPOINT)
-        })
-    {
+    if used * 100 < u64::from(window.max_context) * GOAL_CHECKPOINT_PERCENT {
         return Ok(false);
     }
     let text = format!(
-        "{GOAL_CHECKPOINT} this context is {GOAL_CHECKPOINT_PERCENT}% full. When it fills, earlier context is removed; only the user messages and your todo list are kept verbatim. Use the todo tool now so the list holds this task's completion criteria, each a checkable end state, with its current status."
+        "{GOAL_CHECKPOINT} earlier context will soon be removed; only the user messages and your todo list are kept verbatim. Record in the todo list every result you have derived and still need (values, findings, decisions), then continue the task. Anything not in the list will have to be worked out again."
     );
     cx.log
         .append(

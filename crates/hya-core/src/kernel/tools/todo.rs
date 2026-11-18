@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use hya_proto::{TodoItem, TodoStatus, ToolSchema};
 use hya_tool::{Tool, ToolCtx, ToolError};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
 
 pub(super) struct Todo;
@@ -15,10 +15,30 @@ pub(in crate::kernel) struct Args {
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 enum Op {
-    Add { content: String },
-    Edit { id: String, content: String },
-    Status { id: String, status: TodoStatus },
-    Remove { id: String },
+    Add {
+        content: String,
+        #[serde(default, deserialize_with = "present")]
+        status: Option<TodoStatus>,
+    },
+    #[serde(rename = "edit", alias = "status")]
+    Update {
+        id: String,
+        #[serde(default, deserialize_with = "present")]
+        content: Option<String>,
+        #[serde(default, deserialize_with = "present")]
+        status: Option<TodoStatus>,
+    },
+    Remove {
+        id: String,
+    },
+}
+
+fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
 
 impl Args {
@@ -29,23 +49,33 @@ impl Args {
     ) -> Result<Vec<TodoItem>, ToolError> {
         for op in self.ops {
             match op {
-                Op::Add { content } => {
+                Op::Add { content, status } => {
                     last_id = last_id
                         .checked_add(1)
                         .ok_or_else(|| ToolError::Input("no todo ids available".to_string()))?;
                     items.push(TodoItem {
                         id: last_id.to_string(),
                         content: checked_content(content)?,
-                        status: TodoStatus::Pending,
+                        status: status.unwrap_or(TodoStatus::Pending),
                     });
                 }
-                Op::Edit { id, content } => {
+                Op::Update {
+                    id,
+                    content,
+                    status,
+                } => {
+                    if content.is_none() && status.is_none() {
+                        return Err(ToolError::Input(
+                            "todo edit or status requires content or status".to_string(),
+                        ));
+                    }
                     let index = index(&items, &id)?;
-                    items[index].content = checked_content(content)?;
-                }
-                Op::Status { id, status } => {
-                    let index = index(&items, &id)?;
-                    items[index].status = status;
+                    if let Some(content) = content {
+                        items[index].content = checked_content(content)?;
+                    }
+                    if let Some(status) = status {
+                        items[index].status = status;
+                    }
                 }
                 Op::Remove { id } => {
                     items.remove(index(&items, &id)?);
@@ -82,10 +112,13 @@ impl Tool for Todo {
 
     fn schema(&self) -> ToolSchema {
         let id = json!({"type": "string", "description": "Item id from the todo list"});
-        let content = json!({"type": "string", "minLength": 1});
+        let content = json!({"type": "string", "pattern": r"\S"});
+        let status = json!({
+            "type": "string", "enum": ["pending", "in_progress", "blocked", "completed"]
+        });
         super::schema(
             super::TODO,
-            "Record the task's completion criteria as session todos. Each item is a checkable end state (\"tests in tests/ pass\"), not an action. Write the list when the task is clear, and set an item's status as soon as it changes, not at the end. The current list is kept verbatim when earlier context is removed. Operations apply atomically in order. Returns the full list, including assigned ids. Pass an empty ops array to read it.",
+            "Record checkable completion criteria (such as \"tests pass\") and results needed after earlier context is removed. The list survives rewrites verbatim. Write it when the task is clear, update statuses as they change, and leave correct items as written. Add takes content and optional status (pending by default). Edit and status both take an id and content, status, or both. Remove takes an id. Operations apply atomically in order and return the full list with ids. Pass empty ops to read it.",
             json!({
                 "type": "object",
                 "properties": {
@@ -95,20 +128,14 @@ impl Tool for Todo {
                             "type": "object",
                             "oneOf": [
                                 {
-                                    "properties": {"op": {"const": "add"}, "content": content},
+                                    "properties": {"op": {"const": "add"}, "content": content, "status": status},
                                     "required": ["op", "content"],
                                     "additionalProperties": false
                                 },
                                 {
-                                    "properties": {"op": {"const": "edit"}, "id": id, "content": content},
-                                    "required": ["op", "id", "content"],
-                                    "additionalProperties": false
-                                },
-                                {
-                                    "properties": {"op": {"const": "status"}, "id": id, "status": {
-                                        "type": "string", "enum": ["pending", "in_progress", "blocked", "completed"]
-                                    }},
-                                    "required": ["op", "id", "status"],
+                                    "properties": {"op": {"enum": ["edit", "status"]}, "id": id, "content": content, "status": status},
+                                    "required": ["op", "id"],
+                                    "anyOf": [{"required": ["content"]}, {"required": ["status"]}],
                                     "additionalProperties": false
                                 },
                                 {
@@ -146,5 +173,55 @@ mod tests {
         let items = args.apply(Vec::new(), 0)?;
         assert_eq!(items[0].status, TodoStatus::Completed);
         Ok(())
+    }
+
+    #[test]
+    fn add_accepts_initial_status() -> Result<(), Box<dyn std::error::Error>> {
+        let args: Args = serde_json::from_value(json!({"ops": [
+            {"op": "add", "content": "tests pass", "status": "in_progress"},
+        ]}))?;
+        let items = args.apply(Vec::new(), 0)?;
+        assert_eq!(items[0].content, "tests pass");
+        assert_eq!(items[0].status, TodoStatus::InProgress);
+        Ok(())
+    }
+
+    #[test]
+    fn edit_and_status_each_accept_content_and_status() -> Result<(), Box<dyn std::error::Error>> {
+        for op in ["edit", "status"] {
+            let args: Args = serde_json::from_value(json!({"ops": [
+                {"op": "add", "content": "tests pass"},
+                {"op": op, "id": "1", "content": "focused tests pass", "status": "completed"},
+            ]}))?;
+            let items = args.apply(Vec::new(), 0)?;
+            assert_eq!(items[0].content, "focused tests pass");
+            assert_eq!(items[0].status, TodoStatus::Completed);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn edit_and_status_require_at_least_one_change() -> Result<(), Box<dyn std::error::Error>> {
+        for op in ["edit", "status"] {
+            let args: Args = serde_json::from_value(json!({"ops": [
+                {"op": "add", "content": "tests pass"},
+                {"op": op, "id": "1"},
+            ]}))?;
+            assert!(matches!(
+                args.apply(Vec::new(), 0),
+                Err(ToolError::Input(_))
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn add_rejects_an_id_and_null_status() {
+        for op in [
+            json!({"op": "add", "id": "1", "content": "tests pass"}),
+            json!({"op": "add", "content": "tests pass", "status": null}),
+        ] {
+            assert!(serde_json::from_value::<Args>(json!({"ops": [op]})).is_err());
+        }
     }
 }
