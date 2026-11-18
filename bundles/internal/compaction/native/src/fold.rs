@@ -194,6 +194,7 @@ pub(crate) fn previous_summary(messages: &[Message]) -> Option<String> {
         if rest.starts_with(RESPONSES_COMPACT_ITEMS_MARKER) {
             return None;
         }
+        let rest = hya_proto::context::without_marker_goal(rest);
         (!rest.is_empty()).then(|| rest.to_string())
     })
 }

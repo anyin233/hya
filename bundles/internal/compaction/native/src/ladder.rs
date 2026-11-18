@@ -2,7 +2,7 @@
 //! change either makes to what a request sends is an event in the session log,
 //! so the host rebuilds the request from the projection.
 
-use hya_proto::context::{COMPACT_CONTEXT_MARKER, ReasoningReplayPolicy, render_todos};
+use hya_proto::context::{COMPACT_CONTEXT_MARKER, ReasoningReplayPolicy, marker_goal};
 use hya_proto::{
     CompactionStrategy, Event, FinishReason, Message, MessageId, PartId, Role, StepCut,
 };
@@ -296,12 +296,9 @@ struct Fold {
 
 impl Fold {
     fn carry_todos(&mut self, cx: &RewriteCtx<'_>) {
-        if let Some(todos) = &cx.projection.session.todos
-            && !todos.is_empty()
-        {
-            self.body.push_str("\n\n");
-            self.body.push_str(&render_todos(todos));
-        }
+        let todos = cx.projection.session.todos.as_deref().unwrap_or_default();
+        self.body.push_str("\n\n");
+        self.body.push_str(&marker_goal(todos));
     }
 }
 
