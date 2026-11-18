@@ -430,7 +430,7 @@ impl SessionEngine {
         let input_for_after = active_hooks.as_ref().map(|_| input.clone());
         let started = std::time::Instant::now();
         // Prior content of the files the command may change (revert).
-        let mut file_capture = super::file_snapshot::FileCapture::None;
+        let mut file_capture = super::file_snapshot::FileCapture::default();
         let collect_tool = async {
             Ok::<_, CoreError>(match resources.resolve_tool(&tool) {
                 Some(resolved) => {
@@ -496,7 +496,7 @@ impl SessionEngine {
                                 roots: workspace.roots,
                                 cancel: cancel.clone(),
                             };
-                            file_capture = Box::pin(super::file_snapshot::capture_before(
+                            file_capture = Box::pin(super::file_snapshot::FileCapture::full(
                                 resolved.tool.name(),
                                 &input,
                                 binding.workdir(),
@@ -515,6 +515,15 @@ impl SessionEngine {
             () = cancel.cancelled() => Err(ToolError::Cancelled),
             result = collect_tool => result?,
         };
+        let (changed, stamps) = Box::pin(file_capture.finish(
+            &self.store,
+            session,
+            shell_part.message,
+            shell_part.call,
+            result.as_ref().ok(),
+        ))
+        .await?;
+        let observed = super::file_snapshot::observation(session, false, stamps);
         let mut artifact_guard =
             BashArtifactGuard::capture(&tool, result.as_ref().ok(), binding.workdir());
         let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -550,26 +559,17 @@ impl SessionEngine {
                     hya_tool::ToolResultPolicy::Coding,
                 );
                 let retains_artifact = artifact_guard.retained_by(&output);
-                self.emit(
+                let mut events = vec![Event::ToolResult {
                     session,
-                    Event::ToolResult {
-                        session,
-                        message: shell_part.message,
-                        part: shell_part.part,
-                        call: shell_part.call,
-                        output,
-                        time_ms,
-                    },
-                )
-                .await?;
-                Box::pin(self.record_file_changes(
-                    None,
-                    session,
-                    shell_part.message,
-                    shell_part.call,
-                    file_capture,
-                ))
-                .await?;
+                    message: shell_part.message,
+                    part: shell_part.part,
+                    call: shell_part.call,
+                    output,
+                    time_ms,
+                }];
+                events.extend(changed);
+                events.extend(observed);
+                self.emit_batch_for_actor(None, session, events).await?;
                 if retains_artifact {
                     artifact_guard.disarm();
                 } else {
@@ -580,26 +580,17 @@ impl SessionEngine {
             Err(error) => {
                 artifact_guard.discard()?;
                 let finish = finish_from_tool_error(&error);
-                self.emit(
+                let mut events = vec![Event::ToolError {
                     session,
-                    Event::ToolError {
-                        session,
-                        message: shell_part.message,
-                        part: shell_part.part,
-                        call: shell_part.call,
-                        value: Some(tool_error_value(&error)),
-                        message_text: error.to_string(),
-                    },
-                )
-                .await?;
-                Box::pin(self.record_file_changes(
-                    None,
-                    session,
-                    shell_part.message,
-                    shell_part.call,
-                    file_capture,
-                ))
-                .await?;
+                    message: shell_part.message,
+                    part: shell_part.part,
+                    call: shell_part.call,
+                    value: Some(tool_error_value(&error)),
+                    message_text: error.to_string(),
+                }];
+                events.extend(changed);
+                events.extend(observed);
+                self.emit_batch_for_actor(None, session, events).await?;
                 finish
             }
         };

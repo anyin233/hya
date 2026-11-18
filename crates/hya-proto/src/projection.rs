@@ -107,6 +107,9 @@ pub struct SessionProjection {
     /// .before_message`); `None` for a head fork or a non-fork.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forked_before: Option<MessageId>,
+    /// Most recent observation for each known file, including deletions.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub files: BTreeMap<String, crate::event::FileStamp>,
     /// Pending revert (`SessionReverted`): the hidden messages live here, not
     /// in `messages`, until `SessionUnreverted` restores them or the next
     /// `MessageStarted` commits the revert. `None` when nothing is pending.
@@ -610,7 +613,7 @@ pub fn session_archive_event(
 /// different projection, or when `Projection` (or anything it contains)
 /// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
 /// the bump is recorded.
-pub const PROJECTION_REDUCER_VERSION: u32 = 10;
+pub const PROJECTION_REDUCER_VERSION: u32 = 11;
 
 /// Durable snapshot encoding: the wire projection plus replay-only reducer
 /// state the wire form deliberately omits.
@@ -1162,6 +1165,11 @@ impl Projection {
                             observed: file.observed,
                         }));
                 }
+            }
+            Event::FilesObserved { files, .. } => {
+                self.session
+                    .files
+                    .extend(files.iter().map(|file| (file.path.clone(), file.clone())));
             }
             Event::SessionReverted { message, files, .. } => {
                 self.apply_revert(*message, files);

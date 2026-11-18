@@ -5,14 +5,17 @@
 //! a bundle process reaches the plane from a host-capability task that has
 //! none of the turn's task-local state (activation hooks included).
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use hya_proto::event::FileStamp;
 use hya_proto::{AgentName, MessageId, SessionId, ToolSchema};
 use hya_store::ActorClaim;
 use hya_tool::{GrantScope, NestedTools, ToolCtx, ToolError};
 use serde_json::Value;
+use tokio::sync::Mutex;
 
 use super::{SessionEngine, authorize_tool_call, file_snapshot};
 use crate::TurnBinding;
@@ -33,6 +36,8 @@ pub(super) struct TurnNestedTools {
     pub(super) activation_hooks: Option<Arc<dyn HookDispatcher>>,
     /// Canonical name of the calling tool.
     pub(super) caller: String,
+    /// Nested observations to commit with the calling tool's result.
+    pub(super) stamps: Arc<Mutex<BTreeMap<String, FileStamp>>>,
     /// The calling tool's context, with `nested` disconnected.
     pub(super) base: ToolCtx,
 }
@@ -96,7 +101,7 @@ impl NestedTools for TurnNestedTools {
             .validate_actor_claim(self.actor_claim.as_ref())
             .await
             .map_err(core_error)?;
-        let capture = Box::pin(file_snapshot::capture_before(
+        let capture = Box::pin(file_snapshot::FileCapture::full(
             resolved.tool.name(),
             &input,
             self.binding.workdir(),
@@ -107,15 +112,25 @@ impl NestedTools for TurnNestedTools {
             () = ctx.cancel.cancelled() => Err(ToolError::Cancelled),
             result = resolved.tool.execute(&ctx, input) => result,
         };
-        Box::pin(self.engine.record_file_changes(
-            self.actor_claim.as_ref(),
+        let (changed, stamps) = Box::pin(capture.finish(
+            &self.engine.store,
             self.session,
             self.message,
             call,
-            capture,
+            result.as_ref().ok(),
         ))
         .await
         .map_err(core_error)?;
+        if let Some(changed) = changed {
+            self.engine
+                .emit_for_actor(self.actor_claim.as_ref(), self.session, changed)
+                .await
+                .map_err(core_error)?;
+        }
+        self.stamps
+            .lock()
+            .await
+            .extend(stamps.into_iter().map(|file| (file.path.clone(), file)));
         result
     }
 }

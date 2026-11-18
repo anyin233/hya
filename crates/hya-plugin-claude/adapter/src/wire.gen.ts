@@ -575,6 +575,11 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly call?: ToolCallId | null
   readonly files: ReadonlyArray<FileChange>
 }) |
+({ readonly type: "files_observed" } & {
+  readonly session: SessionId
+  readonly external: boolean
+  readonly files: ReadonlyArray<FileStamp>
+}) |
 ({ readonly type: "session_reverted" } & {
   readonly session: SessionId
   readonly message: MessageId
@@ -619,6 +624,12 @@ export type FileRestore = {
   readonly saved: FileState
   readonly observed?: boolean
   readonly error?: string | null
+}
+
+export type FileStamp = {
+  readonly path: string
+  readonly mtime_ns: number | null
+  readonly size: number | null
 }
 
 export type FileState = ({ readonly kind: "absent" }) |
@@ -1246,6 +1257,7 @@ export function isEvent(value: unknown): value is Event {
     (isRecord(value) && value["type"] === "usage_recorded" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && (value["message"] === undefined || (value["message"] === null || isMessageId(value["message"]))) && (value["step"] === undefined || (value["step"] === null || (typeof value["step"] === "number" && Number.isInteger(value["step"]) && value["step"] >= 0))) && ("model" in value && isModelRef(value["model"])) && ("purpose" in value && isUsagePurpose(value["purpose"])) && ("tokens" in value && isTokenUsage(value["tokens"]))) ||
     (isRecord(value) && value["type"] === "todos_updated" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("todos" in value && (Array.isArray(value["todos"]) && value["todos"].every((item: unknown) => isTodoItem(item))))) ||
     (isRecord(value) && value["type"] === "files_changed" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && (value["call"] === undefined || (value["call"] === null || isToolCallId(value["call"]))) && ("files" in value && (Array.isArray(value["files"]) && value["files"].every((item: unknown) => isFileChange(item))))) ||
+    (isRecord(value) && value["type"] === "files_observed" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("external" in value && typeof value["external"] === "boolean") && ("files" in value && (Array.isArray(value["files"]) && value["files"].every((item: unknown) => isFileStamp(item))))) ||
     (isRecord(value) && value["type"] === "session_reverted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && (value["files"] === undefined || (Array.isArray(value["files"]) && value["files"].every((item: unknown) => isFileRestore(item))))) ||
     (isRecord(value) && value["type"] === "session_unreverted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && (value["files"] === undefined || (Array.isArray(value["files"]) && value["files"].every((item: unknown) => isFileRestore(item))))) ||
     (isRecord(value) && value["type"] === "error" && isRecord(value) && ("session" in value && (value["session"] === null || isSessionId(value["session"]))) && ("code" in value && typeof value["code"] === "string") && ("message" in value && typeof value["message"] === "string") && (value["failed_message"] === undefined || (value["failed_message"] === null || isMessageId(value["failed_message"]))))
@@ -1276,6 +1288,10 @@ export function isFileChange(value: unknown): value is FileChange {
 
 export function isFileRestore(value: unknown): value is FileRestore {
   return isRecord(value) && ("path" in value && typeof value["path"] === "string") && ("restored" in value && isFileState(value["restored"])) && ("saved" in value && isFileState(value["saved"])) && (value["observed"] === undefined || typeof value["observed"] === "boolean") && (value["error"] === undefined || (value["error"] === null || typeof value["error"] === "string"))
+}
+
+export function isFileStamp(value: unknown): value is FileStamp {
+  return isRecord(value) && ("path" in value && typeof value["path"] === "string") && ("mtime_ns" in value && (value["mtime_ns"] === null || (typeof value["mtime_ns"] === "number" && Number.isInteger(value["mtime_ns"])))) && ("size" in value && (value["size"] === null || (typeof value["size"] === "number" && Number.isInteger(value["size"]) && value["size"] >= 0)))
 }
 
 export function isFileState(value: unknown): value is FileState {

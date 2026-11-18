@@ -363,9 +363,14 @@ ride on events: `FileState` names a per-session blob (`file_blob` table).
 
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
-| `files_changed` | `session`, `message` (assistant message of the call), optional `call: ToolCallId`, `files: [FileChange { path, before: FileState }]` | Fold: appends `FileChangeRecord { call, path, before }` to that message's `file_changes`. Appended right after the call's `tool_result` / `tool_error` when it changed at least one file. |
+| `files_changed` | `session`, `message` (assistant message of the call), optional `call: ToolCallId`, `files: [FileChange { path, before: FileState, observed? }]` | Appends `FileChangeRecord { call?, path, before, observed? }` to that message's `file_changes`. Written when a tool changes at least one file. `observed: true` identifies the shell's observational Git capture. |
+| `files_observed` | `session: SessionId`, `external: bool`, `files: [FileStamp { path: string, mtime_ns: i64 \| null, size: u64 \| null }]` | Replaces each path's entry in `SessionProjection.files` (reducer version 11). A tool outcome and its stamps commit together with `external: false`. A pre-round check logs only differing stamps with `external: true` before taking the View. File stamps are excluded from provider requests and the curated v1 stream. |
 | `session_reverted` | `session`, `message` (the reverted user message), `files: [FileRestore { path, restored, saved, error? }]` (omitted when empty) | Fold: `message` and every later message move from `messages` to `revert.hidden` (`SessionProjection.revert = { message, hidden, files }`). While a revert is pending, a new one extends it: the new hidden messages come first, and a file already listed keeps its first `saved`. A `message` not in `messages` is a no-op. v1: `sessionReverted { messageId, files }`. |
 | `session_unreverted` | `session`, `files: [FileRestore]` (omitted when empty) | Fold: the hidden messages return to the end of `messages`; `revert = None`. No-op when nothing is pending. v1: `sessionReverted { undone: true, files }`. |
+
+`FileStamp.path` is absolute. `mtime_ns` is measured since the Unix epoch
+and `size` is measured in bytes. Both values are `null` for a deletion,
+which remains in the map so replay still knows the path.
 
 `FileState` is tagged on `kind`: `absent` (no regular file), `stored { hash,
 size }` (lowercase hex sha256 of the content, the blob key), or `omitted {
@@ -630,6 +635,7 @@ Projection {
 | `context_status` | latest `context_status` |
 | `forked_from` | `session_forked` (omitted when `None`) |
 | `forked_before` | `session_forked.before_message` (omitted when `None`) |
+| `files` | newest `files_observed` stamp per absolute path, including deleted paths (omitted when empty) |
 | `revert` | pending `session_reverted` (`{ message, hidden: [MessageProjection], files: [FileRestore] }`): the hidden messages live here, not in `messages`, until `session_unreverted` or the next `message_started` (omitted when `None`) |
 | `usage` | `usage_recorded` + legacy `message_finished.tokens` fallback (omitted when empty) |
 | `todos` | latest todo snapshot from `todos_updated` or a historical todo result (omitted when `None`) |
@@ -711,6 +717,7 @@ contracts do not change and no database migration is needed.
   projection. `WorkflowStageRouteOutcome` is one observation per provider
   stream group and never carries transcript content.
 - `files_changed` appends file-change records to its message.
+- `files_observed` updates the session file map without changing the transcript.
 - `session_reverted` moves the reverted user message and everything after it
   into `revert.hidden`; `session_unreverted` moves them back; a new
   `message_started` commits (drops) a pending revert.

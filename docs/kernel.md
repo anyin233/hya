@@ -24,7 +24,7 @@ Three primitives update Context.
 | Primitive | Meaning | Events |
 | --- | --- | --- |
 | Model append | The model's text, reasoning, and tool calls | `StepStarted`, `TextStart/Delta/End`, `ReasoningStart/Delta/End`, `ToolCallRequested`, `StepFinished`, `UsageRecorded`, inside assistant `MessageStarted`/`MessageFinished` |
-| Tool append (tool) | An observation paired with a model call, including changes to the session todo list | `ToolResult`, `ToolError`, `TodosUpdated` |
+| Tool append (tool) | An observation paired with a model call, including changes to the session todo list and observed workspace files | `ToolResult`, `ToolError`, `TodosUpdated`, `FilesChanged`, `FilesObserved` |
 | Tool append (user) | User input through the same observation channel | user `MessageStarted`, `TextStart/Delta/End`, `MessageFinished` |
 | Rewrite | Remove earlier Context while retaining its log | a system marker message and `ContextCompacted` with strategy `rewrite` |
 
@@ -119,6 +119,59 @@ content, an unknown item id, or a malformed operation fails the whole batch
 with `ToolError`. A changed list is appended as a `TodosUpdated` full snapshot
 in the same batch as its `ToolResult`. Empty and unchanged lists can be read
 without a new update. The existing session todo API reads the replayed list.
+
+## Workspace file observations
+
+Bare and full mode record when a file seen by the model may have changed.
+For example, the model reads `a.txt`, and while its next request is being
+answered another process rewrites `a.txt`. Before the following round builds
+its request, the kernel `stat`s every known file and appends one
+`FilesObserved` event with `external: true` naming `a.txt`. Nothing about the
+change enters the request: the model sees the new contents only if it reads
+the file again. The stamps are in the log, so in full mode the same check
+also catches edits made between turns, including across a backend restart.
+
+After a tool call, the kernel stamps the files it read or changed and
+records `FilesObserved { session, external: false, files }` alongside
+the tool outcome in one transaction. The log also records the prior state
+of files changed by the tool as `FilesChanged`, which full-mode revert
+uses to restore files. Before constructing each round's View, after any
+rewrite, the kernel checks each known path with one `stat`. It records a
+single `FilesObserved` with `external: true` when at least one stamp differs,
+then takes the View from the updated projection. The `session.files`
+projection retains the latest stamp per path across turns and restarts.
+The request renders the transcript and tool results. File stamps stay
+in the log and projection.
+
+A stamp is `{ path: string, mtime_ns: number | null, size: number | null }`.
+The path is absolute. Modification time is a signed integer in nanoseconds
+since the Unix epoch and size is an integer in bytes. A deleted file or a
+path replaced by a non-file has `null` for both values. A metadata read
+that fails for another reason leaves the previous stamp in place.
+
+Bare mode observes `read`, `write`, and `edit` targets and files changed
+according to `bash`'s Git snapshot. Full mode also observes `apply_patch`
+targets, LSP's explicit file, and Grep's explicit file or structured result
+paths. The same coverage applies when those tools run through a nested
+call. In either mode, the per-round check has no content reads, directory
+scan, Git call, or configuration.
+
+- New or changed files that no tool exposed are undiscovered. `ls`, `glob`,
+  and `find` list paths without reading file contents. Catalog-backed
+  `skill` results, resource handles such as `local://` and `artifact://`,
+  and internal accesses by bundles, plugin tools, or MCP servers are outside
+  file observation. Grep only exposes its explicit file and its displayed
+  result paths.
+- A rewrite with the same modification time and byte size is undetectable.
+- Shell snapshots cover content changes visible to Git from the command's
+  working directory. Files outside that work tree, ignored files, and
+  internal output files are excluded. Metadata-only writes can also escape
+  capture. A shell snapshot records an outside edit made while the command
+  runs as a change of that command (`FilesChanged`), not as an external
+  observation, because Git measures the combined delta.
+
+See the [event reference](architecture/event-model.md#file-snapshots-and-revert)
+and the [revert documentation](architecture/runtime.md#file-snapshots-and-revert).
 
 ## Rewrite rules
 
@@ -225,7 +278,7 @@ plugs into that loop at fixed points:
 | Request | Kernel prompt and six tools | The agent's system prompt, filtered tool schemas plus `rewrite` and `todo`, and reasoning effort, then the `chat.params` hook |
 | Opening the stream | The given model | Cross-model fallback or the Workflow route, under a governor stream permit |
 | Failed round | Ends the run | Retried up to twice when it failed before any text or tool call on a link error |
-| Registry tool call (`ToolGate`) | Execute the tool | Hooks, permissions, the full `ToolCtx`, file snapshots, output capping, steer notices |
+| Registry tool call (`ToolGate`) | Execute the tool and record file snapshots and stamps | Hooks, permissions, the full `ToolCtx`, file snapshots and stamps, output capping, steer notices |
 | Unrun calls after a cancel | Failed as `cancelled` | Left open; the turn end closes them as `CANCELLED` |
 | End | The round's finish | Also ends after an accepted `report` |
 
