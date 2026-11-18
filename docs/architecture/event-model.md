@@ -173,12 +173,22 @@ preferred model plus ordered fallback candidates and per-candidate reasoning.
 
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
-| `step_started` | `session`, `message`, `step: u32` | **no-op** (UI / compat) |
+| `step_started` | `session`, `message`, `step: u32`, optional `view: ViewRef` | Fold: records the message's current step part offset. The reducer ignores `view`. |
 | `step_finished` | `session`, `message`, `step: u32`, `finish: FinishReason` | **no-op**. `finish` defaults to `stop` when replaying older logs that lacked the field (`#[serde(default = "default_step_finish_reason")]`). |
 
 One pair marks one provider stream round inside an assistant message. The
 round's billed usage and serving model are recorded separately by
 `usage_recorded` (below), emitted between the two markers once the stream ends.
+
+`ViewRef` has `cut: EventSeq` (an unsigned integer) and
+`request_sha256: String` (64 lowercase hex digits). The cut is inclusive
+and points to the last durable event in the session projection used to
+build the request. Events emitted after that projection was read can fall
+between the cut and the step marker. The digest hashes the compact JSON array
+`[system, tools, messages]` with object keys sorted recursively and array
+order preserved. It covers the content returned by the harness before
+provider routing. Every retry of a round has the same `ViewRef`. Older
+events omit `view`.
 
 #### Token accounting
 
