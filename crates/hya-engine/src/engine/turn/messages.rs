@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use hya_proto::{Message, ModelRef, Projection, Role};
 use hya_provider::ReasoningEffort;
 
@@ -28,19 +30,36 @@ pub(super) fn projection_to_messages(
     crate::kernel::request::projection_to_messages(&agent.name, projection, model, attachments)
 }
 
-/// The agent prompt, the recorded initial context and the team reference for
-/// the coordination tools this round offers.
+/// The kernel prompt for `workdir` and the `tools` this round offers, then
+/// the agent prompt, the recorded initial context and the team reference for
+/// the offered coordination tools.
+///
+/// The kernel lists its own tools; a tool family's tool is listed with the
+/// line its exposure policy declares, and other tools only by their schemas.
 pub(super) fn system_prompt(
     agent: &AgentSpec,
+    workdir: &Path,
     initial_context: Option<&str>,
     tools: &[hya_proto::ToolSchema],
     depth: u32,
 ) -> String {
-    let reference = crate::prompt::team_quick_reference(
-        |name| tools.iter().any(|schema| schema.name.as_str() == name),
-        depth,
+    let offered = |name: &str| tools.iter().any(|schema| schema.name.as_str() == name);
+    let lines = tools
+        .iter()
+        .filter_map(|schema| {
+            let name = schema.name.as_str();
+            hya_tool::tool_prompt(name).map(|line| (name, line))
+        })
+        .collect::<Vec<_>>();
+    let kernel = crate::kernel::prompt::compose(
+        workdir,
+        offered,
+        &lines,
+        hya_tool::file_operations_rule(offered),
     );
+    let reference = crate::prompt::team_quick_reference(offered, depth);
     [
+        Some(kernel.as_str()),
         Some(agent.system_prompt.trim_end()),
         initial_context,
         reference.as_deref(),
@@ -212,6 +231,15 @@ mod tests {
     fn bundle_advertise_view(
         fields: &str,
     ) -> Result<std::sync::Arc<CompiledResourceView>, Box<dyn std::error::Error>> {
+        agent_view(fields, "selective-agent")
+    }
+
+    /// `agent`'s compiled view, next to a bundle agent `selective-agent`
+    /// declared with `fields`.
+    fn agent_view(
+        fields: &str,
+        agent: &str,
+    ) -> Result<std::sync::Arc<CompiledResourceView>, Box<dyn std::error::Error>> {
         use crate::{AgentCatalog, RuntimeRegistry};
         use hya_bundle::{BundleCatalog, BundleSource, SourceFile, prepare_package};
 
@@ -229,8 +257,70 @@ mod tests {
         ))?;
         let registry = RuntimeRegistry::new(ToolRegistry::builtins(), std::sync::Arc::new(catalog));
         let binding = registry.bind_turn(std::path::Path::new("/tmp/hya-advertise"))?;
-        let policy = binding.agent_resource_policy("selective-agent")?;
+        let policy = binding.agent_resource_policy(agent)?;
         Ok(binding.compile_agent_resources(&policy)?)
+    }
+
+    /// The system prompt of a round of `agent` on `model`.
+    fn round_prompt(
+        agent: &str,
+        model: &str,
+        depth: u32,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        let model = ModelRef::new(model);
+        let resources = agent_view("", agent)?;
+        let mut tools = filtered_tool_schemas(&resources, true, depth, None, &model);
+        tools.extend([
+            crate::kernel::tools::rewrite_schema(),
+            crate::kernel::tools::todo_schema(),
+        ]);
+        let spec = AgentSpec {
+            name: hya_proto::AgentName::new(agent),
+            model,
+            system_prompt: "AGENT PROMPT".to_string(),
+            workdir: "/work".into(),
+            reasoning: None,
+        };
+        Ok(system_prompt(
+            &spec,
+            Path::new("/work"),
+            Some("INITIAL CONTEXT"),
+            &tools,
+            depth,
+        ))
+    }
+
+    #[test]
+    fn system_prompt_is_the_kernel_prompt_for_the_offered_tools_then_the_agents()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let rule = hya_tool::file_operations_rule(|_| true).ok_or("base-tools declares a rule")?;
+        let main = round_prompt("hya-main", "anthropic/claude-opus-5-5", 0)?;
+        let kernel_end = main.find("</cwd>").ok_or("kernel prompt")?;
+        assert!(main.starts_with("You are a coding assistant running inside hya"));
+        assert!(
+            main.contains("<cwd>\n/work\n</cwd>\n\nAGENT PROMPT\n\nINITIAL CONTEXT\n\n## Team")
+        );
+        assert!(main[..kernel_end].contains("- bash: run a shell command\n"));
+        assert!(main.contains("- todo: record the task's completion criteria"));
+        let grep = hya_tool::tool_prompt("grep").ok_or("grep has a line")?;
+        assert!(main.contains(&format!("- grep: {grep}\n")));
+        assert!(main.contains(&format!("<rules>\n- {rule}\n")));
+        assert!(!main.contains("Use bash for file operations"));
+        assert!(!main.contains("- apply_patch:"));
+
+        let gpt = round_prompt("hya-main", "openai/gpt-5.5", 0)?;
+        assert!(gpt.contains("- apply_patch: "));
+
+        let scout = round_prompt("hya-scout", "openai/gpt-5.5", 1)?;
+        assert!(!scout.contains("- bash:"), "{scout}");
+        assert!(!scout.contains("Use bash"), "{scout}");
+        assert!(!scout.contains("- apply_patch:"), "{scout}");
+        assert!(
+            scout.contains("- read: read a text file or image\n"),
+            "{scout}"
+        );
+        assert!(scout.contains(&format!("<rules>\n- {rule}\n")), "{scout}");
+        Ok(())
     }
 
     #[test]

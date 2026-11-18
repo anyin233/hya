@@ -70,6 +70,11 @@ The following JSON shapes use `string` and `int` as type placeholders. All
 input fields are required. Relative paths resolve against the run's working
 directory.
 
+In full mode `hya/base-tools` supplies `read`, `write`, `edit`, and `bash`
+under these names with richer inputs ([Differences from full
+mode](#differences-from-full-mode)); the kernel's prompt lines for them hold
+in both modes.
+
 | Tool | Input JSON | Success result |
 | --- | --- | --- |
 | `bash` | `{"command": string}` | `{"exit_code": int, "output": string}` |
@@ -265,7 +270,7 @@ You are a coding assistant running inside hya, a coding agent harness. Help user
 - edit: replace text in a file
 - write: create or overwrite a file
 - rewrite: remove everything before this call from the conversation, keeping the summary you pass
-- todo: record and update the task's completion criteria; the current list survives rewrites
+- todo: record the task's completion criteria as checkable end states and update each one's status when it changes; the current list survives rewrites
 </tools>
 
 <rules>
@@ -285,12 +290,45 @@ You are a coding assistant running inside hya, a coding agent harness. Help user
 </cwd>
 ```
 
+The prompt is composable: `kernel::prompt::compose(cwd, offered, extra,
+file_operations)` builds it for a round from
+
+| Input | Type | Effect |
+| --- | --- | --- |
+| `cwd` | `&Path` | The `<cwd>` block |
+| `offered` | `Fn(&str) -> bool` | Which tool names the round offers. `<tools>` lists the kernel's line for each offered kernel tool, in the order above, whoever implements it. |
+| `extra` | `&[(&str, &str)]` | Name and line of tools the kernel does not know, listed after the kernel's lines in the given order |
+| `file_operations` | `Option<&str>` | Replaces the rule `Use bash for file operations like ls, rg, find`. Without it that rule is kept only when `bash` is offered. |
+
+`system_prompt(cwd)` is `compose` with all six kernel tools and nothing else;
+its text above is pinned by a test.
+
+Full mode's system prompt starts with this prompt, composed from the tools
+the round's request offers. The kernel's lines cover `read`, `write`, `edit`,
+`bash`, `rewrite`, and `todo`; a tool-family tool adds the line its
+`exposure.yaml` declares (`prompt:`), and `hya/base-tools` declares the
+file-operations rule used when the round offers `ls`, `glob`, `find`, or
+`grep` ([Tool-family presets](base-tools.md#interface-definitions)). MCP and
+plugin tools get no line; their schemas describe them. With an exclusive
+tool in effect (code mode) the list follows the schemas actually shown. The
+agent's prompt, the session's recorded initial context
+([Project context](configuration.md#project-context-agentsmd)), and the team
+quick reference follow, in that order, separated by blank lines. Every
+agent whose turn runs on the kernel loop gets it, bundle agents included;
+fixed system agents that make one-off completions without a turn (such as
+the title generator) keep their own prompts. For example, `hya-scout`, which has no
+`bash`, gets no `bash` line and the base-tools rule instead of the bash rule;
+a GPT-family model also gets the `apply_patch` line.
+
 ## Differences from full mode
 
 Bare mode loads no bundle. It has no permission checks, hooks, subagents,
 Workflows, compaction ladder, output truncation, timeouts, or path bounds.
 These capabilities belong to full mode and its bundles. The kernel retains
 its six tools, minimal prompt, 80% harness rewrite, and event logging.
+
+Full mode's system prompt starts with the kernel prompt, composed from the
+tools each round offers ([System prompt](#system-prompt)).
 
 In full mode the `hya/base-tools` tools `read`, `write`, `edit`, and `bash`
 replace the kernel's four under the same names; the kernel's versions run
