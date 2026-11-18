@@ -33,6 +33,29 @@ pub fn render_todos(items: &[TodoItem]) -> String {
     out
 }
 
+const NO_GOAL: &str = "No todo list is recorded. Use the todo tool now to record this task's completion criteria, each a checkable end state, with its current status; the list is kept verbatim through later rewrites.";
+
+/// The goal section of a rewrite or compaction marker: the list verbatim, or,
+/// when none is recorded, a request to record it now.
+#[must_use]
+pub fn marker_goal(items: &[TodoItem]) -> String {
+    if items.is_empty() {
+        return NO_GOAL.to_string();
+    }
+    render_todos(items)
+}
+
+/// A marker body without its trailing goal section (`\n\n` + [`marker_goal`]),
+/// so a summary updated from it does not restate the list or the request.
+#[must_use]
+pub fn without_marker_goal(body: &str) -> &str {
+    [format!("\n\n{TODO_LIST_HEADER}"), format!("\n\n{NO_GOAL}")]
+        .iter()
+        .filter_map(|section| body.rfind(section.as_str()))
+        .max()
+        .map_or(body, |at| &body[..at])
+}
+
 /// System-message prefix of compacted context (`HYA_COMPACTED_CONTEXT`).
 pub const COMPACT_CONTEXT_MARKER: &str = "HYA_COMPACTED_CONTEXT";
 
