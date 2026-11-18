@@ -58,6 +58,6 @@ pub(super) fn args<T: DeserializeOwned>(input: serde_json::Value) -> Result<T, T
     serde_json::from_value(input).map_err(|error| ToolError::Input(error.to_string()))
 }
 
-fn resolve(workdir: &Path, path: &str) -> PathBuf {
+pub(super) fn resolve(workdir: &Path, path: &str) -> PathBuf {
     workdir.join(path)
 }
