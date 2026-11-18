@@ -20,7 +20,6 @@ use crate::mailbox::MailboxPlane;
 use crate::permission::{Invocation, Mode, PermissionError, PermissionPlane};
 use crate::skill::SkillPlane;
 use crate::spawn::SpawnerPlane;
-use crate::todo::TodoPlane;
 use crate::websearch::WebSearchPlane;
 use crate::workflow_plane::WorkflowPlane;
 
@@ -113,8 +112,6 @@ pub struct ToolCtx {
     pub session: Option<SessionId>,
     /// Parent session id for nested/subagent turns, when applicable.
     pub parent_session: Option<SessionId>,
-    /// In-memory todo plane for `todowrite`.
-    pub todo: TodoPlane,
     /// Skill catalog plane for the `skill` tool.
     pub skills: SkillPlane,
     /// Post-processing chain applied when an `artifact://` handle is retrieved.
@@ -449,7 +446,7 @@ impl ToolRegistry {
     }
 
     /// Install the full set of canonical builtins (and their hidden aliases)
-    /// from all five trusted tool families.
+    /// from all four trusted tool families.
     #[must_use]
     pub fn builtins() -> Self {
         Self::from_tool_families(&crate::base_tools::TOOL_FAMILIES)
@@ -469,13 +466,8 @@ impl ToolRegistry {
     /// library cannot be loaded or disagrees with its bundle policy.
     #[must_use]
     pub fn from_tool_families(identities: &[&str]) -> Self {
-        const FAMILIES: [&str; 5] = [
-            "hya/base-tools",
-            "hya/extended-tools",
-            "hya/channel-tools",
-            "hya/network-tools",
-            "hya/todo-tools",
-        ];
+        use crate::base_tools::TOOL_FAMILIES as FAMILIES;
+
         for identity in identities {
             assert!(
                 FAMILIES.contains(identity),

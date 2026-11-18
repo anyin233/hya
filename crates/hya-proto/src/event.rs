@@ -966,11 +966,8 @@ pub enum Event {
     // -------- todos --------
     /// The session's todo list changed: the full list after a todo tool call.
     ///
-    /// Appended by the engine right after the `ToolResult` of a todo tool
-    /// whose result carries a list different from the folded one (reads that
-    /// change nothing append nothing). Folds into `SessionProjection.todos`.
-    /// Sessions that predate this event have none; their list is read from
-    /// the todo tools' results instead.
+    /// Appended by the kernel in the same batch as the `ToolResult` of a
+    /// `todo` call that changes the list. Folds into `SessionProjection.todos`.
     TodosUpdated {
         /// Session whose todo list changed.
         session: SessionId,

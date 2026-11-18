@@ -262,12 +262,15 @@ mod native_tests {
         ));
         let source = root.join("source");
         std::fs::create_dir_all(&source).unwrap();
-        std::fs::write(source.join("bundle.yaml"), "kind: Bundle\nidentity: { id: hya/todo-tools, version: 1.0.0, publisher: hya }\nnamespace: todo-tools\nextensions:\n  files: [{ id: exposure, path: exposure.yaml }]\n").unwrap();
-        std::fs::write(source.join("exposure.yaml"), "schema_version: 1\nidentity: hya/todo-tools\nprotected_names: []\ntools:\n  - { name: todo__read, schema_version: 1, permission: read_only }\n").unwrap();
-        let library = root.join(format!("libhya_todo_tools{}", std::env::consts::DLL_SUFFIX));
+        std::fs::write(source.join("bundle.yaml"), "kind: Bundle\nidentity: { id: hya/network-tools, version: 1.0.0, publisher: hya }\nnamespace: network-tools\nextensions:\n  files: [{ id: exposure, path: exposure.yaml }]\n").unwrap();
+        std::fs::write(source.join("exposure.yaml"), "schema_version: 1\nidentity: hya/network-tools\nprotected_names: []\ntools:\n  - { name: webfetch, schema_version: 1, permission: read_only }\n").unwrap();
+        let library = root.join(format!(
+            "libhya_network_tools{}",
+            std::env::consts::DLL_SUFFIX
+        ));
         let bytes = [0xcf, 0xfa, 0xed, 0xfe, 0, 0xff];
         std::fs::write(&library, bytes).unwrap();
-        let package = root.join("todo.hyabundle");
+        let package = root.join("network.hyabundle");
         run_native_library(vec![
             source.to_string_lossy().into_owned(),
             library.to_string_lossy().into_owned(),
@@ -279,7 +282,7 @@ mod native_tests {
         let [bundle] = catalog.bundles() else {
             panic!("one bundle")
         };
-        assert_eq!(bundle.tools()[0].local_id, "todo__read");
+        assert_eq!(bundle.tools()[0].local_id, "webfetch");
         let resource = bundle
             .extensions()
             .iter()

@@ -1034,7 +1034,6 @@ dependencies = [
  "hya-provider",
  "hya-server",
  "hya-store",
- "hya-todo-tools",
  "hya-tool",
  "hya-version",
  "hya-workflow",
@@ -1213,7 +1212,6 @@ dependencies = [
  "hya-proto",
  "hya-provider",
  "hya-store",
- "hya-todo-tools",
  "hya-tool",
  "hya-workflow",
  "libc",
@@ -1457,17 +1455,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hya-todo-tools"
-version = "0.0.0"
-dependencies = [
- "async-trait",
- "hya-proto",
- "hya-tool",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "hya-tool"
 version = "0.0.0"
 dependencies = [
@@ -1479,7 +1466,6 @@ dependencies = [
  "hya-extended-tools",
  "hya-network-tools",
  "hya-proto",
- "hya-todo-tools",
  "hya-version",
  "libc",
  "regex",

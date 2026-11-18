@@ -5,7 +5,7 @@ engine exposes tool schemas to the model, then executes requested calls only
 after permission checks pass.
 
 The interface crate owns the registry and session-scoped service planes.
-All 28 canonical built-in tool bodies and schemas live in five family sources
+The 25 registry tool bodies and schemas live in four family sources
 under [`../../bundles/presets`](../../bundles/presets). They are packaged as
 lockstep Rust libraries and loaded by `ToolRegistry::builtins()`. The tools
 use session-scoped planes through `ToolCtx`; plane methods and request types
@@ -25,7 +25,7 @@ remain in `hya-tool` so host authority stays with the session runtime.
   ([External directory boundary](#external-directory-boundary)).
 - `ToolRegistry`: name-to-tool map, aliases, and model-facing schemas.
 
-`ToolRegistry::builtins()` installs **28** canonical schema names before model
+`ToolRegistry::builtins()` installs **25** canonical schema names before model
 filtering ([`tool.rs`](../../crates/hya-tool/src/tool.rs)). The table below is
 the complete inventory. Advertised fields are the model-facing JSON schema
 `required`/`properties` keys; a schema marked **closed** rejects unknown keys.
@@ -37,7 +37,7 @@ Provider tool-name charsets (OpenAI/Anthropic function names) allow only
 use a **double-underscore separator**: `namespace__local` — the same
 convention MCP tools already use model-facing (`mcp__server__tool`). A
 namespace groups the tools of one functionality provider; local names may
-repeat across namespaces (`todo__read` vs `pluginx__read`) while full names
+repeat across namespaces (`alpha__read` vs `pluginx__read`) while full names
 stay globally unique inside a registry. `hya-tool` exposes the mechanism in
 [`namespace.rs`](../../crates/hya-tool/src/namespace.rs):
 
@@ -73,9 +73,7 @@ stay globally unique inside a registry. `hya-tool` exposes the mechanism in
 | `list_agents` | (none) | Agent definitions usable by `task`. |
 | `task` | `{ "description", "prompt", "subagent_type"?, "category"?, "model"?, "command"?, "inline_agent"?, "members"?: [...] }` | Non-blocking: per member `{member (handle), session, status: running}`; results arrive as the member's report mail. Every member is a resident actor. |
 | `workflow` | `{ "action"?: "list"\|"info"\|"select"\|"run"\|"state", "name"?: string, "expected_revision"?: string, "inputs"?: object, "run"?: string }` | Shared app-owned Workflow control. |
-| `todo__read` | `{}` | Current items with stable ids and statuses. |
-| `todo__update_status` | `{ "updates": [{ "id", "status": "pending"\|"in_progress"\|"blocked"\|"completed" }] }` | Full snapshot after batch status updates. |
-| `todo__update_content` | `{ "operations": [{ "op": "add", "content" } \| { "op": "remove", "id" } \| { "op": "edit", "id", "content" }] }` | Full snapshot after batch content edits (atomic; adds report assigned ids). |
+| `todo` | `{"ops":[...]}` ([operations](../kernel.md#session-todos)) | Atomic batch with a full rendered session todo list. The kernel executes the tool directly. |
 | `plan_exit` (`plan`) | plan status input | Plan-mode completion signal. |
 | `send` | `{ "channel"?: string, "body": string }` — `#channel`/channel id/handle/`^parent`; omitted = role default | Delivery receipt: group channel = broadcast announcement, DM channel/handle = private mail (archived child revives), default = led unit or parent. `^parent` auto-infers the DM channel minted with the direct parent at registration time (works even when the parent handle is not yet in the roster, and at any depth — it never targets the root); without an existing DM channel the request is rejected. Agent mail persists channel endpoints; only harness notices may persist a handle. |
 | `list_channel` | (none) | The caller's channels: group pipes with can-post flag, DM channels with peer + unread. |
@@ -287,7 +285,7 @@ persistence writes that serde string into the DB `action` column
 | `mcp` | `Mcp` | MCP bridge tools (`mcp__…`). |
 | `webfetch` | `WebFetch` | `webfetch`. |
 | `websearch` | `WebSearch` | `websearch`. |
-| `todowrite` | `TodoWrite` | `todowrite`. |
+| `todowrite` | `TodoWrite` | Legacy action retained for stored permission rules. |
 | `skill` | `Skill` | `skill`. |
 | `lsp` | `Lsp` | `lsp`. |
 | `externaldirectory` | `ExternalDirectory` | A file tool whose resolved path lies outside every workspace root of the session. Bash never raises it. |

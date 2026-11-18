@@ -486,7 +486,6 @@ impl SessionEngine {
                                     .with_channel_policy(channel_policy),
                                 session: Some(session),
                                 parent_session,
-                                todo: self.todo.clone(),
                                 skills: resources.skill_plane(),
                                 artifacts: self.artifacts.clone(),
                                 agents: agent_roster(binding, agent.name.as_str())?,

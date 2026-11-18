@@ -345,7 +345,7 @@ while only the reviving mail is owed to the new episode. See the
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
 | `context_compacted` | `session`, summary `message`, `strategy`, `from_message`, `to_message`, `folded_count`, `input_tokens_est`, `threshold`, optional `step_cut { through_part, kept_head }` | Moves the summary `message` row to the fold boundary: right after `to_message`, or, with `step_cut`, right before `kept_head`, and sets `to_message`'s `MessageProjection.folded_parts` to the parts through `through_part` (reducer version 9). Requests start at the latest marker and skip a message's `folded_parts`; the projection keeps every message and part. A `step_cut` fold cuts inside the turn's in-flight assistant message at a step boundary (see [compaction](../compaction.md#in-flight-turns)); logs without the field fold whole messages, as before. The system message carries summary output and the range points to the folded log entries. A manual compaction (`CompactSession` / `SummarizeSession`) records `strategy: local_summarizer` over the whole window it summarized, with `threshold: 0` (no threshold tripped); v1 maps it to `compactionApplied { manual: true }`. |
-| `todos_updated` | `session`, `todos: [TodoItem { id, content, status }]` | Fold: `SessionProjection.todos` = the full list. Appended by the engine right after a todo tool's `tool_result` whose `metadata.todos` differs from the folded list (reads and no-op writes append nothing). Sessions without it (logs before reducer version 5) read the latest todo tool result instead. |
+| `todos_updated` | `session`, `todos: [TodoItem { id, content, status }]` | Fold: `SessionProjection.todos` = the full list. Appended by the kernel in the same transaction as a `todo` call's `tool_result` when the list changes. Reads and unchanged lists append only their tool result. The reducer also recovers historical todo lists from tool results with `metadata.todos` and retains the allocated numeric id in its durable snapshot (reducer version 10). |
 | `session_forked` | `session`, `source`, optional `before_message` | Fold: `SessionProjection.forked_from = source`, `forked_before = before_message` (the source-log user message the copy stopped before; `None` for a head fork, which copies every visible message). Records a fork edge separate from subagent `SessionCreated.parent`. Copied messages receive fresh ids; their copied `tokens` never count toward the fork's `usage`. v1: `SessionInfo.forkedFrom`. |
 | `context_evicted` | `session`, `evicted_parts`, `parts: [EvictedPart { part, notice }]`, `tokens_before`, `tokens_after`, `threshold` | Fold: sets `PartProjection::Tool.eviction_notice = notice` on each listed tool part; `state` keeps the full output. Model requests send the notice (artifact handle included) instead of the output; v1 clients see the full output. Logs before `parts` fold nothing. |
 
@@ -632,7 +632,7 @@ Projection {
 | `forked_before` | `session_forked.before_message` (omitted when `None`) |
 | `revert` | pending `session_reverted` (`{ message, hidden: [MessageProjection], files: [FileRestore] }`): the hidden messages live here, not in `messages`, until `session_unreverted` or the next `message_started` (omitted when `None`) |
 | `usage` | `usage_recorded` + legacy `message_finished.tokens` fallback (omitted when empty) |
-| `todos` | latest `todos_updated` (omitted when `None`) |
+| `todos` | latest todo snapshot from `todos_updated` or a historical todo result (omitted when `None`) |
 
 ### `MessageProjection` fields
 

@@ -845,7 +845,7 @@ mod tests {
         let executable = std::env::current_exe().map_err(|error| error.to_string())?;
         let deps = executable.parent().ok_or("test binary has no parent")?;
         let filename = format!(
-            "{}hya_todo_tools{}",
+            "{}hya_network_tools{}",
             std::env::consts::DLL_PREFIX,
             std::env::consts::DLL_SUFFIX
         );
@@ -857,7 +857,7 @@ mod tests {
         let extracted = directory.join(&filename);
         std::fs::copy(deps.join(&filename), &extracted).map_err(|error| error.to_string())?;
 
-        let handle = super::load_extracted("hya_todo_tools", &extracted)?;
+        let handle = super::load_extracted("hya_network_tools", &extracted)?;
         super::symbol(handle, b"hya_tool_bundle_register_v1\0")?;
         assert!(
             !extracted.exists(),

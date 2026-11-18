@@ -26,7 +26,7 @@ fn builtin_skill_catalog_comes_from_prepared_core_skills_bundle() {
 #[test]
 fn inventory_exposes_immutable_noninstallable_core_and_tool_presets() {
     let inventory = hya_app::trusted_preset_inventory().expect("trusted preset inventory");
-    assert_eq!(inventory.len(), 9);
+    assert_eq!(inventory.len(), 8);
     assert_eq!(
         inventory
             .iter()
@@ -41,7 +41,6 @@ fn inventory_exposes_immutable_noninstallable_core_and_tool_presets() {
             "hya/core-skills",
             "hya/extended-tools",
             "hya/network-tools",
-            "hya/todo-tools",
         ]
     );
     assert_eq!(inventory[0].id, "hya/agent-channels");

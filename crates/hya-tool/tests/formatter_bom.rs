@@ -10,8 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use hya_tool::{
     Action, FormatterError, FormatterPlane, FormatterProvider, InteractionPlane, LspPlane, Mode,
-    PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnerPlane, TodoPlane, ToolCtx,
-    ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
+    PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnerPlane, ToolCtx, ToolRegistry,
+    WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -53,7 +53,6 @@ fn ctx_with_formatter(workdir: PathBuf, formatter: FormatterPlane) -> ToolCtx {
         lifecycle: hya_tool::LifecyclePlane::disconnected(),
         session: None,
         parent_session: None,
-        todo: TodoPlane::default(),
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),

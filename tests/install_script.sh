@@ -20,7 +20,7 @@ not_contains() {
   [[ "$haystack" != *"$needle"* ]] || fail "expected output not to contain: $needle"
 }
 
-first_party=(base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review basic-tui-components code-mode)
+first_party=(base-tools extended-tools network-tools channel-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review basic-tui-components code-mode)
 
 help=$(bash ./install.sh --help)
 [[ -x ./install.sh ]] || fail "install.sh must be executable"
@@ -81,7 +81,7 @@ dry_run=$(bash ./install.sh --dry-run --prefix /tmp/hya-install-test --profile d
 contains "$dry_run" "Permission preflight: /tmp/hya-install-test/bin /tmp/hya-install-test/bundles /tmp/hya-install-test/lib/hya"
 [[ "$dry_run" == *"Bun preflight: bun"*"cargo build --locked -p hya-backend --bins"* ]] || fail "Bun preflight must run before cargo build"
 contains "$dry_run" "cargo build --locked -p hya-backend --bins"
-contains "$dry_run" "cargo build --locked -p hya-base-tools -p hya-extended-tools -p hya-network-tools -p hya-channel-tools -p hya-todo-tools --lib"
+contains "$dry_run" "cargo build --locked -p hya-base-tools -p hya-extended-tools -p hya-network-tools -p hya-channel-tools --lib"
 contains "$dry_run" "stage-first-party-bundles --library-dir"
 contains "$dry_run" "bun install --frozen-lockfile --production"
 not_contains "$dry_run" "--profile debug"
@@ -122,7 +122,7 @@ fake_bin="$fixture/fake-bin"
 target="$fixture/target"
 mkdir -p "$fake_bin"
 
-# Fake cargo: builds a scripted backend and stages eleven placeholder bundles.
+# Fake cargo: builds a scripted backend and stages placeholder bundles.
 cat >"$fake_bin/cargo" <<'FAKE_CARGO'
 #!/usr/bin/env bash
 set -euo pipefail

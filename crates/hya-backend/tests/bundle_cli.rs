@@ -734,7 +734,6 @@ fn bundle_list_and_info_include_first_party_without_creating_registry()
         first_party_row("hya/core-skills", "  active Bundle -"),
         first_party_row("hya/extended-tools", "  active Bundle -"),
         first_party_row("hya/network-tools", "  active Bundle -"),
-        first_party_row("hya/todo-tools", "  active Bundle -"),
         first_party_row(
             "hya/goal-loop",
             " hya-goal-guide,hya-goal-verifier active Bundle -",
@@ -1894,7 +1893,6 @@ fn bundle_search_without_a_metadata_match_lists_the_catalog()
         first_party_row("hya/core-skills", "  active Bundle -"),
         first_party_row("hya/extended-tools", "  active Bundle -"),
         first_party_row("hya/network-tools", "  active Bundle -"),
-        first_party_row("hya/todo-tools", "  active Bundle -"),
         first_party_row(
             "hya/goal-loop",
             " hya-goal-guide,hya-goal-verifier active Bundle -",

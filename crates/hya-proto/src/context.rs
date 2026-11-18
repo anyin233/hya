@@ -4,7 +4,34 @@
 //! Token accounting and the request encoders both read these, so they live
 //! here, below the provider routes and the native bundles alike.
 
-use crate::{Message, Part};
+use std::fmt::Write;
+
+use crate::{Message, Part, TodoItem};
+
+/// Name of the kernel tool that updates the session's completion criteria.
+pub const TODO_TOOL: &str = "todo";
+
+/// Prefix of the rendered todo list.
+pub const TODO_LIST_HEADER: &str = "Current todos:";
+
+/// Render the full list for a tool result or a compaction marker.
+#[must_use]
+pub fn render_todos(items: &[TodoItem]) -> String {
+    if items.is_empty() {
+        return format!("{TODO_LIST_HEADER} (empty)");
+    }
+    let mut out = TODO_LIST_HEADER.to_string();
+    for item in items {
+        let _ = write!(
+            out,
+            "\n- #{} [{}] {}",
+            item.id,
+            item.status.as_str(),
+            item.content
+        );
+    }
+    out
+}
 
 /// System-message prefix of compacted context (`HYA_COMPACTED_CONTEXT`).
 pub const COMPACT_CONTEXT_MARKER: &str = "HYA_COMPACTED_CONTEXT";

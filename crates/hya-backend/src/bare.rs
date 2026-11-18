@@ -175,7 +175,6 @@ fn tool_ctx(workdir: &Path, cancel: &CancellationToken) -> ToolCtx {
         lifecycle: hya_tool::LifecyclePlane::disconnected(),
         session: None,
         parent_session: None,
-        todo: hya_tool::TodoPlane::default(),
         skills: hya_tool::SkillPlane::default(),
         artifacts: hya_tool::handle::ArtifactPlane::default(),
         agents: Arc::default(),

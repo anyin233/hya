@@ -72,9 +72,9 @@ fn bash(command: &str) -> ScriptStep {
 fn todo_status(updates: &[(&str, &str)]) -> ScriptStep {
     let updates: Vec<_> = updates
         .iter()
-        .map(|(id, status)| json!({ "id": id, "status": status }))
+        .map(|(id, status)| json!({ "op": "status", "id": id, "status": status }))
         .collect();
-    tool_step("todo__update_status", json!({ "updates": updates }))
+    tool_step("todo", json!({ "ops": updates }))
 }
 
 #[tokio::test]
@@ -83,8 +83,8 @@ async fn e1_unfinished_todos_continue_the_run() {
     let (env, output, requests) = run_lead(
         vec![
             tool_step(
-                "todo__update_content",
-                json!({ "operations": [add("one"), add("two"), add("three"), add("four")] }),
+                "todo",
+                json!({ "ops": [add("one"), add("two"), add("three"), add("four")] }),
             ),
             todo_status(&[("1", "completed"), ("2", "in_progress")]),
             text_step("Item one is done."),
@@ -98,14 +98,20 @@ async fn e1_unfinished_todos_continue_the_run() {
     .await;
     assert_eq!(requests.len(), 6, "{}", env.diagnostics());
     assert!(!requests[2].contains(NOTICE));
+    let request: serde_json::Value = serde_json::from_str(&requests[3]).unwrap();
+    let notice = request["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|message| {
+            let text = message["content"].as_str()?;
+            (message["role"] == "system" && text.starts_with(NOTICE)).then_some(text)
+        })
+        .expect("continuation notice");
+    assert!(notice.contains("#3 [pending]"), "{notice}");
     assert!(
-        requests[3].contains(NOTICE) && requests[3].contains("#3 [pending]"),
-        "notice missing: {}",
-        requests[3]
-    );
-    assert!(
-        !requests[3].contains("#1 ["),
-        "completed items are not listed"
+        !notice.contains("#1 ["),
+        "completed items are not listed: {notice}"
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("FINAL_ANSWER"));
     assert_eq!(env.fake.route_remaining(ROOT).unwrap(), Some(1));
@@ -203,10 +209,8 @@ async fn e5_a_budgeted_run_gets_its_deadline_notice_in_turn() {
 async fn e10_continuation_does_not_repeat_the_deadline_header() {
     let (env, _, requests) = run_lead(
         vec![
-            tool_step(
-                "todo__update_content",
-                json!({"operations": [{"op": "add", "content": "finish"}]}),
-            ),
+            tool_step("todo", json!({"ops": [{"op": "add", "content": "finish"}]})),
+            bash("echo working"),
             text_step("Item remains."),
             todo_status(&[("1", "completed")]),
             text_step("FINAL_ANSWER"),
@@ -215,10 +219,11 @@ async fn e10_continuation_does_not_repeat_the_deadline_header() {
         &["--time-budget", "40"],
     )
     .await;
-    assert_eq!(requests.len(), 4, "{}", env.diagnostics());
-    assert!(requests[2].contains("your turn ended"));
+    assert_eq!(requests.len(), 5, "{}", env.diagnostics());
+    assert!(requests[2].contains("HEADLESS RUN — FINAL"));
+    assert!(requests[3].contains("your turn ended"));
     assert_eq!(
-        requests[2].matches("HEADLESS RUN — FINAL").count(),
+        requests[3].matches("HEADLESS RUN — FINAL").count(),
         1,
         "the tool result already delivered the deadline header"
     );

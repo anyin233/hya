@@ -1,4 +1,4 @@
-//! Session todo rows: the shape the todo tools write, the
+//! Session todo rows: the shape the kernel todo tool writes, the
 //! `TodosUpdated` event records, and the projection folds.
 
 use serde::{Deserialize, Serialize};
@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 /// One todo row stored for a session.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TodoItem {
-    /// Stable item identifier assigned by the todo plane (never reused).
+    /// Stable item identifier assigned by the kernel todo tool.
     pub id: String,
     /// Human-readable task text.
     pub content: String,
@@ -39,4 +39,39 @@ impl TodoStatus {
             Self::Completed => "completed",
         }
     }
+}
+
+/// Recover snapshots from pre-TodosUpdated tool results.
+pub(crate) fn legacy_result(name: &str, output: &serde_json::Value) -> Option<Vec<TodoItem>> {
+    if !matches!(
+        name,
+        "todo__update_status" | "todo__update_content" | "todowrite" | "todo"
+    ) {
+        return None;
+    }
+    let value = output.get("metadata")?.get("todos")?;
+    if let Ok(items) = serde_json::from_value(value.clone()) {
+        return Some(items);
+    }
+    #[derive(Deserialize)]
+    struct LegacyItem {
+        content: String,
+        status: String,
+    }
+    let items = serde_json::from_value::<Vec<LegacyItem>>(value.clone()).ok()?;
+    Some(
+        items
+            .into_iter()
+            .enumerate()
+            .map(|(index, item)| TodoItem {
+                id: format!("todo-{index}"),
+                content: item.content,
+                status: match item.status.as_str() {
+                    "in_progress" => TodoStatus::InProgress,
+                    "completed" => TodoStatus::Completed,
+                    _ => TodoStatus::Pending,
+                },
+            })
+            .collect(),
+    )
 }

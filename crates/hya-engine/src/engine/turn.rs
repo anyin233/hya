@@ -1154,7 +1154,7 @@ impl SessionEngine {
 
 impl SessionEngine {
     /// Tool schemas a full-mode request offers: the agent's filtered tools
-    /// plus the kernel's `rewrite`, which the kernel loop intercepts by name.
+    /// plus `rewrite` and `todo`, handled by the kernel loop.
     fn offered_tools(
         &self,
         resources: &CompiledResourceView,
@@ -1166,7 +1166,11 @@ impl SessionEngine {
             depth,
             self.exclusive_tool.as_deref(),
         );
-        tools.push(crate::kernel::tools::rewrite_schema());
+        tools.retain(|tool| tool.name.as_str() != crate::kernel::tools::TODO);
+        tools.extend([
+            crate::kernel::tools::rewrite_schema(),
+            crate::kernel::tools::todo_schema(),
+        ]);
         tools
     }
 

@@ -1800,8 +1800,7 @@ ends with a `WebUI` row: the address without the scheme, or `unavailable`.
 
 **Todo panel.** The sidebar's `Todos` box is seeded from `GetSessionTodo`
 when a session opens and then kept current by the session stream: every
-todo tool call that changes the list (`todo__update_status`,
-`todo__update_content`, …) sends a durable `todoUpdated { items }` frame
+`todo` call that changes the list sends a durable `todoUpdated { items }` frame
 with the whole new list, which replaces the box's rows at once (no re-read). Each item is one line, a status
 glyph and its text: pending `○` (muted), in progress `◐` (activity),
 completed `✓` (green), blocked `✗` (warning — the `TodoStatus` enum has no

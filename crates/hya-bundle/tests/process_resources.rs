@@ -106,14 +106,14 @@ fn native_library_and_support_files_round_trip_in_local_id_order() {
             SourceFile::new(
                 "bundle.yaml",
                 br#"kind: Bundle
-identity: { id: hya/todo-tools, version: 1.0.0, publisher: hya }
+identity: { id: hya/network-tools, version: 1.0.0, publisher: hya }
 extensions:
   files: [{ id: types, path: types.json }]
-  libraries: [{ id: runtime, path: native/libhya_todo_tools.so }]
+  libraries: [{ id: runtime, path: native/libhya_network_tools.so }]
 "#,
             ),
             SourceFile::new("types.json", b"{}".as_slice()),
-            SourceFile::new("native/libhya_todo_tools.so", vec![0, 0xff, 0x80]),
+            SourceFile::new("native/libhya_network_tools.so", vec![0, 0xff, 0x80]),
         ],
     );
     let prepared = prepare_package(source.clone()).expect("prepare library with support file");
@@ -139,11 +139,11 @@ fn process_and_library_extensions_round_trip_in_local_id_order() {
                 SourceFile::new(
                     "bundle.yaml",
                     format!(
-                        "kind: Bundle\nidentity: {{ id: hya/todo-tools, version: 1.0.0, publisher: hya }}\nextensions:\n  process: {{ kind: rust, command: ['${{BUNDLE_ROOT}}/types.bin'] }}\n  {kind}: [{{ id: types, path: types.bin }}]\n  libraries: [{{ id: runtime, path: native/libhya_todo_tools.so }}]\n"
+                        "kind: Bundle\nidentity: {{ id: hya/network-tools, version: 1.0.0, publisher: hya }}\nextensions:\n  process: {{ kind: rust, command: ['${{BUNDLE_ROOT}}/types.bin'] }}\n  {kind}: [{{ id: types, path: types.bin }}]\n  libraries: [{{ id: runtime, path: native/libhya_network_tools.so }}]\n"
                     ),
                 ),
                 SourceFile::new("types.bin", b"{}".as_slice()),
-                SourceFile::new("native/libhya_todo_tools.so", vec![0, 0xff, 0x80]),
+                SourceFile::new("native/libhya_network_tools.so", vec![0, 0xff, 0x80]),
             ],
         );
         let prepared = prepare_package(source.clone()).expect("prepare process with library");
@@ -171,12 +171,12 @@ fn native_library_bundle_packages_raw_bytes_without_a_process() {
             SourceFile::new(
                 "bundle.yaml",
                 br#"kind: Bundle
-identity: { id: hya/todo-tools, version: 1.0.0, publisher: hya }
+identity: { id: hya/network-tools, version: 1.0.0, publisher: hya }
 extensions:
-  libraries: [{ id: runtime, path: native/libhya_todo_tools.dylib }]
+  libraries: [{ id: runtime, path: native/libhya_network_tools.dylib }]
 "#,
             ),
-            SourceFile::new("native/libhya_todo_tools.dylib", library.clone()),
+            SourceFile::new("native/libhya_network_tools.dylib", library.clone()),
         ],
     );
     let prepared = prepare_package(source.clone()).expect("prepare native library");
