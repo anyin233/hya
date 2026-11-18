@@ -571,12 +571,49 @@ async fn goal_checkpoint_is_asked_once_before_the_rewrite_threshold() {
 
     let requests = fx.provider.requests();
     let asked: Vec<usize> = requests.iter().map(goal_checkpoints).collect();
-    // Below 60%: none; at 65%: asked; at 70% (rewrite at 80%): still one.
-    assert_eq!(asked, [0, 0, 1, 1]);
+    // Below 60%: none; at 65%: asked; at 70%: already answered.
+    assert_eq!(asked, [0, 0, 1, 0]);
     let log = fx.log().await;
     assert!(
         !log.iter()
             .any(|event| matches!(event, Event::ContextCompacted { .. }))
+    );
+    assert_paired(&log);
+}
+
+#[tokio::test]
+async fn goal_checkpoint_stays_out_after_rewrite() {
+    let fx = fixture(
+        "goal-checkpoint-rewrite",
+        FakeProvider::scripted_turns(vec![
+            round_at(2_000),
+            round_at(13_000),
+            round_at(17_000),
+            round_at(14_000),
+            text("done"),
+        ])
+        .with_max_context(20_000),
+    )
+    .await;
+    let finish = fx.turn("go", &CancellationToken::new()).await;
+    assert_eq!(finish.unwrap(), FinishReason::Stop);
+
+    let requests = fx.provider.requests();
+    let asked: Vec<usize> = requests.iter().map(goal_checkpoints).collect();
+    assert_eq!(asked, [0, 0, 1, 0, 0]);
+    assert!(requests[3].messages.iter().any(|message| matches!(
+        message,
+        Message::System { content, .. } if content.starts_with("HYA_COMPACTED_CONTEXT")
+    )));
+    let log = fx.log().await;
+    assert_eq!(
+        log.iter()
+            .filter(|event| matches!(
+                event,
+                Event::TextDelta { delta, .. } if delta.starts_with("[hya] Goal checkpoint:")
+            ))
+            .count(),
+        1
     );
     assert_paired(&log);
 }

@@ -7,6 +7,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::View;
+use super::rewrite::is_goal_checkpoint;
 use crate::CoreError;
 
 /// Prompt image data by blob hash (`data:` URLs), loaded from the session's
@@ -53,8 +54,23 @@ pub fn projection_to_messages(
     model: &ModelRef,
     attachments: &AttachmentData,
 ) -> Vec<Message> {
-    compacted_messages(projection)
+    let messages = compacted_messages(projection);
+    let assistant = messages.iter().rfind(|row| row.role == Role::Assistant);
+    let marker = messages.first().filter(|row| is_marker(row));
+    messages
         .iter()
+        .filter(|row| {
+            !is_goal_checkpoint(row)
+                || (marker.is_none_or(|marker| marker.id < row.id)
+                    && assistant.is_some_and(|assistant| {
+                        // The marker can move in the projection. These IDs are
+                        // minted in creation order by the running turn.
+                        assistant.id < row.id
+                            && sent_parts(assistant)
+                                .iter()
+                                .all(|part| part.id().as_uuid() < row.id.as_uuid())
+                    }))
+        })
         .filter(|m| !(m.role == Role::Assistant && sent_parts(m).is_empty()))
         .map(|m| match m.role {
             Role::User => Message::User {

@@ -94,42 +94,42 @@ number of removed messages. With no earlier content it returns
 
 ## Session todos
 
-Use `todo` in either mode to record the criteria that will tell you the task
-is done, each a checkable end state, and set each one's status when it
-changes. The model chooses when to use it. The kernel executes it directly,
-like `rewrite`. Todos take no part in any stop decision: neither the kernel
-loop nor the headless `exec` wrap-up continues a run because items are open.
+Use `todo` in either mode to record checkable completion criteria and any results
+that will be needed after earlier context is removed. Update statuses as they
+change and leave correct items as written. The model chooses when to use the
+tool, and the kernel executes it directly like `rewrite`. Open todos do not
+keep the kernel loop or headless `exec` running.
 
-Goal checkpoint: once the last round has filled 60% of the model window, and
-once per context epoch (since the latest rewrite), the kernel appends a system
-message starting `[hya] Goal checkpoint:` that asks the model to bring the
-list up to date, because only the user messages and the list survive a
-rewrite. It is a logged message, so the request stays a function of the View.
-A round that jumps past the rewrite threshold directly is rewritten without
-it.
+At 60% of the model window, the kernel can append one logged system message
+per turn starting with `[hya] Goal checkpoint:`. It asks the model to record
+in the list every result it has derived and still needs. The request
+includes the notice until the assistant produces another part or a rewrite
+occurs. If a rewrite happens first, its marker carries the list or asks for
+one. A marker that carries the list first says its recorded results stay valid
+and asks for further results to be recorded as they are obtained. The event log and its replayed View determine which requests show the
+checkpoint.
 
-| Operation | Required JSON fields | Effect |
+| Operation | JSON fields | Effect |
 | --- | --- | --- |
-| Add | `{"op":"add","content":string}` | Append a `pending` item. The kernel assigns the smallest positive decimal string id it has not issued. |
-| Edit | `{"op":"edit","id":string,"content":string}` | Replace an item's text. |
-| Status | `{"op":"status","id":string,"status":string}` | Set the status to `pending`, `in_progress`, `blocked`, or `completed`. |
-| Remove | `{"op":"remove","id":string}` | Remove the item. |
+| Add | `op: "add"`, `content: string`, optional `status: string` | Append an item with a fresh decimal string id. Status defaults to `pending`. |
+| Edit or status | `op: "edit"` or `op: "status"`, `id: string`, and `content: string`, `status: string`, or both | Update the provided fields. |
+| Remove | `op: "remove"`, `id: string` | Remove the item. |
 
-Operations apply in order. For example, in a new session the following call
-adds a criterion and starts it in one batch.
+The allowed statuses are `pending`, `in_progress`, `blocked`, and `completed`.
+Operations apply in order. This call adds a criterion with an initial status.
 
 ```json
-{"ops":[{"op":"add","content":"Run the focused tests"},{"op":"status","id":"1","status":"in_progress"}]}
+{"ops":[{"op":"add","content":"Focused tests pass","status":"in_progress"}]}
 ```
 
-The result string is `Current todos:\n- #1 [in_progress] Run the focused tests`.
+The result string is `Current todos:\n- #1 [in_progress] Focused tests pass`.
 Each additional item appears on its own row in list order. An empty list is
 `Current todos: (empty)`. Pass `{"ops":[]}` to read the current list. An id may be
-given as rendered (`#1`). Blank
-content, an unknown item id, or a malformed operation fails the whole batch
-with `ToolError`. A changed list is appended as a `TodosUpdated` full snapshot
-in the same batch as its `ToolResult`. Empty and unchanged lists can be read
-without a new update. The existing session todo API reads the replayed list.
+given as rendered (`#1`). Blank content, an unknown item id, or a malformed
+operation fails the whole batch with `ToolError`. A changed list is appended as
+a `TodosUpdated` full snapshot in the same batch as its `ToolResult`. Empty and
+unchanged lists can be read without a new update. The existing session todo API
+reads the replayed list.
 
 ## Workspace file observations
 
