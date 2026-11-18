@@ -1,7 +1,7 @@
 //! The lead of a headless root run (`exec`) must not end the run while
 //! it still has work in flight. Nobody is there to answer a turn that stops
 //! early: when the lead's turn ends on its own with live subagents (stopped
-//! and lost when the run ends), unfinished todos, or a last message that
+//! and lost when the run ends), unread mail, or a last message that
 //! announces a next step it did not take, the run gives it another turn with
 //! a harness notice naming what is left, until a turn ends with none of them.
 //! In a budgeted run the deadline bounds this: past the grace no turn starts,
@@ -10,7 +10,7 @@
 use hya_engine::{AgentSpec, CoreError, ResidentSupervisor, SessionEngine};
 use hya_proto::{
     FinishReason, MessageId, PartProjection, Projection, Role, RosterEntry, RosterStatus,
-    SessionId, TodoItem, TodoStatus, scope,
+    SessionId, scope,
 };
 use hya_tool::deadline::{RunDeadline, Stage};
 use tokio_util::sync::CancellationToken;
@@ -100,7 +100,6 @@ pub(crate) async fn run_lead(
 /// Why a lead turn that ended on its own must not end the run yet.
 struct Pending<'a> {
     subagents: Vec<&'a RosterEntry>,
-    todos: Vec<&'a TodoItem>,
     unread_mail: u64,
     narration: Option<Narration>,
 }
@@ -124,17 +123,13 @@ impl<'a> Pending<'a> {
     fn of(projection: &'a Projection, finish: FinishReason) -> Self {
         Self {
             subagents: live_subagents(projection),
-            todos: unfinished_todos(projection),
             unread_mail: unread_root_mail(projection),
             narration: narration(projection, finish),
         }
     }
 
     fn is_empty(&self) -> bool {
-        self.subagents.is_empty()
-            && self.todos.is_empty()
-            && self.unread_mail == 0
-            && self.narration.is_none()
+        self.subagents.is_empty() && self.unread_mail == 0 && self.narration.is_none()
     }
 
     /// One notice listing every reason, most costly to leave first, after
@@ -162,20 +157,6 @@ impl<'a> Pending<'a> {
         }
         if self.unread_mail != 0 {
             notice.push_str(&format!("Your inbox has {} unread message(s).\n  → Read and integrate the new mail before completing the run.\n", self.unread_mail));
-        }
-        if !self.todos.is_empty() {
-            notice.push_str("Your todo list has unfinished items:\n");
-            for todo in &self.todos {
-                notice.push_str(&format!(
-                    "- #{} [{}] {}\n",
-                    todo.id,
-                    todo.status.as_str(),
-                    todo.content
-                ));
-            }
-            notice.push_str(
-                "  → Continue with them. Mark an item `completed` when it is done, or `blocked` if it cannot be done in this run.\n",
-            );
         }
         match &self.narration {
             Some(Narration::Announces(quote)) => notice.push_str(&format!(
@@ -246,18 +227,6 @@ fn unread_root_mail(projection: &Projection) -> u64 {
         .team
         .unread_incoming_mail(scope::ROOT_HANDLE, cursor)
         .count() as u64
-}
-
-/// The lead's own todos still to do. `Blocked` is the way out for an item
-/// that cannot be done: in a headless run nothing outside will unblock it.
-fn unfinished_todos(projection: &Projection) -> Vec<&TodoItem> {
-    projection
-        .session
-        .todos
-        .iter()
-        .flatten()
-        .filter(|todo| matches!(todo.status, TodoStatus::Pending | TodoStatus::InProgress))
-        .collect()
 }
 
 fn narration(projection: &Projection, finish: FinishReason) -> Option<Narration> {
@@ -549,7 +518,9 @@ fn subagent_line(entry: &RosterEntry) -> String {
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use hya_proto::{MessageProjection, PartId, ToolCallId, ToolName, ToolPartState};
+    use hya_proto::{
+        MessageProjection, PartId, TodoItem, TodoStatus, ToolCallId, ToolName, ToolPartState,
+    };
 
     fn text(text: &str) -> PartProjection {
         PartProjection::Text {
@@ -837,33 +808,6 @@ mod tests {
     }
 
     #[test]
-    fn u1_pending_and_in_progress_todos_are_unfinished() {
-        let mut projection = Projection::default();
-        projection.session.todos = Some(vec![
-            todo("1", TodoStatus::Pending),
-            todo("2", TodoStatus::Pending),
-            todo("3", TodoStatus::InProgress),
-            todo("4", TodoStatus::Completed),
-        ]);
-        let ids: Vec<_> = unfinished_todos(&projection)
-            .iter()
-            .map(|todo| todo.id.as_str())
-            .collect();
-        assert_eq!(ids, ["1", "2", "3"]);
-    }
-
-    #[test]
-    fn u2_completed_and_blocked_todos_are_finished() {
-        let mut projection = Projection::default();
-        projection.session.todos = Some(vec![
-            todo("1", TodoStatus::Completed),
-            todo("2", TodoStatus::Blocked),
-        ]);
-        assert!(unfinished_todos(&projection).is_empty());
-        assert!(unfinished_todos(&Projection::default()).is_empty());
-    }
-
-    #[test]
     fn u3_a_trailing_colon_announces() {
         for text in [
             // python-statemachine (hya-v11)
@@ -872,7 +816,7 @@ mod tests {
             "Max fan-out is 102 (cap 10000) ✓. Now verify the file format, output-signal placement, and convergence timing:",
             // cargo-flight-dispatch local tb4
             "Reviewer verdict: **correct**, no P0/P1/P2. Let me read the full report and address its single P3:",
-            // mvcc-lsm-compaction local tb4 (unfinished todos too)
+            // mvcc-lsm-compaction local tb4
             "The fix works. Now let me validate it thoroughly with a randomized differential check against a no-compaction oracle (in /tmp, exploratory) to make sure the compaction rules never lose anything a reader can observe:",
             "下一步：",
         ] {
@@ -993,16 +937,12 @@ mod tests {
             Role::Assistant,
             vec![text("Now let me run it:")],
         )]);
-        projection.session.todos = Some(vec![
-            todo("3", TodoStatus::Pending),
-            todo("4", TodoStatus::Completed),
-        ]);
+        projection.session.todos = Some(vec![todo("3", TodoStatus::Pending)]);
         let notice = Pending::of(&projection, FinishReason::Stop).notice(None, false);
         assert!(notice.starts_with("HEADLESS RUN"));
-        let todos = notice.find("#3 [pending] item 3").expect("todo listed");
-        let narration = notice.find("\"Now let me run it:\"").expect("quoted");
-        assert!(todos < narration);
-        assert!(!notice.contains("#4"));
+        assert!(notice.contains("\"Now let me run it:\""));
+        // g takes no part in stop decisions: open todos add no reason.
+        assert!(!notice.contains("todo"));
     }
 
     /// U10: replay over the final texts of passing recorded trials
