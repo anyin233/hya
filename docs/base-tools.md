@@ -242,7 +242,28 @@ tools:
       - { name: legacy_read, visibility: hidden }
     # optional: replace another family's same-named tool when both load
     # overrides: hya/extended-tools
+    # optional: the tool's line in the system prompt's <tools> list
+    prompt: read a file
+# optional: replaces the kernel prompt's file-operations rule
+file_operations_rule:
+  text: Use the file tools, not shell commands, to list, find, and search files
+  tools: [ls, glob, find, grep]
 ```
+
+`prompt` (optional, one non-empty line) is the text after `- <name>: ` in
+the `<tools>` list of the full-mode [system prompt](kernel.md#system-prompt);
+a tool without it is not listed there. When two families export a name, the
+overriding entry's line is used. The kernel names (`read`, `write`, `edit`,
+`bash`) carry no line: the kernel prompt already describes them. Every other
+first-party tool offered to models has one; for example extended-tools
+declares `{ name: task, ..., prompt: start subagents on independent tasks }`.
+
+`file_operations_rule` (optional) replaces the kernel's rule
+`Use bash for file operations like ls, rg, find` in a round that offers at
+least one of its `tools`, which must be canonical names of the same family.
+`text` is one non-empty line. `hya/base-tools` declares it for `ls`, `glob`,
+`find`, and `grep`. `hya_tool::tool_prompt(name)` and
+`hya_tool::file_operations_rule(offered)` read both keys.
 
 `permission` is one of `read_only`, `task`, `tool`, `command`, or `mcp`. It
 controls invocation defaults: read-only and task calls default to allow,

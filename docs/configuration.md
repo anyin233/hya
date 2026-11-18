@@ -2141,9 +2141,12 @@ and the workdir-local one last
 or missing files are skipped silently. This is the sole discovery
 implementation — callers re-export it rather than reimplement walk order.
 
-A full-mode session records its working directory, platform, UTC date, and
-discovered `AGENTS.md` text at the start of its first model turn. Later
-rounds and backend restarts use that same context. To apply an edit, start
+A full-mode session records its platform, UTC date, and discovered
+`AGENTS.md` text at the start of its first model turn, after the kernel
+prompt, which carries the working directory in `<cwd>`
+([Kernel](kernel.md#system-prompt)). Later rounds and backend restarts use
+that same context. A session recorded before the kernel prompt led the full
+mode's system prompt keeps its recorded `- cwd:` line. To apply an edit, start
 a new session in the workdir (for example, `hya exec "Follow AGENTS.md"`)
 or ask the agent to read the file with a tool. A fork inherits the source
 session's recorded context. Each subagent session records its own.

@@ -2,18 +2,24 @@ schema_version: 1
 identity: hya/base-tools
 protected_names: [read]
 schemes: []
+# Replaces the kernel prompt's "Use bash for file operations" rule whenever
+# the round offers one of these tools.
+file_operations_rule:
+  text: Use the file tools, not shell commands, to list, find, and search files
+  tools: [ls, glob, find, grep]
 tools:
   - { name: read, schema_version: 1, permission: read_only }
   - { name: write, schema_version: 1, permission: tool }
   - { name: edit, schema_version: 1, permission: tool }
-  - { name: ls, schema_version: 1, permission: read_only }
-  - { name: glob, schema_version: 1, permission: read_only }
-  - { name: find, schema_version: 1, permission: read_only }
-  - { name: grep, schema_version: 1, permission: read_only }
+  - { name: ls, schema_version: 1, permission: read_only, prompt: list a directory }
+  - { name: glob, schema_version: 1, permission: read_only, prompt: list files matching a glob pattern }
+  - { name: find, schema_version: 1, permission: read_only, prompt: find files by path or name }
+  - { name: grep, schema_version: 1, permission: read_only, prompt: search file contents with a regular expression }
   - name: ask_user
     schema_version: 1
     permission: tool
     aliases: [{ name: question, visibility: hidden }]
+    prompt: ask the user structured questions and wait for the answers
   - name: bash
     schema_version: 1
     permission: command
@@ -22,3 +28,4 @@ tools:
     schema_version: 1
     permission: tool
     aliases: [{ name: patch, visibility: hidden }]
+    prompt: add, update, move, or delete files with one patch

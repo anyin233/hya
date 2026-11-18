@@ -259,7 +259,10 @@ The four `hya/base-tools` tools `read`, `write`, `edit`, and `bash` replace
 the kernel's built-in tools of the same names in full mode; the kernel's
 versions run only in `hya exec --bare` ([Kernel](kernel.md#differences-from-full-mode)).
 The kernel's `rewrite` and `todo` stay kernel-run in both modes, and no
-bundle tool or alias may take either name.
+bundle tool or alias may take either name. Full mode's system prompt starts
+with the kernel prompt composed from the round's offered tools; the tool
+families contribute the `<tools>` lines and file-operations rule their
+`exposure.yaml` declares ([System prompt](kernel.md#system-prompt)).
 
 The former `hya/subagents` bundle and `hya-release` agent have been removed.
 
