@@ -53,7 +53,7 @@ repository root with the source revision used to record the log:
 
 ```sh
 HYA_BARE_REPLAY_DB=/path/to/hya.db \
-  cargo test -p hya-core --test replay_bare -- --ignored --nocapture
+  cargo test -p hya-core --test it replay_bare:: -- --ignored --nocapture
 ```
 
 The test opens the database read-only. It rebuilds each recorded bare-mode

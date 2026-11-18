@@ -7,7 +7,7 @@ each one is an ordinary public `.hyabundle` package that you build and
 install like any other bundle described in
 [Bundle Authoring](agent-bundle-authoring.md). They exist for two
 reasons at once: they are useful optional capabilities, and each one is a
-coverage fixture exercised by `crates/hya-bundle/tests/extra_bundles.rs` and
+coverage fixture exercised by `crates/hya-bundle/tests/it/extra_bundles.rs` and
 the `crates/hya-e2e` process suite (`T2.26`–`T2.28` and `T2.30` in the
 [Agent feature matrix](testing/agent-matrix.md)).
 

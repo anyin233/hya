@@ -256,7 +256,7 @@
 - Write/Bash tests assert closed schemas, result-cap shape preservation, Bash
   timeout/clamp/zero/cancel/nonzero/PTY/truncation/artifact behavior, and that
   environment values are absent from every result and diagnostic.
-- `crates/hya-tool/tests/task.rs` and app admission tests assert `description`
+- `crates/hya-tool/tests/it/task.rs` and app admission tests assert `description`
   is absent from both nested schemas, blank normalization has no unsupported
   error or child-side-effect, and non-empty direct input has the typed rejection
   with no admission mutation.

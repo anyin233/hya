@@ -1,6 +1,7 @@
 //! Isolated process: the lifecycle SQL counter is process-global.
 #![allow(clippy::unwrap_used)]
 
+#[path = "it/support/mod.rs"]
 mod support;
 
 use std::sync::Arc;
