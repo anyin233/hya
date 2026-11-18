@@ -1,6 +1,8 @@
 //! Deadline instructions must name a tool the Workflow actor can call.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+// Own binary: `hya_tool::deadline::install` sets a process-wide deadline.
+#[path = "it/support/mod.rs"]
 mod support;
 
 use async_trait::async_trait;

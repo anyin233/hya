@@ -132,7 +132,7 @@ Ok(Json(response))
 
 ### 6. Tests Required
 
-- Route tests (`crates/hya-server/tests/v1_api.rs`) assert the Interaction
+- Route tests (`crates/hya-server/tests/it/v1_api.rs`) assert the Interaction
   field sets, type/session filters, duplicate `applied: false`, and
   unknown-id `not_found`.
 - Stream tests assert `permissionRequested`/`questionRequested`/

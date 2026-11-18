@@ -29,7 +29,7 @@
 
 ### 3. Verification
 
-`cargo test -p hya-tool --test task` covers schema, context propagation, input
+`cargo test -p hya-tool --test it task::` covers schema, context propagation, input
 validation, legacy inputs, permission and typed errors, and result shapes.
 `hya-app/tests/spawn_admission.rs` proves multiple children enter provider work
 before either is released. Track P `p08_subagent_task` proves the batched tool

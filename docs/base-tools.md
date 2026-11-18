@@ -368,7 +368,7 @@ fixture in a disposable layout (Linux):
 
 ```sh
 CARGO_BUILD_JOBS=8 cargo build --locked -p hya-tool --examples
-CARGO_BUILD_JOBS=8 cargo test --locked -p hya-tool --test native_replacement
+CARGO_BUILD_JOBS=8 cargo test --locked -p hya-tool --test it native_replacement::
 ```
 
 The test copies its host into a private directory and installs the replacement

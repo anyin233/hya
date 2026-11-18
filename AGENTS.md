@@ -230,7 +230,7 @@ cargo test -p <crate> [-p <dependent> ...]
 cargo build -p hya-backend --bin hya
 ```
 
-`cargo fmt --all --check` is cheap and stays workspace-wide. Pass `-p` once per affected crate so one cargo run covers all of them. Run a single test binary or filter (`cargo test -p <crate> --test <name>` or `cargo test -p <crate> <filter>`) while iterating; run the affected crates' full tests before reporting done.
+`cargo fmt --all --check` is cheap and stays workspace-wide. Pass `-p` once per affected crate so one cargo run covers all of them. Run one test module or filter (`cargo test -p <crate> --test it <module>::` or `cargo test -p <crate> <filter>`) while iterating; run the affected crates' full tests before reporting done.
 
 ### Process agent E2E (`crates/hya-e2e`)
 
@@ -238,7 +238,7 @@ Run Track P only when a change touches `crates/hya-e2e` or an agent surface the 
 
 ```sh
 cargo build -p hya-backend --bin hya
-cargo test -p hya-e2e --test <file> -- --test-threads=1
+cargo test -p hya-e2e --test it <pNN_scenario>:: -- --test-threads=1
 ```
 
 Track P spawns real backend processes and must always run single-threaded. It stays out of any workspace-wide `cargo test` (`--exclude hya-e2e`). Matrix and harness docs: `docs/testing/README.md`, `docs/testing/agent-matrix.md`, `docs/testing/process-e2e.md`, `crates/hya-e2e/matrix.toml`.
