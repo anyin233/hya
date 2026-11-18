@@ -1,8 +1,8 @@
 //! A headless `hya exec` run does not end while the lead's own work is
-//! unfinished: when its turn ends on its own with pending or in-progress
-//! todos, or with a last message announcing a step it did not take, the run
-//! gives it another turn with a `HEADLESS RUN` notice. A plain summary ends
-//! the run; a notice ignored twice in a row ends it too.
+//! unfinished: when its turn ends on its own with a last message announcing
+//! a step it did not take, the run gives it another turn with a `HEADLESS RUN`
+//! notice. A plain summary ends the run, open todos included (todos take no
+//! part in stop decisions); a notice ignored twice in a row ends it too.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::process::Output;
@@ -78,42 +78,20 @@ fn todo_status(updates: &[(&str, &str)]) -> ScriptStep {
 }
 
 #[tokio::test]
-async fn e1_unfinished_todos_continue_the_run() {
+async fn e1_unfinished_todos_do_not_continue_the_run() {
     let add = |content: &str| json!({ "op": "add", "content": content });
     let (env, output, requests) = run_lead(
         vec![
-            tool_step(
-                "todo",
-                json!({ "ops": [add("one"), add("two"), add("three"), add("four")] }),
-            ),
-            todo_status(&[("1", "completed"), ("2", "in_progress")]),
-            text_step("Item one is done."),
-            bash("echo working"),
-            todo_status(&[("2", "completed"), ("3", "completed"), ("4", "blocked")]),
-            text_step("FINAL_ANSWER"),
+            tool_step("todo", json!({ "ops": [add("one"), add("two")] })),
+            text_step("PARTIAL_ANSWER"),
             text_step("ROOT_EXTRA"),
         ],
         &[],
     )
     .await;
-    assert_eq!(requests.len(), 6, "{}", env.diagnostics());
-    assert!(!requests[2].contains(NOTICE));
-    let request: serde_json::Value = serde_json::from_str(&requests[3]).unwrap();
-    let notice = request["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find_map(|message| {
-            let text = message["content"].as_str()?;
-            (message["role"] == "system" && text.starts_with(NOTICE)).then_some(text)
-        })
-        .expect("continuation notice");
-    assert!(notice.contains("#3 [pending]"), "{notice}");
-    assert!(
-        !notice.contains("#1 ["),
-        "completed items are not listed: {notice}"
-    );
-    assert!(String::from_utf8_lossy(&output.stdout).contains("FINAL_ANSWER"));
+    assert_eq!(requests.len(), 2, "{}", env.diagnostics());
+    assert!(requests.iter().all(|request| !request.contains(NOTICE)));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("PARTIAL_ANSWER"));
     assert_eq!(env.fake.route_remaining(ROOT).unwrap(), Some(1));
 }
 
@@ -211,7 +189,7 @@ async fn e10_continuation_does_not_repeat_the_deadline_header() {
         vec![
             tool_step("todo", json!({"ops": [{"op": "add", "content": "finish"}]})),
             bash("echo working"),
-            text_step("Item remains."),
+            text_step("Now let me finish it:"),
             todo_status(&[("1", "completed")]),
             text_step("FINAL_ANSWER"),
             text_step("ROOT_EXTRA"),
