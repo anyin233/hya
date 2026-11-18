@@ -29,7 +29,6 @@ time = { workspace = true }
 
 [dev-dependencies]
 hya-base-tools = { workspace = true }
-hya-todo-tools = { workspace = true }
 hya-extended-tools = { workspace = true }
 hya-channel-tools = { workspace = true }
 hya-network-tools = { workspace = true }

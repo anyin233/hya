@@ -106,7 +106,7 @@ impl Script {
 
     fn step(&mut self) -> Event {
         let session = self.session;
-        match self.rng.below(29) {
+        match self.rng.below(30) {
             0 | 1 => {
                 let message = MessageId::from_uuid(self.uuid());
                 self.messages.push((message, Vec::new()));
@@ -428,6 +428,18 @@ impl Script {
                     }
                 } else {
                     Event::SessionUnarchived { session }
+                }
+            }
+            29 => {
+                let exists = self.rng.chance(50);
+                Event::FilesObserved {
+                    session,
+                    external: self.rng.chance(50),
+                    files: vec![hya_proto::event::FileStamp {
+                        path: format!("/tmp/scripted/f{}", self.rng.below(4)),
+                        mtime_ns: exists.then_some(1_700_000_000_000_000_000),
+                        size: exists.then_some(32),
+                    }],
                 }
             }
             28 => Event::SessionEphemeralSet {

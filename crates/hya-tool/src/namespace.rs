@@ -4,7 +4,7 @@
 //! `[a-zA-Z0-9_-]`, so namespaces ride on a double-underscore separator — the
 //! same convention MCP tools already use model-facing (`mcp__server__tool`).
 //! A namespace groups tools from one provider of functionality; the local
-//! name may repeat across namespaces (`todo__read` vs `pluginx__read`) while
+//! name may repeat across namespaces (`alpha__read` vs `pluginx__read`) while
 //! the full name stays globally unique inside a registry.
 
 use thiserror::Error;

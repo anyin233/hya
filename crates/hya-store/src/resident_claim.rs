@@ -322,13 +322,13 @@ impl SessionStore {
         Ok((message, envelopes))
     }
 
-    /// Commit a tool outcome and its optional team-mail acknowledgement together.
+    /// Commit a tool outcome, its file observations, and optional team-mail acknowledgement together.
     /// The actor capability fences both logs; publish envelopes only after success.
     pub async fn commit_tool_result_with_mail(
         &self,
         claim: Option<&ActorClaim>,
         session: SessionId,
-        result: Event,
+        events: Vec<Event>,
         acknowledgement: Option<Event>,
     ) -> Result<Vec<Envelope>, StoreError> {
         let mut tx = self.begin_transaction().await?;
@@ -336,7 +336,10 @@ impl SessionStore {
             fence_actor_claim(&mut tx, claim).await?;
         }
         let mut envelopes =
-            vec![crate::append_event_in_transaction(&mut tx, session, result).await?];
+            Vec::with_capacity(events.len() + usize::from(acknowledgement.is_some()));
+        for event in events {
+            envelopes.push(crate::append_event_in_transaction(&mut tx, session, event).await?);
+        }
         if let Some(acknowledgement) = acknowledgement {
             let root = acknowledgement.session().ok_or_else(|| {
                 StoreError::ActorClaimData("mail acknowledgement has no session".into())

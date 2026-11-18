@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use hya_proto::{OperationId, SessionId, ToolCallId};
 use hya_tool::{
     Action, AgentDef, InteractionPlane, LspPlane, MemberOutcome, Mode, PermissionPlane,
-    PermissionRules, Rule, SkillPlane, SpawnMember, SpawnerPlane, TodoPlane, ToolCtx, ToolError,
+    PermissionRules, Rule, SkillPlane, SpawnMember, SpawnerPlane, ToolCtx, ToolError,
     ToolOperation, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::json;
@@ -47,7 +47,6 @@ fn ctx_with_session(rules: Vec<Rule>, spawner: SpawnerPlane, session: SessionId)
         lifecycle: hya_tool::LifecyclePlane::disconnected(),
         session: Some(session),
         parent_session: None,
-        todo: TodoPlane::default(),
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),

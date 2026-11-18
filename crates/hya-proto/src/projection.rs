@@ -44,6 +44,9 @@ pub struct SessionProjection {
     pub model: Option<ModelRef>,
     /// Absolute workdir for tools.
     pub workdir: Option<String>,
+    /// Initial environment and workspace guidance recorded for full-mode turns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_context: Option<String>,
     /// Project the session belongs to (ADR-0024), from `SessionCreated`.
     /// `None` for temporary sessions and sessions created before Projects.
     /// Omitted from serialized projections when `None`.
@@ -107,6 +110,9 @@ pub struct SessionProjection {
     /// .before_message`); `None` for a head fork or a non-fork.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forked_before: Option<MessageId>,
+    /// Most recent observation for each known file, including deletions.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub files: BTreeMap<String, crate::event::FileStamp>,
     /// Pending revert (`SessionReverted`): the hidden messages live here, not
     /// in `messages`, until `SessionUnreverted` restores them or the next
     /// `MessageStarted` commits the revert. `None` when nothing is pending.
@@ -119,10 +125,13 @@ pub struct SessionProjection {
     /// revert, or compaction.
     #[serde(default, skip_serializing_if = "SessionUsage::is_empty")]
     pub usage: SessionUsage,
-    /// Latest todo list, folded from `TodosUpdated`. `None` when the session
-    /// never recorded one (including sessions that predate the event).
+    /// Latest todo list, folded from `TodosUpdated` or a historical todo result.
+    /// `None` when the session never recorded a list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub todos: Option<Vec<crate::TodoItem>>,
+    /// Highest issued numeric todo id. Stored in the durable snapshot only.
+    #[serde(skip)]
+    pub todo_last_id: u64,
 }
 
 /// Latest window-occupancy report, mirroring the newest `ContextStatus` event.
@@ -607,7 +616,7 @@ pub fn session_archive_event(
 /// different projection, or when `Projection` (or anything it contains)
 /// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
 /// the bump is recorded.
-pub const PROJECTION_REDUCER_VERSION: u32 = 9;
+pub const PROJECTION_REDUCER_VERSION: u32 = 12;
 
 /// Durable snapshot encoding: the wire projection plus replay-only reducer
 /// state the wire form deliberately omits.
@@ -616,6 +625,8 @@ struct SnapshotRef<'a> {
     projection: &'a Projection,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     workflow_seen_runs: Vec<WorkflowRunId>,
+    #[serde(skip_serializing_if = "is_zero")]
+    todo_last_id: u64,
 }
 
 #[derive(Deserialize)]
@@ -623,6 +634,8 @@ struct SnapshotOwned {
     projection: Projection,
     #[serde(default)]
     workflow_seen_runs: BTreeSet<WorkflowRunId>,
+    #[serde(default)]
+    todo_last_id: u64,
 }
 
 #[cfg(feature = "lifecycle-bench")]
@@ -735,7 +748,7 @@ impl Projection {
     /// Encode this projection as a durable snapshot.
     ///
     /// Unlike the wire form, the snapshot keeps replay-only reducer state
-    /// (Workflow run dedupe), so [`Projection::decode_snapshot`] followed by
+    /// (Workflow run dedupe and todo id allocation), so [`Projection::decode_snapshot`] followed by
     /// applying the remaining events equals a full replay.
     ///
     /// # Errors
@@ -750,6 +763,7 @@ impl Projection {
         serde_json::to_vec(&SnapshotRef {
             projection: self,
             workflow_seen_runs,
+            todo_last_id: self.session.todo_last_id,
         })
     }
 
@@ -762,7 +776,9 @@ impl Projection {
         let SnapshotOwned {
             mut projection,
             workflow_seen_runs,
+            todo_last_id,
         } = serde_json::from_slice(bytes)?;
+        projection.session.todo_last_id = todo_last_id;
         if let Some(workflow) = projection.session.workflow.as_mut() {
             workflow.seen_runs = workflow_seen_runs;
         }
@@ -785,6 +801,13 @@ impl Projection {
             ));
         }
         Ok(projection)
+    }
+
+    fn replace_todos(&mut self, todos: Vec<crate::TodoItem>) {
+        for id in todos.iter().filter_map(|item| item.id.parse::<u64>().ok()) {
+            self.session.todo_last_id = self.session.todo_last_id.max(id);
+        }
+        self.session.todos = Some(todos);
     }
 
     /// Streaming events almost always target the newest message, so search
@@ -853,6 +876,11 @@ impl Projection {
                 self.session.workdir = Some(workdir.clone());
                 self.session.project = *project;
                 self.session.kind = *kind;
+            }
+            Event::InitialContextRecorded { text, .. } => {
+                if self.session.initial_context.is_none() {
+                    self.session.initial_context = Some(text.clone());
+                }
             }
             Event::SessionAgentModelOverrideSet { agent, model, .. } => match model {
                 Some(model) => {
@@ -1146,6 +1174,11 @@ impl Projection {
                         }));
                 }
             }
+            Event::FilesObserved { files, .. } => {
+                self.session
+                    .files
+                    .extend(files.iter().map(|file| (file.path.clone(), file.clone())));
+            }
             Event::SessionReverted { message, files, .. } => {
                 self.apply_revert(*message, files);
             }
@@ -1293,13 +1326,31 @@ impl Projection {
                 time_ms,
                 ..
             } => {
-                if let Some(PartProjection::Tool { state, .. }) = find_part(self, *message, *part) {
+                if let Some(PartProjection::Tool { name, state, .. }) =
+                    find_part(self, *message, *part)
+                {
                     let input = tool_input(state);
+                    let mut added = 0;
+                    let legacy = crate::todo::legacy_result(name.as_str(), output);
+                    if name.as_str() == crate::context::TODO_TOOL && output.is_string() {
+                        // A successful batch consumes an id for every add, even when
+                        // another op in the same batch removes the added row.
+                        added = input["ops"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter(|op| op["op"] == "add")
+                            .count() as u64;
+                    }
                     *state = ToolPartState::Completed {
                         input,
                         output: output.clone(),
                         time_ms: *time_ms,
                     };
+                    self.session.todo_last_id += added;
+                    if let Some(items) = legacy {
+                        self.replace_todos(items);
+                    }
                 }
             }
             Event::ToolError {
@@ -1704,7 +1755,7 @@ impl Projection {
             }
             // Full replacement: the event carries the whole list.
             Event::TodosUpdated { todos, .. } => {
-                self.session.todos = Some(todos.clone());
+                self.replace_todos(todos.clone());
             }
             // Latest occupancy wins: clients read one current figure, not a history.
             Event::ContextStatus {

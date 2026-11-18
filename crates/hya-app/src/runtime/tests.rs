@@ -43,8 +43,8 @@ use hya_provider::{
 use hya_store::{BundleInstallCandidate, BundleInstallOutcome, BundleRegistry};
 use hya_tool::{
     AgentDef, FormatterPlane, InlineAgent, InteractionPlane, LspPlane, MailboxPlane, Mode,
-    PermissionModel, PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnerPlane, TodoPlane,
-    Tool, ToolCtx, ToolError, ToolOperation, ToolPermission, ToolRegistry, WebSearchPlane,
+    PermissionModel, PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnerPlane, Tool,
+    ToolCtx, ToolError, ToolOperation, ToolPermission, ToolRegistry, WebSearchPlane,
     handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
@@ -953,7 +953,6 @@ flowchart TD
         lifecycle: LifecyclePlane::disconnected(),
         session: Some(lead),
         parent_session: None,
-        todo: TodoPlane::default(),
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),
@@ -2164,34 +2163,6 @@ fn agent_with_model_omits_process_cwd_skill_index() {
     assert!(!agent.system_prompt.contains("Baseline skill"));
 }
 
-/// Direct exec/RPC/goal construction still bakes Environment + AGENTS.
-#[test]
-fn agent_with_model_pure_keeps_environment_but_drops_agents_context() {
-    let home = tempdir();
-    let workdir = tempdir();
-    let _env = EnvGuard::with_home(&home, &workdir);
-    let agents_marker = "PURE_MODE_MUST_NOT_SEE_THIS";
-    std::fs::write(workdir.join("AGENTS.md"), agents_marker).unwrap();
-
-    let agent = agent_with_model_pure("fake", None);
-
-    assert!(
-        agent.system_prompt.contains(HARNESS_AGENT_BASE),
-        "pure agent must keep the harness base: {}",
-        agent.system_prompt
-    );
-    assert!(
-        agent.system_prompt.contains("## Environment"),
-        "pure agent must keep Environment: {}",
-        agent.system_prompt
-    );
-    assert!(
-        !agent.system_prompt.contains(agents_marker),
-        "pure agent must not bake process-cwd AGENTS: {}",
-        agent.system_prompt
-    );
-}
-
 #[test]
 fn with_pure_clears_mcp_marks_runtime_and_keeps_websearch() {
     let _env = StableEnvGuard::new();
@@ -2220,36 +2191,134 @@ fn with_pure_clears_mcp_marks_runtime_and_keeps_websearch() {
     );
 }
 
-#[test]
-fn agent_with_model_retains_environment_and_agents_context() {
+#[tokio::test]
+async fn initial_context_backfills_and_survives_runtime_restart() {
     let home = tempdir();
-    let workdir = tempdir();
+    let workdir = home.join("project");
     let _env = EnvGuard::with_home(&home, &workdir);
-    let agents_marker = "DIRECT_MODE_AGENTS_CONTEXT_MARKER";
-    std::fs::write(workdir.join("AGENTS.md"), agents_marker).unwrap();
 
-    let agent = agent_with_model("fake", None);
+    for pure in [false, true] {
+        let db = home.join(if pure { "pure.db" } else { "full.db" });
+        let agents_path = workdir.join("AGENTS.md");
+        std::fs::write(&agents_path, "ORIGINAL_PROJECT_INSTRUCTIONS").unwrap();
+        let agent = agent_with_model("fake", None);
+        assert_eq!(agent.system_prompt, HARNESS_AGENT_BASE);
 
-    assert!(
-        agent.system_prompt.contains(HARNESS_AGENT_BASE),
-        "direct agent must keep harness base: {}",
-        agent.system_prompt
-    );
-    assert!(
-        agent.system_prompt.contains("## Environment"),
-        "direct agent must bake Environment: {}",
-        agent.system_prompt
-    );
-    assert!(
-        agent.system_prompt.contains(agents_marker),
-        "direct agent must bake process-cwd AGENTS: {}",
-        agent.system_prompt
-    );
-    assert!(
-        agent.system_prompt.contains("## Project context:"),
-        "direct agent must use project-context separators: {}",
-        agent.system_prompt
-    );
+        let session = SessionId::new();
+        let store = SessionStore::connect(db.to_str().unwrap()).await.unwrap();
+        store
+            .append_event(
+                session,
+                &Event::SessionCreated {
+                    session,
+                    parent: None,
+                    agent: agent.name.clone(),
+                    model: agent.model.clone(),
+                    workdir: workdir.to_string_lossy().into_owned(),
+                    project: None,
+                    kind: hya_proto::SessionKind::Project,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            store
+                .read_projection_shared(session)
+                .await
+                .unwrap()
+                .session
+                .initial_context
+                .is_none()
+        );
+
+        let mut first_system = None;
+        for restart in [false, true] {
+            let store = SessionStore::connect(db.to_str().unwrap()).await.unwrap();
+            let provider = Arc::new(FakeProvider::scripted(vec![FakeStep::Finish(
+                FinishReason::Stop,
+            )]));
+            let router = ProviderRouter::new().with(provider.clone());
+            let mut runtime = build_session_engine_with_mcp_defer(
+                store,
+                router,
+                &agent,
+                BTreeMap::new(),
+                Vec::new(),
+                (
+                    WebSearchConfig::default(),
+                    InvocationPolicy::default(),
+                    config::EngineSettings::default(),
+                ),
+                EngineBuildOptions {
+                    defer_mcp: false,
+                    pure,
+                },
+            )
+            .await
+            .unwrap();
+            let engine = runtime.engine();
+            engine
+                .admit_user_prompt(session, "continue".to_string())
+                .await
+                .unwrap();
+            assert_eq!(
+                engine
+                    .run_turn(session, &agent, CancellationToken::new())
+                    .await
+                    .unwrap(),
+                FinishReason::Stop,
+            );
+            let events = engine.replay(session).await.unwrap();
+            let recorded: Vec<_> = events
+                .iter()
+                .filter_map(|entry| match &entry.event {
+                    Event::InitialContextRecorded { text, .. } => Some((entry.seq, text)),
+                    _ => None,
+                })
+                .collect();
+            let [(recorded_seq, text)] = recorded.as_slice() else {
+                panic!(
+                    "expected a single initial context record, got {}",
+                    recorded.len()
+                );
+            };
+            let step = events
+                .iter()
+                .find_map(|entry| match &entry.event {
+                    Event::StepStarted {
+                        view: Some(view), ..
+                    } => Some(view),
+                    _ => None,
+                })
+                .unwrap();
+            assert!(step.cut.0 >= recorded_seq.0);
+            assert_eq!(
+                engine
+                    .read_projection(session)
+                    .await
+                    .unwrap()
+                    .session
+                    .initial_context
+                    .as_ref(),
+                Some(*text),
+            );
+            let requests = provider.requests();
+            let [request] = requests.as_slice() else {
+                panic!("expected one request, got {}", requests.len());
+            };
+            let system = request.system.as_deref().unwrap();
+            assert!(system.contains("## Environment"));
+            assert_eq!(system.contains("ORIGINAL_PROJECT_INSTRUCTIONS"), !pure);
+            assert!(!system.contains("UPDATED_PROJECT_INSTRUCTIONS"));
+            if restart {
+                assert_eq!(Some(system), first_system.as_deref());
+            } else {
+                first_system = Some(system.to_string());
+                std::fs::write(&agents_path, "UPDATED_PROJECT_INSTRUCTIONS").unwrap();
+            }
+            runtime.shutdown().await.unwrap();
+        }
+    }
 }
 
 /// Server/TUI AppState agent slot is base-only (no pre-baked AGENTS).
@@ -2270,7 +2339,7 @@ fn agent_base_with_model_excludes_prebaked_agents_and_environment() {
     );
     assert!(
         !agent.system_prompt.contains(agents_marker),
-        "server base must not bake AGENTS (layered per turn)"
+        "server base must not bake AGENTS (recorded for the session)"
     );
     assert!(!agent.system_prompt.contains("## Project context:"));
 }
@@ -3930,7 +3999,6 @@ fn sidecar_test_ctx(root: &Path) -> ToolCtx {
         lifecycle: LifecyclePlane::disconnected(),
         session: Some(session),
         parent_session: None,
-        todo: TodoPlane::default(),
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),
@@ -6707,7 +6775,6 @@ for line in sys.stdin:
         lifecycle: LifecyclePlane::disconnected(),
         session: Some(session),
         parent_session: None,
-        todo: TodoPlane::default(),
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),

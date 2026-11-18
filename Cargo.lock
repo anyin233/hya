@@ -1034,7 +1034,6 @@ dependencies = [
  "hya-provider",
  "hya-server",
  "hya-store",
- "hya-todo-tools",
  "hya-tool",
  "hya-version",
  "hya-workflow",
@@ -1057,7 +1056,7 @@ dependencies = [
 
 [[package]]
 name = "hya-backend"
-version = "0.48.0-dev.3"
+version = "0.48.0-dev.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1166,6 +1165,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 1.0.69",
  "tokio",
  "tokio-util",
@@ -1212,7 +1212,6 @@ dependencies = [
  "hya-proto",
  "hya-provider",
  "hya-store",
- "hya-todo-tools",
  "hya-tool",
  "hya-workflow",
  "libc",
@@ -1456,17 +1455,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hya-todo-tools"
-version = "0.0.0"
-dependencies = [
- "async-trait",
- "hya-proto",
- "hya-tool",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "hya-tool"
 version = "0.0.0"
 dependencies = [
@@ -1478,7 +1466,6 @@ dependencies = [
  "hya-extended-tools",
  "hya-network-tools",
  "hya-proto",
- "hya-todo-tools",
  "hya-version",
  "libc",
  "regex",

@@ -1403,17 +1403,31 @@ impl CompiledResourceView {
         self.canonical_hook_ids.as_ref()
     }
 
-    /// Prompt skill exposure for the bound agent. When the selected view
-    /// includes the harness skill facade (even if aliased), only the on-demand
-    /// index is appended; otherwise selected bundle-local static skill bodies
-    /// are inlined once with their dispatchable spelling list.
+    /// Skills from directory discovery, including builtins that discovery did
+    /// not shadow. Captured once as part of the session's initial context.
+    pub(crate) fn directory_skills_prompt_section(&self) -> Option<String> {
+        skill_index_with_spellings(
+            "Skills found at session start; use the skill tool to load a current skill:",
+            self.skills()
+                .iter()
+                .filter(|entry| entry.origin != hya_tool::SkillCatalogOrigin::Virtual),
+        )
+    }
+
+    /// Live skill guidance from selected bundle and plugin resources. With the
+    /// skill facade these are listed, otherwise bundle-local bodies are inlined.
     pub(crate) fn skills_prompt_section(&self) -> Option<String> {
         let skills = self.skills();
         if skills.is_empty() {
             return None;
         }
         if self.skill_facade_selected {
-            return skill_index_with_spellings(skills);
+            return skill_index_with_spellings(
+                "These skills are available on demand; read the named SKILL.md when relevant:",
+                skills
+                    .iter()
+                    .filter(|entry| entry.origin == hya_tool::SkillCatalogOrigin::Virtual),
+            );
         }
         Some(inline_selected_skills_with_spellings(skills))
     }

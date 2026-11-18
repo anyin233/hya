@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_engine::{AgentSpec, CreateSession, EventBus, RevertError, RevertTarget, SessionEngine};
 use hya_proto::{
-    AgentName, FileState, FinishReason, Message, MessageId, ModelRef, Part, Role, SessionId,
+    AgentName, Event, FileState, FinishReason, Message, MessageId, ModelRef, Part, Role, SessionId,
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
@@ -230,6 +230,31 @@ async fn write_changes_are_recorded_and_reverted_then_redone() {
         changes[1][0].before,
         FileState::Stored { size: 3, .. }
     ));
+
+    let stamp = &projection.session.files[a.to_str().unwrap()];
+    assert_eq!(stamp.size, Some(3));
+    let events = fx.engine.replay(fx.session).await.unwrap();
+    assert_eq!(
+        events
+            .windows(2)
+            .filter(|pair| matches!(
+                (&pair[0].event, &pair[1].event),
+                (
+                    Event::ToolResult { .. },
+                    Event::FilesObserved {
+                        external: false,
+                        ..
+                    }
+                )
+            ))
+            .count(),
+        2,
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|envelope| matches!(envelope.event, Event::FilesObserved { external: true, .. }))
+    );
 
     // Revert the second turn: content goes back to the first write.
     let outcome = fx

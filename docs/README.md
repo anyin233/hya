@@ -21,7 +21,7 @@ event log, how crates and runtime planes fit together, and what invariants
 govern sessions, Projects, subagents, and Workflows:
 
 - **[Design Philosophy & Architecture Overview](architecture/overview.md)** — The seven core architectural pillars, layer boundaries, and end-to-end turn lifecycle.
-- **[Project Structure](project-structure.md)** — Repository layout, all 21 workspace crates + 6 native bundle crates, 28 canonical builtin tools, 14 first-party bundles, and dependency direction.
+- **[Project Structure](project-structure.md)** — Repository layout, all 21 workspace crates + 5 native bundle crates, 25 registry tools, 13 first-party bundles, and dependency direction.
 - **[Domain Glossary (`CONTEXT.md`)](../CONTEXT.md)** — Canonical domain terminology across `hya-proto`, `hya-core`, Projects, Relay, Workflows, and TUI.
 - **Core Subsystem Specifications:**
   - [Runtime (`hya-engine`)](architecture/runtime.md) — `SessionEngine`, publish seams, `TurnBinding`, Goal/Loop drivers, file snapshots & revert, and workspace roots.
@@ -31,7 +31,7 @@ govern sessions, Projects, subagents, and Workflows:
   - [Admission and Governor](architecture/admission-and-governor.md) — Atomic task batches, active-claim capacity, and in-memory `SubagentGovernor` stream budgets.
   - [Providers (`hya-provider`)](architecture/providers.md) — OpenAI Chat/Responses/Codex, Grok Build, Anthropic, Google Gemini, capability preflight, and reasoning routing.
   - [Tools and Permissions (`hya-tool`)](architecture/tools-and-permissions.md) — `ToolRegistry`, `PermissionPlane`, `ProjectScope` symlink-safe multi-root containment, saved rules, and output caps.
-  - [Agent Tool Surface](architecture/agent-tool-surface.md) — Registered vs advertised vs executable schemas, `todo__*`, `task`, channel tools, and hashline editing.
+  - [Agent Tool Surface](architecture/agent-tool-surface.md) — Registered vs advertised vs executable schemas, `todo`, `task`, channel tools, and hashline editing.
   - [Server and Client (`hya-server` / `hya-sdk-v1`)](architecture/server-client.md) — Single-port `/v1` HTTP/SSE/WS + `V1Grpc` dispatch, `AppState` drain, error codes, and SDK clients.
 - **Architecture Decision Records (`docs/adr/`):**
   - Daemon, Projects & Lifecycle: [ADR-0022 (One writer per DB)](adr/0022-one-writer-per-database.md), [ADR-0023 (Persistent daemon)](adr/0023-persistent-backend-daemon.md), [ADR-0024 (Projects & client workspace)](adr/0024-project-model-and-client-chosen-workspace.md), [ADR-0026 (Multi-root path permissions)](adr/0026-multi-root-path-permissions.md), [ADR-0027 (Per-Project catalog tier)](adr/0027-per-project-catalog-tier.md), [ADR-0031 (Hot reload & stop/start restart)](adr/0031-hot-reload-and-stop-start-restart.md).
@@ -57,7 +57,7 @@ Everything needed to install, configure, operate, and extend `hya` day to day:
   - [Browser-Rendered TUI (WebUI)](tui-web.md) — Running the TUI in browsers over a real PTY + xterm.js, plus the `tui-exp` and Playwright test harnesses.
   - [Secure Relay](relay.md) — End-to-end encrypted remote access with `hya proxy`, `hya serve --relay`, `hya --connect`, `hya bridge`, and `hya relay doctor`.
 - **Context, Skills, Workflows & Bundles:**
-  - [Kernel](kernel.md) — Three Context primitives, five built-in tools, rewrite rules, and `hya exec --bare`.
+  - [Kernel](kernel.md) — Three Context primitives, six built-in tools, rewrite rules, and `hya exec --bare`.
   - [Compaction](compaction.md) — The five context-reduction mechanisms, thresholds, and configurable order.
   - [Skills](skills.md) — Skill discovery roots, progressive loading via `skill`, and `hya/core-skills`.
   - [Workflows](workflows.md) — Authoring `*.hya.md` Stage DAGs, stage model routing, CLI/TUI control, and WorkflowBundle packaging.

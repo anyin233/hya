@@ -52,6 +52,15 @@ impl SessionKind {
     }
 }
 
+/// Reference to the view used to build a model round's request.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ViewRef {
+    /// Last durable event in the view's session log prefix (inclusive).
+    pub cut: EventSeq,
+    /// Lowercase hex SHA-256 of the canonical system, tools, and messages.
+    pub request_sha256: String,
+}
+
 /// Canonical runtime event stream: one tagged variant per discrete state change.
 ///
 /// Persist durable variants with a real `EventSeq`; high-frequency text may be
@@ -81,6 +90,14 @@ pub enum Event {
         /// field existed decode as [`SessionKind::Project`].
         #[serde(default)]
         kind: SessionKind,
+    },
+
+    /// Freeze the initial environment and workspace guidance for full-mode turns.
+    InitialContextRecorded {
+        /// Session this event belongs to.
+        session: SessionId,
+        /// Rendered initial context used in the system prompt.
+        text: String,
     },
 
     /// Set or clear one temporary Agent model for the owning root Session tree.
@@ -366,6 +383,9 @@ pub enum Event {
         message: MessageId,
         /// Zero-based round index within the turn.
         step: u32,
+        /// Request view, shared by every retry of the round. Absent in old logs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        view: Option<ViewRef>,
     },
     /// Provider round finished; reducer no-op. `finish` defaults to `stop` on old logs.
     StepFinished {
@@ -954,11 +974,8 @@ pub enum Event {
     // -------- todos --------
     /// The session's todo list changed: the full list after a todo tool call.
     ///
-    /// Appended by the engine right after the `ToolResult` of a todo tool
-    /// whose result carries a list different from the folded one (reads that
-    /// change nothing append nothing). Folds into `SessionProjection.todos`.
-    /// Sessions that predate this event have none; their list is read from
-    /// the todo tools' results instead.
+    /// Appended by the kernel in the same batch as the `ToolResult` of a
+    /// `todo` call that changes the list. Folds into `SessionProjection.todos`.
     TodosUpdated {
         /// Session whose todo list changed.
         session: SessionId,
@@ -969,8 +986,7 @@ pub enum Event {
     // -------- file snapshots and revert --------
     /// Files one tool call changed, each with its content before the change.
     ///
-    /// Appended by the engine right after the call's `ToolResult` /
-    /// `ToolError` when the call changed at least one file (write, edit,
+    /// Recorded after the call has changed at least one file (write, edit,
     /// apply_patch, and bash inside a git work tree). Contents live in the
     /// store's per-session blob table; the event carries only paths and blob
     /// keys. Folds onto `MessageProjection.file_changes` of `message` and is
@@ -985,6 +1001,16 @@ pub enum Event {
         call: Option<ToolCallId>,
         /// Changed files, each with its state before the call.
         files: Vec<crate::revert::FileChange>,
+    },
+
+    /// Metadata of files the session has accessed, or changes since the last observation.
+    FilesObserved {
+        /// Session whose known files are being updated.
+        session: SessionId,
+        /// True for a change detected before a round, false for a tool observation.
+        external: bool,
+        /// One stamp per observed path.
+        files: Vec<FileStamp>,
     },
 
     /// The transcript was reverted to just before user message `message`.
@@ -1191,6 +1217,7 @@ impl Event {
     pub fn session(&self) -> Option<SessionId> {
         match self {
             Event::SessionCreated { session, .. }
+            | Event::InitialContextRecorded { session, .. }
             | Event::SessionAgentModelOverrideSet { session, .. }
             | Event::SessionPermissionModeSet { session, .. }
             | Event::SessionTitled { session, .. }
@@ -1253,11 +1280,23 @@ impl Event {
             | Event::UsageRecorded { session, .. }
             | Event::TodosUpdated { session, .. }
             | Event::FilesChanged { session, .. }
+            | Event::FilesObserved { session, .. }
             | Event::SessionReverted { session, .. }
             | Event::SessionUnreverted { session, .. } => Some(*session),
             Event::Error { session, .. } => *session,
         }
     }
+}
+
+/// Metadata for one known path. Both values are null when the file is deleted.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileStamp {
+    /// Absolute path.
+    pub path: String,
+    /// Modification time in nanoseconds since the Unix epoch.
+    pub mtime_ns: Option<i64>,
+    /// File size in bytes.
+    pub size: Option<u64>,
 }
 
 /// An ordered, replayable event: the unit shipped over SSE and stored in the log.

@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use hya_proto::context::TODO_TOOL;
 use hya_proto::{EvictedPart, Message, Part, ToolPartState};
 use hya_tool::handle::{ArtifactPlane, ArtifactStore};
 
@@ -64,6 +65,7 @@ fn stale_tool_outputs(
     keep_steps: usize,
 ) -> Vec<(usize, usize)> {
     let mut candidates = Vec::new();
+    let mut latest_todo = None;
     for (message_index, message) in messages.iter().enumerate() {
         let parts = match message {
             Message::Assistant { parts, .. } | Message::User { parts, .. } => parts,
@@ -71,12 +73,17 @@ fn stale_tool_outputs(
         };
         for (part_index, part) in parts.iter().enumerate() {
             if let Part::Tool {
+                name,
                 state: ToolPartState::Completed { output, .. },
                 ..
             } = part
                 && !is_eviction_notice(output)
             {
-                candidates.push((message_index, part_index));
+                let location = (message_index, part_index);
+                if name.as_str() == TODO_TOOL {
+                    latest_todo = Some(location);
+                }
+                candidates.push(location);
             }
         }
     }
@@ -87,6 +94,7 @@ fn stale_tool_outputs(
         .enumerate()
         .filter(|(rank, (message_index, _))| *rank < step_cut || *message_index < message_cut)
         .map(|(_, location)| location)
+        .filter(|location| Some(*location) != latest_todo)
         .collect()
 }
 
@@ -231,6 +239,31 @@ mod tests {
 
     fn evict(messages: &mut [Message], keep: usize, sink: Option<&dyn EvictionSink>) -> usize {
         evict_stale_tool_outputs(messages, keep, keep, sink).len()
+    }
+
+    #[test]
+    fn eviction_keeps_only_the_newest_todo_result_when_both_are_stale() {
+        let mut older = assistant_with_tool("Current todos:\n- #1 [pending] first");
+        let mut latest = assistant_with_tool("Current todos:\n- #1 [completed] first");
+        for message in [&mut older, &mut latest] {
+            let Message::Assistant { parts, .. } = message else {
+                panic!("expected assistant tool message");
+            };
+            let Part::Tool { name, .. } = &mut parts[0] else {
+                panic!("expected tool part");
+            };
+            *name = hya_proto::ToolName::new(TODO_TOOL);
+        }
+        let mut messages = [older, latest, assistant_with_tool("recent")];
+        assert_eq!(evict(&mut messages, 1, None), 1);
+        assert_eq!(
+            tool_output_of(&messages[0]).as_deref(),
+            Some(EVICTED_OUTPUT_NOTICE)
+        );
+        assert_eq!(
+            tool_output_of(&messages[1]).as_deref(),
+            Some("Current todos:\n- #1 [completed] first")
+        );
     }
 
     #[test]

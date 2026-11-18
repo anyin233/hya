@@ -2,14 +2,14 @@
 
 ## Introduction
 
-Five trusted first-party Plugin presets own the exposure policy for Hya's Rust
+Four trusted first-party Plugin presets own the exposure policy for Hya's Rust
 builtin tools. They record model visibility, compatibility aliases, schema
 versions, invocation permission posture, protected names, and URI-scheme
-ownership. All five families own their concrete Rust implementations and ship lockstep
+ownership. All four families own their concrete Rust implementations and ship lockstep
 dynamic libraries inside public `.hyabundle` packages. `hya-tool` supplies the
 `Tool` interface, registry, native loader, permission model, and session planes.
 
-The sources live in `bundles/presets/{base,extended,network,channel,todo}-tools`.
+The sources live in `bundles/presets/{base,extended,network,channel}-tools`.
 Each `bundle.yaml` identifies a `Plugin` and declares `exposure.yaml` as an inert
 `extensions.files` asset. Every source also declares its Cargo manifest and Rust implementation modules
 as source assets. The companion file carries trusted preset metadata
@@ -36,10 +36,10 @@ declared tools before the runtime can publish it.
 | `hya/extended-tools` | `lsp`, `skill`, `list_agents`, `task`, `workflow`, `search_agent`, `archive`, `plan_exit`, `project_activity`, `wait` |
 | `hya/network-tools` | `webfetch`, `websearch` |
 | `hya/channel-tools` | `send`, `list_channel`, `report`, `wait` (overrides extended-tools' `wait`) |
-| `hya/todo-tools` | `todo__read`, `todo__update_status`, `todo__update_content` |
 
-The registry holds 28 canonical names: `wait` is exported by two families and
-installed once.
+The registry holds 25 canonical names. Two families export `wait` and the
+registry installs it once. The model also receives the kernel's
+[`todo` and `rewrite` tools](kernel.md#built-in-tools).
 
 `ask_user` is the canonical name for the requested `ask` function; `question` remains its hidden alias. The
 user-assigned `lsp` and `task` tools belong to the extended family.
@@ -74,8 +74,8 @@ To stage a built native family executable, use:
 
 ```sh
 cargo run -p xtask -- package-native-tool-bundle \
-  bundles/presets/todo-tools target/release/hya-todo-tools \
-  dist/todo-tools.hyabundle
+  bundles/presets/network-tools target/release/hya-network-tools \
+  dist/network-tools.hyabundle
 ```
 
 The command reads the family source, preserves its declared files, adds
@@ -86,11 +86,11 @@ package. The executable must be built for the target platform first.
 To build and package one trusted family implementation for the current target:
 
 ```sh
-cargo build -p hya-todo-tools --lib
+cargo build -p hya-network-tools --lib
 cargo run -p xtask -- package-native-tool-library \
-  bundles/presets/todo-tools \
-  target/debug/libhya_todo_tools.so \
-  dist/bundles/hya-todo-tools.hyabundle
+  bundles/presets/network-tools \
+  target/debug/libhya_network_tools.so \
+  dist/bundles/hya-network-tools.hyabundle
 ```
 
 Use `.dylib` instead of `.so` on macOS. The command embeds the raw library
@@ -263,7 +263,7 @@ The one use today is `wait`: `hya/extended-tools` exports a `wait` that wakes
 on subagent progress only, and `hya/channel-tools` exports
 `{ name: wait, schema_version: 1, permission: read_only, overrides: hya/extended-tools }`,
 which also wakes on mail for the caller. `ToolRegistry::builtins()` loads all
-five families, so the channel-aware `wait` is the one installed;
+four families, so the channel-aware `wait` is the one installed;
 `ToolRegistry::from_tool_families(&[...])` builds a registry from a subset of
 families (for example without `hya/channel-tools`, which installs the
 extended-tools `wait`). `builtin_bundle_origin("wait")` names the winner.
@@ -271,7 +271,7 @@ extended-tools `wait`). `builtin_bundle_origin("wait")` names the winner.
 ```rust
 use hya_tool::ToolRegistry;
 let registry = ToolRegistry::from_tool_families(&[
-    "hya/base-tools", "hya/extended-tools", "hya/network-tools", "hya/todo-tools",
+    "hya/base-tools", "hya/extended-tools", "hya/network-tools",
 ]);
 assert_eq!(registry.builtin_bundle_origin("wait"), Some("hya/extended-tools"));
 assert_eq!(ToolRegistry::builtins().builtin_bundle_origin("wait"), Some("hya/channel-tools"));
@@ -294,7 +294,7 @@ The staged package adds these manifest entries without modifying the source
 ```yaml
 resources:
   tools:
-    - { id: todo__read, path: declarations/tool.json }
+    - { id: webfetch, path: declarations/tool.json }
 extensions:
   rust:
     - { id: runtime, path: native/tool-runtime }
@@ -315,10 +315,10 @@ The in-process library package instead adds `extensions.libraries` and no
 ```yaml
 resources:
   tools:
-    - { id: todo__read, path: declarations/tool.json }
+    - { id: webfetch, path: declarations/tool.json }
 extensions:
   libraries:
-    - { id: runtime, path: native/libhya_todo_tools.so }
+    - { id: runtime, path: native/libhya_network_tools.so }
 ```
 
 `extensions.libraries` is a list of `{id, path}` raw byte resources. A family
@@ -372,8 +372,8 @@ CARGO_BUILD_JOBS=8 cargo test --locked -p hya-tool --test native_replacement
 ```
 
 The test copies its host into a private directory and installs the replacement
-as `libhya_todo_tools.so` beside it. It constructs only `hya/todo-tools` through
-`ToolRegistry::from_tool_families`, invokes `todo__read`, and checks the fixture's
+as `libhya_network_tools.so` beside it. It constructs only `hya/network-tools` through
+`ToolRegistry::from_tool_families`, invokes `webfetch`, and checks the fixture's
 unique result and echoed input. A second library reports a wrong ABI digest;
 its registration aborts if called, proving rejection precedes registration.
 No shared build library is overwritten. `cargo test -p hya-tool` builds both
@@ -478,9 +478,6 @@ and artifact spill; coding results use its structured field/envelope bounds.
 | `send` | Mailbox-plane response; no wrapper byte cap. |
 | `list_channel` | Mailbox-plane response; no wrapper byte cap. |
 | `report` | Lifecycle-plane response; no wrapper byte cap. |
-| `todo__read` | Entire todo snapshot; no byte cap. |
-| `todo__update_status` | Entire todo snapshot; no byte cap. |
-| `todo__update_content` | Entire todo snapshot plus added IDs; no byte cap. |
 
 MCP and plugin results also retain the host cap. Row limits and optional input
 limits alone cannot replace a serialized output bound.

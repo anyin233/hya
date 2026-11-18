@@ -28,10 +28,11 @@ pub(super) fn projection_to_messages(
     crate::kernel::request::projection_to_messages(&agent.name, projection, model, attachments)
 }
 
-/// The agent's system prompt plus the team quick reference for exactly the
-/// coordination tools in `tools` (harness-allocated per agent and depth).
+/// The agent prompt, the recorded initial context and the team reference for
+/// the coordination tools this round offers.
 pub(super) fn system_prompt(
     agent: &AgentSpec,
+    initial_context: Option<&str>,
     tools: &[hya_proto::ToolSchema],
     depth: u32,
 ) -> String {
@@ -39,11 +40,16 @@ pub(super) fn system_prompt(
         |name| tools.iter().any(|schema| schema.name.as_str() == name),
         depth,
     );
-    match reference {
-        Some(reference) if agent.system_prompt.trim().is_empty() => reference,
-        Some(reference) => format!("{}\n\n{reference}", agent.system_prompt.trim_end()),
-        None => agent.system_prompt.clone(),
-    }
+    [
+        Some(agent.system_prompt.trim_end()),
+        initial_context,
+        reference.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|section| !section.is_empty())
+    .collect::<Vec<_>>()
+    .join("\n\n")
 }
 
 /// Lowercase hex SHA-256 digests of a request's system prompt text and of its
@@ -483,14 +489,14 @@ mod tests {
             .into_iter()
             .map(|schema| schema.name.as_str().to_string())
             .collect::<BTreeSet<_>>();
-        assert_eq!(builtins.len(), 28);
+        assert_eq!(builtins.len(), 25);
 
         let advertised = builtins
             .iter()
             .filter(|name| advertise_tool(name))
             .cloned()
             .collect::<BTreeSet<_>>();
-        assert_eq!(advertised.len(), 27);
+        assert_eq!(advertised.len(), builtins.len() - 1);
         assert!(advertised.contains("write"));
         assert!(advertised.contains("edit"));
         assert!(!advertised.contains("apply_patch"));

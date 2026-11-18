@@ -22,8 +22,8 @@ use hya_tool::handle::{
 };
 use hya_tool::{
     Action, FormatterPlane, InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane, Mode,
-    PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnerPlane, TodoPlane, Tool, ToolCtx,
-    ToolError, ToolOperation, ToolRegistry, ToolResultPolicy, WebSearchPlane, WorkflowPlane,
+    PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnerPlane, Tool, ToolCtx, ToolError,
+    ToolOperation, ToolRegistry, ToolResultPolicy, WebSearchPlane, WorkflowPlane,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -47,7 +47,6 @@ fn ctx(workdir: PathBuf) -> ToolCtx {
         lifecycle: LifecyclePlane::disconnected(),
         session: None,
         parent_session: None,
-        todo: TodoPlane::default(),
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
         agents: Default::default(),

@@ -277,6 +277,32 @@ async fn nested_calls_run_in_the_callers_view_and_record_against_the_caller() {
     assert_eq!(changed[0].0, Some(calls[0].0));
     assert_eq!(changed[0].1[0].path, written.to_string_lossy());
 
+    let stamps: Vec<_> = events
+        .windows(2)
+        .filter_map(|pair| match pair {
+            [
+                Event::ToolResult { call, .. },
+                Event::FilesObserved {
+                    external: false,
+                    files,
+                    ..
+                },
+            ] => Some((*call, files.as_slice())),
+            _ => None,
+        })
+        .collect();
+    let [(call, [stamp])] = stamps.as_slice() else {
+        panic!("unexpected observations: {stamps:?}")
+    };
+    assert_eq!(*call, calls[0].0);
+    assert_eq!(stamp.path, written.to_string_lossy());
+    assert_eq!(stamp.size, Some(7));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::FilesObserved { external: true, .. }))
+    );
+
     // (b) A tool outside the view is unknown.
     assert_eq!(outcome(1)["error"]["kind"], "other");
     assert_eq!(outcome(1)["error"]["message"], "unknown tool: glob");

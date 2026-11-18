@@ -91,8 +91,8 @@ impl SessionEngine {
         .await
     }
 
-    /// Copy the source's visible messages strictly before `before` (all of
-    /// them when `None`) into a forked session log.
+    /// Copy the initial context and visible messages into a forked log.
+    /// Copies messages strictly before `before` (all of them when `None`).
     ///
     /// # Errors
     /// Propagates store append failures.
@@ -102,6 +102,16 @@ impl SessionEngine {
         source: &Projection,
         before: Option<MessageId>,
     ) -> Result<(), CoreError> {
+        if let Some(text) = &source.session.initial_context {
+            self.emit(
+                target,
+                Event::InitialContextRecorded {
+                    session: target,
+                    text: text.clone(),
+                },
+            )
+            .await?;
+        }
         for message in &source.session.messages {
             if before.is_some_and(|id| id == message.id) {
                 break;

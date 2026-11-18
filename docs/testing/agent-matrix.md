@@ -40,7 +40,7 @@ cargo test -p hya-e2e -- --test-threads=1
 | T1.12 | Session transcript read | `tests/p12_context_api.rs` | Multi-turn user/assistant text in `GET /v1/sessions/{id}/messages` |
 | T1.13 | Project AGENTS.md guidance | `tests/p13_project_agents_context.rs` | Compat-guided FakeLlm request contains AGENTS body marker |
 | T1.14 | Compact / summarize | `tests/p14_compact_summarize.rs` | Compact injects summary into context; follow-up turn works |
-| T1.15 | todowrite + edit | `tests/p15_todo_and_edit.rs` | Todo route lists item; edit rewrites file on disk |
+| T1.15 | kernel todo + edit | `tests/p15_todo_and_edit.rs` | Todo route lists items, the bare model receives the rendered tool result, and edit rewrites a file |
 | T1.16 | Custom slash catalog and route expansion | `tests/p18_custom_slash_resources.rs` | Supported command sources, precedence, exact single-pass expansion, route parity, and literal fallback |
 | T1.17 | Skill-backed slash expansion | `tests/p18_custom_slash_resources.rs` | Direct Skill body admission, discovery order, no redundant `skill` call, and bootstrap cache boundaries |
 | T1.18 | Custom command invokes builtin Skill Tool | `tests/p18_custom_slash_resources.rs` | Real `skill` result reaches the next model request; typed failures recover in the same Session |
@@ -86,7 +86,7 @@ cargo test -p hya-e2e -- --test-threads=1
 | T2.37 | [p38_relay.rs](../../crates/hya-e2e/tests/p38_relay.rs) | TLS to the proxy (`--tls-cert/--tls-key` with an rcgen self-signed certificate; `--relay-ca` on `serve` and `bridge`; `hya://` link; `t=auto`): health, a session, and a prompt through the bridge; the capture hop sees no prompt, answer, or PSK bytes | e2e (Track P) |
 | T2.38 | [p39_exec_live_subagents.rs](../../crates/hya-e2e/tests/p39_exec_live_subagents.rs) | headless exec: a lead turn that ends while its worker is still running gets a HEADLESS RUN notice turn instead of ending the run; the lead waits, the worker reports (it is not stopped), and the lead's final answer is the run's last turn | e2e (Track P) |
 | T2.39 | [p39_exec_live_subagents.rs](../../crates/hya-e2e/tests/p39_exec_live_subagents.rs) | headless exec: two notice turns in a row that neither wait nor archive end the run with the worker still running | e2e (Track P) |
-| T2.40 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec: a lead turn that ends with pending/in-progress todos gets a HEADLESS RUN notice listing them; the run ends once every item is completed or blocked | e2e (Track P) |
+| T2.40 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec: a lead turn that ends with an announced next step gets a HEADLESS RUN notice; open todos alone do not continue the run | e2e (Track P) |
 | T2.41 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec: a last message announcing a next step ("Now verify the file format:") continues the run with the announcement quoted | e2e (Track P) |
 | T2.42 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec: a plain summary after tool work ends the run with no notice | e2e (Track P) |
 | T2.43 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/p40_exec_headless_continuation.rs) | headless exec: two ignored announcement notices in a row end the run | e2e (Track P) |
@@ -109,7 +109,7 @@ exercises **15** canonical Tools:
 
 | Covered (15) | Not directly covered by Track P (12) |
 | --- | --- |
-| `read`, `write`, `edit`, `bash`, `question`, `skill`, `task`, `todowrite`, `send`, `roster`, `channels`, `join`, `leave`, `list_agents`, `workflow` | `ls`, `glob`, `find`, `grep`, `lsp`, `ask_user`, `apply_patch`, `webfetch`, `websearch`, `plan_exit`, `invalid`, `announce` |
+| `read`, `write`, `edit`, `bash`, `question`, `skill`, `task`, `todo`, `send`, `roster`, `channels`, `join`, `leave`, `list_agents`, `workflow` | `ls`, `glob`, `find`, `grep`, `lsp`, `ask_user`, `apply_patch`, `webfetch`, `websearch`, `plan_exit`, `invalid`, `announce` |
 
 ### Multi-agent scenarios need per-agent FakeLlm routing
 

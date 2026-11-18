@@ -2,13 +2,16 @@
 //! permissions, tool context, file snapshots, output capping, and steer
 //! notices around the call.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use hya_proto::{Event, MessageId, SessionId, ToolCallId, ToolSchema};
 use hya_store::ActorClaim;
 use hya_tool::{AgentDef, ReportLatch, ToolCtx, ToolError};
+use tokio::sync::Mutex;
 
+use super::super::file_snapshot::{FileCapture, observation};
 use super::super::roots::SessionWorkspace;
 use super::super::shell::BashArtifactGuard;
 use super::super::steer::SteerMailbox;
@@ -118,12 +121,9 @@ impl TurnToolGate<'_> {
         }
         let input_for_after =
             (engine.hooks.is_some() || activation_hooks.is_some()).then(|| tc.input.clone());
-        let todo_tool = super::super::todos::is_todo_tool(tc.name.as_str());
-        if todo_tool {
-            engine.restore_todo_plane(session).await;
-        }
         let started = std::time::Instant::now();
-        let mut file_capture = super::super::file_snapshot::FileCapture::None;
+        let mut file_capture = FileCapture::default();
+        let nested_stamps = Arc::new(Mutex::new(BTreeMap::new()));
         let behind = hidden_behind(
             resources,
             depth,
@@ -191,7 +191,6 @@ impl TurnToolGate<'_> {
                                 project_activity: engine.project_activity.for_session(session),
                                 session: Some(session),
                                 parent_session,
-                                todo: engine.todo.clone(),
                                 skills: resources.skill_plane(),
                                 artifacts: engine.artifacts.clone(),
                                 agents: agents.clone(),
@@ -216,6 +215,7 @@ impl TurnToolGate<'_> {
                                 grant_scope: workspace.grant_scope.clone(),
                                 activation_hooks: activation_hooks.clone(),
                                 caller: resolved.tool.name().to_string(),
+                                stamps: Arc::clone(&nested_stamps),
                                 base: ctx.clone(),
                             };
                             ctx.nested = hya_tool::NestedToolPlane::new(Arc::new(nested));
@@ -223,7 +223,7 @@ impl TurnToolGate<'_> {
                             // actual dispatch boundary so takeover cannot turn a
                             // previously valid resident into an unfenced launch.
                             engine.validate_actor_claim(actor_claim).await?;
-                            file_capture = Box::pin(super::super::file_snapshot::capture_before(
+                            file_capture = Box::pin(FileCapture::full(
                                 resolved.tool.name(),
                                 &tc.input,
                                 binding.workdir(),
@@ -247,8 +247,19 @@ impl TurnToolGate<'_> {
             () = cancel.cancelled() => (Err(ToolError::Cancelled), hya_tool::ToolResultPolicy::Default),
             result = collect_tool => result?,
         };
-        Box::pin(engine.record_file_changes(actor_claim, session, message, tc.call, file_capture))
-            .await?;
+        let (changed, stamps) = Box::pin(file_capture.finish(
+            &engine.store,
+            session,
+            message,
+            tc.call,
+            result.as_ref().ok(),
+        ))
+        .await?;
+        if let Some(changed) = changed {
+            engine.emit_for_actor(actor_claim, session, changed).await?;
+        }
+        let mut stamps_by_path = std::mem::take(&mut *nested_stamps.lock().await);
+        stamps_by_path.extend(stamps.into_iter().map(|file| (file.path.clone(), file)));
         let mut artifact_guard =
             BashArtifactGuard::capture(tc.name.as_str(), result.as_ref().ok(), binding.workdir());
         let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -366,30 +377,23 @@ impl TurnToolGate<'_> {
                 )
             }
         };
-        let todo_output = match &event {
-            Event::ToolResult { output, .. } if todo_tool => Some(output.clone()),
-            _ => None,
-        };
         let (acknowledgement, consumed_incoming) = steer
             .take_acknowledgement()
             .map_or((None, false), |(event, incoming)| (Some(event), incoming));
+        let mut events = vec![event];
+        events.extend(observation(
+            session,
+            false,
+            stamps_by_path.into_values().collect(),
+        ));
         let envelopes = engine
             .store
-            .commit_tool_result_with_mail(actor_claim, session, event, acknowledgement)
+            .commit_tool_result_with_mail(actor_claim, session, events, acknowledgement)
             .await?;
         for envelope in envelopes {
             engine.publish_envelope(envelope);
         }
         engine.notify_mail_consumed(session, mail_mark, consumed_incoming);
-        // A todo tool's result carries the whole list; record the
-        // change so the projection (and `todoUpdated`) follow it.
-        if let Some(output) = todo_output
-            && let Some(todos) = engine.changed_todos(session, &output).await
-        {
-            engine
-                .emit_for_actor(actor_claim, session, Event::TodosUpdated { session, todos })
-                .await?;
-        }
         if retains_artifact {
             artifact_guard.disarm();
         } else {

@@ -259,7 +259,7 @@ impl AppState {
         self.auto_title
     }
 
-    /// `--pure`: per-turn guidance skips AGENTS/context discovery entirely.
+    /// `--pure`: skip optional project reference guidance.
     #[must_use]
     pub fn with_pure_guidance(mut self, pure: bool) -> Self {
         self.pure_guidance = pure;

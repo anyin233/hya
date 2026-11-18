@@ -2133,14 +2133,25 @@ skip rules, and built-in fallback skills are documented in
 
 ## Project Context (`AGENTS.md`)
 
-hya canonicalizes the workdir and walks **upward** toward the filesystem root
-collecting every `AGENTS.md` it finds, **stopping** once it has processed
-`$HOME` (files above the home directory are never read). The list is then
-reversed so the outermost/parent `AGENTS.md` appears first in the system prompt
+hya canonicalizes the workdir and walks upward to `$HOME` or the filesystem
+root, whichever it reaches first. It includes each `AGENTS.md` on that path.
+The outermost `AGENTS.md` appears first in the system prompt
 and the workdir-local one last
 ([`crates/hya-engine/src/prompt.rs`](../crates/hya-engine/src/prompt.rs)). Unreadable
 or missing files are skipped silently. This is the sole discovery
 implementation — callers re-export it rather than reimplement walk order.
+
+A full-mode session records its working directory, platform, UTC date, and
+discovered `AGENTS.md` text at the start of its first model turn. Later
+rounds and backend restarts use that same context. To apply an edit, start
+a new session in the workdir (for example, `hya exec "Follow AGENTS.md"`)
+or ask the agent to read the file with a tool. A fork inherits the source
+session's recorded context. Each subagent session records its own.
+
+`--pure` skips external context discovery when recording a session's
+initial context. An existing recording remains part of the session's
+history. The [event reference](architecture/event-model.md#session-lifecycle)
+defines the recorded payload.
 
 ## Project references (`references` / `reference`)
 

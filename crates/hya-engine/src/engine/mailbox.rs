@@ -963,7 +963,6 @@ mod tests {
             lifecycle: hya_tool::LifecyclePlane::disconnected(),
             session: Some(org.lead_2.session),
             parent_session: Some(org.root),
-            todo: Default::default(),
             skills: Default::default(),
             artifacts: Default::default(),
             agents: Default::default(),

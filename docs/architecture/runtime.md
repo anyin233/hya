@@ -16,7 +16,7 @@ central type is `SessionEngine` in
   builder.
 - `PermissionPlane` for allow/ask/deny decisions.
 - `InteractionPlane`, `BoundSpawnSender`, `BoundWorkflowSender`,
-  `MailboxPlane`, `TodoPlane`, `WebSearchPlane`, `LspPlane`, and
+  `MailboxPlane`, `WebSearchPlane`, `LspPlane`, and
   `FormatterPlane` for cross-cutting tool services.
 - `EventBus` for live subscribers.
 - optional hook dispatcher for plugins.
@@ -369,11 +369,13 @@ through in-turn steering is not replayed as a separate lead turn.
 
 After prompt admission succeeds, a root turn resolves the session workdir,
 refreshes its skill candidate if the logical view changed, and captures one
-`TurnBinding`. It then records `MessageStarted` and
-`TurnBindingRecorded { generation, system_sha256, tools_sha256 }` (digests
-of the system prompt and tool list; a round whose digests differ, as after a
-mid-turn rebind, records the event again). The binding retains an `Arc` to the
-complete immutable runtime snapshot for the entire assistant turn.
+`TurnBinding`. It then records `MessageStarted`. If the session has no
+initial context, the turn harness records `InitialContextRecorded` from
+the workdir and the visible directory skill index. The turn then records
+`TurnBindingRecorded { generation, system_sha256, tools_sha256 }` with the
+system prompt and tool list digests. A round whose digests differ records the
+binding again, for example after a mid-turn rebind. The binding retains an
+`Arc` to the runtime snapshot for the assistant turn.
 
 ### Per-round sequence
 
@@ -392,8 +394,9 @@ full-mode harness (`TurnHarness` in
    (see [Compaction and Summaries](#compaction-and-summaries)). When the
    ladder changed the log, check the cancel token again and re-read the
    projection.
-4. Build the request with `kernel::request` from the agent's system prompt,
-   filtered tool schemas plus `rewrite`, and reasoning effort; record
+4. Build the request with `kernel::request` from the agent's prompt, the
+   projection's initial context, filtered tool schemas plus `rewrite`, and
+   reasoning effort. Record
    `TurnBindingRecorded` again when the prompt digests changed. Run the
    `chat_params` hook (may rewrite the `CompletionRequest`).
 5. Acquire a governor stream permit (reserved or general by depth), then open
@@ -761,7 +764,7 @@ no bundle watcher or per-tool-call database check.
 Core Agent definitions, including the default `hya-task` subagent, come from
 the trusted, runtime-loaded [`hya/core-agents` preset](../core-agents.md), and
 native tool visibility/aliases/permission posture come from the
-[five tool-family presets](../base-tools.md). Public packages cannot claim
+[four tool-family presets](../base-tools.md). Public packages cannot claim
 their trusted origin. The first-party `hya/subagents` package was removed;
 every spawned agent is a resident actor. [Channel policy bundles](../agent-channels.md)
 restrict engine-minted communication topology without owning channel identities

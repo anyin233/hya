@@ -10,9 +10,9 @@
 //!   allow/ask/deny rules, remembered grants, optional interceptors, and user-ask
 //!   channels ([`permission`]).
 //! - **Runtime planes** — session-scoped services injected through [`ToolCtx`]:
-//!   interaction/questions, subagent spawning, todos, skills, web search, LSP,
+//!   interaction/questions, subagent spawning, skills, web search, LSP,
 //!   mailbox, and formatters.
-//! - **Native bundle loading** — all five builtin families execute from
+//! - **Native bundle loading** — all four builtin families execute from
 //!   trusted, lockstep dynamic libraries. Their implementations live in bundles.
 //!
 //! Tool authors implement [`Tool`] and register with [`ToolRegistry`]. Security
@@ -59,8 +59,6 @@ mod skill;
 mod skill_catalog;
 /// Subagent spawn plane and request types used by the `task` tool.
 pub mod spawn;
-/// In-memory per-session todo list plane and the `todo__` tool group.
-pub mod todo;
 /// Token accounting: how much of the context window a transcript occupies.
 pub mod tokens;
 /// Tool trait, registry, and permission class metadata.
@@ -128,7 +126,6 @@ pub use spawn::{
     HANDLE_PREFIX_MAX_LEN, InlineAgent, MemberOutcome, SpawnError, SpawnMember, SpawnRequest,
     SpawnRequestSendError, SpawnRequestSink, SpawnerPlane, sanitize_handle_prefix,
 };
-pub use todo::{SessionTodos, TodoItem, TodoPlane, TodoStatus};
 pub use tool::{
     DuplicateName, NamedTool, ResolvedTool, Tool, ToolCtx, ToolError, ToolOperation,
     ToolPermission, ToolRegistry, ToolRegistrySnapshot, ToolResultPolicy,

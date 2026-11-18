@@ -2202,7 +2202,7 @@ fn both_planes_keep_builtin_aliases_out_of_model_schemas() {
         .into_iter()
         .map(|schema| schema.name.as_str().to_string())
         .collect::<BTreeSet<_>>();
-    assert_eq!(expected.len(), 28);
+    assert_eq!(expected.len(), 25);
     for (agent_id, plane, workdir) in [
         (
             "full-alias",
@@ -3147,7 +3147,6 @@ fn dispatch_ctx(workdir: &Path) -> ToolCtx {
         lifecycle: hya_tool::LifecyclePlane::disconnected(),
         session: None,
         parent_session: None,
-        todo: hya_tool::TodoPlane::default(),
         skills: SkillPlane::default(),
         artifacts: hya_tool::handle::ArtifactPlane::default(),
         agents: Default::default(),
@@ -3415,12 +3414,8 @@ fn domain_schema_names(compiled: &CompiledResourceView) -> BTreeSet<String> {
 
 // ---- Coordination tools (0.41.0): harness-owned, injected at startup ----
 
-const WITHOUT_CHANNEL_TOOLS: [&str; 4] = [
-    "hya/base-tools",
-    "hya/extended-tools",
-    "hya/network-tools",
-    "hya/todo-tools",
-];
+const WITHOUT_CHANNEL_TOOLS: [&str; 3] =
+    ["hya/base-tools", "hya/extended-tools", "hya/network-tools"];
 
 fn view(allow: &[&str], deny: &[&str]) -> ResourceView {
     ResourceView {

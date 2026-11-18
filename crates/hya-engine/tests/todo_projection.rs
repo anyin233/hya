@@ -13,7 +13,7 @@ use hya_engine::{AgentSpec, CreateSession, EventBus, SessionEngine};
 use hya_proto::{AgentName, Event, FinishReason, ModelRef, SessionId, TodoItem, TodoStatus};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -27,15 +27,11 @@ fn tempdir() -> PathBuf {
     dir
 }
 
-/// A fresh engine (and so a fresh in-memory todo plane) over `store`.
+/// A fresh engine over `store`.
 fn engine(store: SessionStore, script: Vec<Vec<FakeStep>>) -> SessionEngine {
     let router =
         Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted_turns(script))));
-    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
-        Action::TodoWrite,
-        "*",
-        Mode::Allow,
-    )]));
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     SessionEngine::new(
         store,
         router,
@@ -94,8 +90,8 @@ async fn the_todo_list_survives_a_restart_and_the_next_edit_builds_on_it() {
     let first = engine(
         store.clone(),
         call(
-            "todo__update_content",
-            json!({"operations": [
+            "todo",
+            json!({"ops": [
                 {"op": "add", "content": "first"},
                 {"op": "add", "content": "second"}
             ]}),
@@ -115,12 +111,11 @@ async fn the_todo_list_survives_a_restart_and_the_next_edit_builds_on_it() {
     turn(&first, session, &dir).await;
     drop(first);
 
-    // "Restart": a new engine whose todo plane holds nothing for the session.
     let second = engine(
         store.clone(),
         call(
-            "todo__update_status",
-            json!({"updates": [{"id": "2", "status": "completed"}]}),
+            "todo",
+            json!({"ops": [{"op": "status", "id": "2", "status": "completed"}]}),
         ),
     );
     turn(&second, session, &dir).await;
@@ -129,7 +124,6 @@ async fn the_todo_list_survives_a_restart_and_the_next_edit_builds_on_it() {
         item("1", "first", TodoStatus::Pending),
         item("2", "second", TodoStatus::Completed),
     ];
-    assert_eq!(second.todos(session).await, expected);
     let projection = store.read_projection(session).await.unwrap();
     assert_eq!(projection.session.todos, Some(expected));
     let updates = store

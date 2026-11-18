@@ -213,7 +213,7 @@ async fn run_turn_injects_one_ordered_skill_section_from_session_workdir_not_age
     let system = requests[0].system.as_deref().unwrap();
     assert_eq!(
         system
-            .matches("These skills are available on demand; read the named SKILL.md when relevant:")
+            .matches("Skills found at session start; use the skill tool to load a current skill:")
             .count(),
         1
     );
@@ -221,7 +221,7 @@ async fn run_turn_injects_one_ordered_skill_section_from_session_workdir_not_age
     // The session agent's prompt (built-in hya-main) comes before the skills.
     assert!(
         system.find("You are hya-main").unwrap()
-            < system.find("These skills are available on demand").unwrap()
+            < system.find("Skills found at session start").unwrap()
     );
     // Compiled resource views expose harness-qualified spellings next to the short name.
     assert!(

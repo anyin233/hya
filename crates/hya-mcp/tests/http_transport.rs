@@ -92,7 +92,6 @@ fn ctx_allowing_mcp() -> hya_tool::ToolCtx {
         project_activity: hya_tool::ProjectActivityPlane::disconnected(),
         session: None,
         parent_session: None,
-        todo: hya_tool::TodoPlane::default(),
         skills: hya_tool::SkillPlane::default(),
         artifacts: hya_tool::handle::ArtifactPlane::default(),
         websearch: hya_tool::WebSearchPlane::default(),

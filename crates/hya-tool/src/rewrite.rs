@@ -112,6 +112,7 @@ pub trait CompactionHooks: Send + Sync {
 }
 
 /// What a rewriter sees of the round it runs before.
+#[derive(Clone, Copy)]
 pub struct RewriteCtx<'a> {
     /// Session being rewritten.
     pub session: SessionId,

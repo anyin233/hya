@@ -134,7 +134,7 @@ test.describe("live todo panel", () => {
     model: {
       permission: "allow",
       steps: [
-        toolStep("todo__update_content", { operations: [{ op: "add", content: "write tests" }] }),
+        toolStep("todo", { ops: [{ op: "add", content: "write tests" }] }),
         textStep("Added a todo."),
       ],
     },
@@ -153,6 +153,10 @@ test.describe("live todo panel", () => {
     await term.waitForIdle()
 
     await term.waitForText("○ write te", 20_000)
+    await term.press("Control+x")
+    await term.type("/tools")
+    await term.press("Enter")
+    await term.waitForText("- #1 [pending] write tests")
     // One `GetSessionTodo`: the seed when the new session opened (empty then); the item came on the stream.
     expect(proxy.log.filter((entry) => entry.method === "GET" && /\/todo$/.test(entry.path))).toHaveLength(1)
     // Sidebar Context box: the merged transcript's message count (user + assistant).
