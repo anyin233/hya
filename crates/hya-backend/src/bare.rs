@@ -3,6 +3,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context as _;
 use hya_core::kernel::{self, StoreEmit};
@@ -11,7 +12,7 @@ use hya_proto::{
     SessionKind,
 };
 use hya_store::SessionStore;
-use hya_tool::{PermissionModel, PermissionPlane, PermissionRules, ToolCtx};
+use hya_tool::{PermissionModel, PermissionPlane, PermissionRules, ToolCtx, deadline};
 use tokio_util::sync::CancellationToken;
 
 /// `hya exec --bare` on `db`: always in process; a server holding the
@@ -20,9 +21,15 @@ pub(crate) async fn exec_entry(
     prompt: String,
     model_override: Option<String>,
     db: &str,
+    time_budget: Option<u64>,
 ) -> anyhow::Result<()> {
     match crate::db_writer::claim(db, "exec").await? {
-        crate::db_writer::Writer::Direct(store) => exec(prompt, model_override, store).await,
+        crate::db_writer::Writer::Direct(store) => {
+            if let Some(seconds) = time_budget {
+                deadline::install(Duration::from_secs(seconds));
+            }
+            exec(prompt, model_override, store).await
+        }
         crate::db_writer::Writer::Server(server) => crate::db_writer::exit_unroutable(
             "exec",
             db,
@@ -47,65 +54,70 @@ async fn exec(
     let user = MessageId::new();
     let part = PartId::new();
     let message = MessageId::new();
-    store
-        .append_events(
+    let mut events = vec![
+        Event::SessionCreated {
             session,
-            vec![
-                Event::SessionCreated {
-                    session,
-                    parent: None,
-                    agent: AgentName::new(kernel::AGENT),
-                    model: model.clone(),
-                    workdir: workdir.to_string_lossy().into_owned(),
-                    project: None,
-                    kind: SessionKind::Project,
-                },
-                Event::MessageStarted {
-                    session,
-                    message: user,
-                    role: Role::User,
-                    agent: None,
-                    model: None,
-                },
-                Event::TextStart {
-                    session,
-                    message: user,
-                    part,
-                },
-                Event::TextDelta {
-                    session,
-                    message: user,
-                    part,
-                    delta: prompt,
-                },
-                Event::TextEnd {
-                    session,
-                    message: user,
-                    part,
-                },
-                Event::UserPromptContextRecorded {
-                    session,
-                    message: user,
-                    files: Vec::new(),
-                    agents: Vec::new(),
-                },
-                Event::MessageFinished {
-                    session,
-                    message: user,
-                    role: Role::User,
-                    finish: FinishReason::Stop,
-                    tokens: None,
-                    cause: None,
-                },
-                Event::MessageStarted {
-                    session,
-                    message,
-                    role: Role::Assistant,
-                    agent: Some(AgentName::new(kernel::AGENT)),
-                    model: Some(model.clone()),
-                },
-            ],
-        )
+            parent: None,
+            agent: AgentName::new(kernel::AGENT),
+            model: model.clone(),
+            workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: SessionKind::Project,
+        },
+        Event::MessageStarted {
+            session,
+            message: user,
+            role: Role::User,
+            agent: None,
+            model: None,
+        },
+        Event::TextStart {
+            session,
+            message: user,
+            part,
+        },
+        Event::TextDelta {
+            session,
+            message: user,
+            part,
+            delta: prompt,
+        },
+        Event::TextEnd {
+            session,
+            message: user,
+            part,
+        },
+        Event::UserPromptContextRecorded {
+            session,
+            message: user,
+            files: Vec::new(),
+            agents: Vec::new(),
+        },
+        Event::MessageFinished {
+            session,
+            message: user,
+            role: Role::User,
+            finish: FinishReason::Stop,
+            tokens: None,
+            cause: None,
+        },
+    ];
+    if let Some(deadline) = deadline::current() {
+        events.extend(kernel::round::system_message_events(
+            session,
+            MessageId::new(),
+            deadline.opening(),
+        ));
+    }
+    events.push(Event::MessageStarted {
+        session,
+        message,
+        role: Role::Assistant,
+        agent: Some(AgentName::new(kernel::AGENT)),
+        model: Some(model.clone()),
+    });
+    store
+        .append_events(session, events)
         .await
         .context("create the session")?;
     let cancel = CancellationToken::new();
