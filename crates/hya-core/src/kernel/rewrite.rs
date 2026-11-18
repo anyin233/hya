@@ -1,7 +1,7 @@
 //! The rewrite primitive: remove everything before the current step.
 
 use async_trait::async_trait;
-use hya_proto::context::{COMPACT_CONTEXT_MARKER, render_todos};
+use hya_proto::context::{COMPACT_CONTEXT_MARKER, marker_goal};
 use hya_proto::{
     CompactionStrategy, Event, FinishReason, MessageId, PartId, Projection, Role, SessionId,
     StepCut, TodoItem,
@@ -229,10 +229,8 @@ fn marker_text(initiator: Initiator, users: &[String], todos: &[TodoItem]) -> St
         "{COMPACT_CONTEXT_MARKER}[hya] Earlier context was removed by the {by}. It stays in the session log and cannot be read back.\nUser messages from the removed part, verbatim:\n\n{}",
         users.join("\n\n")
     );
-    if !todos.is_empty() {
-        marker.push_str("\n\n");
-        marker.push_str(&render_todos(todos));
-    }
+    marker.push_str("\n\n");
+    marker.push_str(&marker_goal(todos));
     marker
 }
 
