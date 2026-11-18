@@ -133,58 +133,60 @@ reads the replayed list.
 
 ## Workspace file observations
 
-Bare and full mode record when a file seen by the model may have changed.
-For example, the model reads `a.txt`, and while its next request is being
-answered another process rewrites `a.txt`. Before the following round builds
-its request, the kernel `stat`s every known file and appends one
-`FilesObserved` event with `external: true` naming `a.txt`. Nothing about the
-change enters the request: the model sees the new contents only if it reads
-the file again. The stamps are in the log, so in full mode the same check
-also catches edits made between turns, including across a backend restart.
+Bare and full mode maintain the workspace part of Context (W) in the event
+log. On local Linux the kernel watches the session's working directory with
+Rust `notify` and inotify. Sessions of one engine share a watcher for each
+canonical root and advance independently. The first model round inventories
+regular files, including files no tool has opened. Subsequent rounds reconcile
+changed paths and the descendants of directories moved into or out of the root.
+A quiet round advances its view without a file observation event.
 
-After a tool call, the kernel stamps the files it read or changed and
-records `FilesObserved { session, external: false, files }` alongside
-the tool outcome in one transaction. The log also records the prior state
-of files changed by the tool as `FilesChanged`, which full-mode revert
-uses to restore files. Before constructing each round's View, after any
-rewrite, the kernel checks each known path with one `stat`. It records a
-single `FilesObserved` with `external: true` when at least one stamp differs,
-then takes the View from the updated projection. The `session.files`
-projection retains the latest stamp per path across turns and restarts.
-The request renders the transcript and tool results. File stamps stay
-in the log and projection.
+This is automatic in an ordinary `hya exec --bare` run and in `hya serve`.
+For example, open two sessions in the same directory, run a turn in each, then
+create `report.md` from another terminal. At the next model round in each
+session, W records `report.md` before `StepStarted.view.cut`. Each agent can
+read the file to obtain its contents. The inventory stays in the projection
+and adds no file list or content to the provider prompt. A library host running
+repeated bare turns can share one `kernel::WorkspaceWatches` with
+`kernel::run_with_watches`; `kernel::run` owns a watcher for its run.
 
-A stamp is `{ path: string, mtime_ns: number | null, size: number | null }`.
-The path is absolute. Modification time is a signed integer in nanoseconds
-since the Unix epoch and size is an integer in bytes. A deleted file or a
-path replaced by a non-file has `null` for both values. A metadata read
-that fails for another reason leaves the previous stamp in place.
+The event contract is `FilesObserved { session, external, files }`. Each file
+is `{ path: string, mtime_ns: i64 | null, size: u64 | null }` with an absolute
+path, Unix nanoseconds and byte size. Absence produces two nulls for a known
+path. Replay replaces that path's entry in `session.files`. An event can
+invalidate an unchanged stamp, for example an equal-length rewrite that
+restores the old modification time. Consumers tracking freshness should
+follow the event sequence. Notifications coalesce intermediate operations. A transient file that vanishes
+before reconciliation may leave no observable state.
 
-Bare mode observes `read`, `write`, and `edit` targets and files changed
-according to `bash`'s Git snapshot. After every `bash` call, with or without
-Git, the kernel also `stat`s each known file and stamps the changed ones as
-that call's own observation (`external: false`), so a shell edit outside a Git
-work tree is not reported as an outside change; it records no `FilesChanged`
-there, so revert cannot restore it. Full mode also observes `apply_patch`
-targets, LSP's explicit file, and Grep's explicit file or structured result
-paths. The same coverage applies when those tools run through a nested
-call. In either mode, the per-round check has no content reads, directory
-scan, Git call, or configuration.
+Tool observations carry `external: false`. Bare mode stamps explicit read,
+write and edit targets. Full mode also handles patch targets, LSP's explicit
+file and grep results, including nested calls. With an active baseline, a
+shell call samples changes at completion, including newly created files in
+a non-Git workspace. A pre-request observation carries `external: true`.
+These flags identify observation boundaries. Concurrent changes during a
+shell command can be attributed to that command. Revert still requires the
+separate pre-change content captured by `FilesChanged`.
 
-- New or changed files that no tool exposed are undiscovered. `ls`, `glob`,
-  and `find` list paths without reading file contents. Catalog-backed
-  `skill` results, resource handles such as `local://` and `artifact://`,
-  and internal accesses by bundles, plugin tools, or MCP servers are outside
-  file observation. Grep only exposes its explicit file and its displayed
-  result paths.
-- A rewrite with the same modification time and byte size is undetectable.
-- Shell snapshots cover content changes visible to Git from the command's
-  working directory. Files outside that work tree, ignored files, and
-  internal output files are excluded. Metadata-only writes can also escape
-  capture. An outside edit made while a command runs is recorded as that
-  command's change (`FilesChanged` inside Git, `external: false` stamps
-  outside), not as an external observation: a before/after comparison cannot
-  tell who wrote. A file a shell command creates without Git stays unknown.
+The next round after a daemon restart, root replacement, lost notification
+stream or expired reader history reconciles durable W with an inventory.
+It invalidates surviving files and marks known removals. A file created and
+removed entirely while observation was interrupted leaves no evidence.
+Automatically discovered names must be UTF-8. Directory symlinks, Git
+internals, workspace scratch and output directories (`.hya/local` and
+`.hya/tool-output`), and the active SQLite/runtime files are excluded from
+discovery. Project files such as `.hya/skills` remain in scope. Explicitly observed paths outside the watched scope
+and symlink targets retain metadata checks.
+
+An engine caches 16 recent roots and retains any roots currently in use. Directory registration is subject
+to the operating system's inotify quota. The change journal holds up to
+8,192 distinct dirty names and 256
+reader cursors per root. Exceeding the history limits causes an inventory on a
+reader's next round. If a native watch cannot be installed, the kernel logs
+the failure and checks the session's known file stamps; setup is retried after
+30 seconds. Other operating systems use the known-file check. That check can
+detect ordinary changes to known paths but cannot discover new files or detect
+an equal-size write with the original mtime.
 
 See the [event reference](architecture/event-model.md#file-snapshots-and-revert)
 and the [revert documentation](architecture/runtime.md#file-snapshots-and-revert).

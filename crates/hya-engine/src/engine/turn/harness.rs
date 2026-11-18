@@ -157,6 +157,7 @@ impl SessionEngine {
         };
         let provider = self.provider_router();
         let scope = kernel::Scope {
+            watches: &self.workspace_watches,
             store: &self.store,
             emit: &emit,
             complete: Some(self),
