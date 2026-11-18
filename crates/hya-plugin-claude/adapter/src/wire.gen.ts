@@ -189,6 +189,10 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly project?: ProjectId | null
   readonly kind?: SessionKind
 }) |
+({ readonly type: "initial_context_recorded" } & {
+  readonly session: SessionId
+  readonly text: string
+}) |
 ({ readonly type: "session_agent_model_override_set" } & {
   readonly session: SessionId
   readonly agent: AgentName
@@ -1195,6 +1199,7 @@ export function isEnvelope(value: unknown): value is Envelope {
 
 export function isEvent(value: unknown): value is Event {
   return (isRecord(value) && value["type"] === "session_created" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("parent" in value && (value["parent"] === null || isSessionId(value["parent"]))) && ("agent" in value && isAgentName(value["agent"])) && ("model" in value && isModelRef(value["model"])) && ("workdir" in value && typeof value["workdir"] === "string") && (value["project"] === undefined || (value["project"] === null || isProjectId(value["project"]))) && (value["kind"] === undefined || isSessionKind(value["kind"]))) ||
+    (isRecord(value) && value["type"] === "initial_context_recorded" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("text" in value && typeof value["text"] === "string")) ||
     (isRecord(value) && value["type"] === "session_agent_model_override_set" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("agent" in value && isAgentName(value["agent"])) && ("model" in value && (value["model"] === null || isModelRef(value["model"])))) ||
     (isRecord(value) && value["type"] === "session_permission_mode_set" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("mode" in value && typeof value["mode"] === "string")) ||
     (isRecord(value) && value["type"] === "session_titled" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("title" in value && typeof value["title"] === "string")) ||

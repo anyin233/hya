@@ -44,6 +44,9 @@ pub struct SessionProjection {
     pub model: Option<ModelRef>,
     /// Absolute workdir for tools.
     pub workdir: Option<String>,
+    /// Initial environment and workspace guidance recorded for full-mode turns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_context: Option<String>,
     /// Project the session belongs to (ADR-0024), from `SessionCreated`.
     /// `None` for temporary sessions and sessions created before Projects.
     /// Omitted from serialized projections when `None`.
@@ -613,7 +616,7 @@ pub fn session_archive_event(
 /// different projection, or when `Projection` (or anything it contains)
 /// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
 /// the bump is recorded.
-pub const PROJECTION_REDUCER_VERSION: u32 = 11;
+pub const PROJECTION_REDUCER_VERSION: u32 = 12;
 
 /// Durable snapshot encoding: the wire projection plus replay-only reducer
 /// state the wire form deliberately omits.
@@ -873,6 +876,11 @@ impl Projection {
                 self.session.workdir = Some(workdir.clone());
                 self.session.project = *project;
                 self.session.kind = *kind;
+            }
+            Event::InitialContextRecorded { text, .. } => {
+                if self.session.initial_context.is_none() {
+                    self.session.initial_context = Some(text.clone());
+                }
             }
             Event::SessionAgentModelOverrideSet { agent, model, .. } => match model {
                 Some(model) => {

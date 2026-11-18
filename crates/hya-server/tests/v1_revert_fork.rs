@@ -323,10 +323,13 @@ async fn fork_copies_the_head_including_the_last_message() {
         [write_turn("one"), write_turn("two")].concat(),
     )
     .await;
+    let agents_path = fx.dir.join("AGENTS.md");
+    std::fs::write(&agents_path, "FORK_SOURCE_INSTRUCTIONS").unwrap();
     let session = fx.session().await;
     fx.prompt(&session, "first").await;
     fx.prompt(&session, "second").await;
 
+    std::fs::write(&agents_path, "UPDATED_FORK_INSTRUCTIONS").unwrap();
     let (status, forked) = fx.fork(&session, json!({})).await;
     assert_eq!(status, StatusCode::OK, "{forked}");
     let fork = forked["session"]["id"].as_str().unwrap().to_owned();
@@ -336,6 +339,24 @@ async fn fork_copies_the_head_including_the_last_message() {
     let copied = fx.messages(&fork).await;
     assert_eq!(copied.len(), 4);
     assert_eq!(copied[3]["role"], json!("ROLE_ASSISTANT"));
+    let source_context = fx
+        .engine
+        .read_projection(session.parse().unwrap())
+        .await
+        .unwrap()
+        .session
+        .initial_context
+        .unwrap();
+    assert!(source_context.contains("FORK_SOURCE_INSTRUCTIONS"));
+    assert_eq!(
+        fx.engine
+            .read_projection(fork.parse().unwrap())
+            .await
+            .unwrap()
+            .session
+            .initial_context,
+        Some(source_context),
+    );
 }
 
 #[tokio::test]
