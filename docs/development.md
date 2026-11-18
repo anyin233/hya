@@ -127,7 +127,7 @@ For an embedded headless root driver, hold
 for the entire run. The guard reuses the Workflow activity counter: while held,
 the supervisor neither starts root mail turns nor admits quiescence synthesis
 prompts. Member turns still run. For example, `exec` holds this guard while its
-lead loop checks live members, unread root mail, todos and final-step output;
+lead loop checks live members, unread root mail and final-step output;
 only that loop injects continuation system notices. A cold root stays
 non-autonomous when the guard drops; a later externally started root turn
 restores normal resident supervision.
@@ -427,7 +427,7 @@ remaining argument is forwarded verbatim. The currently supported tasks are
 | `package-bundle` | Validates a source directory and atomically writes the canonical deterministic public `.hyabundle` package. |
 | `package-native-tool-bundle` | Adds a built target-specific Rust executable and exact policy tool declarations to one tool-family source, then writes a deterministic public package. |
 | `package-native-tool-library` | Adds a built tool-family dynamic library and exact policy tool declarations to one tool-family source, then writes a deterministic public package. |
-| `stage-first-party-bundles` | Packages the fourteen trusted first-party bundles into a backend package's `<package-root>/bundles/` and fails if any bundle version differs from the backend release version. With `--target` and `--assets`, it also writes versioned standalone release assets. |
+| `stage-first-party-bundles` | Packages the thirteen trusted first-party bundles into a backend package's `<package-root>/bundles/` and fails if any bundle version differs from the backend release version. With `--target` and `--assets`, it also writes versioned standalone release assets. |
 | `release-rehearsal` | Runs the pinned, non-publishing unified release build/package/smoke rehearsal for one target. It checks the unified aggregate version contract, then builds, packages, and smokes the `hya` binary, Bun, Bun adapter, TUI/WebUI/TUI-SDK assets and production dependencies, first-party bundles, Argus example, checksums, and unified installer contract. Run it on a host of that target (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`). |
 
 ```sh
@@ -448,7 +448,8 @@ Use this guide when deciding where a change belongs:
 | --- | --- |
 | New event, id, API DTO, message field, projection behavior | `hya-proto` |
 | New provider route, protocol encoder/decoder, capability preflight | `hya-provider` |
-| New builtin tool implementation | Owning source under `bundles/presets/<family>-tools/native` |
+| New registry tool implementation | Owning source under `bundles/presets/<family>-tools/native` |
+| Kernel tool implementation | `hya-core/src/kernel` |
 | Tool trait, loader, runtime plane, or permission action | `hya-tool` |
 | Persistence, replay, migrations, usage projection | `hya-store` |
 | Turn-loop behavior, goal/loop/team/worktree runtime logic | `hya-engine` |
@@ -494,6 +495,7 @@ When changing a boundary, update the nearest docs page:
 | Events/projection | [Event Model](architecture/event-model.md) |
 | Providers | [Providers](architecture/providers.md) |
 | Tools/permissions | [Tools and Permissions](architecture/tools-and-permissions.md) |
+| Kernel tools and Rewrite | [Kernel](kernel.md) |
 | Skills and the trusted core Skill bundle | [Skills](skills.md) |
 | Store/schema | [Storage](architecture/storage.md) |
 | Server/client API | [Server and Client](architecture/server-client.md), [Protocol guide](protocol/README.md) |

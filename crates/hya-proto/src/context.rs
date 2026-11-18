@@ -4,7 +4,64 @@
 //! Token accounting and the request encoders both read these, so they live
 //! here, below the provider routes and the native bundles alike.
 
-use crate::{Message, Part};
+use std::fmt::Write;
+
+use crate::{Message, Part, TodoItem};
+
+/// Name of the kernel tool that updates the session's completion criteria.
+pub const TODO_TOOL: &str = "todo";
+
+/// Prefix of the rendered todo list.
+pub const TODO_LIST_HEADER: &str = "Current todos:";
+
+/// Render the full list for a tool result or a compaction marker.
+#[must_use]
+pub fn render_todos(items: &[TodoItem]) -> String {
+    if items.is_empty() {
+        return format!("{TODO_LIST_HEADER} (empty)");
+    }
+    let mut out = TODO_LIST_HEADER.to_string();
+    for item in items {
+        let _ = write!(
+            out,
+            "\n- #{} [{}] {}",
+            item.id,
+            item.status.as_str(),
+            item.content
+        );
+    }
+    out
+}
+
+const NO_GOAL: &str = "No todo list is recorded. Use the todo tool now to record this task's completion criteria, each a checkable end state, with its current status; the list is kept verbatim through later rewrites.";
+
+const KEPT_RESULTS: &str = "Results recorded in this list are still valid: do not redo that work. Record each further result in the list as you obtain it.";
+
+/// The goal section of a rewrite or compaction marker: the list verbatim, or,
+/// when none is recorded, a request to record it now.
+#[must_use]
+pub fn marker_goal(items: &[TodoItem]) -> String {
+    if items.is_empty() {
+        return NO_GOAL.to_string();
+    }
+    format!("{KEPT_RESULTS}\n\n{}", render_todos(items))
+}
+
+/// A marker body without its trailing goal section (`\n\n` + [`marker_goal`]),
+/// so a summary updated from it does not restate the list or the request.
+#[must_use]
+pub fn without_marker_goal(body: &str) -> &str {
+    [format!("\n\n{TODO_LIST_HEADER}"), format!("\n\n{NO_GOAL}")]
+        .iter()
+        .filter_map(|section| body.rfind(section.as_str()))
+        .max()
+        .map_or(body, |at| {
+            let kept = &body[..at];
+            kept.strip_suffix(KEPT_RESULTS)
+                .and_then(|rest| rest.strip_suffix("\n\n"))
+                .unwrap_or(kept)
+        })
+}
 
 /// System-message prefix of compacted context (`HYA_COMPACTED_CONTEXT`).
 pub const COMPACT_CONTEXT_MARKER: &str = "HYA_COMPACTED_CONTEXT";

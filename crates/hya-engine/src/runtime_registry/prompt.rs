@@ -1,6 +1,8 @@
 use super::*;
 
-fn group_skill_spellings(skills: &[SkillCatalogEntry]) -> Vec<(SkillCatalogEntry, Vec<String>)> {
+fn group_skill_spellings<'a>(
+    skills: impl IntoIterator<Item = &'a SkillCatalogEntry>,
+) -> Vec<(SkillCatalogEntry, Vec<String>)> {
     let mut groups: BTreeMap<String, (SkillCatalogEntry, BTreeSet<String>)> = BTreeMap::new();
     for skill in skills {
         let key = skill.path.to_string_lossy().into_owned();
@@ -48,13 +50,15 @@ fn format_spelling_list(spellings: &[String]) -> String {
     }
 }
 
-pub(super) fn skill_index_with_spellings(skills: &[SkillCatalogEntry]) -> Option<String> {
+pub(super) fn skill_index_with_spellings<'a>(
+    heading: &str,
+    skills: impl IntoIterator<Item = &'a SkillCatalogEntry>,
+) -> Option<String> {
     let groups = group_skill_spellings(skills);
     if groups.is_empty() {
         return None;
     }
-    let mut section =
-        "These skills are available on demand; read the named SKILL.md when relevant:".to_string();
+    let mut section = heading.to_string();
     for (entry, spellings) in groups {
         section.push_str("\n- ");
         section.push_str(&format_spelling_list(&spellings));

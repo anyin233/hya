@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use hya_proto::SessionId;
 use hya_tool::{
     InteractionPlane, LspPlane, PermissionPlane, PermissionRules, QuestionAnswer, QuestionKind,
-    SkillPlane, SpawnerPlane, TodoPlane, ToolCtx, ToolError, ToolRegistry, WebSearchPlane,
+    SkillPlane, SpawnerPlane, ToolCtx, ToolError, ToolRegistry, WebSearchPlane,
     handle::ArtifactPlane,
 };
 use serde_json::json;
@@ -28,7 +28,6 @@ fn ctx_with(interaction: InteractionPlane, session: SessionId) -> ToolCtx {
         lifecycle: hya_tool::LifecyclePlane::disconnected(),
         session: Some(session),
         parent_session: None,
-        todo: TodoPlane::default(),
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),

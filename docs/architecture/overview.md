@@ -115,7 +115,7 @@ Every client drives the backend over one contract defined in `proto/hya/v1`:
 - **Host-controlled tool planes ([ADR-0012](../adr/0012-one-agent-per-bundle-and-host-controlled-tool-plane.md)):**
   An Agent's visible Harness surface is derived from its **Origin**, never
   self-declared in a manifest. Trusted first-party agents (`hya/core-agents`)
-  run on the `Full` plane (all 28 canonical builtin tools, Harness skills, MCP,
+  run on the `Full` plane (all 25 registry tools plus the kernel tools, Harness skills, MCP,
   and plugins, narrowed by `resource_view`). Installed public bundle agents run
   on the clamped `InternalPublic` plane plus only their own bundle's declared
   resources.
@@ -154,9 +154,9 @@ Per [ADR-0031](../adr/0031-hot-reload-and-stop-start-restart.md) (and
 | --- | --- | --- |
 | Foundation & Wire | [`hya-proto`](../../crates/hya-proto), [`hya-version`](../../crates/hya-version), [`hya-api`](../../crates/hya-api) | Strongly typed IDs, canonical `Event`/`Envelope`, `Message`/`Part`, deterministic `Projection` reducer, aggregate version constants, and generated `hya.v1` prost/tonic/pbjson types + error-code table. |
 | Model I/O | [`hya-provider`](../../crates/hya-provider) | Normalize OpenAI Chat, OpenAI Responses, OpenAI Codex, Grok Build, Anthropic Messages, Google Gemini, scripted `FakeProvider`, and offline `DevProvider` (`hya/offline`) into canonical streamed `Event`s, with capability preflight and retry budgets. |
-| Tools, MCP & Plugins | [`hya-tool`](../../crates/hya-tool), `bundles/presets/*-tools/native`, [`hya-mcp`](../../crates/hya-mcp), [`hya-plugin`](../../crates/hya-plugin), [`hya-plugin-bun`](../../crates/hya-plugin-bun), [`hya-plugin-claude`](../../crates/hya-plugin-claude) | 28 canonical builtin tools across 5 lockstep native tool families, `PermissionPlane` + `ProjectScope` multi-root guard, session service planes, MCP `mcp__server__tool` bridge, and out-of-process stdio JSON-RPC plugin hosts (Rust, Bun JS, Claude Code import). |
+| Tools, MCP & Plugins | [`hya-tool`](../../crates/hya-tool), `bundles/presets/*-tools/native`, [`hya-mcp`](../../crates/hya-mcp), [`hya-plugin`](../../crates/hya-plugin), [`hya-plugin-bun`](../../crates/hya-plugin-bun), [`hya-plugin-claude`](../../crates/hya-plugin-claude) | 25 registry tools across four lockstep native tool families, `PermissionPlane` + `ProjectScope` multi-root guard, session service planes, MCP `mcp__server__tool` bridge, and out-of-process stdio JSON-RPC plugin hosts (Rust, Bun JS, Claude Code import). |
 | Persistence | [`hya-store`](../../crates/hya-store) | SQLite WAL `event_log`, transactional batch appends, `projection_snapshot` cache, `project`/`project_root`, `resident_actor_claim` epoch fencing, `pending_resume`, `file_blob` revert snapshots, and separate `bundle_registry` DB. |
-| Packages & Workflows | [`hya-bundle`](../../crates/hya-bundle), [`hya-workflow`](../../crates/hya-workflow) | Deterministic `.hyabundle` preparation/validation (format v4), 14 first-party bundle loaders, `BundleCatalog` indexing, and `*.hya.md` Workflow compilation into immutable Stage DAG plans. |
+| Packages & Workflows | [`hya-bundle`](../../crates/hya-bundle), [`hya-workflow`](../../crates/hya-workflow) | Deterministic `.hyabundle` preparation/validation (format v4), 13 first-party bundle loaders, `BundleCatalog` indexing, and `*.hya.md` Workflow compilation into immutable Stage DAG plans. |
 | Agent Runtime | [`hya-core`](../../crates/hya-core), [`hya-engine`](../../crates/hya-engine) | The three-primitive kernel (`hya-core`); in `hya-engine`: `SessionEngine`, turn admission & streaming rounds, 5-stage context compaction, file snapshots/revert/fork, `ResidentSupervisor` episodic actors, mailbox/channel service, `SubagentGovernor`, Goal/Loop drivers, durable Workflow execution, and `RuntimeRegistry` / `CatalogScope` overlays. |
 | Composition & Control | [`hya-app`](../../crates/hya-app) | `config.yaml` + auth/OAuth resolution, model cache merge ([ADR-0029](../adr/0029-config-model-entries-override-the-model-cache.md)), MCP/plugin/LSP/formatter wiring, per-Project bundle/plugin watchers, `WorkflowControl`, and `HyaRuntime` / `BuiltSessionEngine` lifecycle. |
 | Transports & CLI | [`hya-server`](../../crates/hya-server), [`hya-sdk-v1`](../../crates/hya-sdk-v1), [`hya-relay`](../../crates/hya-relay), [`hya-updater`](../../crates/hya-updater), [`hya-backend`](../../crates/hya-backend) | `/v1` HTTP/SSE/WS + `V1Grpc` single-port server, Host allowlist guard, ephemeral session reaper, typed Rust v1 SDK, `hya.relay.v1` + Noise `NKpsk0` proxy/bridge/host-connector, release installer (`hya update`), and the unified `hya` CLI binary. |
@@ -199,7 +199,7 @@ Per [ADR-0031](../adr/0031-hot-reload-and-stop-start-restart.md) (and
 | Document | Focus |
 | --- | --- |
 | [Architecture & Design Diagrams](diagrams.md) | Visual Mermaid & SVG diagrams covering topology, crate DAG, turn sequence, episodic subagents, Workflows, Projects, Relay, and hot-reload/restart. |
-| [Project Structure](../project-structure.md) | Repository directory layout, crate/module tables, 28 builtin tools, and dependency direction. |
+| [Project Structure](../project-structure.md) | Repository directory layout, crate/module tables, 25 registry tools, and dependency direction. |
 | [Domain Glossary (`CONTEXT.md`)](../../CONTEXT.md) | Ubiquitous vocabulary across `hya-proto`, `hya-core`, tools, Projects, Relay, and TUI. |
 | [Runtime](runtime.md) | `SessionEngine`, publish seams, `TurnBinding`, Goal/Loop drivers, file snapshots & revert, and workspace roots. |
 | [Event Model](event-model.md) | Strong IDs, `EventSeq` rules, full `Event` wire catalog, and `Projection` reducer invariants. |
@@ -208,7 +208,7 @@ Per [ADR-0031](../adr/0031-hot-reload-and-stop-start-restart.md) (and
 | [Admission and Governor](admission-and-governor.md) | Active-claim capacity leases, atomic batch registration, and `SubagentGovernor` execution budgets. |
 | [Providers](providers.md) | `Provider`/`Protocol`/`Decoder` traits, OpenAI/Responses/Codex/Grok/Anthropic/Google encoders, model cache overrides, and reasoning variants. |
 | [Tools and Permissions](tools-and-permissions.md) | `ToolRegistry`, `PermissionPlane`, `ProjectScope` multi-root containment, saved rules, and output caps. |
-| [Agent Tool Surface](agent-tool-surface.md) | Registered vs advertised vs executable tool contracts, `todo__*`, `task`, `send`/`wait`/`report`/`archive`, and hashline editing. |
+| [Agent Tool Surface](agent-tool-surface.md) | Registered vs advertised vs executable tool contracts, `todo`, `task`, `send`/`wait`/`report`/`archive`, and hashline editing. |
 | [Server and Client](server-client.md) | Consolidated `hya.v1` HTTP/SSE/WS + gRPC single-port server, `AppState`, error codes, and `hya-sdk-v1`. |
 | [Protocol Guide](../protocol/README.md) & [API Reference](../protocol/api-reference.md) | Wire-level `hya.v1` integration guide and generated 18-service / 107-RPC specification. |
 | [Architecture Decision Records (`docs/adr/`)](../adr/) | Accepted ADRs governing daemon lifecycle, Projects, Relay, episodic subagents, TUI/WebUI, and hot reload. |

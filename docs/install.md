@@ -3,7 +3,7 @@
 `hya` publishes unified releases tagged `v<version>` (`v0.47.0` for stable
 releases, or `v0.47.0-dev.1` for pre-releases). Each target ships one combined
 archive, `hya-<version>-<target>.tar.gz`, containing the `hya` executable, the
-fourteen first-party bundles, the Argus example bundle, a pinned Bun runtime,
+thirteen first-party bundles, the Argus example bundle, a pinned Bun runtime,
 the Bun plugin adapter, the TUI, the WebUI host, and the TUI extension SDK.
 
 One installer, `scripts/hya-install.sh`, installs or updates the unified

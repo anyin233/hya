@@ -22,6 +22,13 @@ semantics, the configuration surface, and the wire records each mechanism
 emits. Thresholds and token accounting are configured alongside; see
 [Configuration](configuration.md) for the full block.
 
+
+Each fold marker carries the rendered [session todo list](kernel.md#session-todos)
+verbatim when it has items. For a provider-native Responses fold, the encoder
+replays the compact items and then sends the carried list as a system item.
+The `shake` rung leaves the newest visible `todo` result in the transcript
+while it evicts other stale tool outputs.
+
 ## The five mechanisms
 
 | Name (oh-my-pi) | What it does | Model call | Wire strategy |

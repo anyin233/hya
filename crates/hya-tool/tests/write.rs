@@ -17,8 +17,7 @@ use hya_proto::SessionId;
 use hya_tool::{
     Action, FormatterError, FormatterPlane, FormatterProvider, InteractionPlane, LspError,
     LspPlane, LspProvider, LspRequest, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-    SpawnerPlane, TodoPlane, ToolCtx, ToolError, ToolRegistry, WebSearchPlane,
-    handle::ArtifactPlane,
+    SpawnerPlane, ToolCtx, ToolError, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -94,7 +93,6 @@ fn ctx_with_components(
         lifecycle: hya_tool::LifecyclePlane::disconnected(),
         session,
         parent_session: None,
-        todo: TodoPlane::default(),
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),

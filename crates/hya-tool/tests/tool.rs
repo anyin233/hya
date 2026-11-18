@@ -10,8 +10,8 @@ use async_trait::async_trait;
 use hya_proto::{ToolName, ToolSchema};
 use hya_tool::{
     Action, Decision, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Resource,
-    Rule, SkillPlane, SpawnerPlane, TodoPlane, Tool, ToolCtx, ToolError, ToolPermission,
-    ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
+    Rule, SkillPlane, SpawnerPlane, Tool, ToolCtx, ToolError, ToolPermission, ToolRegistry,
+    WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -48,7 +48,6 @@ fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
         lifecycle: hya_tool::LifecyclePlane::disconnected(),
         session: None,
         parent_session: None,
-        todo: TodoPlane::default(),
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),
@@ -507,7 +506,6 @@ async fn bash_happy_and_cancelled() {
         lifecycle: hya_tool::LifecyclePlane::disconnected(),
         session: ctx.session,
         parent_session: None,
-        todo: ctx.todo.clone(),
         skills: ctx.skills.clone(),
         artifacts: ArtifactPlane::default(),
         websearch: ctx.websearch.clone(),
@@ -547,7 +545,6 @@ async fn task_tool_is_lead_only() {
         lifecycle: hya_tool::LifecyclePlane::disconnected(),
         session: None,
         parent_session: Some(hya_proto::SessionId::new()),
-        todo: TodoPlane::default(),
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),

@@ -1,7 +1,7 @@
 //! T2.50–T2.52 — `tools.code.mode` and the first-party `hya/code-mode` bundle.
 //!
 //! - T2.50 `only`: the model is offered `code-mode__run` alone, with the
-//!   hidden tools described inside it; a program reads a project file through
+//!   hidden domain tools described inside it; a program reads a project file through
 //!   `tools.read` and its output reaches the follow-up request; a direct call
 //!   of a hidden tool is refused.
 //! - T2.51 `with_tools`: `code-mode__run` is offered next to the usual tools
@@ -63,7 +63,7 @@ fn followup(env: &E2eEnv) -> String {
 }
 
 #[tokio::test]
-async fn t2_50_only_offers_the_code_tool_and_runs_hidden_tools_from_programs() {
+async fn t2_50_offers_code_and_kernel_tools_and_runs_hidden_tools_from_programs() {
     let env = run(
         Some("only"),
         vec![
@@ -75,7 +75,7 @@ async fn t2_50_only_offers_the_code_tool_and_runs_hidden_tools_from_programs() {
     .await;
 
     let (names, description) = offered(&env);
-    assert_eq!(names, [TOOL], "{}", env.diagnostics());
+    assert_eq!(names, [TOOL, "rewrite", "todo"], "{}", env.diagnostics());
     let description = description.unwrap();
     assert!(description.contains("\n\n### read\n"), "{description}");
     assert!(description.contains("\n\n### bash\n"), "{description}");

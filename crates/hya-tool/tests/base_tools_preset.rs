@@ -69,10 +69,6 @@ fn each_embedded_bundle_owns_its_requested_tool_family() {
             "hya/channel-tools",
             &["send", "list_channel", "report", "wait"],
         ),
-        (
-            "hya/todo-tools",
-            &["todo__read", "todo__update_status", "todo__update_content"],
-        ),
     ];
     for (preset, (identity, expected_names)) in tool_bundle_presets().iter().zip(expected) {
         assert_eq!(preset.identity(), identity);
@@ -102,7 +98,6 @@ fn embedded_base_tools_preset_is_the_registry_authority() {
             "hya/extended-tools",
             "hya/network-tools",
             "hya/channel-tools",
-            "hya/todo-tools",
         ]
     );
     for preset in presets {
@@ -139,9 +134,6 @@ fn embedded_base_tools_preset_is_the_registry_authority() {
         ("webfetch", ToolPermission::Tool, &["fetch"][..]),
         ("websearch", ToolPermission::Tool, &["search"][..]),
         ("plan_exit", ToolPermission::Tool, &["plan"][..]),
-        ("todo__read", ToolPermission::ReadOnly, &[][..]),
-        ("todo__update_status", ToolPermission::Tool, &[][..]),
-        ("todo__update_content", ToolPermission::Tool, &[][..]),
     ];
     let mut actual_policy = presets
         .iter()

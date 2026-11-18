@@ -417,7 +417,7 @@ engine.refresh_runtime(|candidate| {
   (`ubuntu-22.04`), `aarch64-unknown-linux-gnu` (`ubuntu-22.04-arm`),
   `aarch64-apple-darwin` (`macos-15`).
 - Unified archive per target: `hya-<version>-<target>.tar.gz` with `bin/hya`,
-  the fourteen first-party bundles, the Argus example bundle, Bun,
+  the thirteen first-party bundles, the Argus example bundle, Bun,
   `lib/hya/bun-adapter`, `lib/hya/tui`, `lib/hya/tui-web`, and
   `lib/hya/tui-sdk`.
 - Installer: releases publish no installer script. `scripts/hya-install.sh`
@@ -452,7 +452,7 @@ cargo run -p xtask -- release-rehearsal \
 - Third-party release actions are pinned to immutable commit SHAs.
 - The publishing job uses the `release` environment so repository settings can
   require manual approval.
-- Unified release payload includes `bin/hya`, the fourteen first-party bundles
+- Unified release payload includes `bin/hya`, the thirteen first-party bundles
   under `bundles/`, the Argus example bundle, Bun, and production
   `lib/hya/{bun-adapter,tui,tui-web,tui-sdk}`.
 - The rehearsal requires the explicit `--no-publish` guard, builds and packages

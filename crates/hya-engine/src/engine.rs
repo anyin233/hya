@@ -13,7 +13,7 @@ use hya_tool::handle::ArtifactPlane;
 use hya_tool::{
     AgentDef, FormatterPlane, InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane,
     PermissionPlane, ResolvedTool, SpawnRequest, SpawnRequestSendError, SpawnRequestSink,
-    SpawnerPlane, TodoPlane, ToolError, WebSearchPlane,
+    SpawnerPlane, ToolError, WebSearchPlane,
 };
 use serde_json::Value;
 
@@ -79,7 +79,6 @@ mod steer;
 mod stream_round;
 mod summary;
 mod text_complete;
-mod todos;
 mod tool_error;
 mod turn;
 mod turn_end;
@@ -361,6 +360,7 @@ impl hya_tool::WorkflowRequestSink for BoundWorkflowSink {
 pub struct SessionEngine {
     store: SessionStore,
     base_system_prompt: String,
+    pure_context: bool,
     providers: RwLock<Arc<ProviderRouter>>,
     catalog: RwLock<Arc<ProviderCatalogSnapshot>>,
     /// Cross-model failover plane: preferred [`ModelRef`] → its ordered
@@ -388,7 +388,6 @@ pub struct SessionEngine {
     lifecycle: LifecyclePlane,
     /// Mints subagent handle leaves (`<prefix>-<operator>`); injectable RNG.
     handle_namer: Arc<crate::handle_naming::HandleNamer>,
-    todo: TodoPlane,
     websearch: WebSearchPlane,
     /// User-registered `artifact://` post-processing, carried to every tool call.
     artifacts: ArtifactPlane,
@@ -425,6 +424,7 @@ impl Clone for SessionEngine {
         Self {
             store: self.store.clone(),
             base_system_prompt: self.base_system_prompt.clone(),
+            pure_context: self.pure_context,
             providers: RwLock::new(
                 self.providers
                     .read()
@@ -452,7 +452,6 @@ impl Clone for SessionEngine {
             project_activity: self.project_activity.clone(),
             lifecycle: self.lifecycle.clone(),
             handle_namer: self.handle_namer.clone(),
-            todo: self.todo.clone(),
             websearch: self.websearch.clone(),
             artifacts: self.artifacts.clone(),
             formatter: self.formatter.clone(),
@@ -590,7 +589,6 @@ impl SessionEngine {
         let lifecycle = LifecyclePlane::disconnected();
         let mailbox = MailboxPlane::disconnected();
         let (project_activity, activity_rx) = hya_tool::ProjectActivityPlane::new();
-        let todo = TodoPlane::default();
         let websearch = WebSearchPlane::default();
         let formatter = FormatterPlane::default();
         let lsp = LspPlane::default();
@@ -605,6 +603,7 @@ impl SessionEngine {
             store,
             providers: RwLock::new(providers),
             base_system_prompt: String::new(),
+            pure_context: false,
             catalog: RwLock::new(catalog),
             global_reasoning: None,
             exclusive_tool: None,
@@ -621,7 +620,6 @@ impl SessionEngine {
             project_activity,
             lifecycle,
             handle_namer: Arc::new(crate::handle_naming::HandleNamer::default()),
-            todo,
             websearch,
             artifacts: ArtifactPlane::default(),
             formatter,
@@ -694,6 +692,13 @@ impl SessionEngine {
     #[must_use]
     pub fn with_model_categories(mut self, categories: Arc<CategoryRegistry>) -> Self {
         self.model_categories = categories;
+        self
+    }
+
+    /// Skip external project instructions when recording a new session's context.
+    #[must_use]
+    pub fn with_pure_context(mut self, pure: bool) -> Self {
+        self.pure_context = pure;
         self
     }
 

@@ -4,17 +4,21 @@ use hya_proto::{
 };
 use hya_provider::{COMPACT_CONTEXT_MARKER, CompletionRequest, ReasoningEffort};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+use super::View;
+use super::rewrite::is_goal_checkpoint;
+use crate::CoreError;
 
 /// Prompt image data by blob hash (`data:` URLs), loaded from the session's
 /// blob table for the messages a request sends.
 pub type AttachmentData = std::collections::HashMap<String, String>;
 
-/// Build a model request from the visible projection and resolved inputs.
+/// Build a model request from a view and resolved harness inputs.
 ///
-/// A pure function of its arguments: evicted tool outputs send the notice the
-/// projection recorded for them, so the log alone reproduces the request.
+/// Evicted tool outputs carry the notice recorded in the projection.
 pub fn request(
-    projection: &Projection,
+    view: &View<'_>,
     system: &str,
     tools: Vec<hya_proto::ToolSchema>,
     model: &ModelRef,
@@ -26,12 +30,21 @@ pub fn request(
         tools,
         model: model.clone(),
         system: Some(system.to_string()),
-        messages: projection_to_messages(agent, projection, model, attachments),
+        messages: projection_to_messages(agent, view.projection, model, attachments),
         temperature: None,
         max_output_tokens: None,
         reasoning,
         headers: Default::default(),
     }
+}
+
+/// Lowercase hex SHA-256 of the compact JSON array `[system, tools, messages]`
+/// with object keys sorted recursively and array order preserved.
+pub fn request_sha256(request: &CompletionRequest) -> Result<String, CoreError> {
+    let mut content = serde_json::to_value((&request.system, &request.tools, &request.messages))
+        .map_err(|error| CoreError::Invalid(format!("request content: {error}")))?;
+    content.sort_all_objects();
+    Ok(format!("{:x}", Sha256::digest(content.to_string())))
 }
 
 /// Render visible messages with the resolved agent, model, and image data.
@@ -41,8 +54,23 @@ pub fn projection_to_messages(
     model: &ModelRef,
     attachments: &AttachmentData,
 ) -> Vec<Message> {
-    compacted_messages(projection)
+    let messages = compacted_messages(projection);
+    let assistant = messages.iter().rfind(|row| row.role == Role::Assistant);
+    let marker = messages.first().filter(|row| is_marker(row));
+    messages
         .iter()
+        .filter(|row| {
+            !is_goal_checkpoint(row)
+                || (marker.is_none_or(|marker| marker.id < row.id)
+                    && assistant.is_some_and(|assistant| {
+                        // The marker can move in the projection. These IDs are
+                        // minted in creation order by the running turn.
+                        assistant.id < row.id
+                            && sent_parts(assistant)
+                                .iter()
+                                .all(|part| part.id().as_uuid() < row.id.as_uuid())
+                    }))
+        })
         .filter(|m| !(m.role == Role::Assistant && sent_parts(m).is_empty()))
         .map(|m| match m.role {
             Role::User => Message::User {

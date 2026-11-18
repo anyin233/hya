@@ -19,7 +19,6 @@ pub const FIRST_PARTY_BUNDLES: &[&str] = &[
     "hya/extended-tools",
     "hya/network-tools",
     "hya/channel-tools",
-    "hya/todo-tools",
     "hya/core-skills",
     "hya/core-commands",
     "hya/core-agents",

@@ -189,6 +189,10 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly project?: ProjectId | null
   readonly kind?: SessionKind
 }) |
+({ readonly type: "initial_context_recorded" } & {
+  readonly session: SessionId
+  readonly text: string
+}) |
 ({ readonly type: "session_agent_model_override_set" } & {
   readonly session: SessionId
   readonly agent: AgentName
@@ -322,6 +326,7 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly session: SessionId
   readonly message: MessageId
   readonly step: number
+  readonly view?: ViewRef | null
 }) |
 ({ readonly type: "step_finished" } & {
   readonly session: SessionId
@@ -574,6 +579,11 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly call?: ToolCallId | null
   readonly files: ReadonlyArray<FileChange>
 }) |
+({ readonly type: "files_observed" } & {
+  readonly session: SessionId
+  readonly external: boolean
+  readonly files: ReadonlyArray<FileStamp>
+}) |
 ({ readonly type: "session_reverted" } & {
   readonly session: SessionId
   readonly message: MessageId
@@ -618,6 +628,12 @@ export type FileRestore = {
   readonly saved: FileState
   readonly observed?: boolean
   readonly error?: string | null
+}
+
+export type FileStamp = {
+  readonly path: string
+  readonly mtime_ns: number | null
+  readonly size: number | null
 }
 
 export type FileState = ({ readonly kind: "absent" }) |
@@ -966,6 +982,11 @@ export type VerifierVerdictWire = {
   readonly reason?: string
 }
 
+export type ViewRef = {
+  readonly cut: EventSeq
+  readonly request_sha256: string
+}
+
 export type WireCompletionRequest = {
   readonly model: ModelRef
   readonly system?: string | null
@@ -1178,6 +1199,7 @@ export function isEnvelope(value: unknown): value is Envelope {
 
 export function isEvent(value: unknown): value is Event {
   return (isRecord(value) && value["type"] === "session_created" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("parent" in value && (value["parent"] === null || isSessionId(value["parent"]))) && ("agent" in value && isAgentName(value["agent"])) && ("model" in value && isModelRef(value["model"])) && ("workdir" in value && typeof value["workdir"] === "string") && (value["project"] === undefined || (value["project"] === null || isProjectId(value["project"]))) && (value["kind"] === undefined || isSessionKind(value["kind"]))) ||
+    (isRecord(value) && value["type"] === "initial_context_recorded" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("text" in value && typeof value["text"] === "string")) ||
     (isRecord(value) && value["type"] === "session_agent_model_override_set" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("agent" in value && isAgentName(value["agent"])) && ("model" in value && (value["model"] === null || isModelRef(value["model"])))) ||
     (isRecord(value) && value["type"] === "session_permission_mode_set" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("mode" in value && typeof value["mode"] === "string")) ||
     (isRecord(value) && value["type"] === "session_titled" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("title" in value && typeof value["title"] === "string")) ||
@@ -1201,7 +1223,7 @@ export function isEvent(value: unknown): value is Event {
     (isRecord(value) && value["type"] === "user_prompt_context_recorded" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("files" in value && (Array.isArray(value["files"]) && value["files"].every((item: unknown) => true))) && ("agents" in value && (Array.isArray(value["agents"]) && value["agents"].every((item: unknown) => true)))) ||
     (isRecord(value) && value["type"] === "message_finished" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("role" in value && isRole(value["role"])) && ("finish" in value && isFinishReason(value["finish"])) && (value["tokens"] === undefined || (value["tokens"] === null || isTokenUsage(value["tokens"]))) && (value["cause"] === undefined || (value["cause"] === null || isFinishCause(value["cause"])))) ||
     (isRecord(value) && value["type"] === "part_deleted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"]))) ||
-    (isRecord(value) && value["type"] === "step_started" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("step" in value && (typeof value["step"] === "number" && Number.isInteger(value["step"]) && value["step"] >= 0))) ||
+    (isRecord(value) && value["type"] === "step_started" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("step" in value && (typeof value["step"] === "number" && Number.isInteger(value["step"]) && value["step"] >= 0)) && (value["view"] === undefined || (value["view"] === null || isViewRef(value["view"])))) ||
     (isRecord(value) && value["type"] === "step_finished" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("step" in value && (typeof value["step"] === "number" && Number.isInteger(value["step"]) && value["step"] >= 0)) && (value["finish"] === undefined || isFinishReason(value["finish"]))) ||
     (isRecord(value) && value["type"] === "text_start" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"]))) ||
     (isRecord(value) && value["type"] === "text_delta" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"])) && ("delta" in value && typeof value["delta"] === "string")) ||
@@ -1240,6 +1262,7 @@ export function isEvent(value: unknown): value is Event {
     (isRecord(value) && value["type"] === "usage_recorded" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && (value["message"] === undefined || (value["message"] === null || isMessageId(value["message"]))) && (value["step"] === undefined || (value["step"] === null || (typeof value["step"] === "number" && Number.isInteger(value["step"]) && value["step"] >= 0))) && ("model" in value && isModelRef(value["model"])) && ("purpose" in value && isUsagePurpose(value["purpose"])) && ("tokens" in value && isTokenUsage(value["tokens"]))) ||
     (isRecord(value) && value["type"] === "todos_updated" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("todos" in value && (Array.isArray(value["todos"]) && value["todos"].every((item: unknown) => isTodoItem(item))))) ||
     (isRecord(value) && value["type"] === "files_changed" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && (value["call"] === undefined || (value["call"] === null || isToolCallId(value["call"]))) && ("files" in value && (Array.isArray(value["files"]) && value["files"].every((item: unknown) => isFileChange(item))))) ||
+    (isRecord(value) && value["type"] === "files_observed" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("external" in value && typeof value["external"] === "boolean") && ("files" in value && (Array.isArray(value["files"]) && value["files"].every((item: unknown) => isFileStamp(item))))) ||
     (isRecord(value) && value["type"] === "session_reverted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && (value["files"] === undefined || (Array.isArray(value["files"]) && value["files"].every((item: unknown) => isFileRestore(item))))) ||
     (isRecord(value) && value["type"] === "session_unreverted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && (value["files"] === undefined || (Array.isArray(value["files"]) && value["files"].every((item: unknown) => isFileRestore(item))))) ||
     (isRecord(value) && value["type"] === "error" && isRecord(value) && ("session" in value && (value["session"] === null || isSessionId(value["session"]))) && ("code" in value && typeof value["code"] === "string") && ("message" in value && typeof value["message"] === "string") && (value["failed_message"] === undefined || (value["failed_message"] === null || isMessageId(value["failed_message"]))))
@@ -1270,6 +1293,10 @@ export function isFileChange(value: unknown): value is FileChange {
 
 export function isFileRestore(value: unknown): value is FileRestore {
   return isRecord(value) && ("path" in value && typeof value["path"] === "string") && ("restored" in value && isFileState(value["restored"])) && ("saved" in value && isFileState(value["saved"])) && (value["observed"] === undefined || typeof value["observed"] === "boolean") && (value["error"] === undefined || (value["error"] === null || typeof value["error"] === "string"))
+}
+
+export function isFileStamp(value: unknown): value is FileStamp {
+  return isRecord(value) && ("path" in value && typeof value["path"] === "string") && ("mtime_ns" in value && (value["mtime_ns"] === null || (typeof value["mtime_ns"] === "number" && Number.isInteger(value["mtime_ns"])))) && ("size" in value && (value["size"] === null || (typeof value["size"] === "number" && Number.isInteger(value["size"]) && value["size"] >= 0)))
 }
 
 export function isFileState(value: unknown): value is FileState {
@@ -1544,6 +1571,10 @@ export function isUsagePurpose(value: unknown): value is UsagePurpose {
 
 export function isVerifierVerdictWire(value: unknown): value is VerifierVerdictWire {
   return isRecord(value) && ("score" in value && (typeof value["score"] === "number" && Number.isInteger(value["score"]) && value["score"] >= 0)) && ("satisfied" in value && typeof value["satisfied"] === "boolean") && ("evidence_quality" in value && isEvidenceQualityWire(value["evidence_quality"])) && (value["critical_gaps"] === undefined || (Array.isArray(value["critical_gaps"]) && value["critical_gaps"].every((item: unknown) => typeof item === "string"))) && (value["iteration_summary"] === undefined || typeof value["iteration_summary"] === "string") && (value["reason"] === undefined || typeof value["reason"] === "string")
+}
+
+export function isViewRef(value: unknown): value is ViewRef {
+  return isRecord(value) && ("cut" in value && isEventSeq(value["cut"])) && ("request_sha256" in value && typeof value["request_sha256"] === "string")
 }
 
 export function isWireCompletionRequest(value: unknown): value is WireCompletionRequest {

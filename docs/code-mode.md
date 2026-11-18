@@ -27,10 +27,10 @@ every backend and is **off by default**. You turn it on in `config.yaml`:
 | --- | --- |
 | `normal` (default) | The usual tools. The bundle publishes nothing and starts no process. |
 | `with_tools` | The usual tools plus `code-mode__run`. |
-| `only` | `code-mode__run` alone. Every other tool stays executable, but only from a program: a direct call of one is refused with a message that names `code-mode__run`. A subagent is still offered `report`. |
+| `only` | `code-mode__run` plus the kernel tools `rewrite` and `todo`. Other domain tools are callable from a program. A direct call is refused with guidance to use `code-mode__run`. A subagent is also offered `report`. |
 
 Why three modes: `with_tools` lets a model choose per step between a direct
-call and a program. `only` forces every action through a program, so each
+call and a program. `only` routes domain tool calls through a program, so each
 model round is a plan in code and each effect is a traced call of that
 program.
 

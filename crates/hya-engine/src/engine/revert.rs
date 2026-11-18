@@ -128,7 +128,7 @@ impl SessionEngine {
                 targets.push((record.path.clone(), record.before.clone(), record.observed));
             }
         }
-        let mut budget = self.blob_budget(session).await?;
+        let mut budget = BlobBudget::load(&self.store, session).await?;
         let mut files = Vec::with_capacity(targets.len());
         for (path, restored, observed) in targets {
             files.push(
@@ -220,7 +220,7 @@ impl SessionEngine {
         budget: &mut BlobBudget,
     ) -> Result<FileRestore, CoreError> {
         let target = Path::new(&path);
-        let saved = self.snapshot_path(session, target, budget).await?;
+        let saved = budget.snapshot_path(&self.store, session, target).await?;
         let error = if restored.restorable() && restored != saved {
             self.write_state(session, target, &restored).await.err()
         } else {

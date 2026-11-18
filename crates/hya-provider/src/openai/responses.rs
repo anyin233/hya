@@ -6,6 +6,7 @@ use crate::media::image_url;
 use crate::wire::{ToolImages, tool_input, tool_result};
 use crate::{CompletionRequest, Decoder, Protocol, ProviderError, ReasoningEffort};
 
+use hya_proto::context::TODO_LIST_HEADER;
 pub use hya_proto::context::{COMPACT_CONTEXT_MARKER, RESPONSES_COMPACT_ITEMS_MARKER};
 
 /// OpenAI Responses API request encoder + stream decoder factory.
@@ -138,7 +139,8 @@ pub fn format_responses_compact_system(items: &[Value]) -> String {
     )
 }
 
-/// Extract the compact-item array from a system message body, if present.
+/// Extract the compact-item array and append any carried todo list as a
+/// system item.
 pub fn parse_responses_compact_items(content: &str) -> Result<Option<Vec<Value>>, ProviderError> {
     let Some(rest) = content
         .strip_prefix(COMPACT_CONTEXT_MARKER)
@@ -153,11 +155,22 @@ pub fn parse_responses_compact_items(content: &str) -> Result<Option<Vec<Value>>
         // Local-summarizer compact (text summary only) — not a Responses window.
         return Ok(None);
     };
+    // Native windows store compact JSON on one line. A fold can append
+    // the todo list verbatim after that array.
+    let (json_text, todos) = match json_text.split_once("\n\n") {
+        Some((json, todos)) if todos.starts_with(TODO_LIST_HEADER) => (json, Some(todos)),
+        _ => (json_text, None),
+    };
     let value: Value = serde_json::from_str(json_text).map_err(|e| {
         ProviderError::Decode(format!("invalid responses compact window payload: {e}"))
     })?;
     match value {
-        Value::Array(items) => Ok(Some(items)),
+        Value::Array(mut items) => {
+            if let Some(todos) = todos {
+                items.push(json!({"role": "system", "content": todos}));
+            }
+            Ok(Some(items))
+        }
         other => Err(ProviderError::Decode(format!(
             "responses compact window must be a JSON array, got {}",
             other_kind(&other)
@@ -288,6 +301,24 @@ fn user_content(parts: &[Part]) -> Result<Option<Value>, ProviderError> {
 mod tests {
     use super::*;
     use hya_proto::{MessageId, PartId};
+
+    #[test]
+    fn native_compaction_preserves_the_response_items_and_carried_todo_text() {
+        let item = json!({"type": "compaction", "encrypted_content": "opaque"});
+        let list = "Current todos:\n- #1 [pending] quote \"this\"\n\nsecond line";
+        let content = format!(
+            "{}\n\n{list}",
+            format_responses_compact_system(std::slice::from_ref(&item))
+        );
+        let messages = [Message::System {
+            id: MessageId::new(),
+            content,
+        }];
+        assert_eq!(
+            encode_input_items(&messages, false).unwrap(),
+            [item, json!({"role": "system", "content": list})]
+        );
+    }
 
     #[test]
     fn encode_expands_compact_items_marker_verbatim() {

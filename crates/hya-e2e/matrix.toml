@@ -80,7 +80,7 @@ path = "crates/hya-e2e/tests/p14_compact_summarize.rs"
 
 [[scenario]]
 id = "T1.15"
-title = "todowrite and edit tools"
+title = "kernel todo and edit tools"
 track = "P"
 path = "crates/hya-e2e/tests/p15_todo_and_edit.rs"
 

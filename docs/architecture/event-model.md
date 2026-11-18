@@ -129,6 +129,7 @@ Reducer effects:
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
 | `session_created` | `session: SessionId`, `parent: Option<SessionId>`, `agent: AgentName`, `model: ModelRef`, `workdir: String`, `project: Option<ProjectId>` (default `null`), `kind: SessionKind` (`project` \| `temporary`, default `project`) | Fold: sets session id, parent, agent, model, workdir, project, kind. `parent` is the link `session_lineage` walks toward the team root. `project` names the session's Project (ADR-0024; wire form is the UUID, `ProjectId` displays as `prj_<uuid-simple>`); `kind: temporary` sessions have no Project. A subagent session carries its parent's `project` and `kind`. The store mirrors both in `session.project_id` / `session.kind`. |
+| `initial_context_recorded` | `session: SessionId`, `text: String` | Fold: set `SessionProjection.initial_context: Option<String>` from the first record. Logs without a record omit the field. The first full-mode model turn records the rendered environment, project instructions, and discovered skill index before its first request. Later rounds use the recorded text, and forks copy it into their own log. |
 | `session_agent_model_override_set` | `session`, `agent: AgentName`, `model: Option<ModelRef>` | Fold: insert or remove one Agent entry in `agent_model_overrides`. `None` clears that Agent; unrelated entries remain. |
 | `session_permission_mode_set` | `session`, `mode: String` | Fold: `permission_mode` (last write wins). Emitted only on the lineage root; subagent sessions inherit the root's mode. `mode` is `manual`, `yolo`, or `<bundle-id>/<mode-id>`; see [Session permission modes](../configuration.md#session-permission-modes). The v1 stream maps it to `sessionUpdated.permissionMode`. |
 | `session_titled` | `session`, `title: String` | Fold: title |
@@ -173,12 +174,22 @@ preferred model plus ordered fallback candidates and per-candidate reasoning.
 
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
-| `step_started` | `session`, `message`, `step: u32` | **no-op** (UI / compat) |
+| `step_started` | `session`, `message`, `step: u32`, optional `view: ViewRef` | Fold: records the message's current step part offset. The reducer ignores `view`. |
 | `step_finished` | `session`, `message`, `step: u32`, `finish: FinishReason` | **no-op**. `finish` defaults to `stop` when replaying older logs that lacked the field (`#[serde(default = "default_step_finish_reason")]`). |
 
 One pair marks one provider stream round inside an assistant message. The
 round's billed usage and serving model are recorded separately by
 `usage_recorded` (below), emitted between the two markers once the stream ends.
+
+`ViewRef` has `cut: EventSeq` (an unsigned integer) and
+`request_sha256: String` (64 lowercase hex digits). The cut is inclusive
+and points to the last durable event in the session projection used to
+build the request. Events emitted after that projection was read can fall
+between the cut and the step marker. The digest hashes the compact JSON array
+`[system, tools, messages]` with object keys sorted recursively and array
+order preserved. It covers the content returned by the harness before
+provider routing. Every retry of a round has the same `ViewRef`. Older
+events omit `view`.
 
 #### Token accounting
 
@@ -335,7 +346,7 @@ while only the reviving mail is owed to the new episode. See the
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
 | `context_compacted` | `session`, summary `message`, `strategy`, `from_message`, `to_message`, `folded_count`, `input_tokens_est`, `threshold`, optional `step_cut { through_part, kept_head }` | Moves the summary `message` row to the fold boundary: right after `to_message`, or, with `step_cut`, right before `kept_head`, and sets `to_message`'s `MessageProjection.folded_parts` to the parts through `through_part` (reducer version 9). Requests start at the latest marker and skip a message's `folded_parts`; the projection keeps every message and part. A `step_cut` fold cuts inside the turn's in-flight assistant message at a step boundary (see [compaction](../compaction.md#in-flight-turns)); logs without the field fold whole messages, as before. The system message carries summary output and the range points to the folded log entries. A manual compaction (`CompactSession` / `SummarizeSession`) records `strategy: local_summarizer` over the whole window it summarized, with `threshold: 0` (no threshold tripped); v1 maps it to `compactionApplied { manual: true }`. |
-| `todos_updated` | `session`, `todos: [TodoItem { id, content, status }]` | Fold: `SessionProjection.todos` = the full list. Appended by the engine right after a todo tool's `tool_result` whose `metadata.todos` differs from the folded list (reads and no-op writes append nothing). Sessions without it (logs before reducer version 5) read the latest todo tool result instead. |
+| `todos_updated` | `session`, `todos: [TodoItem { id, content, status }]` | Fold: `SessionProjection.todos` = the full list. Appended by the kernel in the same transaction as a `todo` call's `tool_result` when the list changes. Reads and unchanged lists append only their tool result. The reducer also recovers historical todo lists from tool results with `metadata.todos` and retains the allocated numeric id in its durable snapshot (reducer version 10). |
 | `session_forked` | `session`, `source`, optional `before_message` | Fold: `SessionProjection.forked_from = source`, `forked_before = before_message` (the source-log user message the copy stopped before; `None` for a head fork, which copies every visible message). Records a fork edge separate from subagent `SessionCreated.parent`. Copied messages receive fresh ids; their copied `tokens` never count toward the fork's `usage`. v1: `SessionInfo.forkedFrom`. |
 | `context_evicted` | `session`, `evicted_parts`, `parts: [EvictedPart { part, notice }]`, `tokens_before`, `tokens_after`, `threshold` | Fold: sets `PartProjection::Tool.eviction_notice = notice` on each listed tool part; `state` keeps the full output. Model requests send the notice (artifact handle included) instead of the output; v1 clients see the full output. Logs before `parts` fold nothing. |
 
@@ -353,9 +364,14 @@ ride on events: `FileState` names a per-session blob (`file_blob` table).
 
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
-| `files_changed` | `session`, `message` (assistant message of the call), optional `call: ToolCallId`, `files: [FileChange { path, before: FileState }]` | Fold: appends `FileChangeRecord { call, path, before }` to that message's `file_changes`. Appended right after the call's `tool_result` / `tool_error` when it changed at least one file. |
+| `files_changed` | `session`, `message` (assistant message of the call), optional `call: ToolCallId`, `files: [FileChange { path, before: FileState, observed? }]` | Appends `FileChangeRecord { call?, path, before, observed? }` to that message's `file_changes`. Written when a tool changes at least one file. `observed: true` identifies the shell's observational Git capture. |
+| `files_observed` | `session: SessionId`, `external: bool`, `files: [FileStamp { path: string, mtime_ns: i64 \| null, size: u64 \| null }]` | Replaces each path's entry in `SessionProjection.files` (reducer version 11). A tool outcome and its stamps commit together with `external: false`. A pre-round check logs only differing stamps with `external: true` before taking the View. File stamps are excluded from provider requests and the curated v1 stream. |
 | `session_reverted` | `session`, `message` (the reverted user message), `files: [FileRestore { path, restored, saved, error? }]` (omitted when empty) | Fold: `message` and every later message move from `messages` to `revert.hidden` (`SessionProjection.revert = { message, hidden, files }`). While a revert is pending, a new one extends it: the new hidden messages come first, and a file already listed keeps its first `saved`. A `message` not in `messages` is a no-op. v1: `sessionReverted { messageId, files }`. |
 | `session_unreverted` | `session`, `files: [FileRestore]` (omitted when empty) | Fold: the hidden messages return to the end of `messages`; `revert = None`. No-op when nothing is pending. v1: `sessionReverted { undone: true, files }`. |
+
+`FileStamp.path` is absolute. `mtime_ns` is measured since the Unix epoch
+and `size` is measured in bytes. Both values are `null` for a deletion,
+which remains in the map so replay still knows the path.
 
 `FileState` is tagged on `kind`: `absent` (no regular file), `stored { hash,
 size }` (lowercase hex sha256 of the content, the blob key), or `omitted {
@@ -606,6 +622,7 @@ Projection {
 | Field | Source events |
 | --- | --- |
 | `id`, `parent`, `agent`, `model`, `workdir` | `session_created` (+ agent/model switches) |
+| `initial_context` | first `initial_context_recorded` (omitted when `None`) |
 | `project` | `session_created.project` (omitted when `None`) |
 | `kind` | `session_created.kind` (`project` for logs written before the field) |
 | `agent_model_overrides` | `session_agent_model_override_set` (`None` model removes that Agent) |
@@ -620,9 +637,10 @@ Projection {
 | `context_status` | latest `context_status` |
 | `forked_from` | `session_forked` (omitted when `None`) |
 | `forked_before` | `session_forked.before_message` (omitted when `None`) |
+| `files` | newest `files_observed` stamp per absolute path, including deleted paths (omitted when empty) |
 | `revert` | pending `session_reverted` (`{ message, hidden: [MessageProjection], files: [FileRestore] }`): the hidden messages live here, not in `messages`, until `session_unreverted` or the next `message_started` (omitted when `None`) |
 | `usage` | `usage_recorded` + legacy `message_finished.tokens` fallback (omitted when empty) |
-| `todos` | latest `todos_updated` (omitted when `None`) |
+| `todos` | latest todo snapshot from `todos_updated` or a historical todo result (omitted when `None`) |
 
 ### `MessageProjection` fields
 
@@ -701,6 +719,7 @@ contracts do not change and no database migration is needed.
   projection. `WorkflowStageRouteOutcome` is one observation per provider
   stream group and never carries transcript content.
 - `files_changed` appends file-change records to its message.
+- `files_observed` updates the session file map without changing the transcript.
 - `session_reverted` moves the reverted user message and everything after it
   into `revert.hidden`; `session_unreverted` moves them back; a new
   `message_started` commits (drops) a pending revert.

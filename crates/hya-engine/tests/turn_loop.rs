@@ -2050,3 +2050,118 @@ async fn step_fold_runs_before_preflight_rejects_an_under_threshold_provider_cou
         "step fold ran before preflight rejected the request"
     );
 }
+
+#[tokio::test]
+async fn snapcompact_carries_the_latest_todo_result_verbatim() {
+    let dir = tempdir();
+    let provider = Arc::new(FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::ToolCall {
+                name: "todo".to_string(),
+                input: serde_json::json!({"ops": [
+                    {"op": "add", "content": "inspect the inputs"},
+                    {"op": "add", "content": "check all outputs"}
+                ]}),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![
+            FakeStep::Text("detail across the earlier turn ".repeat(600)),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+        vec![
+            FakeStep::Text("continued".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+    ]));
+    let router = Arc::new(ProviderRouter::new().with(provider.clone()));
+    let store = SessionStore::connect_memory().await.unwrap();
+    let engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        PermissionPlane::new(PermissionRules::default()).0,
+        EventBus::default(),
+    )
+    .with_compaction(
+        Arc::new(FoldRecorder(Arc::default())),
+        CompactionConfig {
+            context_fraction: 0.001,
+            keep_recent: 1,
+            method_order: hya_engine::parse_method_order(&[
+                "snapcompact",
+                "shake",
+                "remote",
+                "soft",
+                "handoff",
+            ])
+            .unwrap(),
+            ..CompactionConfig::default()
+        },
+    );
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "x".to_string(),
+        workdir: dir.clone(),
+        reasoning: None,
+    };
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: agent.name.clone(),
+            model: agent.model.clone(),
+            workdir: dir.display().to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+
+    for prompt in ["Track the criteria", "Continue the task"] {
+        engine
+            .admit_user_prompt(session, prompt.to_string())
+            .await
+            .unwrap();
+        engine
+            .run_turn(session, &agent, CancellationToken::new())
+            .await
+            .unwrap();
+    }
+
+    let events = engine.replay(session).await.unwrap();
+    let list = events
+        .iter()
+        .find_map(|event| match &event.event {
+            Event::ToolResult { output, .. } => output.as_str(),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        list,
+        "Current todos:\n- #1 [pending] inspect the inputs\n- #2 [pending] check all outputs"
+    );
+    let markers: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event.event {
+            Event::ContextCompacted {
+                message,
+                strategy: hya_proto::CompactionStrategy::SnapCompact,
+                ..
+            } => Some(message),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(markers.len(), 1);
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[2].messages.iter().any(|msg| matches!(
+        msg, Message::System { id, content } if *id == markers[0] && content.ends_with(list)
+    )));
+    assert!(!requests[2].messages.iter().any(|msg| matches!(
+        msg, Message::Assistant { parts, .. } if parts.iter().any(|part| matches!(
+            part, hya_proto::Part::Tool { name, .. } if name.as_str() == "todo"
+        ))
+    )));
+    let _ = std::fs::remove_dir_all(dir);
+}

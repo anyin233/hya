@@ -22,7 +22,6 @@ fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
         lifecycle: hya_tool::LifecyclePlane::disconnected(),
         session: None,
         parent_session: None,
-        todo: TodoPlane::default(),
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),
@@ -43,7 +42,7 @@ fn replacement_child() {
     };
     if mode == "wrong" {
         let panic =
-            std::panic::catch_unwind(|| ToolRegistry::from_tool_families(&["hya/todo-tools"]));
+            std::panic::catch_unwind(|| ToolRegistry::from_tool_families(&["hya/network-tools"]));
         let error = panic.err().expect("wrong ABI must be rejected");
         let message = error
             .downcast_ref::<String>()
@@ -53,8 +52,8 @@ fn replacement_child() {
         assert!(message.contains("different hya-tool ABI"), "{message}");
         return;
     }
-    let registry = ToolRegistry::from_tool_families(&["hya/todo-tools"]);
-    let tool = registry.resolve("todo__read").unwrap();
+    let registry = ToolRegistry::from_tool_families(&["hya/network-tools"]);
+    let tool = registry.resolve("webfetch").unwrap();
     let ctx = ctx_with(vec![], std::env::current_dir().unwrap());
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let result = runtime
@@ -72,10 +71,10 @@ fn replacement_child() {
     assert_eq!(result["budgetSeconds"], 8);
     assert_eq!(result["cappedSeconds"], hya_tool::deadline::MIN_TOOL_SECS);
     // A second registry reuses the mapping without adopting the cell twice.
-    let _ = ToolRegistry::from_tool_families(&["hya/todo-tools"]);
+    let _ = ToolRegistry::from_tool_families(&["hya/network-tools"]);
     assert_eq!(
-        registry.builtin_bundle_origin("todo__read"),
-        Some("hya/todo-tools")
+        registry.builtin_bundle_origin("webfetch"),
+        Some("hya/network-tools")
     );
 }
 
@@ -103,7 +102,7 @@ fn native_family_can_be_replaced_and_wrong_abi_is_rejected() {
         std::fs::copy(
             examples.join(filename),
             dir.join(format!(
-                "{}hya_todo_tools{}",
+                "{}hya_network_tools{}",
                 std::env::consts::DLL_PREFIX,
                 std::env::consts::DLL_SUFFIX
             )),
