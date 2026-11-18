@@ -9,12 +9,7 @@ use hya_proto::SessionId;
 use hya_tool::{LifecyclePlane, LifecycleRequest, ToolRegistry, WaitOutcome, WaitWake};
 use serde_json::json;
 
-const WITHOUT_CHANNELS: [&str; 4] = [
-    "hya/base-tools",
-    "hya/extended-tools",
-    "hya/network-tools",
-    "hya/todo-tools",
-];
+const WITHOUT_CHANNELS: [&str; 3] = ["hya/base-tools", "hya/extended-tools", "hya/network-tools"];
 
 fn ctx(lifecycle: LifecyclePlane) -> hya_tool::ToolCtx {
     hya_tool::ToolCtx {
@@ -28,7 +23,6 @@ fn ctx(lifecycle: LifecyclePlane) -> hya_tool::ToolCtx {
         lifecycle,
         session: None,
         parent_session: None,
-        todo: hya_tool::TodoPlane::default(),
         skills: hya_tool::SkillPlane::default(),
         artifacts: hya_tool::handle::ArtifactPlane::default(),
         websearch: hya_tool::WebSearchPlane::default(),

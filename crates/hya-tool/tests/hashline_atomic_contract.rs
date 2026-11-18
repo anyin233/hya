@@ -16,8 +16,8 @@ use async_trait::async_trait;
 use hya_proto::SessionId;
 use hya_tool::{
     Action, Decision, FormatterError, FormatterPlane, FormatterProvider, InteractionPlane,
-    LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnerPlane, TodoPlane,
-    ToolCtx, ToolError, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
+    LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnerPlane, ToolCtx,
+    ToolError, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
@@ -109,7 +109,6 @@ fn ctx_with_formatter_session(
         lifecycle: hya_tool::LifecyclePlane::disconnected(),
         session,
         parent_session: None,
-        todo: TodoPlane::default(),
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),

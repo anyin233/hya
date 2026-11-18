@@ -53,7 +53,7 @@ pub enum Action {
     WebFetch,
     /// Provider-backed web search (`websearch`).
     WebSearch,
-    /// Session todo list replace (`todowrite`).
+    /// Legacy permission action for historical todo tools.
     TodoWrite,
     /// Load a skill by name (`skill`).
     Skill,

@@ -130,7 +130,16 @@ test("grep, glob, and find: the pattern, the scope, and the match count", () => 
   expect(toolCard({ tool: "grep", state: ok, inputJson: json({ pattern: "x" }), outputJson: json({ total: 1, matches: [{ file: "a", line: 1, text: "x" }] }) }).summary).toBe("\"x\" · 1 match")
 })
 
-test("todo tools list the todos with their status", () => {
+test("todo shows the full rendered result", () => {
+  const card = toolCard({
+    tool: "todo", state: ok, inputJson: json({ ops: [{ op: "status", id: "1", status: "completed" }] }),
+    outputJson: json("Current todos:\n- #1 [completed] write tests\n- #2 [in_progress] ship"),
+  })
+  expect(card.summary).toBe("Current todos:")
+  expect(texts(card.body)).toEqual(["Current todos:", "- #1 [completed] write tests", "- #2 [in_progress] ship"])
+})
+
+test("legacy todo tools list the todos with their status", () => {
   const card = toolCard({
     tool: "todo__update_status", state: ok, inputJson: json({ updates: [{ id: "1", status: "completed" }] }),
     outputJson: json({ metadata: { todos: [{ id: "1", content: "write tests", status: "completed" }, { id: "2", content: "ship", status: "in_progress" }] } }),

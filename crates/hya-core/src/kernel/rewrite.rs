@@ -1,10 +1,10 @@
 //! The rewrite primitive: remove everything before the current step.
 
 use async_trait::async_trait;
-use hya_proto::context::COMPACT_CONTEXT_MARKER;
+use hya_proto::context::{COMPACT_CONTEXT_MARKER, render_todos};
 use hya_proto::{
     CompactionStrategy, Event, FinishReason, MessageId, PartId, Projection, Role, SessionId,
-    StepCut,
+    StepCut, TodoItem,
 };
 use hya_tool::{RewriteCtx, Rewriter, ToolError};
 
@@ -149,7 +149,8 @@ pub(super) fn rewrite_events(
         .collect();
     let (input_tokens_est, threshold) = budget.unwrap_or((0, 0));
     let marker = MessageId::new();
-    let mut events = marker_events(session, marker, marker_text(initiator, &users));
+    let todos = projection.session.todos.as_deref().unwrap_or_default();
+    let mut events = marker_events(session, marker, marker_text(initiator, &users, todos));
     events.push(Event::ContextCompacted {
         session,
         message: marker,
@@ -164,7 +165,7 @@ pub(super) fn rewrite_events(
     Ok(Some((events, folded_count)))
 }
 
-fn marker_text(initiator: Initiator, users: &[String]) -> String {
+fn marker_text(initiator: Initiator, users: &[String], todos: &[TodoItem]) -> String {
     let by = match initiator {
         Initiator::Model => "model",
         Initiator::Harness => "harness",
@@ -174,10 +175,15 @@ fn marker_text(initiator: Initiator, users: &[String]) -> String {
         .enumerate()
         .map(|(n, text)| format!("--- user message {} ---\n{text}", n + 1))
         .collect();
-    format!(
+    let mut marker = format!(
         "{COMPACT_CONTEXT_MARKER}[hya] Earlier context was removed by the {by}. It stays in the session log and cannot be read back.\nUser messages from the removed part, verbatim:\n\n{}",
         users.join("\n\n")
-    )
+    );
+    if !todos.is_empty() {
+        marker.push_str("\n\n");
+        marker.push_str(&render_todos(todos));
+    }
+    marker
 }
 
 fn marker_events(session: SessionId, message: MessageId, text: String) -> Vec<Event> {

@@ -13,7 +13,7 @@ use hya_tool::handle::ArtifactPlane;
 use hya_tool::{
     AgentDef, FormatterPlane, InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane,
     PermissionPlane, ResolvedTool, SpawnRequest, SpawnRequestSendError, SpawnRequestSink,
-    SpawnerPlane, TodoPlane, ToolError, WebSearchPlane,
+    SpawnerPlane, ToolError, WebSearchPlane,
 };
 use serde_json::Value;
 
@@ -79,7 +79,6 @@ mod steer;
 mod stream_round;
 mod summary;
 mod text_complete;
-mod todos;
 mod tool_error;
 mod turn;
 mod turn_end;
@@ -388,7 +387,6 @@ pub struct SessionEngine {
     lifecycle: LifecyclePlane,
     /// Mints subagent handle leaves (`<prefix>-<operator>`); injectable RNG.
     handle_namer: Arc<crate::handle_naming::HandleNamer>,
-    todo: TodoPlane,
     websearch: WebSearchPlane,
     /// User-registered `artifact://` post-processing, carried to every tool call.
     artifacts: ArtifactPlane,
@@ -452,7 +450,6 @@ impl Clone for SessionEngine {
             project_activity: self.project_activity.clone(),
             lifecycle: self.lifecycle.clone(),
             handle_namer: self.handle_namer.clone(),
-            todo: self.todo.clone(),
             websearch: self.websearch.clone(),
             artifacts: self.artifacts.clone(),
             formatter: self.formatter.clone(),
@@ -590,7 +587,6 @@ impl SessionEngine {
         let lifecycle = LifecyclePlane::disconnected();
         let mailbox = MailboxPlane::disconnected();
         let (project_activity, activity_rx) = hya_tool::ProjectActivityPlane::new();
-        let todo = TodoPlane::default();
         let websearch = WebSearchPlane::default();
         let formatter = FormatterPlane::default();
         let lsp = LspPlane::default();
@@ -621,7 +617,6 @@ impl SessionEngine {
             project_activity,
             lifecycle,
             handle_namer: Arc::new(crate::handle_naming::HandleNamer::default()),
-            todo,
             websearch,
             artifacts: ArtifactPlane::default(),
             formatter,

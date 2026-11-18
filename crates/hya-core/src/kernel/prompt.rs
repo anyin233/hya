@@ -8,6 +8,7 @@ const PROMPT: &str = "You are a coding assistant running inside hya, a coding ag
 - edit: replace text in a file
 - write: create or overwrite a file
 - rewrite: remove everything before this call from the conversation, keeping the summary you pass
+- todo: record and update the task's completion criteria; the current list survives rewrites
 </tools>
 
 <rules>

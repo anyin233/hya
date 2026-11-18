@@ -35,27 +35,27 @@ impl Tool for Probe {
 
 #[test]
 fn namespaced_name_composes_and_round_trips() {
-    let full = namespaced_name("todo", "update_status").unwrap();
-    assert_eq!(full, "todo__update_status");
-    assert_eq!(namespace_of(&full), Some("todo"));
+    let full = namespaced_name("alpha", "update_status").unwrap();
+    assert_eq!(full, "alpha__update_status");
+    assert_eq!(namespace_of(&full), Some("alpha"));
     assert_eq!(namespace_of("read"), None);
     // First-segment rule: MCP-style nested names still resolve a namespace.
     assert_eq!(namespace_of("mcp__github__read"), Some("mcp"));
     // Degenerate spellings are not namespaced.
     assert_eq!(namespace_of("__read"), None);
-    assert_eq!(namespace_of("todo__"), None);
+    assert_eq!(namespace_of("alpha__"), None);
 }
 
 #[test]
 fn namespaced_name_rejects_invalid_tokens() {
     for (namespace, local) in [
         ("", "read"),
-        ("todo", ""),
+        ("alpha", ""),
         ("to do", "read"),
-        ("todo:", "read"),
-        ("todo", "re/ad"),
-        ("todo__x", "read"),
-        ("todo", "read__status"),
+        ("alpha:", "read"),
+        ("alpha", "re/ad"),
+        ("alpha__x", "read"),
+        ("alpha", "read__status"),
     ] {
         assert!(
             namespaced_name(namespace, local).is_err(),
@@ -102,14 +102,4 @@ fn direct_registration_uses_validated_composed_names() {
     let invalid = namespaced_name("bad ns", "read").unwrap_err();
     assert!(invalid.to_string().contains("invalid namespaced tool name"));
     assert!(registry.get("x").is_none());
-}
-
-#[test]
-fn builtin_registry_pairs_namespaced_names_with_their_namespace() {
-    let registry = ToolRegistry::builtins();
-    assert!(registry.get("read").is_some());
-    assert_eq!(namespace_of("read"), None);
-    assert!(registry.get("todo__read").is_some());
-    assert_eq!(namespace_of("todo__read"), Some("todo"));
-    assert!(registry.get("alpha__read").is_none());
 }

@@ -59,10 +59,11 @@ impl Summarizer for FixedSummary {
 
 async fn state_with(provider: FakeProvider, workdir: PathBuf) -> (AppState, Arc<SessionEngine>) {
     let providers = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
-    let (perm, _asks) = PermissionPlane::new(PermissionRules::new(vec![
-        Rule::new(Action::Read, "*", Mode::Allow),
-        Rule::new(Action::TodoWrite, "*", Mode::Allow),
-    ]));
+    let (perm, _asks) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+        Action::Read,
+        "*",
+        Mode::Allow,
+    )]));
     let engine = Arc::new(
         SessionEngine::new(
             SessionStore::connect_memory().await.unwrap(),
@@ -438,8 +439,8 @@ async fn todo_tool_calls_stream_todo_updated_and_fold_into_the_todo_read() {
     let provider = FakeProvider::scripted_turns(vec![
         vec![
             FakeStep::ToolCall {
-                name: "todo__update_content".to_string(),
-                input: json!({"operations": [
+                name: "todo".to_string(),
+                input: json!({"ops": [
                     {"op": "add", "content": "first"},
                     {"op": "add", "content": "second"}
                 ]}),
@@ -448,15 +449,15 @@ async fn todo_tool_calls_stream_todo_updated_and_fold_into_the_todo_read() {
         ],
         vec![
             FakeStep::ToolCall {
-                name: "todo__update_status".to_string(),
-                input: json!({"updates": [{"id": "1", "status": "in_progress"}]}),
+                name: "todo".to_string(),
+                input: json!({"ops": [{"op": "status", "id": "1", "status": "in_progress"}]}),
             },
             FakeStep::Finish(FinishReason::ToolCalls),
         ],
         vec![
             FakeStep::ToolCall {
-                name: "todo__read".to_string(),
-                input: json!({}),
+                name: "todo".to_string(),
+                input: json!({"ops": []}),
             },
             FakeStep::Finish(FinishReason::ToolCalls),
         ],
@@ -484,7 +485,7 @@ async fn todo_tool_calls_stream_todo_updated_and_fold_into_the_todo_read() {
         {"id": "1", "content": "first", "status": "TODO_STATUS_IN_PROGRESS"},
         {"id": "2", "content": "second", "status": "TODO_STATUS_PENDING"},
     ]});
-    // `todo__read` changes nothing, so it records no update.
+    // `todo` with no operations changes nothing, so it records no update.
     let frames = collector.await.unwrap();
     assert_eq!(
         of_kind(frame_events(&frames), "todoUpdated"),

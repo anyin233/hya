@@ -1,4 +1,4 @@
-//! Exposure policies for the five trusted tool-family bundles.
+//! Exposure policies for the four trusted tool-family bundles.
 //!
 //! Each family's `exposure.yaml` is read from its first-party bundle when the
 //! process first needs it; nothing is compiled into the binary.
@@ -12,12 +12,11 @@ use serde::Deserialize;
 use crate::tool::ToolPermission;
 
 /// Tool-family bundles in stable registry order.
-pub(crate) const TOOL_FAMILIES: [&str; 5] = [
+pub(crate) const TOOL_FAMILIES: [&str; 4] = [
     "hya/base-tools",
     "hya/extended-tools",
     "hya/network-tools",
     "hya/channel-tools",
-    "hya/todo-tools",
 ];
 
 /// Metadata that owns one family's builtin visibility, aliases, and defaults.
@@ -392,7 +391,7 @@ mod tests {
             "- { name: wait, schema_version: 1, permission: read_only, overrides: hya/extended-tools }",
         );
         let wrong_target = tools(
-            "- { name: wait, schema_version: 1, permission: read_only, overrides: hya/todo-tools }",
+            "- { name: wait, schema_version: 1, permission: read_only, overrides: hya/network-tools }",
         );
         let accepted = check_family_exports(&[
             ("hya/extended-tools", &extended),
@@ -425,7 +424,7 @@ mod tests {
         assert!(
             check_family_exports(&[
                 ("hya/extended-tools", &extended),
-                ("hya/todo-tools", &aliased),
+                ("hya/network-tools", &aliased),
             ])
             .is_err()
         );

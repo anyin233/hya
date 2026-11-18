@@ -11,7 +11,6 @@ version-reference = "hya"
 workspace = true
 
 [dependencies]
-hya-todo-tools = { workspace = true }
 hya-extended-tools = { workspace = true }
 hya-channel-tools = { workspace = true }
 hya-network-tools = { workspace = true }

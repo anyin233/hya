@@ -1,6 +1,6 @@
 # Three-primitive kernel
 
-`hya exec --bare` runs the `hya-core::kernel` loop alone: five built-in
+`hya exec --bare` runs the `hya-core::kernel` loop alone with six built-in
 tools, a minimal system prompt, and the SQLite event log. It loads no bundle.
 Use it to run a task with only the kernel's Context operations. See
 [ADR-0033](adr/0033-three-primitive-kernel.md) for the design and invariants.
@@ -15,14 +15,16 @@ combinations error out. See the [CLI reference](cli.md#--bare).
 
 ## Three primitives
 
-Context is what the model sees: the event log folded by the shared
-`hya-proto` reducer into the system prompt, tool list, and live work.
-Only three primitives change it:
+The kernel folds the event log with the shared `hya-proto` reducer.
+The model sees the prompt, tool schemas, and live transcript (`m`).
+The session also tracks completion criteria (`g`) as an ordered todo
+list. The model sees that list in tool results and Rewrite markers.
+Three primitives update Context.
 
 | Primitive | Meaning | Events |
 | --- | --- | --- |
 | Model append | The model's text, reasoning, and tool calls | `StepStarted`, `TextStart/Delta/End`, `ReasoningStart/Delta/End`, `ToolCallRequested`, `StepFinished`, `UsageRecorded`, inside assistant `MessageStarted`/`MessageFinished` |
-| Tool append (tool) | An outside observation paired with a model call | `ToolResult`, `ToolError` |
+| Tool append (tool) | An observation paired with a model call, including changes to the session todo list | `ToolResult`, `ToolError`, `TodosUpdated` |
 | Tool append (user) | User input through the same observation channel | user `MessageStarted`, `TextStart/Delta/End`, `MessageFinished` |
 | Rewrite | Remove earlier Context while retaining its log | a system marker message and `ContextCompacted` with strategy `rewrite` |
 
@@ -67,13 +69,14 @@ The following JSON shapes use `string` and `int` as type placeholders. All
 input fields are required. Relative paths resolve against the run's working
 directory.
 
-| Tool | Input JSON | Success result JSON |
+| Tool | Input JSON | Success result |
 | --- | --- | --- |
 | `bash` | `{"command": string}` | `{"exit_code": int, "output": string}` |
 | `read` | `{"path": string}` | `{"content": string}` |
 | `write` | `{"path": string, "content": string}` | `{"bytes": int}` |
 | `edit` | `{"path": string, "old": string, "new": string}` | `{"replaced": 1}` |
 | `rewrite` | `{"summary": string}` | `{"removed_messages": <n>, "note": "The summary in this call is your own text, not an observation."}` |
+| `todo` | `{"ops": [operation, ...]}` | Full list as a JSON string. See [Session todos](#session-todos). |
 
 `bash` runs `sh -c` in the working directory and merges stdout and stderr.
 A nonzero exit is still a success result for the model to interpret. Failure
@@ -88,6 +91,34 @@ multiple matches return `ToolError` stating the count.
 not store a second copy or turn the summary into an observation. `<n>` is the
 number of removed messages. With no earlier content it returns
 `ToolError("nothing to remove")` and emits no `ContextCompacted`.
+
+## Session todos
+
+Use `todo` in either mode to record the criteria that will tell you the task
+is done and update them as work progresses. The model chooses when to use
+it. The kernel executes it directly, like `rewrite`.
+
+| Operation | Required JSON fields | Effect |
+| --- | --- | --- |
+| Add | `{"op":"add","content":string}` | Append a `pending` item. The kernel assigns the smallest positive decimal string id it has not issued. |
+| Edit | `{"op":"edit","id":string,"content":string}` | Replace an item's text. |
+| Status | `{"op":"status","id":string,"status":string}` | Set the status to `pending`, `in_progress`, `blocked`, or `completed`. |
+| Remove | `{"op":"remove","id":string}` | Remove the item. |
+
+Operations apply in order. For example, in a new session the following call
+adds a criterion and starts it in one batch.
+
+```json
+{"ops":[{"op":"add","content":"Run the focused tests"},{"op":"status","id":"1","status":"in_progress"}]}
+```
+
+The result string is `Current todos:\n- #1 [in_progress] Run the focused tests`.
+Each additional item appears on its own row in list order. An empty list is
+`Current todos: (empty)`. Pass `{"ops":[]}` to read the current list. Blank
+content, an unknown item id, or a malformed operation fails the whole batch
+with `ToolError`. A changed list is appended as a `TodosUpdated` full snapshot
+in the same batch as its `ToolResult`. Empty and unchanged lists can be read
+without a new update. The existing session todo API reads the replayed list.
 
 ## Rewrite rules
 
@@ -108,8 +139,12 @@ User messages from the removed part, verbatim:
 ```
 
 `<model|harness>` names the initiator. User text is repeated verbatim; the
-model cannot replace it with a summary. Removed originals stay in SQLite,
-but the kernel provides no way to read them back into Context.
+model cannot replace it with a summary. When the session has todos, the
+marker appends a blank line followed by the current list exactly as rendered
+by the tool. Full-mode compaction markers carry the same list. The `shake`
+rung preserves the most recent visible `todo` result when it evicts stale
+tool outputs. Removed originals stay in SQLite, but the kernel provides no
+way to read them back into Context.
 
 `ContextCompacted` records `strategy: Rewrite` (wire name `rewrite`),
 `from_message` (first visible message), `to_message` (current assistant
@@ -148,6 +183,7 @@ You are a coding assistant running inside hya, a coding agent harness. Help user
 - edit: replace text in a file
 - write: create or overwrite a file
 - rewrite: remove everything before this call from the conversation, keeping the summary you pass
+- todo: record and update the task's completion criteria; the current list survives rewrites
 </tools>
 
 <rules>
@@ -169,7 +205,7 @@ You are a coding assistant running inside hya, a coding agent harness. Help user
 Bare mode loads no bundle. It has no permission checks, hooks, subagents,
 Workflows, compaction ladder, output truncation, timeouts, or path bounds.
 These capabilities belong to full mode and its bundles. The kernel retains
-its five tools, minimal prompt, 80% harness rewrite, and event logging.
+its six tools, minimal prompt, 80% harness rewrite, and event logging.
 `--pure` only removes external project/user context from full mode; it does
 not select the kernel alone.
 
@@ -186,14 +222,14 @@ plugs into that loop at fixed points:
 | Point | Bare mode | Full mode |
 | --- | --- | --- |
 | Before the round (`Harness::before_round`) | 80% harness rewrite (`HarnessRewriter`) | Re-validate the actor claim, rebind a Root turn to a new runtime generation, resolve the round's model, then run the engine's rewriter: the [compaction ladder](compaction.md) of the `hya/compaction` internal bundle |
-| Request | Kernel prompt and five tools | The agent's system prompt, filtered tool schemas plus `rewrite`, and reasoning effort, then the `chat.params` hook |
+| Request | Kernel prompt and six tools | The agent's system prompt, filtered tool schemas plus `rewrite` and `todo`, and reasoning effort, then the `chat.params` hook |
 | Opening the stream | The given model | Cross-model fallback or the Workflow route, under a governor stream permit |
 | Failed round | Ends the run | Retried up to twice when it failed before any text or tool call on a link error |
-| Tool call (`ToolGate`) | Execute the tool | Hooks, permissions, the full `ToolCtx`, file snapshots, output capping, steer notices |
+| Registry tool call (`ToolGate`) | Execute the tool | Hooks, permissions, the full `ToolCtx`, file snapshots, output capping, steer notices |
 | Unrun calls after a cancel | Failed as `cancelled` | Left open; the turn end closes them as `CANCELLED` |
 | End | The round's finish | Also ends after an accepted `report` |
 
-The model's `rewrite` call is offered and handled by the kernel in both
+The kernel offers and handles the model's `rewrite` and `todo` calls in both
 modes. The ladder's `ContextEvicted` events store the exact notice for each
 evicted part, which the projection renders during replay.
 `TurnBindingRecorded` records the runtime generation and the pre-hook

@@ -191,7 +191,6 @@ fn tool_ctx(workdir: &Path, cancel: &CancellationToken) -> ToolCtx {
         lifecycle: hya_tool::LifecyclePlane::disconnected(),
         session: None,
         parent_session: None,
-        todo: hya_tool::TodoPlane::default(),
         skills: hya_tool::SkillPlane::default(),
         artifacts: hya_tool::handle::ArtifactPlane::default(),
         agents: Arc::default(),
@@ -636,4 +635,126 @@ async fn a6_harness_rewrite_and_restart() {
         attempts += 1;
     }
     assert_eq!(attempts, requests.len());
+}
+
+#[tokio::test]
+async fn rewrite_carries_the_latest_todo_result_verbatim() {
+    let fx = fixture(
+        "rewrite-todos",
+        FakeProvider::scripted_turns(vec![
+            call(
+                "todo",
+                json!({"ops": [
+                    {"op": "add", "content": "inspect the inputs"},
+                    {"op": "add", "content": "check all outputs"},
+                    {"op": "status", "id": "2", "status": "in_progress"}
+                ]}),
+            ),
+            call("rewrite", json!({"summary": "continue checking"})),
+            text("done"),
+        ]),
+    )
+    .await;
+    fx.turn("check the results", &CancellationToken::new())
+        .await
+        .unwrap();
+
+    let log = fx.log().await;
+    assert_paired(&log);
+    let list =
+        "Current todos:\n- #1 [pending] inspect the inputs\n- #2 [in_progress] check all outputs";
+    assert!(log.windows(2).any(|pair| matches!(
+        pair,
+        [Event::ToolResult { output, .. }, Event::TodosUpdated { todos, .. }]
+            if output == list && todos.len() == 2
+    )));
+    let requests = fx.provider.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(!assistant_parts(&requests[2]).any(|part| matches!(
+        part, Part::Tool { name, .. } if name.as_str() == "todo"
+    )));
+    assert!(requests[2].messages.iter().any(|message| matches!(
+        message,
+        Message::System { content, .. }
+            if content.starts_with(COMPACT_CONTEXT_MARKER) && content.ends_with(list)
+    )));
+}
+
+#[tokio::test]
+async fn invalid_todo_batch_is_rolled_back_without_recording_an_update() {
+    let fx = fixture(
+        "invalid-todos",
+        FakeProvider::scripted_turns(vec![
+            call(
+                "todo",
+                json!({"ops": [{"op": "add", "content": "keep me"}]}),
+            ),
+            call(
+                "todo",
+                json!({"ops": [
+                    {"op": "edit", "id": "1", "content": "undo this"},
+                    {"op": "add", "content": "undo this too"},
+                    {"op": "remove", "id": "99"}
+                ]}),
+            ),
+            call("todo", json!({"ops": []})),
+            text("done"),
+        ]),
+    )
+    .await;
+    fx.turn("edit the list", &CancellationToken::new())
+        .await
+        .unwrap();
+
+    let log = fx.log().await;
+    assert_paired(&log);
+    assert!(
+        matches!(tool_errors(&log).as_slice(), [error] if error.contains("unknown todo id `99`"))
+    );
+    let updates = log
+        .iter()
+        .filter(|event| matches!(event, Event::TodosUpdated { .. }));
+    assert_eq!(updates.count(), 1);
+    let results: Vec<_> = log
+        .iter()
+        .filter_map(|event| match event {
+            Event::ToolResult { output, .. } => output.as_str(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results, ["Current todos:\n- #1 [pending] keep me"; 2]);
+}
+
+#[tokio::test]
+async fn todo_ids_stay_allocated_after_their_rows_are_removed() {
+    let fx = fixture(
+        "removed-todos",
+        FakeProvider::scripted_turns(vec![
+            call(
+                "todo",
+                json!({"ops": [
+                    {"op": "add", "content": "temporary"},
+                    {"op": "remove", "id": "1"}
+                ]}),
+            ),
+            call("todo", json!({"ops": [{"op": "add", "content": "keep"}]})),
+            text("done"),
+        ]),
+    )
+    .await;
+    fx.turn("replace the list", &CancellationToken::new())
+        .await
+        .unwrap();
+    let log = fx.log().await;
+    let projection = fx.store.read_projection(fx.session).await.unwrap();
+    let todos = projection.session.todos.as_ref().unwrap();
+    assert_eq!(todos.len(), 1);
+    assert_eq!(todos[0].id, "2");
+    assert_eq!(todos[0].content, "keep");
+    assert_eq!(
+        log.iter()
+            .filter(|event| matches!(event, Event::TodosUpdated { .. }))
+            .count(),
+        1
+    );
 }

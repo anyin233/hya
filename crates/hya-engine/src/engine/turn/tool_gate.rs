@@ -118,10 +118,6 @@ impl TurnToolGate<'_> {
         }
         let input_for_after =
             (engine.hooks.is_some() || activation_hooks.is_some()).then(|| tc.input.clone());
-        let todo_tool = super::super::todos::is_todo_tool(tc.name.as_str());
-        if todo_tool {
-            engine.restore_todo_plane(session).await;
-        }
         let started = std::time::Instant::now();
         let mut file_capture = super::super::file_snapshot::FileCapture::None;
         let behind = hidden_behind(
@@ -191,7 +187,6 @@ impl TurnToolGate<'_> {
                                 project_activity: engine.project_activity.for_session(session),
                                 session: Some(session),
                                 parent_session,
-                                todo: engine.todo.clone(),
                                 skills: resources.skill_plane(),
                                 artifacts: engine.artifacts.clone(),
                                 agents: agents.clone(),
@@ -366,10 +361,6 @@ impl TurnToolGate<'_> {
                 )
             }
         };
-        let todo_output = match &event {
-            Event::ToolResult { output, .. } if todo_tool => Some(output.clone()),
-            _ => None,
-        };
         let (acknowledgement, consumed_incoming) = steer
             .take_acknowledgement()
             .map_or((None, false), |(event, incoming)| (Some(event), incoming));
@@ -381,15 +372,6 @@ impl TurnToolGate<'_> {
             engine.publish_envelope(envelope);
         }
         engine.notify_mail_consumed(session, mail_mark, consumed_incoming);
-        // A todo tool's result carries the whole list; record the
-        // change so the projection (and `todoUpdated`) follow it.
-        if let Some(output) = todo_output
-            && let Some(todos) = engine.changed_todos(session, &output).await
-        {
-            engine
-                .emit_for_actor(actor_claim, session, Event::TodosUpdated { session, todos })
-                .await?;
-        }
         if retains_artifact {
             artifact_guard.disarm();
         } else {

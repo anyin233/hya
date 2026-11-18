@@ -21,7 +21,7 @@ canonical tools contribute schemas.
 
 ## Builtin inventory
 
-`ToolRegistry::builtins()` installs **28** canonical schema names before model
+`ToolRegistry::builtins()` installs **25** canonical schema names before model
 filtering. The inventory below is complete for that constructor. A schema marked
 **closed** rejects unknown keys; aliases resolve only at runtime and are never
 advertised.
@@ -32,7 +32,7 @@ advertised.
 | File access | `read`, `write`, `edit`, `apply_patch` | Read or mutate workspace files. `read`, `write`, and `edit` are native coding tools; `apply_patch` remains the separate patch envelope. |
 | Local discovery | `ls`, `glob`, `find`, `grep`, `lsp` | List directories, match paths, search text, or query language servers. |
 | Commands | `bash` | Run a command with bounded capture; hidden runtime name `shell` is not advertised. |
-| Human/session interaction | `ask_user`, `todo__read`, `todo__update_status`, `todo__update_content`, `plan_exit` | Ask batched structured questions, read/update session todos, request a plan-mode transition. |
+| Human/session interaction | `ask_user`, `todo`, `plan_exit` | Ask batched structured questions, read/update session todos, request a plan-mode transition. |
 | Agents and teams | `skill`, `list_agents`, `task`, `workflow`, `search_agent`, `archive`, `wait` | Load skills, discover/spawn agents, execute governed Workflow commands, search archived subagents, stop-and-archive a subagent, and block until subagents finish (`wait` stays advertised at every depth). The orchestration plane is hidden at depth 2 ([ADR-0015](../adr/0015-unified-resident-subagent-lifecycle.md)). |
 | Project activity | `project_activity` | Read-only, Project-scoped view of recent sessions and newest changes per file; never exposes prompts, arguments, or contents. `busy`/`idle` is live state from this daemon. |
 | Communication | `send`, `list_channel`, `report` | Channel-plane communication: one channel-addressed send (the channel's nature picks DM vs broadcast, with archive revival), channel listing, and terminal reports ([ADR-0016](../adr/0016-channel-communication-plane.md)). |
@@ -57,24 +57,12 @@ Plane failures (no host attached) surface as a tool error instead of a
 silent empty answer.
 ([bundles/presets/base-tools/native/src/ask_user.rs](../../bundles/presets/base-tools/native/src/ask_user.rs))
 
-### The `todo__` namespace
+### Todo
 
-Session todos live behind three namespaced tools sharing one plane
-([crates/hya-tool/src/todo.rs](../../crates/hya-tool/src/todo.rs)):
-
-- `todo__read` — the current list; items are `{id, content, status}` with
-  stable plane-assigned ids ("1", "2", …) that are never reused.
-- `todo__update_status` — batch `{id, status}` updates; statuses are
-  `pending`, `in_progress`, `blocked`, `completed`.
-- `todo__update_content` — batch `add` / `remove` / `edit` operations,
-  validated as a whole before anything is applied (a bad id fails the
-  batch with the current ids listed, leaving the list untouched).
-
-Every write returns the full snapshot in `metadata.todos`, which is what
-the engine's replay fold consumes; the pre-0.36.53 `todowrite` spelling
-is removed from dispatch, and a session with no `TodosUpdated` event reads
-whatever its in-memory plane holds.
-The wire enum gained `TODO_STATUS_BLOCKED`.
+The kernel's [`todo` tool](../kernel.md#session-todos) is available in bare and
+full mode. It applies an `ops` array atomically and returns the full rendered
+list. Every Rewrite preserves the current list verbatim. The session todo
+route and live TUI updates read the durable `TodosUpdated` snapshots.
 
 ### Task
 
@@ -185,15 +173,6 @@ than 10 supporting files shows an incomplete list. See also
 [`docs/skills.md`](../skills.md).
 ([crates/hya-tool/src/skill.rs:14](../../crates/hya-tool/src/skill.rs#L14),
 [crates/hya-tool/src/skill.rs:95-150](../../crates/hya-tool/src/skill.rs#L95-L150))
-
-### Todowrite
-
-Input is a `todos` array of `{content, status, priority}` objects. The call
-**replaces** the session's whole todo list rather than appending. The list lives
-in the in-memory `TodoPlane` (not persisted independently of the event log). The
-result echoes the list back with a title carrying the count of still-open items
-(status other than `"completed"`). Alias: `todo`.
-([crates/hya-tool/src/todo.rs:75-136](../../crates/hya-tool/src/todo.rs#L75-L136))
 
 ### Coordination tools (allocated at startup)
 

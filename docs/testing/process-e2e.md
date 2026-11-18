@@ -177,7 +177,7 @@ behavior.
 | Session context | `GET /v1/sessions/{id}/messages` includes multi-turn user/assistant content |
 | Project AGENTS.md | Guided FakeLlm request contains AGENTS body (not just the raw prompt text) |
 | Compact / summarize | Context contains summary marker after compact; follow-up turn still works |
-| Todo | `GET /v1/sessions/{id}/todo` lists items written via `todowrite` |
+| Todo | `GET /v1/sessions/{id}/todo` lists items written via `todo` |
 | Edit | Disk file content after `edit` tool |
 | Mailbox `send` | The **recipient's** next FakeLlm request contains `[mail from …] <body>` — never the sender's success string or call args |
 | Mailbox `send` receipts | A *direct* send hard-codes `recipients: 1`; only a `#channel` send counts real subscribers. Any receipt assertion must name the channel (`to #squad (N recipient…)`), never bare `recipients:1` |

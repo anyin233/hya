@@ -10,7 +10,7 @@ Raw native executables are carried by `extensions.rust` and started through the
 existing out-of-process plugin protocol.
 
 First-party in-process tool families can carry a Rust dynamic library under
-`extensions.libraries`. All five trusted tool-family presets use this form. Their
+`extensions.libraries`. All four trusted tool-family presets use this form. Their
 `hya_tool_bundle_abi_v1` export must match the host's ABI digest, and
 `hya_tool_bundle_register_v1` registers tools after the bundle identity and
 declared names are checked. `hya_tool_bundle_with_runtime_v1` enters the
@@ -237,12 +237,12 @@ unknown id `not_found` (404), an immutable bundle or a conflict that
 
 Hya's own tools, agents, Skills, commands, channel policy and workflows are
 bundles that the backend loads when it starts. None of their content is
-compiled into the binary. `hya_bundle::FIRST_PARTY_BUNDLES` lists the fourteen
+compiled into the binary. `hya_bundle::FIRST_PARTY_BUNDLES` lists the thirteen
 trusted identities:
 
 | Identity | Source | Supplies |
 | --- | --- | --- |
-| `hya/base-tools`, `hya/extended-tools`, `hya/network-tools`, `hya/channel-tools`, `hya/todo-tools` | `bundles/presets/<family>-tools` | Tool exposure policy and native tool library |
+| `hya/base-tools`, `hya/extended-tools`, `hya/network-tools`, `hya/channel-tools` | `bundles/presets/<family>-tools` | Tool exposure policy and native tool library |
 | `hya/core-skills` | `bundles/presets/core-skills` | Builtin Skills |
 | `hya/core-commands` | `bundles/presets/core-commands` | `/init` and `/review` prompt templates |
 | `hya/core-agents` | `bundles/presets/core-agents` | Builtin agent roster, prompts and reserved ids |
@@ -282,13 +282,13 @@ A release builds each supported target natively: `x86_64-unknown-linux-gnu`,
 `aarch64-unknown-linux-gnu`, and `aarch64-apple-darwin`. It publishes:
 
 - One unified archive per target, `hya-<version>-<target>.tar.gz`, holding
-  `bin/hya`, `bundles/hya-<name>.hyabundle` for all fourteen bundles, the Argus
+  `bin/hya`, `bundles/hya-<name>.hyabundle` for all thirteen bundles, the Argus
   example bundle, Bun (`lib/hya/bin/bun`), `lib/hya/bun-adapter`, `lib/hya/tui`
   (including the target's `@opentui/core-<platform>` native package and
   precompiled `dist/app.js`), `lib/hya/tui-sdk`, and `lib/hya/tui-web` with its
   `web/` page.
 - One standalone asset per bundle, byte-identical to the archived copy:
-  `hya-<name>-<version>-<target>.hyabundle` for the six native bundles (five
+  `hya-<name>-<version>-<target>.hyabundle` for the five native bundles (four
   tool families and `hya/compaction`) on each target, and `hya-<name>-<version>.hyabundle` once for the eight
   platform-independent bundles. The release fails if two targets built a
   platform-independent bundle with different bytes. To replace a bundle in an
@@ -597,7 +597,7 @@ refresh integration suite.
 ### Native tool startup cache
 
 Installed first-party tool packages are validated before their native libraries
-run. The five independent family policies are prepared concurrently, preserving
+run. The four independent family policies are prepared concurrently, preserving
 the declared order for exposure and override resolution. Per-identity catalog
 locks prevent duplicate preparation while allowing different packages to load
 concurrently.

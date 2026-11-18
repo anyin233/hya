@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use hya_tool::handle::{ArtifactPlane, ArtifactStore};
 use hya_tool::{
     Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-    SpawnerPlane, TodoPlane, ToolCtx, ToolRegistry, WebSearchPlane,
+    SpawnerPlane, ToolCtx, ToolRegistry, WebSearchPlane,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -52,7 +52,6 @@ fn ctx_with(workdir: PathBuf, artifacts: ArtifactPlane) -> ToolCtx {
         lifecycle: hya_tool::LifecyclePlane::disconnected(),
         session: None,
         parent_session: None,
-        todo: TodoPlane::default(),
         skills: SkillPlane::default(),
         artifacts,
         agents: Default::default(),

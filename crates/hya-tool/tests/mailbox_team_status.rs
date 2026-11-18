@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use hya_proto::{ChannelKind, SessionId};
 use hya_tool::{
     ChannelRow, InteractionPlane, LspPlane, MailboxPlane, MailboxRequest, MemberStatusRow,
-    PermissionPlane, PermissionRules, SkillPlane, SpawnerPlane, TodoPlane, ToolCtx, ToolRegistry,
+    PermissionPlane, PermissionRules, SkillPlane, SpawnerPlane, ToolCtx, ToolRegistry,
     WebSearchPlane, handle::ArtifactPlane,
 };
 use tokio_util::sync::CancellationToken;
@@ -33,7 +33,6 @@ fn ctx_with(mailbox: MailboxPlane, session: SessionId) -> ToolCtx {
         lifecycle: hya_tool::LifecyclePlane::disconnected(),
         session: Some(session),
         parent_session: None,
-        todo: TodoPlane::default(),
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),

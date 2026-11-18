@@ -7,10 +7,16 @@ the ubiquitous language across `hya-proto`, `hya-core`, `hya-engine`, `hya-store
 ## Kernel
 
 **Context**:
-What the model sees in one request: the event log folded by the `hya-proto`
-reducer into a short system prompt, the tool list, and the live work. The
-request is a pure function of it ([ADR-0033](docs/adr/0033-three-primitive-kernel.md)).
-_Avoid_: history, memory, transcript (the transcript is the whole log)
+The state a kernel round reads through its [View](docs/kernel.md#request-views).
+The part visible to the model is the live transcript (`m`), including todo
+tool results and Rewrite markers. The log also records the current
+completion criteria (`g`) independently of the visible transcript.
+_Avoid_: history, memory
+
+**Completion criteria (`g`)**:
+The ordered session todo list. The model can update it with the kernel
+`todo` tool. `TodosUpdated` records a full replacement, and Rewrite carries
+the rendered list back into the visible transcript.
 
 **Model append**:
 The primitive that adds the model's own sampled output — text, reasoning, tool
@@ -28,12 +34,12 @@ _Avoid_: observation injection, synthetic result
 The destructive primitive: it removes everything before the current step from
 the Context, logged as a system marker plus `ContextCompacted{strategy:
 rewrite}`. The harness starts one at 80% of the window; the model starts one
-with the `rewrite` tool. Removed text stays in the log and cannot be read back.
+with the `rewrite` tool. A marker repeats the current todo list. Removed text stays in the log and cannot be read back.
 _Avoid_: summarize, compaction (compaction is the full-mode bundle method)
 
 **Bare mode**:
-Running the kernel alone with `hya exec --bare`: no bundle, five tools (`bash`,
-`read`, `write`, `edit`, `rewrite`), the minimal system prompt, and the event
+Running the kernel alone with `hya exec --bare`: no bundle, six tools (`bash`,
+`read`, `write`, `edit`, `rewrite`, `todo`), the minimal system prompt, and the event
 log. It has no permissions, hooks, or subagents.
 _Avoid_: minimal mode, safe mode
 
@@ -75,7 +81,7 @@ _Avoid_: kind, type
 
 **Tool plane**:
 The set of Harness-owned capabilities an Agent can see, derived from its **Agent
-origin**. `Full` includes all 28 builtin tools plus Harness skills, MCP, and
+origin**. `Full` includes all 25 registry tools plus Harness skills, MCP, and
 plugins; `InternalPublic` includes only the builtin tool snapshot, with no
 Harness skills, MCP, or external plugins. Not a security sandbox: an authorized
 bundle agent may still spawn a built-in subagent that runs on its own plane.
@@ -93,9 +99,9 @@ extensions (`tui:`). Historically split shapes are referred to by role as
 (one Workflow + reachable Agent closure).
 
 **First-party bundle (Preset)**:
-One of the fourteen trusted bundles shipped with the backend (`hya/base-tools`,
+One of the thirteen trusted bundles shipped with the backend (`hya/base-tools`,
 `hya/extended-tools`, `hya/network-tools`, `hya/channel-tools`,
-`hya/todo-tools`, `hya/core-agents`, `hya/core-skills`, `hya/core-commands`,
+`hya/core-agents`, `hya/core-skills`, `hya/core-commands`,
 `hya/agent-channels`, `hya/goal-loop`, `hya/plan-impl-review`,
 `hya/basic-tui-components`, `hya/code-mode`, and the internal bundle
 `hya/compaction`). Loaded from in-tree sources in Cargo builds or

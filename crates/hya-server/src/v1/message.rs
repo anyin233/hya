@@ -106,14 +106,13 @@ async fn get_session_todo(
     if projection.session.id.is_none() {
         return Err(V1Error::session_not_found(&id));
     }
-    let items = st.engine.todos(session).await;
-    Ok(Json(todo_list(&items)))
+    Ok(Json(todo_list(
+        projection.session.todos.as_deref().unwrap_or_default(),
+    )))
 }
 
-/// Map the engine's todo rows onto the wire list. Item ids are the plane's
-/// stable ids; replayed pre-0.36.53 rows carry synthesized `todo-{index}`
-/// ids from the engine fold.
-pub(crate) fn todo_list(items: &[hya_tool::TodoItem]) -> pb::TodoList {
+/// Map the session projection's todo rows onto the wire list.
+pub(crate) fn todo_list(items: &[hya_proto::TodoItem]) -> pb::TodoList {
     pb::TodoList {
         items: items
             .iter()
@@ -121,10 +120,10 @@ pub(crate) fn todo_list(items: &[hya_tool::TodoItem]) -> pb::TodoList {
                 id: item.id.clone(),
                 content: item.content.clone(),
                 status: match item.status {
-                    hya_tool::TodoStatus::Pending => pb::TodoStatus::Pending as i32,
-                    hya_tool::TodoStatus::InProgress => pb::TodoStatus::InProgress as i32,
-                    hya_tool::TodoStatus::Blocked => pb::TodoStatus::Blocked as i32,
-                    hya_tool::TodoStatus::Completed => pb::TodoStatus::Completed as i32,
+                    hya_proto::TodoStatus::Pending => pb::TodoStatus::Pending as i32,
+                    hya_proto::TodoStatus::InProgress => pb::TodoStatus::InProgress as i32,
+                    hya_proto::TodoStatus::Blocked => pb::TodoStatus::Blocked as i32,
+                    hya_proto::TodoStatus::Completed => pb::TodoStatus::Completed as i32,
                 },
             })
             .collect(),
