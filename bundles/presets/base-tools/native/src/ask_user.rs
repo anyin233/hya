@@ -226,7 +226,7 @@ mod tests {
     use hya_proto::SessionId;
     use hya_tool::{
         InteractionPlane, LspPlane, PermissionPlane, PermissionRules, SkillPlane, SpawnerPlane,
-        TodoPlane, WebSearchPlane, handle::ArtifactPlane,
+        WebSearchPlane, handle::ArtifactPlane,
     };
     use std::path::PathBuf;
     use tokio_util::sync::CancellationToken;
@@ -244,7 +244,6 @@ mod tests {
             lifecycle: hya_tool::LifecyclePlane::disconnected(),
             session: Some(session),
             parent_session: None,
-            todo: TodoPlane::default(),
             skills: SkillPlane::default(),
             artifacts: ArtifactPlane::default(),
             websearch: WebSearchPlane::default(),

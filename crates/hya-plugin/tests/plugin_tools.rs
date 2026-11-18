@@ -12,7 +12,7 @@ use hya_plugin::messages::{HostInfo, PluginKindWire};
 use hya_proto::SessionId;
 use hya_tool::{
     Action, FormatterPlane, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules,
-    Rule, SkillPlane, SpawnerPlane, TodoPlane, ToolCtx, WebSearchPlane, handle::ArtifactPlane,
+    Rule, SkillPlane, SpawnerPlane, ToolCtx, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -136,7 +136,6 @@ fn ctx_with(session: SessionId) -> ToolCtx {
         lifecycle: hya_tool::LifecyclePlane::disconnected(),
         session: Some(session),
         parent_session: None,
-        todo: TodoPlane::default(),
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),

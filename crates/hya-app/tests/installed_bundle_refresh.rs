@@ -39,7 +39,6 @@ fn process_tool_ctx(workdir: &std::path::Path) -> ToolCtx {
         lifecycle: hya_tool::LifecyclePlane::disconnected(),
         session: Some(hya_proto::SessionId::new()),
         parent_session: None,
-        todo: hya_tool::TodoPlane::default(),
         skills: hya_tool::SkillPlane::default(),
         artifacts: hya_tool::handle::ArtifactPlane::default(),
         websearch: hya_tool::WebSearchPlane::default(),

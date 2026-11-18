@@ -2,7 +2,7 @@
 //! change either makes to what a request sends is an event in the session log,
 //! so the host rebuilds the request from the projection.
 
-use hya_proto::context::{COMPACT_CONTEXT_MARKER, ReasoningReplayPolicy};
+use hya_proto::context::{COMPACT_CONTEXT_MARKER, ReasoningReplayPolicy, render_todos};
 use hya_proto::{
     CompactionStrategy, Event, FinishReason, Message, MessageId, PartId, Role, StepCut,
 };
@@ -98,7 +98,7 @@ pub(crate) async fn walk(cx: &RewriteCtx<'_>) -> Result<bool, ToolError> {
         });
         let fold =
             |messages: &[Message]| fold_cut(messages, keep_messages, keep_steps, threshold, &count);
-        let committed = match rung {
+        let mut committed = match rung {
             Rung::SpillToolOutputs => {
                 let before = count(&messages);
                 let evicted = evict_stale_tool_outputs(
@@ -196,6 +196,7 @@ pub(crate) async fn walk(cx: &RewriteCtx<'_>) -> Result<bool, ToolError> {
                 }
             }
         };
+        committed.carry_todos(cx);
         summary_tokens = Some(committed.body.len() / 4);
         commit(cx, committed, input_tokens_est, threshold_tokens).await?;
         // Re-read and re-estimate: the provider's reported usage described
@@ -245,12 +246,13 @@ pub(crate) async fn summarize_now(cx: &RewriteCtx<'_>) -> Result<bool, ToolError
     let summary = models.summarize(cx.session, &messages, call).await?;
     let tokens = TokenAccounting::new(config.token_accounting).estimate(&messages);
     // Behind the marker, so the request cuts the folded history.
-    let fold = Fold {
+    let mut fold = Fold {
         body: format!("{COMPACT_CONTEXT_MARKER}\n{summary}"),
         strategy: CompactionStrategy::LocalSummarizer,
         folded: whole_range(&messages),
         step_cut: None,
     };
+    fold.carry_todos(cx);
     commit(cx, fold, u64::try_from(tokens).unwrap_or(u64::MAX), 0).await?;
     Ok(true)
 }
@@ -290,6 +292,17 @@ struct Fold {
     /// alone.
     folded: Option<(MessageId, MessageId, u32)>,
     step_cut: Option<StepCut>,
+}
+
+impl Fold {
+    fn carry_todos(&mut self, cx: &RewriteCtx<'_>) {
+        if let Some(todos) = &cx.projection.session.todos
+            && !todos.is_empty()
+        {
+            self.body.push_str("\n\n");
+            self.body.push_str(&render_todos(todos));
+        }
+    }
 }
 
 /// Append the marker message and its `ContextCompacted` as one batch.

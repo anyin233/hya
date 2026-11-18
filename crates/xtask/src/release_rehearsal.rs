@@ -84,12 +84,11 @@ fn host_target(root: &Path) -> Result<String> {
 const BINARY_NAME: &str = "hya";
 /// Crates whose release `cdylib` the native bundles (tool families and
 /// internal bundles) package.
-const NATIVE_BUNDLE_CRATES: [&str; 6] = [
+const NATIVE_BUNDLE_CRATES: [&str; 5] = [
     "hya-base-tools",
     "hya-extended-tools",
     "hya-network-tools",
     "hya-channel-tools",
-    "hya-todo-tools",
     "hya-compaction",
 ];
 const BUN_ADAPTER: &str = "crates/hya-plugin-bun/adapter";

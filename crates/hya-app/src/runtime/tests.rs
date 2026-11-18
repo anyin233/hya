@@ -43,8 +43,8 @@ use hya_provider::{
 use hya_store::{BundleInstallCandidate, BundleInstallOutcome, BundleRegistry};
 use hya_tool::{
     AgentDef, FormatterPlane, InlineAgent, InteractionPlane, LspPlane, MailboxPlane, Mode,
-    PermissionModel, PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnerPlane, TodoPlane,
-    Tool, ToolCtx, ToolError, ToolOperation, ToolPermission, ToolRegistry, WebSearchPlane,
+    PermissionModel, PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnerPlane, Tool,
+    ToolCtx, ToolError, ToolOperation, ToolPermission, ToolRegistry, WebSearchPlane,
     handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
@@ -953,7 +953,6 @@ flowchart TD
         lifecycle: LifecyclePlane::disconnected(),
         session: Some(lead),
         parent_session: None,
-        todo: TodoPlane::default(),
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),
@@ -3930,7 +3929,6 @@ fn sidecar_test_ctx(root: &Path) -> ToolCtx {
         lifecycle: LifecyclePlane::disconnected(),
         session: Some(session),
         parent_session: None,
-        todo: TodoPlane::default(),
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),
@@ -6707,7 +6705,6 @@ for line in sys.stdin:
         lifecycle: LifecyclePlane::disconnected(),
         session: Some(session),
         parent_session: None,
-        todo: TodoPlane::default(),
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),

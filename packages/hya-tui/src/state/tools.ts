@@ -20,7 +20,7 @@ const builtinTools = new Set([
  * fields (docs/architecture/agent-tool-surface.md): `bash` (command, exit),
  * `read` (path, line range), `edit` / `write` / `apply_patch` (path and a
  * diff), `grep` / `glob` / `find` / `ls` (pattern, scope, count), the
- * `todo__*` tools (the list), `webfetch` / `websearch`, `skill`, `ask_user`,
+ * `todo` tool (the list), `webfetch` / `websearch`, `skill`, `ask_user`,
  * `task` (agent and description; see state/members.ts for the child), and
  * anything else (MCP `ns__tool` included) as the name and compact arguments.
  *
@@ -389,6 +389,9 @@ function describe(tool: string, input: Json, output: unknown, raw: string, shell
         task: { agent, description, ...(child ? { child } : {}), ...(name ? { name } : {}), ...(entries ? { members: entries } : {}) },
       }
     }
+  }
+  if (tool === "todo" && typeof output === "string") {
+    return { summary: text?.split("\n", 1)[0] ?? "", body: clipLines(textLines(text ?? "", "fg")) }
   }
   if (tool.startsWith("todo")) {
     const items = [meta.todos, out.todos, input.todos].find(Array.isArray) as unknown[] | undefined

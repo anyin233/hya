@@ -159,7 +159,7 @@ fn reducer_fingerprint_pins_the_version() {
     let fingerprint = fnv1a(&encoded);
     assert_eq!(
         (PROJECTION_REDUCER_VERSION, fingerprint),
-        (9, 0x235b_30e4_6838_13da),
+        (10, 0x3362_8b8e_06a3_247a),
         "reducer output changed: bump PROJECTION_REDUCER_VERSION and record \
          the new fingerprint {fingerprint:#018x}"
     );
@@ -192,4 +192,61 @@ fn snapshot_rejects_out_of_range_channel_mail_index() {
         .push(0);
     let bytes = projection.encode_snapshot().unwrap();
     assert!(Projection::decode_snapshot(&bytes).is_err());
+}
+
+#[test]
+fn historical_todo_results_keep_their_list_and_ids_through_snapshot_replay() {
+    use hya_proto::{MessageId, PartId, Role, TodoStatus, ToolCallId};
+    use serde_json::json;
+
+    let session = SessionId::new();
+    let message = MessageId::new();
+    let result = |name: &str, output| {
+        let part = PartId::new();
+        let call = ToolCallId::new();
+        [
+            Event::ToolCallRequested {
+                session,
+                message,
+                part,
+                call,
+                name: name.into(),
+                input: json!({}),
+            },
+            Event::ToolResult {
+                session,
+                message,
+                part,
+                call,
+                output,
+                time_ms: 0,
+            },
+        ]
+    };
+    let mut events = vec![Event::MessageStarted {
+        session,
+        message,
+        role: Role::Assistant,
+        agent: None,
+        model: None,
+    }];
+    events.extend(result(
+        "todowrite",
+        json!({"metadata":{"todos":[{"content":"older", "status":"completed"}]}}),
+    ));
+    events.extend(result(
+        "todo__update_content",
+        json!({"metadata":{"todos":[{"id":"3", "content":"newer", "status":"blocked"}]}}),
+    ));
+    let log = envelopes(events);
+    let older = Projection::from_events(&log[..3]).session.todos.unwrap();
+    assert_eq!(older[0].id, "todo-0");
+    assert_eq!(older[0].status, TodoStatus::Completed);
+
+    let p = fold_from_snapshot(&log, &[]);
+    assert_eq!(p, Projection::from_events(&log));
+    assert_eq!(p.session.todo_last_id, 3);
+    let newer = p.session.todos.unwrap();
+    assert_eq!(newer[0].content, "newer");
+    assert_eq!(newer[0].status, TodoStatus::Blocked);
 }

@@ -9,7 +9,7 @@ pub mod prompt;
 pub mod request;
 mod rewrite;
 pub mod round;
-/// The kernel's five tools.
+/// The kernel's six tools.
 pub mod tools;
 mod view;
 
@@ -322,9 +322,8 @@ impl SessionLog for Scope<'_> {
     }
 }
 
-/// Execute a round's calls in order: `rewrite` in the kernel, every other
-/// call through `gate`. When `cancel` fires, stops after the current call and
-/// returns the calls that did not run.
+/// Execute calls in order, keeping `rewrite` and `todo` in the kernel.
+/// When cancelled, return the calls that did not run.
 async fn execute_calls(
     scope: &Scope<'_>,
     model: &ModelRef,
@@ -351,6 +350,8 @@ async fn execute_calls(
                     )],
                 )
                 .await?;
+        } else if call.name == tools::TODO {
+            model_todo(scope, call).await?;
         } else {
             gate.call(call).await?;
         }
@@ -539,6 +540,33 @@ async fn model_rewrite(
         })),
         None => Err("nothing to remove".to_string()),
     })
+}
+
+/// Record the todo result and any list change in the same transaction.
+async fn model_todo(scope: &Scope<'_>, mut call: ToolCall) -> Result<(), CoreError> {
+    let started = Instant::now();
+    let session = scope.session;
+    let args = tools::args::<tools::todo::Args>(std::mem::take(&mut call.input));
+    let projection = scope.store.read_projection_shared(session).await?;
+    let current = projection.session.todos.as_deref().unwrap_or_default();
+    let mut events = Vec::with_capacity(2);
+    let result =
+        match args.and_then(|args| args.apply(current.to_vec(), projection.session.todo_last_id)) {
+            Ok(todos) => {
+                let output = Value::String(hya_proto::context::render_todos(&todos));
+                if todos != current {
+                    events.push(Event::TodosUpdated { session, todos });
+                }
+                Ok(output)
+            }
+            Err(error) => Err(error.to_string()),
+        };
+    let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    events.insert(
+        0,
+        tool_event(session, scope.message, &call, result, time_ms),
+    );
+    scope.emit.emit(session, events).await
 }
 
 fn tool_event(

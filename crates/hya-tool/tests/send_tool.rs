@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use hya_proto::{MailEndpoint, MailKind, SessionId};
 use hya_tool::{
     InteractionPlane, LspPlane, MailReceipt, MailboxPlane, MailboxRequest, PermissionPlane,
-    PermissionRules, SkillPlane, SpawnerPlane, TodoPlane, ToolCtx, ToolError, ToolRegistry,
-    WebSearchPlane, handle::ArtifactPlane,
+    PermissionRules, SkillPlane, SpawnerPlane, ToolCtx, ToolError, ToolRegistry, WebSearchPlane,
+    handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -35,7 +35,6 @@ fn ctx_with(mailbox: MailboxPlane, session: SessionId) -> ToolCtx {
         lifecycle: hya_tool::LifecyclePlane::disconnected(),
         session: Some(session),
         parent_session: None,
-        todo: TodoPlane::default(),
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),
@@ -201,5 +200,5 @@ fn send_replaces_dm_and_broadcast_in_the_registry() {
         .collect();
     assert!(!canonical.contains(&"dm".to_string()));
     assert!(!canonical.contains(&"broadcast".to_string()));
-    assert_eq!(canonical.len(), 28);
+    assert_eq!(canonical.len(), 25);
 }

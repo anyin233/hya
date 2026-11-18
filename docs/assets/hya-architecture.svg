@@ -119,7 +119,7 @@
 
   <rect x="378" y="668" width="388" height="72" rx="8" fill="#0f172a" stroke="#fbbf24" stroke-width="1.2"/>
   <text x="392" y="689" fill="#f1f5f9" font-size="12.5" font-weight="600">Tool &amp; Permission Plane (hya-tool · mcp · plugin)</text>
-  <text x="392" y="707" fill="#94a3b8" font-size="10.8">28 Builtins (5 native dylibs) · ProjectScope multi-root guard</text>
+  <text x="392" y="707" fill="#94a3b8" font-size="10.8">25 registry tools (4 native dylibs) · ProjectScope multi-root guard</text>
   <text x="392" y="723" fill="#64748b" font-size="10.5">MCP (mcp__srv__tool) · Out-of-process Rust / Bun / Claude</text>
 
   <rect x="780" y="668" width="336" height="72" rx="8" fill="#0f172a" stroke="#34d399" stroke-width="1.2"/>

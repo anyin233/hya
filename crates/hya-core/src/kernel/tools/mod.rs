@@ -1,4 +1,4 @@
-//! The kernel's tools: `bash`, `read`, `write`, `edit`, and `rewrite`.
+//! The kernel's tools: `bash`, `read`, `write`, `edit`, `rewrite`, and `todo`.
 //!
 //! Plain implementations: no permission checks, output truncation, timeouts,
 //! or path boundaries. Relative paths resolve against `ToolCtx::workdir`.
@@ -7,6 +7,7 @@ mod bash;
 mod edit;
 mod read;
 pub(super) mod rewrite;
+pub(super) mod todo;
 mod write;
 
 use std::path::{Path, PathBuf};
@@ -19,7 +20,9 @@ use serde::de::DeserializeOwned;
 /// Name of the tool whose calls the kernel loop handles itself.
 pub const REWRITE: &str = "rewrite";
 
-/// The five kernel tools, in the order the system prompt lists them.
+pub use hya_proto::context::TODO_TOOL as TODO;
+
+/// The six kernel tools, in the order the system prompt lists them.
 #[must_use]
 pub fn builtin() -> Vec<Arc<dyn Tool>> {
     vec![
@@ -28,12 +31,18 @@ pub fn builtin() -> Vec<Arc<dyn Tool>> {
         Arc::new(edit::Edit),
         Arc::new(write::Write),
         Arc::new(rewrite::Rewrite),
+        Arc::new(todo::Todo),
     ]
 }
 
 /// Schema of the `rewrite` tool, for a tool set the kernel loop intercepts it in.
 pub fn rewrite_schema() -> ToolSchema {
     rewrite::Rewrite.schema()
+}
+
+/// Schema of the `todo` tool for full-mode requests.
+pub fn todo_schema() -> ToolSchema {
+    todo::Todo.schema()
 }
 
 fn schema(name: &str, description: &str, input_schema: serde_json::Value) -> ToolSchema {
@@ -45,7 +54,7 @@ fn schema(name: &str, description: &str, input_schema: serde_json::Value) -> Too
     }
 }
 
-fn args<T: DeserializeOwned>(input: serde_json::Value) -> Result<T, ToolError> {
+pub(super) fn args<T: DeserializeOwned>(input: serde_json::Value) -> Result<T, ToolError> {
     serde_json::from_value(input).map_err(|error| ToolError::Input(error.to_string()))
 }
 

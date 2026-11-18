@@ -6,10 +6,10 @@
 
 `hya` is an event-sourced, multi-agent coding agent written in Rust. It
 normalizes OpenAI Chat/Responses/Codex, Grok Build, Anthropic Messages, and
-Google Gemini routes into one canonical `Event` stream, executes 28 builtin tools
-(plus MCP servers and out-of-process Rust/Bun/Claude bundle extensions) behind a
-multi-root permission plane, and orchestrates episodic resident subagents and
-compiled `Workflow` DAGs.
+Google Gemini routes into one canonical `Event` stream. It offers kernel tools
+and a multi-root permission plane for 25 registry tools, MCP servers, and
+out-of-process Rust/Bun/Claude bundle extensions. It orchestrates episodic
+resident subagents and compiled `Workflow` DAGs.
 
 Every client speaks one consolidated contract — **`hya.v1`** (18 services, 107
 RPCs) — served identically over HTTP/JSON + SSE + WebSocket (`/v1`) and gRPC on

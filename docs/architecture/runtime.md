@@ -16,7 +16,7 @@ central type is `SessionEngine` in
   builder.
 - `PermissionPlane` for allow/ask/deny decisions.
 - `InteractionPlane`, `BoundSpawnSender`, `BoundWorkflowSender`,
-  `MailboxPlane`, `TodoPlane`, `WebSearchPlane`, `LspPlane`, and
+  `MailboxPlane`, `WebSearchPlane`, `LspPlane`, and
   `FormatterPlane` for cross-cutting tool services.
 - `EventBus` for live subscribers.
 - optional hook dispatcher for plugins.
@@ -761,7 +761,7 @@ no bundle watcher or per-tool-call database check.
 Core Agent definitions, including the default `hya-task` subagent, come from
 the trusted, runtime-loaded [`hya/core-agents` preset](../core-agents.md), and
 native tool visibility/aliases/permission posture come from the
-[five tool-family presets](../base-tools.md). Public packages cannot claim
+[four tool-family presets](../base-tools.md). Public packages cannot claim
 their trusted origin. The first-party `hya/subagents` package was removed;
 every spawned agent is a resident actor. [Channel policy bundles](../agent-channels.md)
 restrict engine-minted communication topology without owning channel identities
