@@ -126,10 +126,24 @@ impl SessionEngine {
                 text
             }
         };
+        // The first round's model: the tool list depends on it.
+        let model = self.requested_turn_model(
+            &binding,
+            projection
+                .session
+                .agent
+                .as_ref()
+                .unwrap_or(&agent.name)
+                .as_str(),
+            apply_default_overlays,
+            explicit_model,
+            &projection,
+            agent,
+        );
         drop(projection);
         // Digests of the system prompt and tool list, recorded with the
         // binding at turn start and again whenever a round's differ.
-        let tools = self.offered_tools(&resources, depth);
+        let tools = self.offered_tools(&resources, depth, &model);
         let system = system_prompt(agent, Some(&initial_context), &tools, depth);
         let recorded_digests = prompt_digests(&system, &tools)?;
         events.push(Event::TurnBindingRecorded {
@@ -191,7 +205,7 @@ impl SessionEngine {
             root_session_cache: None,
             rounds: 0,
             stable_id: String::new(),
-            model: agent.model.clone(),
+            model,
             attachments: AttachmentData::new(),
             parent_session: None,
             offered: Vec::new(),
@@ -361,7 +375,6 @@ impl ToolGate for TurnHarness<'_> {
             resources: &self.resources,
             agents: &self.agents,
             agent: &self.live_agent,
-            depth: self.depth,
             external_dirs: self.external_dirs,
             workspace: &self.workspace,
             actor_claim: self.actor_claim,
@@ -415,7 +428,7 @@ impl Harness for TurnHarness<'_> {
         self.parent_session = projection.session.parent;
         self.attachments = engine.attachment_data(self.session, projection).await?;
         // What the system prompt and tools cost: a request with no messages.
-        let tools = engine.offered_tools(&self.resources, self.depth);
+        let tools = engine.offered_tools(&self.resources, self.depth, &self.model);
         let overhead_tokens = engine.token_accounting.estimate_request(
             &[],
             Some(&system_prompt(
@@ -484,7 +497,7 @@ impl Harness for TurnHarness<'_> {
             )
             .await?
             .effort;
-        let tools = engine.offered_tools(&self.resources, self.depth);
+        let tools = engine.offered_tools(&self.resources, self.depth, &self.model);
         let system = system_prompt(
             &self.live_agent,
             view.projection.session.initial_context.as_deref(),
