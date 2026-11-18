@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hya_core::CoreError;
-use hya_core::kernel::{self, StoreEmit, request::AttachmentData};
+use hya_core::kernel::{self, StoreEmit, View, request::AttachmentData};
 use hya_proto::{
     AgentName, CompactionStrategy, Event, FinishReason, Message, MessageId, ModelRef, Part, PartId,
     Projection, Role, SessionId, SessionKind, TokenUsage, ToolPartState,
@@ -606,17 +606,34 @@ async fn a6_harness_rewrite_and_restart() {
         )));
     }
 
-    // Rebuilt from the log alone, the request is byte-identical.
-    let projection = Projection::from_events(&envelopes[..next_step]);
-    let schemas = fx.tools.iter().map(|tool| tool.schema()).collect();
-    let rebuilt = kernel::request::request(
-        &projection,
-        &fx.system,
-        schemas,
-        &fx.model,
-        &AgentName::new(kernel::AGENT),
-        &AttachmentData::new(),
-        None,
-    );
-    assert_eq!(format!("{rebuilt:?}"), format!("{:?}", requests[1]));
+    // Each recorded cut reproduces the request, including the round after the rewrite.
+    let mut attempts = 0;
+    for (index, envelope) in envelopes.iter().enumerate() {
+        let Event::StepStarted { view, .. } = &envelope.event else {
+            continue;
+        };
+        let recorded = view.as_ref().expect("step has a view");
+        assert_eq!(recorded.cut, envelopes[index - 1].seq);
+        let end = envelopes.partition_point(|entry| entry.seq <= recorded.cut);
+        let projection = Projection::from_events(&envelopes[..end]);
+        let view = View {
+            projection: &projection,
+        };
+        let rebuilt = kernel::request::request(
+            &view,
+            &fx.system,
+            fx.tools.iter().map(|tool| tool.schema()).collect(),
+            &fx.model,
+            &AgentName::new(kernel::AGENT),
+            &AttachmentData::new(),
+            None,
+        );
+        assert_eq!(
+            kernel::request::request_sha256(&rebuilt).unwrap(),
+            recorded.request_sha256
+        );
+        assert_eq!(format!("{rebuilt:?}"), format!("{:?}", requests[attempts]));
+        attempts += 1;
+    }
+    assert_eq!(attempts, requests.len());
 }

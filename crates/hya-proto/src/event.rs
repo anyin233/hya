@@ -52,6 +52,15 @@ impl SessionKind {
     }
 }
 
+/// Reference to the view used to build a model round's request.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ViewRef {
+    /// Last durable event in the view's session log prefix (inclusive).
+    pub cut: EventSeq,
+    /// Lowercase hex SHA-256 of the canonical system, tools, and messages.
+    pub request_sha256: String,
+}
+
 /// Canonical runtime event stream: one tagged variant per discrete state change.
 ///
 /// Persist durable variants with a real `EventSeq`; high-frequency text may be
@@ -366,6 +375,9 @@ pub enum Event {
         message: MessageId,
         /// Zero-based round index within the turn.
         step: u32,
+        /// Request view, shared by every retry of the round. Absent in old logs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        view: Option<ViewRef>,
     },
     /// Provider round finished; reducer no-op. `finish` defaults to `stop` on old logs.
     StepFinished {

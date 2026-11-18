@@ -39,7 +39,7 @@ use crate::hooks::{
     ChatParamsInput, ChatParamsOutcome, HookChain, HookDispatcher, activation_hook_for,
     replace_activation_hooks,
 };
-use crate::kernel::{self, Failure, Harness, Round, ToolCall, ToolGate};
+use crate::kernel::{self, Failure, Harness, Round, ToolCall, ToolGate, View};
 use crate::runtime_registry::CompiledResourceView;
 use crate::workflow::WorkflowTurnRoute;
 
@@ -375,19 +375,10 @@ impl Harness for TurnHarness<'_> {
         self.attachments = engine.attachment_data(self.session, projection).await?;
         // What the system prompt and tools cost: a request with no messages.
         let tools = engine.offered_tools(&self.resources, self.depth);
-        let template = kernel::request::request(
-            &Projection::default(),
-            &system_prompt(&self.live_agent, &tools, self.depth),
-            tools,
-            &self.model,
-            &self.live_agent.name,
-            &self.attachments,
-            None,
-        );
         let overhead_tokens = engine.token_accounting.estimate_request(
-            &template.messages,
-            template.system.as_deref(),
-            &template.tools,
+            &[],
+            Some(&system_prompt(&self.live_agent, &tools, self.depth)),
+            &tools,
             engine
                 .provider_router()
                 .reasoning_replay_policy(&self.model),
@@ -429,7 +420,7 @@ impl Harness for TurnHarness<'_> {
         result.map_err(|error| errors.into_error(error))
     }
 
-    async fn request(&mut self, projection: &Projection) -> Result<CompletionRequest, CoreError> {
+    async fn request(&mut self, view: &View<'_>) -> Result<CompletionRequest, CoreError> {
         let engine = self.engine;
         let session = self.session;
         // Resolved every round, so a preference saved mid-session applies to
@@ -460,7 +451,7 @@ impl Harness for TurnHarness<'_> {
             self.recorded_digests = digests;
         }
         let request = kernel::request::request(
-            projection,
+            view,
             &system,
             tools,
             &self.model,

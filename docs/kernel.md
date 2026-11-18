@@ -31,6 +31,36 @@ outside observations. Unknown tools, invalid input, execution errors, and
 cancellation return as failed tool results. Tools run sequentially, with no
 retry, model fallback, or step limit.
 
+## Request views
+
+Each round reads a `kernel::View` after the harness has had a chance to
+rewrite the context. The view borrows the folded session projection.
+`View::cut()` gives the last durable event sequence in that projection,
+inclusive. `Harness::request(&View)` takes this view and supplies the
+resolved harness inputs needed to build the request.
+
+Each `StepStarted` records a `view` with the numeric `cut` and a
+`request_sha256` string. The digest covers the harness's completed system
+prompt, tool schemas, and messages. Retries reuse the same view reference.
+See the event reference for the digest encoding and optional field.
+[Step markers](architecture/event-model.md#step-markers-provider-rounds)
+
+To verify a bare-mode log offline, run the ignored replay test from the
+repository root with the source revision used to record the log:
+
+```sh
+HYA_BARE_REPLAY_DB=/path/to/hya.db \
+  cargo test -p hya-core --test replay_bare -- --ignored --nocapture
+```
+
+The test opens the database read-only. It rebuilds each recorded bare-mode
+request from the session's model, working directory, log prefix, and the
+kernel's fixed prompt and tools. It prints the equal and unequal counts
+and fails on any unequal view. Full-mode replay also needs the resolved
+round configuration, any referenced attachment blobs, and reproducible
+hook output. Legacy URI media entries can acquire fresh part IDs during
+request assembly.
+
 ## Built-in tools
 
 The following JSON shapes use `string` and `int` as type placeholders. All
@@ -149,7 +179,7 @@ Full mode is the `hya-engine` crate (`SessionEngine` and everything behind
 the server and CLI); the kernel and `CoreError` are all of `hya-core`.
 Full-mode turns run the same kernel loop as `--bare`; there is no second
 round loop. Each round reads the projection, lets the harness rewrite it,
-builds the request with `kernel::request` from the (re-read) projection,
+builds the request with `kernel::request` from the resulting view,
 streams one model round, and runs its tool calls in order. The full mode
 plugs into that loop at fixed points:
 
@@ -164,12 +194,12 @@ plugs into that loop at fixed points:
 | End | The round's finish | Also ends after an accepted `report` |
 
 The model's `rewrite` call is offered and handled by the kernel in both
-modes. Everything that shapes a request is in the log: the ladder's
-evictions are `ContextEvicted` events whose `parts` carry each evicted part
-with its exact notice, so the projection renders the notices; `TurnBindingRecorded` records the
-SHA-256 digests of the system prompt and tool list at turn start and again
-whenever a round's differ. Only the digests are logged, not the text, so a
-restart replays the same request while the bundles are unchanged.
+modes. The ladder's `ContextEvicted` events store the exact notice for each
+evicted part, which the projection renders during replay.
+`TurnBindingRecorded` records the runtime generation and the pre-hook
+system prompt and tool list digests at turn start and whenever those
+digests change. `StepStarted.view` fingerprints the request content after
+`chat.params` and before provider routing.
 
 ## Rewrite contract
 
