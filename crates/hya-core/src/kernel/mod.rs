@@ -262,8 +262,7 @@ impl Harness for Bare<'_> {
         if HarnessRewriter.before_round(cx).await? {
             return Ok(true);
         }
-        let max_context = window.map(|window| window.max_context);
-        Ok(goal_checkpoint(scope.session, projection, max_context, scope).await?)
+        Ok(goal_checkpoint(cx).await?)
     }
 
     async fn request(&mut self, view: &View<'_>) -> Result<CompletionRequest, CoreError> {

@@ -6,7 +6,8 @@ use hya_proto::{
     CompactionStrategy, Event, FinishReason, MessageId, PartId, Projection, Role, SessionId,
     StepCut, TodoItem,
 };
-use hya_tool::{RewriteCtx, Rewriter, SessionLog, ToolError};
+use hya_tool::tokens::TokenAccounting;
+use hya_tool::{RewriteCtx, Rewriter, ToolError};
 
 use super::request::{collect_text, compacted_messages, is_marker};
 use crate::error::CoreError;
@@ -75,23 +76,29 @@ impl HarnessRewriter {
 }
 
 /// Ask the model, once since the last rewrite, to record the task's completion
-/// criteria and their status in its todo list, when the last round filled
-/// [`GOAL_CHECKPOINT_PERCENT`] of the window. The notice is a system message
-/// in the log, so the request stays a function of the View. Returns whether
-/// it was appended.
-pub async fn goal_checkpoint(
-    session: SessionId,
-    projection: &Projection,
-    max_context: Option<u32>,
-    log: &dyn SessionLog,
-) -> Result<bool, ToolError> {
-    let Some(window) = max_context.filter(|w| *w > 0) else {
+/// criteria and their status in its todo list, when the next request would
+/// fill [`GOAL_CHECKPOINT_PERCENT`] of the window, by the larger of the
+/// compaction ladder's count (usage plus estimated newer parts, prompt and
+/// schemas) and the harness rewriter's (the last reported round). The notice is a system message in the log, so the
+/// request stays a function of the View. Returns whether it was appended.
+pub async fn goal_checkpoint(cx: RewriteCtx<'_>) -> Result<bool, ToolError> {
+    let Some(window) = cx.window.filter(|window| window.max_context > 0) else {
         return Ok(false);
     };
-    let Some((used, _)) = pressure(projection, Some(window)) else {
-        return Ok(false);
-    };
-    if used * 100 < u64::from(window) * GOAL_CHECKPOINT_PERCENT
+    let projection = cx.projection;
+    let messages = cx.transcript.messages(projection).await?;
+    let used = TokenAccounting::default()
+        .tokens_in_use_with_reasoning_policy(
+            &messages,
+            window.usage_reporting,
+            window.reasoning_replay,
+        )
+        .tokens
+        .saturating_add(cx.overhead_tokens) as u64;
+    // The kernel's own trigger reads the last reported round instead.
+    let used =
+        pressure(projection, Some(window.max_context)).map_or(used, |(last, _)| last.max(used));
+    if used * 100 < u64::from(window.max_context) * GOAL_CHECKPOINT_PERCENT
         || compacted_messages(projection).iter().any(|row| {
             row.role == Role::System && collect_text(&row.parts).starts_with(GOAL_CHECKPOINT)
         })
@@ -101,7 +108,11 @@ pub async fn goal_checkpoint(
     let text = format!(
         "{GOAL_CHECKPOINT} this context is {GOAL_CHECKPOINT_PERCENT}% full. When it fills, earlier context is removed; only the user messages and your todo list are kept verbatim. Use the todo tool now so the list holds this task's completion criteria, each a checkable end state, with its current status."
     );
-    log.append(session, marker_events(session, MessageId::new(), text))
+    cx.log
+        .append(
+            cx.session,
+            marker_events(cx.session, MessageId::new(), text),
+        )
         .await?;
     Ok(true)
 }

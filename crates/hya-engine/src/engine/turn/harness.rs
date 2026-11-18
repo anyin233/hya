@@ -447,13 +447,12 @@ impl Harness for TurnHarness<'_> {
             fold: FixedSystemAgent::Compaction,
             errors: &errors,
         };
-        let window = engine.model_window(&self.model);
         let cx = RewriteCtx {
             session: self.session,
             message: self.message,
             model: &self.model,
             projection,
-            window,
+            window: engine.model_window(&self.model),
             overhead_tokens,
             workdir: &session_workdir(&self.live_agent, projection),
             config: &config,
@@ -463,10 +462,7 @@ impl Harness for TurnHarness<'_> {
             hooks: Some(engine),
         };
         let result = match engine.rewriter.before_round(cx).await {
-            Ok(false) => {
-                let max_context = window.map(|window| window.max_context);
-                hya_core::kernel::goal_checkpoint(self.session, projection, max_context, &log).await
-            }
+            Ok(false) => hya_core::kernel::goal_checkpoint(cx).await,
             other => other,
         };
         result.map_err(|error| errors.into_error(error))
