@@ -529,6 +529,58 @@ async fn a5_rewrite_with_nothing_to_remove() {
     );
 }
 
+fn round_at(tokens: u64) -> Vec<FakeStep> {
+    vec![
+        FakeStep::ToolCall {
+            name: "bash".to_string(),
+            input: json!({"command": "echo hi"}),
+        },
+        FakeStep::Usage(TokenUsage {
+            input: tokens,
+            ..TokenUsage::default()
+        }),
+        FakeStep::Finish(FinishReason::ToolCalls),
+    ]
+}
+
+fn goal_checkpoints(request: &CompletionRequest) -> usize {
+    request
+        .messages
+        .iter()
+        .filter(|message| {
+            matches!(message, Message::System { content, .. } if content.starts_with("[hya] Goal checkpoint:"))
+        })
+        .count()
+}
+
+#[tokio::test]
+async fn goal_checkpoint_is_asked_once_before_the_rewrite_threshold() {
+    let fx = fixture(
+        "goal-checkpoint",
+        FakeProvider::scripted_turns(vec![
+            round_at(500),
+            round_at(650),
+            round_at(700),
+            text("done"),
+        ])
+        .with_max_context(1_000),
+    )
+    .await;
+    let finish = fx.turn("go", &CancellationToken::new()).await;
+    assert_eq!(finish.unwrap(), FinishReason::Stop);
+
+    let requests = fx.provider.requests();
+    let asked: Vec<usize> = requests.iter().map(goal_checkpoints).collect();
+    // Below 60%: none; at 65%: asked; at 70%: still the one notice.
+    assert_eq!(asked, [0, 0, 1, 1]);
+    let log = fx.log().await;
+    assert!(
+        !log.iter()
+            .any(|event| matches!(event, Event::ContextCompacted { .. }))
+    );
+    assert_paired(&log);
+}
+
 #[tokio::test]
 async fn a6_harness_rewrite_and_restart() {
     let fx = fixture(

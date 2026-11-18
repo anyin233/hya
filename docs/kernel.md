@@ -95,8 +95,18 @@ number of removed messages. With no earlier content it returns
 ## Session todos
 
 Use `todo` in either mode to record the criteria that will tell you the task
-is done and update them as work progresses. The model chooses when to use
-it. The kernel executes it directly, like `rewrite`.
+is done, each a checkable end state, and set each one's status when it
+changes. The model chooses when to use it. The kernel executes it directly,
+like `rewrite`. Todos take no part in any stop decision: neither the kernel
+loop nor the headless `exec` wrap-up continues a run because items are open.
+
+Goal checkpoint: once the last round has filled 60% of the model window, and
+once per context epoch (since the latest rewrite), the kernel appends a system
+message starting `[hya] Goal checkpoint:` that asks the model to bring the
+list up to date, because only the user messages and the list survive a
+rewrite. It is a logged message, so the request stays a function of the View.
+A round that jumps past the rewrite threshold directly is rewritten without
+it.
 
 | Operation | Required JSON fields | Effect |
 | --- | --- | --- |
@@ -114,7 +124,8 @@ adds a criterion and starts it in one batch.
 
 The result string is `Current todos:\n- #1 [in_progress] Run the focused tests`.
 Each additional item appears on its own row in list order. An empty list is
-`Current todos: (empty)`. Pass `{"ops":[]}` to read the current list. Blank
+`Current todos: (empty)`. Pass `{"ops":[]}` to read the current list. An id may be
+given as rendered (`#1`). Blank
 content, an unknown item id, or a malformed operation fails the whole batch
 with `ToolError`. A changed list is appended as a `TodosUpdated` full snapshot
 in the same batch as its `ToolResult`. Empty and unchanged lists can be read
