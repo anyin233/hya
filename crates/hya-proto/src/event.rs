@@ -978,8 +978,7 @@ pub enum Event {
     // -------- file snapshots and revert --------
     /// Files one tool call changed, each with its content before the change.
     ///
-    /// Appended by the engine right after the call's `ToolResult` /
-    /// `ToolError` when the call changed at least one file (write, edit,
+    /// Recorded after the call has changed at least one file (write, edit,
     /// apply_patch, and bash inside a git work tree). Contents live in the
     /// store's per-session blob table; the event carries only paths and blob
     /// keys. Folds onto `MessageProjection.file_changes` of `message` and is
@@ -994,6 +993,16 @@ pub enum Event {
         call: Option<ToolCallId>,
         /// Changed files, each with its state before the call.
         files: Vec<crate::revert::FileChange>,
+    },
+
+    /// Metadata of files the session has accessed, or changes since the last observation.
+    FilesObserved {
+        /// Session whose known files are being updated.
+        session: SessionId,
+        /// True for a change detected before a round, false for a tool observation.
+        external: bool,
+        /// One stamp per observed path.
+        files: Vec<FileStamp>,
     },
 
     /// The transcript was reverted to just before user message `message`.
@@ -1262,11 +1271,23 @@ impl Event {
             | Event::UsageRecorded { session, .. }
             | Event::TodosUpdated { session, .. }
             | Event::FilesChanged { session, .. }
+            | Event::FilesObserved { session, .. }
             | Event::SessionReverted { session, .. }
             | Event::SessionUnreverted { session, .. } => Some(*session),
             Event::Error { session, .. } => *session,
         }
     }
+}
+
+/// Metadata for one known path. Both values are null when the file is deleted.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileStamp {
+    /// Absolute path.
+    pub path: String,
+    /// Modification time in nanoseconds since the Unix epoch.
+    pub mtime_ns: Option<i64>,
+    /// File size in bytes.
+    pub size: Option<u64>,
 }
 
 /// An ordered, replayable event: the unit shipped over SSE and stored in the log.

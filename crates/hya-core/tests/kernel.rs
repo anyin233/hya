@@ -11,14 +11,14 @@ use std::time::Duration;
 use hya_core::CoreError;
 use hya_core::kernel::{self, StoreEmit, View, request::AttachmentData};
 use hya_proto::{
-    AgentName, CompactionStrategy, Event, FinishReason, Message, MessageId, ModelRef, Part, PartId,
-    Projection, Role, SessionId, SessionKind, TokenUsage, ToolPartState,
+    AgentName, CompactionStrategy, Envelope, Event, FileState, FinishReason, Message, MessageId,
+    ModelRef, Part, PartId, Projection, Role, SessionId, SessionKind, TokenUsage, ToolPartState,
 };
 use hya_provider::{
     COMPACT_CONTEXT_MARKER, CompletionRequest, FakeProvider, FakeStep, ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, Tool, ToolCtx};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, Tool, ToolCtx, ToolError};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -38,6 +38,10 @@ async fn fixture(name: &str, provider: FakeProvider) -> Fixture {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let store = SessionStore::connect_memory().await.unwrap();
+    fixture_with_store(dir, provider, store).await
+}
+
+async fn fixture_with_store(dir: PathBuf, provider: FakeProvider, store: SessionStore) -> Fixture {
     let provider = Arc::new(provider);
     let router = ProviderRouter::new().with(provider.clone());
     let model = ModelRef::new("fake/model");
@@ -76,6 +80,15 @@ impl Fixture {
         &self,
         prompt: &str,
         cancel: &CancellationToken,
+    ) -> Result<FinishReason, CoreError> {
+        self.turn_with_publish(prompt, cancel, &|_| {}).await
+    }
+
+    async fn turn_with_publish(
+        &self,
+        prompt: &str,
+        cancel: &CancellationToken,
+        publish: &(dyn Fn(Envelope) + Send + Sync),
     ) -> Result<FinishReason, CoreError> {
         let session = self.session;
         let user = MessageId::new();
@@ -127,10 +140,9 @@ impl Fixture {
             )
             .await
             .unwrap();
-        let publish = |_| {};
         let emit = StoreEmit {
             store: &self.store,
-            publish: &publish,
+            publish,
         };
         let ctx = tool_ctx(&self.dir, cancel);
         let finish = kernel::run(kernel::Run {
@@ -756,5 +768,303 @@ async fn todo_ids_stay_allocated_after_their_rows_are_removed() {
             .filter(|event| matches!(event, Event::TodosUpdated { .. }))
             .count(),
         1
+    );
+}
+
+fn init_git(dir: &Path) {
+    let output = std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[tokio::test]
+async fn file_mutations_record_prior_content_and_stamp_after_the_tool() {
+    let fx = fixture(
+        "file-mutations",
+        FakeProvider::scripted_turns(vec![
+            call("write", json!({"path": "a.txt", "content": "hello\n"})),
+            call(
+                "edit",
+                json!({"path": "a.txt", "old": "hello", "new": "bye"}),
+            ),
+            call("bash", json!({"command": "printf 'shell\n' >> a.txt"})),
+            // Even a write of identical bytes can change the mtime.
+            call("write", json!({"path": "a.txt", "content": "bye\nshell\n"})),
+            text("done"),
+        ]),
+    )
+    .await;
+    init_git(&fx.dir);
+    fx.turn("make the edits", &CancellationToken::new())
+        .await
+        .unwrap();
+
+    let log = fx.log().await;
+    let mut changes = Vec::new();
+    let mut sizes = Vec::new();
+    for (index, event) in log.iter().enumerate() {
+        match event {
+            Event::FilesChanged {
+                call: Some(call),
+                files,
+                ..
+            } => {
+                assert!(
+                    matches!(&log[index - 1], Event::ToolResult { call: result, .. } if result == call)
+                );
+                let [file] = files.as_slice() else {
+                    panic!("expected one changed file: {files:?}")
+                };
+                assert_eq!(Path::new(&file.path), fx.dir.join("a.txt"));
+                changes.push(file);
+            }
+            Event::FilesObserved {
+                external, files, ..
+            } => {
+                assert!(
+                    !external,
+                    "a tool's changes were reported as external: {files:?}"
+                );
+                let [file] = files.as_slice() else {
+                    panic!("expected one stamp: {files:?}")
+                };
+                assert_eq!(Path::new(&file.path), fx.dir.join("a.txt"));
+                assert!(file.mtime_ns.is_some());
+                sizes.push(file.size.unwrap());
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(sizes, [6, 4, 10, 10]);
+    assert_eq!(changes.len(), 3);
+    assert_eq!(changes[0].before, FileState::Absent);
+    for (file, bytes) in [(changes[1], b"hello\n".as_slice()), (changes[2], b"bye\n")] {
+        let FileState::Stored { hash, .. } = &file.before else {
+            panic!("missing prior content: {file:?}")
+        };
+        assert_eq!(
+            fx.store
+                .file_blob(fx.session, hash)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(bytes)
+        );
+    }
+    assert!(changes[2].observed);
+}
+
+#[tokio::test]
+async fn outside_change_to_read_file_is_logged_before_the_next_request() {
+    let fx = fixture(
+        "file-between-rounds",
+        FakeProvider::scripted_turns(vec![
+            call("read", json!({"path": "a.txt"})),
+            call("read", json!({"path": "a.txt"})),
+            text("done"),
+        ]),
+    )
+    .await;
+    let a = fx.dir.join("a.txt");
+    std::fs::write(&a, "old").unwrap();
+    let publish = |envelope: Envelope| {
+        if matches!(envelope.event, Event::ToolResult { output, .. } if output["content"] == "old")
+        {
+            std::fs::write(&a, "outside update").unwrap();
+            std::fs::write(fx.dir.join("b.txt"), "unseen").unwrap();
+        }
+    };
+    fx.turn_with_publish("read twice", &CancellationToken::new(), &publish)
+        .await
+        .unwrap();
+
+    let log = fx.store.replay(fx.session).await.unwrap();
+    let external: Vec<_> = log
+        .iter()
+        .filter_map(|envelope| match &envelope.event {
+            Event::FilesObserved {
+                external: true,
+                files,
+                ..
+            } => Some((envelope.seq, files)),
+            _ => None,
+        })
+        .collect();
+    let [(seq, files)] = external.as_slice() else {
+        panic!("expected one external event: {external:?}")
+    };
+    let [file] = files.as_slice() else {
+        panic!("expected only the read file: {files:?}")
+    };
+    assert_eq!(Path::new(&file.path), a);
+    assert_eq!(file.size, Some(14));
+    let next = log.iter().find(|e| e.seq.0 == seq.0 + 1).unwrap();
+    assert!(
+        matches!(&next.event, Event::StepStarted { step: 1, view: Some(view), .. } if view.cut == *seq)
+    );
+    let requests = fx.provider.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        !assistant_parts(&requests[1]).any(|part| matches!(part, Part::Tool {
+        state: ToolPartState::Completed { output, .. }, ..
+    } if output["content"] == "outside update"))
+    );
+    assert!(
+        assistant_parts(&requests[2]).any(|part| matches!(part, Part::Tool {
+        state: ToolPartState::Completed { output, .. }, ..
+    } if output["content"] == "outside update"))
+    );
+}
+
+#[tokio::test]
+async fn file_stamps_survive_reopening_the_database() {
+    let dir = std::env::temp_dir().join(format!("hya-kernel-file-restart-{}", SessionId::new()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("hya.db");
+    let db = db.to_str().unwrap();
+    let a = dir.join("a.txt");
+    std::fs::write(&a, "old").unwrap();
+    let mut fx = fixture_with_store(
+        dir.clone(),
+        FakeProvider::scripted_turns(vec![
+            call("read", json!({"path": "a.txt"})),
+            text("done"),
+            text("back"),
+        ]),
+        SessionStore::connect(db).await.unwrap(),
+    )
+    .await;
+    fx.turn("read before restart", &CancellationToken::new())
+        .await
+        .unwrap();
+    let session = fx.session;
+    // Close all connections and discard the store's in-process projection.
+    drop(fx.store);
+    fx.store = SessionStore::connect(db).await.unwrap();
+    std::fs::remove_file(&a).unwrap();
+
+    fx.turn("resume after restart", &CancellationToken::new())
+        .await
+        .unwrap();
+    let log = fx.log().await;
+    let observed: Vec<_> = log
+        .iter()
+        .filter_map(|event| match event {
+            Event::FilesObserved {
+                external: true,
+                files,
+                ..
+            } => Some(files.as_slice()),
+            _ => None,
+        })
+        .collect();
+    let [[file]] = observed.as_slice() else {
+        panic!("expected one deletion: {observed:?}")
+    };
+    assert_eq!(Path::new(&file.path), a);
+    assert_eq!(file.mtime_ns, None);
+    assert_eq!(file.size, None);
+    assert_eq!(
+        serde_json::to_value(file).unwrap(),
+        json!({"path": a, "mtime_ns": null, "size": null})
+    );
+    assert_eq!(
+        fx.store
+            .read_projection_shared(session)
+            .await
+            .unwrap()
+            .session
+            .files[&file.path],
+        *file
+    );
+}
+
+struct ShellWithConcurrentEdit(Arc<dyn Tool>);
+
+#[async_trait::async_trait]
+impl Tool for ShellWithConcurrentEdit {
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+
+    fn schema(&self) -> hya_proto::ToolSchema {
+        self.0.schema()
+    }
+
+    async fn execute(
+        &self,
+        ctx: &ToolCtx,
+        input: serde_json::Value,
+    ) -> Result<serde_json::Value, ToolError> {
+        if input["command"] == "sleep 0.05" {
+            // Poll the real Bash tool first so the shell is running when the
+            // other task edits the workspace.
+            let (outcome, ()) = tokio::join!(biased;
+                self.0.execute(ctx, input),
+                async {
+                    tokio::fs::write(ctx.workdir.join("a.txt"), "outside").await.unwrap();
+                    tokio::fs::write(ctx.workdir.join("b.txt"), "unseen").await.unwrap();
+                },
+            );
+            outcome
+        } else {
+            self.0.execute(ctx, input).await
+        }
+    }
+}
+
+#[tokio::test]
+async fn outside_edits_during_a_shell_call_are_recorded_as_its_changes() {
+    let mut fx = fixture(
+        "file-sleep",
+        FakeProvider::scripted_turns(vec![
+            call("write", json!({"path": "a.txt", "content": "hello\n"})),
+            call("bash", json!({"command": "printf 'shell\n' >> a.txt"})),
+            call("bash", json!({"command": "sleep 0.05"})),
+            call("read", json!({"path": "a.txt"})),
+            text("done"),
+        ]),
+    )
+    .await;
+    init_git(&fx.dir);
+    let bash = fx
+        .tools
+        .iter_mut()
+        .find(|tool| tool.name() == "bash")
+        .unwrap();
+    *bash = Arc::new(ShellWithConcurrentEdit(Arc::clone(bash)));
+    fx.turn("write, append, wait, and read", &CancellationToken::new())
+        .await
+        .unwrap();
+
+    let a = fx.dir.join("a.txt");
+    let b = fx.dir.join("b.txt");
+    let log = fx.log().await;
+    let changed: Vec<Vec<&Path>> = log
+        .iter()
+        .filter_map(|event| match event {
+            Event::FilesChanged { files, .. } => {
+                Some(files.iter().map(|file| Path::new(&file.path)).collect())
+            }
+            _ => None,
+        })
+        .collect();
+    // Git measures the shell's combined delta, so the outside edits made
+    // during the wait are recorded as that command's changes.
+    assert_eq!(
+        changed,
+        [
+            vec![a.as_path()],
+            vec![a.as_path()],
+            vec![a.as_path(), b.as_path()]
+        ]
+    );
+    assert!(
+        !log.iter()
+            .any(|event| matches!(event, Event::FilesObserved { external: true, .. })),
+        "{log:?}"
     );
 }

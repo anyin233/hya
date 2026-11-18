@@ -2,13 +2,16 @@
 //! permissions, tool context, file snapshots, output capping, and steer
 //! notices around the call.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use hya_proto::{Event, MessageId, SessionId, ToolCallId, ToolSchema};
 use hya_store::ActorClaim;
 use hya_tool::{AgentDef, ReportLatch, ToolCtx, ToolError};
+use tokio::sync::Mutex;
 
+use super::super::file_snapshot::{FileCapture, observation};
 use super::super::roots::SessionWorkspace;
 use super::super::shell::BashArtifactGuard;
 use super::super::steer::SteerMailbox;
@@ -119,7 +122,8 @@ impl TurnToolGate<'_> {
         let input_for_after =
             (engine.hooks.is_some() || activation_hooks.is_some()).then(|| tc.input.clone());
         let started = std::time::Instant::now();
-        let mut file_capture = super::super::file_snapshot::FileCapture::None;
+        let mut file_capture = FileCapture::default();
+        let nested_stamps = Arc::new(Mutex::new(BTreeMap::new()));
         let behind = hidden_behind(
             resources,
             depth,
@@ -211,6 +215,7 @@ impl TurnToolGate<'_> {
                                 grant_scope: workspace.grant_scope.clone(),
                                 activation_hooks: activation_hooks.clone(),
                                 caller: resolved.tool.name().to_string(),
+                                stamps: Arc::clone(&nested_stamps),
                                 base: ctx.clone(),
                             };
                             ctx.nested = hya_tool::NestedToolPlane::new(Arc::new(nested));
@@ -218,7 +223,7 @@ impl TurnToolGate<'_> {
                             // actual dispatch boundary so takeover cannot turn a
                             // previously valid resident into an unfenced launch.
                             engine.validate_actor_claim(actor_claim).await?;
-                            file_capture = Box::pin(super::super::file_snapshot::capture_before(
+                            file_capture = Box::pin(FileCapture::full(
                                 resolved.tool.name(),
                                 &tc.input,
                                 binding.workdir(),
@@ -242,8 +247,19 @@ impl TurnToolGate<'_> {
             () = cancel.cancelled() => (Err(ToolError::Cancelled), hya_tool::ToolResultPolicy::Default),
             result = collect_tool => result?,
         };
-        Box::pin(engine.record_file_changes(actor_claim, session, message, tc.call, file_capture))
-            .await?;
+        let (changed, stamps) = Box::pin(file_capture.finish(
+            &engine.store,
+            session,
+            message,
+            tc.call,
+            result.as_ref().ok(),
+        ))
+        .await?;
+        if let Some(changed) = changed {
+            engine.emit_for_actor(actor_claim, session, changed).await?;
+        }
+        let mut stamps_by_path = std::mem::take(&mut *nested_stamps.lock().await);
+        stamps_by_path.extend(stamps.into_iter().map(|file| (file.path.clone(), file)));
         let mut artifact_guard =
             BashArtifactGuard::capture(tc.name.as_str(), result.as_ref().ok(), binding.workdir());
         let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -364,9 +380,15 @@ impl TurnToolGate<'_> {
         let (acknowledgement, consumed_incoming) = steer
             .take_acknowledgement()
             .map_or((None, false), |(event, incoming)| (Some(event), incoming));
+        let mut events = vec![event];
+        events.extend(observation(
+            session,
+            false,
+            stamps_by_path.into_values().collect(),
+        ));
         let envelopes = engine
             .store
-            .commit_tool_result_with_mail(actor_claim, session, event, acknowledgement)
+            .commit_tool_result_with_mail(actor_claim, session, events, acknowledgement)
             .await?;
         for envelope in envelopes {
             engine.publish_envelope(envelope);

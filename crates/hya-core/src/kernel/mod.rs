@@ -3,6 +3,8 @@
 //!
 //! Each round reads a [`View`] of the session projection to build its request.
 
+/// File snapshots and lightweight workspace observations.
+pub mod file_snapshot;
 /// The kernel's minimal system prompt.
 pub mod prompt;
 /// Projection-to-request conversion.
@@ -157,7 +159,13 @@ struct Bare<'a> {
 impl ToolGate for Bare<'_> {
     async fn call(&mut self, mut call: ToolCall) -> Result<(), CoreError> {
         let started = Instant::now();
-        let outcome = match self.tools.iter().find(|tool| tool.name() == call.name) {
+        let tool = self.tools.iter().find(|tool| tool.name() == call.name);
+        let capture = if tool.is_some() {
+            file_snapshot::FileCapture::bare(&call.name, &call.input, &self.ctx.workdir).await
+        } else {
+            file_snapshot::FileCapture::default()
+        };
+        let outcome = match tool {
             None => Err(format!("unknown tool: {}", call.name)),
             Some(tool) => tokio::select! {
                 biased;
@@ -169,16 +177,19 @@ impl ToolGate for Bare<'_> {
         };
         let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let Scope {
+            store,
             emit,
             session,
             message,
             ..
         } = *self.scope;
-        emit.emit(
-            session,
-            vec![tool_event(session, message, &call, outcome, time_ms)],
-        )
-        .await
+        let (changed, stamps) = capture
+            .finish(store, session, message, call.call, outcome.as_ref().ok())
+            .await?;
+        let mut events = vec![tool_event(session, message, &call, outcome, time_ms)];
+        events.extend(changed);
+        events.extend(file_snapshot::observation(session, false, stamps));
+        emit.emit(session, events).await
     }
 
     /// Fail every unrun call as cancelled, so none is left without a result.
@@ -432,6 +443,11 @@ pub async fn drive(
             if cancel.is_cancelled() {
                 return Ok(FinishReason::Cancelled);
             }
+            projection = store.read_projection_shared(session).await?;
+        }
+        let changes = file_snapshot::external_changes(&projection.session.files).await;
+        if let Some(event) = file_snapshot::observation(session, true, changes) {
+            emit.emit(session, vec![event]).await?;
             projection = store.read_projection_shared(session).await?;
         }
         let view = View {
