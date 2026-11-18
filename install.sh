@@ -77,7 +77,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-tool_libraries=(-p hya-base-tools -p hya-extended-tools -p hya-network-tools -p hya-channel-tools)
+tool_libraries=(-p hya-base-tools -p hya-extended-tools -p hya-network-tools -p hya-channel-tools -p hya-compaction)
 case "$profile" in
   release)
     profile_args=(--profile release)
