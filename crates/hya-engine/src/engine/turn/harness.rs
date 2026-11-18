@@ -100,12 +100,11 @@ impl SessionEngine {
             _ => 0,
         };
         let mut events = Vec::with_capacity(2);
+        let workdir = session_workdir(agent, &projection);
         let initial_context = match &projection.session.initial_context {
             Some(text) => text.clone(),
             None => {
-                let workdir = session_workdir(agent, &projection);
                 let env = PromptEnv {
-                    cwd: workdir.to_string_lossy().into_owned(),
                     platform: std::env::consts::OS.to_string(),
                     date: today(),
                 };
@@ -144,7 +143,7 @@ impl SessionEngine {
         // Digests of the system prompt and tool list, recorded with the
         // binding at turn start and again whenever a round's differ.
         let tools = self.offered_tools(&resources, depth, &model);
-        let system = system_prompt(agent, Some(&initial_context), &tools, depth);
+        let system = system_prompt(agent, &workdir, Some(&initial_context), &tools, depth);
         let recorded_digests = prompt_digests(&system, &tools)?;
         events.push(Event::TurnBindingRecorded {
             session,
@@ -429,10 +428,12 @@ impl Harness for TurnHarness<'_> {
         self.attachments = engine.attachment_data(self.session, projection).await?;
         // What the system prompt and tools cost: a request with no messages.
         let tools = engine.offered_tools(&self.resources, self.depth, &self.model);
+        let workdir = session_workdir(&self.live_agent, projection);
         let overhead_tokens = engine.token_accounting.estimate_request(
             &[],
             Some(&system_prompt(
                 &self.live_agent,
+                &workdir,
                 projection.session.initial_context.as_deref(),
                 &tools,
                 self.depth,
@@ -468,7 +469,7 @@ impl Harness for TurnHarness<'_> {
             projection,
             window: engine.model_window(&self.model),
             overhead_tokens,
-            workdir: &session_workdir(&self.live_agent, projection),
+            workdir: &workdir,
             config: &config,
             log: &log,
             transcript: &transcript,
@@ -500,6 +501,7 @@ impl Harness for TurnHarness<'_> {
         let tools = engine.offered_tools(&self.resources, self.depth, &self.model);
         let system = system_prompt(
             &self.live_agent,
+            &session_workdir(&self.live_agent, view.projection),
             view.projection.session.initial_context.as_deref(),
             &tools,
             self.depth,

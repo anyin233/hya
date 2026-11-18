@@ -112,7 +112,8 @@ In `only` mode the model cannot see the other tools' schemas, so the engine
 appends them to the description of `code-mode__run` in each request: one
 section per hidden tool with its name, description and argument schema. The
 team quick reference in the system prompt, which teaches only offered tools,
-is absent in this mode.
+is absent in this mode, and the [kernel prompt](kernel.md#system-prompt) at
+its start lists only `rewrite` and `todo`.
 
 ## Interface
 

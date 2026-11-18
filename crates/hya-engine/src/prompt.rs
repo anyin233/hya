@@ -1,9 +1,8 @@
 use std::path::{Path, PathBuf};
 
 /// Process-local environment facts rendered into the Harness prompt layer.
+/// The working directory is the kernel prompt's `<cwd>`.
 pub struct PromptEnv {
-    /// Absolute or display cwd string.
-    pub cwd: String,
     /// OS/platform label for the Environment block.
     pub platform: String,
     /// Calendar date string (`YYYY-MM-DD`).
@@ -69,8 +68,8 @@ pub fn render_environment_and_context(
     context_files: &[(String, String)],
 ) -> String {
     let mut out = format!(
-        "## Environment\n- cwd: {}\n- platform: {}\n- date: {}\n",
-        env.cwd, env.platform, env.date
+        "## Environment\n- platform: {}\n- date: {}\n",
+        env.platform, env.date
     );
     for (name, content) in context_files {
         out.push_str("\n## Project context: ");
@@ -157,7 +156,6 @@ mod tests {
 
     fn env() -> PromptEnv {
         PromptEnv {
-            cwd: "/work/proj".to_string(),
             platform: "linux".to_string(),
             date: "2026-06-21".to_string(),
         }
@@ -315,7 +313,7 @@ mod tests {
     fn render_environment_and_context_omits_agent_base() {
         let ctx = vec![("AGENTS.md".to_string(), "Prefer spaces.".to_string())];
         let out = render_environment_and_context(&env(), &ctx);
-        assert!(out.starts_with("## Environment\n"));
+        assert!(out.starts_with("## Environment\n- platform: linux\n- date: 2026-06-21\n"));
         assert!(out.contains("## Project context: AGENTS.md"));
         assert!(out.contains("Prefer spaces."));
         assert!(!out.contains("You are hya"));
