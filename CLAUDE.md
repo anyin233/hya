@@ -1,7 +1,19 @@
 # CLAUDE.md — hya
 
 > Project overview, component map, change guidance, and verification live in
-> `AGENTS.md`.
+> `AGENTS.md`. Claude Code does not load that file by itself: read it before
+> changing code. Its Verification section sets which checks to run for the
+> components a change touches, and its documentation, TUI, and release rules
+> apply to feature work.
+
+## Commit and push
+
+- Commit only when the user explicitly asks: one commit per atomic change,
+  staging only that change's files.
+- Push only when the user authorizes it.
+- Use one-line semantic commit messages with no agent or AI attribution.
+- Report failed or unavailable checks; they do not block a commit or push the
+  user asked for.
 
 ## Agent skills
 
