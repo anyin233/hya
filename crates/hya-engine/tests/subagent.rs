@@ -1065,6 +1065,8 @@ impl Provider for PerSessionRecorder {
 #[tokio::test]
 async fn recorded_observability_never_enters_the_parent_model_input() {
     let workdir = support::TestDir::new("observability-no-leak");
+    let agents_path = workdir.path().join("AGENTS.md");
+    std::fs::write(&agents_path, "CHILD_INITIAL_INSTRUCTIONS").unwrap();
     let requests = Arc::new(Mutex::new(Vec::new()));
     let router = Arc::new(ProviderRouter::new().with(Arc::new(PerSessionRecorder {
         requests: requests.clone(),
@@ -1137,6 +1139,13 @@ async fn recorded_observability_never_enters_the_parent_model_input() {
         "precondition: the child must have compacted"
     );
 
+    assert!(child_events.iter().any(|envelope| matches!(
+        &envelope.event,
+        Event::InitialContextRecorded { session, text }
+            if *session == child && text.contains("CHILD_INITIAL_INSTRUCTIONS")
+    )));
+    std::fs::write(&agents_path, "LEAD_INITIAL_INSTRUCTIONS").unwrap();
+
     // Run a lead turn AFTER the child finished, so the lead's model input is
     // built from a log that already contains the spawn edge and the child's work.
     engine
@@ -1149,12 +1158,23 @@ async fn recorded_observability_never_enters_the_parent_model_input() {
         .unwrap();
 
     let requests = requests.lock().unwrap();
+    assert!(requests.iter().any(|(session, request)| {
+        *session == child
+            && request
+                .system
+                .as_deref()
+                .unwrap()
+                .contains("CHILD_INITIAL_INSTRUCTIONS")
+    }));
     let lead_requests: Vec<_> = requests
         .iter()
         .filter(|(session, _)| *session == lead)
         .collect();
     assert!(!lead_requests.is_empty(), "the lead must have run a turn");
     for (_, request) in lead_requests {
+        let system = request.system.as_deref().unwrap();
+        assert!(system.contains("LEAD_INITIAL_INSTRUCTIONS"));
+        assert!(!system.contains("CHILD_INITIAL_INSTRUCTIONS"));
         let rendered = format!("{:?}", request.messages);
         assert!(
             !rendered.contains("HYA_COMPACTED_CONTEXT"),

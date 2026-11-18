@@ -361,6 +361,7 @@ impl hya_tool::WorkflowRequestSink for BoundWorkflowSink {
 pub struct SessionEngine {
     store: SessionStore,
     base_system_prompt: String,
+    pure_context: bool,
     providers: RwLock<Arc<ProviderRouter>>,
     catalog: RwLock<Arc<ProviderCatalogSnapshot>>,
     /// Cross-model failover plane: preferred [`ModelRef`] → its ordered
@@ -425,6 +426,7 @@ impl Clone for SessionEngine {
         Self {
             store: self.store.clone(),
             base_system_prompt: self.base_system_prompt.clone(),
+            pure_context: self.pure_context,
             providers: RwLock::new(
                 self.providers
                     .read()
@@ -605,6 +607,7 @@ impl SessionEngine {
             store,
             providers: RwLock::new(providers),
             base_system_prompt: String::new(),
+            pure_context: false,
             catalog: RwLock::new(catalog),
             global_reasoning: None,
             exclusive_tool: None,
@@ -694,6 +697,13 @@ impl SessionEngine {
     #[must_use]
     pub fn with_model_categories(mut self, categories: Arc<CategoryRegistry>) -> Self {
         self.model_categories = categories;
+        self
+    }
+
+    /// Skip external project instructions when recording a new session's context.
+    #[must_use]
+    pub fn with_pure_context(mut self, pure: bool) -> Self {
+        self.pure_context = pure;
         self
     }
 
