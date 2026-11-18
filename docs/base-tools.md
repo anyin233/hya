@@ -41,6 +41,14 @@ The registry holds 25 canonical names. Two families export `wait` and the
 registry installs it once. The model also receives the kernel's
 [`todo` and `rewrite` tools](kernel.md#built-in-tools).
 
+`write` and `edit` are offered to every model. `apply_patch` is offered only
+to a GPT-family model, in addition to `write` and `edit`: one whose id, after
+its last `/` and without a `#variant` suffix, lowercased, starts with `gpt` or
+contains `codex`. `openai/gpt-5.5` and `x/y/gpt-6.2-sol#high` get it;
+`anthropic/claude-opus-5-5` and `glm-5.3` do not. The choice follows each
+round's model, so a model change inside a turn changes the tool list. A call
+through the hidden `patch` alias dispatches to `apply_patch` for every model.
+
 `ask_user` is the canonical name for the requested `ask` function; `question` remains its hidden alias. The
 user-assigned `lsp` and `task` tools belong to the extended family.
 

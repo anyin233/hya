@@ -1153,18 +1153,20 @@ impl SessionEngine {
 }
 
 impl SessionEngine {
-    /// Tool schemas a full-mode request offers: the agent's filtered tools
-    /// plus `rewrite` and `todo`, handled by the kernel loop.
+    /// Tool schemas a full-mode request to `model` offers: the agent's
+    /// filtered tools plus `rewrite` and `todo`, handled by the kernel loop.
     fn offered_tools(
         &self,
         resources: &CompiledResourceView,
         depth: u32,
+        model: &ModelRef,
     ) -> Vec<hya_proto::ToolSchema> {
         let mut tools = filtered_tool_schemas(
             resources,
             self.interaction.is_available(),
             depth,
             self.exclusive_tool.as_deref(),
+            model,
         );
         tools.extend([
             crate::kernel::tools::rewrite_schema(),

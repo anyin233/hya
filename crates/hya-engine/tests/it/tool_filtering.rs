@@ -172,17 +172,20 @@ fn base_tools_replace_the_kernel_tools_under_the_same_names() {
 }
 
 #[tokio::test]
-async fn runtime_tool_request_advertises_hashline_write_edit_for_every_model() {
-    for model in ["gpt-5", "gpt-4o", "gpt-5.6-sol", "glm-5.3"] {
+async fn runtime_offers_apply_patch_to_gpt_family_models_only() {
+    for (model, gpt) in [
+        ("openai/gpt-5.5", true),
+        ("x/y/gpt-6.2-sol#high", true),
+        ("anthropic/claude-opus-5-5", false),
+        ("glm-5.3", false),
+    ] {
         let ids = tool_ids("recording", model).await;
         assert!(
             ids.contains(&"edit".to_string()) && ids.contains(&"write".to_string()),
             "{model} must advertise hashline write/edit"
         );
-        assert!(
-            !ids.contains(&"apply_patch".to_string()),
-            "{model} must not advertise apply_patch"
-        );
+        assert_eq!(ids.contains(&"apply_patch".to_string()), gpt, "{model}");
+        assert!(!ids.contains(&"patch".to_string()), "{model}");
     }
 }
 

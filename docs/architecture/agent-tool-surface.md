@@ -607,8 +607,9 @@ applies an advertisement-only filter:
   No flag, config key, RPC, or tool argument changes: for example,
   `hya exec "summarize this repo"` offers neither human-answer tool, while a
   session attached through the TUI/server can still ask questions.
-- `apply_patch` is never advertised. It remains registered for hidden `patch`
-  dispatch.
+- `apply_patch` is advertised to GPT-family models only (the round's model;
+  see [Tool-family presets](../base-tools.md)). Hidden `patch` dispatch works
+  for every model.
 - enabled `websearch` is advertised to every model provider.
 - `report` is never advertised to the root (depth 0); `task`, `list_agents`,
   `workflow`, `search_agent`, and `archive` are not advertised at the depth
@@ -620,7 +621,8 @@ harness-allocated [coordination tools](#coordination-tools-allocated-at-startup)
 
 The tools remain registered even when their schemas are filtered from the
 request. File mutation on the model-facing path is the hashline `write`/`edit`
-pair, not the Codex-style `apply_patch` envelope.
+pair for every model, plus the Codex-style `apply_patch` envelope for
+GPT-family models.
 ([`hya_engine::advertise_tool`](../../crates/hya-engine/src/engine/turn/messages.rs))
 
 ### Websearch provider independence
