@@ -106,7 +106,7 @@ fn roster_is_resolved_from_the_bound_spawn_graph() {
         ["worker"]
     );
     assert!(matches!(
-        binding.resolve_spawn("lead", "hya-compaction"),
+        binding.resolve_spawn("lead", "hya-title"),
         Err(hya_bundle::BundleError::AgentSpawnNotAllowed { .. })
     ));
 }

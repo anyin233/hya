@@ -186,7 +186,8 @@ fn installing_a_bundle_makes_its_agent_spawnable_by_a_builtin() {
 #[test]
 fn reserved_system_agents_stay_unspawnable_by_ordinary_agents() {
     let catalog = catalog(&[installed("acme/reviewer", "acme-reviewer", &[])]);
-    for reserved in ["hya-compaction", "hya-summary", "hya-title"] {
+    {
+        let reserved = "hya-title";
         assert!(
             !catalog
                 .spawnable("hya-main")
@@ -406,7 +407,8 @@ fn private_agents_require_workflow_or_explicit_spawn_authorization() {
         catalog.resolve_workflow_agent("acme-other", "acme-helper"),
         Err(BundleError::AgentSpawnNotAllowed { .. })
     ));
-    for reserved in ["hya-title", "hya-summary", "hya-compaction"] {
+    {
+        let reserved = "hya-title";
         assert!(matches!(
             catalog.resolve_workflow_agent(reserved, "acme-helper"),
             Err(BundleError::AgentSpawnNotAllowed { .. })

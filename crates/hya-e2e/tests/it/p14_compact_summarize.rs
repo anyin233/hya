@@ -1,4 +1,5 @@
-//! T1.14 — compact / summarize injects system summary into session context.
+//! T1.14 — compact / summarize removes earlier context behind the kernel's
+//! Rewrite marker, which repeats the removed user messages verbatim.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use hya_e2e::{E2eEnvBuilder, text_step};
@@ -7,12 +8,12 @@ use serde_json::Value;
 
 #[tokio::test]
 async fn t1_14_compact_injects_summary_and_allows_follow_up_turn() {
-    // FakeLlm queue: two normal turns, then ModelSummarizer completion, then post-compact turn.
+    // FakeLlm queue: two normal turns, then the post-compact turn. The
+    // compaction itself makes no model call.
     let env = E2eEnvBuilder::new()
         .scripts(vec![
             text_step("COMPACT_TURN_ONE"),
             text_step("COMPACT_TURN_TWO"),
-            text_step("E2E_COMPACT_SUMMARY_MARKER"),
             text_step("AFTER_COMPACT_OK"),
         ])
         .build()
@@ -39,9 +40,9 @@ async fn t1_14_compact_injects_summary_and_allows_follow_up_turn() {
         .expect("context after compact");
     let blob = context.to_string();
     assert!(
-        blob.contains("E2E_COMPACT_SUMMARY_MARKER")
-            || blob.contains("Summary of earlier conversation"),
-        "compact must inject a system summary into context; context={context}; {}",
+        blob.contains("Earlier context was removed by the harness")
+            && blob.contains("remember detail ONE about widget-alpha"),
+        "compact must add the rewrite marker with the removed user message; context={context}; {}",
         env.diagnostics()
     );
 
@@ -65,24 +66,20 @@ async fn t1_14_compact_injects_summary_and_allows_follow_up_turn() {
         env.diagnostics()
     );
 
-    // Follow-up model request should still see prior transcript and/or summary.
+    // The follow-up request carries the marker instead of turn 1.
     let requests = env.fake.requests().expect("requests");
+    let last = requests.last().unwrap().to_string();
+    assert!(last.contains("Earlier context was removed by the harness"));
     assert!(
-        requests.len() >= 4,
-        "two turns + summarize + follow-up expected; n={}; {}",
-        requests.len(),
-        env.diagnostics()
+        !last.contains("COMPACT_TURN_ONE"),
+        "turn 1 left the request"
     );
 }
 
 #[tokio::test]
 async fn t1_14_legacy_summarize_persists_summary_metadata_path() {
     let env = E2eEnvBuilder::new()
-        .scripts(vec![
-            text_step("SUM_TURN_A"),
-            text_step("SUM_TURN_B"),
-            text_step("E2E_LEGACY_SUMMARY_MARKER"),
-        ])
+        .scripts(vec![text_step("SUM_TURN_A"), text_step("SUM_TURN_B")])
         .build()
         .await
         .expect("e2e env");
@@ -95,7 +92,7 @@ async fn t1_14_legacy_summarize_persists_summary_metadata_path() {
         .summarize_session_legacy(&session)
         .await
         .expect("legacy summarize");
-    // v1 returns the generated summary message id.
+    // v1 returns the marker message id.
     assert!(
         result
             .get("summaryMessage")
@@ -108,9 +105,9 @@ async fn t1_14_legacy_summarize_persists_summary_metadata_path() {
     let context = env.session_context(&session).await.expect("context");
     let blob = context.to_string();
     assert!(
-        blob.contains("E2E_LEGACY_SUMMARY_MARKER")
-            || blob.contains("Summary of earlier conversation"),
-        "legacy summarize must inject summary text; context={context}; {}",
+        blob.contains("Earlier context was removed by the harness")
+            && blob.contains("legacy summarize A"),
+        "legacy summarize must add the rewrite marker; context={context}; {}",
         env.diagnostics()
     );
 }

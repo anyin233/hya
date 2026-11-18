@@ -112,8 +112,10 @@ change and leave correct items as written. The model chooses when to use the
 tool, and the kernel executes it directly like `rewrite`. Open todos do not
 keep the kernel loop or headless `exec` running.
 
-At 60% of the model window, the kernel can append one logged system message
-per turn starting with `[hya] Goal checkpoint:`. It asks the model to record
+When the request would fill 60% of the model window, by the same measure as
+the [rewrite trigger](#rewrite-rules), and no reduction ran before the round,
+the kernel can append one logged system message per turn starting with
+`[hya] Goal checkpoint:`. It asks the model to record
 in the list every result it has derived and still needs. The request
 includes the notice until the assistant produces another part or a rewrite
 occurs. If a rewrite happens first, its marker carries the list or asks for
@@ -228,8 +230,8 @@ User messages from the removed part, verbatim:
 `<model|harness>` names the initiator. User text is repeated verbatim; the
 model cannot replace it with a summary. When the session has todos, the
 marker appends a blank line followed by the current list exactly as rendered
-by the tool. Full-mode compaction markers carry the same list. The `shake`
-rung preserves the most recent visible `todo` result when it evicts stale
+by the tool. A `remote` fold's marker carries the same list. The `shake`
+step preserves the most recent visible `todo` result when it evicts stale
 tool outputs. Removed originals stay in SQLite, but the kernel provides no
 way to read them back into Context.
 
@@ -241,17 +243,26 @@ last part before the current step; `kept_head` is the current turn's user
 message. If the assistant message has no earlier step, `step_cut` is `None`
 and `to_message` is the preceding message.
 
-Before a round, the harness rewrites when the last assistant message's
-`usage.last_round` satisfies:
+Before a round, `kernel::before_round` measures the request:
 
 ```text
-last.prompt() + last.output > max_context * 8 / 10
+used      = max(last.prompt() + last.output,
+                usage-anchored count of the request + overhead,
+                local estimate of the request + overhead)
+threshold = max_context * 8 / 10
 ```
 
-This is a strict 80% threshold using the provider's model capabilities. If
-capabilities or last-round usage are missing, no rewrite is triggered; an
-oversized-request provider error surfaces unchanged. Harness rewrites use
-the same removal range as model rewrites.
+`last` is the last assistant message's `usage.last_round`; `overhead` is the
+system prompt and offered tool schemas. The request counts include tool
+results that arrived after the last round. When `used > threshold`, the
+kernel runs its extensions (none in bare mode), re-estimates the request from
+the re-read projection when one changed the log, and rewrites when the
+request is still over the threshold. A route that advertises no window
+triggers nothing; an oversized-request provider error then surfaces
+unchanged. Harness rewrites use the same removal range as model rewrites, and
+record `used` and `threshold` as `input_tokens_est` and `threshold`; a model
+rewrite records the last round's usage. See
+[Compaction](compaction.md#before-each-round) for the full sequence.
 
 Known limitation: image attachments in removed user messages are not kept
 with the repeated text.
@@ -352,7 +363,7 @@ plugs into that loop at fixed points:
 
 | Point | Bare mode | Full mode |
 | --- | --- | --- |
-| Before the round (`Harness::before_round`) | 80% harness rewrite (`HarnessRewriter`) | Re-validate the actor claim, rebind a Root turn to a new runtime generation, resolve the round's model, then run the engine's rewriter: the [compaction ladder](compaction.md) of the `hya/compaction` internal bundle |
+| Before the round (`Harness::before_round`) | `kernel::before_round` with no extensions: the 80% Rewrite, then the goal checkpoint | Re-validate the actor claim, rebind a Root turn to a new runtime generation, resolve the round's model, then `kernel::before_round` with the internal bundles' extensions (`hya/compaction`: [`shake` and `remote`](compaction.md)) |
 | Request | Kernel prompt and six tools | The agent's system prompt, filtered tool schemas plus `rewrite` and `todo`, and reasoning effort, then the `chat.params` hook |
 | Opening the stream | The given model | Cross-model fallback or the Workflow route, under a governor stream permit |
 | Failed round | Ends the run | Retried up to twice when it failed before any text or tool call on a link error |
@@ -361,7 +372,7 @@ plugs into that loop at fixed points:
 | End | The round's finish | Also ends after an accepted `report` |
 
 The kernel offers and handles the model's `rewrite` and `todo` calls in both
-modes. The ladder's `ContextEvicted` events store the exact notice for each
+modes. `shake`'s `ContextEvicted` events store the exact notice for each
 evicted part, which the projection renders during replay.
 `TurnBindingRecorded` records the runtime generation and the pre-hook
 system prompt and tool list digests at turn start and whenever those
@@ -376,32 +387,35 @@ records it at the first model turn run by the new runtime.
 
 ## Rewrite contract
 
-The contract a rewriter is written against lives in `hya-tool`
+The contract an extension is written against lives in `hya-tool`
 (`hya_tool::rewrite`), because a native bundle links only `hya-tool` and
 `hya-proto`. All of it is part of the native ABI digest.
 
 | Item | Implemented by | Purpose |
 | --- | --- | --- |
-| `Rewriter { before_round(cx), rewrite_now(cx) }` | the kernel's `HarnessRewriter` (bare mode); internal bundles | Rewrite before a round when needed, or now (`/summarize`); `Ok(true)` when the log changed. Stateless (`&self`) |
-| `RewriteCtx` | the host, per call | Session, assistant message, round model and its `ModelWindow` (window, usage reporting, reasoning replay), projection, system-and-tools `overhead_tokens`, workdir, the rewriter's JSON `config`, and the services below |
+| `Rewriter { before_round(cx), rewrite_now(cx) }` | internal bundles | A context-reduction extension. `before_round` runs before every round and reduces only when `cx.pressure` is over; `rewrite_now` reduces on request (`/summarize`). `Ok(true)` when the log changed. Stateless (`&self`) |
+| `RewriteCtx` | the host, per call | Session, assistant message, round model and its `ModelWindow` (window, usage reporting, reasoning replay), projection, system-and-tools `overhead_tokens`, `pressure`, workdir, the extension's JSON `config`, and the services below |
+| `Pressure { used, threshold }` | the kernel | The request's size against 80% of the window; `None` without a window. `over()` is `used > threshold` |
 | `SessionLog { projection, append }` | bare: `kernel::Scope` over the store; full mode: the turn's actor-claimed emit | Read the projection, append one event batch |
 | `Transcript { messages(projection) }` | bare: the kernel agent's rendering; full mode: the agent's rendering with the round's prompt images (`/summarize`: the current episode) | The messages a round sends for a projection |
-| `ModelHost { fold_agent, has_summarizer, summarize, compact_window }` | full mode only (`None` in bare) | The fixed agent that folds context (Compaction, or Summary for `/summarize`); the engine's summarizer, which renders the summary or handoff prompt and records the call's usage; route-native `/responses/compact` |
-| `CompactionHooks { before, after }` | full mode only (`SessionEngine`) | The `compaction.before` (overflow) and `compaction.after` hook points |
+| `ModelHost { compact_window(model, messages) }` | full mode only (`None` in bare) | Route-native `/responses/compact`; `None` when the route has none |
+| `CompactionHooks { before(session, tokens), after(session, summary_tokens) }` | full mode only (`SessionEngine`) | The `compaction.before` (overflow) and `compaction.after` hook points; the host ignores the `compaction.before` reply |
 
-The harness's `before_round` builds the context and calls the rewriter.
-Full mode's rewriter is the first one the internal bundles register (today
-`hya/compaction`, [Compaction](compaction.md)); `SessionEngine::new` loads
-them once per process with `hya_core::bundles::load_internal()` and panics
-when a listed bundle's library cannot be loaded, as a missing tool family
-does. When no internal bundle registers a rewriter, full mode uses the
-kernel's `HarnessRewriter`: the 80% rewrite of bare mode, with no ladder,
-no `ContextStatus`, and `/summarize` removing everything before the
-session's newest message. Full mode's `config` is the engine's
-`CompactionConfig` plus the token-accounting mode, as JSON. A host failure
-reaches the rewriter as a `ToolError`; the host keeps the original
-`CoreError` and a failed rewrite ends the turn with it (for example a stale
-actor claim or a missing fold agent).
+The kernel drives the reduction. `kernel::before_round(cx, extensions)`
+measures the pressure, calls each extension's `before_round` in order, and
+then rewrites itself as described in [Rewrite rules](#rewrite-rules);
+`kernel::rewrite_now(cx, extensions)` runs each extension's `rewrite_now`
+until one changes the log, otherwise the kernel's own Rewrite. Bare mode
+passes no extensions. Full mode passes every rewriter the internal bundles
+register, in registration order (today `hya/compaction`,
+[Compaction](compaction.md)); nothing replaces the kernel's Rewrite.
+`SessionEngine::new` loads them once per process with
+`hya_core::bundles::load_internal()` and panics when a listed bundle's library
+cannot be loaded, as a missing tool family does. Full mode's `config` is the
+engine's `keep_recent` and token-accounting mode, as JSON. A host failure
+reaches the kernel or an extension as a `ToolError`; the host keeps the
+original `CoreError` and a failed reduction ends the turn with it (for
+example a stale actor claim).
 Token estimation (`hya_tool::tokens`) is shared by host and bundles, and the
 reasoning replay policy and compacted-context markers it and the request
 encoders read are in `hya_proto::context`.

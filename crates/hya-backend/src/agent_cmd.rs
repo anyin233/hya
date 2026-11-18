@@ -108,12 +108,9 @@ mod tests {
             !text.contains("category: quick"),
             "disk metadata must not surface:\n{text}"
         );
-        // System compaction/title/summary are not ordinarily reachable.
-        for system in ["hya-compaction", "hya-title", "hya-summary"] {
-            assert!(
-                !names.iter().any(|name| name == system),
-                "the listing must exclude system agent {system}:\n{text}"
-            );
-        }
+        assert!(
+            !names.iter().any(|name| name == "hya-title"),
+            "the listing must exclude the system agent hya-title:\n{text}"
+        );
     }
 }

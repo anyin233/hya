@@ -1046,15 +1046,28 @@ impl Provider for PerSessionRecorder {
         session: SessionId,
         message: MessageId,
     ) -> Result<EventStream, ProviderError> {
-        self.requests.lock().unwrap().push((session, request));
-        let events = FakeProvider::materialize(
-            &[
+        // The member's first round takes a step, so a later round has an
+        // earlier step for the kernel to rewrite away.
+        let mut requests = self.requests.lock().unwrap();
+        let first = !requests.iter().any(|(seen, _)| *seen == session);
+        let directed = format!("{:?}", request.messages).contains("SECRET_DIRECTIVE_MARKER");
+        requests.push((session, request));
+        drop(requests);
+        let steps = if first && directed {
+            vec![
+                FakeStep::ToolCall {
+                    name: "todo".to_string(),
+                    input: json!({"ops": []}),
+                },
+                FakeStep::Finish(FinishReason::ToolCalls),
+            ]
+        } else {
+            vec![
                 FakeStep::Text("done".to_string()),
                 FakeStep::Finish(FinishReason::Stop),
-            ],
-            session,
-            message,
-        );
+            ]
+        };
+        let events = FakeProvider::materialize(&steps, session, message);
         Ok(Box::pin(stream::iter(events.into_iter().map(Ok))))
     }
 }
@@ -1088,12 +1101,7 @@ async fn recorded_observability_never_enters_the_parent_model_input() {
         .with_compaction(
             Arc::new(LeakProbeSummarizer),
             hya_engine::CompactionConfig {
-                // The fake route advertises a 200k window, so the threshold is
-                // window-scaled to 20k, above the lead's system and tool schemas.
-                // The child's directive clears that; the lead's request does not.
-                token_threshold: 1_000_000,
                 keep_recent: 0,
-                context_fraction: 0.1,
                 ..hya_engine::CompactionConfig::default()
             },
         ),
@@ -1117,10 +1125,13 @@ async fn recorded_observability_never_enters_the_parent_model_input() {
         .await
         .unwrap();
 
-    // The child crosses 20k tokens even after counting the fixed request material.
+    // ~170k tokens: with the fixed request material the child's request is
+    // over the 200k window's 160k threshold and still fits the window.
+    let tokenizer = hya_engine::tokens::TokenAccounting::default();
+    let unit = "lorem ipsum dolor sit amet ".repeat(100);
     let directive = format!(
         "SECRET_DIRECTIVE_MARKER audit the retry paths. {}",
-        "x".repeat(128_000)
+        unit.repeat(170_000 / tokenizer.tokenizer().count_text(&unit))
     );
     let mut spec = member(&engine, &agent, &directive);
     spec.tool_call = Some(ToolCallId::new());

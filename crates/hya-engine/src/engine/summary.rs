@@ -4,33 +4,28 @@ use hya_proto::{
 use hya_tool::RewriteCtx;
 
 use super::turn::rewrite_host::{EpisodeTranscript, HostErrors, TurnLog, TurnModels};
-use super::{FixedSystemAgent, SessionEngine, fixed_system_agent, projection_workdir};
+use super::{SessionEngine, projection_workdir};
 use crate::error::CoreError;
 
 use hya_provider::COMPACT_CONTEXT_MARKER;
 
 impl SessionEngine {
-    /// Fold the session's current episode into one summary behind a marker,
-    /// through the engine's rewriter (`hya/compaction`); returns the marker.
+    /// Reduce the session's current episode now: the internal bundles'
+    /// extensions (`hya/compaction` tries the route's native compaction),
+    /// otherwise the kernel's own Rewrite. Returns the marker.
     pub async fn summarize_session(&self, session: SessionId) -> Result<MessageId, CoreError> {
         let _lease = self
             .begin_turn(session, &tokio_util::sync::CancellationToken::new())
             .await?
             .ok_or(CoreError::Cancelled)?;
         let projection = self.store.read_projection_shared(session).await?;
-        // Empty projection has no session id; fail before workdir/catalog lookup.
+        // Empty projection has no session id; fail before the workdir lookup.
         if projection.session.id.is_none() {
             return Err(CoreError::Invalid("session not found".to_string()));
         }
         let workdir = projection_workdir(&projection).ok_or_else(|| {
             CoreError::Invalid("session workdir required for summarize_session".to_string())
         })?;
-        // Bind once from the persisted session workdir; exact-lookup only.
-        let binding = self.bind_session_runtime(session, &workdir).await?;
-        fixed_system_agent(&binding, FixedSystemAgent::Summary)?;
-        if self.summarizer.is_none() {
-            return Err(CoreError::Invalid("summarizer not configured".to_string()));
-        }
         let model = projection
             .session
             .model
@@ -45,22 +40,27 @@ impl SessionEngine {
         };
         let models = TurnModels {
             engine: self,
-            actor_claim: None,
-            binding: &binding,
-            fold: FixedSystemAgent::Summary,
             errors: &errors,
         };
+        // The kernel's Rewrite keeps the newest turn's user message; anchored
+        // on a later user or marker message it would cut that message's own
+        // parts.
+        let message = projection
+            .session
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == Role::Assistant)
+            .map(|message| message.id)
+            .ok_or_else(|| CoreError::Invalid("nothing to summarize".to_string()))?;
         let cx = RewriteCtx {
             session,
-            message: projection
-                .session
-                .messages
-                .last()
-                .map_or_else(MessageId::new, |message| message.id),
+            message,
             model: &model,
             projection: &projection,
             window: self.model_window(&model),
             overhead_tokens: 0,
+            pressure: None,
             workdir: &workdir,
             config: &config,
             log: &log,
@@ -68,7 +68,7 @@ impl SessionEngine {
             models: Some(&models),
             hooks: Some(self),
         };
-        let changed = self.rewriter.rewrite_now(cx).await;
+        let changed = hya_core::kernel::rewrite_now(cx, &self.rewriters).await;
         if !changed.map_err(|error| errors.into_error(error))? {
             return Err(CoreError::Invalid("nothing to summarize".to_string()));
         }

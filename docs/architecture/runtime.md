@@ -389,11 +389,11 @@ full-mode harness (`TurnHarness` in
 2. Read the current projection from the store.
 3. Before the round: validate the actor claim (if any); check activation-hook
    health (`is_healthy`), unhealthy → `CoreError::Cancelled`; rebind a Root
-   turn after its first round; resolve the round's model; run the engine's
-   rewriter, the compaction ladder of the `hya/compaction` internal bundle
-   (see [Compaction and Summaries](#compaction-and-summaries)). When the
-   ladder changed the log, check the cancel token again and re-read the
-   projection.
+   turn after its first round; resolve the round's model; run the kernel's
+   context reduction (`kernel::before_round`) with the `hya/compaction`
+   internal bundle's extension steps (see
+   [Compaction and Summaries](#compaction-and-summaries)). When the reduction
+   changed the log, check the cancel token again and re-read the projection.
 4. Build the request with `kernel::request` from the agent's prompt, the
    projection's initial context, filtered tool schemas plus `rewrite`, and
    reasoning effort. Record
@@ -1163,37 +1163,31 @@ or tokenized for billing.
 
 ## Compaction and Summaries
 
-The ladder is the `hya/compaction` internal bundle
-([`bundles/internal/compaction/native`](../../bundles/internal/compaction/native)),
-run as the engine's rewriter before each round and for `/compact`; the host
-keeps its settings and the summarizer in
-[`compaction.rs`](../../crates/hya-engine/src/compaction.rs). The mechanism set, the configurable firing
-order, thresholds, and wire records are documented canonically in
-[Compaction](../compaction.md); this section records the runtime contracts.
+The kernel drives context reduction (`kernel::before_round`,
+[`hya-core/src/kernel/rewrite.rs`](../../crates/hya-core/src/kernel/rewrite.rs)).
+Full mode passes it the extensions the internal bundles register: the
+`hya/compaction` bundle
+([`bundles/internal/compaction/native`](../../bundles/internal/compaction/native))
+with its `shake` and `remote` steps. The sequence, thresholds, and wire
+records are documented canonically in [Compaction](../compaction.md); this
+section records the runtime contracts.
 
-`CompactionConfig` fields: `token_threshold` (default `100_000`),
-`keep_recent` (default `6`), `context_fraction` (default `0.75`),
-`reserve_tokens` (default `16_384`), `summary_max_tokens` (default `4_096`),
-and `method_order` (a permutation of the five rungs; see below).
-
-The trip threshold is `min(window * context_fraction, window -
-reserve_tokens)` floored at `MIN_RESOLVED_THRESHOLD` (`1_000`) when the route
-advertises a nonzero `max_context`; otherwise the flat `token_threshold`
-applies. A fraction outside `(0.0, 1.0]` falls back to the flat threshold.
-`keep_recent` is independent: compaction still requires
-`messages.len() > keep_recent`.
+`CompactionConfig` fields: `keep_recent` (default `6`, the tail `shake`
+keeps) and `summary_max_tokens` (default `4_096`, the terminal handoff's
+output cap). The threshold is fixed at 80% of the route's advertised
+`max_context`; without a window nothing is reduced.
 
 `SummarizeOptions` fields for summarizer calls: `system`, `model`,
-`reasoning`, `previous_summary` (the anchored summary this one updates),
-`max_output_tokens`, and `handoff` (send the verbatim transcript plus one
-trailing handoff prompt instead of the rendered serialization).
+`reasoning`, `previous_summary` (the handoff this one updates),
+`max_output_tokens`, and `usage`. The summarizer writes only the terminal
+handoff: the verbatim episode plus one trailing state-handoff prompt.
 
 ### Final request window check
 
-Each round accounts for the composed system prompt and tool schemas when
-measuring context for the reduction ladder. Its threshold includes this
-fixed request material as well as the transcript. For example, a large system
-prompt can trigger reduction even when the conversation alone is small.
+The reduction counts the composed system prompt and tool schemas as well as
+the transcript, and the request's local estimate as well as the usage the
+route reported. For example, a large system prompt can trigger reduction
+even when the conversation alone is small.
 
 After reduction and `chat.params` rewriting, immediately before opening a
 provider stream, the engine estimates the final
@@ -1205,50 +1199,28 @@ fallback candidate against that candidate's advertised nonzero `max_context`.
 An oversized request fails with a `ProviderError::Incompatible` containing the
 model, estimated input/output tokens, and context window; that request is never
 sent. Unknown models still use the router's normal unknown-model error.
-No new configuration is required; existing compaction settings control reduction.
 Estimates are local estimates, not a provider tokenizer guarantee.
 
-### The reduction ladder
+### The reduction sequence
 
-When the window is over threshold, the turn walks
-`CompactionConfig::method_order` — the five oh-my-pi mechanisms under their
-omp wire names: `shake` (`SpillToolOutputs`), `remote` (`ProviderCompact`),
-`soft` (`Summarize`), `snapcompact` (`SnapCompact`), `handoff` (`Handoff`).
-Default order: `shake, remote, soft, snapcompact, handoff`.
+Before each round, over the threshold:
 
-1. Before each rung the loop re-checks the threshold; the walk stops at the
-   first rung that fits the transcript back under it.
-2. An unavailable rung advances: `remote` on a route without compact support
-   (only `openai-response`, `openai-codex`, and `grok-build` advertise
-   `/responses/compact`), `soft`/`handoff` when no summarizer is wired,
-   `shake` when nothing is left to evict. A failed rung advances the same
-   way, so a model-free order still folds.
-3. `remote` resolves the fixed `hya-compaction` system agent (missing definition
-   fails closed with `AgentDefinitionMissing`), calls
-   `ProviderRouter::compact_if_supported`, and persists the folded items
-   behind `HYA_COMPACTED_CONTEXT` + `<<<RESPONSES_COMPACT_ITEMS>>>` via
+1. `shake` evicts stale completed tool outputs to `artifact://` handles
+   (logged in `ContextEvicted.parts`, idempotent, `keep_recent` protected; a
+   512-byte floor keeps bodies that cost more to reference than to keep).
+2. Still over, `remote` calls `ProviderRouter::compact_if_supported` on the
+   round's model (only `openai-response`, `openai-codex`, and `grok-build`
+   advertise `/responses/compact`) and persists the folded items behind
+   `HYA_COMPACTED_CONTEXT` + `<<<RESPONSES_COMPACT_ITEMS>>>` via
    `format_responses_compact_system`; later `/responses` requests re-inject
-   the items verbatim.
-4. `soft` folds the prefix through the host summarizer (`ModelSummarizer`) behind the
-   same marker; `snapcompact` commits a local deterministic archive of the
-   folded prefix (no model call); `handoff` commits a model-written handoff
-   document over the whole transcript. All three emit `ContextCompacted`
-   with their own strategy (`local_summarizer` / `snap_compact` / `handoff`).
-5. `shake` evicts stale completed tool outputs to `artifact://` handles
-   (logged in `ContextEvicted.parts`, idempotent, `keep_recent` protected; a 512-byte floor
-   keeps bodies that cost more to reference than to keep) and emits
-   `ContextEvicted` whenever it saved tokens — including when the saving
-   alone did not suffice and the walk escalated.
+   the items verbatim. No compact support or a failed call skips it.
+3. Still over after re-estimating the re-read projection, the kernel's own
+   Rewrite removes everything before the current step
+   (`ContextCompacted { strategy: rewrite }`).
 
-Every fold is persisted behind the `HYA_COMPACTED_CONTEXT` marker, and
-`compacted_messages` (`engine/turn/messages.rs`) drops pre-marker history on
-later requests. `previous_summary` reads the marker-prefixed body so the
-next fold anchors on it — including snapcompact archives and handoff
-documents.
-
-The CLI exposes local compact via `/compact` (`engine/summary.rs`, which
-also writes the marker); the v1 `SummarizeSession` rpc persists the same
-native summary shape.
+The bundle records `ContextStatus` every round. `/compact` and the v1
+`SummarizeSession` rpc (`engine/summary.rs`) try `remote`, then the kernel's
+Rewrite anchored on the newest assistant message, and return the marker.
 
 ## Session Titles
 
@@ -1294,9 +1266,7 @@ without a special case.
 
 | Id | Use |
 | --- | --- |
-| `hya-compaction` | Over-threshold context compact |
 | `hya-title` | Auto session title |
-| `hya-summary` | Explicit summarize path |
 
 Callers cannot pass an arbitrary agent id into these seams.
 

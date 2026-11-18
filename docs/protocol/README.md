@@ -543,22 +543,24 @@ foldedCount, manual }`: `message` is the system message holding the summary
 it, and `manual` is true for a client-requested `CompactSession` (or
 `SummarizeSession`, which compacts the same way) and false when the context
 crossed its threshold mid-turn. `strategy` is a stable snake_case name:
-`native` (provider-native compaction), `local_summarizer` (a model-written
-summary; also every manual compaction), `snap_compact` (a local dense
-archive, no model call), `handoff` (a model-written handoff document), or
-`rewrite` (a kernel rewrite: earlier steps replaced by a summary).
+`native` (provider-native compaction) or `rewrite` (the kernel's Rewrite:
+everything before the current step removed behind a marker that repeats the
+removed user messages). Older logs also carry `local_summarizer` (a
+model-written summary), `snap_compact` (a local dense archive), and
+`handoff` (a model-written handoff document).
 The record is in `ListEvents` too, so a transcript read can place the
 divider.
 
 `POST /v1/sessions/{id}/compact` (`CompactSession`) answers
 `{ compactedUntilSeq, strategy }` with the same `strategy` name the recorded
-`compactionApplied` carries (`local_summarizer`). The request's `untilSeq` is
-deprecated and ignored: a manual compaction always folds the whole
-transcript at the head, and `compactedUntilSeq` reports the watermark
-reached. Without a configured summarizer the call is `503 unavailable`.
+`compactionApplied` carries (`native` on a route with native compaction,
+otherwise `rewrite`). The request's `untilSeq` is deprecated and ignored:
+the kernel's Rewrite keeps the newest turn's user message and removes the
+rest, and `compactedUntilSeq` reports the watermark reached. A session with
+nothing to remove answers `invalid_argument` (`nothing to summarize`).
 
 ```json
-{ "event": { "seq": "40", "session": "hysec_...", "compactionApplied": { "untilSeq": "40", "strategy": "local_summarizer", "message": "msg_...", "foldedCount": 12, "manual": true } } }
+{ "event": { "seq": "40", "session": "hysec_...", "compactionApplied": { "untilSeq": "40", "strategy": "rewrite", "message": "msg_...", "foldedCount": 12, "manual": true } } }
 ```
 
 ## Prompt attachments (images)

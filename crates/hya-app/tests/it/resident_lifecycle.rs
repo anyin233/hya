@@ -3288,6 +3288,17 @@ async fn m46_in_episode_compaction_does_not_replace_the_handoff_goal() {
         .provider
         .script(vec![Round::unfinished("latest episode state")]);
     h.mail(&handle, later).await.unwrap();
+    // The rewrite marker sits before the kept user message, so the episode's
+    // last message is still the earlier finished answer: wait for the new one.
+    h.until(child, |p| {
+        p.session.messages.iter().any(|m| {
+            m.finish.is_some()
+                && m.parts.iter().any(|part| {
+                    matches!(part, hya_proto::PartProjection::Text { text, .. } if text == "latest episode state")
+                })
+        })
+    })
+    .await;
     h.idle(child, &handle).await;
     output(&h.tool("archive", json!({"target": handle})).await);
     let handoff = h
@@ -3307,7 +3318,9 @@ async fn m46_in_episode_compaction_does_not_replace_the_handoff_goal() {
     assert!(
         handoff
             .doc
-            .contains("2. Current state - latest episode state")
+            .contains("2. Current state - latest episode state"),
+        "{}",
+        handoff.doc
     );
 }
 
