@@ -16,6 +16,10 @@
 //!   a file that was clean before is read back from the `HEAD` tree, a dirty
 //!   one from the in-memory capture taken before the command. Paths under the
 //!   workdir's `.hya/` (tool artifacts) are skipped.
+//!   With or without Git, every file the session knows (`session.files`) is
+//!   stat'ed after the command; a changed stamp is that command's own
+//!   observation (`FilesObserved { external: false }`), so a shell edit
+//!   outside Git is never reported as an outside change.
 //!
 //! Limits (no unbounded growth): a file larger than [`MAX_FILE_BYTES`] is
 //! recorded as `omitted` (`too_large`); a session keeps at most
@@ -81,8 +85,8 @@ enum Capture {
     },
     /// Known target paths (write / edit / apply_patch).
     Paths(Vec<(PathBuf, Prior)>),
-    /// A bash command inside a git work tree.
-    Git(Box<GitCapture>),
+    /// A bash command; `Some` inside a git work tree.
+    Shell(Option<Box<GitCapture>>),
 }
 
 #[derive(Debug)]
@@ -152,10 +156,9 @@ impl FileCapture {
     }
 
     async fn git(cwd: &Path, workdir: &Path) -> Self {
-        Self(match GitCapture::before(cwd, workdir).await {
-            Some(capture) => Capture::Git(Box::new(capture)),
-            None => Capture::None,
-        })
+        Self(Capture::Shell(
+            GitCapture::before(cwd, workdir).await.map(Box::new),
+        ))
     }
 
     /// Return the revert snapshot and stamps once the tool has ended.
@@ -211,10 +214,19 @@ impl FileCapture {
                 }
                 (changed, false)
             }
-            Capture::Git(capture) => {
-                let changed = capture.after().await;
+            Capture::Shell(capture) => {
+                let changed = match capture {
+                    Some(capture) => capture.after().await,
+                    None => Vec::new(),
+                };
                 for (path, _) in &changed {
                     if let Some(file) = stamp(path).await {
+                        stamps.push(file);
+                    }
+                }
+                let known = store.read_projection_shared(session).await?;
+                for file in external_changes(&known.session.files).await {
+                    if !stamps.iter().any(|stamp| stamp.path == file.path) {
                         stamps.push(file);
                     }
                 }
