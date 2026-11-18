@@ -1,14 +1,5 @@
-# Unreleased
+# 0.48.0-dev.5
 
 - `bash` now stamps every file the session knows after each call, with or without Git, so a shell edit outside a Git work tree is recorded as the command's own observation instead of an outside change.
-- Goal checkpoint: once a round fills 60% of the model window, the kernel asks the model once (per context epoch) to bring its todo list up to date before a rewrite. The `todo` tool now asks for checkable end states and prompt status updates, and accepts ids as rendered (`#1`).
+- The kernel shows the goal checkpoint when context reaches 60% before a rewrite, asking the model to record in the todo list every result it still needs. It leaves later requests once the assistant produces another part or a rewrite occurs. A rewrite marker that carries a todo list states that results recorded there are still valid. The `todo` tool asks for checkable end states and results worth keeping, accepts ids as rendered (`#1`), and can change an item’s content and status in one operation or set its status on creation.
 - Headless `hya exec` no longer continues a run because todos are open; live subagents, unread mail and an announced next step still continue it.
-
-# 0.48.0-dev.4
-
-## Context is m, g and w (ADR-0034)
-
-- Each model round now records the view it read: `StepStarted` carries `view: {cut, request_sha256}`, the event-log position and the SHA-256 of the request built from it. Replaying the log to `cut` rebuilds a request with the same digest. Old logs without `view` still load. See [Request views](docs/kernel.md#request-views).
-- The todo list is a kernel tool. `todo` takes `{"ops": [...]}` (`add`, `edit`, `status`, `remove`), applies the batch atomically, and returns the full list; bare and full mode both offer it. The list is carried verbatim through every Rewrite and compaction marker, and output eviction keeps the newest `todo` result. The `hya/todo-tools` bundle and its `todo__read`, `todo__update_status` and `todo__update_content` tools are removed; the release ships thirteen first-party bundles. Lists in older sessions are recovered from their tool results.
-- Bare mode now records `FilesChanged` for `write`, `edit` and `bash` (Git work trees), like full mode. Both modes stamp the files the model read or changed (`FilesObserved`, mtime and size) and, before each round, record files changed by someone else (`external: true`) without putting anything into the request. See [Workspace file observations](docs/kernel.md#workspace-file-observations).
-- Full-mode sessions record their initial environment, `AGENTS.md` guidance and directory skill index on the first turn (`InitialContextRecorded`) and reuse it across rounds and restarts. Editing `AGENTS.md` mid-session no longer changes the system prompt: start a new session or have the agent read the file.

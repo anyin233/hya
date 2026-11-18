@@ -1,0 +1,8 @@
+# 0.48.0-dev.4
+
+## Context is m, g and w (ADR-0034)
+
+- Each model round now records the view it read: `StepStarted` carries `view: {cut, request_sha256}`, the event-log position and the SHA-256 of the request built from it. Replaying the log to `cut` rebuilds a request with the same digest. Old logs without `view` still load. See [Request views](../kernel.md#request-views).
+- The todo list is a kernel tool. `todo` takes `{"ops": [...]}` (`add`, `edit`, `status`, `remove`), applies the batch atomically, and returns the full list; bare and full mode both offer it. The list is carried verbatim through every Rewrite and compaction marker, and output eviction keeps the newest `todo` result. The `hya/todo-tools` bundle and its `todo__read`, `todo__update_status` and `todo__update_content` tools are removed; the release ships thirteen first-party bundles. Lists in older sessions are recovered from their tool results.
+- Bare mode now records `FilesChanged` for `write`, `edit` and `bash` (Git work trees), like full mode. Both modes stamp the files the model read or changed (`FilesObserved`, mtime and size) and, before each round, record files changed by someone else (`external: true`) without putting anything into the request. See [Workspace file observations](../kernel.md#workspace-file-observations).
+- Full-mode sessions record their initial environment, `AGENTS.md` guidance and directory skill index on the first turn (`InitialContextRecorded`) and reuse it across rounds and restarts. Editing `AGENTS.md` mid-session no longer changes the system prompt: start a new session or have the agent read the file.
