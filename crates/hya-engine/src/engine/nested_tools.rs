@@ -134,4 +134,22 @@ impl NestedTools for TurnNestedTools {
             .extend(stamps.into_iter().map(|file| (file.path.clone(), file)));
         result
     }
+
+    /// `"<session>:<file revision>"` after reconciling the session's record
+    /// under the turn's actor claim. Stamps of earlier nested calls are not in
+    /// the log yet; they count as known so they are not reported as external.
+    async fn workspace_state(&self) -> Result<Option<String>, ToolError> {
+        let pending = self.stamps.lock().await.clone();
+        let emit = super::stream_round::TurnEmit {
+            engine: &self.engine,
+            actor_claim: self.actor_claim.as_ref(),
+        };
+        let revision = self
+            .engine
+            .workspace_watches
+            .reconcile(&self.engine.store, &emit, self.session, pending)
+            .await
+            .map_err(core_error)?;
+        Ok(revision.map(|revision| format!("{}:{revision}", self.session)))
+    }
 }

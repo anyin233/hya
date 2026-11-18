@@ -4,6 +4,8 @@
 //! nested call is authorized like a model call of that tool and its file
 //! changes are recorded against the calling tool call; it emits no tool events
 //! of its own and runs with a disconnected plane, so nesting is one level deep.
+//! The plane also carries the calling turn's workspace revision
+//! (`workspace.state`).
 
 use std::sync::Arc;
 
@@ -20,6 +22,9 @@ pub trait NestedTools: Send + Sync {
     fn list(&self) -> Vec<ToolSchema>;
     /// Run one tool as part of the calling tool call.
     async fn call(&self, name: &str, input: Value) -> Result<Value, ToolError>;
+    /// Reconcile the calling session's workspace record and return its
+    /// session-scoped revision; `None` when the record cannot see new files.
+    async fn workspace_state(&self) -> Result<Option<String>, ToolError>;
 }
 
 /// Call-scoped access to the calling agent's other tools.
@@ -67,6 +72,18 @@ impl NestedToolPlane {
             .as_ref()
             .ok_or_else(|| ToolError::Other("nested tool calls are unavailable".to_string()))?;
         tools.call(name, input).await
+    }
+
+    /// The calling session's workspace revision; `None` when disconnected.
+    ///
+    /// # Errors
+    ///
+    /// The engine's reconcile error.
+    pub async fn workspace_state(&self) -> Result<Option<String>, ToolError> {
+        match &self.tools {
+            Some(tools) => tools.workspace_state().await,
+            None => Ok(None),
+        }
     }
 }
 

@@ -67,5 +67,4 @@ mod usage;
 mod usage_attribution;
 mod wait;
 mod workflow;
-mod workspace_state;
 mod worktree_lifecycle;
