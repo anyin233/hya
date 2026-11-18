@@ -1252,6 +1252,7 @@ mod tests {
                 session: SessionId::new(),
                 message,
                 step,
+                view: None,
             },
         });
     }

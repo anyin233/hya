@@ -4,6 +4,29 @@
 use hya_proto::{Envelope, Event, EventSeq, MessageId, PartId, Projection, Role, SessionId};
 
 #[test]
+fn legacy_step_started_has_no_view() {
+    let session = SessionId::new();
+    let message = MessageId::new();
+    let old = serde_json::json!({
+        "type": "step_started",
+        "session": session,
+        "message": message,
+        "step": 2
+    });
+    let event: Event = serde_json::from_value(old.clone()).unwrap();
+    assert_eq!(
+        event,
+        Event::StepStarted {
+            session,
+            message,
+            step: 2,
+            view: None,
+        }
+    );
+    assert_eq!(serde_json::to_value(event).unwrap(), old);
+}
+
+#[test]
 fn step_boundary_survives_snapshot_resume_and_prior_part_deletion() {
     let session = SessionId::new();
     let message = MessageId::new();
@@ -21,6 +44,7 @@ fn step_boundary_survives_snapshot_resume_and_prior_part_deletion() {
             session,
             message,
             step: 0,
+            view: None,
         },
         Event::TextStart {
             session,
@@ -31,6 +55,7 @@ fn step_boundary_survives_snapshot_resume_and_prior_part_deletion() {
             session,
             message,
             step: 1,
+            view: None,
         },
         Event::TextStart {
             session,

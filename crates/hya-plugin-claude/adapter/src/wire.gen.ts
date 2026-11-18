@@ -322,6 +322,7 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly session: SessionId
   readonly message: MessageId
   readonly step: number
+  readonly view?: ViewRef | null
 }) |
 ({ readonly type: "step_finished" } & {
   readonly session: SessionId
@@ -966,6 +967,11 @@ export type VerifierVerdictWire = {
   readonly reason?: string
 }
 
+export type ViewRef = {
+  readonly cut: EventSeq
+  readonly request_sha256: string
+}
+
 export type WireCompletionRequest = {
   readonly model: ModelRef
   readonly system?: string | null
@@ -1201,7 +1207,7 @@ export function isEvent(value: unknown): value is Event {
     (isRecord(value) && value["type"] === "user_prompt_context_recorded" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("files" in value && (Array.isArray(value["files"]) && value["files"].every((item: unknown) => true))) && ("agents" in value && (Array.isArray(value["agents"]) && value["agents"].every((item: unknown) => true)))) ||
     (isRecord(value) && value["type"] === "message_finished" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("role" in value && isRole(value["role"])) && ("finish" in value && isFinishReason(value["finish"])) && (value["tokens"] === undefined || (value["tokens"] === null || isTokenUsage(value["tokens"]))) && (value["cause"] === undefined || (value["cause"] === null || isFinishCause(value["cause"])))) ||
     (isRecord(value) && value["type"] === "part_deleted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"]))) ||
-    (isRecord(value) && value["type"] === "step_started" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("step" in value && (typeof value["step"] === "number" && Number.isInteger(value["step"]) && value["step"] >= 0))) ||
+    (isRecord(value) && value["type"] === "step_started" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("step" in value && (typeof value["step"] === "number" && Number.isInteger(value["step"]) && value["step"] >= 0)) && (value["view"] === undefined || (value["view"] === null || isViewRef(value["view"])))) ||
     (isRecord(value) && value["type"] === "step_finished" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("step" in value && (typeof value["step"] === "number" && Number.isInteger(value["step"]) && value["step"] >= 0)) && (value["finish"] === undefined || isFinishReason(value["finish"]))) ||
     (isRecord(value) && value["type"] === "text_start" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"]))) ||
     (isRecord(value) && value["type"] === "text_delta" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"])) && ("delta" in value && typeof value["delta"] === "string")) ||
@@ -1544,6 +1550,10 @@ export function isUsagePurpose(value: unknown): value is UsagePurpose {
 
 export function isVerifierVerdictWire(value: unknown): value is VerifierVerdictWire {
   return isRecord(value) && ("score" in value && (typeof value["score"] === "number" && Number.isInteger(value["score"]) && value["score"] >= 0)) && ("satisfied" in value && typeof value["satisfied"] === "boolean") && ("evidence_quality" in value && isEvidenceQualityWire(value["evidence_quality"])) && (value["critical_gaps"] === undefined || (Array.isArray(value["critical_gaps"]) && value["critical_gaps"].every((item: unknown) => typeof item === "string"))) && (value["iteration_summary"] === undefined || typeof value["iteration_summary"] === "string") && (value["reason"] === undefined || typeof value["reason"] === "string")
+}
+
+export function isViewRef(value: unknown): value is ViewRef {
+  return isRecord(value) && ("cut" in value && isEventSeq(value["cut"])) && ("request_sha256" in value && typeof value["request_sha256"] === "string")
 }
 
 export function isWireCompletionRequest(value: unknown): value is WireCompletionRequest {

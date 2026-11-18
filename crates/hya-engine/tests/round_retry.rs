@@ -10,9 +10,11 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use futures::stream;
+use hya_engine::kernel::{self, View, request::AttachmentData};
 use hya_engine::{AgentSpec, CoreError, CreateSession, EventBus, SessionEngine};
 use hya_proto::{
-    AgentName, Event, FinishReason, MessageId, ModelRef, PartId, SessionId, ToolCallId, ToolName,
+    AgentName, Event, FinishReason, MessageId, ModelRef, PartId, Projection, SessionId, ToolCallId,
+    ToolName,
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
@@ -168,6 +170,15 @@ async fn retries_reasoning_only_failure_and_commits_final_text() {
     assert_eq!(result.unwrap(), FinishReason::Stop);
     assert_eq!(*opens.lock().unwrap(), 2);
     let events = engine.store().replay(session).await.unwrap();
+    let views: Vec<_> = events
+        .iter()
+        .filter_map(|entry| match &entry.event {
+            Event::StepStarted { view, .. } => Some(view.as_ref().expect("attempt has a view")),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(views.len(), 2);
+    assert_eq!(views[0], views[1]);
     assert_eq!(
         events
             .iter()
@@ -219,6 +230,88 @@ async fn retries_reasoning_only_failure_and_commits_final_text() {
             engine.store().read_projection(session).await.unwrap()
         )
         .contains("final")
+    );
+}
+
+#[tokio::test]
+async fn full_mode_request_replays_to_recorded_view() {
+    let provider = Arc::new(FakeProvider::scripted_turns(vec![vec![FakeStep::Text(
+        "done".into(),
+    )]]));
+    let engine = SessionEngine::new(
+        SessionStore::connect_memory().await.unwrap(),
+        Arc::new(ProviderRouter::new().with(provider.clone())),
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        PermissionPlane::new(PermissionRules::default()).0,
+        EventBus::default(),
+    );
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "full replay system prompt".into(),
+        workdir: PathBuf::from("/tmp"),
+        reasoning: None,
+    };
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: agent.name.clone(),
+            model: agent.model.clone(),
+            workdir: agent.workdir.display().to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    engine
+        .admit_user_prompt(session, "go".into())
+        .await
+        .unwrap();
+    assert_eq!(
+        engine
+            .run_turn(session, &agent, CancellationToken::new())
+            .await
+            .unwrap(),
+        FinishReason::Stop
+    );
+    let log = engine.store().replay(session).await.unwrap();
+    let (index, recorded) = log
+        .iter()
+        .enumerate()
+        .find_map(|(index, entry)| match &entry.event {
+            Event::StepStarted { view, .. } => {
+                Some((index, view.as_ref().expect("step has a view")))
+            }
+            _ => None,
+        })
+        .expect("one provider step");
+    assert!(recorded.cut < log[index].seq);
+    let end = log.partition_point(|entry| entry.seq <= recorded.cut);
+    let projection = Projection::from_events(&log[..end]);
+    let view = View {
+        projection: &projection,
+    };
+    assert_eq!(view.cut(), recorded.cut);
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 1);
+    let sent = &requests[0];
+    // The full harness's resolved prompt and schemas are inputs to replay.
+    let rebuilt = kernel::request::request(
+        &view,
+        sent.system.as_deref().expect("full-mode system prompt"),
+        sent.tools.clone(),
+        &agent.model,
+        &agent.name,
+        &AttachmentData::new(),
+        None,
+    );
+    assert_eq!(
+        kernel::request::request_sha256(&rebuilt).unwrap(),
+        recorded.request_sha256
+    );
+    assert_eq!(
+        kernel::request::request_sha256(sent).unwrap(),
+        recorded.request_sha256
     );
 }
 

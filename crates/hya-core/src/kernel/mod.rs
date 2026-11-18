@@ -1,8 +1,7 @@
 //! The three-primitive kernel (ADR-0033): model append, tool append, and
 //! rewrite over the event log.
 //!
-//! The live Context is the session projection; every request is
-//! [`request::request`] of it, and every change to it is an event.
+//! Each round reads a [`View`] of the session projection to build its request.
 
 /// The kernel's minimal system prompt.
 pub mod prompt;
@@ -12,11 +11,13 @@ mod rewrite;
 pub mod round;
 /// The kernel's five tools.
 pub mod tools;
+mod view;
 
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use hya_proto::event::ViewRef;
 use hya_proto::{
     AgentName, Envelope, Event, EventSeq, FinishReason, Message, MessageId, ModelRef, Projection,
     SessionId, ToolSchema,
@@ -34,6 +35,7 @@ use crate::error::CoreError;
 pub use rewrite::HarnessRewriter;
 use rewrite::Initiator;
 pub use round::{CompleteText, Failure, Round, ToolCall};
+pub use view::View;
 
 /// Agent name the kernel renders assistant messages with in requests.
 pub const AGENT: &str = "kernel";
@@ -121,8 +123,8 @@ pub trait Harness: ToolGate {
     /// Rewrite the Context before the round `projection` would send, if
     /// needed; `true` when the log changed.
     async fn before_round(&mut self, projection: &Projection) -> Result<bool, CoreError>;
-    /// The round's request for `projection`.
-    async fn request(&mut self, projection: &Projection) -> Result<CompletionRequest, CoreError>;
+    /// The round's request for `view`.
+    async fn request(&mut self, view: &View<'_>) -> Result<CompletionRequest, CoreError>;
     /// Open `request`'s stream and name the model serving it; `None` when a
     /// cancel stopped the opening.
     async fn open(
@@ -249,9 +251,9 @@ impl Harness for Bare<'_> {
         Ok(HarnessRewriter.before_round(cx).await?)
     }
 
-    async fn request(&mut self, projection: &Projection) -> Result<CompletionRequest, CoreError> {
+    async fn request(&mut self, view: &View<'_>) -> Result<CompletionRequest, CoreError> {
         Ok(request::request(
-            projection,
+            view,
             self.system,
             self.schemas.clone(),
             self.model,
@@ -431,7 +433,14 @@ pub async fn drive(
             }
             projection = store.read_projection_shared(session).await?;
         }
-        let req = harness.request(&projection).await?;
+        let view = View {
+            projection: &projection,
+        };
+        let req = harness.request(&view).await?;
+        let view_ref = ViewRef {
+            cut: view.cut(),
+            request_sha256: request::request_sha256(&req)?,
+        };
         drop(projection);
         let round = loop {
             let Some((stream, served)) = harness.open(&req).await? else {
@@ -443,6 +452,7 @@ pub async fn drive(
                     session,
                     message,
                     step,
+                    view: Some(view_ref.clone()),
                 }],
             )
             .await?;
