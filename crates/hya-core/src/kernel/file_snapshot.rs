@@ -16,10 +16,8 @@
 //!   a file that was clean before is read back from the `HEAD` tree, a dirty
 //!   one from the in-memory capture taken before the command. Paths under the
 //!   workdir's `.hya/` (tool artifacts) are skipped.
-//!   With or without Git, every file the session knows (`session.files`) is
-//!   stat'ed after the command; a changed stamp is that command's own
-//!   observation (`FilesObserved { external: false }`), so a shell edit
-//!   outside Git is never reported as an outside change.
+//!   A completed shell samples workspace changes as its own observations
+//!   (`FilesObserved { external: false }`) independently of Git revert capture.
 //!
 //! Limits (no unbounded growth): a file larger than [`MAX_FILE_BYTES`] is
 //! recorded as `omitted` (`too_large`); a session keeps at most
@@ -170,6 +168,46 @@ impl FileCapture {
         message: MessageId,
         call: ToolCallId,
         output: Option<&Value>,
+        workspace: (&super::WorkspaceWatches, &Path),
+    ) -> Result<(Option<Event>, Vec<FileStamp>), CoreError> {
+        if matches!(self.0, Capture::None) {
+            return Ok((None, Vec::new()));
+        }
+        let (watches, workdir) = workspace;
+        let mut watch = if matches!(self.0, Capture::Shell(_)) {
+            watches
+                .changes(
+                    store,
+                    session,
+                    store.read_projection_shared(session).await?,
+                    false,
+                )
+                .await
+        } else {
+            watches.tool_cut(workdir, session).await
+        };
+        let (event, stamps) = self
+            .finish_at(
+                store,
+                session,
+                message,
+                call,
+                output,
+                std::mem::take(&mut watch.files),
+            )
+            .await?;
+        watch.tool_observed(&stamps);
+        Ok((event, stamps))
+    }
+
+    async fn finish_at(
+        self,
+        store: &SessionStore,
+        session: SessionId,
+        message: MessageId,
+        call: ToolCallId,
+        output: Option<&Value>,
+        shell_changes: Vec<FileStamp>,
     ) -> Result<(Option<Event>, Vec<FileStamp>), CoreError> {
         let mut stamps = Vec::new();
         let (changed, observed) = match self.0 {
@@ -224,12 +262,12 @@ impl FileCapture {
                         stamps.push(file);
                     }
                 }
-                let known = store.read_projection_shared(session).await?;
-                for file in external_changes(&known.session.files).await {
-                    if !stamps.iter().any(|stamp| stamp.path == file.path) {
-                        stamps.push(file);
-                    }
-                }
+                let captured: BTreeSet<_> = stamps.iter().map(|s| s.path.clone()).collect();
+                stamps.extend(
+                    shell_changes
+                        .into_iter()
+                        .filter(|s| !captured.contains(&s.path)),
+                );
                 (changed, true)
             }
         };
@@ -264,7 +302,19 @@ fn text<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
 /// Observe a path after tool execution or before the next request.
 async fn stamp(path: &Path) -> Option<FileStamp> {
     let path = std::path::absolute(path).ok()?;
-    let (mtime_ns, size) = match tokio::fs::metadata(&path).await {
+    stamp_metadata(&path, tokio::fs::metadata(&path).await)
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn stamp_sync(path: &Path) -> Option<FileStamp> {
+    stamp_metadata(path, std::fs::metadata(path))
+}
+
+pub(super) fn stamp_metadata(
+    path: &Path,
+    meta: std::io::Result<std::fs::Metadata>,
+) -> Option<FileStamp> {
+    let (mtime_ns, size) = match meta {
         Ok(metadata) if metadata.is_file() => {
             let modified = metadata.modified().ok()?;
             let nanos = match modified.duration_since(UNIX_EPOCH) {
@@ -274,7 +324,14 @@ async fn stamp(path: &Path) -> Option<FileStamp> {
             (Some(i64::try_from(nanos).ok()?), Some(metadata.len()))
         }
         Ok(_) => (None, None),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (None, None),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            (None, None)
+        }
         Err(_) => return None,
     };
     Some(FileStamp {

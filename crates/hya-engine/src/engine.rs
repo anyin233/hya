@@ -358,6 +358,7 @@ impl hya_tool::WorkflowRequestSink for BoundWorkflowSink {
 ///
 /// Clone shares execution handles and snapshots the current resource bindings.
 pub struct SessionEngine {
+    workspace_watches: hya_core::kernel::WorkspaceWatches,
     store: SessionStore,
     base_system_prompt: String,
     pure_context: bool,
@@ -422,6 +423,7 @@ pub struct SessionEngine {
 impl Clone for SessionEngine {
     fn clone(&self) -> Self {
         Self {
+            workspace_watches: self.workspace_watches.clone(),
             store: self.store.clone(),
             base_system_prompt: self.base_system_prompt.clone(),
             pure_context: self.pure_context,
@@ -600,6 +602,7 @@ impl SessionEngine {
             ))
         });
         let engine = Self {
+            workspace_watches: Default::default(),
             store,
             providers: RwLock::new(providers),
             base_system_prompt: String::new(),

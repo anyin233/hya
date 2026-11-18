@@ -253,6 +253,7 @@ impl TurnToolGate<'_> {
             message,
             tc.call,
             result.as_ref().ok(),
+            (&engine.workspace_watches, binding.workdir()),
         ))
         .await?;
         if let Some(changed) = changed {

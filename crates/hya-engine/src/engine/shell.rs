@@ -521,6 +521,7 @@ impl SessionEngine {
             shell_part.message,
             shell_part.call,
             result.as_ref().ok(),
+            (&self.workspace_watches, binding.workdir()),
         ))
         .await?;
         let observed = super::file_snapshot::observation(session, false, stamps);

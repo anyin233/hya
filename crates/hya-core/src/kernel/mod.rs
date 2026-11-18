@@ -14,6 +14,8 @@ pub mod round;
 /// The kernel's six tools.
 pub mod tools;
 mod view;
+mod workspace;
+pub use workspace::WorkspaceWatches;
 
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -184,7 +186,14 @@ impl ToolGate for Bare<'_> {
             ..
         } = *self.scope;
         let (changed, stamps) = capture
-            .finish(store, session, message, call.call, outcome.as_ref().ok())
+            .finish(
+                store,
+                session,
+                message,
+                call.call,
+                outcome.as_ref().ok(),
+                (self.scope.watches, &self.ctx.workdir),
+            )
             .await?;
         let mut events = vec![tool_event(session, message, &call, outcome, time_ms)];
         events.extend(changed);
@@ -305,6 +314,8 @@ impl Harness for Bare<'_> {
 /// The run a round belongs to. As a [`SessionLog`] it reads the store and
 /// appends through the run's [`Emit`].
 pub struct Scope<'a> {
+    /// Runtime-owned workspace observers shared across turns.
+    pub watches: &'a WorkspaceWatches,
     /// Session event log.
     pub store: &'a SessionStore,
     /// Event sink.
@@ -381,6 +392,14 @@ async fn execute_calls(
 /// Returns that round's finish, or `Cancelled`. The caller finishes the
 /// assistant message. No retries, fallback, concurrency, or step cap.
 pub async fn run(run: Run<'_>) -> Result<FinishReason, CoreError> {
+    run_with_watches(run, &WorkspaceWatches::default()).await
+}
+
+/// Run a bare turn with workspace watches retained across calls.
+pub async fn run_with_watches(
+    run: Run<'_>,
+    watches: &WorkspaceWatches,
+) -> Result<FinishReason, CoreError> {
     let Run {
         store,
         emit,
@@ -394,6 +413,7 @@ pub async fn run(run: Run<'_>) -> Result<FinishReason, CoreError> {
         cancel,
     } = run;
     let scope = Scope {
+        watches,
         store,
         emit,
         complete: None,
@@ -448,11 +468,16 @@ pub async fn drive(
             }
             projection = store.read_projection_shared(session).await?;
         }
-        let changes = file_snapshot::external_changes(&projection.session.files).await;
+        let mut batch = scope
+            .watches
+            .changes(store, session, projection.clone(), true)
+            .await;
+        let changes = std::mem::take(&mut batch.files);
         if let Some(event) = file_snapshot::observation(session, true, changes) {
             emit.emit(session, vec![event]).await?;
             projection = store.read_projection_shared(session).await?;
         }
+        batch.committed();
         let view = View {
             projection: &projection,
         };

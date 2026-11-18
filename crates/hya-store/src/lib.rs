@@ -371,6 +371,11 @@ pub struct ProjectActivityFile {
 }
 
 impl SessionStore {
+    /// On-disk database and runtime files, when this store is file-backed.
+    pub fn paths(&self) -> Option<&DatabasePaths> {
+        self.runtime_owner.paths.as_ref()
+    }
+
     /// Open a plain filesystem path (initialize the schema and enable WAL), or
     /// `""` / `":memory:"` with the keeper-backed in-memory mode.
     /// This does not make the caller a runtime owner; runtime writers use
