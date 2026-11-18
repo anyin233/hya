@@ -255,6 +255,12 @@ trusted identities:
 In-tree sources are searched in the `presets`, `first-party`, and `internal`
 groups, in that order.
 
+The four `hya/base-tools` tools `read`, `write`, `edit`, and `bash` replace
+the kernel's built-in tools of the same names in full mode; the kernel's
+versions run only in `hya exec --bare` ([Kernel](kernel.md#differences-from-full-mode)).
+The kernel's `rewrite` and `todo` stay kernel-run in both modes, and no
+bundle tool or alias may take either name.
+
 The former `hya/subagents` bundle and `hya-release` agent have been removed.
 
 `first_party_source` picks one source per identity:

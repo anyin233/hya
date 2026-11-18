@@ -433,6 +433,24 @@ mod tests {
         }
     }
 
+    /// The kernel loop handles `rewrite` and `todo` calls by name, so no other
+    /// tool may be offered under either name.
+    #[test]
+    fn a_tool_cannot_be_offered_under_a_kernel_tool_name() {
+        for name in ["rewrite", "todo"] {
+            let Err(error) = bundle_advertise_view(&format!(
+                "resource_view: {{ allow: ['harness:tool/bash'], aliases: {{ {name}: 'harness:tool/bash' }} }}"
+            )) else {
+                panic!("an alias named {name} must not compile");
+            };
+            let message = error.to_string();
+            assert!(
+                message.contains(&format!("`{name}` is reserved")),
+                "{message}"
+            );
+        }
+    }
+
     /// Pin explicit overrides, the unsuffixed default, and no silent
     /// inheritance for an invalid variant.
     #[test]
