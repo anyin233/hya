@@ -257,8 +257,8 @@ bunx playwright test e2e/<spec>.ts
 ```
 
 See [Browser-rendered TUI](tui-web.md) for the harness API. CI runs the full
-suite (plus the `packages/hya-tui` and adapter typecheck/test above) in the
-`tui` job of [`ci.yml`](../.github/workflows/ci.yml); see
+suite in the `tui` job of [`ci.yml`](../.github/workflows/ci.yml) and the
+`packages/hya-tui` and adapter typecheck/test above in its `frontend` job; see
 [tui-web.md#ci](tui-web.md#ci).
 
 ## Version bumps
