@@ -37,7 +37,6 @@ fn builtin_prompt(id: &str) -> &'static str {
 const ROOT_PROMPT: &str = "ROOT_AGENT_SYSTEM_PROMPT_MUST_NOT_BE_COMPACTION";
 const HARDCODED_TITLE: &str =
     "You are a title generator. Output only a concise single-line conversation title";
-const HARDCODED_COMPACTION: &str = "You compress conversation history. No tools.";
 
 struct CaptureProvider {
     requests: Mutex<Vec<CompletionRequest>>,
@@ -114,6 +113,7 @@ impl Provider for NativeCompactProvider {
         Some(Capabilities {
             streaming_tool_calls: true,
             reasoning_request: true,
+            max_context: 30_000,
             ..Capabilities::default()
         })
     }
@@ -264,9 +264,7 @@ async fn engine_with(
         engine = engine.with_compaction(
             summarizer,
             CompactionConfig {
-                token_threshold: 1,
                 keep_recent: 1,
-                context_fraction: 0.75,
                 ..CompactionConfig::default()
             },
         );
@@ -408,195 +406,6 @@ async fn auto_title_absent_bundle_model_preserves_session_fallback_model() {
 }
 
 #[tokio::test]
-async fn compaction_in_root_turn_uses_compaction_from_captured_binding_not_root_prompt() {
-    let workdir = support::TestDir::new("fixed-compaction-turn");
-    let provider = Arc::new(CaptureProvider {
-        requests: Mutex::new(Vec::new()),
-    });
-    let engine = engine_with_capture(
-        catalog(&[
-            AgentFixture::main("hya-main").can_spawn(&["hya-task"]),
-            AgentFixture::main("hya-task"),
-        ]),
-        provider.clone(),
-        true,
-    )
-    .await;
-    engine.runtime_registry().publish_agent_model_preferences(
-        [(
-            "hya-compaction".to_string(),
-            ModelRef::new("remembered/compaction"),
-        )]
-        .into_iter()
-        .collect(),
-    );
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("hya-main"),
-            model: ModelRef::new("session-model"),
-            workdir: workdir.path().to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    // Exceed keep_recent + token threshold so local ModelSummarizer runs.
-    for i in 0..4 {
-        engine
-            .admit_user_prompt(session, format!("earlier detail {i} {}", "x".repeat(40)))
-            .await
-            .unwrap();
-    }
-
-    let finish = engine
-        .run_turn(
-            session,
-            &base_agent(workdir.path()),
-            CancellationToken::new(),
-        )
-        .await
-        .expect("root turn with compaction definition");
-    assert_eq!(finish, FinishReason::Stop);
-
-    let requests = provider.requests.lock().unwrap();
-    let compaction = requests
-        .iter()
-        .find(|req| req.system.as_deref() == Some(builtin_prompt("hya-compaction")))
-        .expect("compaction completion must use prepared Bundle system prompt");
-    assert!(
-        !compaction
-            .system
-            .as_deref()
-            .unwrap_or("")
-            .contains(HARDCODED_COMPACTION),
-        "hardcoded compaction system prompt must not be used"
-    );
-    assert_ne!(
-        compaction.system.as_deref(),
-        Some(ROOT_PROMPT),
-        "compaction must not reuse the root agent system prompt"
-    );
-    assert_eq!(compaction.model.as_str(), "remembered/compaction");
-    assert_eq!(
-        compaction.reasoning, None,
-        "a builtin system agent declares no reasoning effort"
-    );
-    assert!(compaction.tools.is_empty(), "compaction remains no-tools");
-}
-
-#[tokio::test]
-async fn summarize_session_exact_resolves_summary_from_one_captured_binding() {
-    let workdir = support::TestDir::new("fixed-summary-session");
-    let provider = Arc::new(CaptureProvider {
-        requests: Mutex::new(Vec::new()),
-    });
-    let engine = engine_with_capture(
-        catalog(&[AgentFixture::main("hya-main")]),
-        provider.clone(),
-        true,
-    )
-    .await;
-    engine.runtime_registry().publish_agent_model_preferences(
-        [(
-            "hya-summary".to_string(),
-            ModelRef::new("remembered/summary"),
-        )]
-        .into_iter()
-        .collect(),
-    );
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("hya-main"),
-            model: ModelRef::new("session-model"),
-            workdir: workdir.path().to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    engine
-        .admit_user_prompt(session, "implemented the feature".to_string())
-        .await
-        .unwrap();
-
-    let message = hya_proto::MessageId::new();
-    let part = PartId::new();
-    let call = hya_proto::ToolCallId::new();
-    engine
-        .store()
-        .append_events(
-            session,
-            vec![
-                Event::MessageStarted {
-                    session,
-                    message,
-                    role: Role::Assistant,
-                    agent: None,
-                    model: None,
-                },
-                Event::ToolCallRequested {
-                    session,
-                    message,
-                    part,
-                    call,
-                    name: hya_proto::ToolName::new("bash"),
-                    input: serde_json::json!({"command": "cargo test evidence"}),
-                },
-                Event::ToolResult {
-                    session,
-                    message,
-                    part,
-                    call,
-                    output: serde_json::json!({"stdout": "evidence tests passed"}),
-                    time_ms: 1,
-                },
-                Event::MessageFinished {
-                    session,
-                    message,
-                    role: Role::Assistant,
-                    finish: FinishReason::Stop,
-                    tokens: None,
-                    cause: None,
-                },
-            ],
-        )
-        .await
-        .unwrap();
-
-    engine
-        .summarize_session(session)
-        .await
-        .expect("summary definition present");
-
-    let handoff = engine.terminal_handoff(session).await.unwrap();
-    assert!(!handoff.degraded);
-    let requests = provider.requests.lock().unwrap();
-    let rendered = serde_json::to_string(&requests[0].messages).unwrap();
-    assert!(rendered.contains("cargo test evidence"), "{rendered}");
-    assert!(rendered.contains("evidence tests passed"), "{rendered}");
-    assert_eq!(requests.len(), 2, "summary and handoff completions");
-    let handoff_input = serde_json::to_string(&requests[1].messages).unwrap();
-    assert!(
-        handoff_input.contains("cargo test evidence"),
-        "{handoff_input}"
-    );
-    assert!(
-        handoff_input.contains("evidence tests passed"),
-        "{handoff_input}"
-    );
-    let req = &requests[0];
-    assert_eq!(req.system.as_deref(), Some(builtin_prompt("hya-summary")));
-    assert_eq!(req.model.as_str(), "remembered/summary");
-    assert_eq!(
-        req.reasoning, None,
-        "a builtin system agent declares no reasoning effort"
-    );
-    assert!(req.tools.is_empty());
-}
-
-#[tokio::test]
 async fn fixed_system_ids_remain_absent_from_ordinary_spawnable_roster() {
     let workdir = support::TestDir::new("fixed-roster");
     let provider = Arc::new(CaptureProvider {
@@ -621,7 +430,8 @@ async fn fixed_system_ids_remain_absent_from_ordinary_spawnable_roster() {
     // Built-ins spawn the whole ordinary set, so the roster is every
     // non-reserved agent rather than a hand-listed pair.
     assert!(names.contains(&"hya-scout") && names.contains(&"hya-task"));
-    for reserved in ["hya-compaction", "hya-title", "hya-summary"] {
+    {
+        let reserved = "hya-title";
         assert!(
             !names.contains(&reserved),
             "{reserved} must not appear in ordinary spawnable roster"
@@ -638,98 +448,16 @@ async fn fixed_system_ids_remain_absent_from_ordinary_spawnable_roster() {
     }
 }
 
+/// Over the threshold, the `remote` step folds the window with the route's
+/// native compaction, on the turn's model and without a system prompt; the
+/// request is then under the threshold and the kernel does not rewrite.
 #[tokio::test]
-async fn provider_native_compact_uses_compaction_prompt_not_root_and_session_model() {
-    // Owner requirement applies to the fixed compaction callsite for BOTH the
-    // provider-native compact path and the local ModelSummarizer fallback.
+async fn provider_native_compact_folds_on_the_turn_model() {
     let workdir = support::TestDir::new("fixed-native-compact-prompt");
     let provider = Arc::new(NativeCompactProvider {
         requests: Mutex::new(Vec::new()),
         compact_calls: Mutex::new(Vec::new()),
     });
-    let engine = engine_with(
-        catalog(&[AgentFixture::main("hya-main")]),
-        provider.clone() as Arc<dyn Provider>,
-        // Summarizer present only as unused fallback; native compact returns Some.
-        true,
-    )
-    .await;
-    engine.runtime_registry().publish_agent_model_preferences(
-        [(
-            "hya-compaction".to_string(),
-            ModelRef::new("remembered/native-compaction"),
-        )]
-        .into_iter()
-        .collect(),
-    );
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("hya-main"),
-            model: ModelRef::new("session-model"),
-            workdir: workdir.path().to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    for i in 0..4 {
-        engine
-            .admit_user_prompt(session, format!("earlier detail {i} {}", "x".repeat(40)))
-            .await
-            .unwrap();
-    }
-
-    let finish = engine
-        .run_turn(
-            session,
-            &base_agent(workdir.path()),
-            CancellationToken::new(),
-        )
-        .await
-        .expect("native compact with compaction definition");
-    assert_eq!(finish, FinishReason::Stop);
-
-    let compact_calls = provider.compact_calls.lock().unwrap();
-    assert_eq!(
-        compact_calls.len(),
-        1,
-        "exactly one native compact_responses call per over-threshold round"
-    );
-    let call = &compact_calls[0];
-    assert_eq!(
-        call.system.as_deref(),
-        Some(builtin_prompt("hya-compaction")),
-        "native compact must exact-resolve the fixed compaction prompt, not root"
-    );
-    assert_ne!(
-        call.system.as_deref(),
-        Some(ROOT_PROMPT),
-        "native compact must not reuse the root agent system prompt"
-    );
-    assert_eq!(
-        call.model.as_str(),
-        "remembered/native-compaction",
-        "provider-native compact uses the resolved Compaction Agent model"
-    );
-    // Local summarizer fallback must not run when native compact succeeds.
-    let stream_requests = provider.requests.lock().unwrap();
-    assert!(
-        stream_requests
-            .iter()
-            .all(|req| req.system.as_deref() != Some(builtin_prompt("hya-compaction"))),
-        "native path must not also invoke ModelSummarizer with compaction prompt"
-    );
-}
-
-#[tokio::test]
-async fn under_threshold_turn_does_not_require_or_lookup_fixed_compaction() {
-    let workdir = support::TestDir::new("fixed-under-threshold-no-lookup");
-    let provider = Arc::new(NativeCompactProvider {
-        requests: Mutex::new(Vec::new()),
-        compact_calls: Mutex::new(Vec::new()),
-    });
-    // No compaction/title/summary definitions in catalog — under threshold must still run.
     let engine = engine_with(
         catalog(&[AgentFixture::main("hya-main")]),
         provider.clone() as Arc<dyn Provider>,
@@ -747,10 +475,17 @@ async fn under_threshold_turn_does_not_require_or_lookup_fixed_compaction() {
         })
         .await
         .unwrap();
-    engine
-        .admit_user_prompt(session, "short".to_string())
-        .await
-        .unwrap();
+    // ~20k tokens of prompts put the request over the 30k window's 24k
+    // threshold; the native window replaces them.
+    let tokenizer = hya_engine::tokens::TokenAccounting::default();
+    let unit = "lorem ipsum dolor sit amet ".repeat(100);
+    let filler = unit.repeat(5_000 / tokenizer.tokenizer().count_text(&unit) + 1);
+    for i in 0..4 {
+        engine
+            .admit_user_prompt(session, format!("earlier detail {i} {filler}"))
+            .await
+            .unwrap();
+    }
 
     let finish = engine
         .run_turn(
@@ -759,30 +494,41 @@ async fn under_threshold_turn_does_not_require_or_lookup_fixed_compaction() {
             CancellationToken::new(),
         )
         .await
-        .expect("under-threshold turn must not require fixed compaction definition");
+        .expect("native compact turn");
     assert_eq!(finish, FinishReason::Stop);
-    assert!(
-        provider.compact_calls.lock().unwrap().is_empty(),
-        "under threshold must not call compact_responses"
-    );
-    assert_eq!(
-        provider.requests.lock().unwrap().len(),
-        1,
-        "exactly one ordinary completion stream under threshold"
-    );
+
+    {
+        let compact_calls = provider.compact_calls.lock().unwrap();
+        assert_eq!(compact_calls.len(), 1, "one native compact call");
+        assert_eq!(compact_calls[0].model, "session-model");
+        assert_eq!(compact_calls[0].system, None);
+    }
+    let strategies: Vec<_> = engine
+        .replay(session)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| match e.event {
+            Event::ContextCompacted { strategy, .. } => Some(strategy),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(strategies, [hya_proto::CompactionStrategy::Native]);
+    let requests = provider.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(format!("{:?}", requests[0].messages).contains("native-compacted-window"));
 }
 
 const ORDINARY_GUIDANCE_MARKER: &str = "ORDINARY_PROJECT_GUIDANCE_MUST_NOT_REACH_FIXED_SYSTEM";
 
 #[tokio::test]
-async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
+async fn fixed_title_excludes_ordinary_guidance_marker() {
     // Fixed system agents exact-resolve dedicated Bundle prompts only. Even when
     // project AGENTS.md (ordinary guidance source) is present in the workdir,
-    // title/summary/compaction must not include that marker.
+    // the title call must not include that marker.
     let workdir = support::TestDir::new("fixed-no-ordinary-guidance");
     std::fs::write(workdir.path().join("AGENTS.md"), ORDINARY_GUIDANCE_MARKER).unwrap();
 
-    // --- title ---
     let title_provider = Arc::new(CaptureProvider {
         requests: Mutex::new(Vec::new()),
     });
@@ -821,101 +567,6 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
             "title must not include ordinary project guidance: {system}"
         );
     }
-
-    // --- summary ---
-    let summary_provider = Arc::new(CaptureProvider {
-        requests: Mutex::new(Vec::new()),
-    });
-    let summary_engine = engine_with_capture(
-        catalog(&[AgentFixture::main("hya-main")]),
-        summary_provider.clone(),
-        true,
-    )
-    .await;
-    let summary_session = summary_engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("hya-main"),
-            model: ModelRef::new("session-model"),
-            workdir: workdir.path().to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    summary_engine
-        .admit_user_prompt(summary_session, "summarize me".to_string())
-        .await
-        .unwrap();
-    summary_engine
-        .summarize_session(summary_session)
-        .await
-        .expect("summary present");
-    {
-        let reqs = summary_provider.requests.lock().unwrap();
-        assert_eq!(reqs.len(), 1);
-        let system = reqs[0].system.as_deref().unwrap_or("");
-        assert_eq!(system, builtin_prompt("hya-summary"));
-        assert!(
-            !system.contains(ORDINARY_GUIDANCE_MARKER),
-            "summary must not include ordinary project guidance: {system}"
-        );
-    }
-
-    // --- compaction (local summarizer path under threshold=1) ---
-    let compaction_provider = Arc::new(CaptureProvider {
-        requests: Mutex::new(Vec::new()),
-    });
-    let compaction_engine = engine_with_capture(
-        catalog(&[AgentFixture::main("hya-main")]),
-        compaction_provider.clone(),
-        true,
-    )
-    .await;
-    let compaction_session = compaction_engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("hya-main"),
-            model: ModelRef::new("session-model"),
-            workdir: workdir.path().to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    for i in 0..8 {
-        compaction_engine
-            .admit_user_prompt(
-                compaction_session,
-                format!("bulk context line {i} with padding text for tokens"),
-            )
-            .await
-            .unwrap();
-    }
-    compaction_engine
-        .run_turn(
-            compaction_session,
-            &base_agent(workdir.path()),
-            CancellationToken::new(),
-        )
-        .await
-        .expect("compaction turn");
-    {
-        let reqs = compaction_provider.requests.lock().unwrap();
-        let compaction = reqs
-            .iter()
-            .find(|r| r.system.as_deref() == Some(builtin_prompt("hya-compaction")))
-            .expect("compaction completion must use fixed Bundle prompt");
-        let system = compaction.system.as_deref().unwrap_or("");
-        assert!(
-            !system.contains(ORDINARY_GUIDANCE_MARKER),
-            "compaction must not include ordinary project guidance: {system}"
-        );
-        assert!(
-            !system.contains(ROOT_PROMPT) || system == builtin_prompt("hya-compaction"),
-            "compaction must stay on fixed Bundle prompt only"
-        );
-    }
 }
 
 #[tokio::test]
@@ -929,7 +580,8 @@ async fn reserved_system_agents_are_always_resolvable_from_the_embedded_preset()
     let engine = engine_with_capture(catalog(&[]), provider, false).await;
     let binding = engine.bind_runtime(workdir.path()).unwrap();
 
-    for reserved in ["hya-compaction", "hya-title", "hya-summary"] {
+    {
+        let reserved = "hya-title";
         let definition = binding
             .resolve_agent(reserved)
             .unwrap_or_else(|| panic!("`{reserved}` must always resolve"));
@@ -1082,91 +734,6 @@ async fn title_generation_usage_is_attributed_to_the_session_with_title_purpose(
 }
 
 #[tokio::test]
-async fn compaction_usage_is_attributed_with_compaction_purpose() {
-    let workdir = support::TestDir::new("fixed-compaction-usage");
-    let engine = engine_with(
-        catalog(&[AgentFixture::main("hya-main")]),
-        Arc::new(UsageReportingProvider),
-        true,
-    )
-    .await;
-    engine.runtime_registry().publish_agent_model_preferences(
-        [
-            (
-                "hya-compaction".to_string(),
-                ModelRef::new("remembered/compaction"),
-            ),
-            (
-                "hya-summary".to_string(),
-                ModelRef::new("remembered/summary"),
-            ),
-        ]
-        .into_iter()
-        .collect(),
-    );
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("hya-main"),
-            model: ModelRef::new("session-model"),
-            workdir: workdir.path().to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    for i in 0..4 {
-        engine
-            .admit_user_prompt(session, format!("earlier detail {i} {}", "x".repeat(40)))
-            .await
-            .unwrap();
-    }
-
-    // In-turn compaction ladder (local summarizer), then the turn's own round.
-    let finish = engine
-        .run_turn(
-            session,
-            &base_agent(workdir.path()),
-            CancellationToken::new(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(finish, FinishReason::Stop);
-    // Explicit `/compact` summary.
-    engine.summarize_session(session).await.unwrap();
-
-    let records = side_call_records(&engine, session).await;
-    let compaction: Vec<_> = records
-        .iter()
-        .filter(|record| record.3 == hya_proto::UsagePurpose::Compaction)
-        .collect();
-    // The ladder may walk more than one summarizer rung while the tiny
-    // threshold stays exceeded; each call is billed and recorded.
-    assert!(compaction.len() >= 2, "{records:?}");
-    assert!(compaction.iter().all(|r| r.0.is_none() && r.1.is_none()));
-    let (summary, ladder) = compaction.split_last().unwrap();
-    assert!(
-        ladder
-            .iter()
-            .all(|r| r.2.as_str() == "remembered/compaction")
-    );
-    assert_eq!(summary.2.as_str(), "remembered/summary");
-    let turn: Vec<_> = records
-        .iter()
-        .filter(|record| record.3 == hya_proto::UsagePurpose::Turn)
-        .collect();
-    assert_eq!(turn.len(), 1);
-    assert_eq!(turn[0].2.as_str(), "session-model");
-
-    let usage = engine.read_projection(session).await.unwrap().session.usage;
-    assert_eq!(
-        usage.by_purpose[&hya_proto::UsagePurpose::Compaction].rounds,
-        compaction.len() as u64
-    );
-    assert_eq!(usage.by_model.len(), 3);
-}
-
-#[tokio::test]
 async fn manual_compaction_waits_for_turn_lease() {
     let workdir = support::TestDir::new("fixed-summary-session");
     let provider = Arc::new(CaptureProvider {
@@ -1178,14 +745,6 @@ async fn manual_compaction_waits_for_turn_lease() {
         true,
     )
     .await;
-    engine.runtime_registry().publish_agent_model_preferences(
-        [(
-            "hya-summary".to_string(),
-            ModelRef::new("remembered/summary"),
-        )]
-        .into_iter()
-        .collect(),
-    );
     let session = engine
         .create(CreateSession {
             parent: None,
@@ -1207,5 +766,10 @@ async fn manual_compaction_waits_for_turn_lease() {
     );
     assert!(provider.requests.lock().unwrap().is_empty());
     drop(lease);
-    summary.await.unwrap();
+    // Runs once the lease is free; the empty session has nothing to remove.
+    let error = summary.await.unwrap_err();
+    assert!(
+        error.to_string().contains("nothing to summarize"),
+        "{error}"
+    );
 }

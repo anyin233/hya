@@ -30,7 +30,8 @@ features out of the kernel ([Kernel](kernel.md)). Their sources live under
 `bundles/internal/<name>` (`bundle.yaml` plus a `native/` crate with
 `crate-type = ["rlib", "cdylib"]` that links only `hya-tool` and
 `hya-proto`), and `hya_bundle::INTERNAL_BUNDLES` lists them (`hya/compaction`,
-the [compaction ladder](compaction.md); every entry is also in
+the [context-reduction steps](compaction.md) the kernel runs before its own
+Rewrite; every entry is also in
 `FIRST_PARTY_BUNDLES`). Full mode loads them once per process, when the first
 `SessionEngine` is built, with `hya_core::bundles::load_internal()`, which calls
 `hya_tool::native_bundle::load(identity)` for each: identity `hya/<name>` maps
@@ -250,7 +251,7 @@ trusted identities:
 | `hya/goal-loop`, `hya/plan-impl-review` | `bundles/first-party/<name>` | First-party AgentSet and Workflow bundles |
 | `hya/basic-tui-components` | `bundles/first-party/basic-tui-components` | Built-in TUI Sessions, Todos, Projects and Context surfaces |
 | `hya/code-mode` | `bundles/first-party/code-mode` | The `code-mode__run` tool. Shipped disabled; `tools.code.mode` enables it ([Code mode](code-mode.md)) |
-| `hya/compaction` | `bundles/internal/compaction` | Internal bundle: the full-mode [compaction ladder](compaction.md) as a native rewriter |
+| `hya/compaction` | `bundles/internal/compaction` | Internal bundle: the full-mode [`shake` and `remote` steps](compaction.md) as a native rewriter extension |
 
 In-tree sources are searched in the `presets`, `first-party`, and `internal`
 groups, in that order.

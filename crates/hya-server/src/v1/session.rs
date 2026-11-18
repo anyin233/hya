@@ -646,20 +646,30 @@ async fn compact_session(
 ) -> Result<Json<pb::CompactSessionResponse>, V1Error> {
     let session = parse_session(&id)?;
     match st.engine.summarize_session(session).await {
-        Ok(_) => {
+        Ok(marker) => {
+            // The strategy the recorded `ContextCompacted` of the marker names.
+            let strategy = st
+                .engine
+                .replay(session)
+                .await?
+                .iter()
+                .rev()
+                .find_map(|envelope| match &envelope.event {
+                    hya_proto::Event::ContextCompacted {
+                        message, strategy, ..
+                    } if *message == marker => Some(*strategy),
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    V1Error::from(hya_engine::CoreError::Invalid(
+                        "compaction record missing".to_string(),
+                    ))
+                })?;
             let projection = st.engine.read_projection_shared(session).await?;
             Ok(Json(pb::CompactSessionResponse {
                 compacted_until_seq: projection.last_seq,
-                // `summarize_session` records a local-summarizer fold.
-                strategy: hya_proto::CompactionStrategy::LocalSummarizer
-                    .as_str()
-                    .to_owned(),
+                strategy: strategy.as_str().to_owned(),
             }))
-        }
-        Err(hya_engine::CoreError::Invalid(message)) if message == "summarizer not configured" => {
-            Err(V1Error::unavailable(
-                "compaction summarizer is not configured",
-            ))
         }
         Err(hya_engine::CoreError::Invalid(message)) if message == "session not found" => {
             Err(V1Error::session_not_found(&id))
@@ -679,9 +689,6 @@ async fn summarize_session(
         })),
         Err(hya_engine::CoreError::Invalid(message)) if message == "session not found" => {
             Err(V1Error::session_not_found(&id))
-        }
-        Err(hya_engine::CoreError::Invalid(message)) if message == "summarizer not configured" => {
-            Err(V1Error::unavailable("summarizer is not configured"))
         }
         Err(other) => Err(V1Error::from(other)),
     }

@@ -1,7 +1,8 @@
 //! The full mode's [`Harness`]: what a full-mode turn adds around the kernel
 //! loop. Before each round it re-validates the actor claim, rebinds a Root
 //! activation to a new runtime generation, resolves the round's model, and
-//! walks the compaction ladder; the request carries the agent's prompt,
+//! runs the kernel's context reduction with the internal bundles' extensions
+//! (`hya/compaction`); the request carries the agent's prompt,
 //! tools, and effort through `chat.params`; streams open through model
 //! fallback or the Workflow route under a governor permit; a round that
 //! failed before any output is retried; an accepted `report` ends the turn.
@@ -24,8 +25,8 @@ use super::super::roots::SessionWorkspace;
 use super::super::steer::SteerMailbox;
 use super::super::stream_round::TurnEmit;
 use super::super::{
-    AgentSpec, FixedSystemAgent, SessionEngine, agent_roster,
-    effective_agent_for_binding_with_sidecar_tools, session_workdir,
+    AgentSpec, SessionEngine, agent_roster, effective_agent_for_binding_with_sidecar_tools,
+    session_workdir,
 };
 use super::messages::{AttachmentData, prompt_digests, system_prompt};
 use super::rewrite_host::{HostErrors, TurnLog, TurnModels, TurnTranscript};
@@ -398,8 +399,8 @@ impl ToolGate for TurnHarness<'_> {
 #[async_trait]
 impl Harness for TurnHarness<'_> {
     /// Re-validate the actor claim, rebind (Root, after the first round),
-    /// resolve the round's model and attachments, then run the engine's
-    /// rewriter (the `hya/compaction` ladder).
+    /// resolve the round's model and attachments, then run the kernel's
+    /// context reduction with the engine's extensions (`hya/compaction`).
     async fn before_round(&mut self, projection: &Projection) -> Result<bool, CoreError> {
         let engine = self.engine;
         engine.validate_actor_claim(self.actor_claim).await?;
@@ -457,9 +458,6 @@ impl Harness for TurnHarness<'_> {
         };
         let models = TurnModels {
             engine,
-            actor_claim: self.actor_claim,
-            binding: &self.binding,
-            fold: FixedSystemAgent::Compaction,
             errors: &errors,
         };
         let cx = RewriteCtx {
@@ -469,6 +467,7 @@ impl Harness for TurnHarness<'_> {
             projection,
             window: engine.model_window(&self.model),
             overhead_tokens,
+            pressure: None,
             workdir: &workdir,
             config: &config,
             log: &log,
@@ -476,11 +475,9 @@ impl Harness for TurnHarness<'_> {
             models: Some(&models),
             hooks: Some(engine),
         };
-        let result = match engine.rewriter.before_round(cx).await {
-            Ok(false) => hya_core::kernel::goal_checkpoint(cx).await,
-            other => other,
-        };
-        result.map_err(|error| errors.into_error(error))
+        kernel::before_round(cx, &engine.rewriters)
+            .await
+            .map_err(|error| errors.into_error(error))
     }
 
     async fn request(&mut self, view: &View<'_>) -> Result<CompletionRequest, CoreError> {

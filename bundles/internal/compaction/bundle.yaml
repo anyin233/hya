@@ -14,10 +14,6 @@ extensions:
     - id: native-2
       path: native/src/evict.rs
     - id: native-3
-      path: native/src/fold.rs
-    - id: native-4
       path: native/src/ladder.rs
-    - id: native-5
+    - id: native-4
       path: native/src/lib.rs
-    - id: native-6
-      path: native/src/snap.rs

@@ -427,7 +427,7 @@ path = "crates/hya-e2e/tests/it/p41_code_mode.rs"
 
 [[scenario]]
 id = "T2.53"
-title = "headless exec: a single turn whose steps outgrow the window folds its old steps into the summary and finishes; later requests carry the summary, the prompt and the newest steps"
+title = "headless exec: a single turn whose steps outgrow the window has its old steps removed by the kernel rewrite and finishes; later requests carry the marker, the prompt and the newest steps"
 track = "P"
 path = "crates/hya-e2e/tests/it/p42_exec_step_fold.rs"
 

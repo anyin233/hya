@@ -45,7 +45,8 @@ async fn a_builtin_caller_reaches_every_ordinary_agent_but_no_reserved_one() {
         "role maps to mode on roster entries"
     );
 
-    for reserved in ["hya-compaction", "hya-title", "hya-summary"] {
+    {
+        let reserved = "hya-title";
         assert!(!names.contains(&reserved));
         assert!(binding.resolve_spawn("hya-main", reserved).is_err());
         assert!(

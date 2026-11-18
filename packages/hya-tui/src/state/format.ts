@@ -186,11 +186,11 @@ export const todoGlyphs: Record<string, string> = {
 
 /**
  * `CompactionApplied.strategy` (`docs/protocol/README.md` "Compaction") in
- * words: `native` (provider-native compaction), `local_summarizer` (a
- * model-written summary — also every manual `/compact`), `snap_compact` (a
- * local dense archive, no model call), `handoff` (a model-written handoff
- * document), or `rewrite` (a kernel rewrite: earlier steps replaced by a
- * summary); an unrecognized or missing name is shown as-is (or `unknown`).
+ * words: `native` (provider-native compaction) or `rewrite` (the kernel's
+ * Rewrite: earlier context removed behind a marker); older logs also carry
+ * `local_summarizer` (a model-written summary), `snap_compact` (a local dense
+ * archive), and `handoff` (a model-written handoff document). An
+ * unrecognized or missing name is shown as-is (or `unknown`).
  */
 export function strategyText(strategy: string | undefined): string {
   switch (strategy) {
@@ -205,7 +205,7 @@ export function strategyText(strategy: string | undefined): string {
 
 /**
  * A `CompactionApplied` transcript divider:
- * `── context compacted · 12 messages · manual · local summary ──` for a
+ * `── context compacted · 12 messages · manual · rewrite ──` for a
  * `/compact` (or `/summarize`), without `manual` for a mid-turn compaction;
  * the count is omitted when the event does not carry one. The strategy name
  * is always shown (`strategyText`) — manual and automatic compactions both
