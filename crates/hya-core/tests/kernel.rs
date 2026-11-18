@@ -23,6 +23,7 @@ use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 struct Fixture {
+    watches: kernel::WorkspaceWatches,
     store: SessionStore,
     provider: Arc<FakeProvider>,
     router: ProviderRouter,
@@ -62,6 +63,7 @@ async fn fixture_with_store(dir: PathBuf, provider: FakeProvider, store: Session
         .await
         .unwrap();
     Fixture {
+        watches: Default::default(),
         system: kernel::prompt::system_prompt(&dir),
         store,
         provider,
@@ -145,18 +147,21 @@ impl Fixture {
             publish,
         };
         let ctx = tool_ctx(&self.dir, cancel);
-        let finish = kernel::run(kernel::Run {
-            store: &self.store,
-            emit: &emit,
-            provider: &self.router,
-            model: &self.model,
-            system: &self.system,
-            tools: &self.tools,
-            ctx: &ctx,
-            session,
-            message,
-            cancel,
-        })
+        let finish = kernel::run_with_watches(
+            kernel::Run {
+                store: &self.store,
+                emit: &emit,
+                provider: &self.router,
+                model: &self.model,
+                system: &self.system,
+                tools: &self.tools,
+                ctx: &ctx,
+                session,
+                message,
+                cancel,
+            },
+            &self.watches,
+        )
         .await?;
         self.store
             .append_events(
@@ -982,12 +987,28 @@ async fn outside_change_to_read_file_is_logged_before_the_next_request() {
             _ => None,
         })
         .collect();
+    #[cfg(target_os = "linux")]
+    let external = {
+        let [(baseline_seq, baseline), change] = external.as_slice() else {
+            panic!("expected the initial W and one incremental event: {external:?}")
+        };
+        assert!(baseline_seq < &change.0);
+        assert_eq!(baseline.len(), 1);
+        assert_eq!(baseline[0].size, Some(3));
+        vec![*change]
+    };
     let [(seq, files)] = external.as_slice() else {
         panic!("expected one external event: {external:?}")
     };
-    let [file] = files.as_slice() else {
-        panic!("expected only the read file: {files:?}")
-    };
+    #[cfg(target_os = "linux")]
+    {
+        assert_eq!(files.len(), 2);
+        assert_eq!(Path::new(&files[1].path), fx.dir.join("b.txt"));
+        assert_eq!(files[1].size, Some(6));
+    }
+    #[cfg(not(target_os = "linux"))]
+    assert_eq!(files.len(), 1);
+    let file = &files[0];
     assert_eq!(Path::new(&file.path), a);
     assert_eq!(file.size, Some(14));
     let next = log.iter().find(|e| e.seq.0 == seq.0 + 1).unwrap();
@@ -1031,6 +1052,7 @@ async fn file_stamps_survive_reopening_the_database() {
         .unwrap();
     let session = fx.session;
     // Close all connections and discard the store's in-process projection.
+    fx.watches = Default::default();
     drop(fx.store);
     fx.store = SessionStore::connect(db).await.unwrap();
     std::fs::remove_file(&a).unwrap();
@@ -1050,7 +1072,16 @@ async fn file_stamps_survive_reopening_the_database() {
             _ => None,
         })
         .collect();
-    let [[file]] = observed.as_slice() else {
+    #[cfg(target_os = "linux")]
+    let observed = {
+        assert_eq!(observed.len(), 2);
+        assert_eq!(observed[0].len(), 1, "session database files entered W");
+        assert_eq!(observed[0][0].size, Some(3));
+        &observed[1..]
+    };
+    #[cfg(not(target_os = "linux"))]
+    let observed = observed.as_slice();
+    let [[file]] = observed else {
         panic!("expected one deletion: {observed:?}")
     };
     assert_eq!(Path::new(&file.path), a);
@@ -1195,5 +1226,101 @@ async fn outside_edits_during_a_shell_call_are_recorded_as_its_changes() {
         !log.iter()
             .any(|event| matches!(event, Event::FilesObserved { external: true, .. })),
         "{log:?}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn independent_workspace_views_reconcile_moves_same_stamp_and_a_cold_restart() {
+    use std::fs::{self, FileTimes};
+    use std::os::unix::fs::symlink;
+
+    let mut a = fixture(
+        "notify-readers",
+        FakeProvider::scripted_turns(vec![text("ok"); 4]),
+    )
+    .await;
+    let mut b = fixture_with_store(
+        a.dir.clone(),
+        FakeProvider::scripted_turns(vec![text("ok"); 3]),
+        a.store.clone(),
+    )
+    .await;
+    b.watches = a.watches.clone();
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(outside.path().join("private"), "outside").unwrap();
+    symlink(outside.path(), a.dir.join("link")).unwrap();
+    let old = a.dir.join("before/f");
+    let new = a.dir.join("after/f");
+    fs::create_dir(old.parent().unwrap()).unwrap();
+    fs::write(&old, "one").unwrap();
+    let cancel = CancellationToken::new();
+    a.turn("start", &cancel).await.unwrap();
+    b.turn("start", &cancel).await.unwrap();
+    fs::rename(old.parent().unwrap(), new.parent().unwrap()).unwrap();
+    a.turn("see move", &cancel).await.unwrap();
+    // Rename away and back before the lagging reader queries. The inode is
+    // unchanged, but inotify detached its original directory descriptor.
+    fs::rename(new.parent().unwrap(), outside.path().join("away")).unwrap();
+    fs::rename(outside.path().join("away"), new.parent().unwrap()).unwrap();
+    b.turn("catch up", &cancel).await.unwrap();
+    let modified = fs::metadata(&new).unwrap().modified().unwrap();
+    fs::write(&new, "two").unwrap();
+    fs::File::open(&new)
+        .unwrap()
+        .set_times(FileTimes::new().set_modified(modified))
+        .unwrap();
+    a.turn("see equal stamp", &cancel).await.unwrap();
+    b.turn("watch still attached", &cancel).await.unwrap();
+
+    let observations = |log: Vec<Event>| {
+        log.into_iter()
+            .filter_map(|e| match e {
+                Event::FilesObserved {
+                    external: true,
+                    files,
+                    ..
+                } => Some(files),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let first = observations(a.log().await);
+    let second = observations(b.log().await);
+    assert_eq!(first.len(), 3);
+    assert_eq!(second.len(), 3);
+    assert_eq!(second[2], first[2]);
+    assert_eq!(first[0].len(), 1);
+    assert_eq!(first[1].len(), 2);
+    assert_eq!(first[1], second[1]);
+    assert!(
+        first[1]
+            .iter()
+            .any(|s| s.path == old.to_str().unwrap() && s.size.is_none())
+    );
+    assert_eq!(first[2].len(), 1);
+    assert_eq!(
+        first[2][0],
+        *first[1]
+            .iter()
+            .find(|s| s.path == new.to_str().unwrap())
+            .unwrap()
+    );
+
+    a.watches = Default::default();
+    fs::remove_file(&new).unwrap();
+    fs::write(a.dir.join("offline"), "new").unwrap();
+    a.turn("cold resume", &cancel).await.unwrap();
+    let recovered = observations(a.log().await);
+    assert_eq!(recovered[3].len(), 2);
+    assert!(
+        recovered[3]
+            .iter()
+            .any(|s| s.path == new.to_str().unwrap() && s.size.is_none())
+    );
+    assert!(
+        recovered[3]
+            .iter()
+            .any(|s| s.path.ends_with("/offline") && s.size == Some(3))
     );
 }

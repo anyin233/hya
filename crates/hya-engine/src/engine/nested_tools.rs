@@ -118,6 +118,7 @@ impl NestedTools for TurnNestedTools {
             self.message,
             call,
             result.as_ref().ok(),
+            (&self.engine.workspace_watches, self.binding.workdir()),
         ))
         .await
         .map_err(core_error)?;
