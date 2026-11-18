@@ -150,7 +150,11 @@ path replaced by a non-file has `null` for both values. A metadata read
 that fails for another reason leaves the previous stamp in place.
 
 Bare mode observes `read`, `write`, and `edit` targets and files changed
-according to `bash`'s Git snapshot. Full mode also observes `apply_patch`
+according to `bash`'s Git snapshot. After every `bash` call, with or without
+Git, the kernel also `stat`s each known file and stamps the changed ones as
+that call's own observation (`external: false`), so a shell edit outside a Git
+work tree is not reported as an outside change; it records no `FilesChanged`
+there, so revert cannot restore it. Full mode also observes `apply_patch`
 targets, LSP's explicit file, and Grep's explicit file or structured result
 paths. The same coverage applies when those tools run through a nested
 call. In either mode, the per-round check has no content reads, directory
@@ -166,9 +170,10 @@ scan, Git call, or configuration.
 - Shell snapshots cover content changes visible to Git from the command's
   working directory. Files outside that work tree, ignored files, and
   internal output files are excluded. Metadata-only writes can also escape
-  capture. A shell snapshot records an outside edit made while the command
-  runs as a change of that command (`FilesChanged`), not as an external
-  observation, because Git measures the combined delta.
+  capture. An outside edit made while a command runs is recorded as that
+  command's change (`FilesChanged` inside Git, `external: false` stamps
+  outside), not as an external observation: a before/after comparison cannot
+  tell who wrote. A file a shell command creates without Git stays unknown.
 
 See the [event reference](architecture/event-model.md#file-snapshots-and-revert)
 and the [revert documentation](architecture/runtime.md#file-snapshots-and-revert).
