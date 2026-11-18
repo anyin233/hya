@@ -160,7 +160,11 @@ repeated bare turns can share one `kernel::WorkspaceWatches` with
 The event contract is `FilesObserved { session, external, files }`. Each file
 is `{ path: string, mtime_ns: i64 | null, size: u64 | null }` with an absolute
 path, Unix nanoseconds and byte size. Absence produces two nulls for a known
-path. Replay replaces that path's entry in `session.files`. An event can
+path. Replay replaces that path's entry in `session.files` and counts every
+`FilesObserved` and `FilesChanged` event as the session's file revision. The
+[`workspace.state`](plugin-protocol.md#request-scoped-host-capabilities) host
+capability reconciles the watch outside a round and returns that revision,
+so a bundle tool can tell whether W changed. An event can
 invalidate an unchanged stamp, for example an equal-length rewrite that
 restores the old modification time. Consumers tracking freshness should
 follow the event sequence. Notifications coalesce intermediate operations. A transient file that vanishes

@@ -484,7 +484,7 @@ pub async fn drive(
         }
         let mut batch = scope
             .watches
-            .changes(store, session, projection.clone(), true)
+            .changes(store, session, projection.clone(), Default::default(), true)
             .await;
         let changes = std::mem::take(&mut batch.files);
         if let Some(event) = file_snapshot::observation(session, true, changes) {
