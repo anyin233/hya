@@ -558,12 +558,12 @@ async fn goal_checkpoint_is_asked_once_before_the_rewrite_threshold() {
     let fx = fixture(
         "goal-checkpoint",
         FakeProvider::scripted_turns(vec![
-            round_at(500),
-            round_at(650),
-            round_at(700),
+            round_at(2_000),
+            round_at(13_000),
+            round_at(14_000),
             text("done"),
         ])
-        .with_max_context(1_000),
+        .with_max_context(20_000),
     )
     .await;
     let finish = fx.turn("go", &CancellationToken::new()).await;
@@ -571,7 +571,7 @@ async fn goal_checkpoint_is_asked_once_before_the_rewrite_threshold() {
 
     let requests = fx.provider.requests();
     let asked: Vec<usize> = requests.iter().map(goal_checkpoints).collect();
-    // Below 60%: none; at 65%: asked; at 70%: still the one notice.
+    // Below 60%: none; at 65%: asked; at 70% (rewrite at 80%): still one.
     assert_eq!(asked, [0, 0, 1, 1]);
     let log = fx.log().await;
     assert!(
