@@ -1,3 +1,9 @@
+# Unreleased
+
+- `bash` now stamps every file the session knows after each call, with or without Git, so a shell edit outside a Git work tree is recorded as the command's own observation instead of an outside change.
+- Goal checkpoint: once a round fills 60% of the model window, the kernel asks the model once (per context epoch) to bring its todo list up to date before a rewrite. The `todo` tool now asks for checkable end states and prompt status updates, and accepts ids as rendered (`#1`).
+- Headless `hya exec` no longer continues a run because todos are open; live subagents, unread mail and an announced next step still continue it.
+
 # 0.48.0-dev.4
 
 ## Context is m, g and w (ADR-0034)
