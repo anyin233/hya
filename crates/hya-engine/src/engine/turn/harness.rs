@@ -11,7 +11,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use hya_proto::{
-    AgentName, FinishReason, MessageId, ModelRef, Projection, SessionId, TokenUsage, ToolSchema,
+    AgentName, Event, FinishReason, MessageId, ModelRef, Projection, SessionId, TokenUsage,
+    ToolSchema,
 };
 use hya_provider::{CompletionRequest, EventStream, ProviderError};
 use hya_store::ActorClaim;
@@ -40,6 +41,7 @@ use crate::hooks::{
     replace_activation_hooks,
 };
 use crate::kernel::{self, Failure, Harness, Round, ToolCall, ToolGate, View};
+use crate::prompt::{PromptEnv, discover_context_files, render_environment_and_context, today};
 use crate::runtime_registry::CompiledResourceView;
 use crate::workflow::WorkflowTurnRoute;
 
@@ -57,8 +59,9 @@ impl SessionEngine {
     /// runtime generation, the round swaps in the fresh binding, a freshly
     /// compiled resource view (retaining the activation's sidecar tools), a
     /// refreshed agent roster, and a re-materialized agent prompt — so tools,
-    /// hooks, skills, and prompts published mid-turn take effect at the next
-    /// model call without rebuilding the transcript context. Any rebind or
+    /// hooks, skills, and agent definitions published mid-turn take effect at
+    /// the next model call. The directory skill index stays in the initial
+    /// context. Any rebind or
     /// recompilation failure is logged and ignored: the turn keeps the current
     /// generation and never dies from a rebind failure (fail-open). Bound and
     /// Resolved activations (subagents, Workflow members) pin their
@@ -87,19 +90,56 @@ impl SessionEngine {
         // Depth in the subagent tree, derived from the parent chain. Subagents use
         // the general live provider-stream class; the root uses the independent
         // reserved class so root progress never waits behind background work.
-        let depth = match &self.governor {
-            Some(_) => self
-                .session_lineage(session)
+        let projection = self.store.read_projection_shared(session).await?;
+        let depth = match (&self.governor, projection.session.parent) {
+            (Some(_), Some(parent)) => self
+                .session_lineage(parent)
                 .await
-                .map(|(_, d)| d)
+                .map(|(_, depth)| depth + 1)
                 .unwrap_or(0),
-            None => 0,
+            _ => 0,
         };
+        let mut events = Vec::with_capacity(2);
+        let initial_context = match &projection.session.initial_context {
+            Some(text) => text.clone(),
+            None => {
+                let workdir = session_workdir(agent, &projection);
+                let env = PromptEnv {
+                    cwd: workdir.to_string_lossy().into_owned(),
+                    platform: std::env::consts::OS.to_string(),
+                    date: today(),
+                };
+                let files = if self.pure_context {
+                    Vec::new()
+                } else {
+                    discover_context_files(&workdir)
+                };
+                let mut text = render_environment_and_context(&env, &files);
+                if let Some(skills) = resources.directory_skills_prompt_section() {
+                    text.push('\n');
+                    text.push_str(&skills);
+                }
+                events.push(Event::InitialContextRecorded {
+                    session,
+                    text: text.clone(),
+                });
+                text
+            }
+        };
+        drop(projection);
         // Digests of the system prompt and tool list, recorded with the
         // binding at turn start and again whenever a round's differ.
         let tools = self.offered_tools(&resources, depth);
-        let recorded_digests = prompt_digests(&system_prompt(agent, &tools, depth), &tools)?;
-        self.emit_turn_binding(actor_claim, session, message, &binding, &recorded_digests)
+        let system = system_prompt(agent, Some(&initial_context), &tools, depth);
+        let recorded_digests = prompt_digests(&system, &tools)?;
+        events.push(Event::TurnBindingRecorded {
+            session,
+            message,
+            generation: binding.generation(),
+            system_sha256: recorded_digests.0.clone(),
+            tools_sha256: recorded_digests.1.clone(),
+        });
+        self.emit_batch_for_actor(actor_claim, session, events)
             .await?;
         // Steer mailbox (fix for the unread-mail blindness): unread mail is
         // surfaced inside tool results, mid-turn, without breaking the model's
@@ -377,7 +417,12 @@ impl Harness for TurnHarness<'_> {
         let tools = engine.offered_tools(&self.resources, self.depth);
         let overhead_tokens = engine.token_accounting.estimate_request(
             &[],
-            Some(&system_prompt(&self.live_agent, &tools, self.depth)),
+            Some(&system_prompt(
+                &self.live_agent,
+                projection.session.initial_context.as_deref(),
+                &tools,
+                self.depth,
+            )),
             &tools,
             engine
                 .provider_router()
@@ -436,7 +481,12 @@ impl Harness for TurnHarness<'_> {
             .await?
             .effort;
         let tools = engine.offered_tools(&self.resources, self.depth);
-        let system = system_prompt(&self.live_agent, &tools, self.depth);
+        let system = system_prompt(
+            &self.live_agent,
+            view.projection.session.initial_context.as_deref(),
+            &tools,
+            self.depth,
+        );
         let digests = prompt_digests(&system, &tools)?;
         if digests != self.recorded_digests {
             engine

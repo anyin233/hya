@@ -17,13 +17,12 @@ use hya_engine::resident::{
 use hya_engine::{
     AgentSpec, BoundSidecarFactory, BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest,
     BoundWorkflowSender, CategoryRegistry, CoreError, DRAIN_DEADLINE, EventBus, ModelSummarizer,
-    PromptEnv, ResidentSupervisor, RuntimeRegistry, RuntimeSourceKind, SessionEngine,
-    SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart, SubagentGovernor,
-    Summarizer, TokenAccounting, TurnBinding, TurnDrainReport, build_system_prompt,
-    run_lifecycle_service, run_mailbox_service,
+    ResidentSupervisor, RuntimeRegistry, RuntimeSourceKind, SessionEngine, SidecarEnvironment,
+    SidecarHandle, SidecarLifecycle, SidecarStart, SubagentGovernor, Summarizer, TokenAccounting,
+    TurnBinding, TurnDrainReport, run_lifecycle_service, run_mailbox_service,
 };
 
-// Single discovery/date implementation lives in hya-core; re-export for callers.
+// Single discovery/date implementation lives in hya-engine; re-export for callers.
 pub use hya_engine::{discover_context_files, today};
 use hya_mcp::McpServerConfig;
 use hya_plugin::activation::{
@@ -322,14 +321,10 @@ fn validate_bundle_sidecar_skills(
 /// (`ServerState.default_agent`, then this same built-in agent).
 pub const BUILTIN_DEFAULT_AGENT_ID: &str = hya_engine::MAIN_AGENT_ID;
 
-/// Agent base only — for HTTP/SSE server and interactive TUI AppState assembly.
+/// Agent base for server and interactive TUI sessions.
 ///
-/// Bundle `prompt=None` keeps this base; per-turn server discovery appends
-/// Environment + current workdir AGENTS + references. Baking those at startup
-/// would duplicate AGENTS when guidance is also layered.
-///
-/// The workdir is empty: `hya serve` has no working directory (ADR-0024).
-/// Every turn's AgentSpec takes its workdir from its session.
+/// The server has no working directory. The turn harness records initial
+/// context from each session's workdir.
 pub fn agent_base_with_model(model: &str, reasoning: Option<ReasoningEffort>) -> AgentSpec {
     AgentSpec {
         name: AgentName::new(BUILTIN_DEFAULT_AGENT_ID),
@@ -351,45 +346,18 @@ fn caller_workdir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// Direct-mode agent (exec/RPC/goal): base + Environment + caller-cwd AGENTS.
-///
-/// These paths call `run_turn` without a separate guidance layer, so context
-/// must remain composed into `system_prompt` here.
+/// Agent base for direct-mode commands, with the caller's working directory.
 pub fn agent_with_model(model: &str, reasoning: Option<ReasoningEffort>) -> AgentSpec {
-    let workdir = caller_workdir();
-    let env = PromptEnv {
-        cwd: workdir.to_string_lossy().into_owned(),
-        platform: std::env::consts::OS.to_string(),
-        date: today(),
-    };
-    let context = discover_context_files(&workdir);
-    let system_prompt = build_system_prompt(HARNESS_AGENT_BASE, &env, &context);
     AgentSpec {
-        name: AgentName::new(BUILTIN_DEFAULT_AGENT_ID),
-        model: ModelRef::new(model),
-        system_prompt,
-        workdir,
-        reasoning,
+        workdir: caller_workdir(),
+        ..agent_base_with_model(model, reasoning)
     }
 }
 
-/// `--pure` variant of [`agent_with_model`]: same Environment block, but no
-/// external AGENTS/context files are discovered or baked into the prompt.
+/// Agent base for direct `--pure` commands. The pure runtime omits external
+/// project instructions when it records the session's initial context.
 pub fn agent_with_model_pure(model: &str, reasoning: Option<ReasoningEffort>) -> AgentSpec {
-    let workdir = caller_workdir();
-    let env = PromptEnv {
-        cwd: workdir.to_string_lossy().into_owned(),
-        platform: std::env::consts::OS.to_string(),
-        date: today(),
-    };
-    let system_prompt = build_system_prompt(HARNESS_AGENT_BASE, &env, &[]);
-    AgentSpec {
-        name: AgentName::new(BUILTIN_DEFAULT_AGENT_ID),
-        model: ModelRef::new(model),
-        system_prompt,
-        workdir,
-        reasoning,
-    }
+    agent_with_model(model, reasoning)
 }
 
 /// Resolve which agent id a headless root session (`exec`/`run`, `-p` goal
@@ -1251,6 +1219,7 @@ async fn build_session_engine_with_mcp_defer(
     let context_settings = settings.context();
     let engine_builder = SessionEngine::new(store, router, runtime, permission, bus)
         .with_base_system_prompt(agent.system_prompt.clone())
+        .with_pure_context(options.pure)
         // Stop/start records use this store's runtime-owner claim.
         .with_runtime_owner(owner_run_id)
         .with_global_reasoning(settings.reasoning())
@@ -1488,8 +1457,7 @@ impl HyaRuntime {
         if opts.yolo {
             eprintln!("hya: --yolo auto-approves ALL tool actions for the hya frontend (RCE risk)");
         }
-        // Server/TUI AppState: agent base only. Per-turn guidance layers
-        // Environment + AGENTS + references once.
+        // Server/TUI AppState retains the base; the harness records context.
         let agent = Arc::new(agent_base_with_model(&runtime.model, None));
         let mut built = build_session_engine(
             store,

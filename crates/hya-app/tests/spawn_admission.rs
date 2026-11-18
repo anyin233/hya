@@ -35,7 +35,7 @@ use sqlx::{Connection, SqliteConnection};
 use tokio::sync::Notify;
 
 const TRIGGER_GUIDANCE: &str = "TRIGGERING_TURN_GUIDANCE_MARKER_0_34_8";
-const CHILD_SCAN_POISON: &str = "CHILD_WORKDIR_SCAN_MUST_NOT_APPEAR";
+const PROJECT_CONTEXT: &str = "RECORDED_PROJECT_CONTEXT_MARKER";
 const POST_SPAWN_MUTATION: &str = "POST_SPAWN_SOURCE_MUTATION_MARKER";
 
 struct AdmissionFixture {
@@ -1072,8 +1072,6 @@ async fn guidance_spawn_fixture(
         })),
     );
     let workdir = temp_child_workdir("parent");
-    // Poison file only on a *child* path used as AgentSpec.workdir below; the
-    // base agent workdir is separate so root discovery is irrelevant.
     let agent = AgentSpec {
         name: AgentName::new("build"),
         model: ModelRef::new("fake"),
@@ -1116,9 +1114,9 @@ async fn guidance_spawn_fixture(
 }
 
 #[tokio::test]
-async fn task_child_uses_triggering_turn_guidance_once_without_child_scan() {
-    // Two provider rounds on the child: guidance must appear once per system
-    // string (composed once) and never include child-workdir scan content.
+async fn task_child_uses_triggering_guidance_and_records_project_context_once() {
+    // Each child request carries the inherited guidance and its own recorded
+    // project context once.
     let fixture = guidance_spawn_fixture(
         &[
             ("build", AgentRole::Main, &["quick"]),
@@ -1138,8 +1136,7 @@ async fn task_child_uses_triggering_turn_guidance_once_without_child_scan() {
     )
     .await;
 
-    // Child inherits base agent workdir; poison AGENTS.md before spawn so a
-    // child filesystem discovery would pick it up.
+    // The child records AGENTS.md from the workdir it inherits.
     let parent_proj = fixture
         .engine
         .read_projection(fixture.parent)
@@ -1150,7 +1147,7 @@ async fn task_child_uses_triggering_turn_guidance_once_without_child_scan() {
         .workdir
         .as_deref()
         .expect("parent workdir");
-    std::fs::write(PathBuf::from(child_wd).join("AGENTS.md"), CHILD_SCAN_POISON).unwrap();
+    std::fs::write(PathBuf::from(child_wd).join("AGENTS.md"), PROJECT_CONTEXT).unwrap();
 
     let guidance: Arc<str> = Arc::from(TRIGGER_GUIDANCE);
     let outcomes = fixture
@@ -1190,10 +1187,7 @@ async fn task_child_uses_triggering_turn_guidance_once_without_child_scan() {
             1,
             "guidance composed once into system: {system}"
         );
-        assert!(
-            !system.contains(CHILD_SCAN_POISON),
-            "child must not discover workdir AGENTS.md: {system}"
-        );
+        assert_eq!(system.matches(PROJECT_CONTEXT).count(), 1);
     }
     // Drop the original Arc; child still held clones for the turn.
     drop(guidance);
@@ -1211,8 +1205,8 @@ async fn resident_activations_reuse_in_process_triggering_guidance() {
     )
     .await;
 
-    // Mutable source string used only to build the initial Arc; mutating the
-    // source after spawn must not alter the in-process Arc text.
+    std::fs::write(fixture.agent.workdir.join("AGENTS.md"), PROJECT_CONTEXT).unwrap();
+    // The child should keep the triggering guidance across activations.
     let mut source = TRIGGER_GUIDANCE.to_string();
     let guidance: Arc<str> = Arc::from(source.as_str());
 
@@ -1292,10 +1286,7 @@ async fn resident_activations_reuse_in_process_triggering_guidance() {
             !system.contains(POST_SPAWN_MUTATION),
             "post-spawn source/disk mutation must not alter guidance: {system}"
         );
-        assert!(
-            !system.contains(CHILD_SCAN_POISON),
-            "resident must not rescan child workdir: {system}"
-        );
+        assert_eq!(system.matches(PROJECT_CONTEXT).count(), 1);
     }
 }
 
@@ -1499,8 +1490,8 @@ async fn batch_invalid_member_with_guidance_has_zero_durable_side_effects() {
 
 /// True end-to-end path: parent `run_turn_with_external_dirs_and_guidance` →
 /// provider issues `task` → TurnExecution ToolCtx SpawnerPlane → app supervisor →
-/// child provider request carries the immutable guidance marker once (no child
-/// AGENTS.md scan, no AgentSpec/catalog overlay).
+/// child provider request carries the triggering guidance and the child's
+/// recorded project context.
 #[tokio::test]
 async fn root_turn_task_tool_propagates_guidance_to_child_provider_once() {
     let fixture = guidance_spawn_fixture(
@@ -1530,8 +1521,7 @@ async fn root_turn_task_tool_propagates_guidance_to_child_provider_once() {
     )
     .await;
 
-    // Poison the shared session workdir so a child filesystem discovery would
-    // inject this marker into the child system prompt.
+    // The root and child record context from the shared workdir.
     let parent_proj = fixture
         .engine
         .read_projection(fixture.parent)
@@ -1542,7 +1532,7 @@ async fn root_turn_task_tool_propagates_guidance_to_child_provider_once() {
         .workdir
         .as_deref()
         .expect("parent workdir");
-    std::fs::write(PathBuf::from(child_wd).join("AGENTS.md"), CHILD_SCAN_POISON).unwrap();
+    std::fs::write(PathBuf::from(child_wd).join("AGENTS.md"), PROJECT_CONTEXT).unwrap();
 
     let guidance: Arc<str> = Arc::from(TRIGGER_GUIDANCE);
     fixture
@@ -1595,10 +1585,7 @@ async fn root_turn_task_tool_propagates_guidance_to_child_provider_once() {
             1,
             "guidance marker exactly once on child request: {system}"
         );
-        assert!(
-            !system.contains(CHILD_SCAN_POISON),
-            "child must not scan workdir AGENTS.md: {system}"
-        );
+        assert_eq!(system.matches(PROJECT_CONTEXT).count(), 1);
     }
 }
 
@@ -1623,7 +1610,7 @@ async fn quiescence_main_synthesis_uses_triggering_guidance_once() {
         .await
         .unwrap();
     if let Some(wd) = parent_proj.session.workdir.as_deref() {
-        std::fs::write(PathBuf::from(wd).join("AGENTS.md"), CHILD_SCAN_POISON).unwrap();
+        std::fs::write(PathBuf::from(wd).join("AGENTS.md"), PROJECT_CONTEXT).unwrap();
     }
 
     let guidance: Arc<str> = Arc::from(TRIGGER_GUIDANCE);
@@ -1704,10 +1691,7 @@ async fn quiescence_main_synthesis_uses_triggering_guidance_once() {
             1,
             "guidance once on main synthesis system: {system}"
         );
-        assert!(
-            !system.contains(CHILD_SCAN_POISON),
-            "main synthesis must not rediscover workdir AGENTS.md: {system}"
-        );
+        assert_eq!(system.matches(PROJECT_CONTEXT).count(), 1);
     }
 }
 

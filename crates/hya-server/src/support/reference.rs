@@ -3,9 +3,7 @@ use std::path::{Path, PathBuf};
 use hya_proto::AgentName;
 use std::sync::Arc;
 
-use hya_engine::{
-    AgentSpec, CoreError, PromptEnv, discover_context_files, render_environment_and_context, today,
-};
+use hya_engine::{AgentSpec, CoreError};
 use hya_proto::SessionId;
 use serde_json::Value;
 
@@ -109,38 +107,12 @@ pub(crate) async fn external_directories_at(st: &ServerState, workdir: &Path) ->
         .collect()
 }
 
-/// Pre-render request-scoped Harness project guidance + described references.
-///
-/// Discovers current workdir `AGENTS.md` once (parent→child), renders Environment
-/// and project-context separators via core prompt helpers, then appends sorted
-/// reference guidance. Result is immutable for the turn — core receives only
-/// this text, never paths/parser/raw files.
+/// Render the references explicitly configured for this turn.
 async fn guidance_at(st: &ServerState, workdir: &Path) -> Option<Arc<str>> {
     if st.pure_guidance {
-        // `--pure`: no external AGENTS/context or reference discovery at all.
         return None;
     }
-    let env = PromptEnv {
-        cwd: workdir.to_string_lossy().into_owned(),
-        platform: std::env::consts::OS.to_string(),
-        date: today(),
-    };
-    let context = discover_context_files(workdir);
-    let project = render_environment_and_context(&env, &context);
-    let references = render_reference_guidance(st, workdir).await;
-
-    let text = match references {
-        Some(refs) if !project.is_empty() => format!("{project}\n\n{refs}"),
-        Some(refs) => refs,
-        None if !project.is_empty() => project,
-        None => return None,
-    };
-    let text = text.trim();
-    if text.is_empty() {
-        None
-    } else {
-        Some(Arc::<str>::from(text))
-    }
+    render_reference_guidance(st, workdir).await.map(Arc::from)
 }
 
 /// Sorted described project references (prior in-process shape and separators).

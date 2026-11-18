@@ -290,6 +290,12 @@ system prompt and tool list digests at turn start and whenever those
 digests change. `StepStarted.view` fingerprints the request content after
 `chat.params` and before provider routing.
 
+Full mode records its initial environment, project instructions, and
+discovered skill index before the first model call. The turn harness reads
+the resulting `initial_context` from the round's projection. A legacy session
+records it at the first model turn run by the new runtime.
+[Project context](configuration.md#project-context-agentsmd)
+
 ## Rewrite contract
 
 The contract a rewriter is written against lives in `hya-tool`
