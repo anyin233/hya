@@ -15,7 +15,8 @@ use hya_proto::{
     ModelRef, Part, PartId, Projection, Role, SessionId, SessionKind, TokenUsage, ToolPartState,
 };
 use hya_provider::{
-    COMPACT_CONTEXT_MARKER, CompletionRequest, FakeProvider, FakeStep, ProviderRouter,
+    AnthropicMessagesProtocol, COMPACT_CONTEXT_MARKER, CompletionRequest, FakeProvider, FakeStep,
+    Protocol, ProviderRouter,
 };
 use hya_store::SessionStore;
 use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, Tool, ToolCtx, ToolError};
@@ -358,6 +359,77 @@ async fn a2_failures_are_observations() {
     assert!(
         log.iter()
             .any(|event| matches!(event, Event::TextReplace { text, .. } if text == "next"))
+    );
+}
+
+#[tokio::test]
+async fn read_image_reaches_the_model_from_live_and_replayed_history() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    let png = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAF0lEQVR4nGP4z8BAEiJN9aiGUQ1DSgMAkPn/Afnh+ngAAAAASUVORK5CYII=";
+    let fx = fixture(
+        "read-image",
+        FakeProvider::scripted_turns(vec![
+            call("read", json!({"path": "board.data"})),
+            call("rewrite", json!({"summary": "saw the board"})),
+            text("done"),
+        ]),
+    )
+    .await;
+    std::fs::write(fx.dir.join("board.data"), STANDARD.decode(png).unwrap()).unwrap();
+    assert_eq!(
+        fx.turn("look at the board", &CancellationToken::new())
+            .await
+            .unwrap(),
+        FinishReason::Stop
+    );
+
+    let requests = fx.provider.requests();
+    let wire = AnthropicMessagesProtocol
+        .encode_for_model(&requests[1], None, true)
+        .unwrap();
+    let result = &wire["messages"][2]["content"][0];
+    assert_eq!(result["type"], "tool_result");
+    assert_eq!(result["is_error"], false);
+    assert_eq!(
+        result["content"][0]["text"],
+        "Image file (image/png, 80 bytes)."
+    );
+    assert_eq!(
+        result["content"][1],
+        json!({"type": "image", "source": {
+            "type": "base64", "media_type": "image/png", "data": png,
+        }})
+    );
+
+    let envelopes = fx.store.replay(fx.session).await.unwrap();
+    let next_round = envelopes
+        .iter()
+        .position(|entry| matches!(entry.event, Event::StepStarted { step: 1, .. }))
+        .unwrap();
+    let projection = Projection::from_events(&envelopes[..next_round]);
+    let rebuilt = kernel::request::request(
+        &View {
+            projection: &projection,
+        },
+        &fx.system,
+        fx.tools.iter().map(|tool| tool.schema()).collect(),
+        &fx.model,
+        &AgentName::new(kernel::AGENT),
+        &AttachmentData::new(),
+        None,
+    );
+    assert_eq!(
+        AnthropicMessagesProtocol
+            .encode_for_model(&rebuilt, None, true)
+            .unwrap(),
+        wire
+    );
+
+    assert!(
+        matches!(assistant_parts(&requests[2]).collect::<Vec<_>>().as_slice(),
+            [Part::Tool { name, state: ToolPartState::Completed { .. }, .. }] if name.as_str() == "rewrite"
+        )
     );
 }
 

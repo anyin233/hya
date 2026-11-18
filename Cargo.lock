@@ -1156,6 +1156,7 @@ name = "hya-core"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "futures",
  "hya-bundle",
  "hya-proto",

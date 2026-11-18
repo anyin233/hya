@@ -72,7 +72,7 @@ directory.
 | Tool | Input JSON | Success result |
 | --- | --- | --- |
 | `bash` | `{"command": string}` | `{"exit_code": int, "output": string}` |
-| `read` | `{"path": string}` | `{"content": string}` |
+| `read` | `{"path": string}` | UTF-8 text as `{"content": string}` or an image as `{"output": string, "attachments": [{"type": "file", "mime": string, "url": string}]}` |
 | `write` | `{"path": string, "content": string}` | `{"bytes": int}` |
 | `edit` | `{"path": string, "old": string, "new": string}` | `{"replaced": 1}` |
 | `rewrite` | `{"summary": string}` | `{"removed_messages": <n>, "note": "The summary in this call is your own text, not an observation."}` |
@@ -82,7 +82,11 @@ directory.
 A nonzero exit is still a success result for the model to interpret. Failure
 to start returns `ToolError`; cancellation kills the process.
 
-`read` returns UTF-8 text; missing files and invalid UTF-8 return `ToolError`.
+Use `read` with `{"path":"diagram.png"}` to inspect an image. `read` recognizes
+PNG, JPEG, GIF, and WebP by their file signatures and stores a base64 data URL in
+the result's attachment. Supported provider routes send it as image content to
+image-capable models. Other files are read as UTF-8 text. Missing files and
+invalid UTF-8 in non-image files return `ToolError`.
 `write` creates parent directories and returns the byte count; I/O errors
 return `ToolError`. `edit` requires exactly one occurrence of `old`; zero or
 multiple matches return `ToolError` stating the count.
@@ -249,7 +253,7 @@ replaced by the working directory:
 You are a coding assistant running inside hya, a coding agent harness. Help users inspect files, run commands, and modify code.
 
 <tools>
-- read: read a file
+- read: read a text file or image
 - bash: run a shell command
 - edit: replace text in a file
 - write: create or overwrite a file
