@@ -1166,7 +1166,6 @@ impl SessionEngine {
             depth,
             self.exclusive_tool.as_deref(),
         );
-        tools.retain(|tool| tool.name.as_str() != crate::kernel::tools::TODO);
         tools.extend([
             crate::kernel::tools::rewrite_schema(),
             crate::kernel::tools::todo_schema(),

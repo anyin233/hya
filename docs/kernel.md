@@ -291,6 +291,14 @@ Bare mode loads no bundle. It has no permission checks, hooks, subagents,
 Workflows, compaction ladder, output truncation, timeouts, or path bounds.
 These capabilities belong to full mode and its bundles. The kernel retains
 its six tools, minimal prompt, 80% harness rewrite, and event logging.
+
+In full mode the `hya/base-tools` tools `read`, `write`, `edit`, and `bash`
+replace the kernel's four under the same names; the kernel's versions run
+only in bare mode. Full mode never registers a kernel tool. The kernel still
+offers and runs `rewrite` and `todo` in both modes, and no other tool may be
+offered under either name: a resource view whose model-facing tool name is
+`rewrite` or `todo` fails to compile. `hya-engine`'s
+`base_tools_replace_the_kernel_tools_under_the_same_names` test pins this.
 `--pure` only removes external project/user context from full mode; it does
 not select the kernel alone.
 

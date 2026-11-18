@@ -146,6 +146,31 @@ async fn tool_ids(provider_id: &'static str, model: &str) -> Vec<String> {
         .collect()
 }
 
+/// Full mode has no kernel tool registry: `hya/base-tools` supplies `read`,
+/// `write`, `edit` and `bash` under the kernel's names, so the kernel prompt's
+/// lines for them hold in full mode. Only `rewrite` and `todo` stay kernel-run.
+#[test]
+fn base_tools_replace_the_kernel_tools_under_the_same_names() {
+    let registry = ToolRegistry::builtins();
+    for tool in hya_engine::kernel::tools::builtin() {
+        let name = tool.name();
+        if [
+            hya_engine::kernel::tools::REWRITE,
+            hya_engine::kernel::tools::TODO,
+        ]
+        .contains(&name)
+        {
+            assert!(registry.get(name).is_none(), "{name} is run by the kernel");
+        } else {
+            assert_eq!(
+                registry.builtin_bundle_origin(name),
+                Some("hya/base-tools"),
+                "{name}"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn runtime_tool_request_advertises_hashline_write_edit_for_every_model() {
     for model in ["gpt-5", "gpt-4o", "gpt-5.6-sol", "glm-5.3"] {
