@@ -129,6 +129,7 @@ Reducer effects:
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
 | `session_created` | `session: SessionId`, `parent: Option<SessionId>`, `agent: AgentName`, `model: ModelRef`, `workdir: String`, `project: Option<ProjectId>` (default `null`), `kind: SessionKind` (`project` \| `temporary`, default `project`) | Fold: sets session id, parent, agent, model, workdir, project, kind. `parent` is the link `session_lineage` walks toward the team root. `project` names the session's Project (ADR-0024; wire form is the UUID, `ProjectId` displays as `prj_<uuid-simple>`); `kind: temporary` sessions have no Project. A subagent session carries its parent's `project` and `kind`. The store mirrors both in `session.project_id` / `session.kind`. |
+| `initial_context_recorded` | `session: SessionId`, `text: String` | Fold: set `SessionProjection.initial_context: Option<String>` from the first record. Logs without a record omit the field. The first full-mode model turn records the rendered environment, project instructions, and discovered skill index before its first request. Later rounds use the recorded text, and forks copy it into their own log. |
 | `session_agent_model_override_set` | `session`, `agent: AgentName`, `model: Option<ModelRef>` | Fold: insert or remove one Agent entry in `agent_model_overrides`. `None` clears that Agent; unrelated entries remain. |
 | `session_permission_mode_set` | `session`, `mode: String` | Fold: `permission_mode` (last write wins). Emitted only on the lineage root; subagent sessions inherit the root's mode. `mode` is `manual`, `yolo`, or `<bundle-id>/<mode-id>`; see [Session permission modes](../configuration.md#session-permission-modes). The v1 stream maps it to `sessionUpdated.permissionMode`. |
 | `session_titled` | `session`, `title: String` | Fold: title |
@@ -616,6 +617,7 @@ Projection {
 | Field | Source events |
 | --- | --- |
 | `id`, `parent`, `agent`, `model`, `workdir` | `session_created` (+ agent/model switches) |
+| `initial_context` | first `initial_context_recorded` (omitted when `None`) |
 | `project` | `session_created.project` (omitted when `None`) |
 | `kind` | `session_created.kind` (`project` for logs written before the field) |
 | `agent_model_overrides` | `session_agent_model_override_set` (`None` model removes that Agent) |

@@ -140,10 +140,7 @@ pub use loop_mode::{
 pub use mailbox::run_mailbox_service;
 pub use orchestrator::{SubagentGovernor, SubagentLimits};
 pub use permission_mode::{PublishedPermissionMode, RuntimePermissionMode, SessionPermissionMode};
-pub use prompt::{
-    PromptEnv, build_system_prompt, context_file_reads, discover_context_files,
-    render_environment_and_context, today,
-};
+pub use prompt::{PromptEnv, discover_context_files, render_environment_and_context, today};
 pub use resident::{ResidentRecovery, ResidentRecoveryReport, ResidentSupervisor, TaskSpawnOrigin};
 pub use runtime_registry::{
     AgentModelConfiguration, AgentResourcePolicy, RuntimeCandidate, RuntimeEffectiveManifest,
