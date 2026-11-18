@@ -63,8 +63,9 @@ asked or for a cross-cutting change that touches most crates.
 
 CI exercises both tracks in different modes, but they are not all separate
 gates: Track P is enforced; Track I remains an index-only classification within
-the Rust suite. CI runs lint (fmt, matrix check, clippy), the workspace suite,
-Track P, and the TUI suites as four parallel jobs. Each gate step carries
+the Rust suite. CI runs lint (fmt, clippy), the workspace suite,
+Track P (with the matrix check), the Bun packages' type checks and unit tests,
+and the terminal suite as five parallel jobs. Each gate step carries
 `if: ${{ !cancelled() }}`, so a failure in one step no longer skips the rest — a
 red `fmt` used to abort the job before the test step ever ran, which hid six
 failing tests for weeks.

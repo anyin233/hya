@@ -24,6 +24,10 @@ for package in packages/hya-tui packages/hya-tui-web crates/hya-plugin-bun/adapt
 done
 
 cd "$repo_root"
+# As in CI, the suite runs the precompiled TUI; the build is removed again so a
+# later `bun src/main.ts` does not run stale code after source edits.
+trap 'rm -rf "${repo_root:?}/packages/hya-tui/dist"' EXIT
+(cd packages/hya-tui && bun run build)
 cargo build --locked -p hya-backend --bin hya -p xtask --bin xtask
 export HYA_BIN="$repo_root/target/debug/hya"
 cd packages/hya-tui-web
