@@ -237,7 +237,7 @@ impl RunDeadline {
         format!(
             "HEADLESS RUN — time budget: {}s wall clock for this whole run; at the limit the \
              process is killed and only files on disk count. Put a working deliverable in place \
-             early. Tool results report the clock as the run goes.",
+             early. Watch for deadline notices as the run goes.",
             self.budget.as_secs()
         )
     }
@@ -256,13 +256,14 @@ impl RunDeadline {
                 "HEADLESS RUN — TIME: {elapsed}s of {budget}s used, {left}s left. At the limit \
                  the run is killed and only files on disk count. Stop exploring and polishing: \
                  make sure every requested deliverable exists at its requested path and passes \
-                 the request's own checks, then finish. Give long commands a timeout well under \
-                 the time left."
+                 the request's own checks, then finish. Start only commands that finish well \
+                 within the time left."
             ),
             (Stage::Final | Stage::Over, false) => format!(
-                "HEADLESS RUN — FINAL {left}s: write any missing deliverable now from the work \
-                 you have, commit if the request asks for a commit, then end your turn. Start \
-                 only commands that finish well within the time left."
+                "HEADLESS RUN — FINAL {left}s: {elapsed}s of {budget}s used. Write any missing \
+                 deliverable now from the work you have, commit if the request asks for a \
+                 commit, then end your turn. Start only commands that finish well within the \
+                 time left."
             ),
             (Stage::Normal | Stage::WrapUp, true) => format!(
                 "HEADLESS RUN — TIME: {elapsed}s of {budget}s used, {left}s left in the whole \

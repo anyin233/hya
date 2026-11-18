@@ -743,20 +743,29 @@ hya exec --time-budget 900 "implement the requested change"
 
 ### `--bare`
 
-`hya exec --bare "<prompt>"` runs the three-primitive kernel alone, with five
-built-in tools (`bash`, `read`, `write`, `edit`, `rewrite`), its minimal system
-prompt, and event logging. It loads no bundle. It prints the final text to
-stdout; `--db` keeps the event log in SQLite.
+`hya exec --bare "<prompt>"` runs the three-primitive kernel alone, with six
+built-in tools (`bash`, `read`, `write`, `edit`, `rewrite`, `todo`), its minimal
+system prompt, and event logging. It runs without bundles and prints the final
+text to stdout. `--db` keeps the event log in SQLite.
 
 ```sh
 hya exec --bare "say hi" --db /tmp/x.db
+hya exec --bare --time-budget 900 "implement the change and write report.md"
 ```
 
-`--bare` conflicts with `--pure`, `--time-budget`, and `--json` (a usage
-error). It always runs in process against `--db`: when a running server holds
-that database it exits 75 instead of routing the run. Use another database or
-stop that server first. The model is `--model` or the configured default; the
-working directory is the cwd.
+`--bare` conflicts with `--pure` and `--json` (a usage error). It always
+runs in process against `--db`. When a running server holds that database,
+it exits 75. Use another database or stop that server first. The model is
+`--model` or the configured default. The working directory is the cwd.
+
+`--time-budget <SECS>` accepts a positive integer (`u64`, at least 1).
+Bare mode announces the total budget on the first request. When it reaches
+WrapUp or Final, it adds a notice with the remaining seconds to the next
+model request. The event log records at most one notice per stage, and each
+stage notice leaves the model's request history when the assistant responds.
+The shared thresholds and Bash timeout calculation are described below.
+The outside harness enforces the process deadline.
+
 See [Kernel](kernel.md) for tool contracts, rewrite rules, and the differences
 from full mode.
 
@@ -832,13 +841,15 @@ notices, a tool result carries one clock line (`HEADLESS RUN — clock: …s of
 …s used, …s left.`) each time another tenth of the budget has passed since
 the session was last told the time.
 
-The thresholds are remaining time: WrapUp is
+Both modes use the same thresholds, measured in remaining time. WrapUp is
 `min(clamp(35% B, 300s, 3600s), 50% B)`, Final is
 `clamp(12% B, 90s, 600s)`, and the Over guard is `clamp(5% B, 30s, 120s)`.
 Over uses the Final notice. Bash and member `wait` timeouts are capped to
 `max(remaining - min(guard, remaining / 2), 5s)`; a shorter requested timeout
-remains unchanged.
-This includes Bash's omitted timeout and `timeout: 0`. Bash reports
+remains unchanged. In bare mode Bash has no timeout parameter. Its automatic
+timeout is also bounded by the remaining time if less than 5 seconds are
+left. A timed-out bare command returns a tool error.
+In full mode the cap includes Bash's omitted timeout and `timeout: 0`. Bash reports
 `metadata.deadlineCapped: true` when shortened and explains the effective
 limit in `<shell_metadata>`. For example, a 900-second run with 200 seconds
 left caps a 300-second Bash call to about 155 seconds, reserving 45 seconds.

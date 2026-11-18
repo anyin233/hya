@@ -706,8 +706,11 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 .exit()
         }
         Some(Command::Exec {
-            prompt, bare: true, ..
-        }) => bare::exec_entry(prompt, model, &db).await,
+            prompt,
+            time_budget,
+            bare: true,
+            ..
+        }) => bare::exec_entry(prompt, model, &db, time_budget).await,
         Some(Command::Exec {
             prompt,
             json,

@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use futures::StreamExt;
 use hya_proto::{
-    Event, FinishReason, MessageId, ModelRef, PartId, SessionId, TokenUsage, ToolCallId,
+    Event, FinishReason, MessageId, ModelRef, PartId, Role, SessionId, TokenUsage, ToolCallId,
     UsagePurpose,
 };
 use hya_provider::EventStream;
@@ -333,6 +333,44 @@ fn reasoning_events(
             message,
             part,
             provider_data,
+        },
+    ]
+}
+
+/// Events for one completed system message in the transcript.
+pub fn system_message_events(session: SessionId, message: MessageId, text: String) -> Vec<Event> {
+    let part = PartId::new();
+    vec![
+        Event::MessageStarted {
+            session,
+            message,
+            role: Role::System,
+            agent: None,
+            model: None,
+        },
+        Event::TextStart {
+            session,
+            message,
+            part,
+        },
+        Event::TextDelta {
+            session,
+            message,
+            part,
+            delta: text,
+        },
+        Event::TextEnd {
+            session,
+            message,
+            part,
+        },
+        Event::MessageFinished {
+            session,
+            message,
+            role: Role::System,
+            finish: FinishReason::Stop,
+            tokens: None,
+            cause: None,
         },
     ]
 }

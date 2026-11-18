@@ -9,9 +9,10 @@ Use it to run a task with only the kernel's Context operations. See
 hya exec --bare "say hi" --db /tmp/x.db
 ```
 
-The working directory is the caller's cwd. `--bare` conflicts with `--pure`,
-`--time-budget`, `--json`, and routing to a running server; these
-combinations error out. See the [CLI reference](cli.md#--bare).
+The working directory is the caller's cwd. `--bare` conflicts with `--pure`
+and `--json` and always runs in process. Add `--time-budget <SECS>` to
+announce the budget to the model, send WrapUp and Final guidance, and cap
+Bash calls. See the [CLI reference](cli.md#--bare).
 
 ## Three primitives
 
@@ -80,7 +81,9 @@ directory.
 
 `bash` runs `sh -c` in the working directory and merges stdout and stderr.
 A nonzero exit is still a success result for the model to interpret. Failure
-to start returns `ToolError`; cancellation kills the process.
+to start returns `ToolError`. Cancellation or a budget-capped timeout kills
+the command's process group. A timeout returns
+`ToolError("bash timed out under the run's time budget")`.
 
 Use `read` with `{"path":"diagram.png"}` to inspect an image. `read` recognizes
 PNG, JPEG, GIF, and WebP by their file signatures and stores a base64 data URL in

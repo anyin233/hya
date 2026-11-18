@@ -3,7 +3,7 @@ use std::process::{ExitStatus, Stdio};
 
 use async_trait::async_trait;
 use hya_proto::ToolSchema;
-use hya_tool::{Tool, ToolCtx, ToolError};
+use hya_tool::{Tool, ToolCtx, ToolError, deadline};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::process::Command;
@@ -35,6 +35,10 @@ impl Tool for Bash {
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
         let Args { command } = super::args(input)?;
+        let timeout = deadline::current().map(|deadline| {
+            // The shared cap has a floor. A bare call cannot use more than the run has left.
+            tokio::time::sleep(deadline.cap(None).0.min(deadline.remaining()))
+        });
         // One pipe for both streams keeps their interleaving.
         let (mut reader, writer) = std::io::pipe()?;
         let mut process = Command::new("sh");
@@ -58,6 +62,12 @@ impl Tool for Bash {
         let status = tokio::select! {
             biased;
             () = ctx.cancel.cancelled() => return Err(ToolError::Cancelled),
+            () = async {
+                match timeout {
+                    Some(timeout) => timeout.await,
+                    None => std::future::pending().await,
+                }
+            } => return Err(ToolError::Other("bash timed out under the run's time budget".into())),
             status = child.wait() => status?,
         };
         // Background jobs the command left behind would hold the pipe open.

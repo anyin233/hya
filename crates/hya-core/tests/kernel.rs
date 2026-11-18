@@ -23,6 +23,80 @@ use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, Tool, ToolC
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
+#[test]
+fn bare_deadline_notices() {
+    // Install the process-wide clock in a child so no other kernel test sees it.
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "bare_deadline_notices_child", "--nocapture"])
+        .env("HYA_BARE_DEADLINE_TEST", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[tokio::test]
+async fn bare_deadline_notices_child() {
+    if std::env::var_os("HYA_BARE_DEADLINE_TEST").is_none() {
+        return;
+    }
+    let fx = fixture(
+        "deadline-notice",
+        FakeProvider::scripted_turns(vec![
+            call("todo", json!({"ops": []})),
+            call("todo", json!({"ops": []})),
+            vec![FakeStep::Text("done".into())],
+        ]),
+    )
+    .await;
+    // A 40-second budget is already in Final, without sleeping.
+    hya_tool::deadline::install(Duration::from_secs(40));
+    assert_eq!(
+        fx.turn("write the deliverable", &CancellationToken::new())
+            .await
+            .unwrap(),
+        FinishReason::Stop
+    );
+    let requests = fx.provider.requests();
+    assert_eq!(requests.len(), 3);
+    let Some(Message::User { parts, .. }) = requests[0].messages.last() else {
+        panic!("expected the deadline notice at the end of the first request");
+    };
+    let [Part::Text { text, .. }] = parts.as_slice() else {
+        panic!("expected a single deadline notice");
+    };
+    let left = text
+        .strip_prefix("HEADLESS RUN — FINAL ")
+        .and_then(|rest| rest.split_once("s: "))
+        .and_then(|(seconds, _)| seconds.parse::<u64>().ok())
+        .expect("Final notice with seconds left");
+    assert!((30..40).contains(&left), "{text}");
+    assert!(text.contains("of 40s used. Write any missing deliverable"));
+    assert!(
+        requests
+            .iter()
+            .all(|req| req.system.as_deref() == Some(fx.system.as_str()))
+    );
+    for req in &requests[1..] {
+        assert!(!format!("{:?}", req.messages).contains("HEADLESS RUN — FINAL"));
+    }
+    let log = fx.log().await;
+    let logged: Vec<_> = log
+        .iter()
+        .filter_map(|event| match event {
+            Event::TextDelta { delta, .. } if delta.starts_with("HEADLESS RUN — FINAL ") => {
+                Some(delta)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(logged, vec![text]);
+}
+
 struct Fixture {
     watches: kernel::WorkspaceWatches,
     store: SessionStore,
