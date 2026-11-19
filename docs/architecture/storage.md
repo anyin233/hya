@@ -17,8 +17,10 @@ All event append paths use
 `append_event_in_transaction(&mut Transaction<Sqlite>, SessionId, Event)`:
 the sole row writer serializes the event, inserts `event_log`, updates its
 materialized indexes, and returns `Result<Envelope, StoreError>`.
-`SessionStore::begin_transaction()` returns a transaction for composing that
-writer with auxiliary rows. For example, begin a transaction, append an event,
+`SessionStore::begin_transaction()` returns a `BEGIN IMMEDIATE` transaction for composing that
+writer with auxiliary rows; every SQLite write transaction in `hya-store`,
+`BundleRegistry`, and `ModelCache` begins with `BEGIN IMMEDIATE` so deferred
+read-to-write upgrades cannot fail immediately with `SQLITE_BUSY_SNAPSHOT`. For example, begin a transaction, append an event,
 write its auxiliary row using the same transaction, then commit and publish the
 returned envelope. Never publish before commit; dropping or rolling back the
 transaction discards both writes.

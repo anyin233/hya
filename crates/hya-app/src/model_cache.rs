@@ -208,7 +208,11 @@ impl ModelCache {
         provider_id: &str,
         models: &[CachedModel],
     ) -> anyhow::Result<()> {
-        let mut tx = self.pool.begin().await.context("begin model cache write")?;
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .context("begin model cache write")?;
         sqlx::query("DELETE FROM provider_models WHERE provider_id = ?1")
             .bind(provider_id)
             .execute(&mut *tx)

@@ -50,7 +50,7 @@ impl SessionStore {
         events: Vec<Event>,
     ) -> Result<Vec<Envelope>, StoreError> {
         let key = session.storage_key();
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_transaction().await?;
         for (hash, content) in blobs {
             let size = i64::try_from(content.len()).unwrap_or(i64::MAX);
             sqlx::query(
