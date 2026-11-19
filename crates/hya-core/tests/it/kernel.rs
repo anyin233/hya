@@ -28,14 +28,23 @@ use tokio_util::sync::CancellationToken;
 
 #[test]
 fn bare_deadline_notices() {
+    run_deadline_test("kernel::bare_deadline_notices_child");
+}
+
+#[test]
+fn bare_deadline_clock() {
+    run_deadline_test("kernel::bare_deadline_clock_child");
+}
+
+fn run_deadline_test(child: &str) {
     // Install the process-wide clock in a child so no other kernel test sees it.
     let output = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "bare_deadline_notices_child", "--nocapture"])
+        .args(["--exact", child, "--nocapture"])
         .env("HYA_BARE_DEADLINE_TEST", "1")
         .output()
         .unwrap();
     assert!(
-        output.status.success(),
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed;"),
         "{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
@@ -98,6 +107,88 @@ async fn bare_deadline_notices_child() {
         })
         .collect();
     assert_eq!(logged, vec![text]);
+}
+
+#[tokio::test]
+async fn bare_deadline_clock_child() {
+    if std::env::var_os("HYA_BARE_DEADLINE_TEST").is_none() {
+        return;
+    }
+    let fx = fixture(
+        "deadline-clock",
+        FakeProvider::scripted_turns(vec![
+            text("ready"),
+            call("todo", json!({"ops": []})),
+            text("first update"),
+            text("second update"),
+        ]),
+    )
+    .await;
+    let tenth = Duration::from_secs(3);
+    hya_tool::deadline::install(tenth * 10);
+    let deadline = hya_tool::deadline::current().unwrap();
+    let cancel = CancellationToken::new();
+    assert_eq!(fx.turn("start", &cancel).await.unwrap(), FinishReason::Stop);
+    for threshold in [tenth, tenth * 2] {
+        tokio::time::sleep(threshold.saturating_sub(deadline.elapsed())).await;
+        assert_eq!(
+            fx.turn("continue", &cancel).await.unwrap(),
+            FinishReason::Stop
+        );
+    }
+
+    let requests = fx.provider.requests();
+    let clocks: Vec<Vec<_>> = requests
+        .iter()
+        .map(|req| {
+            req.messages
+                .iter()
+                .flat_map(|message| match message {
+                    Message::User { parts, .. } => parts.as_slice(),
+                    _ => &[],
+                })
+                .filter_map(|part| match part {
+                    Part::Text { id, text } if text.starts_with("HEADLESS RUN — clock: ") => {
+                        Some((id, text))
+                    }
+                    _ => None,
+                })
+                .collect()
+        })
+        .collect();
+    let [before, first, same, next] = clocks.as_slice() else {
+        panic!("expected four model rounds");
+    };
+    assert!(before.is_empty());
+    assert_eq!(first.len(), 1, "first tenth must reach the model");
+    assert!(
+        same.is_empty(),
+        "the clock line leaves the request once the assistant has responded, and the same tenth logs no other"
+    );
+    assert_eq!(next.len(), 1, "the next tenth must reach the model");
+    assert_ne!(next, first);
+    assert!(assistant_parts(&requests[2]).any(|part| matches!(
+        part,
+        Part::Tool { name, state: ToolPartState::Completed { output, .. }, .. }
+            if name.as_str() == "todo" && output == &json!(hya_proto::context::render_todos(&[]))
+    )));
+    assert!(
+        requests
+            .iter()
+            .all(|req| req.system.as_deref() == Some(fx.system.as_str()))
+    );
+
+    let log = fx.log().await;
+    let logged: Vec<_> = log
+        .iter()
+        .filter_map(|event| match event {
+            Event::TextDelta { part, delta, .. } if delta.starts_with("HEADLESS RUN — clock: ") => {
+                Some((part, delta))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(logged, vec![first[0], next[0]]);
 }
 
 struct Fixture {

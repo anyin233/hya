@@ -269,17 +269,16 @@ impl Harness for Bare<'_> {
         };
         let rewritten = before_round(cx, &[]).await?;
         if let Some(deadline) = hya_tool::deadline::current()
-            && let Some(stage) = deadline.take_notice(scope.session)
+            && let Some(notice) = deadline
+                .take_notice(scope.session)
+                .map(|stage| deadline.notice(stage, false))
+                .or_else(|| deadline.take_clock(scope.session))
         {
             scope
                 .emit
                 .emit(
                     scope.session,
-                    round::system_message_events(
-                        scope.session,
-                        MessageId::new(),
-                        deadline.notice(stage, false),
-                    ),
+                    round::system_message_events(scope.session, MessageId::new(), notice),
                 )
                 .await?;
             return Ok(true);
