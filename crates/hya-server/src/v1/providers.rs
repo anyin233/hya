@@ -232,7 +232,7 @@ fn probe_error_code(error: &ProviderError) -> String {
         ProviderError::Incompatible(_) => "incompatible".to_owned(),
         ProviderError::Decode(_) | ProviderError::Json(_) => "decode".to_owned(),
         ProviderError::AuthExpired { .. } => "auth_expired".to_owned(),
-        ProviderError::Http(_) => "provider_error".to_owned(),
+        ProviderError::Http(_) | ProviderError::StreamInterrupted(_) => "provider_error".to_owned(),
     }
 }
 

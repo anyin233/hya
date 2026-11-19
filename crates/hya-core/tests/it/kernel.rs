@@ -1057,6 +1057,52 @@ async fn transient_round_failure_retries_the_same_request() {
 }
 
 #[tokio::test]
+async fn a_stream_interruption_before_any_part_is_retried() {
+    let (fx, flaky) = flaky_fixture(
+        "retry-interrupted-stream",
+        vec![text("done")],
+        vec![
+            Some((
+                Vec::new(),
+                ProviderError::StreamInterrupted("stalled stream: no SSE frame within 300s".into()),
+            )),
+            Some((Vec::new(), server_error("upstream unreachable"))),
+        ],
+    )
+    .await;
+    assert_eq!(flaky.turn(&fx, "hi").await.unwrap(), FinishReason::Stop);
+    flaky.clock.assert_waits(&[5, 10]);
+    assert_eq!(flaky.requests.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn a_stream_interruption_after_a_part_is_not_retried() {
+    let (fx, flaky) = flaky_fixture(
+        "interrupted-stream-after-reasoning",
+        vec![text("unreached")],
+        vec![Some((
+            vec![FakeStep::Reasoning("half a thought".into())],
+            ProviderError::StreamInterrupted("stalled stream: no SSE frame within 300s".into()),
+        ))],
+    )
+    .await;
+    let error = flaky
+        .turn(&fx, "hi")
+        .await
+        .expect_err("the failed attempt persisted reasoning");
+    assert!(matches!(
+        error,
+        CoreError::Provider(error) if matches!(*error, ProviderError::StreamInterrupted(_))
+    ));
+    flaky.clock.assert_waits(&[]);
+    assert_eq!(flaky.requests.lock().unwrap().len(), 1);
+    assert!(fx.log().await.iter().any(|event| matches!(
+        event,
+        Event::ReasoningReplace { text, .. } if text == "half a thought"
+    )));
+}
+
+#[tokio::test]
 async fn non_transient_round_failure_ends_the_run() {
     let (fx, flaky) = flaky_fixture(
         "retry-invalid",

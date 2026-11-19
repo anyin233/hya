@@ -199,7 +199,9 @@ fn workflow_provider_failure_class(error: &ProviderError) -> hya_proto::Workflow
         ProviderError::AuthExpired { .. } => Class::Auth,
         ProviderError::Incompatible(_) => Class::Incompatible,
         ProviderError::Decode(_) => Class::Decode,
-        ProviderError::Json(_) | ProviderError::Http(_) => Class::Http,
+        ProviderError::Json(_) | ProviderError::Http(_) | ProviderError::StreamInterrupted(_) => {
+            Class::Http
+        }
     }
 }
 

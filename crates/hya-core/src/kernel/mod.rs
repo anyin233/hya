@@ -26,7 +26,7 @@ use hya_proto::{
     AgentName, Envelope, Event, EventSeq, FinishReason, Message, MessageId, ModelRef,
     PartProjection, Projection, Role, SessionId, ToolSchema,
 };
-use hya_provider::{CompletionRequest, EventStream, ProviderRouter};
+use hya_provider::{CompletionRequest, EventStream, ProviderError, ProviderRouter};
 use hya_store::SessionStore;
 use hya_tool::tokens::TokenAccounting;
 use hya_tool::{ModelWindow, RewriteCtx, SessionLog, Tool, ToolCtx, ToolError, Transcript};
@@ -341,7 +341,7 @@ impl Harness for Bare<'_> {
         }
     }
 
-    /// Retry a transient provider failure only if the attempt left no part.
+    /// Retry a transient provider failure or stream interruption only if the attempt left no part.
     async fn failed(&mut self, failure: &Failure) -> Result<bool, CoreError> {
         let CoreError::Provider(error) = &failure.error else {
             return Ok(false);
@@ -349,7 +349,9 @@ impl Harness for Bare<'_> {
         let Some(&wait) = ROUND_RETRY_WAITS.get(self.retries) else {
             return Ok(false);
         };
-        if !error.is_retryable_before_stream() || self.cancel.is_cancelled() {
+        let retryable = error.is_retryable_before_stream()
+            || matches!(error.as_ref(), ProviderError::StreamInterrupted(_));
+        if !retryable || self.cancel.is_cancelled() {
             return Ok(false);
         }
         let Scope {
