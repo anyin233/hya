@@ -381,14 +381,14 @@ without a tool call ends the run, and `hya exec --bare` prints that answer.
 An answer cut off at the output limit (`length`) also gets the check: the
 extra round lets the model finish what the limit cut, and the check is still
 sent only once, so the run ends on the next answer either way.
-The check asks, at the moment the model stops, for what a rule read at the
-start of the run does not reliably get: a comparison of the result with the
-request's own wording rather than with the model's expectation.
+The check asks the model to compare the current result directly with the
+request's wording. For a value the request says is unknown, the model tries
+a value other than the one it can see.
 
 ```text
 [hya] Completion check, sent once before this run ends. Compare the result with the request itself, not with your memory of it.
 1. Re-read the request. List what it states literally: paths and file names, exact strings and output formats, commands and flags, values and counts, and anything it says is unknown or must not be assumed.
-2. For each item, look at the result as it is now (the file on disk, the output of the real command) and compare it with the request's wording, character for character where the wording is exact. A check that only shows what you expected to see (a pattern you wrote, a substring, a summary) does not count.
+2. For each item, look at the result as it is now (the file on disk, the output of the real command) and compare it with the request's wording. Where the wording is exact, print the actual text and read it against the request's text, character for character. A program or pattern you wrote to do the comparison does not count, and neither does a substring or a summary. Where the request says a value is unknown, try the result with a value other than the one you can see.
 3. If something differs, fix it and check again. If everything already matches, change nothing.
 Then give your final answer.
 ```
@@ -405,11 +405,15 @@ call, when:
 - the run is cancelled (checked before the check is appended; a cancel that
   lands right after it is logged ends the run as cancelled, with the check
   never sent);
-- a `--time-budget` deadline is in Final or Over, where the Final notice
-  already tells the model to end.
+- a `--time-budget` deadline is in WrapUp, Final, or Over. The WrapUp
+  notice already asks the model to check the deliverables and finish.
+
+With a deadline, only the Normal stage allows the completion check. A run
+without a deadline can also receive it.
 
 The first two are read from the session log's projection, so a replayed log
 yields the same decision, and a rewrite cannot make the check be sent again.
+The opening line identifies a logged check even when its instructions change.
 Like the deadline stage notices, the check is a transient notice: the next
 request carries it as its last (user) message, and once the assistant message
 has a part after it (the model's response to the check), requests leave it
