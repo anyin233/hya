@@ -1,5 +1,6 @@
-//! An image a tool returned reaches a model that takes images, per protocol;
-//! any other model is told in text that it is not shown.
+//! An image a tool returned reaches a model that takes images, per protocol,
+//! in the request after the round that read it; any other model is told in
+//! text that it is not shown.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -15,6 +16,8 @@ use serde_json::{Value, json};
 const PNG: &str = "data:image/png;base64,iVBORw0KGgo=";
 const READ_TEXT: &str = "Image file (image/png, 8 bytes).";
 const NOT_SHOWN: &str = "(image/png) is not shown to you";
+const NOT_ATTACHED: &str = "(image/png) is not attached to this request";
+const NOT_FITTED: &str = "(image/png) was not shown: this step's images exceed";
 
 fn tool(name: &str, output: Value) -> Part {
     Part::Tool {
@@ -41,53 +44,72 @@ fn read_image() -> Part {
     )
 }
 
-/// The first step reads the image; the second adds text and another tool call.
-fn requests() -> (CompletionRequest, CompletionRequest) {
-    let user = Message::User {
-        id: MessageId::new(),
-        parts: vec![Part::Text {
-            id: PartId::new(),
-            text: "what is on board.png?".to_string(),
-        }],
-    };
-    let assistant = |parts: Vec<Part>| Message::Assistant {
-        id: MessageId::new(),
-        agent: AgentName::new("build"),
-        model: ModelRef::new("m"),
-        parts,
-        finish: None,
-        tokens: None,
-        last_round: None,
-    };
-    let request = |messages: Vec<Message>| CompletionRequest {
+/// A request continuing an assistant message made of `steps`; its last step
+/// is the round the request answers.
+fn continuing(steps: Vec<Vec<Part>>) -> CompletionRequest {
+    let last_step_start = steps[..steps.len() - 1].iter().map(Vec::len).sum();
+    CompletionRequest {
         model: ModelRef::new("m"),
         system: None,
-        messages,
+        messages: vec![
+            Message::User {
+                id: MessageId::new(),
+                parts: vec![Part::Text {
+                    id: PartId::new(),
+                    text: "what is on board.png?".to_string(),
+                }],
+            },
+            Message::Assistant {
+                id: MessageId::new(),
+                agent: AgentName::new("build"),
+                model: ModelRef::new("m"),
+                parts: steps.concat(),
+                finish: None,
+                tokens: None,
+                last_round: None,
+                last_step_start: Some(last_step_start),
+            },
+        ],
         tools: Vec::new(),
         temperature: None,
         max_output_tokens: None,
         reasoning: None,
         headers: Default::default(),
-    };
-    let first_step = vec![read_image()];
-    let mut both_steps = first_step.clone();
-    both_steps.push(Part::Text {
+    }
+}
+
+fn text(text: &str) -> Part {
+    Part::Text {
         id: PartId::new(),
-        text: "A chess board.".to_string(),
-    });
-    both_steps.push(tool("bash", json!({"output": "ok"})));
+        text: text.to_string(),
+    }
+}
+
+/// The first step reads the image; the second adds text and another tool call.
+fn requests() -> (CompletionRequest, CompletionRequest) {
+    let read = read_image();
     (
-        request(vec![user.clone(), assistant(first_step)]),
-        request(vec![user, assistant(both_steps)]),
+        continuing(vec![vec![read.clone()]]),
+        continuing(vec![
+            vec![read],
+            vec![
+                text("A chess board."),
+                tool("bash", json!({"output": "ok"})),
+            ],
+        ]),
     )
 }
 
-/// The second step's request starts with the first step's request: the image
-/// sits at the same place in every later request of the session.
-fn assert_prefix(first: &Value, second: &Value) {
-    let (first, second) = (first.as_array().unwrap(), second.as_array().unwrap());
-    assert!(second.len() > first.len());
-    assert_eq!(first[..], second[..first.len()]);
+/// The request after the second step carries the result as text with the notice.
+fn assert_not_sent_again(later: &Value) {
+    let later = later.to_string();
+    assert!(!later.contains("iVBORw0KGgo"), "{later}");
+    assert!(
+        later.contains(&format!(
+            "{READ_TEXT}\\n\\n[The image of this result {NOT_ATTACHED}"
+        )),
+        "{later}"
+    );
 }
 
 #[test]
@@ -109,7 +131,7 @@ fn anthropic_sends_the_image_inside_the_tool_result() {
     let later = AnthropicMessagesProtocol
         .encode_for_model(&second, None, true)
         .unwrap();
-    assert_prefix(&body["messages"], &later["messages"]);
+    assert_not_sent_again(&later);
 }
 
 #[test]
@@ -131,7 +153,7 @@ fn openai_responses_sends_the_image_in_the_function_call_output() {
     let later = OpenAiResponsesProtocol
         .encode_for_model(&second, None, true)
         .unwrap();
-    assert_prefix(&body["input"], &later["input"]);
+    assert_not_sent_again(&later);
 }
 
 #[test]
@@ -156,7 +178,7 @@ fn openai_chat_sends_the_image_in_a_user_message_after_the_tool_messages() {
     let later = OpenAiChatProtocol
         .encode_for_model(&second, None, true)
         .unwrap();
-    assert_prefix(&body["messages"], &later["messages"]);
+    assert_not_sent_again(&later);
 }
 
 /// Without image input (`Some(false)` or unknown) every protocol sends text
@@ -192,95 +214,146 @@ fn a_model_without_image_input_is_told_the_image_is_not_shown() {
     assert_eq!(OpenAiChatProtocol.encode(&first).unwrap(), chat);
 }
 
-/// The 1 MiB budget keeps images newest first and preserves the latest image result.
+const PROTOCOLS: [&dyn Protocol; 3] = [
+    &AnthropicMessagesProtocol,
+    &OpenAiResponsesProtocol,
+    &OpenAiChatProtocol,
+];
+
+/// A valid PNG data URL of exactly `len` bytes (`len` is 2 mod 4).
+fn url(len: usize) -> String {
+    format!("data:image/png;base64,iVBORw0KGgoA{}", "A".repeat(len - 34))
+}
+
+fn read_page(n: usize, url: &str) -> Part {
+    tool(
+        "read",
+        json!({
+            "title": format!("page{n}.png"),
+            "output": format!("Image file page{n}."),
+            "metadata": {},
+            "attachments": [{"type": "file", "mime": "image/png", "url": url}],
+        }),
+    )
+}
+
+/// Steps of image reads, numbered page1, page2, … in call order.
+fn pages(steps: &[&[&str]]) -> Vec<Vec<Part>> {
+    let mut n = 0;
+    steps
+        .iter()
+        .map(|urls| {
+            urls.iter()
+                .map(|url| {
+                    n += 1;
+                    read_page(n, url)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn encode(protocol: &dyn Protocol, steps: Vec<Vec<Part>>) -> String {
+    protocol
+        .encode_for_model(&continuing(steps), None, true)
+        .unwrap()
+        .to_string()
+}
+
+/// Image payloads in a request body.
+fn sent(body: &str) -> usize {
+    body.matches("iVBORw0KGgo").count()
+}
+
+/// Page `page`'s result carries the notice that starts `[The image {notice}`.
+fn noticed(body: &str, page: usize, notice: &str) -> bool {
+    body.contains(&format!("Image file page{page}.\\n\\n[The image {notice}"))
+}
+
+fn not_fitted() -> String {
+    format!("attached to this result {NOT_FITTED}")
+}
+
+fn not_attached() -> String {
+    format!("of this result {NOT_ATTACHED}")
+}
+
+/// One round's images go in call order within 2 MiB, the first always.
 #[test]
-fn the_newest_images_fill_the_request_budget_and_older_ones_become_text() {
-    // About 384 KiB per URL. Two fit and three exceed the budget.
-    let big = format!(
-        "data:image/png;base64,iVBORw0KGgoA{}",
-        "A".repeat(384 * 1024)
-    );
-    let oversized = format!(
-        "data:image/png;base64,iVBORw0KGgoA{}",
-        "A".repeat(1024 * 1024)
-    );
-    let read = |n: usize, images: &[&str]| {
-        let attachments: Vec<_> = images
-            .iter()
-            .map(|url| json!({"type": "file", "mime": "image/png", "url": url}))
-            .collect();
-        tool(
-            "read",
-            json!({
-                "title": format!("page{n}.png"),
-                "output": format!("Image file page{n}."),
-                "metadata": {},
-                "attachments": attachments,
-            }),
-        )
-    };
-    let request = |pages: &[&[&str]]| {
-        let mut messages = vec![Message::User {
-            id: MessageId::new(),
-            parts: vec![Part::Text {
-                id: PartId::new(),
-                text: "read the pages".to_string(),
-            }],
-        }];
-        for (index, images) in pages.iter().enumerate() {
-            messages.push(Message::Assistant {
-                id: MessageId::new(),
-                agent: AgentName::new("build"),
-                model: ModelRef::new("m"),
-                parts: vec![read(index + 1, images)],
-                finish: None,
-                tokens: None,
-                last_round: None,
-            });
-        }
-        CompletionRequest {
-            model: ModelRef::new("m"),
-            system: None,
-            messages,
-            tools: Vec::new(),
-            temperature: None,
-            max_output_tokens: None,
-            reasoning: None,
-            headers: Default::default(),
-        }
-    };
-    let protocols: [&dyn Protocol; 3] = [
-        &AnthropicMessagesProtocol,
-        &OpenAiResponsesProtocol,
-        &OpenAiChatProtocol,
-    ];
-    for protocol in protocols {
-        let encode = |pages: &[&[&str]]| {
-            protocol
-                .encode_for_model(&request(pages), None, true)
-                .unwrap()
-                .to_string()
-        };
-        let sent = |body: &str| body.matches("iVBORw0KGgo").count();
-        let aged = "[The image attached to this result (image/png) is no longer attached";
-
-        // Under the budget: every image goes.
-        let two = encode(&[&[&big], &[&big]]);
+fn the_newest_rounds_images_fill_the_budget_and_the_rest_become_text() {
+    // About 900 KiB per URL: two fit the budget, three exceed it.
+    let big = url(900 * 1024 + 2);
+    let oversized = url(3 * 1024 * 1024 + 2);
+    for protocol in PROTOCOLS {
+        // Two images read in the same round both go.
+        let two = encode(protocol, pages(&[&[&big, &big]]));
         assert_eq!(sent(&two), 2);
-        assert!(!two.contains(aged));
+        assert!(!two.contains(NOT_ATTACHED) && !two.contains(NOT_FITTED));
 
-        // Once an image exceeds the remaining budget, even a tiny older image ages out.
-        let four = encode(&[&[PNG], &[&big], &[&big], &[&big]]);
+        // Two images that total exactly 2 MiB both go; four bytes more do not.
+        let exact = encode(protocol, pages(&[&[&url(1_048_578), &url(1_048_574)]]));
+        assert_eq!(sent(&exact), 2);
+        let over = encode(protocol, pages(&[&[&url(1_048_578), &url(1_048_578)]]));
+        assert_eq!(sent(&over), 1);
+        assert!(noticed(&over, 2, &not_fitted()));
+
+        // Over the budget: the first two go, the rest, even a tiny one, become text.
+        let four = encode(protocol, pages(&[&[&big, &big, &big, PNG]]));
         assert_eq!(sent(&four), 2);
-        assert_eq!(four.matches(aged).count(), 2);
-        for page in [1, 2] {
-            assert!(four.contains(&format!("Image file page{page}.\\n\\n{aged}")));
-        }
+        assert!(noticed(&four, 3, &not_fitted()) && noticed(&four, 4, &not_fitted()));
 
-        // Both images from the latest image result go, despite the later text-only result.
-        let latest = encode(&[&[&big], &[PNG, &oversized], &[]]);
-        assert_eq!(sent(&latest), 2);
-        assert_eq!(latest.matches(aged).count(), 1);
-        assert!(latest.contains(&format!("Image file page1.\\n\\n{aged}")));
+        // The first image goes even when it alone exceeds the budget.
+        let first = encode(protocol, pages(&[&[&oversized, PNG]]));
+        assert_eq!(sent(&first), 1);
+        assert!(first.contains(&oversized[22..]) && noticed(&first, 2, &not_fitted()));
+    }
+}
+
+/// A response of reasoning, a call that reads an image, and text: the image
+/// goes in the next request.
+#[test]
+fn an_image_read_by_a_call_before_text_in_the_same_step_is_sent() {
+    for protocol in PROTOCOLS {
+        let body = encode(
+            protocol,
+            vec![vec![
+                Part::Reasoning {
+                    id: PartId::new(),
+                    text: "look at the board".to_string(),
+                    provider_data: None,
+                },
+                read_page(1, PNG),
+                text("Reading the board."),
+            ]],
+        );
+        assert_eq!(sent(&body), 1, "{body}");
+    }
+}
+
+/// Two successive rounds of one image read each, without reasoning or text:
+/// only the second round's image goes.
+#[test]
+fn only_the_last_of_two_tool_only_rounds_sends_its_image() {
+    let big = url(900 * 1024 + 2);
+    for protocol in PROTOCOLS {
+        let body = encode(protocol, pages(&[&[PNG], &[&big]]));
+        assert_eq!(sent(&body), 1);
+        assert!(body.contains(&big[22..]) && noticed(&body, 1, &not_attached()));
+    }
+}
+
+/// A round without tool calls (a completion check, or a round without parts)
+/// after the image rounds: no image goes.
+#[test]
+fn a_round_without_tool_calls_sends_no_image() {
+    let big = url(900 * 1024 + 2);
+    for protocol in PROTOCOLS {
+        for after in [vec![text("Done.")], Vec::new()] {
+            let mut steps = pages(&[&[PNG], &[&big]]);
+            steps.push(after);
+            let body = encode(protocol, steps);
+            assert_eq!(sent(&body), 0);
+            assert!(noticed(&body, 1, &not_attached()) && noticed(&body, 2, &not_attached()));
+        }
     }
 }

@@ -279,6 +279,7 @@ fn only_a_model_declared_to_take_images_gets_tool_result_images() {
         finish: None,
         tokens: None,
         last_round: None,
+        last_step_start: Some(0),
     }];
     let result = |support: Option<bool>| {
         let route = route(ProviderKind::Anthropic, 0)

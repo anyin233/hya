@@ -1236,16 +1236,22 @@ async fn a_retry_wait_must_fit_before_final_child() {
     assert_eq!(deadline.stage(), Stage::Normal);
 }
 
+/// The image goes in the request after the read and in no later request, also
+/// after a round of only tool calls; a request rebuilt from the log for the
+/// same step is the one sent.
 #[tokio::test]
-async fn read_image_reaches_the_model_from_live_and_replayed_history() {
+async fn read_image_reaches_the_model_once_from_live_and_replayed_history() {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
 
     let png = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAF0lEQVR4nGP4z8BAEiJN9aiGUQ1DSgMAkPn/Afnh+ngAAAAASUVORK5CYII=";
+    let mut looked = text("A board.");
+    looked.extend(call("todo", json!({"ops": []})));
     let fx = fixture(
         "read-image",
         FakeProvider::scripted_turns(vec![
             call("read", json!({"path": "board.data"})),
-            call("rewrite", json!({"summary": "saw the board"})),
+            call("todo", json!({"ops": []})),
+            looked,
             text("done"),
         ]),
     )
@@ -1259,10 +1265,16 @@ async fn read_image_reaches_the_model_from_live_and_replayed_history() {
     );
 
     let requests = fx.provider.requests();
-    let wire = AnthropicMessagesProtocol
-        .encode_for_model(&requests[1], None, true)
-        .unwrap();
-    let result = &wire["messages"][2]["content"][0];
+    assert!(requests.len() >= 4, "{} requests", requests.len());
+    let wire: Vec<serde_json::Value> = requests
+        .iter()
+        .map(|request| {
+            AnthropicMessagesProtocol
+                .encode_for_model(request, None, true)
+                .unwrap()
+        })
+        .collect();
+    let result = &wire[1]["messages"][2]["content"][0];
     assert_eq!(result["type"], "tool_result");
     assert_eq!(result["is_error"], false);
     assert_eq!(
@@ -1275,36 +1287,46 @@ async fn read_image_reaches_the_model_from_live_and_replayed_history() {
             "type": "base64", "media_type": "image/png", "data": png,
         }})
     );
+    for later in &wire[2..] {
+        let later = later.to_string();
+        assert!(!later.contains(png), "{later}");
+        assert!(
+            later.contains(
+                "Image file (image/png, 80 bytes).\\n\\n[The image of this result \
+                 (image/png) is not attached to this request"
+            ),
+            "{later}"
+        );
+    }
 
     let envelopes = fx.store.replay(fx.session).await.unwrap();
-    let next_round = envelopes
-        .iter()
-        .position(|entry| matches!(entry.event, Event::StepStarted { step: 1, .. }))
-        .unwrap();
-    let projection = Projection::from_events(&envelopes[..next_round]);
-    let rebuilt = kernel::request::request(
-        &View {
-            projection: &projection,
-        },
-        &fx.system,
-        fx.tools.iter().map(|tool| tool.schema()).collect(),
-        &fx.model,
-        &AgentName::new(kernel::AGENT),
-        &AttachmentData::new(),
-        None,
-    );
-    assert_eq!(
-        AnthropicMessagesProtocol
-            .encode_for_model(&rebuilt, None, true)
-            .unwrap(),
-        wire
-    );
-
-    assert!(
-        matches!(assistant_parts(&requests[2]).collect::<Vec<_>>().as_slice(),
-            [Part::Tool { name, state: ToolPartState::Completed { .. }, .. }] if name.as_str() == "rewrite"
-        )
-    );
+    for (step, sent) in wire.iter().enumerate().skip(1) {
+        let started = envelopes
+            .iter()
+            .position(
+                |entry| matches!(entry.event, Event::StepStarted { step: s, .. } if s as usize == step),
+            )
+            .unwrap();
+        let projection = Projection::from_events(&envelopes[..started]);
+        let rebuilt = kernel::request::request(
+            &View {
+                projection: &projection,
+            },
+            &fx.system,
+            fx.tools.iter().map(|tool| tool.schema()).collect(),
+            &fx.model,
+            &AgentName::new(kernel::AGENT),
+            &AttachmentData::new(),
+            None,
+        );
+        assert_eq!(
+            AnthropicMessagesProtocol
+                .encode_for_model(&rebuilt, None, true)
+                .unwrap(),
+            *sent,
+            "step {step}"
+        );
+    }
 }
 
 #[tokio::test]

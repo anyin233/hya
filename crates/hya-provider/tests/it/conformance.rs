@@ -625,6 +625,7 @@ fn assistant_tool_request(input: serde_json::Value) -> CompletionRequest {
                 finish: None,
                 tokens: None,
                 last_round: None,
+                last_step_start: None,
             },
         ],
         tools: Vec::new(),

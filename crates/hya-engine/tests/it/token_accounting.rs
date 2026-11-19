@@ -253,6 +253,7 @@ fn transcript(reported: Option<TokenUsage>) -> Vec<Message> {
             finish: Some(FinishReason::Stop),
             tokens: reported,
             last_round: None,
+            last_step_start: None,
         },
     ]
 }
@@ -417,6 +418,7 @@ fn assistant(parts: Vec<Part>) -> Message {
         finish: None,
         tokens: None,
         last_round: None,
+        last_step_start: None,
     }
 }
 
@@ -569,6 +571,7 @@ fn tool_payloads_are_counted() {
         finish: Some(FinishReason::Stop),
         tokens: None,
         last_round: None,
+        last_step_start: None,
     }];
     assert!(
         accounting.estimate(&bare) > 400,
