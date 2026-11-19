@@ -143,6 +143,9 @@ impl ModelCache {
             .busy_timeout(Duration::from_secs(5));
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
+            // Closing the last connection of a WAL database checkpoints under an exclusive lock.
+            .max_lifetime(None)
+            .idle_timeout(None)
             .connect_with(options)
             .await
             .with_context(|| format!("open model cache {}", path.display()))?;
@@ -334,6 +337,8 @@ mod tests {
         assert_eq!(cache.provider_models("gw").await.unwrap(), rows[1..]);
         cache.replace_provider("gw", &[]).await.unwrap();
         assert!(cache.provider_models("gw").await.unwrap().is_empty());
+        assert_eq!(cache.pool.options().get_max_lifetime(), None);
+        assert_eq!(cache.pool.options().get_idle_timeout(), None);
         cache.close().await;
         let _ = std::fs::remove_dir_all(dir);
     }

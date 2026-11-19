@@ -406,7 +406,10 @@ impl SessionStore {
             .foreign_keys(true);
         let pool_options = SqlitePoolOptions::new()
             .max_connections(8)
-            .acquire_timeout(FILE_POOL_WAIT_TIMEOUT);
+            .acquire_timeout(FILE_POOL_WAIT_TIMEOUT)
+            // Closing the last connection of a WAL database checkpoints under an exclusive lock.
+            .max_lifetime(None)
+            .idle_timeout(None);
         #[cfg(feature = "lifecycle-bench")]
         let pool_options =
             pool_options.after_connect(|connection, _| Box::pin(bench::install(connection)));
@@ -456,6 +459,9 @@ impl SessionStore {
         let pool = SqlitePoolOptions::new()
             .max_connections(8)
             .acquire_timeout(FILE_POOL_WAIT_TIMEOUT)
+            // Closing the last connection of a WAL database checkpoints under an exclusive lock.
+            .max_lifetime(None)
+            .idle_timeout(None)
             .connect_with(opts)
             .await?;
         Ok(Self {
@@ -477,6 +483,9 @@ impl SessionStore {
         let keeper = sqlx::ConnectOptions::connect(&opts).await?;
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
+            // Closing the last connection of a WAL database checkpoints under an exclusive lock.
+            .max_lifetime(None)
+            .idle_timeout(None)
             .connect_with(opts)
             .await?;
         Self::migrate(&pool).await?;
@@ -1421,5 +1430,34 @@ mod event_contract_tests {
         assert!(matches!(error, StoreError::SessionKeyData(_)), "{error}");
         assert!(error.to_string().contains("hysec_"), "{error}");
         assert!(decode_session_key(&[0xff; 16]).is_err());
+    }
+
+    #[tokio::test]
+    async fn sqlite_pools_disable_lifetime_and_idle_retirement() {
+        let dir = std::env::temp_dir().join(format!(
+            "hya-store-pool-opts-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("sessions.db");
+        let rw = SessionStore::connect(db.to_str().unwrap()).await.unwrap();
+        assert_eq!(rw.pool.options().get_max_lifetime(), None);
+        assert_eq!(rw.pool.options().get_idle_timeout(), None);
+
+        let ro = SessionStore::connect_read_only(db.to_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(ro.pool.options().get_max_lifetime(), None);
+        assert_eq!(ro.pool.options().get_idle_timeout(), None);
+
+        let mem = SessionStore::connect_memory().await.unwrap();
+        assert_eq!(mem.pool.options().get_max_lifetime(), None);
+        assert_eq!(mem.pool.options().get_idle_timeout(), None);
+
+        drop(ro);
+        drop(rw);
+        drop(mem);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
