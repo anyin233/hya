@@ -67,7 +67,7 @@ pub fn projection_to_messages(
         ["TIME: ", "FINAL ", "clock: "].iter().any(|kind| {
             text.strip_prefix("HEADLESS RUN — ")
                 .is_some_and(|rest| rest.starts_with(kind))
-        })
+        }) || text == super::COMPLETION_CHECK
     };
     messages
         .iter()
@@ -98,7 +98,7 @@ pub fn projection_to_messages(
                 tokens: m.tokens,
                 last_round: m.usage.as_ref().map(|usage| usage.last_round),
             },
-            // Keep the changing clock in the conversation on providers that
+            // Keep harness notices in the conversation on providers that
             // hoist system messages into the top-level instructions.
             Role::System if deadline_stage(m) => Message::User {
                 id: m.id,

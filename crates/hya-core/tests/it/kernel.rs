@@ -97,6 +97,8 @@ async fn bare_deadline_notices_child() {
         assert!(!format!("{:?}", req.messages).contains("HEADLESS RUN — FINAL"));
     }
     let log = fx.log().await;
+    // Final already tells the model to end: no completion check.
+    assert_eq!(checks_logged(&log), 0);
     let logged: Vec<_> = log
         .iter()
         .filter_map(|event| match event {
@@ -489,6 +491,160 @@ async fn a1_tool_results_pair_with_calls() {
     );
 }
 
+const CHECK: &str = "[hya] Completion check, sent once before this run ends.";
+
+fn is_check(message: &Message) -> bool {
+    matches!(message, Message::User { parts, .. }
+        if matches!(parts.as_slice(), [Part::Text { text, .. }] if text.starts_with(CHECK)))
+}
+
+fn checks_logged(log: &[Event]) -> usize {
+    log.iter()
+        .filter(|event| matches!(event, Event::TextDelta { delta, .. } if delta.starts_with(CHECK)))
+        .count()
+}
+
+/// After a tool call, the first answer gets the completion check; the second
+/// answer ends the run.
+#[tokio::test]
+async fn completion_check_is_sent_once_after_a_tool_call() {
+    let fx = fixture(
+        "completion-check",
+        FakeProvider::scripted_turns(vec![
+            call("todo", json!({"ops": []})),
+            text("draft"),
+            call("todo", json!({"ops": []})),
+            text("final"),
+            text("unreached"),
+        ]),
+    )
+    .await;
+    let finish = fx.turn("do it", &CancellationToken::new()).await;
+    assert_eq!(finish.unwrap(), FinishReason::Stop);
+    assert_eq!(fx.provider.requests().len(), 4);
+    assert_eq!(checks_logged(&fx.log().await), 1);
+    let projection = fx.store.read_projection_shared(fx.session).await.unwrap();
+    let reply = projection
+        .session
+        .messages
+        .iter()
+        .rfind(|message| message.role == Role::Assistant)
+        .unwrap();
+    let last_text = reply.parts.iter().rev().find_map(|part| match part {
+        hya_proto::PartProjection::Text { text, .. } => Some(text.as_str()),
+        _ => None,
+    });
+    assert_eq!(last_text, Some("final"));
+}
+
+/// Like a deadline stage notice, the check is the last message of the next
+/// request and leaves the request once the model has responded to it.
+#[tokio::test]
+async fn the_completion_check_leaves_the_request_after_the_next_step() {
+    let fx = fixture(
+        "check-transient",
+        FakeProvider::scripted_turns(vec![
+            call("todo", json!({"ops": []})),
+            text("draft"),
+            call("todo", json!({"ops": []})),
+            text("final"),
+        ]),
+    )
+    .await;
+    fx.turn("do it", &CancellationToken::new()).await.unwrap();
+    let requests = fx.provider.requests();
+    assert_eq!(requests.len(), 4);
+    assert!(!requests[1].messages.iter().any(is_check));
+    assert!(requests[2].messages.last().is_some_and(is_check));
+    assert!(!requests[3].messages.iter().any(is_check));
+    let parts: Vec<_> = assistant_parts(&requests[3]).collect();
+    assert!(matches!(
+        parts.as_slice(),
+        [
+            Part::Tool { .. },
+            Part::Text { text, .. },
+            Part::Tool { .. },
+        ] if text == "draft"
+    ));
+}
+
+#[tokio::test]
+async fn a_run_without_tool_calls_ends_without_the_completion_check() {
+    let fx = fixture(
+        "no-completion-check",
+        FakeProvider::scripted_turns(vec![text("hi"), text("unreached")]),
+    )
+    .await;
+    let finish = fx.turn("say hi", &CancellationToken::new()).await;
+    assert_eq!(finish.unwrap(), FinishReason::Stop);
+    assert_eq!(fx.provider.requests().len(), 1);
+    assert_eq!(checks_logged(&fx.log().await), 0);
+}
+
+#[tokio::test]
+async fn a_call_of_an_unknown_tool_ends_without_the_completion_check() {
+    let fx = fixture(
+        "unknown-tool-no-check",
+        FakeProvider::scripted_turns(vec![
+            call("nope", json!({})),
+            text("done"),
+            text("unreached"),
+        ]),
+    )
+    .await;
+    let finish = fx.turn("go", &CancellationToken::new()).await;
+    assert_eq!(finish.unwrap(), FinishReason::Stop);
+    assert_eq!(fx.provider.requests().len(), 2);
+    assert_eq!(checks_logged(&fx.log().await), 0);
+}
+
+#[tokio::test]
+async fn an_error_finish_ends_without_the_completion_check() {
+    let fx = fixture(
+        "error-finish-no-check",
+        FakeProvider::scripted_turns(vec![
+            call("todo", json!({"ops": []})),
+            vec![
+                FakeStep::Text("filtered".to_string()),
+                FakeStep::Finish(FinishReason::Error),
+            ],
+            text("unreached"),
+        ]),
+    )
+    .await;
+    let finish = fx.turn("go", &CancellationToken::new()).await;
+    assert_eq!(finish.unwrap(), FinishReason::Error);
+    assert_eq!(fx.provider.requests().len(), 2);
+    assert_eq!(checks_logged(&fx.log().await), 0);
+}
+
+/// A cancel that fires as the answer's step finishes ends the run as before,
+/// with no check logged that no request would carry.
+#[tokio::test]
+async fn a_cancel_as_the_answer_ends_logs_no_completion_check() {
+    let fx = fixture(
+        "cancel-no-check",
+        FakeProvider::scripted_turns(vec![
+            call("todo", json!({"ops": []})),
+            text("done"),
+            text("unreached"),
+        ]),
+    )
+    .await;
+    let cancel = CancellationToken::new();
+    let trip = cancel.clone();
+    let finish = fx
+        .turn_with_publish("go", &cancel, &move |envelope| {
+            if matches!(envelope.event, Event::StepFinished { step: 1, .. }) {
+                trip.cancel();
+            }
+        })
+        .await;
+    assert_eq!(finish.unwrap(), FinishReason::Stop);
+    assert_eq!(fx.provider.requests().len(), 2);
+    assert_eq!(checks_logged(&fx.log().await), 0);
+}
+
 #[tokio::test]
 async fn every_bare_request_carries_the_configured_reasoning_default() {
     let fx = fixture(
@@ -500,7 +656,7 @@ async fn every_bare_request_carries_the_configured_reasoning_default() {
     let finish = fx.turn("run true", &CancellationToken::new()).await;
     assert_eq!(finish.unwrap(), FinishReason::Stop);
     let efforts: Vec<_> = fx.provider.requests().iter().map(|r| r.reasoning).collect();
-    assert_eq!(efforts, vec![Some(ReasoningEffort::Max); 2]);
+    assert_eq!(efforts, vec![Some(ReasoningEffort::Max); 3]);
 }
 
 #[tokio::test]
@@ -525,7 +681,7 @@ async fn a2_failures_are_observations() {
     assert!(errors[1].contains("old"), "{}", errors[1]);
     // The next round runs as usual and sees all three failures.
     let requests = fx.provider.requests();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 5);
     let failed = assistant_parts(&requests[3])
         .filter(|part| {
             matches!(
@@ -861,7 +1017,7 @@ async fn a4_model_rewrite() {
         FinishReason::Stop
     );
     let requests = fx.provider.requests();
-    assert_eq!(requests.len(), 5);
+    assert_eq!(requests.len(), 6);
     let next = &requests[4];
 
     // No dangling call or result; the removed steps are gone.
@@ -1008,7 +1164,7 @@ async fn goal_checkpoint_is_asked_once_before_the_rewrite_threshold() {
     let requests = fx.provider.requests();
     let asked: Vec<usize> = requests.iter().map(goal_checkpoints).collect();
     // Below 60%: none; at 65%: asked; at 70%: already answered.
-    assert_eq!(asked, [0, 0, 1, 0]);
+    assert_eq!(asked, [0, 0, 1, 0, 0]);
     let log = fx.log().await;
     assert!(
         !log.iter()
@@ -1036,7 +1192,7 @@ async fn goal_checkpoint_stays_out_after_rewrite() {
 
     let requests = fx.provider.requests();
     let asked: Vec<usize> = requests.iter().map(goal_checkpoints).collect();
-    assert_eq!(asked, [0, 0, 1, 0, 0]);
+    assert_eq!(asked, [0, 0, 1, 0, 0, 0]);
     assert!(requests[3].messages.iter().any(|message| matches!(
         message,
         Message::System { content, .. } if content.starts_with("HYA_COMPACTED_CONTEXT")
@@ -1371,7 +1527,7 @@ async fn a6_harness_rewrite_and_restart() {
         })
         .unwrap();
     let requests = fx.provider.requests();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 3);
     let sent = part_ids(&requests[1]);
     assert_eq!(
         sent.contains(&reasoning),
@@ -1449,7 +1605,7 @@ async fn rewrite_carries_the_latest_todo_result_verbatim() {
             if output == list && todos.len() == 2
     )));
     let requests = fx.provider.requests();
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 4);
     assert!(!assistant_parts(&requests[2]).any(|part| matches!(
         part, Part::Tool { name, .. } if name.as_str() == "todo"
     )));
@@ -1690,7 +1846,7 @@ async fn outside_change_to_read_file_is_logged_before_the_next_request() {
         matches!(&next.event, Event::StepStarted { step: 1, view: Some(view), .. } if view.cut == *seq)
     );
     let requests = fx.provider.requests();
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 4);
     assert!(
         !assistant_parts(&requests[1]).any(|part| matches!(part, Part::Tool {
         state: ToolPartState::Completed { output, .. }, ..
