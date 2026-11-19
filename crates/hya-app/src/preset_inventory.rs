@@ -1,4 +1,5 @@
-//! Read-only inventory of the trusted first-party presets loaded at runtime.
+//! Read-only inventory of the trusted first-party presets and internal bundles
+//! loaded at runtime.
 
 use hya_bundle::{Bundle, BundleError, first_party_bundle};
 
@@ -23,7 +24,7 @@ pub struct TrustedPresetDescriptor {
     pub resource_ids: Vec<String>,
 }
 
-/// Return trusted presets in stable identity order.
+/// Return trusted presets and internal bundles in stable identity order.
 ///
 /// This is a parallel display inventory. It never inserts preset payloads into
 /// the public [`hya_bundle::BundleCatalog`], so listing cannot introduce
@@ -120,6 +121,22 @@ pub fn trusted_preset_inventory() -> Result<Vec<TrustedPresetDescriptor>, Bundle
             resource_ids: Vec::new(),
         },
     ]);
+    // Internal bundles load into the kernel, not the public catalog; listing them
+    // here makes them visible and immutable like the presets.
+    for identity in hya_bundle::INTERNAL_BUNDLES {
+        let catalog = first_party_bundle(identity)?;
+        let bundle = single_bundle(catalog.bundles(), identity)?;
+        presets.push(TrustedPresetDescriptor {
+            id: bundle.identity().id.clone(),
+            kind: bundle.kind().as_str().to_string(),
+            version: bundle.identity().version.clone(),
+            digest: catalog.digest().to_string(),
+            immutable: true,
+            installable: false,
+            agent_ids: Vec::new(),
+            resource_ids: Vec::new(),
+        });
+    }
     presets.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(presets)
 }

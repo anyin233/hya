@@ -425,7 +425,8 @@ lines).
 the four tool-family presets (`hya/base-tools`, `hya/extended-tools`,
 `hya/network-tools`, `hya/channel-tools`), and
 `hya/core-skills`, `hya/core-commands`, and `hya/agent-channels` preset inventory
-alongside first-party and installed packages. Trusted inventory rows are
+and the internal bundle `hya/compaction` alongside first-party and installed
+packages. Trusted inventory rows are
 immutable and not installable; public packages cannot acquire preset
 privileges. A user or project bundle that overrides a first-party bundle takes
 precedence; removing the override restores the first-party bundle, which itself
