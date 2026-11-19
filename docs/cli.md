@@ -760,11 +760,14 @@ it exits 75. Use another database or stop that server first. The model is
 `--model` or the configured default. The working directory is the cwd.
 
 `--time-budget <SECS>` accepts a positive integer (`u64`, at least 1).
-Bare mode announces the total budget on the first request. When it reaches
-WrapUp or Final, it adds a notice with the remaining seconds to the next
-model request. The event log records at most one notice per stage, and each
-stage notice leaves the model's request history when the assistant responds.
-The shared thresholds and Bash timeout calculation are described below.
+Bare mode announces the total budget on the first request. On the first
+model request after crossing another tenth of the budget, it reports elapsed
+and remaining seconds as `HEADLESS RUN — clock: Xs of Ys used, Zs left.`
+For a 900-second budget, the first update is due at 90 seconds. A new WrapUp
+or Final notice takes precedence and also reports the time. The event log
+records these as system messages. Each stage notice and clock line leaves
+the request history when the assistant responds. The shared thresholds and
+Bash timeout calculation are described below.
 The outside harness enforces the process deadline.
 
 See [Kernel](kernel.md) for tool contracts, rewrite rules, and the differences

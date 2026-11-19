@@ -11,8 +11,8 @@ hya exec --bare "say hi" --db /tmp/x.db
 
 The working directory is the caller's cwd. `--bare` conflicts with `--pure`
 and `--json` and always runs in process. Add `--time-budget <SECS>` to
-announce the budget to the model, send WrapUp and Final guidance, and cap
-Bash calls. See the [CLI reference](cli.md#--bare).
+announce the budget to the model, report its progress, send WrapUp and Final
+guidance, and cap Bash calls. See the [CLI reference](cli.md#--bare).
 
 ## Three primitives
 
@@ -41,6 +41,15 @@ rewrite the context. The view borrows the folded session projection.
 `View::cut()` gives the last durable event sequence in that projection,
 inclusive. `Harness::request(&View)` takes this view and supplies the
 resolved harness inputs needed to build the request.
+
+In a budgeted bare run, the kernel checks the clock before each model
+round. If the budget has crossed another tenth, it logs
+`HEADLESS RUN — clock: Xs of Ys used, Zs left.` as a system message.
+A new WrapUp or Final notice takes precedence. These notices are sent as
+user-role messages in the conversation. A stage notice or a clock line
+leaves the request after the assistant responds, so each is the last
+message of exactly one request and the earlier history is left as it was.
+Tool results keep their original payloads.
 
 Each `StepStarted` records a `view` with the numeric `cut` and a
 `request_sha256` string. The digest covers the harness's completed system
