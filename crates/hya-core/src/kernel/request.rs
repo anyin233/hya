@@ -67,7 +67,7 @@ pub fn projection_to_messages(
         ["TIME: ", "FINAL ", "clock: "].iter().any(|kind| {
             text.strip_prefix("HEADLESS RUN — ")
                 .is_some_and(|rest| rest.starts_with(kind))
-        }) || text == super::COMPLETION_CHECK
+        }) || super::is_completion_check(&text)
     };
     messages
         .iter()

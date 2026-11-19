@@ -19,6 +19,7 @@ use hya_provider::{
     Protocol, ProviderRouter, ReasoningEffort,
 };
 use hya_store::SessionStore;
+use hya_tool::deadline::{self, Stage};
 use hya_tool::{
     Action, Mode, ModelWindow, PermissionPlane, PermissionRules, Pressure, RewriteCtx, Rewriter,
     Rule, SessionLog, Tool, ToolCtx, ToolError, Transcript,
@@ -28,24 +29,26 @@ use tokio_util::sync::CancellationToken;
 
 #[test]
 fn bare_deadline_notices() {
-    run_deadline_test("kernel::bare_deadline_notices_child");
+    for stage in ["final", "wrap-up"] {
+        run_deadline_test("kernel::bare_deadline_notices_child", stage);
+    }
 }
 
 #[test]
 fn bare_deadline_clock() {
-    run_deadline_test("kernel::bare_deadline_clock_child");
+    run_deadline_test("kernel::bare_deadline_clock_child", "clock");
 }
 
-fn run_deadline_test(child: &str) {
+fn run_deadline_test(child: &str, case: &str) {
     // Install the process-wide clock in a child so no other kernel test sees it.
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", child, "--nocapture"])
-        .env("HYA_BARE_DEADLINE_TEST", "1")
+        .env("HYA_BARE_DEADLINE_TEST", case)
         .output()
         .unwrap();
     assert!(
         output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed;"),
-        "{}\n{}",
+        "{case}: {}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -53,9 +56,11 @@ fn run_deadline_test(child: &str) {
 
 #[tokio::test]
 async fn bare_deadline_notices_child() {
-    if std::env::var_os("HYA_BARE_DEADLINE_TEST").is_none() {
-        return;
-    }
+    let (stage, budget, prefix) = match std::env::var("HYA_BARE_DEADLINE_TEST").as_deref() {
+        Ok("final") => (Stage::Final, 40, "HEADLESS RUN — FINAL "),
+        Ok("wrap-up") => (Stage::WrapUp, 240, "HEADLESS RUN — TIME: "),
+        _ => return,
+    };
     let fx = fixture(
         "deadline-notice",
         FakeProvider::scripted_turns(vec![
@@ -65,14 +70,28 @@ async fn bare_deadline_notices_child() {
         ]),
     )
     .await;
-    // A 40-second budget is already in Final, without sleeping.
-    hya_tool::deadline::install(Duration::from_secs(40));
+    deadline::install(Duration::from_secs(budget));
+    let deadline = deadline::current().unwrap();
+    if stage == Stage::WrapUp {
+        // The process clock uses real time. Wait until the wrap-up window starts.
+        tokio::time::sleep(
+            deadline
+                .remaining()
+                .saturating_sub(deadline.wrap_up_window()),
+        )
+        .await;
+    }
+    assert_eq!(deadline.stage(), stage);
     assert_eq!(
         fx.turn("write the deliverable", &CancellationToken::new())
             .await
             .unwrap(),
         FinishReason::Stop
     );
+    let log = fx.log().await;
+    // Both notices already tell the model to finish.
+    assert_eq!(deadline.stage(), stage);
+    assert_eq!(checks_logged(&log), 0);
     let requests = fx.provider.requests();
     assert_eq!(requests.len(), 3);
     let Some(Message::User { parts, .. }) = requests[0].messages.last() else {
@@ -81,30 +100,34 @@ async fn bare_deadline_notices_child() {
     let [Part::Text { text, .. }] = parts.as_slice() else {
         panic!("expected a single deadline notice");
     };
-    let left = text
-        .strip_prefix("HEADLESS RUN — FINAL ")
-        .and_then(|rest| rest.split_once("s: "))
-        .and_then(|(seconds, _)| seconds.parse::<u64>().ok())
-        .expect("Final notice with seconds left");
-    assert!((30..40).contains(&left), "{text}");
-    assert!(text.contains("of 40s used. Write any missing deliverable"));
+    assert!(text.starts_with(prefix), "{text}");
+    if stage == Stage::Final {
+        let left = text
+            .strip_prefix(prefix)
+            .and_then(|rest| rest.split_once("s: "))
+            .and_then(|(seconds, _)| seconds.parse::<u64>().ok())
+            .expect("Final notice with seconds left");
+        assert!((30..40).contains(&left), "{text}");
+        assert!(text.contains("of 40s used. Write any missing deliverable"));
+    } else {
+        assert!(text.contains("of 240s used"), "{text}");
+        assert!(
+            text.contains("the request's own checks, then finish"),
+            "{text}"
+        );
+    }
     assert!(
         requests
             .iter()
             .all(|req| req.system.as_deref() == Some(fx.system.as_str()))
     );
     for req in &requests[1..] {
-        assert!(!format!("{:?}", req.messages).contains("HEADLESS RUN — FINAL"));
+        assert!(!format!("{:?}", req.messages).contains(prefix));
     }
-    let log = fx.log().await;
-    // Final already tells the model to end: no completion check.
-    assert_eq!(checks_logged(&log), 0);
     let logged: Vec<_> = log
         .iter()
         .filter_map(|event| match event {
-            Event::TextDelta { delta, .. } if delta.starts_with("HEADLESS RUN — FINAL ") => {
-                Some(delta)
-            }
+            Event::TextDelta { delta, .. } if delta.starts_with(prefix) => Some(delta),
             _ => None,
         })
         .collect();
@@ -127,8 +150,8 @@ async fn bare_deadline_clock_child() {
     )
     .await;
     let tenth = Duration::from_secs(3);
-    hya_tool::deadline::install(tenth * 10);
-    let deadline = hya_tool::deadline::current().unwrap();
+    deadline::install(tenth * 10);
+    let deadline = deadline::current().unwrap();
     let cancel = CancellationToken::new();
     assert_eq!(fx.turn("start", &cancel).await.unwrap(), FinishReason::Stop);
     for threshold in [tenth, tenth * 2] {
@@ -537,6 +560,61 @@ async fn completion_check_is_sent_once_after_a_tool_call() {
     assert_eq!(last_text, Some("final"));
 }
 
+#[tokio::test]
+async fn a_logged_completion_check_keeps_its_behavior_after_the_wording_changes() {
+    let fx = fixture(
+        "check-replay",
+        FakeProvider::scripted_turns(vec![
+            text("draft"),
+            call("todo", json!({"ops": []})),
+            text("final"),
+        ]),
+    )
+    .await;
+    let cancel = CancellationToken::new();
+    fx.turn("do it", &cancel).await.unwrap();
+
+    let old_check = "[hya] Completion check, sent once before this run ends. Compare the result with the request itself, not with your memory of it.
+1. Re-read the request. List what it states literally: paths and file names, exact strings and output formats, commands and flags, values and counts, and anything it says is unknown or must not be assumed.
+2. For each item, look at the result as it is now (the file on disk, the output of the real command) and compare it with the request's wording, character for character where the wording is exact. A check that only shows what you expected to see (a pattern you wrote, a substring, a summary) does not count.
+3. If something differs, fix it and check again. If everything already matches, change nothing.
+Then give your final answer.";
+    fx.store
+        .append_events(
+            fx.session,
+            kernel::round::system_message_events(fx.session, MessageId::new(), old_check.into()),
+        )
+        .await
+        .unwrap();
+    let projection = fx.store.read_projection_shared(fx.session).await.unwrap();
+    let messages = kernel::request::projection_to_messages(
+        &AgentName::new(kernel::AGENT),
+        &projection,
+        &fx.model,
+        &AttachmentData::new(),
+    );
+    let rendered_as_user = messages.last().is_some_and(is_check);
+
+    fx.turn("continue", &cancel).await.unwrap();
+    let requests = fx.provider.requests();
+    assert_eq!(
+        (
+            rendered_as_user,
+            requests.len(),
+            checks_logged(&fx.log().await)
+        ),
+        (true, 3, 1)
+    );
+    assert!(
+        requests[1..]
+            .iter()
+            .all(|req| req.messages.iter().all(|msg| {
+                !is_check(msg)
+                    && !matches!(msg, Message::System { content, .. } if content == old_check)
+            }))
+    );
+}
+
 /// Like a deadline stage notice, the check is the last message of the next
 /// request and leaves the request once the model has responded to it.
 #[tokio::test]
@@ -555,7 +633,23 @@ async fn the_completion_check_leaves_the_request_after_the_next_step() {
     let requests = fx.provider.requests();
     assert_eq!(requests.len(), 4);
     assert!(!requests[1].messages.iter().any(is_check));
-    assert!(requests[2].messages.last().is_some_and(is_check));
+    let Some(Message::User { parts, .. }) = requests[2].messages.last() else {
+        panic!("expected the completion check at the end of the request");
+    };
+    let [Part::Text { text, .. }] = parts.as_slice() else {
+        panic!("expected the completion check in a single text part");
+    };
+    assert!(text.starts_with(CHECK));
+    assert_eq!(
+        text.lines().nth(2),
+        Some(concat!(
+            "2. For each item, look at the result as it is now (the file on disk, the output of the real command) ",
+            "and compare it with the request's wording. Where the wording is exact, print the actual text and read ",
+            "it against the request's text, character for character. A program or pattern you wrote to do the ",
+            "comparison does not count, and neither does a substring or a summary. Where the request says a value ",
+            "is unknown, try the result with a value other than the one you can see."
+        ))
+    );
     assert!(!requests[3].messages.iter().any(is_check));
     let parts: Vec<_> = assistant_parts(&requests[3]).collect();
     assert!(matches!(

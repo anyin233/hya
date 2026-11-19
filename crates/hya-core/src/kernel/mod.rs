@@ -45,9 +45,14 @@ pub const AGENT: &str = "kernel";
 /// The message a bare run receives once before it ends (docs/kernel.md).
 const COMPLETION_CHECK: &str = "[hya] Completion check, sent once before this run ends. Compare the result with the request itself, not with your memory of it.
 1. Re-read the request. List what it states literally: paths and file names, exact strings and output formats, commands and flags, values and counts, and anything it says is unknown or must not be assumed.
-2. For each item, look at the result as it is now (the file on disk, the output of the real command) and compare it with the request's wording, character for character where the wording is exact. A check that only shows what you expected to see (a pattern you wrote, a substring, a summary) does not count.
+2. For each item, look at the result as it is now (the file on disk, the output of the real command) and compare it with the request's wording. Where the wording is exact, print the actual text and read it against the request's text, character for character. A program or pattern you wrote to do the comparison does not count, and neither does a substring or a summary. Where the request says a value is unknown, try the result with a value other than the one you can see.
 3. If something differs, fix it and check again. If everything already matches, change nothing.
 Then give your final answer.";
+
+fn is_completion_check(text: &str) -> bool {
+    // The opening line identifies logged checks across changes to the instructions.
+    text.lines().next() == COMPLETION_CHECK.lines().next()
+}
 
 /// Where kernel events go: durable appends and live-only publishes.
 #[async_trait]
@@ -330,16 +335,12 @@ impl Harness for Bare<'_> {
         Ok(())
     }
 
-    /// The completion check, once per session and only after the kernel ran
-    /// a call of a known tool; not when the deadline already tells the model
-    /// to end.
+    /// The completion check, once per session after the kernel ran a known
+    /// tool and before any run deadline reaches WrapUp.
     async fn before_end(&mut self) -> Result<bool, CoreError> {
-        if hya_tool::deadline::current().is_some_and(|deadline| {
-            matches!(
-                deadline.stage(),
-                hya_tool::deadline::Stage::Final | hya_tool::deadline::Stage::Over
-            )
-        }) {
+        if hya_tool::deadline::current()
+            .is_some_and(|deadline| deadline.stage() != hya_tool::deadline::Stage::Normal)
+        {
             return Ok(false);
         }
         let Scope {
@@ -363,7 +364,7 @@ impl Harness for Bare<'_> {
         // The logged check counts as sent even after requests leave it out.
         let sent = messages.iter().any(|message| {
             message.role == Role::System
-                && request::collect_text(&message.parts) == COMPLETION_CHECK
+                && is_completion_check(&request::collect_text(&message.parts))
         });
         // Cancelled meanwhile: a logged check would never be sent.
         if !ran_tool || sent || self.cancel.is_cancelled() {
