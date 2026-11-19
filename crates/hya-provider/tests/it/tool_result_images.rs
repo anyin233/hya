@@ -192,17 +192,17 @@ fn a_model_without_image_input_is_told_the_image_is_not_shown() {
     assert_eq!(OpenAiChatProtocol.encode(&first).unwrap(), chat);
 }
 
-/// The 2 MiB budget keeps images newest first and preserves the latest image result.
+/// The 1 MiB budget keeps images newest first and preserves the latest image result.
 #[test]
 fn the_newest_images_fill_the_request_budget_and_older_ones_become_text() {
-    // About 768 KiB per URL. Two fit and three exceed the budget.
+    // About 384 KiB per URL. Two fit and three exceed the budget.
     let big = format!(
         "data:image/png;base64,iVBORw0KGgoA{}",
-        "A".repeat(768 * 1024)
+        "A".repeat(384 * 1024)
     );
     let oversized = format!(
         "data:image/png;base64,iVBORw0KGgoA{}",
-        "A".repeat(2 * 1024 * 1024)
+        "A".repeat(1024 * 1024)
     );
     let read = |n: usize, images: &[&str]| {
         let attachments: Vec<_> = images
