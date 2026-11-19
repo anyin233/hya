@@ -93,9 +93,12 @@ in both modes.
 | `rewrite` | `{"summary": string}` | `{"removed_messages": <n>, "note": "The summary in this call is your own text, not an observation."}` |
 | `todo` | `{"ops": [operation, ...]}` | Full list as a JSON string. See [Session todos](#session-todos). |
 
-`bash` runs `sh -c` in the working directory and merges stdout and stderr.
-A nonzero exit is still a success result for the model to interpret. Failure
-to start returns `ToolError`.
+`bash` runs `bash -c` when it finds a Bash executable on `PATH` and uses
+`sh -c` otherwise. It selects the shell once per process. The command runs in
+the working directory with stdin connected to `/dev/null` and stdout and
+stderr merged. The tool passes only `-c` as a shell option and uses the exit
+code reported by the shell. A nonzero exit is still a success result for the
+model to interpret. Failure to start returns `ToolError`.
 
 A command may run for `timeout` seconds, with a default of 300. Values
 outside 1–86400 are an input error. A `--time-budget` run can reduce the
@@ -111,8 +114,10 @@ model continue after a slow command or pass a longer `timeout` when needed.
 {"command": "make -j8 2>&1 | tail -20", "timeout": 1200}
 ```
 
-Cancellation also kills the process group. A process that left the group
-can survive and hold the output pipe open. After the command exits or is
+Bash kills any processes still in the command's process group when the
+call returns, including after cancellation. A job that must outlive the call
+has to leave the group, for example with `setsid`. A process that leaves the
+group can keep the output pipe open. After the command exits or is
 killed, Bash waits at most one second for more output, subject to the
 remaining run budget, then captures any bytes still buffered in the pipe.
 

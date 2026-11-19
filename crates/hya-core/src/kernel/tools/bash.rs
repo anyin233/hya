@@ -1,6 +1,8 @@
 use std::io::{self, Read as _};
 use std::os::fd::AsRawFd as _;
+use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -21,6 +23,17 @@ const MAX_TIMEOUT_SECS: u64 = 86_400;
 /// How long to wait for more output after the command exits or is killed.
 const DRAIN: Duration = Duration::from_secs(1);
 
+/// `bash` when one is on `PATH`, else `sh`; resolved once per process.
+static SHELL: LazyLock<PathBuf> = LazyLock::new(|| {
+    std::env::var_os("PATH")
+        .and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join("bash"))
+                .find(|bash| bash.is_file())
+        })
+        .unwrap_or_else(|| PathBuf::from("sh"))
+});
+
 pub(super) struct Bash;
 
 #[derive(Deserialize)]
@@ -38,7 +51,7 @@ impl Tool for Bash {
     fn schema(&self) -> ToolSchema {
         super::schema(
             "bash",
-            "Run a shell command (`sh -c`) in the working directory. Returns its exit code and combined stdout and stderr. At `timeout`, Bash kills the command's process group and returns the output it captured.",
+            "Run a shell command in the working directory with `bash -c` if Bash is on PATH, otherwise with `sh -c`. Bash kills processes still in the command's process group when the call returns, so a job that must outlive the call has to leave the group (for example with `setsid`). Returns its exit code and combined stdout and stderr. At `timeout`, Bash kills the command's process group and returns the output it captured.",
             json!({
                 "type": "object",
                 "properties": {
@@ -82,7 +95,7 @@ impl Tool for Bash {
         // One pipe for both streams keeps their interleaving.
         let (reader, writer) = std::io::pipe()?;
         let mut reader = Receiver::from_owned_fd(reader.into())?;
-        let mut process = Command::new("sh");
+        let mut process = Command::new(SHELL.as_path());
         process
             .arg("-c")
             .arg(&command)
