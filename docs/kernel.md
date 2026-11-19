@@ -116,17 +116,23 @@ and a 1,800-second budget limits it to 180 seconds. With a 3,600-second
 budget the default stays 300 seconds and a requested 600-second wait is
 capped at 360 seconds. Without a budget the requested or default wait applies.
 
+Because tool results are sent again with every later request, when Bash has
+captured more than 30,000 bytes at the end of its wait, `output` shows the
+first 10,000 and last 20,000 bytes with a marker line giving the omitted
+and total byte counts and the quoted path to the retained file holding
+the complete output.
+
 Each call creates a private directory (`mkdtemp`, `hya-bash-XXXXXX` in the
 system temporary directory) holding an `output` file, which receives the
 command's stdout and stderr, and an `exit_code` file. A call ends in one of
 four ways:
 
 - **The command ends within the wait.** The result is
-  `{"exit_code": int, "output": string}` with the complete output, and Bash
-  removes the call's directory. Nothing is signalled: a job the command
-  started with `&` keeps running, as it does after any shell exits. Its
-  output still goes to the removed file, so a job whose output matters
-  should redirect it to a file of its own.
+  `{"exit_code": int, "output": string}` with the captured output. Bash
+  removes the call's directory when the captured output fits the limit.
+  A job the command started with `&` keeps running, as it does after any
+  shell exits. Redirect its output to a file of its own to keep it when
+  Bash removes the directory.
 - **The wait ends first** (the call's `timeout`, the default, or a tenth
   of the run's budget). The command keeps running. The result has
   `exit_code: null`, the output printed until the wait ended, and a
@@ -143,7 +149,8 @@ four ways:
   end-of-budget cap is shorter than the wait above. If the command is
   still running at that cap, Bash kills its process group.
   The result has `exit_code: null`, the captured `output`, and a `timed_out`
-  sentence naming the budget. Once the budget has no time left, Bash does not
+  sentence naming the budget. Bash removes the call's directory when the
+  captured output fits the limit. Once the budget has no time left, Bash does not
   start the command and returns a `timed_out` result with empty `output`.
   See the [CLI reference](cli.md#--bare).
 - **The run is cancelled.** Bash kills the command's process group and the
