@@ -1308,6 +1308,47 @@ async fn read_image_reaches_the_model_from_live_and_replayed_history() {
 }
 
 #[tokio::test]
+async fn read_oversized_image_returns_resize_guidance_without_attachment() {
+    let fx = fixture(
+        "read-oversized-image",
+        FakeProvider::scripted_turns(vec![
+            call("read", json!({"path": "board.png"})),
+            text("done"),
+        ]),
+    )
+    .await;
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    // One byte above the PNG file limit for the 2 MiB serialized attachment.
+    png.resize(1_572_814, 0);
+    std::fs::write(fx.dir.join("board.png"), png).unwrap();
+
+    assert_eq!(
+        fx.turn("look at the board", &CancellationToken::new())
+            .await
+            .unwrap(),
+        FinishReason::Stop
+    );
+
+    let requests = fx.provider.requests();
+    let output = assistant_parts(&requests[1])
+        .find_map(|part| match part {
+            Part::Tool {
+                name,
+                state: ToolPartState::Completed { output, .. },
+                ..
+            } if name.as_str() == "read" => Some(output),
+            _ => None,
+        })
+        .unwrap();
+    assert!(output.get("attachments").is_none(), "image was attached");
+    let notice = output["output"].as_str().unwrap();
+    assert!(notice.contains("Image file (image/png, 1572814 bytes)."));
+    assert!(notice.contains("larger than the limit of 1572813 bytes"));
+    assert!(notice.contains("not attached"));
+    assert!(notice.contains("Downscale or crop it with a program and read the smaller file"));
+}
+
+#[tokio::test]
 async fn large_image_result_stays_below_rewrite_pressure() {
     let fx = fixture(
         "large-image-pressure",

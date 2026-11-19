@@ -87,11 +87,18 @@ in both modes.
 | Tool | Input JSON | Success result |
 | --- | --- | --- |
 | `bash` | `{"command": string, "timeout"?: int}` | `{"exit_code": int, "output": string}`; when the wait ends first `{"exit_code": null, "output": string, "still_running": string}`, or `"timed_out": string` in place of `still_running` when the run's budget cut the wait (the command is killed) or has no time left |
-| `read` | `{"path": string}` | UTF-8 text as `{"content": string}` or an image as `{"output": string, "attachments": [{"type": "file", "mime": string, "url": string}]}` |
+| `read` | `{"path": string}` | UTF-8 text as `{"content": string}` or an image as `{"output": string, "attachments": [{"type": "file", "mime": string, "url": string}]}` or `{"output": string}` when the image exceeds the attachment limit |
 | `write` | `{"path": string, "content": string}` | `{"bytes": int}` |
 | `edit` | `{"path": string, "old": string, "new": string}` | `{"replaced": 1}` |
 | `rewrite` | `{"summary": string}` | `{"removed_messages": <n>, "note": "The summary in this call is your own text, not an observation."}` |
 | `todo` | `{"ops": [operation, ...]}` | Full list as a JSON string. See [Session todos](#session-todos). |
+
+Bare `read` limits each serialized image attachment to 2 MiB, including
+base64 and the attachment array. For example, reading a 2 MiB PNG returns
+only `output` with the MIME type, file size in bytes, and the file size
+limit (about 1.5 MiB, depending on the MIME type). The message says the
+image is too large to attach and tells the model to downscale or crop it
+with a program and read the smaller file.
 
 `bash` runs `bash -c` when it finds a Bash executable on `PATH` and uses
 `sh -c` otherwise. It selects the shell once per process. The command runs in
