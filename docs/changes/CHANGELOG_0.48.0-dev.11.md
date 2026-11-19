@@ -1,0 +1,4 @@
+# 0.48.0-dev.11
+
+- **Image replay budget.** A request replays at most 2 MiB of tool-result image data, newest first (before: 16 MiB); older images get the existing "no longer attached" notice. The images of the most recent tool result that has any are always sent. Every replayed image costs time and tokens on each later request, and a request carrying several megabytes of images could stall at the provider.
+- **Completion check timing and wording.** In a bare run with a time budget the completion check is sent only before the wrap-up stage; in WrapUp, Final and Over the run ends without it. Its second step now asks to print the actual text and read it against the request, says that a program or pattern written for the comparison does not count, and asks to try a value other than the visible one where the request says a value is unknown.
