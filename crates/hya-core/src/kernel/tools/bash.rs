@@ -1,5 +1,5 @@
 use std::ffi::OsString;
-use std::io;
+use std::io::{self, SeekFrom};
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
@@ -11,7 +11,7 @@ use hya_proto::ToolSchema;
 use hya_tool::{Tool, ToolCtx, ToolError, deadline};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::io::AsyncReadExt as _;
+use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
 use tokio::process::{Child, Command};
 
 /// Seconds a call waits for its command when it names no `timeout`.
@@ -19,6 +19,13 @@ const DEFAULT_TIMEOUT_SECS: u64 = 300;
 
 /// Longest `timeout` a call may name: far below the range in which a timer deadline overflows.
 const MAX_TIMEOUT_SECS: u64 = 86_400;
+
+/// Most bytes of a command's output one result carries: a result is sent again with every later
+/// request. A longer output is shown as its head and its tail; the end gets the larger share
+/// because results and errors are printed last.
+const MAX_OUTPUT_BYTES: u64 = 30_000;
+const HEAD_OUTPUT_BYTES: u64 = 10_000;
+const TAIL_OUTPUT_BYTES: u64 = MAX_OUTPUT_BYTES - HEAD_OUTPUT_BYTES;
 
 /// `bash` when one is on `PATH`, else `sh`; resolved once per process.
 static SHELL: LazyLock<PathBuf> = LazyLock::new(|| {
@@ -48,7 +55,7 @@ impl Tool for Bash {
     fn schema(&self) -> ToolSchema {
         super::schema(
             "bash",
-            "Run a shell command in the working directory with `bash -c` if Bash is on PATH, otherwise with `sh -c`. Returns its exit code and combined stdout and stderr. `timeout` is how long this call waits. With a run time budget, one call waits at most a tenth of the budget. A command still running then is not stopped: the call returns what it has printed so far, and the command keeps running in the background, with its further output going to a file named in the result. A job the command starts with `&` also keeps running after the call returns; redirect its output to a file to keep it. If the end-of-budget cap ends the wait, Bash stops the command.",
+            "Run a shell command in the working directory with `bash -c` if Bash is on PATH, otherwise with `sh -c`. Returns its exit code and combined stdout and stderr. For output over 30,000 bytes, `output` shows the first 10,000 and last 20,000 bytes and names the file that holds all of it. `timeout` is how long this call waits. With a run time budget, one call waits at most a tenth of the budget. A command still running then is not stopped: the call returns what it has printed so far, and the command keeps running in the background, with its further output going to a file named in the result. A job the command starts with `&` also keeps running after the call returns; redirect its output to a file to keep it. If the end-of-budget cap ends the wait, Bash stops the command.",
             json!({
                 "type": "object",
                 "properties": {
@@ -134,8 +141,15 @@ impl Tool for Bash {
         };
         // What `output` reports is what the file held when the wait ended.
         let printed = std::fs::metadata(&path)?.len();
+        if status.is_none() && capped {
+            // Kill before reading: processes left in the group could keep writing.
+            job.kill();
+        }
+        let output = read_output(&path, printed).await?;
+        if printed > MAX_OUTPUT_BYTES {
+            job.dir = None;
+        }
         if let Some(status) = status {
-            let output = read_output(&path, printed).await?;
             // A job the command started with `&` keeps running, as after any shell exits.
             job.pgid = None;
             return Ok(json!({
@@ -144,18 +158,14 @@ impl Tool for Bash {
             }));
         }
         if capped {
-            // The run is ending, so nothing could follow the command up. Kill before reading:
-            // processes left in the group could keep writing.
-            job.kill();
             return Ok(json!({
                 "exit_code": null,
-                "output": read_output(&path, printed).await?,
+                "output": output,
                 "timed_out": format!(
                     "The command was still running after {limit:?} (the run's time budget capped the timeout). Bash killed its process group and returned the captured `output`."
                 ),
             }));
         }
-        let output = read_output(&path, printed).await?;
         let exit = dir.join("exit_code");
         tokio::spawn(record_exit(child, exit.clone()));
         // Disarmed only here, with no await before the return, so a dropped call kills the command
@@ -181,11 +191,29 @@ impl Tool for Bash {
 }
 
 /// The first `len` bytes the command printed: a file that keeps growing is read only that far.
+/// Over [`MAX_OUTPUT_BYTES`], their head and tail around a marker that names the file.
 async fn read_output(path: &Path, len: u64) -> io::Result<String> {
-    let file = tokio::fs::File::open(path).await?;
-    let mut output = Vec::new();
-    file.take(len).read_to_end(&mut output).await?;
-    Ok(String::from_utf8_lossy(&output).into_owned())
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut bytes = Vec::new();
+    if len <= MAX_OUTPUT_BYTES {
+        file.take(len).read_to_end(&mut bytes).await?;
+        return Ok(String::from_utf8_lossy(&bytes).into_owned());
+    }
+
+    (&mut file)
+        .take(HEAD_OUTPUT_BYTES)
+        .read_to_end(&mut bytes)
+        .await?;
+    let head = String::from_utf8_lossy(&bytes).into_owned();
+    bytes.clear();
+    file.seek(SeekFrom::Start(len - TAIL_OUTPUT_BYTES)).await?;
+    file.take(TAIL_OUTPUT_BYTES).read_to_end(&mut bytes).await?;
+    let tail = String::from_utf8_lossy(&bytes);
+    let omitted = len - MAX_OUTPUT_BYTES;
+    let path = quoted(path);
+    Ok(format!(
+        "{head}\n[… {omitted} bytes omitted here. All {len} bytes are in {path}. Search it with `grep`, or print a part with `sed -n` or `tail -c`.]\n{tail}"
+    ))
 }
 
 /// Waits for a command this call left running and writes its exit code to `exit`.
