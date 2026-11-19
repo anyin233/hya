@@ -1453,38 +1453,51 @@ impl Drop for PidFile {
     }
 }
 
+const BASH_YIELD_COMMAND: &str =
+    "echo $$ > pgid; echo first; while [ ! -e go ]; do sleep 0.01; done; echo second; exit 7";
+
+/// Lets the command finish, kills its group and removes the call's
+/// directory, also when an assertion fails.
+struct LeftRunning {
+    go: PathBuf,
+    pgid: Option<libc::pid_t>,
+    dir: Option<PathBuf>,
+}
+
+impl LeftRunning {
+    fn new(workdir: &Path) -> Self {
+        Self {
+            go: workdir.join("go"),
+            pgid: None,
+            dir: None,
+        }
+    }
+}
+
+impl Drop for LeftRunning {
+    fn drop(&mut self) {
+        let _ = std::fs::write(&self.go, "");
+        if let Some(pgid) = self.pgid.filter(|pgid| *pgid > 0) {
+            // SAFETY: this positive group ID belongs to the test's command.
+            unsafe { libc::killpg(pgid, libc::SIGKILL) };
+        }
+        if let Some(dir) = &self.dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
 /// A command still running when the call's `timeout` ends is not signalled:
 /// the call answers with the output so far and where the rest goes.
 #[tokio::test]
 async fn bash_timeout_leaves_the_command_running_in_the_background() {
-    /// Lets the command finish, kills its group and removes the call's
-    /// directory, also when an assertion fails.
-    struct LeftRunning {
-        go: PathBuf,
-        pgid: Option<libc::pid_t>,
-        dir: Option<PathBuf>,
-    }
-
-    impl Drop for LeftRunning {
-        fn drop(&mut self) {
-            let _ = std::fs::write(&self.go, "");
-            if let Some(pgid) = self.pgid.filter(|pgid| *pgid > 0) {
-                // SAFETY: this positive group ID belongs to the test's command.
-                unsafe { libc::killpg(pgid, libc::SIGKILL) };
-            }
-            if let Some(dir) = &self.dir {
-                let _ = std::fs::remove_dir_all(dir);
-            }
-        }
-    }
-
     let fx = fixture(
         "bash-background",
         FakeProvider::scripted_turns(vec![
             call(
                 "bash",
                 json!({
-                    "command": "echo $$ > pgid; echo first; while [ ! -e go ]; do sleep 0.01; done; echo second; exit 7",
+                    "command": BASH_YIELD_COMMAND,
                     "timeout": 1,
                 }),
             ),
@@ -1492,11 +1505,7 @@ async fn bash_timeout_leaves_the_command_running_in_the_background() {
         ]),
     )
     .await;
-    let mut left = LeftRunning {
-        go: fx.dir.join("go"),
-        pgid: None,
-        dir: None,
-    };
+    let mut left = LeftRunning::new(&fx.dir);
     let finish = tokio::time::timeout(
         Duration::from_secs(15),
         fx.turn("run", &CancellationToken::new()),
@@ -1512,6 +1521,16 @@ async fn bash_timeout_leaves_the_command_running_in_the_background() {
             _ => None,
         })
         .unwrap();
+    assert_bash_yield(result, &mut left, "1s (the `timeout` this call passed)").await;
+    assert_eq!(finish, FinishReason::Stop);
+    assert_paired(&log);
+}
+
+async fn assert_bash_yield(
+    result: &serde_json::Value,
+    left: &mut LeftRunning,
+    expected_wait: &str,
+) {
     let note = result["still_running"].as_str().unwrap_or_default();
     left.pgid = note
         .split_once("process group ")
@@ -1522,17 +1541,12 @@ async fn bash_timeout_leaves_the_command_running_in_the_background() {
         .and_then(|(_, rest)| rest.split_once("/output'"))
         .map(|(dir, _)| PathBuf::from(dir));
 
-    assert_eq!(finish, FinishReason::Stop);
-    assert_paired(&log);
     assert_eq!(result["exit_code"], serde_json::Value::Null);
     assert!(result.get("timed_out").is_none(), "{result}");
     // The shell may not have printed yet; it prints "second" only after the signal file exists.
     let output = result["output"].as_str().unwrap();
     assert!("first\n".starts_with(output), "{output:?}");
-    assert!(
-        note.contains("waited 1s (the `timeout` this call passed)"),
-        "{note}"
-    );
+    assert!(note.contains(&format!("waited {expected_wait}")), "{note}");
     assert!(note.contains("still running then"), "{note}");
     assert!(note.contains("was not stopped"), "{note}");
     let pgid = left
@@ -1549,6 +1563,10 @@ async fn bash_timeout_leaves_the_command_running_in_the_background() {
     );
     assert!(
         note.contains(&format!("`cat '{}'`", exit.display())),
+        "{note}"
+    );
+    assert!(
+        note.contains("To wait again, sleep briefly in another call"),
         "{note}"
     );
     assert!(note.contains(&format!("`kill -- -{pgid}`")), "{note}");
@@ -1572,7 +1590,9 @@ async fn bash_timeout_leaves_the_command_running_in_the_background() {
     assert_eq!(std::fs::read_to_string(&exit).unwrap(), "7\n");
     assert_eq!(std::fs::read_to_string(&out).unwrap(), "first\nsecond\n");
     assert_eq!(
-        std::fs::read_to_string(fx.dir.join("pgid")).unwrap().trim(),
+        std::fs::read_to_string(left.go.with_file_name("pgid"))
+            .unwrap()
+            .trim(),
         pgid.to_string()
     );
 }
@@ -1665,6 +1685,52 @@ fn run_bash_child(child: &str, case: &str) {
     );
 }
 
+#[test]
+fn bash_waits_at_most_a_tenth_of_the_run_budget() {
+    for case in ["short", "900", "1800", "3600-default", "3600-explicit"] {
+        run_bash_child("kernel::bash_budget_share_child", case);
+    }
+}
+
+#[tokio::test]
+async fn bash_budget_share_child() {
+    let (budget, requested, waited) = match std::env::var("HYA_BASH_TEST").as_deref() {
+        Ok("short") => (20, Some(3), "2s"),
+        Ok("900") => (900, None, "90s"),
+        Ok("1800") => (1800, Some(600), "180s"),
+        Ok("3600-default") => (3600, None, "300s"),
+        Ok("3600-explicit") => (3600, Some(600), "360s"),
+        _ => return,
+    };
+    let workdir = std::env::temp_dir();
+    let mut left = LeftRunning::new(&workdir);
+    let bash = kernel::tools::builtin()
+        .into_iter()
+        .find(|tool| tool.name() == "bash")
+        .unwrap();
+    let ctx = tool_ctx(&workdir, &CancellationToken::new());
+    let mut input = json!({"command": BASH_YIELD_COMMAND});
+    if let Some(seconds) = requested {
+        input["timeout"] = json!(seconds);
+    }
+    let reason = if waited == "300s" {
+        "the default; pass `timeout` in seconds to request a longer wait"
+    } else {
+        "the run's time budget lets one call wait at most a tenth of it"
+    };
+    deadline::install(Duration::from_secs(budget));
+    // Use the real timer in the short case. For the long examples, Tokio can
+    // advance the wait while the shell is held open by the signal file.
+    if budget != 20 {
+        tokio::time::pause();
+    }
+    let result = bash.execute(&ctx, input).await.unwrap();
+    if budget != 20 {
+        tokio::time::resume();
+    }
+    assert_bash_yield(&result, &mut left, &format!("{waited} ({reason})")).await;
+}
+
 /// A wait the run's time budget cut short still kills the command's group,
 /// including a job it started: the run is ending and nothing could follow
 /// the command up.
@@ -1690,8 +1756,16 @@ async fn bash_budget_cap_child() {
     )
     .await;
     let job = PidFile(fx.dir.join("pid"));
-    // A budget this short caps the default wait to the time left.
-    deadline::install(Duration::from_secs(3));
+    // With less than a tenth of the budget left, the end-of-budget cap
+    // wins even though the shared cap has a five-second floor.
+    deadline::install(Duration::from_secs(5));
+    let deadline = deadline::current().unwrap();
+    tokio::time::sleep(
+        deadline
+            .remaining()
+            .saturating_sub(Duration::from_millis(400)),
+    )
+    .await;
     let finish = tokio::time::timeout(
         Duration::from_secs(15),
         fx.turn("run", &CancellationToken::new()),

@@ -48,12 +48,12 @@ impl Tool for Bash {
     fn schema(&self) -> ToolSchema {
         super::schema(
             "bash",
-            "Run a shell command in the working directory with `bash -c` if Bash is on PATH, otherwise with `sh -c`. Returns its exit code and combined stdout and stderr. `timeout` is how long this call waits. A command still running then is not stopped: the call returns what it has printed so far, and the command keeps running in the background, with its further output going to a file named in the result. A job the command starts with `&` also keeps running after the call returns; redirect its output to a file to keep it. A wait cut short by the run's time budget ends the command.",
+            "Run a shell command in the working directory with `bash -c` if Bash is on PATH, otherwise with `sh -c`. Returns its exit code and combined stdout and stderr. `timeout` is how long this call waits. With a run time budget, one call waits at most a tenth of the budget. A command still running then is not stopped: the call returns what it has printed so far, and the command keeps running in the background, with its further output going to a file named in the result. A job the command starts with `&` also keeps running after the call returns; redirect its output to a file to keep it. If the end-of-budget cap ends the wait, Bash stops the command.",
             json!({
                 "type": "object",
                 "properties": {
                     "command": {"type": "string", "description": "Shell command"},
-                    "timeout": {"type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT_SECS, "description": "Seconds this call waits for the command. Default 300. A command still running then keeps running in the background, unless the run's time budget ends the wait."},
+                    "timeout": {"type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT_SECS, "description": "Seconds this call waits for the command. Default 300. With a run time budget, one call waits at most a tenth of the budget. A command still running then keeps running in the background, unless the end-of-budget cap ends the wait."},
                 },
                 "required": ["command"],
             }),
@@ -94,7 +94,8 @@ impl Tool for Bash {
         // The shared cap has a floor. A call cannot use more than the run has left.
         let (limit, capped) = match deadline::current() {
             Some(deadline) => {
-                let (cap, capped) = deadline.cap(Some(requested));
+                let wait = requested.min(deadline.budget() / 10);
+                let (cap, capped) = deadline.cap(Some(wait));
                 let left = deadline.remaining();
                 (cap.min(left), capped || left < cap)
             }
@@ -161,17 +162,19 @@ impl Tool for Bash {
         // rather than leave a job nobody was told about.
         job.pgid = None;
         job.dir = None;
-        let reason = if timeout.is_some() {
+        let reason = if limit < requested {
+            "the run's time budget lets one call wait at most a tenth of it"
+        } else if timeout.is_some() {
             "the `timeout` this call passed"
         } else {
-            "the default; pass `timeout` in seconds to wait longer"
+            "the default; pass `timeout` in seconds to request a longer wait"
         };
         let (out, exit) = (quoted(&path), quoted(&exit));
         Ok(json!({
             "exit_code": null,
             "output": output,
             "still_running": format!(
-                "This call waited {limit:?} ({reason}). The command was still running then and was left running in the background as process group {pgid}; it was not stopped. All its output, what `output` shows and whatever it prints from now on, goes to {out}. If it ends while this run is still going, its exit code is written to {exit}. To follow it, run for example `tail -n 20 {out}` and `cat {exit}`. To stop it if it is no longer needed, run `kill -- -{pgid}`."
+                "This call waited {limit:?} ({reason}). The command was still running then and was left running in the background as process group {pgid}; it was not stopped. All its output, what `output` shows and whatever it prints from now on, goes to {out}. If it ends while this run is still going, its exit code is written to {exit}. To follow it, run for example `tail -n 20 {out}` and `cat {exit}`. To wait again, sleep briefly in another call before reading the output. To stop it if it is no longer needed, run `kill -- -{pgid}`."
             ),
         }))
     }
