@@ -36,9 +36,10 @@ same row writer. The engine publishes committed batches through
 - create-if-missing enabled
 - WAL journal mode
 - normal synchronous mode
-- five-second busy timeout
+- 300-second busy and pool-acquire timeout
 - foreign keys enabled
 - up to eight pooled connections
+- no connection retirement by age or idleness (`max_lifetime(None)`, `idle_timeout(None)`) so closing the last handle of a WAL database does not checkpoint under an exclusive lock
 
 `SessionStore::connect_memory()` opens an in-memory SQLite database with one
 connection.
