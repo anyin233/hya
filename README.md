@@ -24,7 +24,7 @@ configured, `hya` starts offline against its built-in echo provider
 
 ## Status
 
-`hya` is under active development (unified version `0.48.0-dev.11`, minimum compatible
+`hya` is under active development (unified version `0.48.0-dev.12`, minimum compatible
 backend `0.46.0` for remote/daemon connections, licensed under `MIT OR Apache-2.0`).
 Releases ship unified backend + TUI/WebUI archives from `v<version>` tags
 (`v0.47.0`, `v0.47.1-dev.1`, …).
