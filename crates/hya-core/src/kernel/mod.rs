@@ -295,7 +295,7 @@ impl Harness for Bare<'_> {
             self.model,
             &self.agent,
             &self.attachments,
-            None,
+            self.scope.provider.reasoning_default(self.model),
         ))
     }
 
