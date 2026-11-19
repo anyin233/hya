@@ -16,7 +16,7 @@ use hya_proto::{
 };
 use hya_provider::{
     AnthropicMessagesProtocol, COMPACT_CONTEXT_MARKER, CompletionRequest, FakeProvider, FakeStep,
-    Protocol, ProviderRouter,
+    Protocol, ProviderRouter, ReasoningEffort,
 };
 use hya_store::SessionStore;
 use hya_tool::{
@@ -396,6 +396,20 @@ async fn a1_tool_results_pair_with_calls() {
             json!({"exit_code": 0, "output": "hello"})
         ]
     );
+}
+
+#[tokio::test]
+async fn every_bare_request_carries_the_configured_reasoning_default() {
+    let fx = fixture(
+        "reasoning-default",
+        FakeProvider::scripted_turns(vec![call("bash", json!({"command": "true"})), text("done")])
+            .with_reasoning_default(ReasoningEffort::Max),
+    )
+    .await;
+    let finish = fx.turn("run true", &CancellationToken::new()).await;
+    assert_eq!(finish.unwrap(), FinishReason::Stop);
+    let efforts: Vec<_> = fx.provider.requests().iter().map(|r| r.reasoning).collect();
+    assert_eq!(efforts, vec![Some(ReasoningEffort::Max); 2]);
 }
 
 #[tokio::test]
