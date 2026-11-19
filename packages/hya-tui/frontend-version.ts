@@ -1,5 +1,5 @@
 /** The unified hya release version. */
-export const frontendVersion = "0.48.0-dev.16"
+export const frontendVersion = "0.48.0-dev.17"
 
 /** The oldest backend release this frontend can use. */
 export const minimumBackendVersion = "0.46.0"
