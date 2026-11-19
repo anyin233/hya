@@ -107,11 +107,19 @@ stderr merged. The tool passes only `-c` as a shell option and uses the exit
 code reported by the shell. A nonzero exit is still a success result for the
 model to interpret. Failure to start returns `ToolError`.
 
-`timeout` is how long the call waits for the command, in seconds, with a
-default of 300. Values outside 1–86400 are an input error. Each call creates
-a private directory (`mkdtemp`, `hya-bash-XXXXXX` in the system temporary
-directory) holding an `output` file, which receives the command's stdout and
-stderr, and an `exit_code` file. A call ends in one of four ways:
+`timeout` sets the requested wait in seconds, with a default of 300.
+Values outside 1–86400 are an input error. With `--time-budget`, the call
+waits at most the smaller of that wait and one tenth of the run's budget,
+subject to the end-of-budget cap below. While it waits, the model cannot
+act or see time updates. A 900-second budget limits one wait to 90 seconds
+and a 1,800-second budget limits it to 180 seconds. With a 3,600-second
+budget the default stays 300 seconds and a requested 600-second wait is
+capped at 360 seconds. Without a budget the requested or default wait applies.
+
+Each call creates a private directory (`mkdtemp`, `hya-bash-XXXXXX` in the
+system temporary directory) holding an `output` file, which receives the
+command's stdout and stderr, and an `exit_code` file. A call ends in one of
+four ways:
 
 - **The command ends within the wait.** The result is
   `{"exit_code": int, "output": string}` with the complete output, and Bash
@@ -119,23 +127,25 @@ stderr, and an `exit_code` file. A call ends in one of four ways:
   started with `&` keeps running, as it does after any shell exits. Its
   output still goes to the removed file, so a job whose output matters
   should redirect it to a file of its own.
-- **The wait ends first** (the call's `timeout` or the default). Bash does
-  not signal the command. The result has `exit_code: null`, the output
-  printed until the wait ended, and a `still_running` sentence that names
-  how long the call waited and which limit that was, the command's process
-  group, the `output` file its output keeps going to, the `exit_code` file,
+- **The wait ends first** (the call's `timeout`, the default, or a tenth
+  of the run's budget). The command keeps running. The result has
+  `exit_code: null`, the output printed until the wait ended, and a
+  `still_running` sentence that names how long the call waited and which
+  limit that was, the command's process group, the `output` and `exit_code` files,
   how to follow it (`tail`, `cat`, with the paths single-quoted for the
-  shell), and how to stop it (`kill -- -<pgid>`). The command keeps running
-  in the background. The running `hya` process writes its exit code (or
-  `128 + signal`) to `exit_code` when it sees the command end; a command
-  that outlives that process leaves no `exit_code` file. Nothing stops such
-  a command, or a job started with `&`, when the run ends normally.
-- **The run's time budget cuts the wait short.** A `--time-budget` run can
-  shorten the wait ([CLI reference](cli.md#--bare)). When the command is
-  still running at that shorter limit, Bash kills its process group and the
-  result has `exit_code: null`, the captured `output`, and a `timed_out`
+  shell), wait again (sleep briefly in a later call before reading the
+  output), or stop it (`kill -- -<pgid>`). The running `hya` process writes
+  its exit code (or `128 + signal`) to `exit_code` when it sees the command
+  end. A command that outlives that process leaves no `exit_code` file.
+  Nothing stops such a command, or a job started with `&`, when the run
+  ends normally.
+- **The run's budget cuts the wait short.** This happens when the
+  end-of-budget cap is shorter than the wait above. If the command is
+  still running at that cap, Bash kills its process group.
+  The result has `exit_code: null`, the captured `output`, and a `timed_out`
   sentence naming the budget. Once the budget has no time left, Bash does not
   start the command and returns a `timed_out` result with empty `output`.
+  See the [CLI reference](cli.md#--bare).
 - **The run is cancelled.** Bash kills the command's process group and the
   call fails as cancelled. The same cleanup runs when Bash cannot read the
   `output` file: the call fails and no command is left running unreported.
