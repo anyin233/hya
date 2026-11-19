@@ -872,8 +872,13 @@ Over uses the Final notice. Bash and member `wait` timeouts are capped to
 `max(remaining - min(guard, remaining / 2), 5s)`; a shorter requested timeout
 remains unchanged. In bare mode the cap applies to Bash's `timeout`
 (300 seconds when omitted), which is also bounded by the remaining time if
-less than 5 seconds are left. At timeout, Bash kills the command's process
-group and returns the captured `output` and a `timed_out` note.
+less than 5 seconds are left. A command still running when its own or the
+default `timeout` ends keeps running in the background, and the result names
+the file its output goes to and the file its exit code is written to if it
+ends while the run lasts. When the budget cut the wait short, Bash kills the
+command's process group and returns the captured `output` and a `timed_out`
+note; cancellation kills it too. Nothing stops a command left running, or a
+job a command started with `&`, when the run ends normally.
 [Kernel tool reference](kernel.md#built-in-tools)
 In full mode the cap includes Bash's omitted timeout and `timeout: 0`. Bash reports
 `metadata.deadlineCapped: true` when shortened and explains the effective
