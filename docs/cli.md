@@ -868,17 +868,27 @@ the session was last told the time.
 Both modes use the same thresholds, measured in remaining time. WrapUp is
 `min(clamp(35% B, 300s, 3600s), 50% B)`, Final is
 `clamp(12% B, 90s, 600s)`, and the Over guard is `clamp(5% B, 30s, 120s)`.
-Over uses the Final notice. Bash and member `wait` timeouts are capped to
-`max(remaining - min(guard, remaining / 2), 5s)`; a shorter requested timeout
-remains unchanged. In bare mode the cap applies to Bash's `timeout`
-(300 seconds when omitted), which is also bounded by the remaining time if
-less than 5 seconds are left. A command still running when its own or the
-default `timeout` ends keeps running in the background, and the result names
-the file its output goes to and the file its exit code is written to if it
-ends while the run lasts. When the budget cut the wait short, Bash kills the
-command's process group and returns the captured `output` and a `timed_out`
-note; cancellation kills it too. Nothing stops a command left running, or a
-job a command started with `&`, when the run ends normally.
+Over uses the Final notice. The end-of-budget cap for Bash and member
+`wait` is `max(remaining - min(guard, remaining / 2), 5s)`.
+In bare mode Bash waits at most the smaller of
+`timeout` (300 seconds when omitted) and one tenth of the run's budget.
+While it waits, the model cannot act or see time updates. A 900-second
+budget limits one wait to 90 seconds and a 1,800-second budget limits it
+to 180 seconds. With a 3,600-second budget the default stays 300 seconds
+and a requested 600-second wait is capped at 360 seconds. Without a
+budget the requested or default wait applies.
+
+The end-of-budget cap above also applies in bare mode, bounded by the
+remaining time if less than 5 seconds are left. If this cap is the
+shorter limit and ends the wait, Bash kills the command's process group
+and returns the captured `output` and a `timed_out` note. Cancellation
+kills it too. If the requested timeout, default, or tenth-of-budget limit
+ends the wait, the command keeps running in the background. The
+`still_running` result names the limit and the output and exit code files.
+The exit code is written if the command ends while the run lasts. To wait
+again, sleep briefly in a later call before reading the output. Nothing
+stops a command left running, or a job a command started with `&`, when
+the run ends normally.
 [Kernel tool reference](kernel.md#built-in-tools)
 In full mode the cap includes Bash's omitted timeout and `timeout: 0`. Bash reports
 `metadata.deadlineCapped: true` when shortened and explains the effective
