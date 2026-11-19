@@ -641,6 +641,10 @@ impl Harness for TurnHarness<'_> {
         Ok(())
     }
 
+    async fn before_end(&mut self) -> Result<bool, CoreError> {
+        Ok(false)
+    }
+
     fn done(&self) -> bool {
         // An accepted `report` ends the member's episode: the round's other
         // tool calls have completed and are recorded.

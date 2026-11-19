@@ -362,6 +362,54 @@ the title generator) keep their own prompts. For example, `hya-scout`, which has
 `bash`, gets no `bash` line and the base-tools rule instead of the bash rule;
 a GPT-family model also gets the `apply_patch` line.
 
+## How a bare run ends
+
+A bare run ends when a model round answers without a tool call, with one
+exception. The first such answer gets one completion check before the run
+ends: the harness appends the logged system message below, in the same form
+as the deadline notices, and the kernel runs another round. The next answer
+without a tool call ends the run, and `hya exec --bare` prints that answer.
+An answer cut off at the output limit (`length`) also gets the check: the
+extra round lets the model finish what the limit cut, and the check is still
+sent only once, so the run ends on the next answer either way.
+The check asks, at the moment the model stops, for what a rule read at the
+start of the run does not reliably get: a comparison of the result with the
+request's own wording rather than with the model's expectation.
+
+```text
+[hya] Completion check, sent once before this run ends. Compare the result with the request itself, not with your memory of it.
+1. Re-read the request. List what it states literally: paths and file names, exact strings and output formats, commands and flags, values and counts, and anything it says is unknown or must not be assumed.
+2. For each item, look at the result as it is now (the file on disk, the output of the real command) and compare it with the request's wording, character for character where the wording is exact. A check that only shows what you expected to see (a pattern you wrote, a substring, a summary) does not count.
+3. If something differs, fix it and check again. If everything already matches, change nothing.
+Then give your final answer.
+```
+
+The check is not sent, and the run ends on the current answer without a tool
+call, when:
+
+- the kernel has not yet run a call of a known tool (a run that only answered,
+  or only called tools that do not exist, has nothing to check);
+- the session log already holds the check (a run gets it once, also after a
+  rewrite or a replay of the log);
+- the round ended with an error finish (for example a provider content
+  filter), which ends the run as it did before;
+- the run is cancelled (checked before the check is appended; a cancel that
+  lands right after it is logged ends the run as cancelled, with the check
+  never sent);
+- a `--time-budget` deadline is in Final or Over, where the Final notice
+  already tells the model to end.
+
+The first two are read from the session log's projection, so a replayed log
+yields the same decision, and a rewrite cannot make the check be sent again.
+Like the deadline stage notices, the check is a transient notice: the next
+request carries it as its last (user) message, and once the assistant message
+has a part after it (the model's response to the check), requests leave it
+out. What the model does in response (its reasoning, text and tool calls)
+stays in the history and carries the work. Nothing configures or disables
+it, and full mode does not send it. The kernel loop asks the harness at this
+point through `Harness::before_end`, only after a `stop` or `length` finish
+and while the run is not cancelled; full mode's harness always ends.
+
 ## Differences from full mode
 
 Bare mode loads no bundle. It has no permission checks, hooks, subagents,
@@ -401,7 +449,7 @@ plugs into that loop at fixed points:
 | Failed round | Ends the run | Retried up to twice when it failed before any text or tool call on a link error |
 | Registry tool call (`ToolGate`) | Execute the tool and record file snapshots and stamps | Hooks, permissions, the full `ToolCtx`, file snapshots and stamps, output capping, steer notices |
 | Unrun calls after a cancel | Failed as `cancelled` | Left open; the turn end closes them as `CANCELLED` |
-| End | The round's finish | Also ends after an accepted `report` |
+| End (`Harness::before_end`, `done`) | The round's finish, after one [completion check](#how-a-bare-run-ends) once a tool call ran | The round's finish; also ends after an accepted `report` |
 
 The kernel offers and handles the model's `rewrite` and `todo` calls in both
 modes. `shake`'s `ContextEvicted` events store the exact notice for each
