@@ -769,6 +769,48 @@ async fn bash_timeout_returns_the_output_so_far_and_never_waits_on_an_escaped_pr
 }
 
 #[tokio::test]
+async fn bash_uses_bash_syntax_when_available() {
+    let bash_available = std::process::Command::new("bash")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    let fx = fixture(
+        "bash-syntax",
+        FakeProvider::scripted_turns(vec![
+            call(
+                "bash",
+                json!({"command": r#"
+                    printf 'shell\n'
+                    if [ -n "${BASH_VERSION-}" ]; then
+                        eval '[[ word == w* ]] && printf "bash\n"'
+                    fi
+                    false | true
+                "#}),
+            ),
+            text("ok"),
+        ]),
+    )
+    .await;
+    assert_eq!(
+        fx.turn("run", &CancellationToken::new()).await.unwrap(),
+        FinishReason::Stop
+    );
+    let log = fx.log().await;
+    let result = log
+        .iter()
+        .find_map(|event| match event {
+            Event::ToolResult { output, .. } => Some(output),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(result["exit_code"], 0);
+    assert!(result["output"].as_str().unwrap().starts_with("shell\n"));
+    if bash_available {
+        assert_eq!(result["output"], "shell\nbash\n");
+    }
+}
+
+#[tokio::test]
 async fn bash_returns_all_output_on_normal_exit() {
     let fx = fixture(
         "bash-large-output",
