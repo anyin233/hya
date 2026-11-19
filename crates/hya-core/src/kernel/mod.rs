@@ -23,8 +23,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use hya_proto::event::ViewRef;
 use hya_proto::{
-    AgentName, Envelope, Event, EventSeq, FinishReason, Message, MessageId, ModelRef, Projection,
-    SessionId, ToolSchema,
+    AgentName, Envelope, Event, EventSeq, FinishReason, Message, MessageId, ModelRef,
+    PartProjection, Projection, Role, SessionId, ToolSchema,
 };
 use hya_provider::{CompletionRequest, EventStream, ProviderRouter};
 use hya_store::SessionStore;
@@ -41,6 +41,13 @@ pub use view::View;
 
 /// Agent name the kernel renders assistant messages with in requests.
 pub const AGENT: &str = "kernel";
+
+/// The message a bare run receives once before it ends (docs/kernel.md).
+const COMPLETION_CHECK: &str = "[hya] Completion check, sent once before this run ends. Compare the result with the request itself, not with your memory of it.
+1. Re-read the request. List what it states literally: paths and file names, exact strings and output formats, commands and flags, values and counts, and anything it says is unknown or must not be assumed.
+2. For each item, look at the result as it is now (the file on disk, the output of the real command) and compare it with the request's wording, character for character where the wording is exact. A check that only shows what you expected to see (a pattern you wrote, a substring, a summary) does not count.
+3. If something differs, fix it and check again. If everything already matches, change nothing.
+Then give your final answer.";
 
 /// Where kernel events go: durable appends and live-only publishes.
 #[async_trait]
@@ -137,6 +144,10 @@ pub trait Harness: ToolGate {
     async fn failed(&mut self, failure: &Failure) -> Result<bool, CoreError>;
     /// A round attempt completed.
     async fn collected(&mut self, round: &Round) -> Result<(), CoreError>;
+    /// A round ended as `Stop` or `Length` without tool calls and the run is
+    /// not cancelled; `true` runs another round instead of ending (the
+    /// harness has appended what that round answers).
+    async fn before_end(&mut self) -> Result<bool, CoreError>;
     /// Whether the run ends after this round's tool calls.
     fn done(&self) -> bool;
 }
@@ -318,6 +329,53 @@ impl Harness for Bare<'_> {
         Ok(())
     }
 
+    /// The completion check, once per session and only after the kernel ran
+    /// a call of a known tool; not when the deadline already tells the model
+    /// to end.
+    async fn before_end(&mut self) -> Result<bool, CoreError> {
+        if hya_tool::deadline::current().is_some_and(|deadline| {
+            matches!(
+                deadline.stage(),
+                hya_tool::deadline::Stage::Final | hya_tool::deadline::Stage::Over
+            )
+        }) {
+            return Ok(false);
+        }
+        let Scope {
+            store,
+            emit,
+            session,
+            ..
+        } = *self.scope;
+        let projection = store.read_projection_shared(session).await?;
+        let messages = &projection.session.messages;
+        // A call of an unknown tool only recorded an error; `execute_calls`
+        // runs `rewrite` and `todo` itself.
+        let ran_tool = messages
+            .iter()
+            .flat_map(|message| &message.parts)
+            .any(|part| {
+                matches!(part, PartProjection::Tool { name, .. }
+                if [tools::REWRITE, tools::TODO].contains(&name.as_str())
+                    || self.tools.iter().any(|tool| tool.name() == name.as_str()))
+            });
+        // The logged check counts as sent even after requests leave it out.
+        let sent = messages.iter().any(|message| {
+            message.role == Role::System
+                && request::collect_text(&message.parts) == COMPLETION_CHECK
+        });
+        // Cancelled meanwhile: a logged check would never be sent.
+        if !ran_tool || sent || self.cancel.is_cancelled() {
+            return Ok(false);
+        }
+        emit.emit(
+            session,
+            round::system_message_events(session, MessageId::new(), COMPLETION_CHECK.to_string()),
+        )
+        .await?;
+        Ok(true)
+    }
+
     fn done(&self) -> bool {
         false
     }
@@ -449,8 +507,8 @@ pub async fn run_with_watches(
 
 /// The kernel loop. Each round: read the projection, let the harness rewrite
 /// it, request and stream one model round, then run its tool calls. Ends when
-/// a round has no tool calls, the harness is done after a round's calls, or
-/// `cancel` fires.
+/// a round has no tool calls and the harness does not continue it, the
+/// harness is done after a round's calls, or `cancel` fires.
 ///
 /// Returns the last round's finish (`Stop` when the harness is done), or
 /// `Cancelled`. The caller finishes the assistant message.
@@ -543,7 +601,13 @@ pub async fn drive(
             harness.cancelled(round.tool_calls).await?;
             return Ok(FinishReason::Cancelled);
         }
-        if round.tool_calls.is_empty() {
+        // Only a normal end of the model's turn asks the harness to go on,
+        // and not once cancelled.
+        if round.tool_calls.is_empty()
+            && !(matches!(round.finish, FinishReason::Stop | FinishReason::Length)
+                && !cancel.is_cancelled()
+                && harness.before_end().await?)
+        {
             return Ok(round.finish);
         }
         let unrun = execute_calls(scope, &req.model, harness, round.tool_calls, cancel).await?;

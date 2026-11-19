@@ -770,6 +770,17 @@ the request history when the assistant responds. The shared thresholds and
 Bash timeout calculation are described below.
 The outside harness enforces the process deadline.
 
+Before the run ends, a run that has executed at least one tool call gets one
+completion check: when the model first answers without a tool call, bare mode
+adds a logged notice asking it to compare the result with the request's
+literal wording, and the run continues. Like a stage notice, the check is
+shown on the next model request once and leaves the request history when the
+assistant responds. The next answer without a tool call ends the run, and
+that answer is what `exec` prints. No check is sent when the model never
+called a known tool, when the answer's round ended with an error, when the
+run is cancelled, or when the time budget is in its Final or Over stage.
+The exact text and rules are in [How a bare run ends](kernel.md#how-a-bare-run-ends).
+
 See [Kernel](kernel.md) for tool contracts, rewrite rules, and the differences
 from full mode.
 
