@@ -212,6 +212,11 @@ request's scope and returns that refresh in `BundleChange.refresh`.
 | `UninstallBundle` | `POST /v1/bundles:uninstall` `{directory, bundleId, project}` | `hya bundle remove`; first-party bundles fail with `failed_precondition`. |
 | `SetBundleEnabled` | `POST /v1/bundles:set-enabled` `{directory, bundleId, enabled}` | `hya bundle enable\|disable`: the disabled set (`bundle_disabled` in the registry database) applies to every scope; trusted presets cannot be disabled. |
 
+Internal bundles (`hya/compaction`) belong to the same immutable inventory as
+the trusted presets: `ListBundles` and `hya bundle list` show them with
+`scope: "first_party"`, `state: "active"`, `enabled: true`, and
+`removable: false`, and they cannot be installed over, removed, or disabled.
+
 An unreadable installed row still appears in `ListBundles` with its stored
 `id`, `version`, `publisher`, `scope: "user"`, `state: "unreadable"`, and an
 `error` string containing the validation failure and reinstall instruction.
