@@ -777,11 +777,12 @@ literal wording, and the run continues. Like a stage notice, the check is
 shown on the next model request once and leaves the request history when the
 assistant responds. The next answer without a tool call ends the run, and
 that answer is what `exec` prints. No check is sent when the model never
-called a known tool, when the answer's round ended with an error, when the
-run is cancelled, or when the time budget is in WrapUp, Final, or Over.
-For the 900-second example above, the check is eligible while more than 315
-seconds remain (Normal). In WrapUp the deadline notice already asks the model
-to check the deliverables and finish.
+called a known tool, when the answer's round ended with an error, or when the
+run is cancelled.
+With `--time-budget`, the check is sent only while more than twice the Final
+window remains (more than 216 seconds for a 900-second budget or 432 seconds
+for a 1,800-second budget), giving the check a few rounds and keeping the
+Final window free for the last step.
 The exact text and rules are in [How a bare run ends](kernel.md#how-a-bare-run-ends).
 
 See [Kernel](kernel.md) for tool contracts, rewrite rules, and the differences
