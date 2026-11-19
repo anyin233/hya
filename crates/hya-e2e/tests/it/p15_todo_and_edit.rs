@@ -101,6 +101,8 @@ async fn t1_15_bare_exec_can_write_todos() {
                 "todo",
                 json!({"ops": [{"op": "add", "content": "Verify the bare run"}]}),
             ),
+            // The first answer after a tool call gets the completion check; the next one ends the run.
+            text_step("draft"),
             text_step("BARE_TODO_WRITTEN"),
         ])
         .build()
@@ -137,7 +139,13 @@ async fn t1_15_bare_exec_can_write_todos() {
         "BARE_TODO_WRITTEN"
     );
     let requests = env.fake.requests().unwrap();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 3);
+    assert!(
+        requests[2]["messages"].as_array().unwrap().last().unwrap()["content"]
+            .as_str()
+            .is_some_and(|text| text.starts_with("[hya] Completion check")),
+        "the completion check must be the last message of the request after the first answer"
+    );
     assert!(
         requests[1]["messages"]
             .as_array()
