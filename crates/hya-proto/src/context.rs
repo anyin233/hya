@@ -169,31 +169,28 @@ pub fn tool_attachment_limit_notice(output: &Value) -> Option<&'static str> {
     )
 }
 
-/// Tool-result image data (data URL length, about the base64 length) one
-/// request carries.
-const MAX_REQUEST_IMAGE_BYTES: usize = 16 * 1024 * 1024;
+/// Budget for tool-result image data (data URL length, about the base64 length).
+const MAX_REQUEST_IMAGE_BYTES: usize = 2 * 1024 * 1024;
 
 /// Which tool-result images one request sends.
 pub struct ToolImageReplay<'a> {
     /// The request's model accepts image input (`Capabilities::image_input ==
     /// Some(true)`) on a protocol that carries tool-result images.
     send: bool,
-    /// Images older than the newest ones that fit [`MAX_REQUEST_IMAGE_BYTES`],
-    /// as (tool part, index in its attachment array).
+    /// Images omitted by the budget, as (tool part, index in its attachment array).
     aged_out: HashSet<(&'a PartId, usize)>,
 }
 
 impl<'a> ToolImageReplay<'a> {
-    /// Plan the images of a request over `messages`. Walking from the newest
-    /// image back, images are kept until the next would exceed the budget;
-    /// it and every older image are aged out. The plan depends only on the
-    /// history, so a later request differs only in the images that newer ones
-    /// pushed out.
+    /// Keep every image from the newest result with images, even if they
+    /// exceed the budget. Walk the remaining images newest first and age out
+    /// the first one that would exceed the budget and every older image.
     #[must_use]
     pub fn new(messages: &'a [Message], send: bool) -> Self {
         let mut aged_out = HashSet::new();
         if send {
             let mut used = 0usize;
+            let mut newest_result = true;
             let parts = messages
                 .iter()
                 .rev()
@@ -211,12 +208,17 @@ impl<'a> ToolImageReplay<'a> {
                 else {
                     continue;
                 };
-                for (index, _, data) in attached_images(output).rev() {
+                let mut images = attached_images(output).rev().peekable();
+                if images.peek().is_none() {
+                    continue;
+                }
+                for (index, _, data) in images {
                     used = used.saturating_add(data.len());
-                    if used > MAX_REQUEST_IMAGE_BYTES {
+                    if !newest_result && used > MAX_REQUEST_IMAGE_BYTES {
                         aged_out.insert((id, index));
                     }
                 }
+                newest_result = false;
             }
         }
         Self { send, aged_out }
