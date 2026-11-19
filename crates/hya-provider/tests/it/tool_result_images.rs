@@ -192,27 +192,34 @@ fn a_model_without_image_input_is_told_the_image_is_not_shown() {
     assert_eq!(OpenAiChatProtocol.encode(&first).unwrap(), chat);
 }
 
-/// A request carries at most 16 MiB of tool-result image data: the newest
-/// images go, each older one is told it is no longer attached.
+/// The 2 MiB budget keeps images newest first and preserves the latest image result.
 #[test]
 fn the_newest_images_fill_the_request_budget_and_older_ones_become_text() {
-    // A valid PNG data URL of about 6 MiB; three of them exceed the budget.
+    // About 768 KiB per URL. Two fit and three exceed the budget.
     let big = format!(
         "data:image/png;base64,iVBORw0KGgoA{}",
-        "A".repeat(6 * 1024 * 1024)
+        "A".repeat(768 * 1024)
     );
-    let read = |n: usize| {
+    let oversized = format!(
+        "data:image/png;base64,iVBORw0KGgoA{}",
+        "A".repeat(2 * 1024 * 1024)
+    );
+    let read = |n: usize, images: &[&str]| {
+        let attachments: Vec<_> = images
+            .iter()
+            .map(|url| json!({"type": "file", "mime": "image/png", "url": url}))
+            .collect();
         tool(
             "read",
             json!({
                 "title": format!("page{n}.png"),
                 "output": format!("Image file page{n}."),
                 "metadata": {},
-                "attachments": [{"type": "file", "mime": "image/png", "url": big}],
+                "attachments": attachments,
             }),
         )
     };
-    let request = |pages: &[usize]| {
+    let request = |pages: &[&[&str]]| {
         let mut messages = vec![Message::User {
             id: MessageId::new(),
             parts: vec![Part::Text {
@@ -220,12 +227,12 @@ fn the_newest_images_fill_the_request_budget_and_older_ones_become_text() {
                 text: "read the pages".to_string(),
             }],
         }];
-        for &n in pages {
+        for (index, images) in pages.iter().enumerate() {
             messages.push(Message::Assistant {
                 id: MessageId::new(),
                 agent: AgentName::new("build"),
                 model: ModelRef::new("m"),
-                parts: vec![read(n)],
+                parts: vec![read(index + 1, images)],
                 finish: None,
                 tokens: None,
                 last_round: None,
@@ -248,24 +255,32 @@ fn the_newest_images_fill_the_request_budget_and_older_ones_become_text() {
         &OpenAiChatProtocol,
     ];
     for protocol in protocols {
-        let encode = |pages: &[usize]| {
+        let encode = |pages: &[&[&str]]| {
             protocol
                 .encode_for_model(&request(pages), None, true)
                 .unwrap()
                 .to_string()
         };
-        let sent = |body: &str| body.matches("iVBORw0KGgoA").count();
+        let sent = |body: &str| body.matches("iVBORw0KGgo").count();
         let aged = "[The image attached to this result (image/png) is no longer attached";
 
         // Under the budget: every image goes.
-        let two = encode(&[2, 3]);
+        let two = encode(&[&[&big], &[&big]]);
         assert_eq!(sent(&two), 2);
         assert!(!two.contains(aged));
 
-        // Over it: the two newest go, the oldest becomes text.
-        let three = encode(&[1, 2, 3]);
-        assert_eq!(sent(&three), 2);
-        assert_eq!(three.matches(aged).count(), 1);
-        assert!(three.contains(&format!("Image file page1.\\n\\n{aged}")));
+        // Once an image exceeds the remaining budget, even a tiny older image ages out.
+        let four = encode(&[&[PNG], &[&big], &[&big], &[&big]]);
+        assert_eq!(sent(&four), 2);
+        assert_eq!(four.matches(aged).count(), 2);
+        for page in [1, 2] {
+            assert!(four.contains(&format!("Image file page{page}.\\n\\n{aged}")));
+        }
+
+        // Both images from the latest image result go, despite the later text-only result.
+        let latest = encode(&[&[&big], &[PNG, &oversized], &[]]);
+        assert_eq!(sent(&latest), 2);
+        assert_eq!(latest.matches(aged).count(), 1);
+        assert!(latest.contains(&format!("Image file page1.\\n\\n{aged}")));
     }
 }
