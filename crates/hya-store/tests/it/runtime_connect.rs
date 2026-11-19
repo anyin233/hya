@@ -107,6 +107,45 @@ async fn a_transient_discovery_probe_does_not_reject_a_starter() {
 }
 
 #[tokio::test]
+async fn file_store_write_waits_for_sqlite_lock() {
+    let scratch = Scratch::new();
+    let store = SessionStore::connect(&scratch.db()).await.unwrap();
+    let mut sqlite = sqlx::SqliteConnection::connect(&format!("sqlite://{}", scratch.db()))
+        .await
+        .unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut sqlite)
+        .await
+        .unwrap();
+
+    let session = SessionId::new();
+    let write = store.append_events(
+        session,
+        vec![Event::SessionCreated {
+            session,
+            parent: None,
+            agent: AgentName::new("hya-main"),
+            model: ModelRef::new("fake"),
+            workdir: scratch.0.to_string_lossy().into_owned(),
+            project: None,
+            kind: SessionKind::Project,
+        }],
+    );
+    tokio::pin!(write);
+    tokio::select! {
+        biased;
+        result = &mut write => panic!("store write finished while the lock was held: {result:?}"),
+        () = tokio::time::sleep(Duration::from_secs(6)) => {}
+    }
+    sqlx::query("COMMIT").execute(&mut sqlite).await.unwrap();
+
+    let appended = write.await.unwrap();
+    let replayed = store.replay(session).await.unwrap();
+    assert_eq!(replayed.len(), 1);
+    assert_eq!(replayed[0].seq, appended[0].seq);
+}
+
+#[tokio::test]
 async fn read_only_connect_neither_migrates_nor_writes_projection_snapshots() {
     let scratch = Scratch::new();
     assert!(
