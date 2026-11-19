@@ -136,7 +136,7 @@ impl SessionStore {
         let roots = normalize_roots(roots)?;
         let id = ProjectId::new();
         let now = now_millis();
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_transaction().await?;
         sqlx::query(
             "INSERT INTO project (id, name, created_at, updated_at, archived) \
              VALUES (?, ?, ?, ?, 0)",
@@ -227,7 +227,7 @@ impl SessionStore {
     ) -> Result<Project, StoreError> {
         let name = name.map(validate_name).transpose()?;
         let roots = roots.map(normalize_roots).transpose()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_transaction().await?;
         if name.is_some() || roots.is_some() {
             let updated = sqlx::query(
                 "UPDATE project SET name = coalesce(?, name), \
@@ -302,7 +302,7 @@ impl SessionStore {
                 sessions: live,
             });
         }
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_transaction().await?;
         let deleted = sqlx::query("DELETE FROM project WHERE id = ?")
             .bind(id.to_string())
             .execute(&mut *tx)

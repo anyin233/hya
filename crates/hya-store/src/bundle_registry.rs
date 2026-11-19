@@ -245,7 +245,7 @@ impl BundleRegistry {
         bundle_id: &str,
         enabled: bool,
     ) -> Result<u64, StoreError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let current =
             sqlx::query("SELECT generation FROM bundle_registry_generation WHERE singleton = 1")
                 .fetch_one(&mut *transaction)
