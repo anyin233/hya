@@ -67,8 +67,8 @@ request assembly.
 ## Built-in tools
 
 The following JSON shapes use `string` and `int` as type placeholders. All
-input fields are required. Relative paths resolve against the run's working
-directory.
+input fields are required except `bash`'s `timeout`. Relative paths resolve
+against the run's working directory.
 
 In full mode `hya/base-tools` supplies `read`, `write`, `edit`, and `bash`
 under these names with richer inputs ([Differences from full
@@ -77,7 +77,7 @@ in both modes.
 
 | Tool | Input JSON | Success result |
 | --- | --- | --- |
-| `bash` | `{"command": string}` | `{"exit_code": int, "output": string}` |
+| `bash` | `{"command": string, "timeout"?: int}` | `{"exit_code": int, "output": string}`; after a timeout `{"exit_code": null, "output": string, "timed_out": string}` |
 | `read` | `{"path": string}` | UTF-8 text as `{"content": string}` or an image as `{"output": string, "attachments": [{"type": "file", "mime": string, "url": string}]}` |
 | `write` | `{"path": string, "content": string}` | `{"bytes": int}` |
 | `edit` | `{"path": string, "old": string, "new": string}` | `{"replaced": 1}` |
@@ -86,9 +86,26 @@ in both modes.
 
 `bash` runs `sh -c` in the working directory and merges stdout and stderr.
 A nonzero exit is still a success result for the model to interpret. Failure
-to start returns `ToolError`. Cancellation or a budget-capped timeout kills
-the command's process group. A timeout returns
-`ToolError("bash timed out under the run's time budget")`.
+to start returns `ToolError`.
+
+A command may run for `timeout` seconds, with a default of 300. Values
+outside 1–86400 are an input error. A `--time-budget` run can reduce the
+limit further ([CLI reference](cli.md#--bare)); once the budget has no time
+left, Bash does not start the command and returns the timeout result with
+empty `output`. When the command is still running at the
+limit, Bash kills its process group. The result includes `exit_code: null`,
+the captured `output`, and a `timed_out` sentence naming the limit and its
+source (the default, the call, or the run's budget). The timeout lets the
+model continue after a slow command or pass a longer `timeout` when needed.
+
+```json
+{"command": "make -j8 2>&1 | tail -20", "timeout": 1200}
+```
+
+Cancellation also kills the process group. A process that left the group
+can survive and hold the output pipe open. After the command exits or is
+killed, Bash waits at most one second for more output, subject to the
+remaining run budget, then captures any bytes still buffered in the pipe.
 
 Use `read` with `{"path":"diagram.png"}` to inspect an image. `read` recognizes
 PNG, JPEG, GIF, and WebP by their file signatures and stores a base64 data URL in
@@ -334,7 +351,8 @@ a GPT-family model also gets the `apply_patch` line.
 ## Differences from full mode
 
 Bare mode loads no bundle. It has no permission checks, hooks, subagents,
-Workflows, compaction ladder, output truncation, timeouts, or path bounds.
+Workflows, compaction ladder, output truncation, or path bounds. Its only
+timeout is `bash`'s per-call limit.
 These capabilities belong to full mode and its bundles. The kernel retains
 its six tools, minimal prompt, 80% harness rewrite, and event logging.
 

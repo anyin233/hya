@@ -846,9 +846,11 @@ Both modes use the same thresholds, measured in remaining time. WrapUp is
 `clamp(12% B, 90s, 600s)`, and the Over guard is `clamp(5% B, 30s, 120s)`.
 Over uses the Final notice. Bash and member `wait` timeouts are capped to
 `max(remaining - min(guard, remaining / 2), 5s)`; a shorter requested timeout
-remains unchanged. In bare mode Bash has no timeout parameter. Its automatic
-timeout is also bounded by the remaining time if less than 5 seconds are
-left. A timed-out bare command returns a tool error.
+remains unchanged. In bare mode the cap applies to Bash's `timeout`
+(300 seconds when omitted), which is also bounded by the remaining time if
+less than 5 seconds are left. At timeout, Bash kills the command's process
+group and returns the captured `output` and a `timed_out` note.
+[Kernel tool reference](kernel.md#built-in-tools)
 In full mode the cap includes Bash's omitted timeout and `timeout: 0`. Bash reports
 `metadata.deadlineCapped: true` when shortened and explains the effective
 limit in `<shell_metadata>`. For example, a 900-second run with 200 seconds

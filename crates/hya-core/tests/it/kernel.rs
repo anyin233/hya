@@ -573,6 +573,141 @@ async fn a3_cancel_is_an_observation() {
     assert!(!alive, "the command's child process {pid} is still running");
 }
 
+/// A command that outlives its timeout is killed and answers with what it
+/// printed; one that leaves a process holding the output pipe still returns.
+// The escaped helper is started with the `setsid` utility, which Linux ships and macOS does not.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn bash_timeout_returns_the_output_so_far_and_never_waits_on_an_escaped_process() {
+    struct EscapedProcess(PathBuf);
+
+    impl Drop for EscapedProcess {
+        fn drop(&mut self) {
+            if let Ok(pid) = std::fs::read_to_string(&self.0)
+                && let Ok(pid) = pid.trim().parse::<libc::pid_t>()
+                && pid > 0
+            {
+                // SAFETY: this positive PID belongs to the test helper.
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+            }
+        }
+    }
+
+    let fx = fixture(
+        "bash-timeout",
+        FakeProvider::scripted_turns(vec![
+            call(
+                "bash",
+                json!({"command": "echo started; sleep 30 & echo $! > pid; wait", "timeout": 1}),
+            ),
+            // Record the PID before exec to cover cleanup if the turn is dropped.
+            // The FIFO makes the shell wait until the helper has left the group.
+            call(
+                "bash",
+                json!({"command": r#"
+                    mkfifo escape-ready || exit 1
+                    sh -c '
+                        echo "$$" > escaped-pid
+                        exec setsid sh -c "echo ready > escape-ready; exec sleep 30"
+                    ' &
+                    read -r ready < escape-ready && echo done
+                "#}),
+            ),
+            call("bash", json!({"command": "true", "timeout": 0})),
+            text("ok"),
+        ]),
+    )
+    .await;
+    let escaped_process = EscapedProcess(fx.dir.join("escaped-pid"));
+    let finish = tokio::time::timeout(
+        Duration::from_secs(15),
+        fx.turn("run", &CancellationToken::new()),
+    )
+    .await
+    .expect("the calls returned while the escaped helper held the pipe open")
+    .unwrap();
+    assert_eq!(finish, FinishReason::Stop);
+    let escaped_pid = std::fs::read_to_string(&escaped_process.0)
+        .unwrap()
+        .trim()
+        .parse::<libc::pid_t>()
+        .unwrap();
+    assert!(escaped_pid > 0);
+    // SAFETY: getsid only queries the session ID for this positive PID.
+    assert_eq!(unsafe { libc::getsid(escaped_pid) }, escaped_pid);
+    let log = fx.log().await;
+    assert_paired(&log);
+    let results: Vec<_> = log
+        .iter()
+        .filter_map(|event| match event {
+            Event::ToolResult { output, .. } => Some(output),
+            _ => None,
+        })
+        .collect();
+    let [timed_out, escaped] = results.as_slice() else {
+        panic!("expected two bash results, got {results:?}");
+    };
+    assert_eq!(timed_out["exit_code"], serde_json::Value::Null);
+    assert_eq!(timed_out["output"], "started\n");
+    let note = timed_out["timed_out"].as_str().unwrap();
+    assert!(
+        note.contains("after 1s")
+            && note.contains("`timeout`")
+            && note.contains("killed its process group")
+            && note.contains("returned the captured"),
+        "{note}"
+    );
+    assert_eq!(**escaped, json!({"exit_code": 0, "output": "done\n"}));
+    assert_eq!(tool_errors(&log).len(), 1, "timeout 0 is an input error");
+    let pid = std::fs::read_to_string(fx.dir.join("pid")).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let stat = std::process::Command::new("ps")
+                .args(["-o", "stat=", "-p", pid.trim()])
+                .output()
+                .unwrap();
+            let stat = String::from_utf8_lossy(&stat.stdout);
+            if stat.trim().is_empty() || stat.trim().starts_with('Z') {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("the timed-out command's child {pid} is still running"));
+}
+
+#[tokio::test]
+async fn bash_returns_all_output_on_normal_exit() {
+    let fx = fixture(
+        "bash-large-output",
+        FakeProvider::scripted_turns(vec![
+            call(
+                "bash",
+                json!({"command": r#"head -c 4194304 /dev/zero | tr '\000' x && printf 'done\n' >&2"#}),
+            ),
+            text("ok"),
+        ]),
+    )
+    .await;
+    let finish = fx.turn("run", &CancellationToken::new()).await.unwrap();
+    assert_eq!(finish, FinishReason::Stop);
+    let log = fx.log().await;
+    assert_paired(&log);
+    let result = log
+        .iter()
+        .find_map(|event| match event {
+            Event::ToolResult { output, .. } => Some(output),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(result["exit_code"], 0);
+    let output = result["output"].as_str().unwrap();
+    let stdout = output.strip_suffix("done\n").expect("final stderr marker");
+    assert_eq!(stdout.len(), 4 * 1024 * 1024);
+    assert!(stdout.bytes().all(|byte| byte == b'x'));
+}
+
 #[tokio::test]
 async fn a4_model_rewrite() {
     let fx = fixture(
