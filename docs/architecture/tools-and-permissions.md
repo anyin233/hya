@@ -190,11 +190,13 @@ and Edit diff metadata remain objects, and independent hard limits set explicit
 truncation flags. The envelope is held to `MAX_CODING_ENVELOPE_BYTES = 256 KiB`
 not counting its `attachments` array, which has its own budget,
 `MAX_CODING_ATTACHMENT_BYTES = 2 MiB` serialized: an entry that does not fit is
-dropped whole and `metadata.attachmentsTruncated` is set. A request then sends
-at most 16 MiB of tool-result image data, newest first (see
-[Tool-result images](providers.md#tool-result-images)). No metadata or hook can bypass the final cap. Provider replay
-uses an object's string `output` field when present and falls back to JSON only
-when no such field exists.
+dropped whole and `metadata.attachmentsTruncated` is set. No metadata or hook
+can bypass the tool-result cap.
+[Tool-result image replay](providers.md#tool-result-images) uses a 2 MiB
+request budget, newest first, and always keeps eligible images from the newest
+result with images. Each replayed image costs time and tokens on every later
+request. Provider replay uses an object's string `output` field when present
+and falls back to JSON only when no such field exists.
 
 ## Coding-tool runtime
 

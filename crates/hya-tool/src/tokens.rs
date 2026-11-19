@@ -642,17 +642,19 @@ mod tests {
 
     #[test]
     fn request_estimate_counts_the_notice_for_an_image_aged_out_of_the_budget() {
-        let oldest = image_result("data:image/png;base64,AAAA");
-        // The newest image fills the byte budget. Only the older image is replaced by a notice.
-        let newest = image_result(&"A".repeat(16 * 1024 * 1024));
         let text = estimate(vec![tool(json!({"output": "Image file."}))], false, true);
         let notice = CalibratedTokenizer.count_text(
             "\n\n[The image attached to this result (image/png) is no longer attached: \
              newer images fill this request's image budget. Read the file again to see it.]",
         );
-        assert_eq!(
-            estimate(vec![tool(oldest), tool(newest)], false, true),
-            2 * text + IMAGE_TOKENS + notice,
-        );
+        for newest_bytes in [2 * 1024 * 1024, 2 * 1024 * 1024 + 4] {
+            let oldest = image_result("data:image/png;base64,AAAA");
+            let newest = image_result(&"A".repeat(newest_bytes));
+            assert_eq!(
+                estimate(vec![tool(oldest), tool(newest)], false, true),
+                2 * text + IMAGE_TOKENS + notice,
+                "newest image: {newest_bytes} bytes",
+            );
+        }
     }
 }

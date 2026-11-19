@@ -32,8 +32,11 @@ alone.
    check is reduced first. A completed tool result is counted as it is sent.
    The estimate uses the string output when available and the full JSON
    otherwise. Each eligible tool image costs 5,000 tokens. When the route
-   omits an image due to capability or the image budget, the estimate counts
-   the corresponding text notice.
+   omits an image due to capability or the 2 MiB per-request image budget,
+   the estimate counts the corresponding text notice. The budget is applied
+   newest first and keeps all eligible images from the newest result with
+   images even when they exceed it. Each replayed image costs time and tokens
+   on every later request, so the budget is small.
 2. **Extensions.** The kernel calls each extension in registration order
    with the pressure. Extensions run every round; they reduce only when
    `used > threshold`. The `hya/compaction` bundle runs `shake`, then
