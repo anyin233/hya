@@ -84,10 +84,13 @@ pub enum ProviderError {
     /// JSON body or frame (de)serialization failed.
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
-    /// Unclassified provider API error frame, link-level stream failure, bad
-    /// header, or HTTP client construction failure.
+    /// Unclassified provider API error frame, malformed SSE, bad header, or
+    /// HTTP client construction failure.
     #[error("http: {0}")]
     Http(String),
+    /// An established SSE stream stalled or failed while reading its HTTP body.
+    #[error("http: {0}")]
+    StreamInterrupted(String),
     /// Request transport failed before an HTTP response established the event stream.
     #[error("transport: {0}")]
     Transport(String),
@@ -132,6 +135,7 @@ impl ProviderError {
             Self::HttpStatus { status, .. } => *status == 429 || (500..=599).contains(status),
             Self::Json(_)
             | Self::Http(_)
+            | Self::StreamInterrupted(_)
             | Self::UnknownModel(_)
             | Self::Incompatible(_)
             | Self::Decode(_)
