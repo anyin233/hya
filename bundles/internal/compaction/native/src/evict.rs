@@ -221,6 +221,7 @@ mod tests {
             finish: None,
             tokens: None,
             last_round: None,
+            last_step_start: None,
         }
     }
 
@@ -336,6 +337,7 @@ mod tests {
             finish: None,
             tokens: None,
             last_round: None,
+            last_step_start: None,
         }];
 
         assert_eq!(evict(&mut messages, 2, None), 2);

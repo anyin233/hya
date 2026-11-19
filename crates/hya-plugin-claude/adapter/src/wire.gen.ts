@@ -724,6 +724,7 @@ export type Message = ({ readonly role: "user" } & {
   readonly agent: AgentName
   readonly model: ModelRef
   readonly parts: ReadonlyArray<Part>
+  readonly last_step_start?: number | null
   readonly last_round?: TokenUsage | null
   readonly finish?: FinishReason | null
   readonly tokens?: TokenUsage | null
@@ -1379,7 +1380,7 @@ export function isMemberRunStatus(value: unknown): value is MemberRunStatus {
 
 export function isMessage(value: unknown): value is Message {
   return (isRecord(value) && value["role"] === "user" && isRecord(value) && ("id" in value && isMessageId(value["id"])) && ("parts" in value && (Array.isArray(value["parts"]) && value["parts"].every((item: unknown) => isPart(item))))) ||
-    (isRecord(value) && value["role"] === "assistant" && isRecord(value) && ("id" in value && isMessageId(value["id"])) && ("agent" in value && isAgentName(value["agent"])) && ("model" in value && isModelRef(value["model"])) && ("parts" in value && (Array.isArray(value["parts"]) && value["parts"].every((item: unknown) => isPart(item)))) && (value["last_round"] === undefined || (value["last_round"] === null || isTokenUsage(value["last_round"]))) && (value["finish"] === undefined || (value["finish"] === null || isFinishReason(value["finish"]))) && (value["tokens"] === undefined || (value["tokens"] === null || isTokenUsage(value["tokens"])))) ||
+    (isRecord(value) && value["role"] === "assistant" && isRecord(value) && ("id" in value && isMessageId(value["id"])) && ("agent" in value && isAgentName(value["agent"])) && ("model" in value && isModelRef(value["model"])) && ("parts" in value && (Array.isArray(value["parts"]) && value["parts"].every((item: unknown) => isPart(item)))) && (value["last_step_start"] === undefined || (value["last_step_start"] === null || (typeof value["last_step_start"] === "number" && Number.isInteger(value["last_step_start"]) && value["last_step_start"] >= 0))) && (value["last_round"] === undefined || (value["last_round"] === null || isTokenUsage(value["last_round"]))) && (value["finish"] === undefined || (value["finish"] === null || isFinishReason(value["finish"]))) && (value["tokens"] === undefined || (value["tokens"] === null || isTokenUsage(value["tokens"])))) ||
     (isRecord(value) && value["role"] === "system" && isRecord(value) && ("id" in value && isMessageId(value["id"])) && ("content" in value && typeof value["content"] === "string"))
 }
 

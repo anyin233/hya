@@ -700,16 +700,34 @@ renders it per request ([`wire.rs`](../../crates/hya-provider/src/wire.rs)
 - Otherwise (`Some(false)`, unknown, a rejected image, or the Google route)
   the result stays text and gets the line `[The image attached to this result
   (<mime>) is not shown to you. Inspect it with a program instead …]`.
-- Replay automatically uses a **1 MiB** budget for tool-result image data
-  (data URL length, about the base64 length). The newest tool result with
-  images keeps all its eligible images, even if they exceed the budget.
-  Remaining images are considered newest first. The first one that would
-  exceed the budget and every older image become the line `[The image attached
-  to this result (<mime>) is no longer attached: newer images fill this
-  request's image budget. Read the file again to see it.]`. For example, after
-  three results with 384 KiB of image data each, the request includes the two
-  newest images and a notice for the oldest. The budget is small because
-  each replayed image costs time and tokens on every later request.
+- A tool-result image is sent at most once: in the request that follows the
+  round that read it ([`context.rs`](../../crates/hya-proto/src/context.rs)
+  `ToolImageReplay`). That round is the last step of the assistant message
+  the request continues: the completed tool results among the parts of that
+  step. The request builder records where the step starts
+  (`Message::Assistant.last_step_start`, from the projection's
+  `last_step_start`) on the turn's own assistant message only, in bare and
+  full mode alike. So a request after a step without tool calls (a completion
+  check, an empty response) or the first request of a new turn sends no
+  tool-result image, and neither does a message without step information
+  (older logs, side requests such as titles and summaries).
+- Inside that round, images are taken in the order of the round's tool parts
+  and their sizes (data URL length, about the base64 length) added up. The
+  first image is always attached, without any notice, even when it alone
+  exceeds the budget; each later image is attached while the total stays
+  within **2 MiB**. A later image that takes the total over 2 MiB and every
+  image after it in the round get the line `[The image attached to this result (<mime>) was not
+  shown: this step's images exceed what one request can carry. Read it again
+  in a later step, fewer images at a time.]`.
+- On a route that takes tool-result images, every image of an earlier round
+  gets the line `[The image of this result (<mime>) is not attached to this
+  request. To look at it, make the call again (for a file: read it again).]`;
+  on a route that does not, it keeps the "not shown to you" line above. The
+  line does not say the image was shown:
+  the budget or the route may have kept it out. Every request that carries
+  image data is slow and costs tokens, and what the model concluded from the
+  image stays in its replayed reasoning and text. To look again, the model
+  reads the file again; the bare `read` description says so.
 - When the coding-tool result cap dropped an attachment for size
   (`metadata.attachmentsTruncated`; the cap keeps at most 2 MiB of serialized
   attachments per result), the text says the attachment is not shown, for
@@ -717,9 +735,15 @@ renders it per request ([`wire.rs`](../../crates/hya-provider/src/wire.rs)
   (a file over about 1.5 MiB); its text says so and suggests downscaling or
   cropping the image with a program and reading the smaller file.
 
-The rendering depends only on the stored history and the model, so an image
-stays at the same place in every later request of the session and the prompt
-cache prefix is stable, until newer images push it out of the request budget.
+The rendering depends only on the messages of the request and the route
+(protocol and the model's image input). In bare mode those messages come from
+the log alone, so a request rebuilt for the same point of the log with the
+same route settings is identical; in full mode the same holds for the same
+harness inputs and hook output. A retried round sends the same request again,
+image included. A hook that replaces the messages has to keep
+`last_step_start` on the assistant message it continues, or no tool-result
+image is sent. From the second request after the round that read it, a tool
+result carries its notice instead of its image.
 A result without images is encoded exactly as before.
 
 ## Usage Reporting

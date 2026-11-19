@@ -97,6 +97,12 @@ pub fn projection_to_messages(
                 finish: m.finish,
                 tokens: m.tokens,
                 last_round: m.usage.as_ref().map(|usage| usage.last_round),
+                // Only the turn's own message: a new turn's message is created
+                // (empty) before its first request, so no older step counts.
+                last_step_start: m
+                    .last_step_start
+                    .filter(|_| assistant.is_some_and(|assistant| assistant.id == m.id))
+                    .map(|start| start.saturating_sub(m.folded_parts)),
             },
             // Keep harness notices in the conversation on providers that
             // hoist system messages into the top-level instructions.
@@ -409,7 +415,8 @@ mod tests {
 
     /// After a step cut the request is `[marker, prompt, kept steps]`: folded
     /// parts are left out whole, and every kept reasoning part goes out exactly
-    /// as stored, `provider_data` included.
+    /// as stored, `provider_data` included. The last step's start counts in the
+    /// sent parts, and only on the message the request continues.
     #[test]
     fn request_skips_step_folded_parts_and_replays_kept_reasoning() {
         use hya_proto::{
@@ -455,8 +462,14 @@ mod tests {
         events.push(started(user, Role::User));
         events.extend(text(user, user_part, "do the task"));
         events.push(started(assistant, Role::Assistant));
-        for (step, part) in steps.iter().enumerate() {
+        for (step, part) in (0u32..).zip(&steps) {
             events.extend([
+                Event::StepStarted {
+                    session,
+                    message: assistant,
+                    step,
+                    view: None,
+                },
                 Event::ReasoningStart {
                     session,
                     message: assistant,
@@ -496,29 +509,41 @@ mod tests {
                 kept_head: user,
             }),
         });
-        let envelopes: Vec<_> = events
-            .into_iter()
-            .enumerate()
-            .map(|(seq, event)| Envelope {
-                seq: EventSeq(seq as u64 + 1),
-                ts_millis: 0,
-                event,
-            })
-            .collect();
-        let projection = Projection::from_events(&envelopes);
+        let project = |events: &[Event]| {
+            let envelopes: Vec<_> = events
+                .iter()
+                .enumerate()
+                .map(|(seq, event)| Envelope {
+                    seq: EventSeq(seq as u64 + 1),
+                    ts_millis: 0,
+                    event: event.clone(),
+                })
+                .collect();
+            Projection::from_events(&envelopes)
+        };
+        let projection = project(&events);
         let agent = AgentName::new("build");
+        let messages = |projection: &Projection| {
+            projection_to_messages(
+                &agent,
+                projection,
+                &ModelRef::new("fake"),
+                &AttachmentData::new(),
+            )
+        };
 
-        let messages = projection_to_messages(
-            &agent,
-            &projection,
-            &ModelRef::new("fake"),
-            &AttachmentData::new(),
-        );
-        let ids: Vec<_> = messages.iter().map(Message::id).collect();
+        let sent = messages(&projection);
+        let ids: Vec<_> = sent.iter().map(Message::id).collect();
         assert_eq!(ids, vec![marker, user, assistant]);
-        let Message::Assistant { parts, .. } = &messages[2] else {
+        let Message::Assistant {
+            parts,
+            last_step_start,
+            ..
+        } = &sent[2]
+        else {
             panic!("expected the in-flight assistant");
         };
+        assert_eq!(*last_step_start, Some(1));
         let stored = &projection.session.messages[2].parts;
         assert_eq!(stored.len(), 3, "the projection keeps the folded step");
         assert_eq!(parts, &map_parts(&stored[1..]));
@@ -526,5 +551,15 @@ mod tests {
             part,
             Part::Reasoning { provider_data: Some(data), .. } if data["encrypted_content"] != "opaque 0"
         )));
+
+        // A new turn: its message is created before its first request, so the
+        // earlier message's last step no longer counts.
+        events.push(started(MessageId::new(), Role::User));
+        events.push(started(MessageId::new(), Role::Assistant));
+        let next = messages(&project(&events));
+        assert!(matches!(
+            &next[2],
+            Message::Assistant { id, last_step_start: None, .. } if *id == assistant
+        ));
     }
 }

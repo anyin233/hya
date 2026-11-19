@@ -169,37 +169,46 @@ pub fn tool_attachment_limit_notice(output: &Value) -> Option<&'static str> {
     )
 }
 
-/// Budget for tool-result image data (data URL length, about the base64 length).
-const MAX_REQUEST_IMAGE_BYTES: usize = 1024 * 1024;
+/// Budget for the images of one round of tool results (data URL length, about
+/// the base64 length).
+const MAX_ROUND_IMAGE_BYTES: usize = 2 * 1024 * 1024;
 
 /// Which tool-result images one request sends.
+///
+/// An image is sent only in the request after the round that read it: every
+/// request that carries image data is slow and costly, and what the model saw
+/// stays in its replayed reasoning and text. The model reads the file again
+/// to look again.
 pub struct ToolImageReplay<'a> {
     /// The request's model accepts image input (`Capabilities::image_input ==
     /// Some(true)`) on a protocol that carries tool-result images.
     send: bool,
-    /// Images omitted by the budget, as (tool part, index in its attachment array).
-    aged_out: HashSet<(&'a PartId, usize)>,
+    /// Tool parts of the newest round of results.
+    round: HashSet<&'a PartId>,
+    /// Images this request attaches, as (tool part, index in its attachment array).
+    attached: HashSet<(&'a PartId, usize)>,
 }
 
 impl<'a> ToolImageReplay<'a> {
-    /// Keep every image from the newest result with images, even if they
-    /// exceed the budget. Walk the remaining images newest first and age out
-    /// the first one that would exceed the budget and every older image.
+    /// The newest round is the completed tool results among the parts of the
+    /// last step of the last assistant message (`last_step_start`); without
+    /// step information no image is sent. Its images are attached in call
+    /// order while they fit the budget; the first one always is.
     #[must_use]
     pub fn new(messages: &'a [Message], send: bool) -> Self {
-        let mut aged_out = HashSet::new();
-        if send {
+        let mut round = HashSet::new();
+        let mut attached = HashSet::new();
+        let last = messages.iter().rev().find_map(|message| match message {
+            Message::Assistant {
+                parts,
+                last_step_start,
+                ..
+            } => Some((parts, *last_step_start)),
+            Message::User { .. } | Message::System { .. } => None,
+        });
+        if send && let Some((parts, Some(start))) = last {
             let mut used = 0usize;
-            let mut newest_result = true;
-            let parts = messages
-                .iter()
-                .rev()
-                .filter_map(|message| match message {
-                    Message::Assistant { parts, .. } => Some(parts),
-                    Message::User { .. } | Message::System { .. } => None,
-                })
-                .flat_map(|parts| parts.iter().rev());
-            for part in parts {
+            for part in parts.iter().skip(start) {
                 let Part::Tool {
                     id,
                     state: ToolPartState::Completed { output, .. },
@@ -208,20 +217,20 @@ impl<'a> ToolImageReplay<'a> {
                 else {
                     continue;
                 };
-                let mut images = attached_images(output).rev().peekable();
-                if images.peek().is_none() {
-                    continue;
-                }
-                for (index, _, data) in images {
+                round.insert(id);
+                for (index, _, data) in attached_images(output) {
                     used = used.saturating_add(data.len());
-                    if !newest_result && used > MAX_REQUEST_IMAGE_BYTES {
-                        aged_out.insert((id, index));
+                    if attached.is_empty() || used <= MAX_ROUND_IMAGE_BYTES {
+                        attached.insert((id, index));
                     }
                 }
-                newest_result = false;
             }
         }
-        Self { send, aged_out }
+        Self {
+            send,
+            round,
+            attached,
+        }
     }
 
     /// Image candidates for a completed result as (MIME type, data, omission notice).
@@ -233,28 +242,36 @@ impl<'a> ToolImageReplay<'a> {
         accepts: impl Fn(&str, &str) -> bool,
     ) -> impl Iterator<Item = (&'output str, &'output str, Option<String>)> {
         attached_images(output).map(move |(index, mime, data)| {
-            let notice = if self.aged_out.contains(&(part, index)) {
+            let notice = if self.send && self.attached.contains(&(part, index)) {
+                (!accepts(mime, data)).then(|| not_shown_notice(mime))
+            } else if self.send && self.round.contains(part) {
                 Some(format!(
-                    "\n\n[The image attached to this result ({mime}) is no longer attached: \
-                     newer images fill this request's image budget. Read the file again to \
-                     see it.]"
+                    "\n\n[The image attached to this result ({mime}) was not shown: this \
+                     step's images exceed what one request can carry. Read it again in a \
+                     later step, fewer images at a time.]"
                 ))
-            } else if self.send && accepts(mime, data) {
-                None
+            } else if self.send {
+                Some(format!(
+                    "\n\n[The image of this result ({mime}) is not attached to this request. \
+                     To look at it, make the call again (for a file: read it again).]"
+                ))
             } else {
-                Some(format!(
-                    "\n\n[The image attached to this result ({mime}) is not shown to you. \
-                     Inspect it with a program instead (an image library, OCR, a conversion \
-                     to text).]"
-                ))
+                Some(not_shown_notice(mime))
             };
             (mime, data, notice)
         })
     }
 }
 
+fn not_shown_notice(mime: &str) -> String {
+    format!(
+        "\n\n[The image attached to this result ({mime}) is not shown to you. Inspect it \
+         with a program instead (an image library, OCR, a conversion to text).]"
+    )
+}
+
 /// Image attachments (`{"mime": "image/…", "url": …}`) of a tool result.
-fn attached_images(output: &Value) -> impl DoubleEndedIterator<Item = (usize, &str, &str)> {
+fn attached_images(output: &Value) -> impl Iterator<Item = (usize, &str, &str)> {
     output
         .get("attachments")
         .and_then(Value::as_array)
