@@ -404,12 +404,12 @@ call, when:
   filter), which ends the run as it did before;
 - the run is cancelled (checked before the check is appended; a cancel that
   lands right after it is logged ends the run as cancelled, with the check
-  never sent);
-- a `--time-budget` deadline is in WrapUp, Final, or Over. The WrapUp
-  notice already asks the model to check the deliverables and finish.
+  never sent).
 
-With a deadline, only the Normal stage allows the completion check. A run
-without a deadline can also receive it.
+With `--time-budget`, the check is sent only while more than twice the Final
+window remains (more than 216 seconds for a 900-second budget or 432 seconds
+for a 1,800-second budget), giving the check a few rounds and keeping the
+Final window free for the last step.
 
 The first two are read from the session log's projection, so a replayed log
 yields the same decision, and a rewrite cannot make the check be sent again.
