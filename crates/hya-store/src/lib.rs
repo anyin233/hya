@@ -572,7 +572,7 @@ impl SessionStore {
         session: SessionId,
         event: &Event,
     ) -> Result<(EventSeq, i64), StoreError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_transaction().await?;
         let envelope = append_event_in_transaction(&mut tx, session, event.clone()).await?;
         tx.commit().await?;
         Ok((envelope.seq, envelope.ts_millis))
@@ -685,7 +685,7 @@ impl SessionStore {
         last_seq: Option<EventSeq>,
     ) -> Result<bool, StoreError> {
         let key = session.storage_key();
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_transaction().await?;
         // The event log goes first: its conditional delete is the check (and
         // takes the write lock), so the cascade below only goes with it.
         let result = match last_seq {

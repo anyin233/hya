@@ -56,7 +56,7 @@ impl SessionStore {
     ) -> Result<(), StoreError> {
         validate(agent_id, effort)?;
         self.require_runtime_owner(owner)?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_transaction().await?;
         self.require_runtime_owner(owner)?;
         sqlx::query(
             "INSERT INTO agent_effort_preference (agent_id, effort, updated_at) VALUES (?, ?, ?)
@@ -80,7 +80,7 @@ impl SessionStore {
     ) -> Result<(), StoreError> {
         validate(agent_id, "clear")?;
         self.require_runtime_owner(owner)?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_transaction().await?;
         self.require_runtime_owner(owner)?;
         sqlx::query("DELETE FROM agent_effort_preference WHERE agent_id = ?")
             .bind(agent_id)
