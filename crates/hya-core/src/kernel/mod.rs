@@ -256,6 +256,7 @@ impl Harness for Bare<'_> {
                 max_context: caps.max_context,
                 usage_reporting: caps.usage_reporting,
                 reasoning_replay: replay,
+                sends_tool_images: scope.provider.sends_tool_images(self.model),
             });
         let overhead_tokens = TokenAccounting::default().estimate_request(
             &[],

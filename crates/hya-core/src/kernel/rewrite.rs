@@ -130,7 +130,7 @@ async fn measure(
         return Ok(None);
     };
     let messages = cx.transcript.messages(projection).await?;
-    let accounting = TokenAccounting::default();
+    let accounting = TokenAccounting::default().with_tool_images(window.sends_tool_images);
     let mut tokens = accounting.estimate_with_reasoning_policy(&messages, window.reasoning_replay);
     if !stale {
         tokens = tokens.max(

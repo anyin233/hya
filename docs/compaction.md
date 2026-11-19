@@ -29,7 +29,11 @@ alone.
    gives no pressure: nothing is reduced. The request counts include tool
    results that arrived after the last round, and the local estimate is what
    full mode's pre-send check measures, so a request that would fail that
-   check is reduced first.
+   check is reduced first. A completed tool result is counted as it is sent.
+   The estimate uses the string output when available and the full JSON
+   otherwise. Each eligible tool image costs 5,000 tokens. When the route
+   omits an image due to capability or the image budget, the estimate counts
+   the corresponding text notice.
 2. **Extensions.** The kernel calls each extension in registration order
    with the pressure. Extensions run every round; they reduce only when
    `used > threshold`. The `hya/compaction` bundle runs `shake`, then

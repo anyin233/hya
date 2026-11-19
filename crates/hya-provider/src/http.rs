@@ -896,7 +896,7 @@ impl HttpProvider {
             .as_ref()
             .map(|caps| caps.max_output)
             .filter(|limit| *limit > 0);
-        let images = caps.is_some_and(|caps| caps.image_input == Some(true));
+        let images = caps.is_some_and(|caps| self.sends_tool_images(&caps));
         if let Some(model_id) = self.served_model_id(&req.model) {
             req.model = ModelRef::new(model_id);
         }
@@ -1118,6 +1118,11 @@ impl Provider for HttpProvider {
         let served = self.served_model_name(model)?;
         Some(self.caps_for_model(served))
     }
+
+    fn sends_tool_images(&self, caps: &Capabilities) -> bool {
+        self.kind != ProviderKind::Google && caps.image_input == Some(true)
+    }
+
     fn reasoning_replay_policy(&self) -> crate::ReasoningReplayPolicy {
         match self.kind {
             ProviderKind::OpenAiResponse | ProviderKind::OpenAiCodex | ProviderKind::GrokBuild => {
@@ -1261,7 +1266,7 @@ impl Provider for HttpProvider {
             .unwrap_or_else(|| model.as_str().to_string());
         let images = self
             .capabilities(model)
-            .is_some_and(|caps| caps.image_input == Some(true));
+            .is_some_and(|caps| self.sends_tool_images(&caps));
         // Encode the same input window the create path would send.
         let mut input = encode_input_items(messages, images)?;
         if let Some(system) = system.filter(|s| !s.is_empty()) {

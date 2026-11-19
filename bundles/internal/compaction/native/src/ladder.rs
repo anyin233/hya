@@ -21,7 +21,8 @@ use crate::evict::{ArtifactEvictionSink, evict_stale_tool_outputs, has_spillable
 /// `true` when the log changed.
 pub(crate) async fn walk(cx: &RewriteCtx<'_>) -> Result<bool, ToolError> {
     let config = Config::from_value(cx.config)?;
-    let accounting = TokenAccounting::new(config.token_accounting);
+    let accounting = TokenAccounting::new(config.token_accounting)
+        .with_tool_images(cx.window.is_some_and(|window| window.sends_tool_images));
     let session = cx.session;
     let mut messages = cx.transcript.messages(cx.projection).await?;
     // The in-flight assistant message does not count against the kept tail.

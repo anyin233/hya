@@ -368,7 +368,10 @@ impl SessionEngine {
         let Some(capabilities) = router.capabilities(&request.model) else {
             return Ok(()); // The router reports unknown models through its normal path.
         };
-        let tokens = self.token_accounting.estimate_request(
+        let accounting = self
+            .token_accounting
+            .with_tool_images(router.sends_tool_images(&request.model));
+        let tokens = accounting.estimate_request(
             &request.messages,
             request.system.as_deref(),
             &request.tools,

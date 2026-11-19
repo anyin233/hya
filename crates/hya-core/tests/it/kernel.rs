@@ -772,6 +772,46 @@ async fn read_image_reaches_the_model_from_live_and_replayed_history() {
 }
 
 #[tokio::test]
+async fn large_image_result_stays_below_rewrite_pressure() {
+    let fx = fixture(
+        "large-image-pressure",
+        FakeProvider::scripted_turns(vec![
+            call("read", json!({"path": "board.png"})),
+            text("done"),
+        ])
+        .with_max_context(8_000)
+        .with_tool_images(),
+    )
+    .await;
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.resize(384 * 1024, 0);
+    std::fs::write(fx.dir.join("board.png"), png).unwrap();
+
+    assert_eq!(
+        fx.turn("look at the board", &CancellationToken::new())
+            .await
+            .unwrap(),
+        FinishReason::Stop
+    );
+    let requests = fx.provider.requests();
+    assert_eq!(requests.len(), 3);
+    // The fixed image charge crosses the checkpoint threshold, while an omission notice would not.
+    assert_eq!(
+        [
+            goal_checkpoints(&requests[0]),
+            goal_checkpoints(&requests[1])
+        ],
+        [0, 1]
+    );
+    assert!(assistant_parts(&requests[1]).any(|part| matches!(
+        part,
+        Part::Tool { state: ToolPartState::Completed { output, .. }, .. }
+        if output["attachments"][0]["url"].as_str().is_some_and(|url| url.len() > 500_000)
+    )));
+    assert!(compactions(&fx.log().await).is_empty());
+}
+
+#[tokio::test]
 async fn a3_cancel_is_an_observation() {
     let fx = fixture(
         "a3",
@@ -1395,6 +1435,7 @@ async fn reduce_with(name: &str, fold: bool) -> (bool, Vec<Event>, Vec<Option<Pr
             max_context: 10_000,
             usage_reporting: false,
             reasoning_replay: hya_proto::context::ReasoningReplayPolicy::None,
+            sends_tool_images: false,
         }),
         overhead_tokens: 0,
         pressure: None,
