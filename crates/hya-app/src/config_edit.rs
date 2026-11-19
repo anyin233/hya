@@ -329,8 +329,8 @@ struct Parser<'a> {
 impl Parser<'_> {
     /// Next content line at or after `from`: `(index, indent)`.
     fn next_content(&self, from: usize) -> Res<Option<(usize, usize)>> {
-        for index in from..self.lines.len() {
-            if let LineKind::Content(indent) = classify(&self.lines[index])? {
+        for (index, line) in self.lines.iter().enumerate().skip(from) {
+            if let LineKind::Content(indent) = classify(line)? {
                 return Ok(Some((index, indent)));
             }
         }
@@ -578,8 +578,7 @@ impl Parser<'_> {
     /// past `parent` belongs to it.
     fn block_scalar(&self, line: usize, parent: usize) -> Res<Inline> {
         let mut last = line;
-        for index in line + 1..self.lines.len() {
-            let text = &self.lines[index];
+        for (index, text) in self.lines.iter().enumerate().skip(line + 1) {
             if text.trim().is_empty() {
                 continue;
             }
