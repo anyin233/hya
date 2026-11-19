@@ -77,6 +77,19 @@ impl ProviderRouter {
     pub fn capabilities(&self, model: &ModelRef) -> Option<crate::Capabilities> {
         self.providers.iter().find_map(|p| p.capabilities(model))
     }
+    /// Whether the first route claiming `model` encodes tool-result images.
+    #[must_use]
+    pub fn sends_tool_images(&self, model: &ModelRef) -> bool {
+        self.providers
+            .iter()
+            .find_map(|provider| {
+                provider
+                    .capabilities(model)
+                    .map(|caps| provider.sends_tool_images(&caps))
+            })
+            .unwrap_or(false)
+    }
+
     /// Reasoning parts replayed by the first route claiming `model`.
     #[must_use]
     pub fn reasoning_replay_policy(&self, model: &ModelRef) -> crate::ReasoningReplayPolicy {

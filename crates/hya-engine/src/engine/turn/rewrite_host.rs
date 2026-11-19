@@ -37,6 +37,7 @@ impl SessionEngine {
             max_context: caps.max_context,
             usage_reporting: caps.usage_reporting,
             reasoning_replay: router.reasoning_replay_policy(model),
+            sends_tool_images: router.sends_tool_images(model),
         })
     }
 }

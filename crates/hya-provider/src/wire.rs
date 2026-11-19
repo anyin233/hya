@@ -1,8 +1,8 @@
 //! Shared helpers for encoding stored tool parts into provider wire formats.
 
-use std::collections::HashSet;
-
-use hya_proto::{Message, Part, PartId, ToolCallId, ToolPartState};
+pub(crate) use hya_proto::context::ToolImageReplay as ToolImages;
+use hya_proto::context::{tool_attachment_limit_notice, tool_result_text};
+use hya_proto::{PartId, ToolCallId, ToolPartState};
 use serde_json::Value;
 
 pub(crate) fn tool_input(state: &ToolPartState) -> &Value {
@@ -23,60 +23,6 @@ pub(crate) struct ToolResult<'a> {
     pub(crate) images: Vec<(&'a str, &'a str)>,
 }
 
-/// Tool-result image data (data URL length, about the base64 length) one
-/// request carries.
-pub(crate) const MAX_REQUEST_IMAGE_BYTES: usize = 16 * 1024 * 1024;
-
-/// Which tool-result images one request sends.
-pub(crate) struct ToolImages<'a> {
-    /// The request's model accepts image input (`Capabilities::image_input ==
-    /// Some(true)`) on a protocol that carries tool-result images.
-    send: bool,
-    /// Images older than the newest ones that fit [`MAX_REQUEST_IMAGE_BYTES`],
-    /// as (tool part, index among its image attachments).
-    aged_out: HashSet<(&'a PartId, usize)>,
-}
-
-impl<'a> ToolImages<'a> {
-    /// Plan the images of a request over `messages`. Walking from the newest
-    /// image back, images are kept until the next would exceed the budget;
-    /// it and every older image are aged out. The plan depends only on the
-    /// history, so a later request differs only in the images that newer ones
-    /// pushed out.
-    pub(crate) fn new(messages: &'a [Message], send: bool) -> Self {
-        let mut aged_out = HashSet::new();
-        if send {
-            let mut used = 0usize;
-            let parts = messages
-                .iter()
-                .rev()
-                .filter_map(|message| match message {
-                    Message::Assistant { parts, .. } => Some(parts),
-                    Message::User { .. } | Message::System { .. } => None,
-                })
-                .flat_map(|parts| parts.iter().rev());
-            for part in parts {
-                let Part::Tool {
-                    id,
-                    state: ToolPartState::Completed { output, .. },
-                    ..
-                } = part
-                else {
-                    continue;
-                };
-                let images: Vec<_> = attached_images(output).collect();
-                for (index, (_, data)) in images.iter().enumerate().rev() {
-                    used = used.saturating_add(data.len());
-                    if used > MAX_REQUEST_IMAGE_BYTES {
-                        aged_out.insert((id, index));
-                    }
-                }
-            }
-        }
-        Self { send, aged_out }
-    }
-}
-
 /// Render the stored tool result of tool part `part` for one request.
 ///
 /// The stored result is model-independent: an image attachment either goes
@@ -91,32 +37,19 @@ pub(crate) fn tool_result<'a>(
 ) -> ToolResult<'a> {
     let (text, is_error) = match state {
         ToolPartState::Completed { output, .. } => {
-            let mut text = value_to_text(output);
+            let mut text = tool_result_text(output).into_owned();
             let mut sent = Vec::new();
-            for (index, (mime, data)) in attached_images(output).enumerate() {
-                if images.aged_out.contains(&(part, index)) {
-                    text.push_str(&format!(
-                        "\n\n[The image attached to this result ({mime}) is no longer attached: \
-                         newer images fill this request's image budget. Read the file again to \
-                         see it.]"
-                    ));
-                } else if images.send && crate::media::image_url(mime, data).is_ok() {
-                    sent.push((mime, data));
+            for (mime, data, notice) in images.attachments(part, output, |mime, data| {
+                crate::media::image_url(mime, data).is_ok()
+            }) {
+                if let Some(notice) = notice {
+                    text.push_str(&notice);
                 } else {
-                    text.push_str(&format!(
-                        "\n\n[The image attached to this result ({mime}) is not shown to you. \
-                         Inspect it with a program instead (an image library, OCR, a conversion \
-                         to text).]"
-                    ));
+                    sent.push((mime, data));
                 }
             }
-            // The tool-result cap drops an attachment over its size budget
-            // and records that here.
-            if output.pointer("/metadata/attachmentsTruncated") == Some(&Value::Bool(true)) {
-                text.push_str(
-                    "\n\n[An attachment of this result was dropped by the size limit and is not \
-                     shown to you. Inspect the file with a program instead.]",
-                );
+            if let Some(notice) = tool_attachment_limit_notice(output) {
+                text.push_str(notice);
             }
             return ToolResult {
                 text,
@@ -135,32 +68,6 @@ pub(crate) fn tool_result<'a>(
         text,
         is_error,
         images: Vec::new(),
-    }
-}
-
-/// Image attachments (`{"mime": "image/…", "url": …}`) of a tool result.
-fn attached_images(output: &Value) -> impl Iterator<Item = (&str, &str)> {
-    output
-        .get("attachments")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|attachment| {
-            let mime = attachment.get("mime")?.as_str()?;
-            let data = attachment.get("url")?.as_str()?;
-            mime.starts_with("image/").then_some((mime, data))
-        })
-}
-
-fn value_to_text(value: &Value) -> String {
-    match value {
-        Value::Object(fields) => fields
-            .get("output")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| value.to_string()),
-        Value::String(text) => text.clone(),
-        _ => value.to_string(),
     }
 }
 

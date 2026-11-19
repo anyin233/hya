@@ -41,6 +41,8 @@ pub struct ModelWindow {
     pub usage_reporting: bool,
     /// Which reasoning parts the route resends.
     pub reasoning_replay: ReasoningReplayPolicy,
+    /// Whether the route encodes tool-result attachments as images.
+    pub sends_tool_images: bool,
 }
 
 /// Model calls a rewriter makes through the host.
