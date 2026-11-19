@@ -65,6 +65,9 @@ pub use recovery::{INTERRUPTED_REASON, InterruptedTurnRecovery};
 pub use resident_claim::{EpisodeRegistration, RecoveredActorClaim, ResidentWorkPrompt};
 pub use workflow::{WorkflowAdmissionOutcome, WorkflowSelectionOutcome};
 
+// Opening a database on a busy disk can take longer than the default 30 seconds.
+const FILE_POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(300);
+
 struct RuntimeOwnerState {
     paths: Option<DatabasePaths>,
     claim: Mutex<Option<RuntimeOwnerClaim>>,
@@ -401,7 +404,9 @@ impl SessionStore {
             .synchronous(SqliteSynchronous::Normal)
             .busy_timeout(Duration::from_secs(5))
             .foreign_keys(true);
-        let pool_options = SqlitePoolOptions::new().max_connections(8);
+        let pool_options = SqlitePoolOptions::new()
+            .max_connections(8)
+            .acquire_timeout(FILE_POOL_ACQUIRE_TIMEOUT);
         #[cfg(feature = "lifecycle-bench")]
         let pool_options =
             pool_options.after_connect(|connection, _| Box::pin(bench::install(connection)));
@@ -450,6 +455,7 @@ impl SessionStore {
             .busy_timeout(Duration::from_secs(5));
         let pool = SqlitePoolOptions::new()
             .max_connections(8)
+            .acquire_timeout(FILE_POOL_ACQUIRE_TIMEOUT)
             .connect_with(opts)
             .await?;
         Ok(Self {
