@@ -40,6 +40,7 @@ pub struct FakeProvider {
     scripts: Vec<Vec<FakeStep>>,
     turn: AtomicUsize,
     max_context: u32,
+    tool_images: bool,
     reasoning_default: Option<ReasoningEffort>,
     requests: Mutex<Vec<CompletionRequest>>,
 }
@@ -61,6 +62,7 @@ impl FakeProvider {
             scripts,
             turn: AtomicUsize::new(0),
             max_context: 200_000,
+            tool_images: false,
             reasoning_default: None,
             requests: Mutex::new(Vec::new()),
         }
@@ -70,6 +72,13 @@ impl FakeProvider {
     #[must_use]
     pub fn with_max_context(mut self, max_context: u32) -> Self {
         self.max_context = max_context;
+        self
+    }
+
+    /// Advertise support for replaying tool-result images.
+    #[must_use]
+    pub fn with_tool_images(mut self) -> Self {
+        self.tool_images = true;
         self
     }
 
@@ -198,9 +207,14 @@ impl Provider for FakeProvider {
             streaming_tool_calls: true,
             usage_reporting: true,
             max_context: self.max_context,
+            image_input: self.tool_images.then_some(true),
             reasoning_request: self.reasoning_default.is_some(),
             ..Capabilities::default()
         })
+    }
+
+    fn sends_tool_images(&self, caps: &Capabilities) -> bool {
+        caps.image_input == Some(true)
     }
 
     async fn stream(

@@ -285,12 +285,18 @@ threshold = max_context * 8 / 10
 
 `last` is the last assistant message's `usage.last_round`; `overhead` is the
 system prompt and offered tool schemas. The request counts include tool
-results that arrived after the last round. When `used > threshold`, the
-kernel runs its extensions (none in bare mode), re-estimates the request from
-the re-read projection when one changed the log, and rewrites when the
-request is still over the threshold. A route that advertises no window
-triggers nothing; an oversized-request provider error then surfaces
-unchanged. Harness rewrites use the same removal range as model rewrites, and
+results that arrived after the last round. A completed tool result is counted
+as it is sent. The estimate uses its string output, or the serialized JSON
+when there is no string output. It charges 5,000 tokens for each prompt image
+and each tool image eligible for replay. It counts the text notice when a route
+cannot send tool images or the 16 MiB per-request image budget displaces an
+image. It also counts the notice when the tool-result size cap drops an
+attachment. The provider validates image data when encoding the request.
+
+When `used > threshold`, the kernel runs its extensions (none in bare mode),
+re-estimates the request from the re-read projection when one changed the log,
+and rewrites when the request is still over the threshold. Without an
+advertised window, an oversized-request provider error surfaces unchanged. Harness rewrites use the same removal range as model rewrites, and
 record `used` and `threshold` as `input_tokens_est` and `threshold`; a model
 rewrite records the last round's usage. See
 [Compaction](compaction.md#before-each-round) for the full sequence.
@@ -474,7 +480,7 @@ The contract an extension is written against lives in `hya-tool`
 | Item | Implemented by | Purpose |
 | --- | --- | --- |
 | `Rewriter { before_round(cx), rewrite_now(cx) }` | internal bundles | A context-reduction extension. `before_round` runs before every round and reduces only when `cx.pressure` is over; `rewrite_now` reduces on request (`/summarize`). `Ok(true)` when the log changed. Stateless (`&self`) |
-| `RewriteCtx` | the host, per call | Session, assistant message, round model and its `ModelWindow` (window, usage reporting, reasoning replay), projection, system-and-tools `overhead_tokens`, `pressure`, workdir, the extension's JSON `config`, and the services below |
+| `RewriteCtx` | the host, per call | Session, assistant message, round model and its `ModelWindow` (window, usage reporting, reasoning replay, tool image support), projection, system-and-tools `overhead_tokens`, `pressure`, workdir, the extension's JSON `config`, and the services below |
 | `Pressure { used, threshold }` | the kernel | The request's size against 80% of the window; `None` without a window. `over()` is `used > threshold` |
 | `SessionLog { projection, append }` | bare: `kernel::Scope` over the store; full mode: the turn's actor-claimed emit | Read the projection, append one event batch |
 | `Transcript { messages(projection) }` | bare: the kernel agent's rendering; full mode: the agent's rendering with the round's prompt images (`/summarize`: the current episode) | The messages a round sends for a projection |

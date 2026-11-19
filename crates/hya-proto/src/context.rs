@@ -1,12 +1,17 @@
 //! How a transcript is replayed into a request: which reasoning parts a route
-//! resends, and the markers compacted context is written behind.
+//! resends, how tool results are represented, and the markers compacted
+//! context is written behind.
 //!
 //! Token accounting and the request encoders both read these, so they live
 //! here, below the provider routes and the native bundles alike.
 
+use std::borrow::Cow;
+use std::collections::HashSet;
 use std::fmt::Write;
 
-use crate::{Message, Part, TodoItem};
+use serde_json::Value;
+
+use crate::{Message, Part, PartId, TodoItem, ToolPartState};
 
 /// Name of the kernel tool that updates the session's completion criteria.
 pub const TODO_TOOL: &str = "todo";
@@ -144,4 +149,118 @@ fn is_signed_anthropic_reasoning(data: &serde_json::Value) -> bool {
             .is_some_and(|value| !value.is_empty()),
         _ => false,
     }
+}
+
+/// Text of a completed tool result before attachment notices.
+#[must_use]
+pub fn tool_result_text(value: &Value) -> Cow<'_, str> {
+    value
+        .as_str()
+        .or_else(|| value.get("output").and_then(Value::as_str))
+        .map_or_else(|| Cow::Owned(value.to_string()), Cow::Borrowed)
+}
+
+/// Notice appended when the tool-result size cap dropped an attachment.
+#[must_use]
+pub fn tool_attachment_limit_notice(output: &Value) -> Option<&'static str> {
+    (output.pointer("/metadata/attachmentsTruncated") == Some(&Value::Bool(true))).then_some(
+        "\n\n[An attachment of this result was dropped by the size limit and is not \
+         shown to you. Inspect the file with a program instead.]",
+    )
+}
+
+/// Tool-result image data (data URL length, about the base64 length) one
+/// request carries.
+const MAX_REQUEST_IMAGE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Which tool-result images one request sends.
+pub struct ToolImageReplay<'a> {
+    /// The request's model accepts image input (`Capabilities::image_input ==
+    /// Some(true)`) on a protocol that carries tool-result images.
+    send: bool,
+    /// Images older than the newest ones that fit [`MAX_REQUEST_IMAGE_BYTES`],
+    /// as (tool part, index in its attachment array).
+    aged_out: HashSet<(&'a PartId, usize)>,
+}
+
+impl<'a> ToolImageReplay<'a> {
+    /// Plan the images of a request over `messages`. Walking from the newest
+    /// image back, images are kept until the next would exceed the budget;
+    /// it and every older image are aged out. The plan depends only on the
+    /// history, so a later request differs only in the images that newer ones
+    /// pushed out.
+    #[must_use]
+    pub fn new(messages: &'a [Message], send: bool) -> Self {
+        let mut aged_out = HashSet::new();
+        if send {
+            let mut used = 0usize;
+            let parts = messages
+                .iter()
+                .rev()
+                .filter_map(|message| match message {
+                    Message::Assistant { parts, .. } => Some(parts),
+                    Message::User { .. } | Message::System { .. } => None,
+                })
+                .flat_map(|parts| parts.iter().rev());
+            for part in parts {
+                let Part::Tool {
+                    id,
+                    state: ToolPartState::Completed { output, .. },
+                    ..
+                } = part
+                else {
+                    continue;
+                };
+                for (index, _, data) in attached_images(output).rev() {
+                    used = used.saturating_add(data.len());
+                    if used > MAX_REQUEST_IMAGE_BYTES {
+                        aged_out.insert((id, index));
+                    }
+                }
+            }
+        }
+        Self { send, aged_out }
+    }
+
+    /// Image candidates for a completed result as (MIME type, data, omission notice).
+    /// Encoders supply their media check. Estimators can accept candidates without validating data.
+    pub fn attachments<'output>(
+        &self,
+        part: &PartId,
+        output: &'output Value,
+        accepts: impl Fn(&str, &str) -> bool,
+    ) -> impl Iterator<Item = (&'output str, &'output str, Option<String>)> {
+        attached_images(output).map(move |(index, mime, data)| {
+            let notice = if self.aged_out.contains(&(part, index)) {
+                Some(format!(
+                    "\n\n[The image attached to this result ({mime}) is no longer attached: \
+                     newer images fill this request's image budget. Read the file again to \
+                     see it.]"
+                ))
+            } else if self.send && accepts(mime, data) {
+                None
+            } else {
+                Some(format!(
+                    "\n\n[The image attached to this result ({mime}) is not shown to you. \
+                     Inspect it with a program instead (an image library, OCR, a conversion \
+                     to text).]"
+                ))
+            };
+            (mime, data, notice)
+        })
+    }
+}
+
+/// Image attachments (`{"mime": "image/…", "url": …}`) of a tool result.
+fn attached_images(output: &Value) -> impl DoubleEndedIterator<Item = (usize, &str, &str)> {
+    output
+        .get("attachments")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flat_map(|attachments| attachments.iter().enumerate())
+        .filter_map(|(index, attachment)| {
+            let mime = attachment.get("mime")?.as_str()?;
+            let data = attachment.get("url")?.as_str()?;
+            mime.starts_with("image/").then_some((index, mime, data))
+        })
 }

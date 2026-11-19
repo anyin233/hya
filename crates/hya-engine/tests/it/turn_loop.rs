@@ -621,7 +621,9 @@ async fn tool_output_eviction_avoids_a_rewrite_and_preserves_the_log() {
             FakeStep::Finish(FinishReason::Stop),
         ],
     ]);
-    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider.with_max_context(50_000))));
+    // The rendered read fits on its own. The next turn's prompt puts the
+    // request above the 20,800-token spill threshold.
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider.with_max_context(26_000))));
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Read,
@@ -753,7 +755,7 @@ async fn request_is_identical_after_restart() {
             ],
             vec![FakeStep::Finish(FinishReason::Stop)],
         ])
-        .with_max_context(50_000),
+        .with_max_context(26_000),
     );
     let db = dir.join("hya.db").to_string_lossy().into_owned();
     let engine_over = |store: SessionStore| {
@@ -871,7 +873,7 @@ async fn evicted_output_stays_evicted_on_later_turns_without_escalating() {
             FakeStep::Finish(FinishReason::Stop),
         ],
     ]);
-    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider.with_max_context(50_000))));
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider.with_max_context(26_000))));
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Read,
@@ -1045,11 +1047,9 @@ async fn stale_tool_outputs_spill_inside_one_long_turn() {
         input: json!({ "path": path }),
     };
 
-    // Three read rounds, then a final answer, all in one turn. A 57.5k window
-    // (threshold 46,000): fixed tool schemas (~14,000) plus one ~30,100-token
-    // read output fit (~44,100), while two read outputs (~74,200) cross the
-    // threshold and spilling the stale one brings the request back to
-    // ~44,100 without a rewrite.
+    // Three read rounds and a final answer share one turn. At a 24,000-token
+    // threshold, the fixed overhead (~7.6k) and one read's rendered text
+    // (~10k) fit. Two reads cross the threshold until the stale one is spilled.
     let provider = FakeProvider::scripted_turns(vec![
         vec![read(), FakeStep::Finish(FinishReason::ToolCalls)],
         vec![read(), FakeStep::Finish(FinishReason::ToolCalls)],
@@ -1059,7 +1059,7 @@ async fn stale_tool_outputs_spill_inside_one_long_turn() {
             FakeStep::Finish(FinishReason::Stop),
         ],
     ]);
-    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider.with_max_context(57_500))));
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider.with_max_context(30_000))));
     let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Read,
         "/**",
@@ -1206,7 +1206,6 @@ impl hya_provider::Provider for OpaqueReasoningRoute {
 async fn a_spill_that_is_not_enough_is_followed_by_the_kernel_rewrite() {
     let dir = tempdir();
     let big_file = dir.join("big.txt");
-    // ~30,100 tokens per read (see the spill tests above).
     let big = format!("{}\n", "R".repeat(100)).repeat(200);
     tokio::fs::write(&big_file, &big).await.unwrap();
     let path = big_file.to_string_lossy().into_owned();
@@ -1282,9 +1281,9 @@ async fn a_spill_that_is_not_enough_is_followed_by_the_kernel_rewrite() {
         .run_turn(session, &agent, CancellationToken::new())
         .await
         .unwrap();
-    // Threshold 88,000: prompt (~40k) + three reads (~90k) is over, and still
-    // over with the oldest read spilled.
-    window.store(110_000, Ordering::SeqCst);
+    // The prompt, fixed overhead and two surviving reads total about 68k
+    // after the oldest read is spilled, still above the 64,000-token threshold.
+    window.store(80_000, Ordering::SeqCst);
     engine
         .admit_user_prompt(session, "go on".to_string())
         .await

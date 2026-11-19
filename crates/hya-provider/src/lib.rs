@@ -467,6 +467,10 @@ pub trait Provider: Send + Sync {
     fn reasoning_replay_policy(&self) -> ReasoningReplayPolicy {
         ReasoningReplayPolicy::None
     }
+    /// Whether this route encodes tool-result attachments as images for these model capabilities.
+    fn sends_tool_images(&self, _caps: &Capabilities) -> bool {
+        false
+    }
     /// Report whether a claimed model supports one typed reasoning effort.
     ///
     /// `None` means this provider does not claim the model; `Some(false)` is a
