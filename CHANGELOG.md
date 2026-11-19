@@ -1,3 +1,3 @@
-# 0.48.0-dev.16
+# 0.48.0-dev.17
 
-- **Store lock wait.** A write to the session database waits up to five minutes for a lock held by another connection, instead of 5 seconds, the same as the wait for a connection. A run on a heavily loaded disk ended with `sqlite: (code: 5) database is locked` when one write outlasted the old limit.
+- **Kernel prompt: keep what the request states and what the data support.** The rule on replacing a result that passed a check now asks for the words of the request that the new result meets ("If the request does not say it, keep the old one"), and two rules are new: use every path, value, field and parameter that the request or its input gives, as given; and between results that both fit the request, keep the one its data support most directly — a result is not better for being rounder, simpler or more symmetric, nor for matching a guess about how the work will be checked. In recorded runs the model often had a supported result and replaced it for a requirement of its own making.
