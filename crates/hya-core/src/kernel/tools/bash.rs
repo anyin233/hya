@@ -55,7 +55,7 @@ impl Tool for Bash {
     fn schema(&self) -> ToolSchema {
         super::schema(
             "bash",
-            "Run a shell command in the working directory with `bash -c` if Bash is on PATH, otherwise with `sh -c`. Returns its exit code and combined stdout and stderr. For output over 30,000 bytes, `output` shows the first 10,000 and last 20,000 bytes and names the file that holds all of it. `timeout` is how long this call waits. With a run time budget, one call waits at most a tenth of the budget. A command still running then is not stopped: the call returns what it has printed so far, and the command keeps running in the background, with its further output going to a file named in the result. A job the command starts with `&` also keeps running after the call returns; redirect its output to a file to keep it. If the end-of-budget cap ends the wait, Bash stops the command.",
+            "Run a shell command in the working directory with `bash -c` if Bash is on PATH, otherwise with `sh -c`. Returns combined stdout and stderr followed by one status line: `[exit code: N]`, `[still running: …]`, `[stopped: …]`, or `[not started: …]`. For output over 30,000 bytes, `output` shows the first 10,000 and last 20,000 bytes and names the file that holds all of it. `timeout` is how long this call waits. With a run time budget, one call waits at most a tenth of the budget. A command still running then is not stopped: the call returns what it has printed so far, and the command keeps running in the background, with its further output going to a file named in the result. A job the command starts with `&` also keeps running after the call returns; redirect its output to a file to keep it. If the end-of-budget cap ends the wait, Bash stops the command.",
             json!({
                 "type": "object",
                 "properties": {
@@ -110,10 +110,11 @@ impl Tool for Bash {
         };
         if limit.is_zero() {
             // A command started now could still change files after the budget ended.
+            let note = "The command was not started: the run's time budget has no time left.";
             return Ok(json!({
                 "exit_code": null,
-                "output": "",
-                "timed_out": "The command was not started: the run's time budget has no time left.",
+                "output": with_status(String::new(), &format!("not started: {note}")),
+                "timed_out": note,
             }));
         }
         // Creating the timer here starts the clock before spawning the shell.
@@ -152,18 +153,20 @@ impl Tool for Bash {
         if let Some(status) = status {
             // A job the command started with `&` keeps running, as after any shell exits.
             job.pgid = None;
+            let code = json!(exit_code(status));
             return Ok(json!({
-                "exit_code": exit_code(status),
-                "output": output,
+                "exit_code": code,
+                "output": with_status(output, &format!("exit code: {code}")),
             }));
         }
         if capped {
+            let note = format!(
+                "The command was still running after {limit:?} (the run's time budget capped the timeout). Bash killed its process group. The output above was captured before the kill."
+            );
             return Ok(json!({
                 "exit_code": null,
-                "output": output,
-                "timed_out": format!(
-                    "The command was still running after {limit:?} (the run's time budget capped the timeout). Bash killed its process group and returned the captured `output`."
-                ),
+                "output": with_status(output, &format!("stopped: {note}")),
+                "timed_out": note,
             }));
         }
         let exit = dir.join("exit_code");
@@ -180,14 +183,25 @@ impl Tool for Bash {
             "the default; pass `timeout` in seconds to request a longer wait"
         };
         let (out, exit) = (quoted(&path), quoted(&exit));
+        let note = format!(
+            "This call waited {limit:?} ({reason}). The command was still running then and was left running in the background as process group {pgid}; it was not stopped. All its output, what is shown above and whatever it prints from now on, goes to {out}. If it ends while this run is still going, its exit code is written to {exit}. To follow it, run for example `tail -n 20 {out}` and `cat {exit}`. To wait again, sleep briefly in another call before reading the output. To stop it if it is no longer needed, run `kill -- -{pgid}`."
+        );
         Ok(json!({
             "exit_code": null,
-            "output": output,
-            "still_running": format!(
-                "This call waited {limit:?} ({reason}). The command was still running then and was left running in the background as process group {pgid}; it was not stopped. All its output, what `output` shows and whatever it prints from now on, goes to {out}. If it ends while this run is still going, its exit code is written to {exit}. To follow it, run for example `tail -n 20 {out}` and `cat {exit}`. To wait again, sleep briefly in another call before reading the output. To stop it if it is no longer needed, run `kill -- -{pgid}`."
-            ),
+            "output": with_status(output, &format!("still running: {note}")),
+            "still_running": note,
         }))
     }
+}
+
+fn with_status(mut output: String, status: &str) -> String {
+    if !output.is_empty() && !output.ends_with('\n') {
+        output.push('\n');
+    }
+    output.push('[');
+    output.push_str(status);
+    output.push(']');
+    output
 }
 
 /// The first `len` bytes the command printed: a file that keeps growing is read only that far.
