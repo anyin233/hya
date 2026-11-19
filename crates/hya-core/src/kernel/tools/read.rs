@@ -21,7 +21,7 @@ impl Tool for Read {
     fn schema(&self) -> ToolSchema {
         super::schema(
             "read",
-            "Read a UTF-8 text file or an image (PNG, JPEG, GIF, WebP).",
+            "Read a UTF-8 text file or an image (PNG, JPEG, GIF, WebP). An image, when it is attached, is shown to you in the next step only; read it again to see it again.",
             json!({
                 "type": "object",
                 "properties": {"path": {"type": "string", "description": "File path, relative to the working directory or absolute"}},

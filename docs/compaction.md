@@ -31,12 +31,13 @@ alone.
    full mode's pre-send check measures, so a request that would fail that
    check is reduced first. A completed tool result is counted as it is sent.
    The estimate uses the string output when available and the full JSON
-   otherwise. Each eligible tool image costs 5,000 tokens. When the route
-   omits an image due to capability or the 1 MiB per-request image budget,
-   the estimate counts the corresponding text notice. The budget is applied
-   newest first and keeps all eligible images from the newest result with
-   images even when they exceed it. Each replayed image costs time and tokens
-   on every later request, so the budget is small.
+   otherwise. A tool image is planned for sending only in the request after
+   the round that read it, up to 2 MiB per round in call order (the first
+   always); the estimate follows the same plan as the encoders. Each planned
+   image costs 5,000 tokens, also one the encoder then rejects by its media
+   check. For every other image, and when the route cannot send tool images,
+   the estimate counts the text notice that replaces it (see
+   [Tool-result images](architecture/providers.md#tool-result-images)).
 2. **Extensions.** The kernel calls each extension in registration order
    with the pressure. Extensions run every round; they reduce only when
    `used > threshold`. The `hya/compaction` bundle runs `shake`, then

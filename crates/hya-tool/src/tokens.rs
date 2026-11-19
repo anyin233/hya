@@ -524,21 +524,35 @@ mod tests {
     use hya_proto::{MessageId, ToolCallId};
     use serde_json::json;
 
+    /// Estimate one message; an assistant message's parts are its last step.
     fn estimate(parts: Vec<Part>, user: bool, sends_tool_images: bool) -> usize {
-        let id = MessageId::new();
-        let message = if user {
-            Message::User { id, parts }
+        if user {
+            estimate_message(
+                Message::User {
+                    id: MessageId::new(),
+                    parts,
+                },
+                sends_tool_images,
+            )
         } else {
-            Message::Assistant {
-                id,
-                agent: "agent".into(),
-                model: "model".into(),
-                parts,
-                finish: None,
-                tokens: None,
-                last_round: None,
-            }
-        };
+            estimate_message(assistant(parts, 0), sends_tool_images)
+        }
+    }
+
+    fn assistant(parts: Vec<Part>, last_step_start: usize) -> Message {
+        Message::Assistant {
+            id: MessageId::new(),
+            agent: "agent".into(),
+            model: "model".into(),
+            parts,
+            finish: None,
+            tokens: None,
+            last_round: None,
+            last_step_start: Some(last_step_start),
+        }
+    }
+
+    fn estimate_message(message: Message, sends_tool_images: bool) -> usize {
         TokenAccounting::default()
             .with_tool_images(sends_tool_images)
             .estimate_request(&[message], None, &[], ReasoningReplayPolicy::None)
@@ -641,20 +655,42 @@ mod tests {
     }
 
     #[test]
-    fn request_estimate_counts_the_notice_for_an_image_aged_out_of_the_budget() {
+    fn request_estimate_counts_an_image_only_in_the_request_after_its_round() {
         let text = estimate(vec![tool(json!({"output": "Image file."}))], false, true);
-        let notice = CalibratedTokenizer.count_text(
-            "\n\n[The image attached to this result (image/png) is no longer attached: \
-             newer images fill this request's image budget. Read the file again to see it.]",
+        let small = "data:image/png;base64,AAAA";
+        let image = || tool(image_result(small));
+        assert_eq!(estimate(vec![image()], false, true), text + IMAGE_TOKENS);
+
+        // The request after a later round (here the model's text) carries the
+        // notice instead.
+        let answer = Part::Text {
+            id: PartId::new(),
+            text: "A board.".into(),
+        };
+        let not_attached = CalibratedTokenizer.count_text(
+            "\n\n[The image of this result (image/png) is not attached to this request. \
+             To look at it, make the call again (for a file: read it again).]",
         );
-        for newest_bytes in [1024 * 1024, 1024 * 1024 + 4] {
-            let oldest = image_result("data:image/png;base64,AAAA");
-            let newest = image_result(&"A".repeat(newest_bytes));
-            assert_eq!(
-                estimate(vec![tool(oldest), tool(newest)], false, true),
-                2 * text + IMAGE_TOKENS + notice,
-                "newest image: {newest_bytes} bytes",
-            );
+        assert_eq!(
+            estimate_message(assistant(vec![image(), answer], 1), true),
+            text + not_attached + CalibratedTokenizer.count_text("A board."),
+        );
+
+        // One round's images share a 2 MiB budget; the first is always counted.
+        let not_fitted = CalibratedTokenizer.count_text(
+            "\n\n[The image attached to this result (image/png) was not shown: this \
+             step's images exceed what one request can carry. Read it again in a \
+             later step, fewer images at a time.]",
+        );
+        let fits = 2 * 1024 * 1024 - small.len();
+        for (second, expected) in [
+            (fits, 2 * text + 2 * IMAGE_TOKENS),
+            (fits + 4, 2 * text + IMAGE_TOKENS + not_fitted),
+        ] {
+            let second = tool(image_result(&"A".repeat(second)));
+            assert_eq!(estimate(vec![image(), second], false, true), expected);
         }
+        let oversized = tool(image_result(&"A".repeat(3 * 1024 * 1024)));
+        assert_eq!(estimate(vec![oversized], false, true), text + IMAGE_TOKENS);
     }
 }

@@ -163,7 +163,11 @@ run that is ending kills, because nothing could follow the command up.
 Use `read` with `{"path":"diagram.png"}` to inspect an image. `read` recognizes
 PNG, JPEG, GIF, and WebP by their file signatures and stores a base64 data URL in
 the result's attachment. Supported provider routes send it as image content to
-image-capable models. Other files are read as UTF-8 text. Missing files and
+image-capable models, at most once, in the request after the step that read it:
+every image costs time and tokens on each request that carries it, so later
+requests carry a notice that tells the model to read the file again to see it
+again (see [Tool-result images](architecture/providers.md#tool-result-images)).
+Other files are read as UTF-8 text. Missing files and
 invalid UTF-8 in non-image files return `ToolError`.
 `write` creates parent directories and returns the byte count; I/O errors
 return `ToolError`. `edit` requires exactly one occurrence of `old`; zero or
@@ -327,11 +331,12 @@ system prompt and offered tool schemas. The request counts include tool
 results that arrived after the last round. A completed tool result is counted
 as it is sent. The estimate uses its string output, or the serialized JSON
 when there is no string output. It charges 5,000 tokens for each prompt image
-and each tool image eligible for replay. It counts the text notice when a route
-cannot send tool images or the 1 MiB per-request image budget displaces an
-image. The budget is applied newest first and keeps all eligible images from
-the newest result with images even if they exceed 1 MiB. The budget is small
-because every replayed image costs time and tokens on each later request.
+and each tool image the replay plan attaches. A tool image is planned only for
+the request after the round that read it, up to 2 MiB per round in call order
+(the first always); the encoders follow the same plan, but an image the
+encoder's media check rejects is still charged. For every other image, and
+when a route cannot send tool images, it counts the text notice that replaces
+it.
 The estimate also counts the notice when the tool-result size cap drops an
 attachment. The provider validates image data when encoding the request.
 

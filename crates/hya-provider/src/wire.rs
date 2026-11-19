@@ -202,6 +202,27 @@ mod tests {
         }
     }
 
+    /// Render `state` as the newest round's only result.
+    fn newest(state: &ToolPartState, send: bool) -> ToolResult<'_> {
+        let id = PartId::new();
+        let messages = [hya_proto::Message::Assistant {
+            id: hya_proto::MessageId::new(),
+            agent: "agent".into(),
+            model: "model".into(),
+            parts: vec![hya_proto::Part::Tool {
+                id,
+                call_id: ToolCallId::new(),
+                name: "read".into(),
+                state: state.clone(),
+            }],
+            finish: None,
+            tokens: None,
+            last_round: None,
+            last_step_start: Some(0),
+        }];
+        tool_result(&id, state, &ToolImages::new(&messages, send))
+    }
+
     #[test]
     fn truncated_tool_arguments_are_rejected() {
         let mut tool = ToolAsm::new();
@@ -253,14 +274,14 @@ mod tests {
     fn an_image_goes_with_the_result_only_to_a_model_that_takes_images() {
         let state = image_result("data:image/png;base64,aGVsbG8=", json!({}));
 
-        let shown = tool_result(&PartId::new(), &state, &ToolImages::new(&[], true));
+        let shown = newest(&state, true);
         assert_eq!(shown.text, "Image file (image/png, 5 bytes).");
         assert_eq!(
             shown.images,
             vec![("image/png", "data:image/png;base64,aGVsbG8=")]
         );
 
-        let hidden = tool_result(&PartId::new(), &state, &ToolImages::new(&[], false));
+        let hidden = newest(&state, false);
         assert!(hidden.images.is_empty());
         assert!(
             hidden.text.starts_with("Image file (image/png, 5 bytes).")
@@ -273,7 +294,7 @@ mod tests {
     #[test]
     fn an_image_the_media_check_rejects_is_described_as_not_shown() {
         let state = image_result("data:image/jpeg;base64,aGVsbG8=", json!({}));
-        let result = tool_result(&PartId::new(), &state, &ToolImages::new(&[], true));
+        let result = newest(&state, true);
         assert!(result.images.is_empty());
         assert!(
             result.text.contains("is not shown to you"),

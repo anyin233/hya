@@ -192,10 +192,11 @@ not counting its `attachments` array, which has its own budget,
 `MAX_CODING_ATTACHMENT_BYTES = 2 MiB` serialized: an entry that does not fit is
 dropped whole and `metadata.attachmentsTruncated` is set. No metadata or hook
 can bypass the tool-result cap.
-[Tool-result image replay](providers.md#tool-result-images) uses a 1 MiB
-request budget, newest first, and always keeps eligible images from the newest
-result with images. Each replayed image costs time and tokens on every later
-request. Provider replay uses an object's string `output` field when present
+[Tool-result images](providers.md#tool-result-images) are sent only in the
+request after the round that read them, up to 2 MiB per round in call order
+(the first always); every other image becomes a notice that tells the model to
+read the file again. Each image costs time and tokens on every request that
+carries it. Provider replay uses an object's string `output` field when present
 and falls back to JSON only when no such field exists.
 
 ## Coding-tool runtime
