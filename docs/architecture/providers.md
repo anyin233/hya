@@ -699,14 +699,14 @@ renders it per request ([`wire.rs`](../../crates/hya-provider/src/wire.rs)
 - Otherwise (`Some(false)`, unknown, a rejected image, or the Google route)
   the result stays text and gets the line `[The image attached to this result
   (<mime>) is not shown to you. Inspect it with a program instead …]`.
-- Replay automatically uses a **2 MiB** budget for tool-result image data
+- Replay automatically uses a **1 MiB** budget for tool-result image data
   (data URL length, about the base64 length). The newest tool result with
   images keeps all its eligible images, even if they exceed the budget.
   Remaining images are considered newest first. The first one that would
   exceed the budget and every older image become the line `[The image attached
   to this result (<mime>) is no longer attached: newer images fill this
   request's image budget. Read the file again to see it.]`. For example, after
-  three results with 768 KiB of image data each, the request includes the two
+  three results with 384 KiB of image data each, the request includes the two
   newest images and a notice for the oldest. The budget is small because
   each replayed image costs time and tokens on every later request.
 - When the coding-tool result cap dropped an attachment for size

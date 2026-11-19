@@ -289,9 +289,9 @@ results that arrived after the last round. A completed tool result is counted
 as it is sent. The estimate uses its string output, or the serialized JSON
 when there is no string output. It charges 5,000 tokens for each prompt image
 and each tool image eligible for replay. It counts the text notice when a route
-cannot send tool images or the 2 MiB per-request image budget displaces an
+cannot send tool images or the 1 MiB per-request image budget displaces an
 image. The budget is applied newest first and keeps all eligible images from
-the newest result with images even if they exceed 2 MiB. The budget is small
+the newest result with images even if they exceed 1 MiB. The budget is small
 because every replayed image costs time and tokens on each later request.
 The estimate also counts the notice when the tool-result size cap drops an
 attachment. The provider validates image data when encoding the request.

@@ -170,7 +170,7 @@ pub fn tool_attachment_limit_notice(output: &Value) -> Option<&'static str> {
 }
 
 /// Budget for tool-result image data (data URL length, about the base64 length).
-const MAX_REQUEST_IMAGE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_REQUEST_IMAGE_BYTES: usize = 1024 * 1024;
 
 /// Which tool-result images one request sends.
 pub struct ToolImageReplay<'a> {
