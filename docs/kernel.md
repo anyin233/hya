@@ -86,7 +86,7 @@ in both modes.
 
 | Tool | Input JSON | Success result |
 | --- | --- | --- |
-| `bash` | `{"command": string, "timeout"?: int}` | `{"exit_code": int, "output": string}`; after a timeout `{"exit_code": null, "output": string, "timed_out": string}` |
+| `bash` | `{"command": string, "timeout"?: int}` | `{"exit_code": int, "output": string}`; when the wait ends first `{"exit_code": null, "output": string, "still_running": string}`, or `"timed_out": string` in place of `still_running` when the run's budget cut the wait (the command is killed) or has no time left |
 | `read` | `{"path": string}` | UTF-8 text as `{"content": string}` or an image as `{"output": string, "attachments": [{"type": "file", "mime": string, "url": string}]}` |
 | `write` | `{"path": string, "content": string}` | `{"bytes": int}` |
 | `edit` | `{"path": string, "old": string, "new": string}` | `{"replaced": 1}` |
@@ -100,26 +100,48 @@ stderr merged. The tool passes only `-c` as a shell option and uses the exit
 code reported by the shell. A nonzero exit is still a success result for the
 model to interpret. Failure to start returns `ToolError`.
 
-A command may run for `timeout` seconds, with a default of 300. Values
-outside 1–86400 are an input error. A `--time-budget` run can reduce the
-limit further ([CLI reference](cli.md#--bare)); once the budget has no time
-left, Bash does not start the command and returns the timeout result with
-empty `output`. When the command is still running at the
-limit, Bash kills its process group. The result includes `exit_code: null`,
-the captured `output`, and a `timed_out` sentence naming the limit and its
-source (the default, the call, or the run's budget). The timeout lets the
-model continue after a slow command or pass a longer `timeout` when needed.
+`timeout` is how long the call waits for the command, in seconds, with a
+default of 300. Values outside 1–86400 are an input error. Each call creates
+a private directory (`mkdtemp`, `hya-bash-XXXXXX` in the system temporary
+directory) holding an `output` file, which receives the command's stdout and
+stderr, and an `exit_code` file. A call ends in one of four ways:
+
+- **The command ends within the wait.** The result is
+  `{"exit_code": int, "output": string}` with the complete output, and Bash
+  removes the call's directory. Nothing is signalled: a job the command
+  started with `&` keeps running, as it does after any shell exits. Its
+  output still goes to the removed file, so a job whose output matters
+  should redirect it to a file of its own.
+- **The wait ends first** (the call's `timeout` or the default). Bash does
+  not signal the command. The result has `exit_code: null`, the output
+  printed until the wait ended, and a `still_running` sentence that names
+  how long the call waited and which limit that was, the command's process
+  group, the `output` file its output keeps going to, the `exit_code` file,
+  how to follow it (`tail`, `cat`, with the paths single-quoted for the
+  shell), and how to stop it (`kill -- -<pgid>`). The command keeps running
+  in the background. The running `hya` process writes its exit code (or
+  `128 + signal`) to `exit_code` when it sees the command end; a command
+  that outlives that process leaves no `exit_code` file. Nothing stops such
+  a command, or a job started with `&`, when the run ends normally.
+- **The run's time budget cuts the wait short.** A `--time-budget` run can
+  shorten the wait ([CLI reference](cli.md#--bare)). When the command is
+  still running at that shorter limit, Bash kills its process group and the
+  result has `exit_code: null`, the captured `output`, and a `timed_out`
+  sentence naming the budget. Once the budget has no time left, Bash does not
+  start the command and returns a `timed_out` result with empty `output`.
+- **The run is cancelled.** Bash kills the command's process group and the
+  call fails as cancelled. The same cleanup runs when Bash cannot read the
+  `output` file: the call fails and no command is left running unreported.
+
+Bash kills the process group only in those last two cases. Waiting without
+killing lets the model get control back after a slow command without
+destroying the command's work: an interrupted package installation can leave
+its package database broken, and a killed build loses its progress. Only a
+run that is ending kills, because nothing could follow the command up.
 
 ```json
 {"command": "make -j8 2>&1 | tail -20", "timeout": 1200}
 ```
-
-Bash kills any processes still in the command's process group when the
-call returns, including after cancellation. A job that must outlive the call
-has to leave the group, for example with `setsid`. A process that leaves the
-group can keep the output pipe open. After the command exits or is
-killed, Bash waits at most one second for more output, subject to the
-remaining run budget, then captures any bytes still buffered in the pipe.
 
 Use `read` with `{"path":"diagram.png"}` to inspect an image. `read` recognizes
 PNG, JPEG, GIF, and WebP by their file signatures and stores a base64 data URL in
@@ -455,7 +477,7 @@ step number.
 
 Bare mode loads no bundle. It has no permission checks, hooks, subagents,
 Workflows, compaction ladder, output truncation, or path bounds. Its only
-timeout is `bash`'s per-call limit.
+timeout is how long a `bash` call waits.
 These capabilities belong to full mode and its bundles. The kernel retains
 its six tools, minimal prompt, 80% harness rewrite, and event logging.
 

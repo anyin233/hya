@@ -1313,6 +1313,7 @@ async fn a3_cancel_is_an_observation() {
     .await;
     let cancel = CancellationToken::new();
     let pid_file = fx.dir.join("pid");
+    let _sleep = PidFile(pid_file.clone());
     let canceller = tokio::spawn({
         let cancel = cancel.clone();
         let pid_file = pid_file.clone();
@@ -1350,68 +1351,170 @@ async fn a3_cancel_is_an_observation() {
     assert!(!alive, "the command's child process {pid} is still running");
 }
 
-/// A command that outlives its timeout is killed and answers with what it
-/// printed; one that leaves a process holding the output pipe still returns.
-// The escaped helper is started with the `setsid` utility, which Linux ships and macOS does not.
-#[cfg(target_os = "linux")]
-#[tokio::test]
-async fn bash_timeout_returns_the_output_so_far_and_never_waits_on_an_escaped_process() {
-    struct EscapedProcess(PathBuf);
+/// Kills the process whose PID a test command wrote to this file, also when an assertion fails.
+struct PidFile(PathBuf);
 
-    impl Drop for EscapedProcess {
+impl Drop for PidFile {
+    fn drop(&mut self) {
+        if let Ok(pid) = std::fs::read_to_string(&self.0)
+            && let Ok(pid) = pid.trim().parse::<libc::pid_t>()
+            && pid > 0
+        {
+            // SAFETY: this positive PID belongs to the test's command.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+    }
+}
+
+/// A command still running when the call's `timeout` ends is not signalled:
+/// the call answers with the output so far and where the rest goes.
+#[tokio::test]
+async fn bash_timeout_leaves_the_command_running_in_the_background() {
+    /// Lets the command finish, kills its group and removes the call's
+    /// directory, also when an assertion fails.
+    struct LeftRunning {
+        go: PathBuf,
+        pgid: Option<libc::pid_t>,
+        dir: Option<PathBuf>,
+    }
+
+    impl Drop for LeftRunning {
         fn drop(&mut self) {
-            if let Ok(pid) = std::fs::read_to_string(&self.0)
-                && let Ok(pid) = pid.trim().parse::<libc::pid_t>()
-                && pid > 0
-            {
-                // SAFETY: this positive PID belongs to the test helper.
-                unsafe { libc::kill(pid, libc::SIGKILL) };
+            let _ = std::fs::write(&self.go, "");
+            if let Some(pgid) = self.pgid.filter(|pgid| *pgid > 0) {
+                // SAFETY: this positive group ID belongs to the test's command.
+                unsafe { libc::killpg(pgid, libc::SIGKILL) };
+            }
+            if let Some(dir) = &self.dir {
+                let _ = std::fs::remove_dir_all(dir);
             }
         }
     }
 
     let fx = fixture(
-        "bash-timeout",
+        "bash-background",
         FakeProvider::scripted_turns(vec![
             call(
                 "bash",
-                json!({"command": "echo started; sleep 30 & echo $! > pid; wait", "timeout": 1}),
+                json!({
+                    "command": "echo $$ > pgid; echo first; while [ ! -e go ]; do sleep 0.01; done; echo second; exit 7",
+                    "timeout": 1,
+                }),
             ),
-            // Record the PID before exec to cover cleanup if the turn is dropped.
-            // The FIFO makes the shell wait until the helper has left the group.
+            text("ok"),
+        ]),
+    )
+    .await;
+    let mut left = LeftRunning {
+        go: fx.dir.join("go"),
+        pgid: None,
+        dir: None,
+    };
+    let finish = tokio::time::timeout(
+        Duration::from_secs(15),
+        fx.turn("run", &CancellationToken::new()),
+    )
+    .await
+    .expect("the call returned while the command kept running")
+    .unwrap();
+    let log = fx.log().await;
+    let result = log
+        .iter()
+        .find_map(|event| match event {
+            Event::ToolResult { output, .. } => Some(output),
+            _ => None,
+        })
+        .unwrap();
+    let note = result["still_running"].as_str().unwrap_or_default();
+    left.pgid = note
+        .split_once("process group ")
+        .and_then(|(_, rest)| rest.split_once(';'))
+        .and_then(|(pgid, _)| pgid.parse().ok());
+    left.dir = note
+        .split_once("goes to '")
+        .and_then(|(_, rest)| rest.split_once("/output'"))
+        .map(|(dir, _)| PathBuf::from(dir));
+
+    assert_eq!(finish, FinishReason::Stop);
+    assert_paired(&log);
+    assert_eq!(result["exit_code"], serde_json::Value::Null);
+    assert!(result.get("timed_out").is_none(), "{result}");
+    // The shell may not have printed yet; it prints "second" only after the signal file exists.
+    let output = result["output"].as_str().unwrap();
+    assert!("first\n".starts_with(output), "{output:?}");
+    assert!(
+        note.contains("waited 1s (the `timeout` this call passed)"),
+        "{note}"
+    );
+    assert!(note.contains("still running then"), "{note}");
+    assert!(note.contains("was not stopped"), "{note}");
+    let pgid = left
+        .pgid
+        .unwrap_or_else(|| panic!("no process group in {note}"));
+    let dir = left
+        .dir
+        .clone()
+        .unwrap_or_else(|| panic!("no output file in {note}"));
+    let (out, exit) = (dir.join("output"), dir.join("exit_code"));
+    assert!(
+        note.contains(&format!("`tail -n 20 '{}'`", out.display())),
+        "{note}"
+    );
+    assert!(
+        note.contains(&format!("`cat '{}'`", exit.display())),
+        "{note}"
+    );
+    assert!(note.contains(&format!("`kill -- -{pgid}`")), "{note}");
+    // SAFETY: signal 0 only checks that the group exists.
+    assert_eq!(
+        unsafe { libc::killpg(pgid, 0) },
+        0,
+        "the command was stopped"
+    );
+
+    std::fs::write(&left.go, "").unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !exit.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the exit code of the background command was written");
+    // The group has ended, so its ID must not be signalled again.
+    left.pgid = None;
+    assert_eq!(std::fs::read_to_string(&exit).unwrap(), "7\n");
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), "first\nsecond\n");
+    assert_eq!(
+        std::fs::read_to_string(fx.dir.join("pgid")).unwrap().trim(),
+        pgid.to_string()
+    );
+}
+
+/// A job the command starts with plain `&` keeps running after the command
+/// ended, and the call returns at once.
+#[tokio::test]
+async fn bash_leaves_a_background_job_running_after_the_command_ends() {
+    let fx = fixture(
+        "bash-job",
+        FakeProvider::scripted_turns(vec![
             call(
                 "bash",
-                json!({"command": r#"
-                    mkfifo escape-ready || exit 1
-                    sh -c '
-                        echo "$$" > escaped-pid
-                        exec setsid sh -c "echo ready > escape-ready; exec sleep 30"
-                    ' &
-                    read -r ready < escape-ready && echo done
-                "#}),
+                json!({"command": "(while [ ! -e go ]; do sleep 0.01; done; echo done > marker) & echo $! > job; echo started; exit 3"}),
             ),
             call("bash", json!({"command": "true", "timeout": 0})),
             text("ok"),
         ]),
     )
     .await;
-    let escaped_process = EscapedProcess(fx.dir.join("escaped-pid"));
+    let job = PidFile(fx.dir.join("job"));
     let finish = tokio::time::timeout(
         Duration::from_secs(15),
         fx.turn("run", &CancellationToken::new()),
     )
     .await
-    .expect("the calls returned while the escaped helper held the pipe open")
+    .expect("the call returned while the job kept running")
     .unwrap();
     assert_eq!(finish, FinishReason::Stop);
-    let escaped_pid = std::fs::read_to_string(&escaped_process.0)
-        .unwrap()
-        .trim()
-        .parse::<libc::pid_t>()
-        .unwrap();
-    assert!(escaped_pid > 0);
-    // SAFETY: getsid only queries the session ID for this positive PID.
-    assert_eq!(unsafe { libc::getsid(escaped_pid) }, escaped_pid);
     let log = fx.log().await;
     assert_paired(&log);
     let results: Vec<_> = log
@@ -1421,26 +1524,124 @@ async fn bash_timeout_returns_the_output_so_far_and_never_waits_on_an_escaped_pr
             _ => None,
         })
         .collect();
-    let [timed_out, escaped] = results.as_slice() else {
-        panic!("expected two bash results, got {results:?}");
-    };
-    assert_eq!(timed_out["exit_code"], serde_json::Value::Null);
-    assert_eq!(timed_out["output"], "started\n");
-    let note = timed_out["timed_out"].as_str().unwrap();
+    assert_eq!(results, [&json!({"exit_code": 3, "output": "started\n"})]);
+    assert_eq!(tool_errors(&log).len(), 1, "timeout 0 is an input error");
+    let pid = std::fs::read_to_string(&job.0)
+        .unwrap()
+        .trim()
+        .parse::<libc::pid_t>()
+        .unwrap();
+    // SAFETY: signal 0 only checks that the process exists.
+    assert_eq!(unsafe { libc::kill(pid, 0) }, 0, "the job was killed");
+
+    std::fs::write(fx.dir.join("go"), "").unwrap();
+    let marker = fx.dir.join("marker");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while std::fs::read_to_string(&marker).unwrap_or_default() != "done\n" {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the job finished its work");
+}
+
+/// Runs `child` in a test process with its own temporary directory, then
+/// checks that its `bash` calls removed every directory they created.
+fn run_bash_child(child: &str, case: &str) {
+    let tmp = std::env::temp_dir().join(format!("hya-kernel-bash-{case}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", child, "--nocapture"])
+        .env("HYA_BASH_TEST", case)
+        .env("TMPDIR", &tmp)
+        .output()
+        .unwrap();
+    let left: Vec<_> = std::fs::read_dir(&tmp)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("hya-bash-"))
+        })
+        .collect();
+    std::fs::remove_dir_all(&tmp).unwrap();
     assert!(
-        note.contains("after 1s")
-            && note.contains("`timeout`")
-            && note.contains("killed its process group")
-            && note.contains("returned the captured"),
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed;"),
+        "{case}: {}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        left.is_empty(),
+        "{case}: call directories left behind: {left:?}"
+    );
+}
+
+/// A wait the run's time budget cut short still kills the command's group,
+/// including a job it started: the run is ending and nothing could follow
+/// the command up.
+#[test]
+fn bash_kills_a_command_cut_off_by_the_run_budget() {
+    run_bash_child("kernel::bash_budget_cap_child", "budget-cap");
+}
+
+#[tokio::test]
+async fn bash_budget_cap_child() {
+    if std::env::var_os("HYA_BASH_TEST").is_none() {
+        return;
+    }
+    let fx = fixture(
+        "bash-budget-cap",
+        FakeProvider::scripted_turns(vec![
+            call(
+                "bash",
+                json!({"command": "sleep 30 & echo $! > pid; echo started; wait"}),
+            ),
+            text("done"),
+        ]),
+    )
+    .await;
+    let job = PidFile(fx.dir.join("pid"));
+    // A budget this short caps the default wait to the time left.
+    deadline::install(Duration::from_secs(3));
+    let finish = tokio::time::timeout(
+        Duration::from_secs(15),
+        fx.turn("run", &CancellationToken::new()),
+    )
+    .await
+    .expect("the capped call returned")
+    .unwrap();
+    assert_eq!(finish, FinishReason::Stop);
+    let log = fx.log().await;
+    assert_paired(&log);
+    let result = log
+        .iter()
+        .find_map(|event| match event {
+            Event::ToolResult { output, .. } => Some(output),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(result["exit_code"], serde_json::Value::Null);
+    let output = result["output"].as_str().unwrap();
+    assert!("started\n".starts_with(output), "{output:?}");
+    assert!(result.get("still_running").is_none(), "{result}");
+    let note = result["timed_out"].as_str().unwrap();
+    assert!(
+        note.contains("the run's time budget capped the timeout")
+            && note.contains("killed its process group"),
         "{note}"
     );
-    assert_eq!(**escaped, json!({"exit_code": 0, "output": "done\n"}));
-    assert_eq!(tool_errors(&log).len(), 1, "timeout 0 is an input error");
-    let pid = std::fs::read_to_string(fx.dir.join("pid")).unwrap();
+    // Without the file the shell was killed before it could name the job,
+    // which was then in the killed group too.
+    let Ok(pid) = std::fs::read_to_string(&job.0) else {
+        return;
+    };
+    let pid = pid.trim();
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let stat = std::process::Command::new("ps")
-                .args(["-o", "stat=", "-p", pid.trim()])
+                .args(["-o", "stat=", "-p", pid])
                 .output()
                 .unwrap();
             let stat = String::from_utf8_lossy(&stat.stdout);
@@ -1451,7 +1652,7 @@ async fn bash_timeout_returns_the_output_so_far_and_never_waits_on_an_escaped_pr
         }
     })
     .await
-    .unwrap_or_else(|_| panic!("the timed-out command's child {pid} is still running"));
+    .unwrap_or_else(|_| panic!("the capped command's job {pid} is still running"));
 }
 
 #[tokio::test]
@@ -1496,8 +1697,16 @@ async fn bash_uses_bash_syntax_when_available() {
     }
 }
 
+#[test]
+fn bash_returns_all_output_on_normal_exit() {
+    run_bash_child("kernel::bash_large_output_child", "large-output");
+}
+
 #[tokio::test]
-async fn bash_returns_all_output_on_normal_exit() {
+async fn bash_large_output_child() {
+    if std::env::var_os("HYA_BASH_TEST").is_none() {
+        return;
+    }
     let fx = fixture(
         "bash-large-output",
         FakeProvider::scripted_turns(vec![
@@ -1509,7 +1718,13 @@ async fn bash_returns_all_output_on_normal_exit() {
         ]),
     )
     .await;
-    let finish = fx.turn("run", &CancellationToken::new()).await.unwrap();
+    let finish = tokio::time::timeout(
+        Duration::from_secs(60),
+        fx.turn("run", &CancellationToken::new()),
+    )
+    .await
+    .expect("the command ended")
+    .unwrap();
     assert_eq!(finish, FinishReason::Stop);
     let log = fx.log().await;
     assert_paired(&log);
