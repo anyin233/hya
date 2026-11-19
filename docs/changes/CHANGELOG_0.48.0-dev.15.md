@@ -1,0 +1,3 @@
+# 0.48.0-dev.15
+
+- **A bare `bash` result carries at most 30,000 bytes of output.** Of a longer output the result shows the first 10,000 and the last 20,000 bytes around a marker line that gives the omitted and total sizes and names the file holding the complete output; the call's directory is kept in that case, so the rest can be searched with `grep` or printed in parts. Before, the whole output was returned and then sent again with every later request: in recorded runs, the 0.6% of results over 30,000 characters accounted for 4% of all prompt tokens, and two outputs of several megabytes made the kernel remove the whole earlier transcript at once.
