@@ -1881,48 +1881,106 @@ async fn bash_uses_bash_syntax_when_available() {
 }
 
 #[test]
-fn bash_returns_all_output_on_normal_exit() {
-    run_bash_child("kernel::bash_large_output_child", "large-output");
+fn bash_keeps_large_output_on_normal_exit() {
+    run_bash_child("kernel::bash_output_child", "large-output");
+}
+
+#[test]
+fn bash_returns_all_output_at_the_limit() {
+    run_bash_child("kernel::bash_output_child", "output-limit");
+}
+
+#[test]
+fn bash_yield_names_the_same_file_in_the_output_marker() {
+    run_bash_child("kernel::bash_output_child", "large-yield");
 }
 
 #[tokio::test]
-async fn bash_large_output_child() {
-    if std::env::var_os("HYA_BASH_TEST").is_none() {
+async fn bash_output_child() {
+    let (size, yields) = match std::env::var("HYA_BASH_TEST").as_deref() {
+        Ok("large-output") => (50_000, false),
+        Ok("output-limit") => (30_000, false),
+        Ok("large-yield") => (50_000, true),
+        _ => return,
+    };
+    let workdir = std::env::temp_dir();
+    let mut left = LeftRunning::new(&workdir);
+    let bash = kernel::tools::builtin()
+        .into_iter()
+        .find(|tool| tool.name() == "bash")
+        .unwrap();
+    let ctx = tool_ctx(&workdir, &CancellationToken::new());
+
+    let padding = size - "first\nlast\n".len();
+    let mut command = format!(
+        r#"printf 'first\n'; head -c {padding} /dev/zero | tr '\000' x; printf 'last\n' >&2"#
+    );
+    if yields {
+        command.push_str("; echo $$ > ready; while [ ! -e go ]; do sleep 0.01; done");
+    }
+    let call = bash.execute(&ctx, json!({"command": command, "timeout": 300}));
+    tokio::pin!(call);
+    let result = if yields {
+        let ready = workdir.join("ready");
+        tokio::select! {
+            result = &mut call => panic!("Bash returned before the ready signal: {result:?}"),
+            () = async {
+                tokio::time::timeout(Duration::from_secs(15), async {
+                    loop {
+                        if let Ok(pid) = std::fs::read_to_string(&ready)
+                            && let Ok(pid) = pid.trim().parse()
+                        {
+                            left.pgid = Some(pid);
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .expect("the command printed its output and signalled readiness");
+            } => {}
+        }
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(300)).await;
+        call.await.unwrap()
+    } else {
+        tokio::time::timeout(Duration::from_secs(15), call)
+            .await
+            .expect("the command ended")
+            .unwrap()
+    };
+
+    let output = result["output"].as_str().unwrap();
+    let expected = format!("first\n{}last\n", "x".repeat(padding));
+    if size == 30_000 {
+        assert_eq!(result["exit_code"], 0);
+        assert_eq!(output, expected);
+        // The parent test checks that the call's directory was removed.
         return;
     }
-    let fx = fixture(
-        "bash-large-output",
-        FakeProvider::scripted_turns(vec![
-            call(
-                "bash",
-                json!({"command": r#"head -c 4194304 /dev/zero | tr '\000' x && printf 'done\n' >&2"#}),
-            ),
-            text("ok"),
-        ]),
-    )
-    .await;
-    let finish = tokio::time::timeout(
-        Duration::from_secs(60),
-        fx.turn("run", &CancellationToken::new()),
-    )
-    .await
-    .expect("the command ended")
-    .unwrap();
-    assert_eq!(finish, FinishReason::Stop);
-    let log = fx.log().await;
-    assert_paired(&log);
-    let result = log
-        .iter()
-        .find_map(|event| match event {
-            Event::ToolResult { output, .. } => Some(output),
-            _ => None,
-        })
-        .unwrap();
-    assert_eq!(result["exit_code"], 0);
-    let output = result["output"].as_str().unwrap();
-    let stdout = output.strip_suffix("done\n").expect("final stderr marker");
-    assert_eq!(stdout.len(), 4 * 1024 * 1024);
-    assert!(stdout.bytes().all(|byte| byte == b'x'));
+
+    // The parent owns the isolated temp root, including on an assertion failure.
+    let marker = output
+        .lines()
+        .find(|line| line.starts_with("[… "))
+        .expect("large output has an omission marker");
+    let (_, rest) = marker.split_once(" bytes are in '").unwrap();
+    let (path, _) = rest.split_once("'.").unwrap();
+    let path = PathBuf::from(path);
+    left.dir = path.parent().map(Path::to_path_buf);
+
+    assert!(marker.starts_with("[… 20000 bytes omitted here. All 50000 bytes"));
+    assert_eq!(output.len(), 30_000 + marker.len() + 2);
+    assert!(output.starts_with(&expected[..10_000]));
+    assert!(output.ends_with(&expected[size - 20_000..]));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+    if yields {
+        assert_eq!(result["exit_code"], serde_json::Value::Null);
+        let note = result["still_running"].as_str().unwrap();
+        assert!(note.contains(&format!("goes to '{}'.", path.display())));
+    } else {
+        assert_eq!(result["exit_code"], 0);
+    }
 }
 
 #[tokio::test]
