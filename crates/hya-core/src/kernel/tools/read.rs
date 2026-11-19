@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use hya_proto::ToolSchema;
-use hya_tool::{Tool, ToolCtx, ToolError};
+use hya_tool::{MAX_CODING_ATTACHMENT_BYTES, Tool, ToolCtx, ToolError};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -34,12 +34,26 @@ impl Tool for Read {
         let Args { path } = super::args(input)?;
         let bytes = tokio::fs::read(super::resolve(&ctx.workdir, &path)).await?;
         if let Some(mime) = image_mime(&bytes) {
+            let prefix = format!("data:{mime};base64,");
+            let empty = json!([{"type": "file", "mime": mime, "url": prefix}]);
+            // Padded base64 uses four bytes for every three bytes of file data.
+            let limit = (MAX_CODING_ATTACHMENT_BYTES - empty.to_string().len()) / 4 * 3;
+            let size = bytes.len();
+            if size > limit {
+                return Ok(json!({
+                    "output": format!(
+                        "Image file ({mime}, {size} bytes). It is larger than the limit of {limit} \
+                         bytes for an image in a tool result, so it is not attached. Downscale or \
+                         crop it with a program and read the smaller file."
+                    ),
+                }));
+            }
             return Ok(json!({
-                "output": format!("Image file ({mime}, {} bytes).", bytes.len()),
+                "output": format!("Image file ({mime}, {size} bytes)."),
                 "attachments": [{
                     "type": "file",
                     "mime": mime,
-                    "url": format!("data:{mime};base64,{}", STANDARD.encode(&bytes)),
+                    "url": format!("{prefix}{}", STANDARD.encode(&bytes)),
                 }],
             }));
         }
