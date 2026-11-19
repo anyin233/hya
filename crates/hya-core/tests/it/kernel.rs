@@ -15,8 +15,9 @@ use hya_proto::{
     ModelRef, Part, PartId, Projection, Role, SessionId, SessionKind, TokenUsage, ToolPartState,
 };
 use hya_provider::{
-    AnthropicMessagesProtocol, COMPACT_CONTEXT_MARKER, CompletionRequest, FakeProvider, FakeStep,
-    Protocol, ProviderRouter, ReasoningEffort,
+    AnthropicMessagesProtocol, COMPACT_CONTEXT_MARKER, Capabilities, CompletionRequest,
+    EventStream, FakeProvider, FakeStep, Protocol, Provider, ProviderError, ProviderRouter,
+    ReasoningEffort,
 };
 use hya_store::SessionStore;
 use hya_tool::deadline::{self, Stage};
@@ -26,6 +27,7 @@ use hya_tool::{
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
+use tracing::instrument::WithSubscriber;
 
 #[test]
 fn bare_deadline_notices() {
@@ -821,6 +823,371 @@ async fn a2_failures_are_observations() {
         log.iter()
             .any(|event| matches!(event, Event::TextReplace { text, .. } if text == "next"))
     );
+}
+
+/// One stream call of [`Flaky`]: `None` plays the fake script, `Some` streams
+/// those steps without their last event, then fails with that error.
+type Attempt = Option<(Vec<FakeStep>, ProviderError)>;
+
+/// A provider whose stream calls follow `failures`, one [`Attempt`] each, and
+/// then `fake`.
+struct Flaky {
+    fake: FakeProvider,
+    failures: std::sync::Mutex<std::collections::VecDeque<Attempt>>,
+    requests: std::sync::Mutex<Vec<CompletionRequest>>,
+    clock: RetryClock,
+}
+
+#[async_trait::async_trait]
+impl Provider for Flaky {
+    fn id(&self) -> &str {
+        self.fake.id()
+    }
+
+    fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+        self.fake.capabilities(model)
+    }
+
+    async fn stream(
+        &self,
+        req: CompletionRequest,
+        session: SessionId,
+        message: MessageId,
+    ) -> Result<EventStream, ProviderError> {
+        self.clock.finish_wait();
+        self.requests.lock().unwrap().push(req.clone());
+        let Some((partial, error)) = self.failures.lock().unwrap().pop_front().flatten() else {
+            return self.fake.stream(req, session, message).await;
+        };
+        let mut events = FakeProvider::materialize(&partial, session, message);
+        events.pop();
+        let items = events.into_iter().map(Ok).chain([Err(error)]);
+        Ok(Box::pin(futures::stream::iter(items)))
+    }
+}
+
+fn server_error(message: &str) -> ProviderError {
+    ProviderError::HttpStatus {
+        status: 500,
+        message: format!("in-stream error (server_error): {message}"),
+        retry_after: None,
+    }
+}
+
+/// A fixture whose provider is a [`Flaky`] over `fake` and `failures`.
+async fn flaky_fixture(
+    name: &str,
+    fake: Vec<Vec<FakeStep>>,
+    failures: Vec<Attempt>,
+) -> (Fixture, Arc<Flaky>) {
+    let mut fx = fixture(name, FakeProvider::scripted_turns(Vec::new())).await;
+    let flaky = Arc::new(Flaky {
+        fake: FakeProvider::scripted_turns(fake),
+        failures: std::sync::Mutex::new(failures.into()),
+        requests: std::sync::Mutex::default(),
+        clock: RetryClock::default(),
+    });
+    fx.router = ProviderRouter::new().with(flaky.clone());
+    (fx, flaky)
+}
+
+#[derive(Clone, Default)]
+struct RetryClock(Arc<std::sync::Mutex<RetryClockState>>);
+
+#[derive(Default)]
+struct RetryClockState {
+    pending: Option<PendingWait>,
+    waits: Vec<Duration>,
+}
+
+struct PendingWait {
+    started: tokio::time::Instant,
+    hold_clock: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl RetryClock {
+    fn pause(&self) {
+        tokio::time::pause();
+        let (hold_clock, done) = tokio::sync::oneshot::channel();
+        // A blocking task holds off Tokio's auto-advance while the retry
+        // check reads SQLite, which runs on its own thread.
+        tokio::task::spawn_blocking(move || {
+            let _ = done.blocking_recv();
+        });
+        self.0.lock().unwrap().pending = Some(PendingWait {
+            started: tokio::time::Instant::now(),
+            hold_clock: Some(hold_clock),
+        });
+    }
+
+    fn finish_wait(&self) {
+        let mut state = self.0.lock().unwrap();
+        if let Some(wait) = state.pending.take() {
+            if wait.hold_clock.is_none() {
+                state.waits.push(wait.started.elapsed());
+            }
+            tokio::time::resume();
+        }
+    }
+
+    fn assert_waits(&self, seconds: &[u64]) {
+        let state = self.0.lock().unwrap();
+        assert_eq!(state.waits.len(), seconds.len(), "{:?}", state.waits);
+        for (&actual, &seconds) in state.waits.iter().zip(seconds) {
+            let expected = Duration::from_secs(seconds);
+            // Tokio rounds the timer deadline up to a millisecond.
+            assert!(
+                (expected..=expected + Duration::from_millis(1)).contains(&actual),
+                "expected {expected:?}, waited {actual:?}"
+            );
+        }
+    }
+}
+
+impl tracing::Subscriber for RetryClock {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.name() == "bare_round_retry"
+    }
+
+    fn event(&self, _: &tracing::Event<'_>) {
+        // The kernel has checked the durable projection and is about to sleep.
+        let mut state = self.0.lock().unwrap();
+        let wait = state.pending.as_mut().unwrap();
+        drop(wait.hold_clock.take());
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        unreachable!("only the bare_round_retry event is enabled")
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+impl Flaky {
+    async fn turn(&self, fx: &Fixture, prompt: &str) -> Result<FinishReason, CoreError> {
+        let publish = |envelope: Envelope| {
+            if matches!(
+                envelope.event,
+                Event::StepFinished {
+                    finish: FinishReason::Error,
+                    ..
+                }
+            ) {
+                self.clock.pause();
+            }
+        };
+        let finish = fx
+            .turn_with_publish(prompt, &CancellationToken::new(), &publish)
+            .with_subscriber(self.clock.clone())
+            .await;
+        self.clock.finish_wait();
+        finish
+    }
+}
+
+#[tokio::test]
+async fn transient_round_failure_retries_the_same_request() {
+    let (fx, flaky) = flaky_fixture(
+        "retry-transient",
+        vec![
+            vec![
+                FakeStep::Reasoning("plan the todo".into()),
+                FakeStep::ToolCall {
+                    name: "todo".into(),
+                    input: json!({"ops": []}),
+                },
+            ],
+            text("done"),
+        ],
+        vec![
+            None,
+            Some((Vec::new(), server_error("upstream unreachable"))),
+        ],
+    )
+    .await;
+    assert_eq!(
+        flaky.turn(&fx, "plan, then answer").await.unwrap(),
+        FinishReason::Stop
+    );
+    flaky.clock.assert_waits(&[5]);
+
+    let requests = flaky.requests.lock().unwrap().clone();
+    // The todo round, the failed round, its retry, and the round after the
+    // completion check.
+    assert_eq!(requests.len(), 4);
+    assert_eq!(format!("{:?}", requests[1]), format!("{:?}", requests[2]));
+    let last = &requests[3];
+    let parts: Vec<_> = assistant_parts(last).collect();
+    assert!(
+        parts
+            .iter()
+            .any(|part| matches!(part, Part::Reasoning { text, .. } if text == "plan the todo")),
+        "the completed step's reasoning is replayed: {parts:?}"
+    );
+    assert!(
+        parts
+            .iter()
+            .any(|part| matches!(part, Part::Text { text, .. } if text == "done"))
+    );
+    let log = fx.log().await;
+    let steps: Vec<_> = log
+        .iter()
+        .filter_map(|event| match event {
+            Event::StepFinished { step, finish, .. } => Some((*step, *finish)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(steps[1], (1, FinishReason::Error), "{steps:?}");
+    assert_eq!(steps[2], (2, FinishReason::Stop), "{steps:?}");
+    let views: Vec<_> = log
+        .iter()
+        .filter_map(|event| match event {
+            Event::StepStarted { step, view, .. } if [1, 2].contains(step) => view.clone(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(views.len(), 2);
+    assert_eq!(
+        views[0], views[1],
+        "the retry reuses the failed step's view"
+    );
+}
+
+#[tokio::test]
+async fn non_transient_round_failure_ends_the_run() {
+    let (fx, flaky) = flaky_fixture(
+        "retry-invalid",
+        vec![text("unreached")],
+        vec![Some((
+            Vec::new(),
+            ProviderError::HttpStatus {
+                status: 400,
+                message: "in-stream error (invalid_request_error): bad".into(),
+                retry_after: None,
+            },
+        ))],
+    )
+    .await;
+    let error = flaky.turn(&fx, "hi").await.expect_err("a 400 ends the run");
+    assert_eq!(
+        error.to_string(),
+        "http status 400: in-stream error (invalid_request_error): bad"
+    );
+    flaky.clock.assert_waits(&[]);
+    assert_eq!(flaky.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_round_is_retried_three_times() {
+    let failures = (1..=4)
+        .map(|attempt| Some((Vec::new(), server_error(&format!("attempt {attempt}")))))
+        .collect();
+    let (fx, flaky) = flaky_fixture("retry-limit", vec![text("unreached")], failures).await;
+    let error = flaky
+        .turn(&fx, "hi")
+        .await
+        .expect_err("the fourth failure ends the run");
+    assert_eq!(
+        error.to_string(),
+        "http status 500: in-stream error (server_error): attempt 4"
+    );
+    flaky.clock.assert_waits(&[5, 10, 20]);
+    let requests = flaky.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 4);
+    assert!(
+        requests
+            .iter()
+            .all(|request| format!("{request:?}") == format!("{:?}", requests[0]))
+    );
+}
+
+#[tokio::test]
+async fn a_transient_failure_after_reasoning_is_not_retried() {
+    let (fx, flaky) = flaky_fixture(
+        "retry-after-reasoning",
+        vec![text("unreached")],
+        vec![Some((
+            vec![FakeStep::Reasoning("half a thought".into())],
+            server_error("upstream unreachable"),
+        ))],
+    )
+    .await;
+    let error = flaky
+        .turn(&fx, "hi")
+        .await
+        .expect_err("the failed attempt persisted reasoning");
+    assert_eq!(
+        error.to_string(),
+        "http status 500: in-stream error (server_error): upstream unreachable"
+    );
+    flaky.clock.assert_waits(&[]);
+    assert_eq!(flaky.requests.lock().unwrap().len(), 1);
+    assert!(fx.log().await.iter().any(|event| matches!(
+        event,
+        Event::ReasoningReplace { text, .. } if text == "half a thought"
+    )));
+}
+
+#[tokio::test]
+async fn a_completed_round_resets_the_retry_count() {
+    let failures = (1..=8)
+        .map(|attempt| {
+            (attempt != 4).then(|| (Vec::new(), server_error(&format!("attempt {attempt}"))))
+        })
+        .collect();
+    let (fx, flaky) = flaky_fixture(
+        "retry-next-round",
+        vec![call("todo", json!({"ops": []}))],
+        failures,
+    )
+    .await;
+    let error = flaky
+        .turn(&fx, "hi")
+        .await
+        .expect_err("the later round exhausts its own retries");
+    assert_eq!(
+        error.to_string(),
+        "http status 500: in-stream error (server_error): attempt 8"
+    );
+    flaky.clock.assert_waits(&[5, 10, 20, 5, 10, 20]);
+    assert_eq!(flaky.requests.lock().unwrap().len(), 8);
+}
+
+#[test]
+fn a_retry_wait_must_fit_before_final() {
+    run_deadline_test("kernel::a_retry_wait_must_fit_before_final_child", "retry");
+}
+
+#[tokio::test]
+async fn a_retry_wait_must_fit_before_final_child() {
+    if std::env::var("HYA_BARE_DEADLINE_TEST").as_deref() != Ok("retry") {
+        return;
+    }
+    let (fx, flaky) = flaky_fixture(
+        "retry-deadline",
+        vec![text("unreached")],
+        vec![Some((Vec::new(), server_error("upstream unreachable")))],
+    )
+    .await;
+    deadline::install(Duration::from_secs(94));
+    let deadline = deadline::current().unwrap();
+    assert_eq!(deadline.stage(), Stage::Normal);
+    assert!(deadline.remaining() < deadline.final_window() + Duration::from_secs(5));
+
+    let error = flaky
+        .turn(&fx, "hi")
+        .await
+        .expect_err("the first retry wait would reach Final");
+    assert_eq!(
+        error.to_string(),
+        "http status 500: in-stream error (server_error): upstream unreachable"
+    );
+    flaky.clock.assert_waits(&[]);
+    assert_eq!(flaky.requests.lock().unwrap().len(), 1);
+    assert_eq!(deadline.stage(), Stage::Normal);
 }
 
 #[tokio::test]
