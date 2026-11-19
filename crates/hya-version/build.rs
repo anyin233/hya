@@ -1,6 +1,12 @@
-use std::{env, fs, path::PathBuf};
+use std::{env, fs, path::PathBuf, process::Command};
 
 fn main() {
+    let rustc = Command::new(env::var_os("RUSTC").expect("cargo sets RUSTC"))
+        .arg("-V")
+        .output()
+        .expect("run rustc -V");
+    let rustc = String::from_utf8(rustc.stdout).expect("rustc -V prints UTF-8");
+    println!("cargo:rustc-env=HYA_RUSTC={}", rustc.trim());
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir"));
     let versions_path = manifest_dir.join("../../versions.toml");
     println!("cargo:rerun-if-changed={}", versions_path.display());

@@ -112,8 +112,11 @@ copies are deleted after loading; verified cache copies can be reused. The
 loaded library stays mapped for the process lifetime.
 `builtin_bundle_origin(name)` returns the identity for a loaded native tool.
 Cargo builds load the library Cargo just linked instead: a library in the
-executable's `deps/` directory wins, then one beside the executable. A package
-staged under `target/debug/bundles/` is used only when neither exists, so a
+executable's `deps/` directory wins, then one beside the executable, then the
+libraries in Cargo's per-unit build directory
+(`build/<package>/<unit>/out/`, the layout of Cargo 1.100 and later), newest
+first; a library that fails the ABI check is skipped for the next one. A package
+staged under `target/debug/bundles/` is used only when none exists, so a
 stale package cannot shadow a fresh build or slow backend startup with full
 package verification. The Rust ABI is not stable across independent builds;
 build the backend and library from the same workspace and toolchain.
@@ -357,7 +360,9 @@ package must have one library named `runtime`; its exported C symbols are
 `hya_tool_bundle_with_runtime_v1(*const c_void, unsafe extern "C" fn(*mut c_void), *mut c_void)` and
 `hya_tool_bundle_share_deadline_v1(*const c_void)`.
 The host checks the 32-byte ABI digest before sharing its deadline cell or calling `register`, and the
-library remains mapped for the process lifetime. The runtime callback polls
+library remains mapped for the process lifetime. The digest covers the hya version, the compiler
+(`rustc -V`), the platform, and the sources and sizes of the types that cross the boundary, so a
+library left by another toolchain is rejected instead of loaded. The runtime callback polls
 one tool future synchronously while the bundle's Tokio runtime is entered.
 Calls with an existing host runtime stay on their original task, preserving
 task-local admission context. Calls without one use a temporary joined worker.
@@ -414,8 +419,10 @@ For deployment, package the replacement library with
 identity and declarations. Use the expected filename
 `libhya_<family>_tools.so` (`.dylib` on macOS). Discovery, in order, is
 `<executable-directory>/deps/<filename>`, then
-`<executable-directory>/<filename>`, then the family's `.hyabundle` under
-`bundles/` in the executable directory (or its parent for `bin/` and `deps/`).
+`<executable-directory>/<filename>`, then Cargo's build units
+(`build/<package>/<unit>/out/<filename>`, newest first), then the family's
+`.hyabundle` under `bundles/` in the executable directory (or its parent for
+`bin/` and `deps/`).
 All families selected by the registry must be present. Libraries are cached by
 family for the process lifetime, so restart the host to select new bytes.
 
