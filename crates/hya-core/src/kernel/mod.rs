@@ -18,7 +18,7 @@ mod workspace;
 pub use workspace::WorkspaceWatches;
 
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use hya_proto::event::ViewRef;
@@ -131,7 +131,7 @@ pub trait ToolGate: Send {
 /// What a harness supplies around the kernel's rounds: the rewrite before
 /// each round, each round's request and stream, whether a failed round is
 /// retried, and when the run stops. Bare mode's [`Bare`] is the kernel alone;
-/// full mode adds rebinding, hooks, model fallback, and retry.
+/// full mode adds rebinding, hooks, and model fallback.
 #[async_trait]
 pub trait Harness: ToolGate {
     /// Rewrite the Context before the round `projection` would send, if
@@ -157,8 +157,17 @@ pub trait Harness: ToolGate {
     fn done(&self) -> bool;
 }
 
+/// Waits before the first, second and third retry of a round that failed on a
+/// transient provider error (docs/kernel.md).
+const ROUND_RETRY_WAITS: [Duration; 3] = [
+    Duration::from_secs(5),
+    Duration::from_secs(10),
+    Duration::from_secs(20),
+];
+
 /// Bare mode's [`Harness`]: the given prompt and tools on one model, the
-/// kernel's own context reduction, no retry.
+/// kernel's own context reduction, retry of a round after a transient
+/// provider error.
 struct Bare<'a> {
     scope: &'a Scope<'a>,
     model: &'a ModelRef,
@@ -169,6 +178,8 @@ struct Bare<'a> {
     cancel: &'a CancellationToken,
     agent: AgentName,
     attachments: request::AttachmentData,
+    /// Retries of the current round so far.
+    retries: usize,
 }
 
 #[async_trait]
@@ -319,19 +330,73 @@ impl Harness for Bare<'_> {
         &mut self,
         request: &CompletionRequest,
     ) -> Result<Option<(EventStream, ModelRef)>, CoreError> {
-        let stream = self
-            .scope
-            .provider
-            .stream(request.clone(), self.scope.session, self.scope.message)
-            .await?;
-        Ok(Some((stream, self.model.clone())))
+        tokio::select! {
+            biased;
+            () = self.cancel.cancelled() => Ok(None),
+            stream = self.scope.provider.stream(
+                request.clone(),
+                self.scope.session,
+                self.scope.message,
+            ) => Ok(Some((stream?, self.model.clone()))),
+        }
     }
 
-    async fn failed(&mut self, _failure: &Failure) -> Result<bool, CoreError> {
-        Ok(false)
+    /// Retry a transient provider failure only if the attempt left no part.
+    async fn failed(&mut self, failure: &Failure) -> Result<bool, CoreError> {
+        let CoreError::Provider(error) = &failure.error else {
+            return Ok(false);
+        };
+        let Some(&wait) = ROUND_RETRY_WAITS.get(self.retries) else {
+            return Ok(false);
+        };
+        if !error.is_retryable_before_stream() || self.cancel.is_cancelled() {
+            return Ok(false);
+        }
+        let Scope {
+            store,
+            session,
+            message,
+            ..
+        } = *self.scope;
+        let produced_part = store
+            .with_projection(session, |projection| {
+                projection.session.messages.iter().any(|row| {
+                    row.id == message
+                        && row
+                            .last_step_start
+                            .is_some_and(|start| start < row.parts.len())
+                })
+            })
+            .await?;
+        let deadline = hya_tool::deadline::current();
+        if produced_part
+            || self.cancel.is_cancelled()
+            || deadline.is_some_and(|d| d.remaining().saturating_sub(d.final_window()) <= wait)
+        {
+            return Ok(false);
+        }
+        tracing::warn!(
+            name: "bare_round_retry",
+            %session,
+            retry = self.retries + 1,
+            "bare round failed: {error}; waiting {wait:?} before retry"
+        );
+        tokio::select! {
+            biased;
+            () = self.cancel.cancelled() => return Ok(false),
+            () = tokio::time::sleep(wait) => {}
+        }
+        if self.cancel.is_cancelled()
+            || deadline.is_some_and(|d| d.stage() >= hya_tool::deadline::Stage::Final)
+        {
+            return Ok(false);
+        }
+        self.retries += 1;
+        Ok(true)
     }
 
     async fn collected(&mut self, _round: &Round) -> Result<(), CoreError> {
+        self.retries = 0;
         Ok(())
     }
 
@@ -462,7 +527,8 @@ async fn execute_calls(
 /// Run model rounds and tool calls until a round ends without tool calls.
 ///
 /// Returns that round's finish, or `Cancelled`. The caller finishes the
-/// assistant message. No retries, fallback, concurrency, or step cap.
+/// assistant message. Transient provider failures before any part was
+/// persisted can be retried.
 pub async fn run(run: Run<'_>) -> Result<FinishReason, CoreError> {
     run_with_watches(run, &WorkspaceWatches::default()).await
 }
@@ -503,6 +569,7 @@ pub async fn run_with_watches(
         cancel,
         agent: AgentName::new(AGENT),
         attachments: request::AttachmentData::new(),
+        retries: 0,
     };
     drive(&scope, &mut bare, cancel).await
 }

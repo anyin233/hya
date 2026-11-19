@@ -423,6 +423,34 @@ it, and full mode does not send it. The kernel loop asks the harness at this
 point through `Harness::before_end`, only after a `stop` or `length` finish
 and while the run is not cancelled; full mode's harness always ends.
 
+## When a bare round fails
+
+Bare mode can recover from a transient upstream error after a provider stream
+opens. When you run `hya exec --bare`, the kernel retries the same request up
+to three times per round, waiting 5, 10, and 20 seconds before the respective
+retries.
+
+A retry requires all of the following.
+
+- The provider classifies the error as transient. This includes transport
+  errors, HTTP 429, and HTTP 5xx, including in-stream error frames classified
+  as 429 or 5xx.
+- The failed attempt persisted no part in the assistant message, including
+  text, reasoning, tool input, or a tool call.
+- The run is active throughout the wait. With `--time-budget`, the full wait
+  must fit before Final, and the budget must still be in Normal or WrapUp
+  when the wait ends.
+
+A stalled stream or a connection dropped mid-stream ends the run without a
+retry. When a retry is ruled out or the third retry fails, the run ends with
+the current attempt's error. A completed round resets the retry count.
+
+For example, if an in-stream HTTP 500 arrives before the assistant has
+produced any output and the run has time left, bare mode waits 5 seconds
+before sending the same request again. The event log records the failed
+attempt as `StepFinished` with `finish: error`. The retry runs under the next
+step number.
+
 ## Differences from full mode
 
 Bare mode loads no bundle. It has no permission checks, hooks, subagents,
@@ -459,7 +487,7 @@ plugs into that loop at fixed points:
 | Before the round (`Harness::before_round`) | `kernel::before_round` with no extensions: the 80% Rewrite, then the goal checkpoint | Re-validate the actor claim, rebind a Root turn to a new runtime generation, resolve the round's model, then `kernel::before_round` with the internal bundles' extensions (`hya/compaction`: [`shake` and `remote`](compaction.md)) |
 | Request | Kernel prompt and six tools | The agent's system prompt, filtered tool schemas plus `rewrite` and `todo`, and reasoning effort, then the `chat.params` hook |
 | Opening the stream | The given model | Cross-model fallback or the Workflow route, under a governor stream permit |
-| Failed round | Ends the run | Retried up to twice when it failed before any text or tool call on a link error |
+| Failed round | Retried up to three times after 5, 10, and 20 s when the transient failure left no assistant part and the wait fits before Final ([When a bare round fails](#when-a-bare-round-fails)) | Retried up to twice when it failed before any text or tool call on a link error |
 | Registry tool call (`ToolGate`) | Execute the tool and record file snapshots and stamps | Hooks, permissions, the full `ToolCtx`, file snapshots and stamps, output capping, steer notices |
 | Unrun calls after a cancel | Failed as `cancelled` | Left open; the turn end closes them as `CANCELLED` |
 | End (`Harness::before_end`, `done`) | The round's finish, after one [completion check](#how-a-bare-run-ends) once a tool call ran | The round's finish; also ends after an accepted `report` |
