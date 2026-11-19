@@ -29,9 +29,11 @@ use tokio_util::sync::CancellationToken;
 
 #[test]
 fn bare_deadline_notices() {
-    for stage in ["final", "wrap-up"] {
-        run_deadline_test("kernel::bare_deadline_notices_child", stage);
-    }
+    std::thread::scope(|scope| {
+        for case in ["final", "wrap-up-above", "wrap-up-below", "900", "1800"] {
+            scope.spawn(move || run_deadline_test("kernel::bare_deadline_notices_child", case));
+        }
+    });
 }
 
 #[test]
@@ -56,30 +58,54 @@ fn run_deadline_test(child: &str, case: &str) {
 
 #[tokio::test]
 async fn bare_deadline_notices_child() {
-    let (stage, budget, prefix) = match std::env::var("HYA_BARE_DEADLINE_TEST").as_deref() {
-        Ok("final") => (Stage::Final, 40, "HEADLESS RUN — FINAL "),
-        Ok("wrap-up") => (Stage::WrapUp, 240, "HEADLESS RUN — TIME: "),
+    let (budget, cutoff, scenario) = match std::env::var("HYA_BARE_DEADLINE_TEST").as_deref() {
+        Ok("final") => (
+            40,
+            180,
+            Some((Stage::Final, false, "HEADLESS RUN — FINAL ")),
+        ),
+        Ok("wrap-up-above") => (
+            380,
+            180,
+            Some((Stage::WrapUp, true, "HEADLESS RUN — TIME: ")),
+        ),
+        Ok("wrap-up-below") => (
+            380,
+            180,
+            Some((Stage::WrapUp, false, "HEADLESS RUN — TIME: ")),
+        ),
+        Ok("900") => (900, 216, None),
+        Ok("1800") => (1800, 432, None),
         _ => return,
+    };
+    let cutoff = Duration::from_secs(cutoff);
+    let Some((stage, send_check, prefix)) = scenario else {
+        deadline::install(Duration::from_secs(budget));
+        assert_eq!(2 * deadline::current().unwrap().final_window(), cutoff);
+        return;
     };
     let fx = fixture(
         "deadline-notice",
         FakeProvider::scripted_turns(vec![
             call("todo", json!({"ops": []})),
             call("todo", json!({"ops": []})),
-            vec![FakeStep::Text("done".into())],
+            text("done"),
+            text("checked"),
         ]),
     )
     .await;
     deadline::install(Duration::from_secs(budget));
     let deadline = deadline::current().unwrap();
+    assert_eq!(2 * deadline.final_window(), cutoff);
     if stage == Stage::WrapUp {
-        // The process clock uses real time. Wait until the wrap-up window starts.
-        tokio::time::sleep(
-            deadline
-                .remaining()
-                .saturating_sub(deadline.wrap_up_window()),
-        )
-        .await;
+        // The eligible case starts with the wrap-up stage, as far above the
+        // cutoff as that stage allows; the other starts just below the cutoff.
+        let remaining = if send_check {
+            deadline.wrap_up_window()
+        } else {
+            cutoff - Duration::from_secs(5)
+        };
+        tokio::time::sleep(deadline.remaining().saturating_sub(remaining)).await;
     }
     assert_eq!(deadline.stage(), stage);
     assert_eq!(
@@ -89,11 +115,14 @@ async fn bare_deadline_notices_child() {
         FinishReason::Stop
     );
     let log = fx.log().await;
-    // Both notices already tell the model to finish.
     assert_eq!(deadline.stage(), stage);
-    assert_eq!(checks_logged(&log), 0);
+    assert_eq!(deadline.remaining() > cutoff, send_check);
+    assert_eq!(checks_logged(&log), usize::from(send_check));
     let requests = fx.provider.requests();
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 3 + usize::from(send_check));
+    if send_check {
+        assert!(requests[3].messages.last().is_some_and(is_check));
+    }
     let Some(Message::User { parts, .. }) = requests[0].messages.last() else {
         panic!("expected the deadline notice at the end of the first request");
     };
@@ -110,7 +139,7 @@ async fn bare_deadline_notices_child() {
         assert!((30..40).contains(&left), "{text}");
         assert!(text.contains("of 40s used. Write any missing deliverable"));
     } else {
-        assert!(text.contains("of 240s used"), "{text}");
+        assert!(text.contains(&format!("of {budget}s used")), "{text}");
         assert!(
             text.contains("the request's own checks, then finish"),
             "{text}"

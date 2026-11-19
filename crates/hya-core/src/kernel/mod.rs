@@ -336,10 +336,10 @@ impl Harness for Bare<'_> {
     }
 
     /// The completion check, once per session after the kernel ran a known
-    /// tool and before any run deadline reaches WrapUp.
+    /// tool, while more than two final windows remain on any run deadline.
     async fn before_end(&mut self) -> Result<bool, CoreError> {
         if hya_tool::deadline::current()
-            .is_some_and(|deadline| deadline.stage() != hya_tool::deadline::Stage::Normal)
+            .is_some_and(|deadline| deadline.remaining() <= 2 * deadline.final_window())
         {
             return Ok(false);
         }
