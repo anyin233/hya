@@ -64,7 +64,10 @@ pub fn projection_to_messages(
             return false;
         }
         let text = collect_text(&row.parts);
-        text.starts_with("HEADLESS RUN — TIME: ") || text.starts_with("HEADLESS RUN — FINAL ")
+        ["TIME: ", "FINAL ", "clock: "].iter().any(|kind| {
+            text.strip_prefix("HEADLESS RUN — ")
+                .is_some_and(|rest| rest.starts_with(kind))
+        })
     };
     messages
         .iter()
