@@ -81,12 +81,13 @@ fn replacement_child() {
 #[test]
 fn native_family_can_be_replaced_and_wrong_abi_is_rejected() {
     let executable = std::env::current_exe().unwrap();
+    // Cargo uplifts examples to the profile directory, a different number of
+    // levels above the test binary in each of its build layouts.
     let examples = executable
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("examples");
+        .ancestors()
+        .map(|directory| directory.join("examples"))
+        .find(|examples| examples.is_dir())
+        .expect("cargo test builds the cdylib examples");
     let root = std::env::temp_dir().join(format!("hya-replacement-{}", std::process::id()));
     for (mode, fixture) in [("valid", "replacement_tools"), ("wrong", "wrong_abi_tools")] {
         let dir = root.join(mode);
