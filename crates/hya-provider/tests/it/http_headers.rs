@@ -142,16 +142,15 @@ async fn http_provider_idle_stall_before_any_frame_surfaces_once() {
     .expect("post-header idle stall should end the stream within the guard");
 
     assert_eq!(connections.load(Ordering::SeqCst), 1);
-    assert_eq!(events.len(), 1);
-    match &events[0] {
-        Err(ProviderError::Http(message)) => {
-            assert!(
-                message.contains("no SSE frame"),
-                "unexpected error: {message}"
-            );
-        }
-        other => panic!("expected a single idle-stall error, got {other:?}"),
-    }
+    let [Err(error @ ProviderError::StreamInterrupted(_))] = events.as_slice() else {
+        panic!("expected a single idle-stall error, got {events:?}");
+    };
+    assert_eq!(
+        error.to_string(),
+        "http: stalled stream: no SSE frame within 250ms"
+    );
+    assert!(!error.is_retryable_before_stream());
+    assert_eq!(error.retry_after(), None);
 }
 
 #[tokio::test]
@@ -192,9 +191,12 @@ async fn zero_event_body_failure_surfaces_without_replay() {
     .await
     .expect("zero-event decode failure should surface");
 
-    assert!(
-        matches!(events.as_slice(), [Err(ProviderError::Http(_))]),
-        "{events:?}"
+    let [Err(error @ ProviderError::StreamInterrupted(_))] = events.as_slice() else {
+        panic!("expected a single body-read error, got {events:?}");
+    };
+    assert_eq!(
+        error.to_string(),
+        "http: Transport error: error decoding response body"
     );
     assert_eq!(connections.load(Ordering::SeqCst), 1);
 }
@@ -346,9 +348,12 @@ async fn post_event_body_failure_is_never_replayed() {
     // body-decode error surfaces exactly once.
     assert_eq!(events.len(), 3, "events: {events:?}");
     assert!(events[0].is_ok() && events[1].is_ok());
-    assert!(
-        matches!(&events[2], Err(ProviderError::Http(_))),
-        "expected exactly one terminal error, got {events:?}"
+    let Err(error @ ProviderError::StreamInterrupted(_)) = &events[2] else {
+        panic!("expected a terminal body-read error, got {events:?}");
+    };
+    assert_eq!(
+        error.to_string(),
+        "http: Transport error: error decoding response body"
     );
 }
 
