@@ -887,6 +887,8 @@ ends the wait, the command keeps running in the background. The
 `still_running` result names the limit and the output and exit code files.
 For output over 30,000 bytes, bare Bash returns the first 10,000 and last
 20,000 bytes with a marker naming the file that keeps the complete output.
+The model receives the `output` string, which ends with `[exit code: N]`,
+`[still running: …]`, `[stopped: …]`, or `[not started: …]`.
 The exit code is written if the command ends while the run lasts. To wait
 again, sleep briefly in a later call before reading the output. Nothing
 stops a command left running, or a job a command started with `&`, when

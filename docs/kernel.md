@@ -86,7 +86,7 @@ in both modes.
 
 | Tool | Input JSON | Success result |
 | --- | --- | --- |
-| `bash` | `{"command": string, "timeout"?: int}` | `{"exit_code": int, "output": string}`; when the wait ends first `{"exit_code": null, "output": string, "still_running": string}`, or `"timed_out": string` in place of `still_running` when the run's budget cut the wait (the command is killed) or has no time left |
+| `bash` | `{"command": string, "timeout"?: int}` | `{"exit_code": int, "output": string}`; when the wait ends first `{"exit_code": null, "output": string, "still_running": string}`, or `"timed_out": string` in place of `still_running` when the run's budget cut the wait (the command is killed) or has no time left. The last line of `output` is `[exit code: N]`, `[still running: …]`, `[stopped: …]`, or `[not started: …]`. |
 | `read` | `{"path": string}` | UTF-8 text as `{"content": string}` or an image as `{"output": string, "attachments": [{"type": "file", "mime": string, "url": string}]}` or `{"output": string}` when the image exceeds the attachment limit |
 | `write` | `{"path": string, "content": string}` | `{"bytes": int}` |
 | `edit` | `{"path": string, "old": string, "new": string}` | `{"replaced": 1}` |
@@ -120,7 +120,9 @@ Because tool results are sent again with every later request, when Bash has
 captured more than 30,000 bytes at the end of its wait, `output` shows the
 first 10,000 and last 20,000 bytes with a marker line giving the omitted
 and total byte counts and the quoted path to the retained file holding
-the complete output.
+the complete output. The model receives only the result's `output` string,
+so Bash appends one status line after the captured output, adding a newline
+when needed.
 
 Each call creates a private directory (`mkdtemp`, `hya-bash-XXXXXX` in the
 system temporary directory) holding an `output` file, which receives the
@@ -128,8 +130,10 @@ command's stdout and stderr, and an `exit_code` file. A call ends in one of
 four ways:
 
 - **The command ends within the wait.** The result is
-  `{"exit_code": int, "output": string}` with the captured output. Bash
-  removes the call's directory when the captured output fits the limit.
+  `{"exit_code": int, "output": string}` with the captured output followed by
+  `[exit code: N]`, including `[exit code: 0]` on success. A command killed
+  by a signal reports `128 + signal`. Bash removes the call's directory
+  when the captured output fits the limit.
   A job the command started with `&` keeps running, as it does after any
   shell exits. Redirect its output to a file of its own to keep it when
   Bash removes the directory.
@@ -144,14 +148,17 @@ four ways:
   its exit code (or `128 + signal`) to `exit_code` when it sees the command
   end. A command that outlives that process leaves no `exit_code` file.
   Nothing stops such a command, or a job started with `&`, when the run
-  ends normally.
+  ends normally. The last line of `output` is `[still running: …]` with
+  the `still_running` sentence.
 - **The run's budget cuts the wait short.** This happens when the
   end-of-budget cap is shorter than the wait above. If the command is
   still running at that cap, Bash kills its process group.
   The result has `exit_code: null`, the captured `output`, and a `timed_out`
-  sentence naming the budget. Bash removes the call's directory when the
-  captured output fits the limit. Once the budget has no time left, Bash does not
-  start the command and returns a `timed_out` result with empty `output`.
+  sentence naming the budget. The last line of `output` is `[stopped: …]`
+  with that sentence. Bash removes the call's directory when the captured
+  output fits the limit. Once the budget has no time left, Bash skips
+  starting the command and returns a `timed_out` result whose `output` is
+  just `[not started: …]` with the reason.
   See the [CLI reference](cli.md#--bare).
 - **The run is cancelled.** Bash kills the command's process group and the
   call fails as cancelled. The same cleanup runs when Bash cannot read the

@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use hya_core::CoreError;
 use hya_core::kernel::{self, StoreEmit, View, request::AttachmentData};
+use hya_proto::context::tool_result_text;
 use hya_proto::{
     AgentName, CompactionStrategy, Envelope, Event, FileState, FinishReason, Message, MessageId,
     ModelRef, Part, PartId, Projection, Role, SessionId, SessionKind, TokenUsage, ToolPartState,
@@ -540,7 +541,7 @@ async fn a1_tool_results_pair_with_calls() {
         outputs,
         vec![
             json!({"bytes": 5}),
-            json!({"exit_code": 0, "output": "hello"})
+            json!({"exit_code": 0, "output": "hello\n[exit code: 0]"})
         ]
     );
 }
@@ -1566,7 +1567,10 @@ async fn assert_bash_yield(
     assert_eq!(result["exit_code"], serde_json::Value::Null);
     assert!(result.get("timed_out").is_none(), "{result}");
     // The shell may not have printed yet; it prints "second" only after the signal file exists.
-    let output = result["output"].as_str().unwrap();
+    let model_text = tool_result_text(result);
+    let status = format!("[still running: {note}]");
+    assert_eq!(model_text.lines().last(), Some(status.as_str()));
+    let output = model_text.strip_suffix(&status).unwrap();
     assert!("first\n".starts_with(output), "{output:?}");
     assert!(note.contains(&format!("waited {expected_wait}")), "{note}");
     assert!(note.contains("still running then"), "{note}");
@@ -1653,7 +1657,9 @@ async fn bash_leaves_a_background_job_running_after_the_command_ends() {
             _ => None,
         })
         .collect();
-    assert_eq!(results, [&json!({"exit_code": 3, "output": "started\n"})]);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["exit_code"], 3);
+    assert_eq!(tool_result_text(results[0]), "started\n[exit code: 3]");
     assert_eq!(tool_errors(&log).len(), 1, "timeout 0 is an input error");
     let pid = std::fs::read_to_string(&job.0)
         .unwrap()
@@ -1806,15 +1812,34 @@ async fn bash_budget_cap_child() {
         })
         .unwrap();
     assert_eq!(result["exit_code"], serde_json::Value::Null);
-    let output = result["output"].as_str().unwrap();
-    assert!("started\n".starts_with(output), "{output:?}");
     assert!(result.get("still_running").is_none(), "{result}");
     let note = result["timed_out"].as_str().unwrap();
+    let model_text = tool_result_text(result);
+    let status = format!("[stopped: {note}]");
+    assert_eq!(model_text.lines().last(), Some(status.as_str()));
+    let output = model_text.strip_suffix(&status).unwrap();
+    assert!("started\n".starts_with(output), "{output:?}");
+
     assert!(
         note.contains("the run's time budget capped the timeout")
             && note.contains("killed its process group"),
         "{note}"
     );
+
+    let bash = kernel::tools::builtin()
+        .into_iter()
+        .find(|tool| tool.name() == "bash")
+        .unwrap();
+    let ctx = tool_ctx(&fx.dir, &CancellationToken::new());
+    let result = bash
+        .execute(&ctx, json!({"command": "touch unexpected"}))
+        .await
+        .unwrap();
+    assert!(!fx.dir.join("unexpected").exists());
+    assert_eq!(result["exit_code"], serde_json::Value::Null);
+    let note = result["timed_out"].as_str().unwrap();
+    assert_eq!(tool_result_text(&result), format!("[not started: {note}]"));
+
     // Without the file the shell was killed before it could name the job,
     // which was then in the killed group too.
     let Ok(pid) = std::fs::read_to_string(&job.0) else {
@@ -1876,7 +1901,24 @@ async fn bash_uses_bash_syntax_when_available() {
     assert_eq!(result["exit_code"], 0);
     assert!(result["output"].as_str().unwrap().starts_with("shell\n"));
     if bash_available {
-        assert_eq!(result["output"], "shell\nbash\n");
+        assert_eq!(result["output"], "shell\nbash\n[exit code: 0]");
+    }
+}
+
+#[tokio::test]
+async fn bash_reports_exit_codes_without_command_output() {
+    let bash = kernel::tools::builtin()
+        .into_iter()
+        .find(|tool| tool.name() == "bash")
+        .unwrap();
+    let ctx = tool_ctx(Path::new("."), &CancellationToken::new());
+    for (command, code) in [("true", 0), ("kill -TERM $$", 143)] {
+        let result = bash
+            .execute(&ctx, json!({"command": command}))
+            .await
+            .unwrap();
+        assert_eq!(result["exit_code"], code);
+        assert_eq!(tool_result_text(&result), format!("[exit code: {code}]"));
     }
 }
 
@@ -1950,7 +1992,16 @@ async fn bash_output_child() {
             .unwrap()
     };
 
-    let output = result["output"].as_str().unwrap();
+    let model_text = tool_result_text(&result);
+    let status = if yields {
+        format!(
+            "[still running: {}]",
+            result["still_running"].as_str().unwrap()
+        )
+    } else {
+        "[exit code: 0]".to_string()
+    };
+    let output = model_text.strip_suffix(&status).unwrap();
     let expected = format!("first\n{}last\n", "x".repeat(padding));
     if size == 30_000 {
         assert_eq!(result["exit_code"], 0);
@@ -2070,7 +2121,7 @@ async fn a4_model_rewrite() {
     assert_eq!(echoes, 2);
     assert!(log.iter().any(|event| matches!(
         event,
-        Event::ToolResult { output, .. } if output["output"] == "one\n"
+        Event::ToolResult { output, .. } if output["output"] == "one\n[exit code: 0]"
     )));
     assert!(
         log.iter()
