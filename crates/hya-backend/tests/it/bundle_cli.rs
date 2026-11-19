@@ -730,6 +730,7 @@ fn bundle_list_and_info_include_first_party_without_creating_registry()
         LIST_HEADER.to_string(),
         first_party_row("hya/base-tools", "  active Bundle -"),
         first_party_row("hya/channel-tools", "  active Bundle -"),
+        first_party_row("hya/compaction", "  active Bundle -"),
         first_party_row("hya/core-commands", "  active Bundle -"),
         first_party_row("hya/core-skills", "  active Bundle -"),
         first_party_row("hya/extended-tools", "  active Bundle -"),

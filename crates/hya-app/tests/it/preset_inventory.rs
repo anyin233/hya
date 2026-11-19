@@ -24,9 +24,8 @@ fn builtin_skill_catalog_comes_from_prepared_core_skills_bundle() {
 }
 
 #[test]
-fn inventory_exposes_immutable_noninstallable_core_and_tool_presets() {
+fn inventory_exposes_immutable_noninstallable_presets_and_internal_bundles() {
     let inventory = hya_app::trusted_preset_inventory().expect("trusted preset inventory");
-    assert_eq!(inventory.len(), 8);
     assert_eq!(
         inventory
             .iter()
@@ -36,6 +35,7 @@ fn inventory_exposes_immutable_noninstallable_core_and_tool_presets() {
             "hya/agent-channels",
             "hya/base-tools",
             "hya/channel-tools",
+            "hya/compaction",
             "hya/core-agents",
             "hya/core-commands",
             "hya/core-skills",
@@ -54,13 +54,14 @@ fn inventory_exposes_immutable_noninstallable_core_and_tool_presets() {
     assert_eq!(inventory[2].kind, "Bundle");
     assert_eq!(inventory[3].kind, "Bundle");
     assert_eq!(inventory[4].kind, "Bundle");
-    assert_eq!(inventory[4].resource_ids, ["init", "review"]);
+    assert_eq!(inventory[5].resource_ids, ["init", "review"]);
     assert_eq!(inventory[5].kind, "Bundle");
+    assert_eq!(inventory[6].kind, "Bundle");
     assert_eq!(
-        inventory[5].resource_ids,
+        inventory[6].resource_ids,
         ["agent-bundle-authoring", "secure-self-update"]
     );
-    assert!(inventory[6..].iter().all(|item| item.kind == "Bundle"));
+    assert!(inventory[7..].iter().all(|item| item.kind == "Bundle"));
     for preset in inventory {
         assert!(preset.immutable);
         assert!(!preset.installable);
