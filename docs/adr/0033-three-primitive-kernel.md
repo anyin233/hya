@@ -114,10 +114,12 @@ native loader); moving the trait into core would make every cdylib link
 
 ## Consequences
 
-- **Bare mode** (`hya exec --bare`) loads no bundle: five tools, the minimal
+- **Bare mode** (`hya exec --bare`) loads no bundle: six tools, the minimal
   prompt, the 80% harness rewrite, the event log. No permissions, hooks,
-  subagents, Workflows, compaction ladder, output truncation, timeouts, or
-  path boundaries; those belong to bundles.
+  subagents, Workflows, compaction ladder, output truncation, or path
+  boundaries; those belong to bundles. `bash` keeps one limit of its own, a
+  per-call timeout (default 300 s): without it a single command can consume
+  a whole run before the model gets the turn back.
 - Image attachments of removed user messages are not kept; only their text is
   repeated in the marker.
 - `CompactionStrategy::Rewrite` is a wire-format addition; older readers that
@@ -127,7 +129,7 @@ native loader); moving the trait into core would make every cdylib link
   "Same request after restart" holds as long as the bundle versions are
   unchanged.
 - ADR-0012's host-controlled tool plane does not apply in bare mode: the
-  kernel's five tools are the whole plane.
+  kernel's six tools are the whole plane.
 
 ## Alternatives rejected
 
