@@ -192,7 +192,7 @@ not counting its `attachments` array, which has its own budget,
 `MAX_CODING_ATTACHMENT_BYTES = 2 MiB` serialized: an entry that does not fit is
 dropped whole and `metadata.attachmentsTruncated` is set. No metadata or hook
 can bypass the tool-result cap.
-[Tool-result image replay](providers.md#tool-result-images) uses a 2 MiB
+[Tool-result image replay](providers.md#tool-result-images) uses a 1 MiB
 request budget, newest first, and always keeps eligible images from the newest
 result with images. Each replayed image costs time and tokens on every later
 request. Provider replay uses an object's string `output` field when present

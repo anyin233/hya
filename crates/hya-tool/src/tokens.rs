@@ -647,7 +647,7 @@ mod tests {
             "\n\n[The image attached to this result (image/png) is no longer attached: \
              newer images fill this request's image budget. Read the file again to see it.]",
         );
-        for newest_bytes in [2 * 1024 * 1024, 2 * 1024 * 1024 + 4] {
+        for newest_bytes in [1024 * 1024, 1024 * 1024 + 4] {
             let oldest = image_result("data:image/png;base64,AAAA");
             let newest = image_result(&"A".repeat(newest_bytes));
             assert_eq!(
