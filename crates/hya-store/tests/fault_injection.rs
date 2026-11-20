@@ -34,7 +34,7 @@ use std::ptr;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Once, OnceLock, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use hya_proto::{Event, SessionId};
 use hya_store::{BundleRegistry, SessionStore};
@@ -119,6 +119,7 @@ struct VfsEvent {
 }
 
 struct FaultPolicy {
+    stall_open_ms: AtomicU64,
     wal_write_lock_holder: AtomicU64,
     shm_read_hook: Mutex<Option<(usize, ReadHook)>>,
     trace: Mutex<Vec<VfsEvent>>,
@@ -127,6 +128,7 @@ struct FaultPolicy {
 impl FaultPolicy {
     fn new() -> Arc<Self> {
         Arc::new(Self {
+            stall_open_ms: AtomicU64::new(0),
             wal_write_lock_holder: AtomicU64::new(0),
             shm_read_hook: Mutex::new(None),
             trace: Mutex::new(Vec::new()),
@@ -512,6 +514,12 @@ unsafe extern "C" fn vfs_x_open(
             lookup_policy(&path_str)
         };
         let kind = FileKind::from_path(&path_str);
+        if let Some(pol) = &policy {
+            let stall = pol.stall_open_ms.load(Ordering::Relaxed);
+            if stall > 0 {
+                std::thread::sleep(Duration::from_millis(stall));
+            }
+        }
         let inner = libc::calloc(1, parent.szOsFile as usize).cast::<sqlite3_file>();
         if inner.is_null() {
             return SQLITE_ERROR;
@@ -1065,4 +1073,33 @@ async fn bundle_registry_set_bundle_enabled_prevents_busy_snapshot() {
     drop(ctrl_racer.await);
     let (code, _) = db_error_details(&ctrl_err).unwrap();
     assert_eq!(code, "517", "unexpected deferred error: {ctrl_err}");
+}
+
+#[tokio::test]
+#[ignore = "slow storage fault matrix; run with --ignored"]
+async fn slow_bundle_registry_open_survives_32s_stall() {
+    let _gate = clock_gate().read().await;
+    let case = FaultCase::new("bundle-registry-open-32s");
+    let reg_path = case.db_path("registry.sqlite3");
+    drop(
+        BundleRegistry::connect(reg_path.to_str().unwrap())
+            .await
+            .unwrap(),
+    );
+    case.policy.stall_open_ms.store(32_000, Ordering::Relaxed);
+    let pol = Arc::clone(&case.policy);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        pol.stall_open_ms.store(0, Ordering::Relaxed);
+    });
+    let t0 = Instant::now();
+    let reg = BundleRegistry::connect(reg_path.to_str().unwrap())
+        .await
+        .expect("BundleRegistry::connect should wait past sqlx default 30s acquire_timeout");
+    assert!(
+        t0.elapsed() >= Duration::from_secs(30),
+        "elapsed={:?}",
+        t0.elapsed()
+    );
+    assert_eq!(reg.generation().await.unwrap(), 0);
 }
