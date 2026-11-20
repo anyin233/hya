@@ -250,7 +250,7 @@ snapshot (without provider data), preserving partial thinking for replay.
 | --- | --- | --- | --- |
 | `tool_input_start` | `session`, `message`, `part`, `call: ToolCallId`, `name: ToolName` | → `Pending { input: null }` | Fold: push tool part |
 | `tool_input_delta` | `session`, `message`, `part`, `call`, `name`, `delta: String` | (unchanged) | **live-only**, never persisted; `tool_call_requested` stores the complete input |
-| `tool_call_requested` | `session`, `message`, `part`, `call`, `name`, `input: Value` | → `Running { input }` | Fold: upsert running tool. Turn loop collects these into the round's `tool_calls` list. |
+| `tool_call_requested` | `session`, `message`, `part`, `call`, `name`, `input: Value` | → `Running { input }` | Fold: upsert running tool. Turn loop collects these into the round's `tool_calls` list. Argument text that was not valid JSON is recorded as `{"invalid_json_arguments": {"text", "error"}}`; the turn loop answers that call with a `tool_error` and runs no tool ([kernel](../kernel.md#tool-calls-whose-arguments-are-not-valid-json)). |
 | `tool_result` | `session`, `message`, `part`, `call`, `output: Value`, `time_ms: u64` | → `Completed { input, output, time_ms }` | Fold |
 | `tool_error` | `session`, `message`, `part`, `call`, `message_text: String`, `value: Option<Value>` | → `Error { input, message, value }` | Fold. Engine commonly sets `value` to `{ "error": { "type": "...", "message": "..." } }`. |
 | `tool_part_updated` | `session`, `message`, `part`, `state: ToolPartState` | → given state | Fold: direct overwrite (fork/copy and out-of-band progress) |

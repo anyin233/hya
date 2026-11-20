@@ -1478,3 +1478,170 @@ async fn kernel_rewrite_runs_before_preflight_rejects_an_under_threshold_provide
         "the kernel rewrote before preflight rejected the request"
     );
 }
+
+/// The input a provider decoder records for a call whose argument text is
+/// `args` (the stream ends at the output limit).
+fn decoded_input(args: &str) -> serde_json::Value {
+    use hya_provider::Protocol as _;
+    let args = serde_json::to_string(args).unwrap();
+    let mut decoder = hya_provider::OpenAiChatProtocol.decoder(
+        hya_proto::SessionId::new(),
+        hya_proto::MessageId::new(),
+        None,
+    );
+    let mut events = decoder
+        .push(&format!(
+            r#"{{"choices":[{{"delta":{{"tool_calls":[{{"index":0,"id":"c","function":{{"name":"x","arguments":{args}}}}}]}},"finish_reason":"length"}}]}}"#
+        ))
+        .unwrap();
+    events.extend(decoder.finish().unwrap());
+    events
+        .into_iter()
+        .find_map(|event| match event {
+            Event::ToolCallRequested { input, .. } => Some(input),
+            _ => None,
+        })
+        .unwrap()
+}
+
+/// A tool whose arguments are all optional; counts its runs.
+#[derive(Default)]
+struct Optional(std::sync::atomic::AtomicUsize);
+
+#[async_trait::async_trait]
+impl hya_tool::Tool for Optional {
+    fn name(&self) -> &str {
+        "optional"
+    }
+
+    fn schema(&self) -> hya_proto::ToolSchema {
+        hya_proto::ToolSchema {
+            name: hya_proto::ToolName::new("optional"),
+            description: "Takes only optional arguments.".to_string(),
+            input_schema: json!({"type": "object", "properties": {"note": {"type": "string"}}}),
+            output_schema: None,
+        }
+    }
+
+    async fn execute(
+        &self,
+        _ctx: &hya_tool::ToolCtx,
+        _input: serde_json::Value,
+    ) -> Result<serde_json::Value, hya_tool::ToolError> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(json!("ran"))
+    }
+}
+
+/// In full mode a call whose argument text is not valid JSON reaches no tool,
+/// hook or permission check: the next request carries a failed result with
+/// the parser error, and the turn goes on.
+#[tokio::test]
+async fn a_call_with_invalid_argument_json_fails_without_running() {
+    let dir = tempdir();
+    let provider = Arc::new(FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::ToolCall {
+                name: "read".to_string(),
+                input: decoded_input(r#"{"filePath":"a"#),
+            },
+            FakeStep::Finish(FinishReason::Length),
+        ],
+        vec![
+            FakeStep::ToolCall {
+                name: "optional".to_string(),
+                input: decoded_input(r#"{"note":"a"}}"#),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![
+            FakeStep::Text("done".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+    ]));
+    let router = Arc::new(ProviderRouter::new().with(provider.clone()));
+    let tools = ToolRegistry::builtins();
+    let optional = Arc::new(Optional::default());
+    tools.register(optional.clone()).unwrap();
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![
+        Rule::new(Action::Tool, "*", Mode::Allow),
+        Rule::new(Action::Read, "/**", Mode::Allow),
+    ]));
+    let engine = SessionEngine::new(
+        SessionStore::connect_memory().await.unwrap(),
+        router,
+        support::test_runtime(Arc::new(tools)),
+        perm,
+        EventBus::default(),
+    );
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("general"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    engine
+        .admit_user_prompt(session, "call with broken arguments".to_string())
+        .await
+        .unwrap();
+    let agent = AgentSpec {
+        name: AgentName::new("general"),
+        model: ModelRef::new("fake"),
+        system_prompt: String::new(),
+        workdir: dir,
+        reasoning: None,
+    };
+
+    let finish = engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert_eq!(finish, FinishReason::Stop);
+    assert_eq!(optional.0.load(Ordering::SeqCst), 0);
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        requests[1]
+            .tools
+            .iter()
+            .any(|tool| tool.name.as_str() == "optional")
+    );
+    for (request, error) in [
+        (
+            &requests[1],
+            "EOF while parsing a string at line 1 column 14",
+        ),
+        (&requests[2], "trailing characters at line 1 column 13"),
+    ] {
+        let message = request
+            .messages
+            .iter()
+            .filter_map(|message| match message {
+                Message::Assistant { parts, .. } => Some(parts),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|part| match part {
+                hya_proto::Part::Tool {
+                    state: ToolPartState::Error { message, .. },
+                    ..
+                } => Some(message.as_str()),
+                _ => None,
+            })
+            .next_back()
+            .unwrap();
+        assert_eq!(
+            message,
+            format!(
+                "arguments are not valid JSON: {error}. Nothing was run; call the tool \
+                 again with its arguments as one valid JSON object."
+            )
+        );
+    }
+}
