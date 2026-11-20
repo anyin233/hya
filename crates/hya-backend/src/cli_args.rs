@@ -267,9 +267,9 @@ pub(crate) enum Command {
         time_budget: Option<u64>,
         /// Run the three-primitive kernel alone with six built-in tools, its
         /// minimal system prompt, no bundles or permission checks. Prints
-        /// the final text. Supports --time-budget and always runs in process
-        /// against `--db`.
-        #[arg(long, conflicts_with_all = ["pure", "json"])]
+        /// the final text unless --json is set. Supports --time-budget and
+        /// always runs in process against `--db`.
+        #[arg(long, conflicts_with = "pure")]
         bare: bool,
     },
     /// Start the HTTP + SSE server.
