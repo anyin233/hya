@@ -87,7 +87,7 @@ in both modes.
 | Tool | Input JSON | Success result |
 | --- | --- | --- |
 | `bash` | `{"command": string, "timeout"?: int}` | `{"exit_code": int, "output": string}`; when the wait ends first `{"exit_code": null, "output": string, "still_running": string}`, or `"timed_out": string` in place of `still_running` when the run's budget cut the wait (the command is killed) or has no time left. The last line of `output` is `[exit code: N]`, `[still running: …]`, `[stopped: …]`, or `[not started: …]`. |
-| `read` | `{"path": string}` | UTF-8 text as `{"content": string}` or an image as `{"output": string, "attachments": [{"type": "file", "mime": string, "url": string}]}` or `{"output": string}` when the image exceeds the attachment limit |
+| `read` | `{"path": string}` | UTF-8 text verbatim as `{"output": string}` or an image as `{"output": string, "attachments": [{"type": "file", "mime": string, "url": string}]}` or `{"output": string}` when the image exceeds the attachment limit |
 | `write` | `{"path": string, "content": string}` | `{"bytes": int}` |
 | `edit` | `{"path": string, "old": string, "new": string}` | `{"replaced": 1}` |
 | `rewrite` | `{"summary": string}` | `{"removed_messages": <n>, "note": "The summary in this call is your own text, not an observation."}` |
@@ -178,15 +178,18 @@ run that is ending kills, because nothing could follow the command up.
 {"command": "make -j8 2>&1 | tail -20", "timeout": 1200}
 ```
 
-Use `read` with `{"path":"diagram.png"}` to inspect an image. `read` recognizes
-PNG, JPEG, GIF, and WebP by their file signatures and stores a base64 data URL in
-the result's attachment. Supported provider routes send it as image content to
-image-capable models, at most once, in the request after the step that read it:
+Use `read` with `{"path":"notes.txt"}` to read a UTF-8 text file. The result
+contains only `output`, and the model receives the file's text verbatim.
+For an image, use `{"path":"diagram.png"}`. `read` recognizes PNG, JPEG, GIF,
+and WebP by their file signatures. It returns a description in `output` and a
+base64 data URL in `attachments`. Supported provider routes send the attachment
+to image-capable models at most once, in the request after the step that read it:
 every image costs time and tokens on each request that carries it, so later
 requests carry a notice that tells the model to read the file again to see it
 again (see [Tool-result images](architecture/providers.md#tool-result-images)).
-Other files are read as UTF-8 text. Missing files and
-invalid UTF-8 in non-image files return `ToolError`.
+For an image above the attachment limit, `output` contains resize guidance and
+is the only field. Missing files and invalid UTF-8 in non-image files return
+`ToolError`.
 `write` creates parent directories and returns the byte count; I/O errors
 return `ToolError`. `edit` requires exactly one occurrence of `old`; zero or
 multiple matches return `ToolError` stating the count.

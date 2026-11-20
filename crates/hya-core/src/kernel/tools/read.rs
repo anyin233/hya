@@ -63,7 +63,7 @@ impl Tool for Read {
                 "stream did not contain valid UTF-8",
             )
         })?;
-        Ok(json!({"content": content}))
+        Ok(json!({"output": content}))
     }
 }
 
