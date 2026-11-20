@@ -255,7 +255,7 @@ pub(crate) enum ServeRelayAction {
 pub(crate) enum Command {
     /// Run a single prompt headlessly and print the resulting transcript.
     Exec {
-        /// The user prompt to send to the agent.
+        /// The user prompt to send to the agent. Use `-` to read it from stdin.
         prompt: String,
         /// Emit the event stream as JSONL instead of a rendered transcript.
         #[arg(long)]

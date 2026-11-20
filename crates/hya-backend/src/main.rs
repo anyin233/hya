@@ -37,7 +37,7 @@ mod workflow_cmd;
 
 pub use hya_app::{auth, config, formatter_config, permission, plugins};
 
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -706,17 +706,27 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 .exit()
         }
         Some(Command::Exec {
-            prompt,
-            time_budget,
-            bare: true,
-            ..
-        }) => bare::exec_entry(prompt, model, &db, time_budget).await,
-        Some(Command::Exec {
-            prompt,
+            mut prompt,
             json,
             time_budget,
-            bare: false,
-        }) => exec_entry(prompt, model, &db, yolo, json, pure, time_budget).await,
+            bare,
+        }) => {
+            if prompt == "-" {
+                prompt.clear();
+                std::io::stdin()
+                    .read_to_string(&mut prompt)
+                    .context("read the exec prompt from stdin as UTF-8")?;
+                if prompt.ends_with('\n') {
+                    prompt.pop();
+                }
+                anyhow::ensure!(!prompt.is_empty(), "empty exec prompt on stdin");
+            }
+            if bare {
+                bare::exec_entry(prompt, model, &db, time_budget).await
+            } else {
+                exec_entry(prompt, model, &db, yolo, json, pure, time_budget).await
+            }
+        }
         Some(Command::Serve {
             action: Some(action),
             db: command_db,
