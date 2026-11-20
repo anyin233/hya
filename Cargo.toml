@@ -54,6 +54,7 @@ rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"]
 futures = "0.3"
 async-trait = "0.1"
 base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 data-encoding = "2"
 sha2 = "0.10"
 # Relay open tokens (HMAC-SHA256 over the link PSK) and constant-time compares.
