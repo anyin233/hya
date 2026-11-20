@@ -10,7 +10,7 @@ hya exec --bare "say hi" --db /tmp/x.db
 ```
 
 The working directory is the caller's cwd. `--bare` conflicts with `--pure`
-and `--json` and always runs in process. Add `--time-budget <SECS>` to
+and always runs in process. Add `--time-budget <SECS>` to
 announce the budget to the model, report its progress, send WrapUp and Final
 guidance, and cap Bash calls. See the [CLI reference](cli.md#--bare).
 
@@ -435,8 +435,8 @@ A bare run ends when a model round answers without a tool call, with one
 exception. The first such answer gets one completion check before the run
 ends: the harness appends the logged system message below, in the same form
 as the deadline notices, and the kernel runs another round. The next answer
-without a tool call ends the run, and `hya exec --bare` prints that answer.
-An answer cut off at the output limit (`length`) also gets the check: the
+without a tool call ends the run, and `hya exec --bare` prints that answer by
+default. An answer cut off at the output limit (`length`) also gets the check: the
 extra round lets the model finish what the limit cut, and the check is still
 sent only once, so the run ends on the next answer either way.
 The check asks the model to compare the current result directly with the

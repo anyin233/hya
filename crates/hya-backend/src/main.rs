@@ -722,7 +722,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 anyhow::ensure!(!prompt.is_empty(), "empty exec prompt on stdin");
             }
             if bare {
-                bare::exec_entry(prompt, model, &db, time_budget).await
+                bare::exec_entry(prompt, model, &db, time_budget, json).await
             } else {
                 exec_entry(prompt, model, &db, yolo, json, pure, time_budget).await
             }
