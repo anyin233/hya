@@ -1,0 +1,4 @@
+# 0.48.0-dev.19
+
+- **SQLite connections are no longer retired by age or idleness.** The connection pools of the session store, the bundle registry and the model cache kept the library's defaults: a connection is closed after 30 minutes of life or 10 idle minutes. Closing the last connection of a WAL database checkpoints it under an exclusive lock; on a slow disk the next write then gave up with `(code: 5) database is locked` and the run ended — the cause of a run lost at 1,838 s. Connections now live as long as the store.
+- **Write transactions take the write lock when they begin.** Every write transaction of the session store, the bundle registry and the model cache now opens with `BEGIN IMMEDIATE`; a transaction that read first and wrote later could fail at once with a stale-snapshot error, whatever the lock wait.
