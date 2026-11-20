@@ -880,6 +880,13 @@ notices, a tool result carries one clock line (`HEADLESS RUN — clock: …s of
 …s used, …s left.`) each time another tenth of the budget has passed since
 the session was last told the time.
 
+In either mode, the lead agent’s Final notice includes this instruction to
+preserve a checked deliverable as the time limit approaches.
+
+> Do not edit a file you have already delivered in place: if it needs a change,
+> change a copy, run the check the file passed, and replace the file only if
+> the copy passes.
+
 Both modes use the same thresholds, measured in remaining time. WrapUp is
 `min(clamp(35% B, 300s, 3600s), 50% B)`, Final is
 `clamp(12% B, 90s, 600s)`, and the Over guard is `clamp(5% B, 30s, 120s)`.

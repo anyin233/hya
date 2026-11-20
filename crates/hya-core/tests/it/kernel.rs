@@ -141,6 +141,15 @@ async fn bare_deadline_notices_child() {
             .expect("Final notice with seconds left");
         assert!((30..40).contains(&left), "{text}");
         assert!(text.contains("of 40s used. Write any missing deliverable"));
+        assert!(
+            text.ends_with(
+                "then end your turn. Do not edit a file you have already delivered in place: \
+                 if it needs a change, change a copy, run the check the file passed, and replace \
+                 the file only if the copy passes. Start only commands that finish well within \
+                 the time left."
+            ),
+            "{text}"
+        );
     } else {
         assert!(text.contains(&format!("of {budget}s used")), "{text}");
         assert!(
