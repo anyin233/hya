@@ -1,3 +1,5 @@
-# 0.48.0-dev.20
+# 0.48.0-dev.21
 
-- **Kernel prompt: the three rules of 0.48.0-dev.17 are withdrawn.** The rule on replacing a result that passed a check reads as before 0.48.0-dev.17, and the two rules added then (use what the request and its input give as given; between fitting results keep the one the data support) are removed. In a targeted rerun on the tasks they were written for they brought no gain, and the model took up their wording to reason about a hidden reference rather than to keep its result.
+- **`hya exec -` reads the prompt from standard input.** With the prompt argument `-`, `exec` (bare and full) reads the prompt from stdin, so it no longer has to be in the process's argument list — where it is visible in process listings and where a command the agent runs that matches processes by command line (`pkill -f`) can match hya itself when the prompt names the same file or program.
+- **`hya exec --bare --json` streams the session's events.** Bare mode now accepts `--json`: every durable event is written to stdout as one JSON line, flushed as it is committed, in the format of `exec --json` and `tail-session`. With `--db` left out the session lives in memory and the caller keeps the record, which keeps it out of a sandbox the agent's own commands can read.
+- **Store tests:** a fault-injection harness for the session store (an in-process SQLite VFS and a simulated clock) with regression tests for the connection-retirement and stale-snapshot fixes of 0.48.0-dev.19.
