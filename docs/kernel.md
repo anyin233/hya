@@ -225,7 +225,9 @@ every image costs time and tokens on each request that carries it, so later
 requests carry a notice that tells the model to read the file again to see it
 again (see [Tool-result images](architecture/providers.md#tool-result-images)).
 For an image above the attachment limit, `output` contains resize guidance and
-is the only field. Missing files and invalid UTF-8 in non-image files return
+is the only field. If an image within the limit fails to decode, the successful
+result contains only `output` with its MIME type, size, and the decoder error.
+Missing files and invalid UTF-8 in non-image files return
 `ToolError`.
 `write` creates parent directories and returns the byte count; I/O errors
 return `ToolError`. `edit` requires exactly one occurrence of `old`; zero or

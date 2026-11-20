@@ -1370,6 +1370,87 @@ async fn read_returns_text_verbatim() {
     assert_eq!(result, json!({"output": text}));
 }
 
+fn encoded_test_image(format: image::ImageFormat) -> Vec<u8> {
+    let image = image::RgbImage::from_pixel(2, 2, image::Rgb([255, 0, 0]));
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut encoded, format).unwrap();
+    encoded.into_inner()
+}
+
+async fn read_image_file(bytes: &[u8]) -> serde_json::Value {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("image.data"), bytes).unwrap();
+    let read = kernel::tools::builtin()
+        .into_iter()
+        .find(|tool| tool.name() == "read")
+        .unwrap();
+    let ctx = tool_ctx(dir.path(), &CancellationToken::new());
+    read.execute(&ctx, json!({"path": "image.data"}))
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn read_corrupt_png_reports_decode_error_without_attachment() {
+    let mut png = encoded_test_image(image::ImageFormat::Png);
+    assert_eq!(&png[37..41], b"IDAT");
+    png[41] = 0; // Corrupt the zlib header after the intact IHDR.
+    let result = read_image_file(&png).await;
+    assert!(
+        result.get("attachments").is_none(),
+        "corrupt PNG was attached"
+    );
+    let notice = tool_result_text(&result);
+    assert!(notice.starts_with(&format!(
+        "Image file (image/png, {} bytes). It does not decode as image/png (",
+        png.len()
+    )));
+    assert!(notice.contains("), so it is not attached."));
+}
+
+#[tokio::test]
+async fn read_truncated_jpeg_reports_decode_error_without_attachment() {
+    let mut jpeg = encoded_test_image(image::ImageFormat::Jpeg);
+    jpeg.truncate(32);
+    let result = read_image_file(&jpeg).await;
+    assert!(
+        result.get("attachments").is_none(),
+        "truncated JPEG was attached"
+    );
+    let notice = tool_result_text(&result);
+    assert!(
+        notice.starts_with("Image file (image/jpeg, 32 bytes). It does not decode as image/jpeg (")
+    );
+    assert!(notice.contains("), so it is not attached."));
+}
+
+#[tokio::test]
+async fn read_valid_images_attach_original_bytes() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use image::ImageFormat;
+
+    for (format, mime) in [
+        (ImageFormat::Png, "image/png"),
+        (ImageFormat::Jpeg, "image/jpeg"),
+        (ImageFormat::Gif, "image/gif"),
+        (ImageFormat::WebP, "image/webp"),
+    ] {
+        let bytes = encoded_test_image(format);
+        let result = read_image_file(&bytes).await;
+        assert_eq!(
+            result,
+            json!({
+                "output": format!("Image file ({mime}, {} bytes).", bytes.len()),
+                "attachments": [{
+                    "type": "file",
+                    "mime": mime,
+                    "url": format!("data:{mime};base64,{}", STANDARD.encode(&bytes)),
+                }],
+            }),
+        );
+    }
+}
+
 /// The image goes in the request after the read and in no later request, also
 /// after a round of only tool calls; a request rebuilt from the log for the
 /// same step is the one sent.
@@ -1516,8 +1597,17 @@ async fn large_image_result_stays_below_rewrite_pressure() {
         .with_tool_images(),
     )
     .await;
-    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
-    png.resize(384 * 1024, 0);
+    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+    use image::{ExtendedColorType, ImageEncoder};
+
+    let mut png = Vec::new();
+    PngEncoder::new_with_quality(
+        &mut png,
+        CompressionType::Uncompressed,
+        FilterType::NoFilter,
+    )
+    .write_image(&[0; 384 * 1024], 512, 256, ExtendedColorType::Rgb8)
+    .unwrap();
     std::fs::write(fx.dir.join("board.png"), png).unwrap();
 
     assert_eq!(
