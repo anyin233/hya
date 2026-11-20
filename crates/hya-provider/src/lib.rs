@@ -63,6 +63,7 @@ pub use openai::{
     format_responses_compact_system, parse_responses_compact_items,
 };
 pub use router::ProviderRouter;
+pub use wire::invalid_tool_arguments;
 
 /// Reject a request a route cannot serve before a turn starts (risk #12):
 /// tool-using turns require `streaming_tool_calls`.

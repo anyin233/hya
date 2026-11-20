@@ -81,6 +81,19 @@ fn error_value_to_text(message: &str, value: Option<&Value>) -> String {
         None => message.to_string(),
     }
 }
+
+/// Key of the input a decoder records for a tool call whose argument text is
+/// not valid JSON: `{"invalid_json_arguments": {"text": <raw>, "error": <parser error>}}`.
+const INVALID_ARGUMENTS: &str = "invalid_json_arguments";
+
+/// The parser error of a tool call whose recorded input is the marker for
+/// argument text that was not valid JSON; `None` for any other input. A model
+/// that sends the marker shape itself as its arguments is rejected the same way.
+#[must_use]
+pub fn invalid_tool_arguments(input: &Value) -> Option<&str> {
+    input.get(INVALID_ARGUMENTS)?.get("error")?.as_str()
+}
+
 pub(crate) struct ToolAsm {
     pub(crate) part: PartId,
     pub(crate) call: ToolCallId,
@@ -101,9 +114,20 @@ impl ToolAsm {
             requested: false,
         }
     }
+    /// The call's input. Argument text that is not valid JSON becomes the
+    /// [`invalid_tool_arguments`] marker, so the call is recorded and fails at
+    /// dispatch instead of failing the round; empty text stays a decode error.
     pub(crate) fn input(&self) -> Result<Value, crate::ProviderError> {
-        serde_json::from_str(&self.args)
-            .map_err(|e| crate::ProviderError::Decode(format!("tool {} arguments: {e}", self.name)))
+        match serde_json::from_str(&self.args) {
+            Ok(input) => Ok(input),
+            Err(error) if self.args.is_empty() => Err(crate::ProviderError::Decode(format!(
+                "tool {} arguments: {error}",
+                self.name
+            ))),
+            Err(error) => Ok(serde_json::json!({
+                INVALID_ARGUMENTS: {"text": self.args, "error": error.to_string()}
+            })),
+        }
     }
 
     pub(crate) fn delta(
@@ -223,12 +247,43 @@ mod tests {
         tool_result(&id, state, &ToolImages::new(&messages, send))
     }
 
-    #[test]
-    fn truncated_tool_arguments_are_rejected() {
+    fn asm(args: &str) -> ToolAsm {
         let mut tool = ToolAsm::new();
         tool.name = "read".into();
-        tool.args = "{\"path\":".into();
-        assert!(tool.input().is_err());
+        tool.args = args.into();
+        tool
+    }
+
+    #[test]
+    fn argument_text_that_is_not_json_becomes_the_marker() {
+        for (args, error) in [
+            (
+                "{\"path\":\"a",
+                "EOF while parsing a string at line 1 column 10",
+            ),
+            (
+                "{\"path\":\"a\"}}",
+                "trailing characters at line 1 column 13",
+            ),
+        ] {
+            let input = asm(args).input().unwrap();
+            assert_eq!(invalid_tool_arguments(&input), Some(error), "{input}");
+            assert_eq!(input[INVALID_ARGUMENTS]["text"], args);
+        }
+    }
+
+    #[test]
+    fn valid_and_empty_argument_text_keep_their_decoding() {
+        for (args, input) in [
+            ("{\"path\":\"a\"}", json!({"path": "a"})),
+            ("[1]", json!([1])),
+            ("null", Value::Null),
+        ] {
+            let decoded = asm(args).input().unwrap();
+            assert_eq!(decoded, input);
+            assert_eq!(invalid_tool_arguments(&decoded), None);
+        }
+        assert!(asm("").input().is_err());
     }
 
     #[test]
