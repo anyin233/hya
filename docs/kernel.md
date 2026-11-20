@@ -30,9 +30,39 @@ Three primitives update Context.
 | Rewrite | Remove earlier Context while retaining its log | a system marker message and `ContextCompacted` with strategy `rewrite` |
 
 The log only grows. Model text remains a claim; only tool append introduces
-outside observations. Unknown tools, invalid input, execution errors, and
-cancellation return as failed tool results. Tools run sequentially, with no
-retry, model fallback, or step limit.
+outside observations. Unknown tools, invalid input (including argument text
+that is not valid JSON), execution errors, and cancellation return as failed
+tool results. Tools run sequentially, with no retry, model fallback, or step
+limit.
+
+### Tool calls whose arguments are not valid JSON
+
+A model streams a tool call's arguments as text. When that text is not valid
+JSON (cut off inside a string, or followed by extra text), the provider
+decoder still records the call as `ToolCallRequested`, with the marker input
+`{"invalid_json_arguments": {"text": <the raw argument text>, "error": <the
+parser error>}}`, and the round ends normally. The kernel loop checks every
+call before it runs it, in both modes, ahead of `rewrite`, `todo`, the
+`ToolGate`, hooks, and permission checks. For a marker input, no tool runs.
+The call gets a `ToolError` with this text, and the next round goes on:
+
+```text
+arguments are not valid JSON: trailing characters at line 1 column 829. Nothing was run; call the tool again with its arguments as one valid JSON object.
+```
+
+The marker stays the call's recorded input. Later requests send it back as
+the call's arguments, an object every provider accepts, and the event log
+keeps the raw text and the parser error for analysis. Valid JSON, including a
+value that is not an object, reaches the tool unchanged. Empty argument text
+is still a decode error that fails the round. A model that sends the marker
+shape itself as its arguments is rejected the same way.
+
+The same rule covers a stream that ends inside a call's arguments when the
+decoder still closes the call: at the output limit (`length`), or when the
+stream ends cleanly without a terminal event on the Chat Completions and
+Anthropic routes. A connection that breaks mid-stream fails the round as an
+interrupted stream, as before: the decoder never closes the call it was
+streaming, so that call is not recorded.
 
 ## Request views
 

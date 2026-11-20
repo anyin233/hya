@@ -887,7 +887,14 @@ models are surfaced through `hya models`, the v1 catalog routes
 saved-token auth commands. See
 [`../configuration.md`](../configuration.md) for the YAML shape.
 
-Tool argument decoding is strict across Chat Completions, Responses, and
-Anthropic streams. Invalid or truncated argument JSON returns
-`ProviderError::Decode` with the tool name and JSON parse location. No
-`ToolCallRequested` with a substituted null input is emitted for that call.
+Tool argument decoding never substitutes or repairs arguments. On the Chat
+Completions, Responses, and Anthropic streams, argument text that is not valid
+JSON (truncated, or followed by extra text) is still emitted as
+`ToolCallRequested`. Its input is the marker
+`{"invalid_json_arguments": {"text": <raw text>, "error": <parser error with
+line and column>}}`, which `hya_provider::invalid_tool_arguments` both builds
+and recognises. The kernel fails such a call before any tool runs, and the
+model receives the parser error as a failed tool result ([kernel](../kernel.md#tool-calls-whose-arguments-are-not-valid-json)).
+The marker is an object, so every request builder replays it as the call's
+arguments. Empty argument text still returns `ProviderError::Decode` with the
+tool name and parse location.

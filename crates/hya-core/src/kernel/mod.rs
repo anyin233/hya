@@ -26,7 +26,9 @@ use hya_proto::{
     AgentName, Envelope, Event, EventSeq, FinishReason, Message, MessageId, ModelRef,
     PartProjection, Projection, Role, SessionId, ToolSchema,
 };
-use hya_provider::{CompletionRequest, EventStream, ProviderError, ProviderRouter};
+use hya_provider::{
+    CompletionRequest, EventStream, ProviderError, ProviderRouter, invalid_tool_arguments,
+};
 use hya_store::SessionStore;
 use hya_tool::tokens::TokenAccounting;
 use hya_tool::{ModelWindow, RewriteCtx, SessionLog, Tool, ToolCtx, ToolError, Transcript};
@@ -487,7 +489,9 @@ impl SessionLog for Scope<'_> {
 }
 
 /// Execute calls in order, keeping `rewrite` and `todo` in the kernel.
-/// When cancelled, return the calls that did not run.
+/// A call whose argument text was not valid JSON fails here, before any tool,
+/// hook or permission check sees it. When cancelled, return the calls that did
+/// not run.
 async fn execute_calls(
     scope: &Scope<'_>,
     model: &ModelRef,
@@ -497,7 +501,19 @@ async fn execute_calls(
 ) -> Result<Vec<ToolCall>, CoreError> {
     let mut calls = calls.into_iter();
     while let Some(call) = calls.next() {
-        if call.name == tools::REWRITE {
+        if let Some(error) = invalid_tool_arguments(&call.input) {
+            let outcome = Err(format!(
+                "arguments are not valid JSON: {error}. Nothing was run; call the tool \
+                 again with its arguments as one valid JSON object."
+            ));
+            scope
+                .emit
+                .emit(
+                    scope.session,
+                    vec![tool_event(scope.session, scope.message, &call, outcome, 0)],
+                )
+                .await?;
+        } else if call.name == tools::REWRITE {
             let started = Instant::now();
             let outcome = model_rewrite(scope, model, &call).await?;
             let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);

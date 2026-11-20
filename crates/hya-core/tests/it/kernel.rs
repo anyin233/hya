@@ -17,8 +17,8 @@ use hya_proto::{
 };
 use hya_provider::{
     AnthropicMessagesProtocol, COMPACT_CONTEXT_MARKER, Capabilities, CompletionRequest,
-    EventStream, FakeProvider, FakeStep, Protocol, Provider, ProviderError, ProviderRouter,
-    ReasoningEffort,
+    EventStream, FakeProvider, FakeStep, OpenAiChatProtocol, Protocol, Provider, ProviderError,
+    ProviderRouter, ReasoningEffort,
 };
 use hya_store::SessionStore;
 use hya_tool::deadline::{self, Stage};
@@ -823,6 +823,111 @@ async fn a2_failures_are_observations() {
     assert!(
         log.iter()
             .any(|event| matches!(event, Event::TextReplace { text, .. } if text == "next"))
+    );
+}
+
+/// The input a provider decoder records for a call whose argument text is
+/// `args` (the stream ends at the output limit).
+fn decoded_input(args: &str) -> serde_json::Value {
+    let args = serde_json::to_string(args).unwrap();
+    let mut decoder = OpenAiChatProtocol.decoder(SessionId::new(), MessageId::new(), None);
+    let mut events = decoder
+        .push(&format!(
+            r#"{{"choices":[{{"delta":{{"tool_calls":[{{"index":0,"id":"c","function":{{"name":"x","arguments":{args}}}}}]}},"finish_reason":"length"}}]}}"#
+        ))
+        .unwrap();
+    events.extend(decoder.finish().unwrap());
+    events
+        .into_iter()
+        .find_map(|event| match event {
+            Event::ToolCallRequested { input, .. } => Some(input),
+            _ => None,
+        })
+        .unwrap()
+}
+
+/// A tool whose arguments are all optional; counts its runs.
+#[derive(Default)]
+struct Optional(std::sync::atomic::AtomicUsize);
+
+#[async_trait::async_trait]
+impl Tool for Optional {
+    fn name(&self) -> &str {
+        "optional"
+    }
+
+    fn schema(&self) -> hya_proto::ToolSchema {
+        hya_proto::ToolSchema {
+            name: hya_proto::ToolName::new("optional"),
+            description: "Takes only optional arguments.".to_string(),
+            input_schema: json!({"type": "object", "properties": {"note": {"type": "string"}}}),
+            output_schema: None,
+        }
+    }
+
+    async fn execute(
+        &self,
+        _ctx: &ToolCtx,
+        _input: serde_json::Value,
+    ) -> Result<serde_json::Value, ToolError> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(json!("ran"))
+    }
+}
+
+/// A call whose argument text is not valid JSON runs no tool: the model's
+/// next request carries a failed result with the parser error, and the run
+/// goes on.
+#[tokio::test]
+async fn a_call_with_invalid_argument_json_fails_without_running() {
+    let mut fx = fixture(
+        "invalid-args",
+        FakeProvider::scripted_turns(vec![
+            call("bash", decoded_input(r#"{"command":"ec"#)),
+            call("optional", decoded_input(r#"{"note":"a"}}"#)),
+            text("done"),
+        ]),
+    )
+    .await;
+    let optional = Arc::new(Optional::default());
+    fx.tools.push(optional.clone());
+    let finish = fx
+        .turn("call with broken arguments", &CancellationToken::new())
+        .await;
+    assert_eq!(finish.unwrap(), FinishReason::Stop);
+    assert_eq!(optional.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let log = fx.log().await;
+    assert_paired(&log);
+    let requests = fx.provider.requests();
+    for (request, error) in [
+        (
+            &requests[1],
+            "EOF while parsing a string at line 1 column 14",
+        ),
+        (&requests[2], "trailing characters at line 1 column 13"),
+    ] {
+        let message = assistant_parts(request)
+            .filter_map(|part| match part {
+                Part::Tool {
+                    state: ToolPartState::Error { message, .. },
+                    ..
+                } => Some(message.as_str()),
+                _ => None,
+            })
+            .last()
+            .unwrap();
+        assert_eq!(
+            message,
+            format!(
+                "arguments are not valid JSON: {error}. Nothing was run; call the tool \
+                 again with its arguments as one valid JSON object."
+            )
+        );
+        AnthropicMessagesProtocol.encode(request).unwrap();
+    }
+    assert!(
+        log.iter()
+            .any(|event| matches!(event, Event::TextReplace { text, .. } if text == "done"))
     );
 }
 

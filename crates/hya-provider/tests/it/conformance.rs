@@ -1373,3 +1373,194 @@ fn openai_image_encoders_reject_unsupported_media_without_dropping_it() {
     assert!(OpenAiResponsesProtocol.encode(&request).is_err());
     assert!(OpenAiChatProtocol.encode(&request).is_err());
 }
+
+fn decode_with(protocol: &dyn Protocol, lines: &[&str]) -> Vec<Event> {
+    let mut decoder = protocol.decoder(SessionId::new(), MessageId::new(), None);
+    let mut out = Vec::new();
+    for line in lines {
+        out.extend(decoder.push(line).unwrap());
+    }
+    out.extend(decoder.finish().unwrap());
+    out
+}
+
+/// The requested call's input and the round's finish.
+fn requested_call(events: &[Event]) -> (serde_json::Value, FinishReason) {
+    let input = events
+        .iter()
+        .find_map(|event| match event {
+            Event::ToolCallRequested { input, .. } => Some(input.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no tool call in {:?}", summarize(events)));
+    let finish = events
+        .iter()
+        .find_map(|event| match event {
+            Event::MessageFinished { finish, .. } => Some(*finish),
+            _ => None,
+        })
+        .unwrap();
+    (input, finish)
+}
+
+const CUT_ARGS: &str = r#"{"command":"ec"#;
+const CUT_ERROR: &str = "EOF while parsing a string at line 1 column 14";
+const TRAILING_ARGS: &str = r#"{"ops":[]}}"#;
+const TRAILING_ERROR: &str = "trailing characters at line 1 column 11";
+
+/// Each streaming decoder records a call whose argument text is not valid
+/// JSON (cut off at the output limit, or followed by extra text) as a tool
+/// call carrying the parser error, not as a decode error.
+#[test]
+fn decoders_record_a_call_with_invalid_argument_json() {
+    let chat = |args: &str, finish: &str| {
+        let args = serde_json::to_string(args).unwrap();
+        decode_with(
+            &OpenAiChatProtocol,
+            &[
+                &format!(
+                    r#"{{"choices":[{{"delta":{{"tool_calls":[{{"index":0,"id":"call_1","function":{{"name":"bash","arguments":{args}}}}}]}},"finish_reason":null}}]}}"#
+                ),
+                &format!(r#"{{"choices":[{{"delta":{{}},"finish_reason":"{finish}"}}]}}"#),
+                "[DONE]",
+            ],
+        )
+    };
+    let anthropic = |args: &str, stop: &str| {
+        let args = serde_json::to_string(args).unwrap();
+        decode_with(
+            &AnthropicMessagesProtocol,
+            &[
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"bash","input":{}}}"#,
+                &format!(
+                    r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"input_json_delta","partial_json":{args}}}}}"#
+                ),
+                r#"{"type":"content_block_stop","index":0}"#,
+                &format!(r#"{{"type":"message_delta","delta":{{"stop_reason":"{stop}"}}}}"#),
+                r#"{"type":"message_stop"}"#,
+            ],
+        )
+    };
+    // Cut: the response ends before the item is done. Trailing: the done
+    // item carries the arguments.
+    let responses = |args: &str, done: bool| {
+        let args = serde_json::to_string(args).unwrap();
+        let last = if done {
+            format!(
+                r#"{{"type":"response.output_item.done","output_index":0,"item":{{"type":"function_call","call_id":"call_1","name":"bash","arguments":{args}}}}}"#
+            )
+        } else {
+            format!(
+                r#"{{"type":"response.function_call_arguments.delta","output_index":0,"delta":{args}}}"#
+            )
+        };
+        let terminal = if done {
+            "response.completed"
+        } else {
+            "response.incomplete"
+        };
+        decode_with(
+            &OpenAiResponsesProtocol,
+            &[
+                r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"bash","arguments":""}}"#,
+                &last,
+                &format!(r#"{{"type":"{terminal}","response":{{}}}}"#),
+            ],
+        )
+    };
+    let cases = [
+        (
+            "chat cut",
+            chat(CUT_ARGS, "length"),
+            CUT_ERROR,
+            FinishReason::Length,
+        ),
+        (
+            "chat trailing",
+            chat(TRAILING_ARGS, "tool_calls"),
+            TRAILING_ERROR,
+            FinishReason::ToolCalls,
+        ),
+        (
+            "anthropic cut",
+            anthropic(CUT_ARGS, "max_tokens"),
+            CUT_ERROR,
+            FinishReason::Length,
+        ),
+        (
+            "anthropic trailing",
+            anthropic(TRAILING_ARGS, "tool_use"),
+            TRAILING_ERROR,
+            FinishReason::ToolCalls,
+        ),
+        (
+            "responses cut",
+            responses(CUT_ARGS, false),
+            CUT_ERROR,
+            FinishReason::Length,
+        ),
+        (
+            "responses trailing",
+            responses(TRAILING_ARGS, true),
+            TRAILING_ERROR,
+            FinishReason::ToolCalls,
+        ),
+    ];
+    for (case, events, error, finish) in cases {
+        let (input, reported) = requested_call(&events);
+        assert_eq!(
+            hya_provider::invalid_tool_arguments(&input),
+            Some(error),
+            "{case}: {input}"
+        );
+        assert_eq!(reported, finish, "{case}");
+    }
+}
+
+/// The recorded input of such a call replays as an object on every route.
+#[test]
+fn a_call_with_invalid_argument_json_replays_on_every_route() {
+    let (input, _) = requested_call(&decode_all(
+        &OpenAiChatProtocol,
+        &[
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read","arguments":"{\"path\":"}}]},"finish_reason":"length"}]}"#,
+        ],
+    ));
+    let mut request = assistant_tool_request(input.clone());
+    let Message::Assistant { parts, .. } = &mut request.messages[1] else {
+        panic!("assistant fixture");
+    };
+    let Part::Tool { state, .. } = &mut parts[1] else {
+        panic!("tool fixture");
+    };
+    *state = ToolPartState::Error {
+        input: input.clone(),
+        message: "arguments are not valid JSON".to_string(),
+        value: None,
+    };
+    let as_object = |arguments: &serde_json::Value| {
+        serde_json::from_str::<serde_json::Value>(arguments.as_str().unwrap()).unwrap()
+    };
+
+    let chat = OpenAiChatProtocol.encode(&request).unwrap();
+    assert_eq!(
+        as_object(&chat["messages"][1]["tool_calls"][0]["function"]["arguments"]),
+        input
+    );
+    let responses = OpenAiResponsesProtocol.encode(&request).unwrap();
+    let call = responses["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["type"] == "function_call")
+        .unwrap();
+    assert_eq!(as_object(&call["arguments"]), input);
+    let anthropic = AnthropicMessagesProtocol.encode(&request).unwrap();
+    assert_eq!(anthropic["messages"][1]["content"][1]["input"], input);
+    let google = GoogleProtocol.encode(&request).unwrap();
+    assert_eq!(
+        google["contents"][1]["parts"][1]["functionCall"]["args"],
+        input
+    );
+    assert!(input.is_object());
+}
