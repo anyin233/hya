@@ -262,8 +262,10 @@ impl RunDeadline {
             (Stage::Final | Stage::Over, false) => format!(
                 "HEADLESS RUN — FINAL {left}s: {elapsed}s of {budget}s used. Write any missing \
                  deliverable now from the work you have, commit if the request asks for a \
-                 commit, then end your turn. Start only commands that finish well within the \
-                 time left."
+                 commit, then end your turn. Do not edit a file you have already delivered in \
+                 place: if it needs a change, change a copy, run the check the file passed, and \
+                 replace the file only if the copy passes. Start only commands that finish well \
+                 within the time left."
             ),
             (Stage::Normal | Stage::WrapUp, true) => format!(
                 "HEADLESS RUN — TIME: {elapsed}s of {budget}s used, {left}s left in the whole \
@@ -373,6 +375,27 @@ mod tests {
         let member = session();
         wrap_up.mark_notified(member, Stage::WrapUp);
         assert_eq!(wrap_up.take_clock(member), None);
+    }
+
+    #[test]
+    fn final_notice_text_for_lead_and_subagent() {
+        // Before the clock starts, elapsed time is zero for both notices.
+        let deadline = RunDeadline::new(
+            Instant::now() + Duration::from_secs(3600),
+            Duration::from_secs(40),
+        );
+        assert_eq!(
+            deadline.notice(Stage::Final, false),
+            "HEADLESS RUN — FINAL 40s: 0s of 40s used. Write any missing deliverable now from \
+             the work you have, commit if the request asks for a commit, then end your turn. \
+             Do not edit a file you have already delivered in place: if it needs a change, \
+             change a copy, run the check the file passed, and replace the file only if the \
+             copy passes. Start only commands that finish well within the time left."
+        );
+        assert_eq!(
+            deadline.notice(Stage::Final, true),
+            "HEADLESS RUN — FINAL 40s: call `report` now with what you have."
+        );
     }
 
     /// D3: once per stage per session, and only upward.

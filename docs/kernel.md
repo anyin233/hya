@@ -81,6 +81,13 @@ leaves the request after the assistant responds, so each is the last
 message of exactly one request and the earlier history is left as it was.
 Tool results keep their original payloads.
 
+The lead agent’s Final notice includes this instruction to preserve a checked
+deliverable as the time limit approaches.
+
+> Do not edit a file you have already delivered in place: if it needs a change,
+> change a copy, run the check the file passed, and replace the file only if
+> the copy passes.
+
 Each `StepStarted` records a `view` with the numeric `cut` and a
 `request_sha256` string. The digest covers the harness's completed system
 prompt, tool schemas, and messages. Retries reuse the same view reference.
