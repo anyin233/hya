@@ -434,3 +434,182 @@ fn start_waits_out_a_server_that_is_shutting_down() -> TestResult {
     let _ = std::fs::remove_dir_all(&root);
     Ok(())
 }
+
+fn run_bounded(cmd: &mut Command, limit: Duration) -> Result<Output, Box<dyn std::error::Error>> {
+    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let stdout = child.stdout.take().ok_or("missing stdout")?;
+    let stderr = child.stderr.take().ok_or("missing stderr")?;
+    let out_t = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = std::io::BufReader::new(stdout).read_to_end(&mut buf);
+        buf
+    });
+    let err_t = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = std::io::BufReader::new(stderr).read_to_end(&mut buf);
+        buf
+    });
+    let deadline = Instant::now() + limit;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let out_s = String::from_utf8_lossy(&out_t.join().unwrap_or_default()).into_owned();
+            let err_s = String::from_utf8_lossy(&err_t.join().unwrap_or_default()).into_owned();
+            return Err(format!(
+                "command did not exit within {limit:?}; stdout={out_s:?} stderr={err_s:?}"
+            )
+            .into());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    Ok(Output {
+        status,
+        stdout: out_t.join().unwrap_or_default(),
+        stderr: err_t.join().unwrap_or_default(),
+    })
+}
+
+#[test]
+fn serve_strict_open_rejects_unopenable_database_foreground_and_detached() -> TestResult {
+    let root = scratch("hya-serve-strict-open")?;
+    let db = root.join("db-as-directory");
+    std::fs::create_dir(&db)?;
+
+    // 1. Foreground `hya serve` must fail fast with the open error (never fall back to memory).
+    let fg = run_bounded(
+        &mut serve(&root, &db, &["--bind", "127.0.0.1:0"]),
+        Duration::from_secs(10),
+    )?;
+    let fg_stdout = String::from_utf8_lossy(&fg.stdout);
+    let fg_stderr = String::from_utf8_lossy(&fg.stderr);
+    assert!(
+        !fg.status.success(),
+        "foreground serve must fail on unopenable directory db: stdout={fg_stdout:?} stderr={fg_stderr:?}"
+    );
+    assert!(
+        !fg_stderr.contains("running in memory") && !fg_stdout.contains("hya server listening on"),
+        "foreground serve must not fall back to memory: stdout={fg_stdout:?} stderr={fg_stderr:?}"
+    );
+    assert!(
+        fg_stderr.contains("open store"),
+        "foreground serve stderr must explain open failure: {fg_stderr:?}"
+    );
+
+    // 2. Detached `hya serve start --json` must fail fast (not wait 60s on a memory daemon).
+    let detached = run_bounded(
+        &mut serve(&root, &db, &["start", "--json"]),
+        Duration::from_secs(15),
+    )?;
+    let detached_stderr = String::from_utf8_lossy(&detached.stderr);
+    assert!(
+        !detached.status.success(),
+        "detached serve start must fail on unopenable db: {detached_stderr:?}"
+    );
+    assert!(
+        !detached_stderr.contains("did not answer within"),
+        "detached serve start must fail promptly instead of waiting 60s: {detached_stderr:?}"
+    );
+    let log_path = root.join("db-as-directory.server.log");
+    let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+    assert!(
+        !log.contains("running in memory") && !log.contains("hya server listening on"),
+        "detached daemon must not fall back to memory: {log:?}"
+    );
+    assert!(
+        detached_stderr.contains("open store") || log.contains("open store"),
+        "failure reason missing from stderr ({detached_stderr:?}) and log ({log:?})"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+    Ok(())
+}
+
+#[test]
+fn serve_relay_failure_cleans_discovery_and_locks() -> TestResult {
+    let root = scratch("hya-serve-relay-fail")?;
+    let db = root.join("s.db");
+    std::fs::write(
+        format!("{}.relay-identity.json", db.display()),
+        "invalid identity",
+    )?;
+    let out = run_bounded(
+        &mut serve(
+            &root,
+            &db,
+            &[
+                "--bind",
+                "127.0.0.1:0",
+                "--relay",
+                "http://127.0.0.1:1",
+                "--relay-quiet-link",
+            ],
+        ),
+        Duration::from_secs(15),
+    )?;
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "relay connect error must fail serve");
+    assert!(stderr.contains("identity"), "stderr={stderr:?}");
+    assert!(
+        !root.join("s.db.server.json").exists(),
+        "discovery file must be cleaned up on relay failure"
+    );
+    // Subsequent strict owner command must be able to claim the database immediately.
+    let next = run_bounded(
+        &mut serve(&root, &db, &["start", "--json"]),
+        Duration::from_secs(15),
+    )?;
+    assert!(
+        next.status.success(),
+        "database owner lock remained held after relay failure: {}",
+        String::from_utf8_lossy(&next.stderr)
+    );
+    let pid = pid_of(&json(&next)?)?;
+    let mut daemon = Daemons(vec![pid]);
+    assert!(run(&root, &db, &["stop"])?.status.success());
+    daemon.0.clear();
+    let _ = std::fs::remove_dir_all(&root);
+    Ok(())
+}
+
+#[test]
+fn strict_short_commands_reject_unopenable_database() -> TestResult {
+    let root = scratch("hya-short-strict-open")?;
+    let db = root.join("db-as-directory");
+    std::fs::create_dir(&db)?;
+    let session_id = hya_proto::SessionId::new().to_string();
+
+    for args in [
+        vec!["sessions", "archive", &session_id],
+        vec!["workflow", "state", "--session", &session_id],
+    ] {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_hya"));
+        cmd.env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", root.join("home"))
+            .env("XDG_CONFIG_HOME", root.join("config"))
+            .env("XDG_DATA_HOME", root.join("data"))
+            .env("XDG_STATE_HOME", root.join("state"))
+            .env("XDG_CACHE_HOME", root.join("cache"))
+            .env("NO_COLOR", "1")
+            .current_dir(&root)
+            .arg("--db")
+            .arg(&db)
+            .args(&args)
+            .stdin(Stdio::null());
+        let out = run_bounded(&mut cmd, Duration::from_secs(10))?;
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !out.status.success(),
+            "{args:?} must fail on unopenable directory db; stderr={stderr:?}"
+        );
+        assert!(
+            !stderr.contains("running in memory") && stderr.contains("open store"),
+            "{args:?} must report open error without falling back to memory; stderr={stderr:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+    Ok(())
+}

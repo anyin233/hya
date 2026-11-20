@@ -135,11 +135,12 @@ async fn file_store_write_waits_for_sqlite_lock() {
     tokio::select! {
         biased;
         result = &mut write => panic!("store write finished while the lock was held: {result:?}"),
-        () = tokio::time::sleep(Duration::from_secs(6)) => {}
+        () = tokio::time::sleep(Duration::from_millis(600)) => {}
     }
     sqlx::query("COMMIT").execute(&mut sqlite).await.unwrap();
 
     let appended = write.await.unwrap();
+    assert_eq!(store.health(), hya_store::StoreHealth::Healthy);
     let replayed = store.replay(session).await.unwrap();
     assert_eq!(replayed.len(), 1);
     assert_eq!(replayed[0].seq, appended[0].seq);

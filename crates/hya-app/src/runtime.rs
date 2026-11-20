@@ -559,7 +559,9 @@ async fn resolve_runtime_strict(model_override: Option<String>) -> anyhow::Resul
     })
 }
 
-/// Reserve ownership before opening a SQLite runtime store, or use memory when `db` is empty.
+/// Reserve ownership and open a SQLite runtime store strictly (no in-memory
+/// fallback on open failure or timeout; returns an in-memory store only when
+/// `db` is `""`).
 pub async fn open_store(db: &str) -> anyhow::Result<SessionStore> {
     if db.is_empty() {
         SessionStore::connect_memory()
@@ -569,6 +571,28 @@ pub async fn open_store(db: &str) -> anyhow::Result<SessionStore> {
         SessionStore::connect_runtime(db)
             .await
             .with_context(|| format!("open store at {db}"))
+    }
+}
+
+/// Reserve ownership before opening a SQLite runtime store, falling back to an
+/// in-memory store on open timeout or storage fault (or using memory when `db`
+/// is empty) for one-shot headless runs.
+pub async fn open_store_or_memory(db: &str) -> anyhow::Result<SessionStore> {
+    if db.is_empty() {
+        SessionStore::connect_memory()
+            .await
+            .context("open in-memory store")
+    } else {
+        let store = SessionStore::connect_runtime_or_memory(db)
+            .await
+            .with_context(|| format!("open store at {db}"))?;
+        if let Some((path, reason)) = store.memory_fallback() {
+            eprintln!(
+                "warning: could not open store at {} ({reason}); running in memory — nothing will be persisted",
+                path.display()
+            );
+        }
+        Ok(store)
     }
 }
 
@@ -700,6 +724,10 @@ impl BuiltSessionEngine {
     /// residents so no late registration can escape the drain. Safe to call repeatedly.
     pub async fn shutdown(&mut self) -> Result<(), CoreError> {
         self.drain(FinishCause::Shutdown).await;
+        self.engine
+            .store()
+            .drain_and_report_exit(hya_store::EXIT_DRAIN_TIMEOUT)
+            .await;
         self.release_runtime_owner()
     }
 
@@ -1442,6 +1470,19 @@ impl HyaRuntime {
     /// served with axum (or inspected by embedders).
     pub async fn start(opts: RuntimeOptions) -> anyhow::Result<Self> {
         let store = open_store(&opts.db).await?;
+        let exit_store = store.clone();
+        match Self::start_with_store(store, opts).await {
+            Ok(runtime) => Ok(runtime),
+            Err(error) => {
+                exit_store
+                    .drain_and_report_exit(hya_store::EXIT_DRAIN_TIMEOUT)
+                    .await;
+                Err(error)
+            }
+        }
+    }
+
+    async fn start_with_store(store: SessionStore, opts: RuntimeOptions) -> anyhow::Result<Self> {
         let runtime = if opts.force_offline {
             let mut runtime = offline_runtime(opts.model, false);
             runtime.default_agent = opts.default_agent;
@@ -1509,6 +1550,10 @@ impl HyaRuntime {
         self.app_state.begin_shutdown();
         self._built.drain(FinishCause::Shutdown).await;
         self.app_state.shutdown().await;
+        self.engine
+            .store()
+            .drain_and_report_exit(hya_store::EXIT_DRAIN_TIMEOUT)
+            .await;
         self._built.release_runtime_owner()
     }
 
@@ -1532,3 +1577,59 @@ impl HyaRuntime {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod open_store_tests {
+    use super::{HyaRuntime, RuntimeOptions, open_store, open_store_or_memory};
+
+    #[tokio::test]
+    async fn open_store_is_strict_while_open_store_or_memory_falls_back() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "hya-open-store-split-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let blocker = dir.join("not-a-dir");
+        std::fs::create_dir_all(&blocker).unwrap();
+        let path = blocker.to_string_lossy().into_owned();
+
+        let strict_err = match open_store(&path).await {
+            Ok(_) => panic!("strict open_store must fail on directory db"),
+            Err(err) => err,
+        };
+        assert!(
+            strict_err.to_string().contains("open store"),
+            "{strict_err}"
+        );
+
+        let runtime_err = match HyaRuntime::start(RuntimeOptions {
+            db: path.clone(),
+            model: None,
+            default_agent: None,
+            yolo: false,
+            force_offline: true,
+        })
+        .await
+        {
+            Ok(_) => panic!("HyaRuntime::start must fail on directory db"),
+            Err(err) => err,
+        };
+        assert!(
+            runtime_err.to_string().contains("open store"),
+            "{runtime_err}"
+        );
+
+        let fallback = match open_store_or_memory(&path).await {
+            Ok(store) => store,
+            Err(err) => panic!("open_store_or_memory must fall back on directory db: {err}"),
+        };
+        assert!(fallback.memory_fallback().is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

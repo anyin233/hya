@@ -20,8 +20,8 @@ use hya_proto::{
 };
 use hya_sdk_v1::{SdkError, V1Sdk};
 
-use crate::StopSignal;
 use crate::exec_stream::JsonStreamPrinter;
+use crate::stop_signals::StopSignal;
 
 /// How often a routed command polls the server while it waits.
 const POLL: Duration = Duration::from_millis(250);

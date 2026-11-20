@@ -99,6 +99,7 @@ cargo test -p hya-e2e -- --test-threads=1
 | T2.51 | [p41_code_mode.rs](../../crates/hya-e2e/tests/it/p41_code_mode.rs) | `tools.code.mode: with_tools`: `code-mode__run` is offered next to `read`, `bash`, `edit`; its description lists no hidden tool; a program's nested `tools.read` and a direct `read` both deliver the file text | e2e (Track P) |
 | T2.52 | [p41_code_mode.rs](../../crates/hya-e2e/tests/it/p41_code_mode.rs) | default mode: no `code-mode__run` in the offered tools; `hya bundle list` shows `hya/code-mode` as `disabled` | e2e (Track P) |
 | T2.53 | [p42_exec_step_fold.rs](../../crates/hya-e2e/tests/it/p42_exec_step_fold.rs) | headless exec, one turn of twelve ~11k-token `bash` steps (no reasoning) against a 120k window (`keep_recent` 1): the kernel's Rewrite removes the old steps, the run exits 0 with `FINAL_ANSWER`, and the last request carries the rewrite marker, the prompt and the newest step but not `STEP_0_BEGIN` | e2e (Track P) |
+| T2.54 | [p43_store_robustness.rs](../../crates/hya-e2e/tests/it/p43_store_robustness.rs) | store robustness: external SQLite write locks recover after turn progression, unopenable/stalled opens fall back in memory for headless `exec`, mid-run database replacement halts writes and disk reads without touching the replacement file, strict server/short commands fail fast on unopenable paths, signals trigger exit drain, and stderr emits exact durability reports while `--json` stays pure JSONL | e2e (Track P) |
 
 ### Built-in tool coverage
 

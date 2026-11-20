@@ -1375,6 +1375,7 @@ Limits, so snapshots never grow without bound:
 | --- | --- | --- |
 | One file's content | 2 MiB (`MAX_FILE_BYTES`) | `omitted` / `too_large` |
 | All blobs of one session | 256 MiB (`MAX_SESSION_BLOB_BYTES`) | `omitted` / `session_cap` |
+| Lazy `file_blob_bytes` read fails (storage fault or > 5 s `READ_TIMEOUT`) | — | `omitted` / `store unavailable` (edit and turn continue; that file cannot be reverted from the log; non-storage errors propagate) |
 | bash pre-capture: dirty files read | 2,000 files (`MAX_DIRTY_FILES`) | `omitted` / `snapshot_budget` |
 | bash pre-capture: bytes read | 16 MiB (`MAX_DIRTY_BYTES`) | `omitted` / `snapshot_budget` |
 | each git call | 10 s | the bash call is not captured |

@@ -29,12 +29,24 @@ pub(crate) async fn exec_entry(
     time_budget: Option<u64>,
     json: bool,
 ) -> anyhow::Result<()> {
-    match crate::db_writer::claim(db, "exec").await? {
+    match crate::db_writer::claim_or_memory(db, "exec").await? {
         crate::db_writer::Writer::Direct(store) => {
+            let mut signals = crate::stop_signals::StopSignals::install()?;
             if let Some(seconds) = time_budget {
                 deadline::install(Duration::from_secs(seconds));
             }
-            exec(prompt, model_override, store, json).await
+            let cancel = CancellationToken::new();
+            let (result, stop) = signals
+                .run_cancellable(
+                    &store,
+                    &cancel,
+                    Some(hya_engine::DRAIN_DEADLINE),
+                    exec(prompt, model_override, store.clone(), json, &cancel),
+                )
+                .await;
+            signals.drain_store_on_exit(&store, stop.is_some()).await;
+            crate::stop_signals::exit_if_stopped(stop);
+            result.unwrap_or(Ok(()))
         }
         crate::db_writer::Writer::Server(server) => crate::db_writer::exit_unroutable(
             "exec",
@@ -52,6 +64,7 @@ async fn exec(
     model_override: Option<String>,
     store: SessionStore,
     json: bool,
+    cancel: &CancellationToken,
 ) -> anyhow::Result<()> {
     crate::first_run_config_bootstrap(false)?;
     let runtime = hya_app::resolve_runtime(model_override).await;
@@ -135,7 +148,6 @@ async fn exec(
     emit.emit(session, events)
         .await
         .context("create the session")?;
-    let cancel = CancellationToken::new();
     let result = kernel::run(kernel::Run {
         store: &store,
         emit,
@@ -143,10 +155,10 @@ async fn exec(
         model: &model,
         system: &kernel::prompt::system_prompt(&workdir),
         tools: &kernel::tools::builtin(),
-        ctx: &tool_ctx(&workdir, &cancel),
+        ctx: &tool_ctx(&workdir, cancel),
         session,
         message,
-        cancel: &cancel,
+        cancel,
     })
     .await;
     emit.emit(
@@ -180,6 +192,7 @@ async fn exec(
         }
     }
     println!("{text}");
+    let _ = io::stdout().flush();
     Ok(())
 }
 
