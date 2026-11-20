@@ -85,3 +85,14 @@ fn port_with_a_subcommand_is_an_error() -> Result<(), Box<dyn std::error::Error>
     let _ = std::fs::remove_dir_all(&root);
     Ok(())
 }
+
+#[test]
+fn exec_rejects_an_empty_stdin_prompt() -> Result<(), Box<dyn std::error::Error>> {
+    let root = scratch("hya-empty-stdin-prompt")?;
+    let output = hya(&root).args(["exec", "--bare", "-"]).output()?;
+    let _ = std::fs::remove_dir_all(&root);
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("empty exec prompt on stdin"), "{stderr}");
+    Ok(())
+}

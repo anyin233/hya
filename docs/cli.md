@@ -742,6 +742,9 @@ hya exec --json "summarize this repo"
 hya exec --time-budget 900 "implement the requested change"
 ```
 
+A prompt argument of `-` reads UTF-8 from standard input through EOF, removes
+one trailing newline, and rejects an empty result or invalid UTF-8.
+
 ### `--bare`
 
 `hya exec --bare "<prompt>"` runs the three-primitive kernel alone, with six
@@ -749,7 +752,12 @@ built-in tools (`bash`, `read`, `write`, `edit`, `rewrite`, `todo`), its minimal
 system prompt, and event logging. It runs without bundles and prints the final
 text to stdout. `--db` keeps the event log in SQLite.
 
+Use `-` with `--bare` to keep the prompt out of process listings and prevent
+commands such as `pkill -f` and `pgrep -f` from matching hya itself on a file
+or program named in the prompt.
+
 ```sh
+printf '%s' "$PROMPT" | hya exec --bare -
 hya exec --bare "say hi" --db /tmp/x.db
 hya exec --bare --time-budget 900 "implement the change and write report.md"
 ```

@@ -157,3 +157,54 @@ async fn t1_15_bare_exec_can_write_todos() {
             })
     );
 }
+
+#[tokio::test]
+async fn t1_15_bare_exec_reads_prompt_from_stdin() {
+    let env = E2eEnvBuilder::new()
+        .scripts(vec![text_step("STDIN_PROMPT_RECEIVED")])
+        .build()
+        .await
+        .expect("e2e env");
+    let backend = &env.backend;
+    let root = backend.project.parent().expect("e2e root");
+    let prompt = "  Summarize café notes.\nKeep the original spacing.\n";
+    let input = root.join("prompt.txt");
+    std::fs::write(&input, format!("{prompt}\n")).expect("write stdin fixture");
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        tokio::process::Command::new(&backend.binary)
+            .args(["--model", "fake/model", "--db"])
+            .arg(root.join("bare.db"))
+            .args(["exec", "--bare", "-"])
+            .current_dir(&backend.project)
+            .env("HOME", root.join("home"))
+            .env("XDG_CONFIG_HOME", &backend.xdg_config_home)
+            .env("XDG_DATA_HOME", &backend.xdg_data_home)
+            .env("XDG_STATE_HOME", root.join("state"))
+            .env("XDG_CACHE_HOME", root.join("cache"))
+            .env_remove("HYA_MODEL")
+            .stdin(std::fs::File::open(&input).expect("open stdin fixture"))
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("bare execution finished")
+    .expect("spawn hya exec --bare -");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "STDIN_PROMPT_RECEIVED"
+    );
+    let requests = env.fake.requests().unwrap();
+    let user_message = requests[0]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|msg| msg["role"] == "user")
+        .expect("provider request contains a user message");
+    assert_eq!(user_message["content"], prompt);
+}
