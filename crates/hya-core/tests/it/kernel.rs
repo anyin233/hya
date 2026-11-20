@@ -1242,22 +1242,39 @@ async fn non_transient_round_failure_ends_the_run() {
 }
 
 #[tokio::test]
-async fn a_round_is_retried_three_times() {
-    let failures = (1..=4)
+async fn a_round_can_succeed_on_the_ninth_attempt() {
+    let failures = (1..=8)
+        .map(|attempt| Some((Vec::new(), server_error(&format!("attempt {attempt}")))))
+        .collect();
+    let (fx, flaky) = flaky_fixture("retry-ninth-attempt", vec![text("done")], failures).await;
+    assert_eq!(
+        flaky
+            .turn(&fx, "hi")
+            .await
+            .expect("the ninth attempt succeeds"),
+        FinishReason::Stop
+    );
+    flaky.clock.assert_waits(&[5, 10, 20, 40, 60, 60, 60, 60]);
+    assert_eq!(flaky.requests.lock().unwrap().len(), 9);
+}
+
+#[tokio::test]
+async fn a_round_returns_the_ninth_failure() {
+    let failures = (1..=9)
         .map(|attempt| Some((Vec::new(), server_error(&format!("attempt {attempt}")))))
         .collect();
     let (fx, flaky) = flaky_fixture("retry-limit", vec![text("unreached")], failures).await;
     let error = flaky
         .turn(&fx, "hi")
         .await
-        .expect_err("the fourth failure ends the run");
+        .expect_err("the ninth failure ends the run");
     assert_eq!(
         error.to_string(),
-        "http status 500: in-stream error (server_error): attempt 4"
+        "http status 500: in-stream error (server_error): attempt 9"
     );
-    flaky.clock.assert_waits(&[5, 10, 20]);
+    flaky.clock.assert_waits(&[5, 10, 20, 40, 60, 60, 60, 60]);
     let requests = flaky.requests.lock().unwrap().clone();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 9);
     assert!(
         requests
             .iter()
@@ -1294,9 +1311,9 @@ async fn a_transient_failure_after_reasoning_is_not_retried() {
 
 #[tokio::test]
 async fn a_completed_round_resets_the_retry_count() {
-    let failures = (1..=8)
+    let failures = (1..=18)
         .map(|attempt| {
-            (attempt != 4).then(|| (Vec::new(), server_error(&format!("attempt {attempt}"))))
+            (attempt != 9).then(|| (Vec::new(), server_error(&format!("attempt {attempt}"))))
         })
         .collect();
     let (fx, flaky) = flaky_fixture(
@@ -1311,10 +1328,12 @@ async fn a_completed_round_resets_the_retry_count() {
         .expect_err("the later round exhausts its own retries");
     assert_eq!(
         error.to_string(),
-        "http status 500: in-stream error (server_error): attempt 8"
+        "http status 500: in-stream error (server_error): attempt 18"
     );
-    flaky.clock.assert_waits(&[5, 10, 20, 5, 10, 20]);
-    assert_eq!(flaky.requests.lock().unwrap().len(), 8);
+    flaky
+        .clock
+        .assert_waits(&[5, 10, 20, 40, 60, 60, 60, 60, 5, 10, 20, 40, 60, 60, 60, 60]);
+    assert_eq!(flaky.requests.lock().unwrap().len(), 18);
 }
 
 #[test]
