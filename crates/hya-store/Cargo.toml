@@ -26,3 +26,6 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+libsqlite3-sys = "=0.30.1"
