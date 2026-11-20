@@ -1,4 +1,3 @@
-# 0.48.0-dev.23
+# 0.48.0-dev.24
 
-- **A tool call with malformed arguments no longer ends the run.** When a model sends argument text that is not valid JSON (cut off, or with trailing characters), the call is recorded and comes back to the model as a failed call that quotes the parser's error and asks for the call again; no tool, hook or permission check sees it. Before, the round failed with `decode: tool <name> arguments: …` and the run ended. Bare and full mode.
-- **Bare `edit`: identical `old` and `new` is an error.** The call returns an input error and does not write the file; before, it returned `{"replaced": 1}` although nothing changed.
+- **Headless runs: the FINAL deadline notice protects files that are already delivered.** The notice now also says: "Do not edit a file you have already delivered in place: if it needs a change, change a copy, run the check the file passed, and replace the file only if the copy passes." Before, it only told the agent to write missing deliverables; runs were seen editing a working deliverable in place after the notice and reaching the limit before the change could be tested or undone.
