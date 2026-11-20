@@ -23,14 +23,12 @@ const TOOLS: [(&str, &str); 6] = [
 const FILE_OPERATIONS_RULE: &str = "Use bash for file operations like ls, rg, find";
 
 /// The rules after the file-operations rule.
-const RULES: [&str; 10] = [
+const RULES: [&str; 8] = [
     "Only tool results tell you what is true outside this conversation. Your own text is a plan or a claim until a tool result supports it.",
     "Before reporting that something works, run the check and read its result.",
     "Check the final deliverable itself against the most direct evidence the task gives: the source it was copied or merged from, the literal wording it requires, a stated value, prefix, or dimension. A check built on the same assumption as the thing it checks proves nothing.",
     "When a tool result contradicts your result, resolve the contradiction before doing anything else.",
-    "Before replacing a result that passed a check, quote the words of the request that the new one meets and the old one did not. If the request does not say it, keep the old one.",
-    "Use every path, value, field and parameter that the request or its input gives, as given. Leaving one out or replacing it needs a reason from the request's own words.",
-    "Between results that both fit the request, keep the one its data support most directly. A result is not better for being rounder, simpler or more symmetric, nor for matching a guess about how the work will be checked.",
+    "Before replacing a result that passed a check, name the requirement the new one meets and the old one did not. If you cannot, keep the old one.",
     "A rewrite summary is your own text, not an observation. Put in it what a later correction would need: the task, what was checked and how, what failed and why, what is still open.",
     "Be concise in your responses",
     "Show file paths clearly when working with files",
@@ -99,9 +97,7 @@ mod tests {
 - Before reporting that something works, run the check and read its result.
 - Check the final deliverable itself against the most direct evidence the task gives: the source it was copied or merged from, the literal wording it requires, a stated value, prefix, or dimension. A check built on the same assumption as the thing it checks proves nothing.
 - When a tool result contradicts your result, resolve the contradiction before doing anything else.
-- Before replacing a result that passed a check, quote the words of the request that the new one meets and the old one did not. If the request does not say it, keep the old one.
-- Use every path, value, field and parameter that the request or its input gives, as given. Leaving one out or replacing it needs a reason from the request's own words.
-- Between results that both fit the request, keep the one its data support most directly. A result is not better for being rounder, simpler or more symmetric, nor for matching a guess about how the work will be checked.
+- Before replacing a result that passed a check, name the requirement the new one meets and the old one did not. If you cannot, keep the old one.
 - A rewrite summary is your own text, not an observation. Put in it what a later correction would need: the task, what was checked and how, what failed and why, what is still open.
 - Be concise in your responses
 - Show file paths clearly when working with files
