@@ -2884,6 +2884,44 @@ fn init_git(dir: &Path) {
 }
 
 #[tokio::test]
+async fn edit_rejects_identical_text_without_writing() {
+    let fx = fixture(
+        "edit-identical",
+        FakeProvider::scripted_turns(vec![
+            call(
+                "edit",
+                json!({"path": "a.txt", "old": "hello", "new": "hello"}),
+            ),
+            text("done"),
+        ]),
+    )
+    .await;
+    let path = fx.dir.join("a.txt");
+    std::fs::write(&path, "hello\n").unwrap();
+    let file = std::fs::File::open(&path).unwrap();
+    file.set_times(
+        std::fs::FileTimes::new()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000)),
+    )
+    .unwrap();
+    let modified = file.metadata().unwrap().modified().unwrap();
+
+    fx.turn("replace hello with hello", &CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        tool_errors(&fx.log().await),
+        ["input: `old` and `new` are identical. The file was not changed"]
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello\n");
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().modified().unwrap(),
+        modified
+    );
+}
+
+#[tokio::test]
 async fn file_mutations_record_prior_content_and_stamp_after_the_tool() {
     let fx = fixture(
         "file-mutations",
