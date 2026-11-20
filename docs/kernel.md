@@ -126,8 +126,12 @@ when needed.
 
 Each call creates a private directory (`mkdtemp`, `hya-bash-XXXXXX` in the
 system temporary directory) holding an `output` file, which receives the
-command's stdout and stderr, and an `exit_code` file. A call ends in one of
-four ways:
+command's stdout and stderr, and an `exit_code` file. Commands run with
+`PYTHONUNBUFFERED=1`, so Python output reaches the file as it is printed,
+while other programs that buffer output when writing to a file may still
+show it late.
+
+A call ends in one of four ways:
 
 - **The command ends within the wait.** The result is
   `{"exit_code": int, "output": string}` with the captured output followed by
