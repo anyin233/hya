@@ -222,7 +222,8 @@ is the only field. Missing files and invalid UTF-8 in non-image files return
 `ToolError`.
 `write` creates parent directories and returns the byte count; I/O errors
 return `ToolError`. `edit` requires exactly one occurrence of `old`; zero or
-multiple matches return `ToolError` stating the count.
+multiple matches return `ToolError` stating the count. Identical `old` and `new`
+return `ToolError::Input` without writing the file.
 
 `rewrite` keeps its `summary` in the call input in the current step. It does
 not store a second copy or turn the summary into an observation. `<n>` is the
