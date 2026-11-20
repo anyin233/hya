@@ -203,6 +203,7 @@ impl BundleRegistry {
             .busy_timeout(Duration::ZERO);
         let pool = SqlitePoolOptions::new()
             .max_connections(8)
+            .acquire_timeout(crate::FILE_POOL_WAIT_TIMEOUT)
             // Closing the last connection of a WAL database checkpoints under an exclusive lock.
             .max_lifetime(None)
             .idle_timeout(None)
@@ -821,6 +822,10 @@ mod disabled_tests {
         std::fs::create_dir_all(&dir)?;
         let path = dir.join("registry.sqlite3");
         let registry = BundleRegistry::connect(&path.to_string_lossy()).await?;
+        assert_eq!(
+            registry.pool.options().get_acquire_timeout(),
+            crate::FILE_POOL_WAIT_TIMEOUT
+        );
         assert_eq!(registry.pool.options().get_max_lifetime(), None);
         assert_eq!(registry.pool.options().get_idle_timeout(), None);
         registry.pool.close().await;
