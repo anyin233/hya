@@ -630,7 +630,8 @@ migrations live under
 | --- | --- | --- |
 | Journal | WAL | WAL |
 | Synchronous | **Normal** | **Full** |
-| Busy timeout | **5 seconds** | **Zero** (contention fails fast as `StoreError::BundleRegistryBusy`) |
+| Busy timeout | **300 seconds** | **Zero** (contention fails fast as `StoreError::BundleRegistryBusy`) |
+| Pool acquire timeout | **300 seconds** | **300 seconds** |
 | Pool max | 8 | 8 |
 | Foreign keys | on | on |
 
