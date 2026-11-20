@@ -1237,6 +1237,25 @@ async fn a_retry_wait_must_fit_before_final_child() {
     assert_eq!(deadline.stage(), Stage::Normal);
 }
 
+#[tokio::test]
+async fn read_returns_text_verbatim() {
+    let dir = tempfile::tempdir().unwrap();
+    let text = "first line\n\"quoted\" and a \\ backslash\n";
+    std::fs::write(dir.path().join("text.txt"), text).unwrap();
+    let read = kernel::tools::builtin()
+        .into_iter()
+        .find(|tool| tool.name() == "read")
+        .unwrap();
+    let ctx = tool_ctx(dir.path(), &CancellationToken::new());
+    let result = read
+        .execute(&ctx, json!({"path": "text.txt"}))
+        .await
+        .unwrap();
+
+    assert_eq!(tool_result_text(&result), text);
+    assert_eq!(result, json!({"output": text}));
+}
+
 /// The image goes in the request after the read and in no later request, also
 /// after a round of only tool calls; a request rebuilt from the log for the
 /// same step is the one sent.
@@ -2850,8 +2869,7 @@ async fn outside_change_to_read_file_is_logged_before_the_next_request() {
     let a = fx.dir.join("a.txt");
     std::fs::write(&a, "old").unwrap();
     let publish = |envelope: Envelope| {
-        if matches!(envelope.event, Event::ToolResult { output, .. } if output["content"] == "old")
-        {
+        if matches!(envelope.event, Event::ToolResult { output, .. } if output["output"] == "old") {
             std::fs::write(&a, "outside update").unwrap();
             std::fs::write(fx.dir.join("b.txt"), "unseen").unwrap();
         }
@@ -2905,12 +2923,12 @@ async fn outside_change_to_read_file_is_logged_before_the_next_request() {
     assert!(
         !assistant_parts(&requests[1]).any(|part| matches!(part, Part::Tool {
         state: ToolPartState::Completed { output, .. }, ..
-    } if output["content"] == "outside update"))
+    } if output["output"] == "outside update"))
     );
     assert!(
         assistant_parts(&requests[2]).any(|part| matches!(part, Part::Tool {
         state: ToolPartState::Completed { output, .. }, ..
-    } if output["content"] == "outside update"))
+    } if output["output"] == "outside update"))
     );
 }
 
