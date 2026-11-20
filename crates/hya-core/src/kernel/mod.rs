@@ -159,12 +159,17 @@ pub trait Harness: ToolGate {
     fn done(&self) -> bool;
 }
 
-/// Waits before the first, second and third retry of a round that failed on a
-/// transient provider error (docs/kernel.md).
-const ROUND_RETRY_WAITS: [Duration; 3] = [
+/// Waits before retrying a round that failed on a transient provider error
+/// (docs/kernel.md).
+const ROUND_RETRY_WAITS: [Duration; 8] = [
     Duration::from_secs(5),
     Duration::from_secs(10),
     Duration::from_secs(20),
+    Duration::from_secs(40),
+    Duration::from_secs(60),
+    Duration::from_secs(60),
+    Duration::from_secs(60),
+    Duration::from_secs(60),
 ];
 
 /// Bare mode's [`Harness`]: the given prompt and tools on one model, the
