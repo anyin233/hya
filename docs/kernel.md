@@ -532,8 +532,11 @@ and while the run is not cancelled; full mode's harness always ends.
 
 Bare mode can recover from transient provider errors and interrupted streams.
 When you run `hya exec --bare`, the kernel retries the same request up
-to three times per round, waiting 5, 10, and 20 seconds before the respective
-retries.
+to eight times per round, waiting 5, 10, 20, 40, 60, 60, 60, and 60 seconds
+before the respective retries. A model route can need minutes to stop sending
+requests to an upstream that throttles or has exhausted its allowance. Without
+`--time-budget`, a persistently failing endpoint ends the run after about five
+minutes of waiting, up from 35 seconds.
 
 A retry requires all of the following.
 
@@ -547,7 +550,7 @@ A retry requires all of the following.
   must fit before Final, and the budget must still be in Normal or WrapUp
   when the wait ends.
 
-When a retry is ruled out or the third retry fails, the run ends with the
+When a retry is ruled out or the eighth retry fails, the run ends with the
 current attempt's error. A completed round resets the retry count.
 
 For example, if an in-stream HTTP 500 arrives before the assistant has
@@ -592,7 +595,7 @@ plugs into that loop at fixed points:
 | Before the round (`Harness::before_round`) | `kernel::before_round` with no extensions: the 80% Rewrite, then the goal checkpoint | Re-validate the actor claim, rebind a Root turn to a new runtime generation, resolve the round's model, then `kernel::before_round` with the internal bundles' extensions (`hya/compaction`: [`shake` and `remote`](compaction.md)) |
 | Request | Kernel prompt and six tools | The agent's system prompt, filtered tool schemas plus `rewrite` and `todo`, and reasoning effort, then the `chat.params` hook |
 | Opening the stream | The given model | Cross-model fallback or the Workflow route, under a governor stream permit |
-| Failed round | Retried up to three times after 5, 10, and 20 s when a transient error or stream interruption left no assistant part and the wait fits before Final ([When a bare round fails](#when-a-bare-round-fails)) | Retried up to twice when it failed before any text or tool call on a link error |
+| Failed round | Retried up to eight times after 5, 10, 20, 40, 60, 60, 60, and 60 s when a transient error or stream interruption left no assistant part and the wait fits before Final ([When a bare round fails](#when-a-bare-round-fails)) | Retried up to twice when it failed before any text or tool call on a link error |
 | Registry tool call (`ToolGate`) | Execute the tool and record file snapshots and stamps | Hooks, permissions, the full `ToolCtx`, file snapshots and stamps, output capping, steer notices |
 | Unrun calls after a cancel | Failed as `cancelled` | Left open; the turn end closes them as `CANCELLED` |
 | End (`Harness::before_end`, `done`) | The round's finish, after one [completion check](#how-a-bare-run-ends) once a tool call ran | The round's finish; also ends after an accepted `report` |
