@@ -739,6 +739,7 @@ runs whose prompt context is exactly what you passed.
 ```sh
 hya exec "summarize this repo"
 hya exec --json "summarize this repo"
+hya exec --bare --json "say hi" > run.jsonl
 hya exec --time-budget 900 "implement the requested change"
 ```
 
@@ -750,7 +751,13 @@ one trailing newline, and rejects an empty result or invalid UTF-8.
 `hya exec --bare "<prompt>"` runs the three-primitive kernel alone, with six
 built-in tools (`bash`, `read`, `write`, `edit`, `rewrite`, `todo`), its minimal
 system prompt, and event logging. It runs without bundles and prints the final
-text to stdout. `--db` keeps the event log in SQLite.
+text to stdout by default. `--db` keeps the event log in SQLite.
+
+`hya exec --bare --json "<prompt>"` writes only the session's durable events
+to stdout, flushing one JSON envelope per line in sequence order as events
+commit, in the same format as `exec --json` and `tail-session`.
+To record a sandboxed run outside the sandbox, omit `--db` to keep the store
+in memory and save the JSON lines on the caller's side.
 
 Use `-` with `--bare` to keep the prompt out of process listings and prevent
 commands such as `pkill -f` and `pgrep -f` from matching hya itself on a file
@@ -762,7 +769,7 @@ hya exec --bare "say hi" --db /tmp/x.db
 hya exec --bare --time-budget 900 "implement the change and write report.md"
 ```
 
-`--bare` conflicts with `--pure` and `--json` (a usage error). It always
+`--bare` conflicts with `--pure` (a usage error). It always
 runs in process against `--db`. When a running server holds that database,
 it exits 75. Use another database or stop that server first. The model is
 `--model` or the configured default. The working directory is the cwd.

@@ -40,9 +40,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { workspace = true }
 futures = { workspace = true }
+async-trait = { workspace = true }
 
 [dev-dependencies]
-async-trait = { workspace = true }
 serde_norway = { workspace = true }
 hya-relay = { workspace = true }
 ed25519-dalek = { workspace = true }

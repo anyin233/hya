@@ -22,6 +22,14 @@ pub(crate) fn eligible(envelope: &Envelope, session: SessionId) -> bool {
     envelope.event.session() == Some(session) && envelope.seq.0 != 0
 }
 
+pub(crate) fn write_envelope(
+    out: &mut impl std::io::Write,
+    envelope: &Envelope,
+) -> std::io::Result<()> {
+    let line = serde_json::to_string(envelope).map_err(|e| std::io::Error::other(e.to_string()))?;
+    writeln!(out, "{line}")
+}
+
 /// Incremental JSONL writer deduplicating by durable seq.
 pub(crate) struct JsonStreamPrinter<W: std::io::Write> {
     out: W,
@@ -49,9 +57,7 @@ impl<W: std::io::Write> JsonStreamPrinter<W> {
         if !eligible(envelope, session) || !self.printed.insert(envelope.seq.0) {
             return Ok(false);
         }
-        let line =
-            serde_json::to_string(envelope).map_err(|e| std::io::Error::other(e.to_string()))?;
-        writeln!(self.out, "{line}")?;
+        write_envelope(&mut self.out, envelope)?;
         Ok(true)
     }
 
