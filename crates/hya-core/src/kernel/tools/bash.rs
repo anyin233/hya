@@ -125,6 +125,7 @@ impl Tool for Bash {
             .arg("-c")
             .arg(&command)
             .current_dir(&ctx.workdir)
+            .env("PYTHONUNBUFFERED", "1")
             .stdin(Stdio::null())
             .stdout(file.try_clone()?)
             .stderr(file)

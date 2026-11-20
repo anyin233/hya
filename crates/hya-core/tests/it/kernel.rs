@@ -1922,6 +1922,23 @@ async fn bash_reports_exit_codes_without_command_output() {
     }
 }
 
+#[tokio::test]
+async fn bash_sets_pythonunbuffered() {
+    let bash = kernel::tools::builtin()
+        .into_iter()
+        .find(|tool| tool.name() == "bash")
+        .unwrap();
+    let ctx = tool_ctx(Path::new("."), &CancellationToken::new());
+    let result = bash
+        .execute(
+            &ctx,
+            json!({"command": r#"printf '%s' "$PYTHONUNBUFFERED""#}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["output"], "1\n[exit code: 0]");
+}
+
 #[test]
 fn bash_keeps_large_output_on_normal_exit() {
     run_bash_child("kernel::bash_output_child", "large-output");

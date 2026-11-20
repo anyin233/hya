@@ -902,6 +902,9 @@ ends the wait, the command keeps running in the background. The
 `still_running` result names the limit and the output and exit code files.
 For output over 30,000 bytes, bare Bash returns the first 10,000 and last
 20,000 bytes with a marker naming the file that keeps the complete output.
+Bare Bash sets `PYTHONUNBUFFERED=1` so Python output reaches the file as it
+is printed. Other programs that buffer output when writing to a file may
+still show it late.
 The model receives the `output` string, which ends with `[exit code: N]`,
 `[still running: …]`, `[stopped: …]`, or `[not started: …]`.
 The exit code is written if the command ends while the run lasts. To wait
