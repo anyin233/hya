@@ -1,6 +1,4 @@
-# 0.48.0-dev.22
+# 0.48.0-dev.23
 
-- **Bare `bash`: Python output reaches the output file as it is printed.** Commands run with `PYTHONUNBUFFERED=1`. Before, a Python program that outlived the call's wait showed nothing in the file the `[still running: …]` line names until its buffer filled or it exited.
-- **Bare `read`: a text file reaches the model as its text.** The result is `{"output": <text>}`; before, it was `{"content": …}`, which the model received as one JSON-escaped string.
-- **Workflows: a concurrent stage no longer deadlocks on the store.** Concurrent stages run as their own tasks, so a stage cannot wait for a store connection that its caller holds; this removes the intermittent `sqlite: pool timed out` of workflow runs.
-- **Bundle registry: opening waits as long as the session store does** for a busy database, instead of the pool's default 30 seconds.
+- **A tool call with malformed arguments no longer ends the run.** When a model sends argument text that is not valid JSON (cut off, or with trailing characters), the call is recorded and comes back to the model as a failed call that quotes the parser's error and asks for the call again; no tool, hook or permission check sees it. Before, the round failed with `decode: tool <name> arguments: …` and the run ended. Bare and full mode.
+- **Bare `edit`: identical `old` and `new` is an error.** The call returns an input error and does not write the file; before, it returned `{"replaced": 1}` although nothing changed.
