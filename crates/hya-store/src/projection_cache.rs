@@ -79,6 +79,12 @@ pub(crate) struct PreparedFold {
 }
 
 impl PreparedFold {
+    pub(crate) fn final_seq(&self) -> u64 {
+        self.tail
+            .last()
+            .map_or(self.projection.last_seq, |env| env.seq.0)
+    }
+
     pub(crate) fn finish(mut self) -> Folded {
         if !self.tail.is_empty() {
             let projection = Arc::make_mut(&mut self.projection);
@@ -144,21 +150,16 @@ impl ProjectionCache {
         })
     }
 
-    /// Record a fold; an older fold never replaces a newer one.
-    pub(crate) fn put(
-        &self,
-        session: SessionId,
-        projection: Arc<Projection>,
-        persisted_seq: u64,
-        unpersisted: u64,
-    ) {
-        self.insert(
-            &mut self.entries(),
-            session,
-            projection,
-            persisted_seq,
-            unpersisted,
-        );
+    /// Update snapshot durability counters only if `session` is still cached at `last_seq`.
+    /// Never re-inserts a fold that was evicted or invalidated during snapshot encoding.
+    pub(crate) fn mark_persisted(&self, session: SessionId, last_seq: u64) {
+        let mut entries = self.entries();
+        if let Some(entry) = entries.get_mut(&session)
+            && entry.projection.last_seq == last_seq
+        {
+            entry.persisted_seq = last_seq;
+            entry.unpersisted = 0;
+        }
     }
 
     fn insert(
@@ -195,6 +196,24 @@ impl ProjectionCache {
         );
     }
 
+    /// Advance an active cached fold (or initialize one from `SessionCreated`).
+    pub(crate) fn apply_envelope(&self, session: SessionId, env: &Envelope, init_on_create: bool) {
+        let now = self.tick();
+        let mut entries = self.entries();
+        if let Some(entry) = entries.get_mut(&session) {
+            if env.seq.0 > entry.projection.last_seq {
+                Arc::make_mut(&mut entry.projection).apply(env);
+                entry.unpersisted = entry.unpersisted.saturating_add(1);
+                entry.last_used = now;
+            }
+            return;
+        }
+        if init_on_create && matches!(env.event, hya_proto::Event::SessionCreated { .. }) {
+            let proj = Arc::new(Projection::from_events(std::slice::from_ref(env)));
+            self.insert(&mut entries, session, proj, 0, 1);
+        }
+    }
+
     /// Transfer cache ownership, apply the tail and publish without an await or cache gap.
     pub(crate) fn advance(
         &self,
@@ -202,6 +221,7 @@ impl ProjectionCache {
         prepared: PreparedFold,
         mut persisted_seq: u64,
         mut unpersisted: u64,
+        tail: &[Envelope],
     ) -> (Folded, u64, u64) {
         let mut entries = self.entries();
         if entries
@@ -210,12 +230,28 @@ impl ProjectionCache {
         {
             entries.remove(&session);
         }
-        let folded = prepared.finish();
+        let mut folded = prepared.finish();
         if folded.rebuilt {
             persisted_seq = 0;
             unpersisted = folded.applied;
         } else {
             unpersisted = unpersisted.saturating_add(folded.applied);
+        }
+        unpersisted = unpersisted.saturating_add(apply_tail(&mut folded.projection, tail));
+        if let Some(existing) = entries.get_mut(&session)
+            && existing.projection.last_seq >= folded.projection.last_seq
+        {
+            existing.last_used = self.tick();
+            let last_seq = existing.projection.last_seq;
+            return (
+                Folded {
+                    projection: Arc::clone(&existing.projection),
+                    applied: 0,
+                    rebuilt: false,
+                },
+                last_seq,
+                0,
+            );
         }
         if folded.projection.last_seq == 0 {
             entries.remove(&session);
@@ -231,6 +267,19 @@ impl ProjectionCache {
         (folded, persisted_seq, unpersisted)
     }
 
+    /// Apply `tail` on top of `prepared` without inserting or updating the cache.
+    pub(crate) fn finish_without_caching(
+        &self,
+        prepared: PreparedFold,
+        tail: &[Envelope],
+    ) -> Folded {
+        let mut folded = prepared.finish();
+        folded.applied = folded
+            .applied
+            .saturating_add(apply_tail(&mut folded.projection, tail));
+        folded
+    }
+
     /// Drop every entry for `sessions` (e.g. a deleted session and its
     /// descendants); unknown sessions are ignored.
     pub(crate) fn remove_all(&self, sessions: impl IntoIterator<Item = SessionId>) {
@@ -239,6 +288,22 @@ impl ProjectionCache {
             entries.remove(&session);
         }
     }
+}
+
+fn apply_tail(projection: &mut Arc<Projection>, tail: &[Envelope]) -> u64 {
+    let last_seq = projection.last_seq;
+    if !tail.iter().any(|env| env.seq.0 > last_seq) {
+        return 0;
+    }
+    let mut applied = 0_u64;
+    let proj = Arc::make_mut(projection);
+    for env in tail {
+        if env.seq.0 > proj.last_seq {
+            proj.apply(env);
+            applied = applied.saturating_add(1);
+        }
+    }
+    applied
 }
 
 fn seq_param(seq: u64) -> i64 {
@@ -355,7 +420,7 @@ pub(crate) async fn fold(
     })
 }
 
-/// Upsert the durable snapshot of `projection`.
+/// Upsert a pre-encoded durable snapshot for `session` at `last_seq`.
 ///
 /// Written only while the anchor event still exists, so a snapshot racing a
 /// `delete_session` is a no-op. Replacing a newer row with an older (still
@@ -363,11 +428,11 @@ pub(crate) async fn fold(
 pub(crate) async fn persist_snapshot(
     conn: &mut SqliteConnection,
     session: SessionId,
-    projection: &Projection,
+    last_seq: u64,
+    payload: Vec<u8>,
 ) -> Result<(), StoreError> {
-    let payload = projection.encode_snapshot()?;
     let key = session.storage_key();
-    let last_seq = seq_param(projection.last_seq);
+    let last_seq = seq_param(last_seq);
     sqlx::query(
         "INSERT INTO projection_snapshot (session_id, reducer_version, last_seq, payload) \
          SELECT ?1, ?2, ?3, ?4 \
@@ -431,7 +496,7 @@ mod tests {
             "read warmed the cache"
         );
 
-        let mut tx = store.pool.begin().await.unwrap();
+        let mut tx = store.begin_transaction().await.unwrap();
         append_event_in_transaction(
             &mut tx,
             session,
@@ -453,5 +518,40 @@ mod tests {
             store.read_projection(session).await.unwrap(),
             Projection::from_events(&store.replay(session).await.unwrap())
         );
+    }
+
+    #[tokio::test]
+    async fn mark_persisted_never_reinserts_removed_or_stale_entry() {
+        let store = SessionStore::connect_memory().await.unwrap();
+        let session = SessionId::new();
+        store
+            .append_event(
+                session,
+                &Event::SessionTitled {
+                    session,
+                    title: "one".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let proj = store.read_projection(session).await.unwrap();
+        let last_seq = proj.last_seq;
+
+        // Removing the entry (e.g. unconfirmed raw tx release) prevents mark_persisted from inserting.
+        store.projections.remove_all([session]);
+        store.projections.mark_persisted(session, last_seq);
+        assert!(
+            store.projections.get(session).is_none(),
+            "mark_persisted must never re-insert a removed cache entry"
+        );
+
+        // Warm at last_seq: mismatching sequence leaves counters untouched; matching resets unpersisted.
+        let _ = store.read_projection(session).await.unwrap();
+        store.projections.mark_persisted(session, last_seq + 1);
+        assert_eq!(store.projections.get(session).unwrap().persisted_seq, 0);
+        store.projections.mark_persisted(session, last_seq);
+        let updated = store.projections.get(session).unwrap();
+        assert_eq!(updated.persisted_seq, last_seq);
+        assert_eq!(updated.unpersisted, 0);
     }
 }

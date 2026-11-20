@@ -258,3 +258,57 @@ async fn saved_permission_without_time_is_stamped_on_insert() {
         "insert must stamp the creation time: {saved:?}"
     );
 }
+
+/// Pins that read APIs (`replay`, `list_sessions`, `session_exists`, `read_projection`)
+/// complete without waiting on an open write transaction. Writer/reader pool cardinality,
+/// `read_only` enforcement, and `test_before_acquire(false)` are pinned directly in `lib.rs`.
+#[tokio::test]
+async fn read_pool_reads_do_not_block_on_open_write_transaction() {
+    let path = temp_db();
+    let store = SessionStore::connect(&path).await.unwrap();
+    let session = SessionId::new();
+    store
+        .append_event(
+            session,
+            &Event::SessionCreated {
+                session,
+                parent: None,
+                agent: "build".into(),
+                model: "fake".into(),
+                workdir: "/tmp".into(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
+            },
+        )
+        .await
+        .unwrap();
+
+    // Holding an open write transaction must not block concurrent read queries.
+    let tx = store.begin_transaction().await.unwrap();
+    let deadline = std::time::Duration::from_millis(500);
+    let replayed = tokio::time::timeout(deadline, store.replay(session))
+        .await
+        .expect("replay must not block on open write transaction")
+        .unwrap();
+    assert_eq!(replayed.len(), 1);
+    let listed = tokio::time::timeout(deadline, store.list_sessions())
+        .await
+        .expect("list_sessions must not block on open write transaction")
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    let exists = tokio::time::timeout(deadline, store.session_exists(session))
+        .await
+        .expect("session_exists must not block on open write transaction")
+        .unwrap();
+    assert!(exists);
+    let proj = tokio::time::timeout(deadline, store.read_projection(session))
+        .await
+        .expect("read_projection must not block on open write transaction")
+        .unwrap();
+    assert_eq!(proj.last_seq, 1);
+    drop(tx);
+    drop(store);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(format!("{path}-wal"));
+    let _ = std::fs::remove_file(format!("{path}-shm"));
+}

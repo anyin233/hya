@@ -41,3 +41,4 @@ mod p39_exec_live_subagents;
 mod p40_exec_headless_continuation;
 mod p41_code_mode;
 mod p42_exec_step_fold;
+mod p43_store_robustness;

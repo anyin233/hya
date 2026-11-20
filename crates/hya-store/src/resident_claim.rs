@@ -331,6 +331,19 @@ impl SessionStore {
         events: Vec<Event>,
         acknowledgement: Option<Event>,
     ) -> Result<Vec<Envelope>, StoreError> {
+        if claim.is_none()
+            && let Some(queue) = &self.write_queue
+        {
+            let mut batch: Vec<(SessionId, Event)> =
+                events.into_iter().map(|ev| (session, ev)).collect();
+            if let Some(ack) = acknowledgement {
+                let root = ack.session().ok_or_else(|| {
+                    StoreError::ActorClaimData("mail acknowledgement has no session".into())
+                })?;
+                batch.push((root, ack));
+            }
+            return queue.submit(Vec::new(), batch).await;
+        }
         let mut tx = self.begin_transaction().await?;
         if let Some(claim) = claim {
             fence_actor_claim(&mut tx, claim).await?;
@@ -353,17 +366,21 @@ impl SessionStore {
 
     /// Session ids of resident actors currently in the `active` claim state.
     pub async fn active_actor_ids(&self) -> Result<Vec<SessionId>, StoreError> {
-        let rows = sqlx::query(
-            "SELECT actor_id FROM resident_actor_claim WHERE state = 'active' ORDER BY actor_id",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        rows.into_iter()
-            .map(|row| {
-                let actor_id: Vec<u8> = row.try_get("actor_id")?;
-                decode_session_key(&actor_id)
-            })
-            .collect()
+        let pool = self.read_pool_checked()?;
+        self.run_read_bounded("active_actor_ids", async {
+            let rows = sqlx::query(
+                "SELECT actor_id FROM resident_actor_claim WHERE state = 'active' ORDER BY actor_id",
+            )
+            .fetch_all(pool)
+            .await?;
+            rows.into_iter()
+                .map(|row| {
+                    let actor_id: Vec<u8> = row.try_get("actor_id")?;
+                    decode_session_key(&actor_id)
+                })
+                .collect()
+        })
+        .await
     }
 
     /// Claim a never-claimed or explicitly released actor.
@@ -385,7 +402,7 @@ impl SessionStore {
 
     /// Claim an actor as part of the caller's registration transaction.
     pub async fn try_claim_new_in_transaction(
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        tx: &mut crate::StoreTransaction<'_>,
         root: SessionId,
         actor_id: SessionId,
         owner_run_id: OwnerRunId,
@@ -485,7 +502,7 @@ impl SessionStore {
     pub async fn live_member_count(&self, root: SessionId) -> Result<u64, StoreError> {
         let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM resident_actor_claim WHERE root_session_id = ? AND state = 'active'",
-        ).bind(root.storage_key()).fetch_one(&self.pool).await?;
+        ).bind(root.storage_key()).fetch_one(self.read_pool_checked()?).await?;
         Ok(count as u64)
     }
 
@@ -532,7 +549,7 @@ impl SessionStore {
              WHERE actor_id = ? AND state = 'active'",
         )
         .bind(claim.actor_id.storage_key())
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.read_pool_checked()?)
         .await?
         .map(decode_claim)
         .transpose()?;
@@ -625,7 +642,7 @@ impl SessionStore {
 }
 
 pub(crate) async fn fence_actor_claim(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    tx: &mut crate::StoreTransaction<'_>,
     claim: &ActorClaim,
 ) -> Result<(), StoreError> {
     let current = sqlx::query(
@@ -678,7 +695,7 @@ pub struct EpisodeRegistration {
 }
 
 async fn check_capacity(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    tx: &mut crate::StoreTransaction<'_>,
     root: SessionId,
     requested: u64,
     limit: u64,

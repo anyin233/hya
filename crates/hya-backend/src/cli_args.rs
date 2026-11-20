@@ -133,7 +133,7 @@ pub(crate) enum ServeAction {
         #[arg(long)]
         force: bool,
         /// Seconds to wait for a graceful stop.
-        #[arg(long, default_value_t = 30, value_name = "SECONDS")]
+        #[arg(long, default_value_t = 45, value_name = "SECONDS")]
         timeout: u64,
     },
     /// Stop the backend of `--db` (if one runs), then start a new daemon.
@@ -146,7 +146,7 @@ pub(crate) enum ServeAction {
         #[arg(long)]
         force: bool,
         /// Seconds to wait for the old backend to stop.
-        #[arg(long, default_value_t = 30, value_name = "SECONDS")]
+        #[arg(long, default_value_t = 45, value_name = "SECONDS")]
         timeout: u64,
         /// Join this relay instead of the one the old backend was joined to
         /// (by default the new daemon rejoins the old backend's relay).
@@ -1061,6 +1061,13 @@ mod tests {
             )
         );
         assert_eq!(
+            action(parse(["hya", "serve", "stop"])).0,
+            Some(ServeAction::Stop {
+                force: false,
+                timeout: 45
+            })
+        );
+        assert_eq!(
             action(parse(["hya", "serve", "stop", "--force", "--timeout", "5"])).0,
             Some(ServeAction::Stop {
                 force: true,
@@ -1072,7 +1079,7 @@ mod tests {
             Some(ServeAction::Restart {
                 json: false,
                 force: false,
-                timeout: 30,
+                timeout: 45,
                 relay: super::RelayFlags::default(),
             })
         );

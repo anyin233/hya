@@ -534,3 +534,116 @@ async fn oversized_prior_content_is_not_kept_and_not_restored() {
     assert_eq!(read(&big).as_deref(), Some("small"));
     assert!(!outcome.files[0].restored.restorable());
 }
+
+#[tokio::test]
+async fn revert_restores_paths_when_budget_read_exceeds_read_timeout() {
+    let shm_dir = TempDir(std::env::temp_dir().join(format!("hya-revert-{}", SessionId::new())));
+    std::fs::create_dir_all(&shm_dir.0).unwrap();
+    let workdir = shm_dir.0.join("work").canonicalize().unwrap_or_else(|_| {
+        std::fs::create_dir_all(shm_dir.0.join("work")).unwrap();
+        shm_dir.0.join("work").canonicalize().unwrap()
+    });
+    let file = workdir.join("a.txt");
+    std::fs::write(&file, "before").unwrap();
+    let db = shm_dir.0.join("hya.db");
+    let db_str = db.to_str().unwrap();
+
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![
+        Rule::new(Action::Edit, "**", Mode::Allow),
+        Rule::new(Action::Bash, "**", Mode::Allow),
+        Rule::new(Action::Read, "**", Mode::Allow),
+    ]));
+    let session = {
+        let store = SessionStore::connect(db_str).await.unwrap();
+        let router = Arc::new(ProviderRouter::new().with(Arc::new(Recording {
+            inner: FakeProvider::scripted_turns(tool_turn(
+                "write",
+                json!({"path": "a.txt", "content": "after"}),
+            )),
+            users: Arc::new(Mutex::new(Vec::new())),
+        })));
+        let engine = SessionEngine::new(
+            store,
+            router,
+            support::test_runtime(Arc::new(ToolRegistry::builtins())),
+            perm.clone(),
+            EventBus::default(),
+        );
+        let session = engine
+            .create(CreateSession {
+                parent: None,
+                agent: AgentName::new("hya-main"),
+                model: ModelRef::new("fake"),
+                workdir: workdir.to_string_lossy().into_owned(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
+            })
+            .await
+            .unwrap();
+        let agent = AgentSpec {
+            name: AgentName::new("hya-main"),
+            model: ModelRef::new("fake"),
+            system_prompt: "x".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        engine
+            .admit_user_prompt(session, "overwrite a.txt".to_string())
+            .await
+            .unwrap();
+        engine
+            .run_turn(session, &agent, CancellationToken::new())
+            .await
+            .unwrap();
+        // Add 60,000 auxiliary rows in `file_blob` for `session` so healthy `SUM(size)`
+        // scans ~30MB on tmpfs and naturally exceeds the 2ms `read_timeout` below while
+        // `session_lineage` and `event_log` queries stay sub-millisecond.
+        let mut tx = engine.store().begin_transaction().await.unwrap();
+        sqlx::query(
+            "WITH RECURSIVE cnt(x) AS (VALUES(1) UNION ALL SELECT x + 1 FROM cnt LIMIT 60000) \
+             INSERT INTO file_blob (session_id, hash, size, content) \
+             SELECT ?, printf('pad_%060d', x), 100, zeroblob(400) FROM cnt",
+        )
+        .bind(session.storage_key())
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        session
+    };
+    assert_eq!(read(&file).as_deref(), Some("after"));
+
+    // Reopen with 2ms read_timeout and normal 5s write_timeout: healthy `BlobBudget::load` inside
+    // revert_session takes > 2ms and must NOT abort with READ_TIMEOUT.
+    let read_timeout = std::time::Duration::from_millis(2);
+    let slow_store = SessionStore::connect_with_timeouts(
+        db_str,
+        std::time::Duration::from_secs(5),
+        read_timeout,
+    )
+    .await
+    .unwrap();
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(Recording {
+        inner: FakeProvider::scripted_turns(Vec::new()),
+        users: Arc::new(Mutex::new(Vec::new())),
+    })));
+    let engine = SessionEngine::new(
+        slow_store,
+        router,
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        perm,
+        EventBus::default(),
+    );
+    let started = std::time::Instant::now();
+    let outcome = engine
+        .revert_session(session, RevertTarget::LastUserMessage)
+        .await
+        .expect("healthy revert must not fail at READ_TIMEOUT");
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed > read_timeout,
+        "revert budget read must actually exceed read_timeout ({read_timeout:?}), elapsed={elapsed:?}"
+    );
+    assert_eq!(outcome.files.len(), 1);
+    assert_eq!(read(&file).as_deref(), Some("before"));
+}

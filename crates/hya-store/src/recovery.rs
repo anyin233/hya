@@ -132,7 +132,7 @@ impl SessionStore {
     ) -> Result<InterruptedTurnRecovery, StoreError> {
         self.require_runtime_owner(owner)?;
         let keys = sqlx::query("SELECT DISTINCT session_id FROM open_assistant_message")
-            .fetch_all(&self.pool)
+            .fetch_all(self.read_pool_checked()?)
             .await?
             .into_iter()
             .map(|row| row.try_get::<Vec<u8>, _>("session_id"))
@@ -175,7 +175,7 @@ impl SessionStore {
         // Fold outside the writer transaction first so the (possibly first)
         // full replay lands in the cache; the transaction folds only the tail.
         self.warm_projection(session).await?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.begin_transaction().await?;
         let projection = replay_projection(&self.projections, &mut tx, session).await?;
         let code = match cause {
             FinishCause::Interrupted => "INTERRUPTED",

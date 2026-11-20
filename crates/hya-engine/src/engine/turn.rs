@@ -59,6 +59,8 @@ struct TurnExecution<'a> {
     workflow_route: Option<&'a WorkflowTurnRoute>,
     /// Round-boundary rebind inputs, present for Root activations only.
     rebind: Option<TurnRebindInputs<'a>>,
+    /// Per-turn fallback holding last successful SQL preference reads.
+    effort_fallback: super::TurnEffortFallback,
 }
 
 /// What a Root activation retains so a round-boundary rebind can recompile.
@@ -956,8 +958,15 @@ impl SessionEngine {
                 }
             };
             let (agent, agents, resources) = prepared?;
+            let mut effort_fallback = super::TurnEffortFallback::default();
             // `list_agents` shows the user's runtime/configured Agent efforts.
-            let agents = self.annotate_agent_efforts(agents, Some(&binding)).await?;
+            let agents = self
+                .annotate_agent_efforts_with(
+                    agents,
+                    Some(&binding),
+                    Some((session, &mut effort_fallback)),
+                )
+                .await?;
             let stable_id = projection
                 .session
                 .agent
@@ -1009,6 +1018,7 @@ impl SessionEngine {
                     sidecar_tools: Arc::clone(&root_sidecar_tools),
                     sidecar_hooks,
                 }),
+                effort_fallback,
             };
             let mut rounds = Box::pin(self.run_turn_rounds(session, message, &agent, execution));
             if let Some(loss_token) = sidecar_loss {

@@ -58,6 +58,54 @@ mod handoff;
 mod mailbox;
 mod nested_tools;
 pub(crate) use mailbox::dm_channel_between;
+
+/// Per-turn memory of the last successful effort-preference reads. Healthy turns
+/// still read SQLite every time; only a later storage fault or timeout reuses
+/// the last value and emits one warning for the turn.
+#[derive(Default)]
+pub(super) struct TurnEffortFallback {
+    agent_list: Option<BTreeMap<String, ReasoningEffort>>,
+    agent_pref: Option<(String, Option<ReasoningEffort>)>,
+    model_prefs: HashMap<String, Option<ReasoningEffort>>,
+    warned: bool,
+}
+
+async fn cached_pref<T: Clone, F, Fut>(
+    timeout: std::time::Duration,
+    operation: &'static str,
+    turn: Option<(SessionId, &mut TurnEffortFallback)>,
+    read: F,
+    get: impl FnOnce(&TurnEffortFallback) -> Option<&T>,
+    put: impl FnOnce(&mut TurnEffortFallback, &T),
+) -> Result<T, CoreError>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<T, hya_store::StoreError>>,
+{
+    let Some((session, fb)) = turn else {
+        return Ok(read().await?);
+    };
+    match tokio::time::timeout(timeout, read())
+        .await
+        .map_err(|_| hya_store::StoreError::StorageTimeout { operation, timeout })
+        .and_then(|res| res)
+    {
+        Ok(val) => {
+            put(fb, &val);
+            Ok(val)
+        }
+        Err(error) => {
+            let Some(prev) = get(fb).filter(|_| error.is_storage_fault()).cloned() else {
+                return Err(error.into());
+            };
+            if !fb.warned {
+                fb.warned = true;
+                tracing::warn!(%session, operation, "effort preference store unavailable; reusing last read value for turn: {error}");
+            }
+            Ok(prev)
+        }
+    }
+}
 mod member_control;
 mod members;
 mod model_probe;
@@ -744,11 +792,39 @@ impl SessionEngine {
         authored: Option<ReasoningEffort>,
         binding: Option<&TurnBinding>,
     ) -> Result<Option<(ReasoningEffort, crate::AgentEffortSource)>, CoreError> {
-        let preference = self
-            .store
-            .get_agent_effort_preference(agent_id)
-            .await?
-            .and_then(|row| ReasoningEffort::parse(&row.effort));
+        self.agent_effort_with(agent_id, authored, binding, None)
+            .await
+    }
+
+    async fn agent_effort_with(
+        &self,
+        agent_id: &str,
+        authored: Option<ReasoningEffort>,
+        binding: Option<&TurnBinding>,
+        turn: Option<(SessionId, &mut TurnEffortFallback)>,
+    ) -> Result<Option<(ReasoningEffort, crate::AgentEffortSource)>, CoreError> {
+        let store = &self.store;
+        let preference = cached_pref(
+            store.read_timeout(),
+            "get_agent_effort_preference",
+            turn,
+            || async {
+                Ok(store
+                    .get_agent_effort_preference(agent_id)
+                    .await?
+                    .and_then(|r| ReasoningEffort::parse(&r.effort)))
+            },
+            |fb| {
+                fb.agent_pref
+                    .as_ref()
+                    .and_then(|(id, v)| (id == agent_id).then_some(v))
+            },
+            |fb, &val| match &mut fb.agent_pref {
+                Some((id, prev)) if id == agent_id => *prev = val,
+                slot => *slot = Some((agent_id.to_string(), val)),
+            },
+        )
+        .await?;
         let configured = binding
             .and_then(|binding| binding.project_agent_effort(agent_id))
             .unwrap_or_else(|| {
@@ -772,13 +848,33 @@ impl SessionEngine {
         agents: Arc<[AgentDef]>,
         binding: Option<&TurnBinding>,
     ) -> Result<Arc<[AgentDef]>, CoreError> {
-        let preferences: BTreeMap<String, ReasoningEffort> = self
-            .store
-            .list_agent_effort_preferences()
-            .await?
-            .into_iter()
-            .filter_map(|row| Some((row.agent_id, ReasoningEffort::parse(&row.effort)?)))
-            .collect();
+        self.annotate_agent_efforts_with(agents, binding, None)
+            .await
+    }
+
+    pub(super) async fn annotate_agent_efforts_with(
+        &self,
+        agents: Arc<[AgentDef]>,
+        binding: Option<&TurnBinding>,
+        turn: Option<(SessionId, &mut TurnEffortFallback)>,
+    ) -> Result<Arc<[AgentDef]>, CoreError> {
+        let store = &self.store;
+        let preferences = cached_pref(
+            store.read_timeout(),
+            "list_agent_effort_preferences",
+            turn,
+            || async {
+                Ok(store
+                    .list_agent_effort_preferences()
+                    .await?
+                    .into_iter()
+                    .filter_map(|row| Some((row.agent_id, ReasoningEffort::parse(&row.effort)?)))
+                    .collect::<BTreeMap<String, ReasoningEffort>>())
+            },
+            |fb| fb.agent_list.as_ref(),
+            |fb, val| fb.agent_list = Some(val.clone()),
+        )
+        .await?;
         let configured = self.runtime.agent_effort_configuration();
         if preferences.is_empty() && configured.is_empty() && binding.is_none() {
             return Ok(agents);
@@ -828,9 +924,26 @@ impl SessionEngine {
         authored: Option<ReasoningEffort>,
         binding: Option<&TurnBinding>,
     ) -> Result<crate::EffectiveEffort, CoreError> {
+        self.effective_effort_with(model, agent_id, authored, binding, None)
+            .await
+    }
+
+    pub(super) async fn effective_effort_with(
+        &self,
+        model: &ModelRef,
+        agent_id: Option<&str>,
+        authored: Option<ReasoningEffort>,
+        binding: Option<&TurnBinding>,
+        mut turn: Option<(SessionId, &mut TurnEffortFallback)>,
+    ) -> Result<crate::EffectiveEffort, CoreError> {
         let agent = match agent_id {
-            Some(agent_id) => self
-                .agent_effort(agent_id, authored, binding)
+            Some(id) => self
+                .agent_effort_with(
+                    id,
+                    authored,
+                    binding,
+                    turn.as_mut().map(|(s, fb)| (*s, &mut **fb)),
+                )
                 .await?
                 .map(|(effort, _)| effort),
             None => authored,
@@ -838,13 +951,31 @@ impl SessionEngine {
         let base = model
             .as_str()
             .rsplit_once('#')
-            .map_or(model.as_str(), |(base, _)| base);
+            .map_or(model.as_str(), |(b, _)| b);
         let preference = match base.split_once('/') {
-            Some((provider, model_id)) => self
-                .store
-                .get_model_effort_preference(provider, model_id)
+            Some((provider, model_id)) => {
+                let store = &self.store;
+                cached_pref(
+                    store.read_timeout(),
+                    "get_model_effort_preference",
+                    turn,
+                    || async {
+                        Ok(store
+                            .get_model_effort_preference(provider, model_id)
+                            .await?
+                            .and_then(|r| ReasoningEffort::parse(&r.effort)))
+                    },
+                    |fb| fb.model_prefs.get(base),
+                    |fb, &val| {
+                        if let Some(prev) = fb.model_prefs.get_mut(base) {
+                            *prev = val;
+                        } else {
+                            fb.model_prefs.insert(base.to_string(), val);
+                        }
+                    },
+                )
                 .await?
-                .and_then(|row| ReasoningEffort::parse(&row.effort)),
+            }
             None => None,
         };
         Ok(crate::resolve_effort(

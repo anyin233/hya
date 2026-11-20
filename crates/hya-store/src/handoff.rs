@@ -25,7 +25,7 @@ impl SessionStore {
         let rows = sqlx::query(
             "SELECT session_id, message_id FROM pending_resume ORDER BY created_at, session_id",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.read_pool_checked()?)
         .await?;
         rows.iter()
             .map(|row| {
@@ -52,7 +52,7 @@ impl SessionStore {
         owner: OwnerRunId,
     ) -> Result<Option<(MessageId, Vec<Envelope>)>, StoreError> {
         self.require_runtime_owner(owner)?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.begin_transaction().await?;
         let row = sqlx::query(
             "SELECT message_id, prompt_message_id FROM pending_resume WHERE session_id = ?",
         )
@@ -256,11 +256,11 @@ mod tests {
         store.claim_runtime_owner(owner).unwrap();
         let (session, _) = interrupted(&store).await;
         sqlx::query("CREATE TRIGGER fail_restore BEFORE INSERT ON event_log BEGIN SELECT RAISE(ABORT, 'injected append failure'); END")
-        .execute(&store.pool).await.unwrap();
+        .execute(&store.writer_pool).await.unwrap();
         assert!(store.take_restart_resume(session, owner).await.is_err());
         assert_eq!(store.list_pending_resumes().await.unwrap().len(), 1);
         sqlx::query("DROP TRIGGER fail_restore")
-            .execute(&store.pool)
+            .execute(&store.writer_pool)
             .await
             .unwrap();
         assert!(
@@ -282,7 +282,7 @@ mod tests {
         let (session, _) = interrupted(&store).await;
         sqlx::query("DELETE FROM event_log WHERE session_id = ?")
             .bind(session.storage_key())
-            .execute(&store.pool)
+            .execute(&store.writer_pool)
             .await
             .unwrap();
         assert!(
@@ -316,7 +316,7 @@ mod tests {
             )
             .await
             .unwrap();
-        sqlx::query("CREATE TRIGGER fail_resume BEFORE INSERT ON pending_resume BEGIN SELECT RAISE(ABORT, 'injected resume failure'); END").execute(&store.pool).await.unwrap();
+        sqlx::query("CREATE TRIGGER fail_resume BEFORE INSERT ON pending_resume BEGIN SELECT RAISE(ABORT, 'injected resume failure'); END").execute(&store.writer_pool).await.unwrap();
         assert!(
             store
                 .append_event(

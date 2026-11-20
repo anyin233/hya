@@ -138,11 +138,13 @@ pub(crate) async fn install(connection: &mut sqlx::SqliteConnection) -> Result<(
 
 /// Open every pool connection before a measured phase; excludes lazy setup noise.
 pub async fn warm(store: &crate::SessionStore) -> Result<(), sqlx::Error> {
-    let mut connections = Vec::new();
-    for _ in 0..8 {
-        connections.push(store.pool.acquire().await?);
+    drop(store.writer_pool.acquire().await?);
+    let reader_slots = store.read_pool.options().get_max_connections() as usize;
+    let mut readers = Vec::with_capacity(reader_slots);
+    for _ in 0..reader_slots {
+        readers.push(store.read_pool.acquire().await?);
     }
-    drop(connections);
+    drop(readers);
     Ok(())
 }
 
@@ -151,13 +153,14 @@ mod tests {
     #[tokio::test]
     async fn counts_committed_payloads_and_discards_rollbacks()
     -> Result<(), Box<dyn std::error::Error>> {
+        let _guard = crate::file_store_test_lock().await;
         let path =
             std::env::temp_dir().join(format!("hya-counter-{}.db", hya_proto::SessionId::new()));
         let store = crate::SessionStore::connect(path.to_str().ok_or("path")?).await?;
         super::warm(&store).await?;
         let before_sql = super::snapshot();
         sqlx::raw_sql("SELECT 1; SELECT 2;")
-            .execute(&store.pool)
+            .execute(&store.writer_pool)
             .await?;
         assert_eq!(super::snapshot().statements - before_sql.statements, 2);
         let session = hya_proto::SessionId::new();
@@ -187,6 +190,8 @@ mod tests {
         let rolled_back = super::snapshot();
         assert_eq!(rolled_back.events, after.events);
         assert_eq!(rolled_back.bytes, after.bytes);
+        store.writer_pool.close().await;
+        store.read_pool.close().await;
         drop(store);
         std::fs::remove_file(path)?;
         Ok(())

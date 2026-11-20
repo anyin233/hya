@@ -431,6 +431,12 @@ title = "headless exec: a single turn whose steps outgrow the window has its old
 track = "P"
 path = "crates/hya-e2e/tests/it/p42_exec_step_fold.rs"
 
+[[scenario]]
+id = "T2.54"
+title = "store robustness: external write locks, unopenable or stalled opens, mid-run database replacement, strict server/command open failures, signal exit drain, and exit durability reports"
+track = "P"
+path = "crates/hya-e2e/tests/it/p43_store_robustness.rs"
+
 # Index-only deep engine coverage (not duplicated in Track P).
 [[scenario]]
 id = "I.nested"
