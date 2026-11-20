@@ -46,7 +46,13 @@ pub(crate) async fn cmd_serve(
         }
     };
     let link = match relay_settings {
-        Some(settings) => Some(prepared.relay.connect(settings).await?),
+        Some(settings) => match prepared.relay.connect(settings).await {
+            Ok(link) => Some(link),
+            Err(error) => {
+                shutdown_prepared(prepared).await;
+                return Err(error.into());
+            }
+        },
         None => None,
     };
     println!("hya server listening on {}", prepared.url);
@@ -338,15 +344,33 @@ pub(crate) async fn serve_until(
             let _ = drained.send(result);
         })
         .await;
-    if let Some(task) = extra_served {
-        task.await.context("join extra gRPC listener")?;
-    }
+    let extra_result = match extra_served {
+        Some(task) => task.await.context("join extra gRPC listener"),
+        None => Ok(()),
+    };
     relay.shutdown().await;
     drop(lock);
     let shutdown_result = built.shutdown().await.context("shutdown spawn supervisor");
     drop(built);
     drain_result.await.context("receive drain result")??;
+    extra_result?;
     shutdown_result
+}
+
+/// Tear down a [`PreparedServer`] through the same shutdown path as a normal stop
+/// when post-prepare startup (such as relay connect) fails.
+async fn shutdown_prepared(prepared: PreparedServer) {
+    let PreparedServer {
+        mut built,
+        lock,
+        relay,
+        ..
+    } = prepared;
+    relay.shutdown().await;
+    drop(lock);
+    if let Err(error) = built.shutdown().await {
+        eprintln!("hya: shutdown after startup failure failed: {error:#}");
+    }
 }
 
 /// Whether startup failed because another process still holds the runtime
@@ -374,6 +398,41 @@ pub(crate) async fn prepare_server(
 ) -> anyhow::Result<PreparedServer> {
     emit_startup_mark("backend_start", None);
     let store = open_store(&db).await?;
+    let exit_store = store.clone();
+    match prepare_server_with_store(
+        store,
+        bind,
+        &db,
+        model_override,
+        yolo,
+        pure,
+        relay_flags,
+        hosts,
+    )
+    .await
+    {
+        Ok(prepared) => Ok(prepared),
+        Err(error) => {
+            exit_store
+                .drain_and_report_exit(hya_store::EXIT_DRAIN_TIMEOUT)
+                .await;
+            Err(error)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn prepare_server_with_store(
+    store: hya_store::SessionStore,
+    bind: &str,
+    db: &str,
+    model_override: Option<String>,
+    yolo: bool,
+    pure: bool,
+    relay_flags: &RelayFlags,
+    hosts: &hya_server::HostPolicy,
+) -> anyhow::Result<PreparedServer> {
+    let has_file_store = store.paths().is_some();
     emit_startup_mark("store_open", None);
     let crate::startup::StartedEngine {
         mut built,
@@ -390,7 +449,11 @@ pub(crate) async fn prepare_server(
     )
     .await?;
     let agent = Arc::new(agent);
-    let mut lock = db_lock::owned_metadata(&db)?;
+    let mut lock = if has_file_store {
+        db_lock::owned_metadata(db)?
+    } else {
+        None
+    };
     emit_startup_mark("engine_built", None);
     let engine = built.engine();
     let asks = built
@@ -420,7 +483,7 @@ pub(crate) async fn prepare_server(
     state = state.with_permission_requests(asks);
     // The relay host connector: its identity lives next to the database;
     // the discovery file records the relay it joins (never the link).
-    let relay = hya_server::RelayHost::new(serve_relay::host_config(&db, relay_flags));
+    let relay = hya_server::RelayHost::new(serve_relay::host_config(db, relay_flags));
     if let Some(discovery) = lock.as_ref().map(db_lock::DbLock::discovery_path) {
         let heartbeat = relay_flags.relay_heartbeat;
         relay.set_settings_hook(Arc::new(move |settings| {
@@ -564,8 +627,10 @@ fn emit_startup_mark(mark: &str, detail: Option<&str>) {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod runtime_owner_busy_tests {
-    use super::runtime_owner_busy;
+    use super::{PreparedServer, prepare_server, runtime_owner_busy, shutdown_prepared};
+    use crate::cli_args::RelayFlags;
 
     #[test]
     fn a_held_runtime_owner_anywhere_in_the_chain_is_busy() {
@@ -574,5 +639,64 @@ mod runtime_owner_busy_tests {
         assert!(runtime_owner_busy(&busy));
         let other = anyhow::anyhow!("bind 127.0.0.1:0").context("listen");
         assert!(!runtime_owner_busy(&other));
+    }
+
+    #[tokio::test]
+    async fn shutdown_prepared_drains_store_after_post_prepare_failure() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "hya-serve-post-prepare-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("s.db");
+        let hosts = hya_server::HostPolicy::loopback();
+        let prepared: PreparedServer = prepare_server(
+            "127.0.0.1:0",
+            db.to_string_lossy().into_owned(),
+            Some("hya/offline".into()),
+            false,
+            true,
+            &RelayFlags::default(),
+            &hosts,
+        )
+        .await
+        .unwrap();
+        let store = prepared.built.engine().store().clone();
+        // Force degradation before post-prepare teardown (e.g. relay failure) runs.
+        std::fs::remove_file(&db).unwrap();
+        let session = hya_proto::SessionId::new();
+        store
+            .append_event(
+                session,
+                &hya_proto::Event::SessionTitled {
+                    session,
+                    title: "unpersisted-on-relay-fail".into(),
+                },
+            )
+            .await
+            .unwrap();
+        shutdown_prepared(prepared).await;
+        let mut line = Vec::new();
+        let report = store
+            .drain_and_report_exit_to(std::time::Duration::from_secs(1), &mut line)
+            .await;
+        assert!(
+            matches!(
+                report,
+                hya_store::ExitDrainReport::Unpersisted { events: 1, .. }
+            ),
+            "expected Unpersisted report after shutdown_prepared, got {report:?}"
+        );
+        // BuiltSessionEngine::shutdown already emitted the once-per-store stderr line.
+        assert!(
+            line.is_empty(),
+            "shutdown_prepared should already have consumed exit report: {}",
+            String::from_utf8_lossy(&line)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

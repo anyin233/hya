@@ -13,17 +13,22 @@ in one batch. Completed text boundaries batch `TextStart`, `TextReplace`, and
 `ReasoningEnd` (the reasoning start remains durable when received).
 Live stream deltas and event ordering are unchanged.
 
-All event append paths use
-`append_event_in_transaction(&mut Transaction<Sqlite>, SessionId, Event)`:
+All event append paths inside raw transactions use
+`append_event_in_transaction(&mut StoreTransaction<'_>, SessionId, Event)`:
 the sole row writer serializes the event, inserts `event_log`, updates its
-materialized indexes, and returns `Result<Envelope, StoreError>`.
-`SessionStore::begin_transaction()` returns a `BEGIN IMMEDIATE` transaction for composing that
-writer with auxiliary rows; every SQLite write transaction in `hya-store`,
-`BundleRegistry`, and `ModelCache` begins with `BEGIN IMMEDIATE` so deferred
-read-to-write upgrades cannot fail immediately with `SQLITE_BUSY_SNAPSHOT`. For example, begin a transaction, append an event,
-write its auxiliary row using the same transaction, then commit and publish the
-returned envelope. Never publish before commit; dropping or rolling back the
-transaction discards both writes.
+materialized indexes, records the envelope on the transaction guard, and returns
+`Result<Envelope, StoreError>`. `SessionStore::begin_transaction()` returns a
+`StoreTransaction<'_>` holding a `BEGIN IMMEDIATE` transaction plus a
+write-queue barrier guard for composing that writer with auxiliary rows; every
+SQLite write transaction in `hya-store`, `BundleRegistry`, and `ModelCache`
+begins with `BEGIN IMMEDIATE` so deferred read-to-write upgrades cannot fail
+immediately with `SQLITE_BUSY_SNAPSHOT`. For example, begin a transaction,
+append an event, write its auxiliary row using the same transaction, then
+commit and publish the returned envelope. Never publish before commit; dropping
+or rolling back the transaction discards both writes without updating projection
+cache state, while advancing the in-process sequence high-water on every guard
+release to the highest recorded sequence number (leaving a harmless gap on
+rollback or cancellation).
 
 Resident batches validate the actor claim within the transaction; attachment
 batches store their blobs within it. Both consume `Vec<Event>` and return
@@ -33,15 +38,25 @@ same row writer. The engine publishes committed batches through
 
 ## Connections
 
-`SessionStore::connect(path)` opens a file-backed SQLite database with:
+`SessionStore::connect(path)` opens a file-backed SQLite database using two
+separate pools with no retirement by age or idleness (`max_lifetime(None)`,
+`idle_timeout(None)`) so closing the last handle of a WAL database never
+checkpoints under an exclusive lock mid-run:
 
-- create-if-missing enabled
-- WAL journal mode
-- normal synchronous mode
-- 300-second busy and pool-acquire timeout
-- foreign keys enabled
-- up to eight pooled connections
-- no connection retirement by age or idleness (`max_lifetime(None)`, `idle_timeout(None)`) so closing the last handle of a WAL database does not checkpoint under an exclusive lock
+- **Writer pool (`max_connections(1)`)**: single pinned write connection with
+  `test_before_acquire(false)` (so cancelling a pending acquire never drops and
+  closes the pinned writer handle while `after_release` skips pings when
+  `transaction_depth == 0` and otherwise flushes worker commands, rolls back any
+  open transaction left by a cancelled `begin_with`, and discards handles where
+  explicit rollback fails (SQLite auto-rolled back)), create-if-missing
+  enabled, WAL journal mode, normal synchronous mode, `FILE_POOL_WAIT_TIMEOUT`
+  (300 s) SQLite busy timeout and 300-second pool-acquire timeout, and foreign
+  keys enabled.
+- **Read pool (`max_connections(4)`)**: lazy `read_only(true)` pool
+  (`create_if_missing(false)`, `FILE_POOL_WAIT_TIMEOUT` (300 s) SQLite busy
+  timeout, 300-second pool-acquire timeout, bounded to 4 connections to keep
+  per-store file descriptors low) so reads do not wait for the writer connection
+  or hold open idle handles before first read.
 
 `SessionStore::connect_memory()` opens an in-memory SQLite database with one
 connection.
@@ -176,6 +191,25 @@ variants, prompts, Session content, and provider responses never enter this
 table. File-backed databases retain the rows across restart; memory databases
 do not, and separate database paths remain isolated.
 
+### Effort preferences (`agent_effort_preference`, `model_effort_preference`)
+
+`SessionStore` reads both preference tables directly from SQLite on every query
+(`get_agent_effort_preference`, `list_agent_effort_preferences`,
+`get_model_effort_preference`, `list_model_effort_preferences`), identical to
+`origin/main` on a healthy store, and serializes `upsert_*` and `clear_*`
+mutations (fenced by `require_runtime_owner`) through `begin_transaction()`.
+`StoreError::is_storage_fault()` exposes storage/locking timeouts and errors to
+outside callers. During a running turn, `SessionEngine` bounds its
+preference reads (`agent_effort` at turn start and round-boundary rebind, and
+`effective_effort` on every model round) with `READ_TIMEOUT` (5 s), remembers
+the last successful read for that same agent or model in the turn, and on a
+later storage fault or timeout reuses that remembered value and emits one
+`tracing::warn!` event for the turn (for subscribing hosts, not CLI stderr). If the turn's first read of that same agent or model fails, or a
+non-storage error occurs, the error propagates with no silent `"no preference"`
+default. What the user loses while the store cannot be read is that a
+preference change waits until storage reads recover instead of reaching a
+running turn.
+
 ### Projection snapshots
 
 `projection_snapshot` is the durable level of the
@@ -214,8 +248,16 @@ missing row only makes that one file unrestorable (the revert reports it as
 
 Store API: `put_file_blob(session, hash, content)` (`INSERT OR IGNORE`),
 `file_blob(session, hash) -> Option<Vec<u8>>`,
-`file_blob_bytes(session) -> u64` (the engine's per-session cap check), and
-`append_events_with_blobs(session, blobs, events)`, which inserts blobs and
+`file_blob_bytes(session) -> u64` (queries `SELECT COALESCE(SUM(size), 0)` on
+disk plus acknowledged queued blobs whose hashes are not yet on disk in one read
+transaction, bounded by `write_timeout` only while degraded via
+`run_read_bounded`; revert's `BlobBudget::load` and other non-fallback callers
+keep `origin/main` behavior, while `hya-core`'s lazy capture loads it via
+`BlobBudget::keep_prior` bounded by `READ_TIMEOUT` = 5 s on the first changed
+file needing a blob, omits the before-state as `"store unavailable"`, and emits
+a `tracing::warn!` event (for subscribing hosts, not CLI stderr) on a
+storage fault or timeout while propagating non-storage errors, meaning that edit
+continues but cannot be reverted from the log), and `append_events_with_blobs(session, blobs, events)`, which inserts blobs and
 appends events in one transaction (an image prompt: its images and its user
 message). Prompt images are referenced from `user_prompt_context_recorded`
 by hash, so the event log and projection snapshots stay small and replay is
@@ -425,7 +467,7 @@ treats them as a source of truth.
 | Level | Where | Written | Scope |
 | --- | --- | --- | --- |
 | In-process | `Arc<Projection>` per session, shared by every clone of one `SessionStore` (least recently read of 256 sessions evicted) | every read that folded new events | one process |
-| Durable | `projection_snapshot` row per session ([schema](#projection-snapshots)) | a read that folded ≥ 1024 events since the last snapshot (every read for the first fold of an existing log above that size) | every process on the database |
+| Durable | `projection_snapshot` row per session ([schema](#projection-snapshots)) | best-effort on a read that folded ≥ 1024 events since the last snapshot when the writer connection is immediately available (skipped if the writer is busy) | every process on the database |
 
 A read (`read_projection`, `read_projection_shared`, `with_projection`):
 
@@ -433,7 +475,10 @@ A read (`read_projection`, `read_projection_shared`, `with_projection`):
 2. selects `event_log` rows of the session with `seq >= base.last_seq`, checks
    that the first row is the base's anchor (`seq == last_seq`), and applies
    only the rows after it with `Projection::apply`;
-3. caches the result and, past the interval, upserts the durable snapshot.
+3. caches the result and, past the interval, encodes the snapshot before
+   attempting a non-blocking writer acquire (`try_acquire`); if the writer is
+   free it upserts the durable snapshot, and if the writer is busy the snapshot
+   write is skipped and retried on a later read.
 
 `read_projection_shared` returns the cached `Arc<Projection>` and
 `with_projection(session, |p| ...)` borrows it, so hot readers (the `wait`
@@ -632,7 +677,7 @@ migrations live under
 | Synchronous | **Normal** | **Full** |
 | Busy timeout | **300 seconds** | **Zero** (contention fails fast as `StoreError::BundleRegistryBusy`) |
 | Pool acquire timeout | **300 seconds** | **300 seconds** |
-| Pool max | 8 | 8 |
+| Pool max | 1 writer + 4 readers (lazy) | 8 |
 | Foreign keys | on | on |
 
 Opening the registry retries transient SQLite BUSY/LOCKED errors during connection
@@ -702,7 +747,7 @@ SQLite or migration error.
 
 The same store replay powers:
 
-- `SessionEngine::replay`
+- `SessionEngine::replay` and `SessionStore::replay_page` (matching `origin/main`, full-mode local `exec --json` runs live streaming plus an unbounded healthy startup catch-up and full-session replay on lag and at the end of every run, whereas `exec --bare --json` streams directly from `JsonEmit` without `exec_stream` replay and routed `exec --json` forwards server `/v1` events and propagates raw SDK replay errors; for full-mode local `exec --json`, lag and final replay reads — not startup catch-up — are bounded by `READ_TIMEOUT` = 5 s regardless of write health; non-storage errors at lag are ignored during live streaming as on `origin/main`, and on a storage fault or timeout during either a lag replay or the final replay `exec --json` flushes stdout, writes one warning line to stderr even if the final replay later succeeds or fails with a non-storage error, and exits with the run's result while non-storage final errors propagate after flushing stdout and emitting any recorded lag warning; the stream contains what was broadcast, what the final read's SQL snapshot shows, and the acknowledged queue tail, so an event whose producer was cancelled and whose SQLite COMMIT lands after that final snapshot is not in it)
 - `GET /v1/sessions/{session}/events` (curated replay; `include_raw` returns
   the raw envelope lines)
 - `hya tail-session`
@@ -783,3 +828,219 @@ the same fenced recovery transaction. No schema or wire contract changes.
 
 Projection snapshots use the [shared mail-record layout](event-model.md#teamprojection-mail-records).
 Reducer version 8 stores each record once and keeps inbox/channel indices in the snapshot.
+
+## Bounded synchronous commits and append queue
+
+### Introduction
+
+File-backed read-write `SessionStore` instances route all append operations through
+one per-store background writer task (`write_queue`) backed by an ordered queue.
+In healthy operation every append waits synchronously for SQLite commit; when a
+storage stall, external write lock, or transient storage fault exceeds
+`WRITE_TIMEOUT` (2 seconds), the store transitions to `StoreHealth::Degraded`,
+serves subsequent appends and cached session projections from memory so an active
+turn can finish, and retries the exact in-order disk transactions asynchronously
+until the queue drains back to `StoreHealth::Healthy`.
+
+### Usage
+
+No CLI flags or runtime configuration keys expose queue or durability bounds;
+all timeouts are fixed constants (`OPEN_TIMEOUT`, `WRITE_TIMEOUT`,
+`READ_TIMEOUT`, `EXIT_DRAIN_TIMEOUT`; see
+[ADR-0036](../adr/0036-bounded-append-queue-and-degraded-store.md)).
+Integration and fault-injection tests can override bounds through the
+`#[doc(hidden)]` constructors `SessionStore::connect_with_timeouts`,
+`SessionStore::connect_with_write_timeout`, and
+`SessionStore::connect_runtime_or_memory_with_timeouts`.
+
+Worked check in Rust:
+
+```rust
+use hya_store::{SessionStore, StoreHealth, WRITE_TIMEOUT};
+
+let store = SessionStore::connect("/tmp/sessions.db").await?;
+let (seq, _ts) = store.append_event(session, &event).await?;
+match store.health() {
+    StoreHealth::Healthy => assert!(WRITE_TIMEOUT.as_secs() == 2),
+    StoreHealth::Degraded { reason } => eprintln!("degraded: {reason}"),
+}
+```
+
+### Interface definitions
+
+- `pub const hya_store::OPEN_TIMEOUT: std::time::Duration` — 5-second limit for
+  locking, opening, and migrating a file-backed store in `connect_runtime_or_memory`.
+- `pub const hya_store::WRITE_TIMEOUT: std::time::Duration` — 2-second limit before
+  a healthy append transitions to degraded mode.
+- `pub const hya_store::READ_TIMEOUT: std::time::Duration` — 5-second limit for the
+  four fallback-guarded read sites regardless of write health.
+- `pub const hya_store::EXIT_DRAIN_TIMEOUT: std::time::Duration` — 30-second limit
+  for flushing queued appends on process or runtime exit.
+- `pub enum hya_store::StoreHealth`:
+  - `Healthy` — appends wait for SQLite commit; reads query disk/cache normally.
+  - `Degraded { reason: String }` — appends are queued in memory with
+    `ProjectionCache` updated immediately while the writer task retries disk
+    commits with exponential backoff (25 ms to 250 ms).
+- `pub enum hya_store::ExitDrainReport`:
+  - `Clean` — healthy store with no queued writes or open-time fallback; produces
+    no stderr line (`format_stderr_line() == None`).
+  - `Recovered { path, reason }` — store degraded mid-run, then flushed all queued
+    entries before exit.
+  - `Unpersisted { path, events, bytes, reason }` — queued writes remained at
+    exit due to `EXIT_DRAIN_TIMEOUT` or a permanent writer halt (`events` count
+    plus `bytes` counting serialized event payloads and queued `file_blob` bytes).
+  - `InMemoryFallback { path, events, bytes, reason }` — opening failed or
+    exceeded `OPEN_TIMEOUT`, so all events and blobs lived only in memory (`events` and `bytes` are `Option<u64>`, formatted as `"unknown event/byte count"` if querying the in-memory log fails).
+- `SessionStore::health(&self) -> StoreHealth` — returns current store durability
+  health (`Healthy` for read-only and `:memory:` stores).
+- `SessionStore::connect_runtime(path: &str) -> Result<SessionStore, StoreError>` and
+  `SessionStore::connect_runtime_or_memory(path: &str) -> Result<SessionStore, StoreError>` —
+  run path resolution, runtime-owner locking, and initial file-identity `stat` on
+  detached OS threads bounded by `OPEN_TIMEOUT` (5 s) so a stalled filesystem during
+  open neither skips the bound nor stalls runtime shutdown (per-operation `stat`
+  checks of the writer task, disk reads, and exit drain remain blocking calls on
+  the runtime answered from the kernel inode cache); `connect_runtime` (used
+  by `serve`, daemon, `HyaRuntime`, `sessions archive|unarchive`,
+  `workflow use|state`, and `workflow run --session`) fails strictly with the
+  open or timeout error, while `connect_runtime_or_memory` (used by one-shot
+  headless `exec`, `exec --bare`, `-p`, and direct `workflow run`) falls back to
+  an in-memory store for the process lifetime and records `memory_fallback()`,
+  still never masking `RuntimeOwnerBusy`, `UnsupportedDatabase`, or
+  `InvalidInput` errors (URIs, symlink loops).
+- `SessionStore::drain_for_exit` / `drain_and_report_exit` /
+  `drain_and_report_exit_to` — wait up to `EXIT_DRAIN_TIMEOUT` (returning
+  immediately if flushing halted or the store is an in-memory fallback) and emit
+  at most one stderr durability line per store instance (cannot run on
+  uncatchable `SIGKILL`).
+- **File identity & primary-key conflict protection**:
+  - `WriteQueue::start` records the database file's `(dev, ino)` via `stat` and
+    checks `verify_file_identity` (a blocking `stat` syscall answered from the
+    kernel inode cache, ~0.7 µs on local filesystems) before every writer
+    operation, raw transaction, disk read (`read_pool_checked`), and clean/recovered
+    exit drain report; missing files (`NotFound`/`NotADirectory`), changed
+    device/inode replacements, and 0-byte truncations permanently halt disk
+    flushing and block disk reads (never detecting partial non-zero truncation)
+    while keeping the queue/cache in memory without touching any replacement file.
+    Transient metadata errors (e.g., `PermissionDenied`, `EIO`) degrade, back
+    off, and retry rather than permanently halting.
+  - On `event_log.seq` primary-key conflicts (extended code `1555` or primary
+    code `19` referencing `event_log.seq`), the writer inspects the on-disk row:
+    exact `(session_id, payload, ts)` matches across the batch's events confirm an
+    earlier timed-out/aborted attempt landed and treat the op as committed; any
+    mismatch indicates a foreign writer and permanently halts flushing without
+    renumbering or writing around the conflict.
+- `SessionStore::connect_with_write_timeout(path: &str, write_timeout: Duration) -> Result<SessionStore, StoreError>` and `SessionStore::connect_runtime_or_memory_with_timeouts(...)` —
+  `#[doc(hidden)]` constructors for custom test timeouts.
+- `StoreError::StorageTimeout { operation, timeout }` and `StoreError::StoreDegraded { reason }` —
+  typed store errors returned when a bounded operation times out (`read_projection`,
+  `replay_page`, `file_blob`, `file_blob_bytes`, `begin_transaction`, `persist_snapshot`)
+  or when a non-append write refuses because the store is degraded/halted.
+- **Queued append methods** (`append_event`, `append_events`,
+  `append_events_with_blobs`, `put_file_blob`, and `commit_tool_result_with_mail`
+  when `claim.is_none()`):
+  - Assign monotonically increasing `EventSeq` values in process (seeded from
+    `MAX(seq)` / `sqlite_sequence` on open and raised on every `StoreTransaction`
+    guard release — commit, rollback, or drop — to the highest sequence recorded
+    via `append_event_in_transaction`, leaving a harmless gap if rolled back),
+    inserting explicit `seq` values with per-event timestamps.
+  - Wait without a timeout bound behind any pending or open `StoreTransaction`
+    before taking a `seq` or enqueuing, then wait up to `write_timeout` for
+    synchronous commit before transitioning to `StoreHealth::Degraded`.
+  - Keep timed-out in-flight transactions at the queue head without abandoning or
+    duplicating them; advance warm `ProjectionCache` entries on commit and update
+    or initialize entries (`SessionCreated`) on degrade.
+  - Propagate logical errors (pre-queue validation or non-storage SQLite errors
+    such as constraints and triggers) back to callers without degrading when
+    healthy; a logical failure encountered while flushing a degraded op halts
+    further flushing without overwriting the first degradation reason and keeps
+    `StoreHealth::Degraded`.
+  - Storage/locking errors (`StorageTimeout`, `PoolTimedOut`, `Io`,
+    `WorkerCrashed`, and SQLite primary codes `3 | 5 | 6 | 8 | 10 | 11 | 13 | 14 | 15 | 26`
+    modulo 256) degrade and retry.
+  - Slow reads never trigger degradation.
+- **Projection, replay, and blob reads**:
+  - Four fallback-guarded reads are bounded by `READ_TIMEOUT` (5 s) regardless of
+    write health: `exec --json` lag and final replay reads (not startup
+    catch-up), `hya-core`'s lazy `BlobBudget::keep_prior` call to
+    `file_blob_bytes` (not `file_blob_bytes` itself or revert), in-turn effort
+    preference reads in `SessionEngine`, and the optional anchored follow-up
+    fold in `cached_projection`. All other healthy reads remain unbounded.
+  - `cached_projection` captures a per-session committed watermark and pre-read
+    acknowledged queued tail (`begin_fold`); in `finish_fold`, only the disk
+    fold and the pre-read tail decide whether the fold is complete (`covered_max`
+    excludes later queued entries). An incomplete cold-read race returns
+    uncached using the pre-read tail only, and `cached_projection` then runs
+    one anchored follow-up fold (`seq > last_seq`) bounded by `READ_TIMEOUT` (5 s):
+    if the follow-up fails with a storage fault or timeout, it returns the first
+    valid prefix uncached instead of failing the read (non-storage errors
+    propagate). Current queued entries are appended only on the caching path.
+    Best-effort `persist_snapshot` writes are bounded by `write_timeout`.
+  - Cached session projections (`read_projection`, `with_projection`, etc.) are
+    served directly from `ProjectionCache` without hitting disk while degraded,
+    and `session_exists` checks acknowledged queued events first and answers from
+    `ProjectionCache` while degraded or after a file-identity halt before failing;
+    sessions absent from cache and other disk reads (`replay`,
+    `replay_page`, `file_blob` misses, `file_blob_bytes`, `list_sessions*`,
+    `session_info`, `project_activity_files`, preferences, permissions, and
+    handoff/recovery reads) query `read_pool` and reflect only what is on disk
+    (or refuse with `StoreDegraded` once a file-identity halt has fired).
+    Cold projection/replay/blob reads are bounded by `write_timeout` while
+    degraded.
+  - `replay` and `replay_page` append only acknowledged (`cache_applied`)
+    queued tails (so healthy in-flight appends are never exposed before commit),
+    bounded by `write_timeout` while degraded.
+  - `file_blob` and `file_blob_bytes` read acknowledged queued blobs alongside
+    disk rows, bounded by `write_timeout` while degraded via `run_read_bounded`:
+    `file_blob_bytes` uses `SELECT COALESCE(SUM(size), 0)` on disk and queries
+    disk hash membership only when the queue holds acknowledged blobs for that
+    session so duplicate hashes present on both disk and queue are never
+    double-counted.
+- **Raw transactions and non-append operations**: `begin_transaction` returns a
+  `StoreTransaction<'_>` guard that refuses immediately with `StoreError::StoreDegraded`
+  while degraded or halted without blocking appends — including during catch-up
+  a raw transaction is refused at once although the disk works, because waiting
+  would hold the appends behind it. When healthy, `begin_transaction` bounds only
+  the barrier wait ahead of queued appends by `write_timeout`; opening
+  `BEGIN IMMEDIATE` on the writer pool waits as on `main`. `StoreTransaction::commit`
+  moves both the database transaction and the guard into an owned spawned task
+  to await SQLite `COMMIT`, so cancelling the caller's future never releases the
+  guard while `COMMIT` is still in flight; on confirmation, recorded
+  raw-transaction envelopes update `committed_seqs` and existing warm cache
+  entries. If a `StoreTransaction` with recorded envelopes is released without a
+  confirmed commit (dropped before commit, or `commit()` returns an error),
+  `Drop` raises `committed_seqs` for those sessions and evicts them from
+  `ProjectionCache` before admitting the next append so the next read folds from
+  disk. Other control/metadata operations (`save_permission`,
+  `remove_saved_permission`, session deletion, fenced resident claims,
+  workflows, handoff, recovery, projects, preferences) compose through
+  `begin_transaction`.
+
+#### What this design gives up
+
+- Appends submitted while a raw `StoreTransaction` is pending or open wait
+  unboundedly for that transaction to finish (matching `origin/main`) rather
+  than timing out or allocating an in-process `seq` early: in full mode an append
+  behind a non-append write that is stuck on the disk waits as long as that
+  write does.
+- When `exec --json` lag or final replay hits a storage fault or `READ_TIMEOUT`
+  (5 s), stdout retains all already-printed events, one warning prints to stderr
+  (even if final replay later succeeds), and the user gets an incomplete JSONL
+  stream for any unprinted tail events; events whose producer was cancelled and
+  whose raw-transaction COMMIT lands after the final SQL snapshot are not in it.
+- When `hya-core`'s lazy `BlobBudget::keep_prior` read hits a storage fault or
+  `READ_TIMEOUT` (5 s), the file edit continues with
+  `omitted { reason: "store unavailable" }` and that file has no saved
+  before-state, so it cannot be reverted from the log.
+- While preference reads fail with a storage fault or hit `READ_TIMEOUT` (5 s),
+  a running turn keeps using the last read preference for that same agent or
+  model (with one warning per turn) so a preference change waits until storage
+  reads recover; a turn's first read of that same agent or model still fails if
+  storage is unreadable.
+- While a store is degraded, permanently halted (file deleted, replaced,
+  truncated, or foreign `event_log.seq` conflict), or running in an open-time
+  in-memory fallback, queued/in-memory events and blobs are not yet durable on
+  disk: a hard `SIGKILL` before recovery or clean exit drain loses those
+  unpersisted writes, and an open-time fallback never migrates back to disk mid-run.
+- Sustained disk outages buffer queued events and `file_blob` payloads in
+  process memory for the remainder of the run until storage recovers or the
+  process reports unpersisted totals at exit.

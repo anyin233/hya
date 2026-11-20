@@ -87,6 +87,7 @@ impl SessionEngine {
             workflow_route,
             explicit_model,
             rebind,
+            effort_fallback,
         } = execution;
         // Depth in the subagent tree, derived from the parent chain. Subagents use
         // the general live provider-stream class; the root uses the independent
@@ -212,6 +213,7 @@ impl SessionEngine {
             permit: None,
             retries: 0,
             total_tokens: None,
+            effort_fallback,
         };
         let finish = kernel::drive(&scope, &mut harness, cancel).await?;
         if finish != FinishReason::Cancelled {
@@ -277,6 +279,7 @@ struct TurnHarness<'a> {
     /// Retries of the current round.
     retries: u32,
     total_tokens: Option<TokenUsage>,
+    effort_fallback: super::super::TurnEffortFallback,
 }
 
 impl TurnHarness<'_> {
@@ -348,7 +351,13 @@ impl TurnHarness<'_> {
         if let Some(sidecar_hooks) = &inputs.sidecar_hooks {
             hooks.push(Arc::clone(sidecar_hooks));
         }
-        self.agents = engine.annotate_agent_efforts(roster, Some(&fresh)).await?;
+        self.agents = engine
+            .annotate_agent_efforts_with(
+                roster,
+                Some(&fresh),
+                Some((session, &mut self.effort_fallback)),
+            )
+            .await?;
         self.binding = fresh;
         self.live_agent = materialized;
         self.resources = compiled;
@@ -487,11 +496,12 @@ impl Harness for TurnHarness<'_> {
         // the next request without a restart. `live_agent.reasoning` is the
         // Agent's authored effort; the user's per-Agent choices outrank it.
         let effort = engine
-            .effective_effort(
+            .effective_effort_with(
                 &self.model,
                 Some(&self.stable_id),
                 self.live_agent.reasoning,
                 Some(&self.binding),
+                Some((session, &mut self.effort_fallback)),
             )
             .await?
             .effort;
