@@ -547,7 +547,8 @@ A retry requires all of the following.
 - The provider reports a transient error or an established stream stalls or
   breaks while reading the HTTP body. Transient errors include transport
   errors before the stream and HTTP 429 or 5xx, including in-stream error
-  frames classified as 429 or 5xx.
+  frames classified as 429 or 5xx. An error opening the stream, after the
+  provider's own attempts, follows the same retry rule.
 - The failed attempt persisted no part in the assistant message, including
   text, reasoning, tool input, or a tool call.
 - The run is active throughout the wait. With `--time-budget`, the full wait
@@ -561,7 +562,9 @@ For example, if an in-stream HTTP 500 arrives before the assistant has
 produced any output and the run has time left, bare mode waits 5 seconds
 before sending the same request again. The event log records the failed
 attempt as `StepFinished` with `finish: error`. The retry runs under the next
-step number.
+step number. If opening the stream returns HTTP 429, the same wait and
+request replay apply. The failed open emits neither `StepStarted` nor
+`StepFinished`, so the next attempt uses the same step number.
 
 ## Differences from full mode
 
@@ -599,7 +602,7 @@ plugs into that loop at fixed points:
 | Before the round (`Harness::before_round`) | `kernel::before_round` with no extensions: the 80% Rewrite, then the goal checkpoint | Re-validate the actor claim, rebind a Root turn to a new runtime generation, resolve the round's model, then `kernel::before_round` with the internal bundles' extensions (`hya/compaction`: [`shake` and `remote`](compaction.md)) |
 | Request | Kernel prompt and six tools | The agent's system prompt, filtered tool schemas plus `rewrite` and `todo`, and reasoning effort, then the `chat.params` hook |
 | Opening the stream | The given model | Cross-model fallback or the Workflow route, under a governor stream permit |
-| Failed round | Retried up to eight times after 5, 10, 20, 40, 60, 60, 60, and 60 s when a transient error or stream interruption left no assistant part and the wait fits before Final ([When a bare round fails](#when-a-bare-round-fails)) | Retried up to twice when it failed before any text or tool call on a link error |
+| Failed round | Retried up to eight times after 5, 10, 20, 40, 60, 60, 60, and 60 s when a transient error opening or reading the stream, or a stream interruption, left no assistant part and the wait fits before Final ([When a bare round fails](#when-a-bare-round-fails)) | After the stream opens, retried up to twice on a link error before any text or tool call |
 | Registry tool call (`ToolGate`) | Execute the tool and record file snapshots and stamps | Hooks, permissions, the full `ToolCtx`, file snapshots and stamps, output capping, steer notices |
 | Unrun calls after a cancel | Failed as `cancelled` | Left open; the turn end closes them as `CANCELLED` |
 | End (`Harness::before_end`, `done`) | The round's finish, after one [completion check](#how-a-bare-run-ends) once a tool call ran | The round's finish; also ends after an accepted `report` |

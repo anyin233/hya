@@ -38,6 +38,8 @@ pub struct Round {
 pub struct Failure {
     /// Why the round failed.
     pub error: CoreError,
+    /// The stream opened and the step was started in the log.
+    pub step_started: bool,
     /// The model had requested a tool call.
     pub saw_tool_call: bool,
     /// The model had produced text.
@@ -142,6 +144,7 @@ pub async fn collect(
         }),
         Err(error) => Err(Failure {
             error,
+            step_started: true,
             saw_tool_call: !drained.tool_calls.is_empty(),
             saw_text: drained.saw_text,
         }),
