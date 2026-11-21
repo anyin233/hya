@@ -797,6 +797,9 @@ live-only `partAppended` argument fragments, and a durable `toolStateChanged`
 with the complete input (see [Tool calls](#tool-calls)).
 A prompt's image attachments arrive as one durable `partsAdded` (see
 [Prompt attachments](#prompt-attachments-images)).
+A durable `partDeleted { message, part }` removes that part from its message:
+a part deleted with `DeleteMessagePart`, or a part of a failed bare round
+attempt that is retried ([When a bare round fails](../kernel.md#when-a-bare-round-fails)).
 A `text_complete`
 plugin may rewrite a finished part: the rewrite arrives as a live
 `partReplaced` and is what the durable `partReplaced` records.

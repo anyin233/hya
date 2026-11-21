@@ -763,6 +763,7 @@ impl V1Sdk {
 /// - A seeded pending tool with empty input is also live-lost: its prefix is
 ///   unknown, so fragments cannot reconstruct it.
 /// - `partReplaced` sets the part's whole text, superseding live deltas.
+/// - `partDeleted` removes the part with that id from its message.
 /// - `sessionReverted` (a revert or its undo) hides or restores whole
 ///   messages: [`apply`](Self::apply) returns `true` (re-seed).
 /// - Durable frames at or below [`last_seq`](Self::last_seq) are ignored.
@@ -927,6 +928,13 @@ impl V1SessionMirror {
                         }
                     }
                 }
+            }
+            Some(P::PartDeleted(deleted)) => {
+                if let Some(message) = self.messages.get_mut(&deleted.message) {
+                    message.parts.retain(|part| part.id != deleted.part);
+                }
+                self.durable_parts.remove(&deleted.part);
+                self.live_lost_parts.remove(&deleted.part);
             }
             Some(P::ToolStateChanged(changed)) => {
                 if durable && !changed.input_json.is_empty() {
@@ -1295,6 +1303,31 @@ mod tests {
             Some("http status 400: nope")
         );
         assert_eq!(mirror.last_seq, 8);
+    }
+
+    /// A deleted part leaves the message; its later live deltas add nothing.
+    #[test]
+    fn part_deleted_removes_the_part() {
+        let mut mirror = V1SessionMirror::default();
+        mirror.apply(&frame(
+            1,
+            P::MessageStarted(pb::MessageStarted {
+                message: "m".into(),
+                role: pb::Role::Assistant as i32,
+                ..Default::default()
+            }),
+        ));
+        mirror.apply(&frame(2, started("cut")));
+        mirror.apply(&frame(3, started("kept")));
+        mirror.apply(&frame(
+            4,
+            P::PartDeleted(pb::PartDeleted {
+                message: "m".into(),
+                part: "cut".into(),
+            }),
+        ));
+        mirror.apply(&frame(0, appended("cut", "stale")));
+        assert_eq!(text_of(&mirror), vec![("kept".into(), String::new())]);
     }
 
     /// A durable part is final: stale live deltas for it do not double it.

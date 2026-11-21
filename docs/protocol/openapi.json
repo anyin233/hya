@@ -2764,6 +2764,9 @@
           },
           "member_lifecycle_changed": {
             "$ref": "#/components/schemas/MemberLifecycleChanged"
+          },
+          "part_deleted": {
+            "$ref": "#/components/schemas/PartDeleted"
           }
         }
       },
@@ -2815,6 +2818,18 @@
             "items": {
               "$ref": "#/components/schemas/PartInfo"
             }
+          }
+        }
+      },
+      "PartDeleted": {
+        "type": "object",
+        "description": "A part removed from a message.",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "part": {
+            "type": "string"
           }
         }
       },
