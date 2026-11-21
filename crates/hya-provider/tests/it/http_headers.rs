@@ -13,11 +13,13 @@ use std::{
 
 use futures::StreamExt as _;
 use hya_proto::{
-    AgentName, Event, FinishReason, Message, MessageId, ModelRef, Part, PartId, SessionId,
-    TokenUsage, ToolCallId, ToolName, ToolPartState, ToolSchema,
+    AgentName, Envelope, Event, EventSeq, FinishReason, Message, MessageId, ModelRef, Part, PartId,
+    PartProjection, Projection, Role, SessionId, SessionKind, TokenUsage, ToolCallId, ToolName,
+    ToolPartState, ToolSchema,
 };
 use hya_provider::{
-    CompletionRequest, HttpProvider, Provider as _, ProviderError, ProviderKind, ReasoningEffort,
+    CompletionRequest, HttpProvider, OpenAiResponsesProtocol, Protocol as _, Provider as _,
+    ProviderError, ProviderKind, ReasoningEffort,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -611,7 +613,11 @@ async fn http_provider_posts_responses_body_with_every_reasoning_effort() {
         );
         assert_eq!(body["stream"], true);
         assert_eq!(body["store"], false);
-        assert!(body.get("include").is_none());
+        if effort == ReasoningEffort::Off {
+            assert!(body.get("include").is_none());
+        } else {
+            assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
+        }
     }
 }
 
@@ -650,6 +656,68 @@ async fn http_provider_omits_reasoning_when_no_effort_is_selected() {
 
     assert!(events.iter().all(Result::is_ok));
     assert!(body.get("reasoning").is_none());
+    assert!(body.get("include").is_none());
+}
+
+/// Codex shares the Responses encoder, so it requests encrypted reasoning
+/// exactly when a non-off effort is set; Grok Build always requests it.
+#[tokio::test]
+async fn http_provider_responses_routes_request_encrypted_reasoning_by_effort() {
+    let include = Some(json!(["reasoning.encrypted_content"]));
+    for (kind, effort, include) in [
+        (ProviderKind::OpenAiCodex, None, None),
+        (ProviderKind::OpenAiCodex, Some(ReasoningEffort::Off), None),
+        (
+            ProviderKind::OpenAiCodex,
+            Some(ReasoningEffort::High),
+            include.clone(),
+        ),
+        (ProviderKind::GrokBuild, None, include.clone()),
+        (
+            ProviderKind::GrokBuild,
+            Some(ReasoningEffort::Off),
+            include.clone(),
+        ),
+    ] {
+        let (base_url, request_rx) = start_sse_server(
+            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"
+                .to_string(),
+        )
+        .await;
+        let provider = HttpProvider::new(
+            "route",
+            kind,
+            &base_url,
+            Some("token".to_string()),
+            ["model".to_string()],
+        )
+        .unwrap();
+        let req = CompletionRequest {
+            model: ModelRef::new("route/model"),
+            system: None,
+            messages: Vec::new(),
+            tools: Vec::new(),
+            temperature: None,
+            max_output_tokens: None,
+            reasoning: effort,
+            headers: Default::default(),
+        };
+        let events: Vec<_> = provider
+            .stream(req, SessionId::new(), MessageId::new())
+            .await
+            .unwrap()
+            .collect()
+            .await;
+        let request = captured_request(request_rx).await;
+        let body: Value = serde_json::from_str(&request.body).unwrap();
+
+        assert!(events.iter().all(Result::is_ok));
+        assert_eq!(
+            body.get("include"),
+            include.as_ref(),
+            "kind={kind:?} effort={effort:?}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1045,6 +1113,426 @@ async fn http_provider_decodes_responses_reasoning_text_tool_and_usage() {
             ..
         }
     ));
+}
+
+/// A reasoning item that only the terminal `/response/output` carries is
+/// still closed with its encrypted payload, before the message finishes.
+#[tokio::test]
+async fn responses_terminal_output_closes_unfinished_reasoning() {
+    let item = json!({
+        "id": "rs_1",
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": "Plan."}],
+        "encrypted_content": "opaque"
+    });
+    let completed = json!({
+        "type": "response.completed",
+        "response": {
+            "status": "completed",
+            "output": [item, {"type": "message", "content": []}],
+            "input_transformations": [
+                {"action": "removed", "type": "reasoning", "reason": "prefix_mismatch"}
+            ]
+        }
+    });
+    for streamed in [
+        "",
+        "data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":0,\"delta\":\"Plan.\"}\n\n",
+    ] {
+        let sse = format!("{streamed}data: {completed}\n\n");
+        let events = response_events(ProviderKind::OpenAiResponse, &sse)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let kinds: Vec<_> = events
+            .iter()
+            .map(|event| match event {
+                Event::ReasoningStart { .. } => "start",
+                Event::ReasoningDelta { .. } => "delta",
+                Event::ReasoningEnd { .. } => "end",
+                Event::MessageFinished { .. } => "finished",
+                event => panic!("unexpected event {event:?}"),
+            })
+            .collect();
+        let expected: &[&str] = if streamed.is_empty() {
+            &["start", "end", "finished"]
+        } else {
+            &["start", "delta", "end", "finished"]
+        };
+        assert_eq!(kinds, expected, "streamed={streamed:?}");
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::ReasoningEnd { provider_data: Some(data), .. } if data == &item
+        )));
+    }
+}
+
+/// A reasoning item already closed by `output_item.done` is not closed again
+/// by the terminal output: a second `ReasoningEnd` would blank its text.
+#[tokio::test]
+async fn responses_terminal_output_does_not_reclose_finished_reasoning() {
+    let sse = concat!(
+        "data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":0,\"delta\":\"Plan.\"}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\",\"encrypted_content\":\"opaque\"}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"id\":\"rs_1\",\"type\":\"reasoning\",\"encrypted_content\":\"opaque\"}]}}\n\n",
+    );
+    let events = response_events(ProviderKind::OpenAiResponse, sse)
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let ends = events
+        .iter()
+        .filter(|event| matches!(event, Event::ReasoningEnd { .. }))
+        .count();
+    assert_eq!(ends, 1);
+    assert!(matches!(events.last(), Some(Event::MessageFinished { .. })));
+}
+
+/// A reasoning item announced by `output_item.added` keeps its place before a
+/// call that streams next, though only the terminal output carries its
+/// payload, so the next request replays reasoning before the call.
+#[tokio::test]
+async fn responses_terminal_reasoning_replays_before_a_streamed_call() {
+    let reasoning =
+        json!({"id": "rs_1", "type": "reasoning", "summary": [], "encrypted_content": "opaque"});
+    let function_call = json!({"id": "fc_1", "type": "function_call", "call_id": "call_up", "name": "read", "arguments": "{\"path\":\"a.txt\"}"});
+    let completed = json!({"type": "response.completed", "response": {
+        "status": "completed",
+        "output": [reasoning, function_call],
+    }});
+    let sse = [
+        json!({"type": "response.output_item.added", "output_index": 0, "item": {"id": "rs_1", "type": "reasoning", "summary": []}}),
+        json!({"type": "response.output_item.added", "output_index": 1, "item": {"id": "fc_1", "type": "function_call", "call_id": "call_up", "name": "read", "arguments": ""}}),
+        json!({"type": "response.output_item.done", "output_index": 1, "item": function_call}),
+        completed,
+    ]
+    .iter()
+    .map(|frame| format!("data: {frame}\n\n"))
+    .collect::<String>();
+    let (session, user, message) = (SessionId::new(), MessageId::new(), MessageId::new());
+    let (base_url, _request_rx) = start_sse_server(sse).await;
+    let provider = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiResponse,
+        &base_url,
+        Some("test-token".to_string()),
+        ["model".to_string()],
+    )
+    .unwrap();
+    let decoded: Vec<Event> = provider
+        .stream(
+            CompletionRequest {
+                model: ModelRef::new("openai/model"),
+                system: None,
+                messages: Vec::new(),
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: None,
+                reasoning: Some(ReasoningEffort::High),
+                headers: Default::default(),
+            },
+            session,
+            message,
+        )
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let (tool_part, call) = decoded
+        .iter()
+        .find_map(|event| match event {
+            Event::ToolCallRequested { part, call, .. } => Some((*part, *call)),
+            _ => None,
+        })
+        .unwrap();
+
+    // Fold the round into the log the way the kernel records it.
+    let user_part = PartId::new();
+    let mut events = vec![
+        Event::SessionCreated {
+            session,
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("openai/model"),
+            workdir: "/tmp".to_string(),
+            project: None,
+            kind: SessionKind::Project,
+        },
+        Event::MessageStarted {
+            session,
+            message: user,
+            role: Role::User,
+            agent: None,
+            model: None,
+        },
+        Event::TextStart {
+            session,
+            message: user,
+            part: user_part,
+        },
+        Event::TextDelta {
+            session,
+            message: user,
+            part: user_part,
+            delta: "read a.txt".to_string(),
+        },
+        Event::MessageStarted {
+            session,
+            message,
+            role: Role::Assistant,
+            agent: None,
+            model: None,
+        },
+    ];
+    events.extend(decoded);
+    events.push(Event::ToolResult {
+        session,
+        message,
+        part: tool_part,
+        call,
+        output: json!("contents"),
+        time_ms: 3,
+    });
+    let envelopes: Vec<_> = (1..)
+        .zip(events)
+        .map(|(seq, event)| Envelope {
+            seq: EventSeq(seq),
+            ts_millis: 0,
+            event,
+        })
+        .collect();
+    let projection = Projection::from_events(&envelopes);
+    let row = projection
+        .session
+        .messages
+        .iter()
+        .find(|row| row.id == message)
+        .unwrap();
+    let parts = row
+        .parts
+        .iter()
+        .map(|part| match part {
+            PartProjection::Text { id, text } => Part::Text {
+                id: *id,
+                text: text.clone(),
+            },
+            PartProjection::Reasoning {
+                id,
+                text,
+                provider_data,
+                ..
+            } => Part::Reasoning {
+                id: *id,
+                text: text.clone(),
+                provider_data: provider_data.clone(),
+            },
+            PartProjection::Tool {
+                id,
+                call,
+                name,
+                state,
+                ..
+            } => Part::Tool {
+                id: *id,
+                call_id: *call,
+                name: name.clone(),
+                state: state.clone(),
+            },
+        })
+        .collect();
+    let next = CompletionRequest {
+        model: ModelRef::new("openai/model"),
+        system: None,
+        messages: vec![
+            Message::User {
+                id: user,
+                parts: vec![Part::Text {
+                    id: user_part,
+                    text: "read a.txt".to_string(),
+                }],
+            },
+            Message::Assistant {
+                id: message,
+                agent: AgentName::new("build"),
+                model: ModelRef::new("openai/model"),
+                parts,
+                finish: Some(FinishReason::ToolCalls),
+                tokens: None,
+                last_round: None,
+                last_step_start: None,
+            },
+        ],
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: Some(ReasoningEffort::High),
+        headers: Default::default(),
+    };
+    let body = OpenAiResponsesProtocol.encode(&next).unwrap();
+    assert_eq!(
+        body["input"],
+        json!([
+            {"role": "user", "content": "read a.txt"},
+            reasoning,
+            {
+                "type": "function_call",
+                "call_id": call.to_string(),
+                "name": "read",
+                "arguments": "{\"path\":\"a.txt\"}"
+            },
+            {"type": "function_call_output", "call_id": call.to_string(), "output": "contents"},
+        ])
+    );
+}
+
+/// A reasoning item that only the terminal output carries, after a call
+/// already streamed, is left out rather than recorded after the call.
+#[tokio::test]
+async fn responses_terminal_reasoning_after_streamed_output_is_skipped() {
+    let function_call = json!({"id": "fc_1", "type": "function_call", "call_id": "call_up", "name": "read", "arguments": "{}"});
+    let sse = [
+        json!({"type": "response.output_item.added", "output_index": 1, "item": function_call}),
+        json!({"type": "response.output_item.done", "output_index": 1, "item": function_call}),
+        json!({"type": "response.completed", "response": {
+            "status": "completed",
+            "output": [{"id": "rs_1", "type": "reasoning", "encrypted_content": "opaque"}, function_call],
+        }}),
+    ]
+    .iter()
+    .map(|frame| format!("data: {frame}\n\n"))
+    .collect::<String>();
+    let events = response_events(ProviderKind::OpenAiResponse, &sse)
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            Event::ReasoningStart { .. } | Event::ReasoningEnd { .. }
+        )),
+        "{events:?}"
+    );
+    assert!(matches!(events.last(), Some(Event::MessageFinished { .. })));
+}
+
+/// A summary-only `output_item.done` leaves the part open; the terminal
+/// output's item with `encrypted_content` closes it, once, keeping the text.
+#[tokio::test]
+async fn responses_terminal_encrypted_item_replaces_summary_only_done() {
+    let summary = json!({"id": "rs_1", "type": "reasoning", "summary": [{"type": "summary_text", "text": "Need a file."}]});
+    let mut encrypted = summary.clone();
+    encrypted["encrypted_content"] = json!("opaque");
+    for (completed, provider_data) in [
+        (
+            json!({"type": "response.completed", "response": {"status": "completed", "output": [encrypted]}}),
+            encrypted.clone(),
+        ),
+        // Without terminal output the summary-only item is kept.
+        (
+            json!({"type": "response.completed", "response": {"status": "completed"}}),
+            summary.clone(),
+        ),
+    ] {
+        let sse = [
+            json!({"type": "response.reasoning_summary_text.delta", "output_index": 0, "summary_index": 0, "delta": "Need a file."}),
+            json!({"type": "response.output_item.done", "output_index": 0, "item": summary}),
+            completed,
+        ]
+        .iter()
+        .map(|frame| format!("data: {frame}\n\n"))
+        .collect::<String>();
+        let events = response_events(ProviderKind::OpenAiResponse, &sse)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(
+            matches!(
+                events.as_slice(),
+                [
+                    Event::ReasoningStart { .. },
+                    Event::ReasoningDelta { delta, .. },
+                    Event::ReasoningEnd { provider_data: Some(data), .. },
+                    Event::MessageFinished { .. },
+                ] if delta == "Need a file." && data == &provider_data
+            ),
+            "{events:?}"
+        );
+    }
+}
+
+/// Text still open at an earlier output index ends before a terminal-only
+/// reasoning item starts, so the text is recorded first.
+#[tokio::test]
+async fn responses_terminal_reasoning_follows_earlier_open_text() {
+    let sse = [
+        json!({"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "Reading"}),
+        json!({"type": "response.completed", "response": {
+            "status": "completed",
+            "output": [
+                {"type": "message", "content": [{"type": "output_text", "text": "Reading"}]},
+                {"type": "reasoning", "id": "rs_1", "encrypted_content": "opaque", "summary": []},
+            ],
+        }}),
+    ]
+    .iter()
+    .map(|frame| format!("data: {frame}\n\n"))
+    .collect::<String>();
+    let events = response_events(ProviderKind::OpenAiResponse, &sse)
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert!(
+        matches!(
+            events.as_slice(),
+            [
+                Event::TextStart { .. },
+                Event::TextDelta { .. },
+                Event::TextEnd { .. },
+                Event::ReasoningStart { .. },
+                Event::ReasoningEnd {
+                    provider_data: Some(_),
+                    ..
+                },
+                Event::MessageFinished { .. },
+            ]
+        ),
+        "{events:?}"
+    );
+}
+
+/// `response.incomplete` closes a terminal-only reasoning item too, before
+/// the `Length` finish.
+#[tokio::test]
+async fn responses_incomplete_terminal_output_closes_reasoning() {
+    let item = json!({"id": "rs_1", "type": "reasoning", "encrypted_content": "opaque"});
+    let sse = format!(
+        "data: {}\n\n",
+        json!({"type": "response.incomplete", "response": {"status": "incomplete", "output": [item]}})
+    );
+    let events = response_events(ProviderKind::OpenAiResponse, &sse)
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert!(
+        matches!(
+            events.as_slice(),
+            [
+                Event::ReasoningStart { .. },
+                Event::ReasoningEnd { provider_data: Some(data), .. },
+                Event::MessageFinished { finish: FinishReason::Length, .. },
+            ] if data == &item
+        ),
+        "{events:?}"
+    );
 }
 
 #[tokio::test]

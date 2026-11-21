@@ -79,6 +79,11 @@ impl Protocol for OpenAiResponsesProtocol {
                 "effort": reasoning.as_str(),
                 "summary": "auto",
             });
+            // Stateless (`store: false`) replay needs the encrypted item;
+            // non-reasoning models reject the include, so `Off` omits it.
+            if reasoning != ReasoningEffort::Off {
+                body["include"] = json!(["reasoning.encrypted_content"]);
+            }
         }
         if let Some(temperature) = req.temperature {
             body["temperature"] = json!(temperature);
