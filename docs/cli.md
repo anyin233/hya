@@ -836,7 +836,10 @@ adds a logged notice asking it to compare the result with the request's
 literal wording, and the run continues. Like a stage notice, the check is
 shown on the next model request once and leaves the request history when the
 assistant responds. The next answer without a tool call ends the run, and
-that answer is what `exec` prints. No check is sent when the model never
+that answer is what `exec` prints. A turn with neither answer text nor a tool
+call (thinking only) does not end the run: up to twice in a row, a logged
+notice asks the model to continue
+([Turns without an answer](kernel.md#turns-without-an-answer)). No check is sent when the model never
 called a known tool, when the answer's round ended with an error, or when the
 run is cancelled.
 With `--time-budget`, the check is sent only while more than twice the Final
