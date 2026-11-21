@@ -668,8 +668,11 @@ mod tests {
             text: "A board.".into(),
         };
         let not_attached = CalibratedTokenizer.count_text(
-            "\n\n[The image of this result (image/png) is not attached to this request. \
-             To look at it, make the call again (for a file: read it again).]",
+            "\n\n[An image is sent to you only in the request right after the call \
+             that produced it; later requests, like this one, carry this note \
+             instead. This is the normal course, not a failure. To look at the \
+             image of this result (image/png), make the call again (for a file: read \
+             it again).]",
         );
         assert_eq!(
             estimate_message(assistant(vec![image(), answer], 1), true),
