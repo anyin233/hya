@@ -607,6 +607,10 @@ impl Harness for TurnHarness<'_> {
     }
 
     async fn failed(&mut self, failure: &Failure) -> Result<bool, CoreError> {
+        // Opening already applies model fallback and finalizes any failed Workflow route.
+        if !failure.step_started {
+            return Ok(false);
+        }
         let retryable = self.retries < MAX_ROUND_RETRIES
             && !failure.saw_tool_call
             && !failure.saw_text
