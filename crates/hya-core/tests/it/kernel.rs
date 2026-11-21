@@ -945,6 +945,8 @@ enum Attempt {
     Play,
     Open(ProviderError),
     Stream(Vec<FakeStep>, ProviderError),
+    /// The whole script, then the error.
+    Break(Vec<FakeStep>, ProviderError),
 }
 
 /// A provider whose stream calls follow `failures`, one [`Attempt`] each, and
@@ -975,16 +977,19 @@ impl Provider for Flaky {
         self.clock.finish_wait();
         self.requests.lock().unwrap().push(req.clone());
         let attempt = self.failures.lock().unwrap().pop_front();
-        let (partial, error) = match attempt {
+        let (partial, error, cut) = match attempt {
             None | Some(Attempt::Play) => return self.fake.stream(req, session, message).await,
             Some(Attempt::Open(error)) => {
                 self.clock.pause();
                 return Err(error);
             }
-            Some(Attempt::Stream(partial, error)) => (partial, error),
+            Some(Attempt::Stream(partial, error)) => (partial, error, true),
+            Some(Attempt::Break(script, error)) => (script, error, false),
         };
         let mut events = FakeProvider::materialize(&partial, session, message);
-        events.pop();
+        if cut {
+            events.pop();
+        }
         let items = events.into_iter().map(Ok).chain([Err(error)]);
         Ok(Box::pin(futures::stream::iter(items)))
     }
@@ -1376,9 +1381,7 @@ async fn a_stream_cut_after_partial_output_is_retried_without_it() {
                     FakeStep::Reasoning("half a thought".into()),
                     FakeStep::Text("partial answer".into()),
                 ],
-                ProviderError::StreamInterrupted(
-                    "Transport error: error decoding response body".into(),
-                ),
+                body_break(),
             ),
         ],
     )
@@ -1482,12 +1485,7 @@ async fn a_tool_call_of_a_cut_attempt_is_not_run() {
     let (fx, flaky) = flaky_fixture(
         "retry-after-tool-call",
         vec![call("bash", command), text("done"), text("checked")],
-        vec![Attempt::Stream(
-            cut,
-            ProviderError::StreamInterrupted(
-                "Transport error: error decoding response body".into(),
-            ),
-        )],
+        vec![Attempt::Stream(cut, body_break())],
     )
     .await;
     assert_eq!(flaky.turn(&fx, "count").await.unwrap(), FinishReason::Stop);
@@ -1522,6 +1520,158 @@ async fn a_tool_call_of_a_cut_attempt_is_not_run() {
             .collect();
         assert_eq!(sent.len(), 1, "{sent:?}");
     }
+}
+
+fn body_break() -> ProviderError {
+    ProviderError::StreamInterrupted("Transport error: error decoding response body".into())
+}
+
+#[tokio::test]
+async fn a_stream_break_after_the_final_frame_completes_the_round() {
+    let (fx, flaky) = flaky_fixture(
+        "break-after-final-frame",
+        vec![text("unreached")],
+        vec![Attempt::Break(
+            vec![
+                FakeStep::Text("the answer".into()),
+                FakeStep::Finish(FinishReason::Stop),
+            ],
+            body_break(),
+        )],
+    )
+    .await;
+    assert_eq!(flaky.turn(&fx, "hi").await.unwrap(), FinishReason::Stop);
+    flaky.clock.assert_waits(&[]);
+    assert_eq!(flaky.requests.lock().unwrap().len(), 1);
+    let log = fx.log().await;
+    assert!(
+        !log.iter()
+            .any(|event| matches!(event, Event::PartDeleted { .. }))
+    );
+    assert!(log.iter().any(|event| matches!(
+        event,
+        Event::StepFinished {
+            step: 0,
+            finish: FinishReason::Stop,
+            ..
+        }
+    )));
+    let projection = fx.store.read_projection(fx.session).await.unwrap();
+    let reply = projection.session.messages.last().unwrap();
+    assert!(
+        matches!(
+            reply.parts.as_slice(),
+            [hya_proto::PartProjection::Text { text, .. }] if text == "the answer"
+        ),
+        "{:?}",
+        reply.parts
+    );
+}
+
+#[tokio::test]
+async fn a_stream_break_after_the_final_frame_runs_its_tool_call() {
+    let mut round = call("bash", json!({"command": "echo ran >> count.txt"}));
+    round.push(FakeStep::Finish(FinishReason::ToolCalls));
+    let (fx, flaky) = flaky_fixture(
+        "break-after-final-frame-tool",
+        vec![text("done"), text("checked")],
+        vec![Attempt::Break(round, body_break())],
+    )
+    .await;
+    assert_eq!(flaky.turn(&fx, "count").await.unwrap(), FinishReason::Stop);
+    flaky.clock.assert_waits(&[]);
+    assert_eq!(
+        std::fs::read_to_string(fx.dir.join("count.txt")).unwrap(),
+        "ran\n"
+    );
+    // The tool round, the round after it, and the round after the completion check.
+    assert_eq!(flaky.requests.lock().unwrap().len(), 3);
+    assert!(
+        !fx.log()
+            .await
+            .iter()
+            .any(|event| matches!(event, Event::PartDeleted { .. }))
+    );
+}
+
+#[tokio::test]
+async fn a_cut_during_tool_input_is_retried_without_it() {
+    // The fixture drops the last event, the call's request: only its input streamed.
+    let (fx, flaky) = flaky_fixture(
+        "retry-after-tool-input",
+        vec![text("done")],
+        vec![Attempt::Stream(
+            call("bash", json!({"command": "echo ran >> count.txt"})),
+            body_break(),
+        )],
+    )
+    .await;
+    assert_eq!(flaky.turn(&fx, "hi").await.unwrap(), FinishReason::Stop);
+    flaky.clock.assert_waits(&[5]);
+    assert!(!fx.dir.join("count.txt").exists());
+    let log = fx.log().await;
+    let started = log
+        .iter()
+        .find_map(|event| match event {
+            Event::ToolInputStart { part, .. } => Some(*part),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        log.iter()
+            .any(|event| matches!(event, Event::PartDeleted { part, .. } if *part == started))
+    );
+    let projection = fx.store.read_projection(fx.session).await.unwrap();
+    let reply = projection.session.messages.last().unwrap();
+    assert!(
+        matches!(
+            reply.parts.as_slice(),
+            [hya_proto::PartProjection::Text { text, .. }] if text == "done"
+        ),
+        "{:?}",
+        reply.parts
+    );
+}
+
+#[tokio::test]
+async fn a_cancel_during_the_wait_ends_the_run_with_the_parts_deleted() {
+    let (fx, flaky) = flaky_fixture(
+        "retry-cancelled-wait",
+        vec![text("unreached")],
+        vec![Attempt::Stream(
+            vec![
+                FakeStep::Reasoning("half a thought".into()),
+                FakeStep::Text("partial answer".into()),
+            ],
+            body_break(),
+        )],
+    )
+    .await;
+    let cancel = CancellationToken::new();
+    // The deletion is appended before the wait starts.
+    let publish = |envelope: Envelope| {
+        if matches!(envelope.event, Event::PartDeleted { .. }) {
+            cancel.cancel();
+        }
+    };
+    let error = fx
+        .turn_with_publish("hi", &cancel, &publish)
+        .await
+        .expect_err("the cancelled wait ends the run");
+    assert!(matches!(
+        error,
+        CoreError::Provider(error) if matches!(*error, ProviderError::StreamInterrupted(_))
+    ));
+    assert_eq!(flaky.requests.lock().unwrap().len(), 1);
+    let deleted = fx
+        .log()
+        .await
+        .iter()
+        .filter(|event| matches!(event, Event::PartDeleted { .. }))
+        .count();
+    assert_eq!(deleted, 2);
+    let projection = fx.store.read_projection(fx.session).await.unwrap();
+    assert!(projection.session.messages.last().unwrap().parts.is_empty());
 }
 
 #[tokio::test]

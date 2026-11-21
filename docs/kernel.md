@@ -554,23 +554,34 @@ A retry requires all of the following.
   must fit before Final, and the budget must still be in Normal or WrapUp
   when the wait ends.
 
+A round whose stream already delivered its final frame is complete. If the
+stream then stalls or breaks while its body is read, the round counts as
+collected with its finish, tool calls, and usage: it is neither retried nor
+an error. Every provider protocol's final frame (`[DONE]`, `message_stop`, a
+`finishReason`, `response.completed` or `response.incomplete`) is its last
+meaningful one. An in-stream error frame after the final frame still fails
+the round.
+
 A retry does not depend on how far the failed attempt got. The attempt may
 have persisted reasoning, text, tool input, or complete tool calls. None of
 it was acted on: the kernel runs a round's tool calls, including `rewrite`
-and `todo`, only after the round's stream ended without error. When it
-decides to retry, before the wait, the kernel appends one `part_deleted`
-event for each part the attempt persisted. The attempt's own events stay in
-the log as they were recorded, but its parts leave the assistant message.
-They are not sent in the retry or any later request, and are never run. They
-are not part of the answer `hya exec` prints, and they do not count as a
-tool call for the completion check. They are left out of the context
-estimate, `rewrite`, and any fold. A run that ends during the wait keeps
-them deleted. The retry sends the failed attempt's request again, so both
-`StepStarted` events carry the same `view`.
+and `todo`, only after the round's stream ended without error. Once a retry
+is selected, before the wait, the kernel appends one `part_deleted` event
+for each part the attempt persisted. The attempt's own events stay in the
+log as they were recorded, but its parts leave the assistant message. They
+are not sent in the retry or any later request, and are never run. They are
+not part of the answer `hya exec` prints, and they do not count as a tool
+call for the completion check. They are left out of `rewrite`, any fold,
+and the context estimate's count of the request. Usage the attempt reported
+stays recorded and billed; it can be the latest round's usage that the
+context estimate compares with, until the retry reports its own. If the
+wait then ends in a cancel or the Final stage, the run ends with the
+attempt's error and the parts stay deleted. The retry sends the failed
+attempt's request again, so both `StepStarted` events carry the same `view`.
 
-When a retry is ruled out or the eighth retry fails, the run ends with the
-current attempt's error, and that attempt's parts stay in the message. A
-completed round resets the retry count.
+When a retry is ruled out before the wait, or the eighth retry fails, the
+run ends with the current attempt's error, and that attempt's parts stay in
+the message. A completed round resets the retry count.
 
 For example, the route cuts a stream 90 seconds into a round while the model
 is reasoning, and the run has time left. The event log records the attempt's
