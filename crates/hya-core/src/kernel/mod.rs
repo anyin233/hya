@@ -147,7 +147,7 @@ pub trait Harness: ToolGate {
         &mut self,
         request: &CompletionRequest,
     ) -> Result<Option<(EventStream, ModelRef)>, CoreError>;
-    /// A round attempt failed; `true` retries it under the next step.
+    /// A round attempt failed; `true` retries it, advancing the step only if it started.
     async fn failed(&mut self, failure: &Failure) -> Result<bool, CoreError>;
     /// A round attempt completed.
     async fn collected(&mut self, round: &Round) -> Result<(), CoreError>;
@@ -367,16 +367,17 @@ impl Harness for Bare<'_> {
             message,
             ..
         } = *self.scope;
-        let produced_part = store
-            .with_projection(session, |projection| {
-                projection.session.messages.iter().any(|row| {
-                    row.id == message
-                        && row
-                            .last_step_start
-                            .is_some_and(|start| start < row.parts.len())
+        let produced_part = failure.step_started
+            && store
+                .with_projection(session, |projection| {
+                    projection.session.messages.iter().any(|row| {
+                        row.id == message
+                            && row
+                                .last_step_start
+                                .is_some_and(|start| start < row.parts.len())
+                    })
                 })
-            })
-            .await?;
+                .await?;
         let deadline = hya_tool::deadline::current();
         if produced_part
             || self.cancel.is_cancelled()
@@ -650,37 +651,47 @@ pub async fn drive(
         };
         drop(projection);
         let round = loop {
-            let Some((stream, served)) = harness.open(&req).await? else {
-                return Ok(FinishReason::Cancelled);
-            };
-            emit.emit(
-                session,
-                vec![Event::StepStarted {
-                    session,
-                    message,
-                    step,
-                    view: Some(view_ref.clone()),
-                }],
-            )
-            .await?;
-            match round::collect(
-                emit, complete, session, message, step, &served, stream, cancel,
-            )
-            .await
-            {
-                Ok(round) => break round,
-                Err(failure) => {
+            let failure = match harness.open(&req).await {
+                Ok(None) => return Ok(FinishReason::Cancelled),
+                Err(error) => Failure {
+                    error,
+                    step_started: false,
+                    saw_tool_call: false,
+                    saw_text: false,
+                },
+                Ok(Some((stream, served))) => {
                     emit.emit(
                         session,
-                        vec![step_finished(session, message, step, FinishReason::Error)],
+                        vec![Event::StepStarted {
+                            session,
+                            message,
+                            step,
+                            view: Some(view_ref.clone()),
+                        }],
                     )
                     .await?;
-                    if !harness.failed(&failure).await? {
-                        return Err(failure.error);
+                    match round::collect(
+                        emit, complete, session, message, step, &served, stream, cancel,
+                    )
+                    .await
+                    {
+                        Ok(round) => break round,
+                        Err(failure) => failure,
                     }
-                    // A failed attempt keeps its step number in the log.
-                    step += 1;
                 }
+            };
+            if failure.step_started {
+                emit.emit(
+                    session,
+                    vec![step_finished(session, message, step, FinishReason::Error)],
+                )
+                .await?;
+            }
+            if !harness.failed(&failure).await? {
+                return Err(failure.error);
+            }
+            if failure.step_started {
+                step += 1;
             }
         };
         harness.collected(&round).await?;

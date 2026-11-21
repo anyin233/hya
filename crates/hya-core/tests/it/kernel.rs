@@ -940,9 +940,12 @@ async fn a_call_with_invalid_argument_json_fails_without_running() {
     );
 }
 
-/// One stream call of [`Flaky`]: `None` plays the fake script, `Some` streams
-/// those steps without their last event, then fails with that error.
-type Attempt = Option<(Vec<FakeStep>, ProviderError)>;
+/// One provider call in the flaky fixture.
+enum Attempt {
+    Play,
+    Open(ProviderError),
+    Stream(Vec<FakeStep>, ProviderError),
+}
 
 /// A provider whose stream calls follow `failures`, one [`Attempt`] each, and
 /// then `fake`.
@@ -971,8 +974,14 @@ impl Provider for Flaky {
     ) -> Result<EventStream, ProviderError> {
         self.clock.finish_wait();
         self.requests.lock().unwrap().push(req.clone());
-        let Some((partial, error)) = self.failures.lock().unwrap().pop_front().flatten() else {
-            return self.fake.stream(req, session, message).await;
+        let attempt = self.failures.lock().unwrap().pop_front();
+        let (partial, error) = match attempt {
+            None | Some(Attempt::Play) => return self.fake.stream(req, session, message).await,
+            Some(Attempt::Open(error)) => {
+                self.clock.pause();
+                return Err(error);
+            }
+            Some(Attempt::Stream(partial, error)) => (partial, error),
         };
         let mut events = FakeProvider::materialize(&partial, session, message);
         events.pop();
@@ -1118,8 +1127,8 @@ async fn transient_round_failure_retries_the_same_request() {
             text("done"),
         ],
         vec![
-            None,
-            Some((Vec::new(), server_error("upstream unreachable"))),
+            Attempt::Play,
+            Attempt::Stream(Vec::new(), server_error("upstream unreachable")),
         ],
     )
     .await;
@@ -1172,16 +1181,106 @@ async fn transient_round_failure_retries_the_same_request() {
 }
 
 #[tokio::test]
+async fn transient_open_failure_retries_the_same_request() {
+    let mut todo = call("todo", json!({"ops": []}));
+    todo.push(FakeStep::Finish(FinishReason::ToolCalls));
+    let (fx, flaky) = flaky_fixture(
+        "retry-open",
+        vec![todo, text("done")],
+        vec![
+            Attempt::Play,
+            Attempt::Open(ProviderError::Transport("connection lost".into())),
+            Attempt::Open(ProviderError::HttpStatus {
+                status: 429,
+                message: "rate limited".into(),
+                retry_after: None,
+            }),
+        ],
+    )
+    .await;
+    assert_eq!(
+        flaky.turn(&fx, "hi").await.expect("the open is retried"),
+        FinishReason::Stop
+    );
+    flaky.clock.assert_waits(&[5, 10]);
+    let requests = flaky.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 5);
+    for request in &requests[2..4] {
+        assert_eq!(format!("{request:?}"), format!("{:?}", requests[1]));
+    }
+    let steps: Vec<_> = fx
+        .log()
+        .await
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::StepStarted { step, .. } => Some((step, None)),
+            Event::StepFinished { step, finish, .. } => Some((step, Some(finish))),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            (0, None),
+            (0, Some(FinishReason::ToolCalls)),
+            (1, None),
+            (1, Some(FinishReason::Stop)),
+            (2, None),
+            (2, Some(FinishReason::Stop)),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn the_ninth_open_failure_ends_the_run() {
+    let failures = (1..=9)
+        .map(|attempt| {
+            Attempt::Open(ProviderError::HttpStatus {
+                status: 500,
+                message: format!("attempt {attempt}"),
+                retry_after: None,
+            })
+        })
+        .collect();
+    let (fx, flaky) = flaky_fixture("retry-open-limit", vec![text("unreached")], failures).await;
+    let error = flaky
+        .turn(&fx, "hi")
+        .await
+        .expect_err("the ninth open fails");
+    assert_eq!(error.to_string(), "http status 500: attempt 9");
+    flaky.clock.assert_waits(&[5, 10, 20, 40, 60, 60, 60, 60]);
+    assert_eq!(flaky.requests.lock().unwrap().len(), 9);
+}
+
+#[tokio::test]
+async fn non_transient_open_failure_ends_the_run() {
+    let (fx, flaky) = flaky_fixture(
+        "retry-open-invalid",
+        vec![text("unreached")],
+        vec![Attempt::Open(ProviderError::HttpStatus {
+            status: 400,
+            message: "bad request".into(),
+            retry_after: None,
+        })],
+    )
+    .await;
+    let error = flaky.turn(&fx, "hi").await.expect_err("a 400 ends the run");
+    assert_eq!(error.to_string(), "http status 400: bad request");
+    flaky.clock.assert_waits(&[]);
+    assert_eq!(flaky.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn a_stream_interruption_before_any_part_is_retried() {
     let (fx, flaky) = flaky_fixture(
         "retry-interrupted-stream",
         vec![text("done")],
         vec![
-            Some((
+            Attempt::Stream(
                 Vec::new(),
                 ProviderError::StreamInterrupted("stalled stream: no SSE frame within 300s".into()),
-            )),
-            Some((Vec::new(), server_error("upstream unreachable"))),
+            ),
+            Attempt::Stream(Vec::new(), server_error("upstream unreachable")),
         ],
     )
     .await;
@@ -1195,10 +1294,10 @@ async fn a_stream_interruption_after_a_part_is_not_retried() {
     let (fx, flaky) = flaky_fixture(
         "interrupted-stream-after-reasoning",
         vec![text("unreached")],
-        vec![Some((
+        vec![Attempt::Stream(
             vec![FakeStep::Reasoning("half a thought".into())],
             ProviderError::StreamInterrupted("stalled stream: no SSE frame within 300s".into()),
-        ))],
+        )],
     )
     .await;
     let error = flaky
@@ -1222,14 +1321,14 @@ async fn non_transient_round_failure_ends_the_run() {
     let (fx, flaky) = flaky_fixture(
         "retry-invalid",
         vec![text("unreached")],
-        vec![Some((
+        vec![Attempt::Stream(
             Vec::new(),
             ProviderError::HttpStatus {
                 status: 400,
                 message: "in-stream error (invalid_request_error): bad".into(),
                 retry_after: None,
             },
-        ))],
+        )],
     )
     .await;
     let error = flaky.turn(&fx, "hi").await.expect_err("a 400 ends the run");
@@ -1244,7 +1343,7 @@ async fn non_transient_round_failure_ends_the_run() {
 #[tokio::test]
 async fn a_round_can_succeed_on_the_ninth_attempt() {
     let failures = (1..=8)
-        .map(|attempt| Some((Vec::new(), server_error(&format!("attempt {attempt}")))))
+        .map(|attempt| Attempt::Stream(Vec::new(), server_error(&format!("attempt {attempt}"))))
         .collect();
     let (fx, flaky) = flaky_fixture("retry-ninth-attempt", vec![text("done")], failures).await;
     assert_eq!(
@@ -1261,7 +1360,7 @@ async fn a_round_can_succeed_on_the_ninth_attempt() {
 #[tokio::test]
 async fn a_round_returns_the_ninth_failure() {
     let failures = (1..=9)
-        .map(|attempt| Some((Vec::new(), server_error(&format!("attempt {attempt}")))))
+        .map(|attempt| Attempt::Stream(Vec::new(), server_error(&format!("attempt {attempt}"))))
         .collect();
     let (fx, flaky) = flaky_fixture("retry-limit", vec![text("unreached")], failures).await;
     let error = flaky
@@ -1287,10 +1386,10 @@ async fn a_transient_failure_after_reasoning_is_not_retried() {
     let (fx, flaky) = flaky_fixture(
         "retry-after-reasoning",
         vec![text("unreached")],
-        vec![Some((
+        vec![Attempt::Stream(
             vec![FakeStep::Reasoning("half a thought".into())],
             server_error("upstream unreachable"),
-        ))],
+        )],
     )
     .await;
     let error = flaky
@@ -1313,7 +1412,11 @@ async fn a_transient_failure_after_reasoning_is_not_retried() {
 async fn a_completed_round_resets_the_retry_count() {
     let failures = (1..=18)
         .map(|attempt| {
-            (attempt != 9).then(|| (Vec::new(), server_error(&format!("attempt {attempt}"))))
+            if attempt == 9 {
+                Attempt::Play
+            } else {
+                Attempt::Stream(Vec::new(), server_error(&format!("attempt {attempt}")))
+            }
         })
         .collect();
     let (fx, flaky) = flaky_fixture(
@@ -1349,7 +1452,10 @@ async fn a_retry_wait_must_fit_before_final_child() {
     let (fx, flaky) = flaky_fixture(
         "retry-deadline",
         vec![text("unreached")],
-        vec![Some((Vec::new(), server_error("upstream unreachable")))],
+        vec![Attempt::Stream(
+            Vec::new(),
+            server_error("upstream unreachable"),
+        )],
     )
     .await;
     deadline::install(Duration::from_secs(94));
