@@ -878,7 +878,8 @@ pub async fn drive(
                 scope.provider.sends_tool_images(&served),
             )
         });
-        let replayed = replays_last_step_reasoning(&req.messages, message, policy);
+        let replayed = policy.expands_next_prompt()
+            && replays_last_step_reasoning(&req.messages, message, policy);
         let this = PrevRound {
             had_tool_image: ToolImageReplay::new(&req.messages, sends_tool_images).has_attached(),
             model: served,

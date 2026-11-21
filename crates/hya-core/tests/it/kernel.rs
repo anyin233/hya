@@ -4839,3 +4839,31 @@ async fn reasoning_notice_is_sent_after_a_prompt_quoting_it() {
         )
     ));
 }
+
+/// `GoogleThought` routes replay compact `thoughtSignature` tokens without
+/// billing prior `thoughtsTokenCount` into `promptTokenCount`, so stable
+/// prompts across tool steps never emit `REASONING_DROPPED_NOTICE`.
+#[tokio::test]
+async fn google_thought_replay_does_not_trigger_reasoning_dropped_notice() {
+    let google_thought = Some(json!({
+        "type": hya_proto::context::GOOGLE_THOUGHT_TYPE,
+        "thought_signature": "sig_g1"
+    }));
+    let fx = route_fixture(
+        "reasoning-skip-google-thought",
+        FakeProvider::scripted_turns(vec![
+            todo_round(1000, 2000),
+            todo_round(1200, 2000),
+            text("done"),
+            text("checked"),
+        ]),
+        ReasoningReplayPolicy::GoogleThought,
+        google_thought,
+    )
+    .await;
+    fx.turn("work it out", &CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(fx.provider.requests().len(), 4);
+    assert!(reasoning_notice_requests(&fx).is_empty());
+}
