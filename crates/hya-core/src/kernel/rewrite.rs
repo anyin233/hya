@@ -22,7 +22,7 @@ const TRIGGER_PERCENT: u64 = 80;
 const GOAL_CHECKPOINT_PERCENT: u64 = 60;
 
 /// Prefix of the goal-checkpoint notice; marks it in the transcript.
-const GOAL_CHECKPOINT: &str = "[hya] Goal checkpoint:";
+pub(super) const GOAL_CHECKPOINT: &str = "[hya] Goal checkpoint:";
 
 pub(super) fn is_goal_checkpoint(message: &hya_proto::MessageProjection) -> bool {
     message.role == Role::System && collect_text(&message.parts).starts_with(GOAL_CHECKPOINT)

@@ -88,6 +88,88 @@ deliverable as the time limit approaches.
 > change a copy, run the check the file passed, and replace the file only if
 > the copy passes.
 
+### Dropped-reasoning notice
+
+Some model endpoints silently leave a step's replayed reasoning out of the next
+request's prompt (see [OpenAI Responses
+protocol](architecture/providers.md#openai-responses-protocol)). The model then loses whatever it
+kept only in private thinking — derived values, findings, plans — at every
+tool call. In both bare and full mode the kernel detects this from provider
+usage and tells the model once per turn to keep that state in visible text, a
+workspace file, or the todo list.
+
+Detection compares each round with the previous round of the same run
+(`PrevRound`). The model that served the round decides everything route
+specific — what was replayed, whether images were attached — so a full-mode
+fallback model is judged by its own route, not by the requested model's. Full
+mode looks that route up on the engine's live provider router
+(`Harness::served_route`), since a route can be added mid-turn; bare mode uses
+the run's router. The
+previous round must have made tool calls and reported at least
+`MIN_DROPPED_REASONING_TOKENS` (1,000) reasoning tokens with a known split
+(`reasoning_unknown` false), and the current request must replay at least one
+reasoning part from that round: a part of the previous step that the serving
+route's `ReasoningReplayPolicy::replays` sends. Both rounds must report a
+non-zero prompt (`input + cache_read + cache_write`). The next prompt holds the
+previous one plus that round's output, reasoning included, so a drop is
+recorded when
+
+```text
+curr.prompt < prev.prompt + prev.reasoning / 2
+```
+
+The replay requirement keeps the check off routes that send no reasoning:
+Google and routes with `ReasoningReplayPolicy::None` replay nothing, and a
+chat route that reports reasoning tokens without streaming
+`reasoning_content` has no part to replay. Anthropic replays signed
+current-turn thinking but reports no thinking split (`reasoning_unknown`), so
+it is not checked either.
+
+A pair is not compared when either request legitimately changes or shortens
+earlier history:
+
+- the serving model changed;
+- a rewrite or compaction moved the compaction marker, or tool-output eviction
+  changed how many sent tool outputs (`sent_parts`, so folded parts do not
+  count) carry an eviction notice;
+- either request attaches a tool-result image (sent once; the next request
+  carries a text note instead);
+- either request ends with a one-request notice: a goal checkpoint, a
+  deadline stage or clock line, the completion check, the empty-turn notice,
+  or this notice itself;
+- the previous round made no tool calls (a continuation follows it).
+
+A detected drop logs the warning `reasoning_replay_dropped` (session, step,
+`prev_prompt`, `curr_prompt`, `prev_reasoning`). If the round made tool calls
+and no request of this run has delivered the notice yet, the kernel appends
+after those calls a system message, delivered as the last user message of the
+next request only, in both modes:
+
+> [hya] Reasoning replay notice: the model endpoint did not carry your
+> previous step's private reasoning into the next request. Do not rely on
+> private thinking being available in later steps: keep key derivations,
+> findings, decisions, and next steps in brief visible text alongside your
+> tool calls, in a workspace file, or in the todo list.
+
+"Once" counts delivery, not logging: the notice counts as sent when a request
+carries the notice message the kernel appended (matched by its id, so a user
+prompt quoting the notice text does not count), and a rewrite before the next
+request that removes the notice unsent leaves the next drop free to send it. The next
+round's parts take the notice out of later requests. If that round has no
+parts at all and the run continues with the empty-turn notice or the
+completion check, the continuation replaces the notice instead of joining it.
+
+The two kinds of loss are found differently. A Responses endpoint that binds
+each reasoning item to the history before it removes the item when that
+history changed in place, and reports it (`prefix_mismatch` in
+`/response/input_transformations`); the decoder logs those reports. hya's own
+in-place changes — a tool-result image replaced by its note, a tool output
+replaced by its eviction notice, a rewrite, a transient notice removed — are
+exactly the rounds the guards above skip, so the usage check does not count
+such removals. A gateway that drops every replayed reasoning item even when
+the history only grew reports nothing; the usage check finds it on those
+append-only rounds.
+
 Each `StepStarted` records a `view` with the numeric `cut` and a
 `request_sha256` string. The digest covers the harness's completed system
 prompt, tool schemas, and messages. Retries reuse the same view reference.

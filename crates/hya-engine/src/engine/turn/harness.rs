@@ -664,6 +664,19 @@ impl Harness for TurnHarness<'_> {
         // tool calls have completed and are recorded.
         self.report_latch.is_set()
     }
+
+    /// Rounds open on the live router (a fallback route can be added
+    /// mid-turn); the turn's `Scope` holds the router from its start.
+    fn served_route(
+        &self,
+        model: &ModelRef,
+    ) -> Option<(hya_proto::context::ReasoningReplayPolicy, bool)> {
+        let router = self.engine.provider_router();
+        Some((
+            router.reasoning_replay_policy(model),
+            router.sends_tool_images(model),
+        ))
+    }
 }
 
 /// Mid-stream retries are limited to link failures that are safe to replay before

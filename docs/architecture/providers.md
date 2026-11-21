@@ -622,6 +622,13 @@ Two different upstream behaviours lose replayed reasoning:
   `type: "reasoning"` item on later requests, even when the history only
   grew. No HTTP error and no `input_transformations` entry mark it.
 
+The decoder's warning covers the reported removals. The unreported drop is
+found by the kernel from provider usage, on rounds whose history only grew: it
+skips rounds where hya itself changed earlier history (image note, tool-output
+eviction, rewrite or compaction, transient notices), and tells the model once
+per turn to keep its working state in visible text
+([dropped-reasoning notice](../kernel.md#dropped-reasoning-notice)).
+
 Grok Build uses a decoder variant that **requires** a typed terminal
 (`response.completed` or `response.incomplete`); otherwise finish errors with a
 missing-terminal message.
