@@ -343,6 +343,18 @@ impl ReasoningEffort {
             }
         }
     }
+
+    /// Google Gemini 3+ `thinkingLevel` label; `Off` omits.
+    #[must_use]
+    pub fn google_thinking_level(self, _model_id: &str) -> Option<&'static str> {
+        match self {
+            Self::Off => None,
+            Self::Minimal => Some("minimal"),
+            Self::Low => Some("low"),
+            Self::Medium => Some("medium"),
+            Self::High | Self::XHigh | Self::Max => Some("high"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -417,6 +429,23 @@ mod reasoning_effort_tests {
         assert_eq!(R::Max.google_budget("gemini-2.5-flash"), Some(24576));
         assert_eq!(R::High.google_budget("gemini-2.5-flash"), Some(16000));
         assert_eq!(R::Low.google_budget("gemini-2.5-flash"), None);
+    }
+
+    #[test]
+    fn google_thinking_levels_map_all_efforts() {
+        assert_eq!(R::Off.google_thinking_level("gemini-3-pro"), None);
+        assert_eq!(
+            R::Minimal.google_thinking_level("gemini-3-pro"),
+            Some("minimal")
+        );
+        assert_eq!(R::Low.google_thinking_level("gemini-3-pro"), Some("low"));
+        assert_eq!(
+            R::Medium.google_thinking_level("gemini-3-pro"),
+            Some("medium")
+        );
+        assert_eq!(R::High.google_thinking_level("gemini-3-pro"), Some("high"));
+        assert_eq!(R::XHigh.google_thinking_level("gemini-3-pro"), Some("high"));
+        assert_eq!(R::Max.google_thinking_level("gemini-3-pro"), Some("high"));
     }
 }
 

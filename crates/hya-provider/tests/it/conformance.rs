@@ -1822,3 +1822,228 @@ fn openai_chat_and_responses_preserve_upstream_call_id_and_strip_foreign_state()
             .all(|item| item.get("type").and_then(|v| v.as_str()) != Some("thinking"))
     );
 }
+
+#[test]
+fn google_decodes_and_replays_thoughts_signatures_ids_and_clusters() {
+    use hya_proto::context::{GOOGLE_TEXT_SIGNATURE_TYPE, GOOGLE_THOUGHT_TYPE};
+
+    // Stream step 1: thought with signature, answer text, then parallel calls (only first has thoughtSignature).
+    let events = decode_all_google(
+        &GoogleProtocol,
+        &[
+            r#"{"candidates":[{"content":{"parts":[{"thought":true,"text":"plan step 1","thoughtSignature":"sig_t1"},{"text":"checking","thoughtSignature":"sig_txt"},{"functionCall":{"id":"fc_1","name":"read","args":{"path":"a"}},"thoughtSignature":"sig_fc1"},{"functionCall":{"id":"fc_2","name":"glob","args":{"pattern":"*"}}}],"role":"model"},"finishReason":"STOP"}]}"#,
+        ],
+    );
+    assert!(
+        events
+            .iter()
+            .all(|e| !matches!(e, Event::TextDelta { delta, .. } if delta.contains("plan step 1"))),
+        "thought text must not leak into visible TextDelta"
+    );
+    let reasoning_data: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::ReasoningEnd { provider_data, .. } => provider_data.clone(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reasoning_data,
+        vec![
+            json!({"type": GOOGLE_THOUGHT_TYPE, "thought_signature": "sig_t1"}),
+            json!({"type": GOOGLE_TEXT_SIGNATURE_TYPE, "thought_signature": "sig_txt"}),
+        ]
+    );
+    let tools: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::ToolCallRequested {
+                call,
+                name,
+                provider_data,
+                ..
+            } => Some((name.to_string(), *call, provider_data.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tools.len(), 2);
+    assert_eq!(
+        tools[0].2,
+        Some(json!({"call_id": "fc_1", "thought_signature": "sig_fc1"}))
+    );
+    assert_eq!(tools[1].2, Some(json!({"call_id": "fc_2"})));
+
+    // Sequential multi-step assistant turn: step 1 (thought + parallel calls),
+    // step 2 (signature-only sequential call with no intervening text/thought),
+    // plus mid-conversation Message::System (must not mutate systemInstruction)
+    // and foreign Anthropic thinking part (must be ignored).
+    let req = CompletionRequest {
+        model: ModelRef::new("google/gemini-3-pro-preview#high"),
+        system: Some("static system".into()),
+        messages: vec![
+            Message::User {
+                id: MessageId::new(),
+                parts: vec![Part::Text {
+                    id: PartId::new(),
+                    text: "start".into(),
+                }],
+            },
+            Message::Assistant {
+                id: MessageId::new(),
+                agent: AgentName::new("build"),
+                model: ModelRef::new("gemini-3-pro-preview"),
+                parts: vec![
+                    Part::Reasoning {
+                        id: PartId::new(),
+                        text: "Claude leak".into(),
+                        provider_data: Some(json!({"type": "thinking", "signature": "cl_sig"})),
+                    },
+                    Part::Reasoning {
+                        id: PartId::new(),
+                        text: "plan step 1".into(),
+                        provider_data: Some(json!({
+                            "type": GOOGLE_THOUGHT_TYPE,
+                            "thought_signature": "sig_t1"
+                        })),
+                    },
+                    Part::Text {
+                        id: PartId::new(),
+                        text: "checking".into(),
+                    },
+                    Part::Reasoning {
+                        id: PartId::new(),
+                        text: String::new(),
+                        provider_data: Some(json!({
+                            "type": GOOGLE_TEXT_SIGNATURE_TYPE,
+                            "thought_signature": "sig_txt"
+                        })),
+                    },
+                    Part::Tool {
+                        id: PartId::new(),
+                        call_id: tools[0].1,
+                        name: ToolName::new("read"),
+                        state: ToolPartState::Completed {
+                            input: json!({"path": "a"}),
+                            output: json!("content a"),
+                            time_ms: 1,
+                        },
+                        provider_data: tools[0].2.clone(),
+                    },
+                    Part::Tool {
+                        id: PartId::new(),
+                        call_id: tools[1].1,
+                        name: ToolName::new("glob"),
+                        state: ToolPartState::Completed {
+                            input: json!({"pattern": "*"}),
+                            output: json!("a"),
+                            time_ms: 1,
+                        },
+                        provider_data: tools[1].2.clone(),
+                    },
+                    Part::Tool {
+                        id: PartId::new(),
+                        call_id: ToolCallId::new(),
+                        name: ToolName::new("read"),
+                        state: ToolPartState::Completed {
+                            input: json!({"path": "b"}),
+                            output: json!("content b"),
+                            time_ms: 1,
+                        },
+                        provider_data: Some(json!({
+                            "call_id": "fc_3",
+                            "thought_signature": "sig_fc3"
+                        })),
+                    },
+                ],
+                finish: Some(FinishReason::ToolCalls),
+                tokens: None,
+                last_round: None,
+                last_step_start: None,
+            },
+            Message::System {
+                id: MessageId::new(),
+                content: "HYA_COMPACTED_CONTEXT\nsummary".into(),
+            },
+        ],
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: Some(ReasoningEffort::High),
+        headers: Default::default(),
+    };
+
+    let body = GoogleProtocol.encode(&req).unwrap();
+    assert_eq!(
+        body["systemInstruction"],
+        json!({"parts": [{"text": "static system"}]})
+    );
+    assert_eq!(
+        body["generationConfig"]["thinkingConfig"],
+        json!({"thinkingLevel": "high", "includeThoughts": true})
+    );
+    assert!(
+        body["generationConfig"]["thinkingConfig"]
+            .get("thinkingBudget")
+            .is_none()
+    );
+
+    let contents = body["contents"].as_array().unwrap();
+    // user("start") -> model(step 1) -> user(FR1, FR2) -> model(step 2) -> user(FR3 + coalesced System)
+    assert_eq!(contents.len(), 5, "contents={contents:#?}");
+    assert_eq!(contents[0]["role"], "user");
+    assert_eq!(contents[1]["role"], "model");
+    assert_eq!(contents[2]["role"], "user");
+    assert_eq!(contents[3]["role"], "model");
+    assert_eq!(contents[4]["role"], "user");
+
+    let step1_model = contents[1]["parts"].as_array().unwrap();
+    assert_eq!(
+        step1_model[0],
+        json!({"thought": true, "text": "plan step 1", "thoughtSignature": "sig_t1"})
+    );
+    assert_eq!(
+        step1_model[1],
+        json!({"text": "checking", "thoughtSignature": "sig_txt"})
+    );
+    assert_eq!(
+        step1_model[2],
+        json!({"functionCall": {"id": "fc_1", "name": "read", "args": {"path": "a"}}, "thoughtSignature": "sig_fc1"})
+    );
+    assert_eq!(
+        step1_model[3],
+        json!({"functionCall": {"id": "fc_2", "name": "glob", "args": {"pattern": "*"}}})
+    );
+    assert_eq!(contents[2]["parts"][0]["functionResponse"]["id"], "fc_1");
+    assert_eq!(contents[2]["parts"][1]["functionResponse"]["id"], "fc_2");
+    assert_eq!(contents[3]["parts"][0]["thoughtSignature"], "sig_fc3");
+    assert_eq!(contents[4]["parts"][0]["functionResponse"]["id"], "fc_3");
+    assert_eq!(
+        contents[4]["parts"][1]["text"],
+        "HYA_COMPACTED_CONTEXT\nsummary"
+    );
+
+    // Cross-model switch strips Gemini signatures, thought blocks, and upstream call ids.
+    let mut switched = req.clone();
+    switched.model = ModelRef::new("gemini-3.5-flash");
+    let cross = GoogleProtocol.encode(&switched).unwrap();
+    let encoded = cross["contents"].to_string();
+    assert!(!encoded.contains("sig_fc1"), "{encoded}");
+    assert!(!encoded.contains("sig_t1"), "{encoded}");
+    assert!(!encoded.contains("sig_txt"), "{encoded}");
+    assert!(!encoded.contains("fc_1"), "{encoded}");
+    assert!(!encoded.contains("\"thought\":true"), "{encoded}");
+
+    // Gemini 2.5 keeps thinkingBudget + includeThoughts and omits thinkingLevel.
+    let mut legacy = req;
+    legacy.model = ModelRef::new("gemini-2.5-pro");
+    let legacy_body = GoogleProtocol.encode(&legacy).unwrap();
+    assert_eq!(
+        legacy_body["generationConfig"]["thinkingConfig"],
+        json!({"thinkingBudget": 16000, "includeThoughts": true})
+    );
+    assert!(
+        legacy_body["generationConfig"]["thinkingConfig"]
+            .get("thinkingLevel")
+            .is_none()
+    );
+}

@@ -137,7 +137,7 @@ impl ProviderKind {
                 &["none", "minimal", "low", "medium", "high", "xhigh", "max"]
             }
             ProviderKind::GrokBuild => &["low", "medium", "high"],
-            ProviderKind::Google => &["high", "max"],
+            ProviderKind::Google => &["minimal", "low", "medium", "high", "max"],
         }
     }
 
@@ -1130,7 +1130,7 @@ impl Provider for HttpProvider {
             }
             ProviderKind::Anthropic => crate::ReasoningReplayPolicy::SignedCurrentTurn,
             ProviderKind::OpenAiCompatible => crate::ReasoningReplayPolicy::ReasoningContent,
-            ProviderKind::Google => crate::ReasoningReplayPolicy::None,
+            ProviderKind::Google => crate::ReasoningReplayPolicy::GoogleThought,
         }
     }
 
@@ -1505,7 +1505,10 @@ mod tests {
             ProviderKind::OpenAiCompatible.reasoning_variants(),
             ["minimal", "low", "medium", "high", "xhigh"]
         );
-        assert_eq!(ProviderKind::Google.reasoning_variants(), ["high", "max"]);
+        assert_eq!(
+            ProviderKind::Google.reasoning_variants(),
+            ["minimal", "low", "medium", "high", "max"]
+        );
     }
 
     #[test]

@@ -707,14 +707,35 @@ request as an assistant prefill.
 ## Google Protocol
 
 [`google.rs`](../../crates/hya-provider/src/google.rs) encodes requests for
-Gemini:
+Gemini (`ProviderKind::Google`, `ReasoningReplayPolicy::GoogleThought`):
 
-- system prompts become `systemInstruction` (top-level system plus any
-  `Message::System` history rows concatenated)
+- top-level `CompletionRequest.system` populates `systemInstruction` without
+  mutating it mid-turn; mid-conversation `Message::System` rows (such as
+  compaction markers) are emitted as coalesced `role: "user"` text parts inside
+  `contents` to preserve prompt-prefix caching
 - user text and canonical media parts become `contents[].parts`
-- tools become Gemini function declarations
-- tool results become `functionResponse` parts
-- reasoning effort maps to Gemini thinking-budget settings
+- tools become Gemini function declarations; assistant turns are split per step
+  (`google_assistant_clusters`) into alternating `role: "model"` and
+  `role: "user"` (`functionResponse`) entries, coalescing adjacent same-role
+  entries
+- when the assistant message's served model matches the target request model
+  (`same_model_id`), the encoder replays `google_thought` parts
+  (`{"thought": true, "text": ..., "thoughtSignature"?: ...}`), attaches
+  `google_text_signature` (`thoughtSignature` on the preceding text part), and
+  preserves `functionCall.id` / `functionResponse.id` and `functionCall`
+  `thoughtSignature` (with only the first call of a parallel batch or each
+  sequential step carrying one, as required by Gemini 3+ anti-distillation
+  checks); across model switches all signatures, thought parts, and upstream IDs
+  are stripped
+- `generationConfig.thinkingConfig`: Gemini 3+ (`gemini-3*`, `gemini-4*`, …)
+  emits `{"thinkingLevel": "minimal" | "low" | "medium" | "high", "includeThoughts": true}`
+  (`XHigh` and `Max` map to `"high"`), never pairing `thinkingBudget`;
+  Gemini 2.5 and legacy/generic ids emit
+  `{"thinkingBudget": <tokens>, "includeThoughts": true}` when reasoning is
+  `High`/`XHigh`/`Max`
+- because Gemini replays opaque `thoughtSignature` tokens without billing
+  prior `thoughtsTokenCount` back into `promptTokenCount`,
+  `ReasoningReplayPolicy::GoogleThought.expands_next_prompt()` returns `false`
 
 ### Inline media contract
 
@@ -741,8 +762,15 @@ is sent as `inlineData: { mimeType, data }`.
 
 ### Decoder and finish reasons
 
-The decoder reads **`candidates[0]` only**, coalesces all text parts into a
-single text part, and closes on the first `finishReason` it sees.
+The decoder reads **`candidates[0]` only**, routes `part.thought == true` to
+`ReasoningStart`/`ReasoningDelta`/`ReasoningEnd` (`provider_data:
+{"type": "google_thought", "thought_signature"?: ...}`), separates non-thought
+text parts (capturing any trailing `thoughtSignature` as
+`{"type": "google_text_signature", "thought_signature": ...}`), captures
+`functionCall.id` (`provider_data.call_id`) and `functionCall`
+`thoughtSignature` (`provider_data.thought_signature`), closes open
+reasoning/text parts before each transition so persisted part order matches the
+stream, and closes on the first `finishReason` it sees.
 
 | Condition | hya `FinishReason` |
 | --- | --- |

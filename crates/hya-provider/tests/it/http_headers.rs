@@ -1897,6 +1897,66 @@ async fn http_provider_posts_signed_anthropic_thinking_before_tool_use() {
 }
 
 #[tokio::test]
+async fn http_provider_google_uses_google_thought_policy_and_gemini3_thinking_level() {
+    let (base_url, request_rx) = start_sse_server(
+        r#"data: {"candidates":[{"content":{"parts":[{"thought":true,"text":"plan","thoughtSignature":"s1"},{"text":"ok"}],"role":"model"},"finishReason":"STOP"}]}"#
+            .to_string()
+            + "\n\n",
+    )
+    .await;
+    let provider = HttpProvider::new(
+        "google",
+        ProviderKind::Google,
+        &base_url,
+        Some("g-token".to_string()),
+        ["gemini-3-pro-preview".to_string()],
+    )
+    .unwrap();
+    assert_eq!(
+        provider.reasoning_replay_policy(),
+        hya_provider::ReasoningReplayPolicy::GoogleThought
+    );
+    assert!(!provider.reasoning_replay_policy().expands_next_prompt());
+
+    let req = CompletionRequest {
+        model: ModelRef::new("google/gemini-3-pro-preview"),
+        system: Some("sys".to_string()),
+        messages: vec![Message::User {
+            id: MessageId::new(),
+            parts: vec![Part::Text {
+                id: PartId::new(),
+                text: "hi".to_string(),
+            }],
+        }],
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: Some(ReasoningEffort::Medium),
+        headers: Default::default(),
+    };
+    let events: Vec<_> = provider
+        .stream(req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .map(Result::unwrap)
+        .collect();
+    let captured = captured_request(request_rx).await;
+    let body: Value = serde_json::from_str(&captured.body).unwrap();
+    assert_eq!(
+        body["generationConfig"]["thinkingConfig"],
+        json!({"thinkingLevel": "medium", "includeThoughts": true})
+    );
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::ReasoningEnd { provider_data: Some(data), .. }
+            if data["type"] == "google_thought" && data["thought_signature"] == "s1"
+    )));
+}
+
+#[tokio::test]
 async fn http_provider_forces_single_auth_refresh_on_401_and_retries_once() {
     let (base_url, connections, requests) = start_scripted_server(vec![
         "HTTP/1.1 401 Unauthorized\r\ncontent-length: 12\r\nconnection: close\r\n\r\nstale token.\n".to_string(),

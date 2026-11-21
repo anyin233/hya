@@ -83,6 +83,13 @@ pub const REASONING_CONTENT_TYPE: &str = "reasoning_content";
 /// Marker written by older chat decoders; historical sessions still replay it.
 pub const LEGACY_CHAT_REASONING_MARKER: &str = "openai_chat_reasoning_content";
 
+/// `provider_data` type marking a Google Gemini `thought: true` reasoning part.
+pub const GOOGLE_THOUGHT_TYPE: &str = "google_thought";
+
+/// `provider_data` type marking a Google Gemini trailing `thoughtSignature`
+/// captured from a non-thought model `text` part.
+pub const GOOGLE_TEXT_SIGNATURE_TYPE: &str = "google_text_signature";
+
 /// Normalize a model reference to its bare upstream model id: strip any
 /// trailing `#<variant>` suffix and any leading `<provider>/` prefix.
 #[must_use]
@@ -116,6 +123,8 @@ pub enum ReasoningReplayPolicy {
     /// The chat encoder sends the text of reasoning streamed as
     /// `reasoning_content`, on every turn, as the message's `reasoning_content`.
     ReasoningContent,
+    /// The Google Gemini encoder replays Google thought parts and thought signatures.
+    GoogleThought,
 }
 
 /// Index of the latest user message that carries text: assistant messages
@@ -154,7 +163,31 @@ impl ReasoningReplayPolicy {
                         .and_then(serde_json::Value::as_bool)
                         == Some(true)
             }),
+            Self::GoogleThought => provider_data.as_ref().is_some_and(is_google_reasoning),
         }
+    }
+
+    /// Whether replaying prior reasoning expands the next request's reported
+    /// prompt token count proportionally to the prior round's reasoning tokens.
+    ///
+    /// Google Gemini replays compact encrypted `thoughtSignature` tokens and
+    /// does not bill prior `thoughtsTokenCount` back into `promptTokenCount`, so
+    /// prompt-growth drop detection applies only to `ProviderData` and
+    /// `ReasoningContent`.
+    #[must_use]
+    pub fn expands_next_prompt(self) -> bool {
+        matches!(self, Self::ProviderData | Self::ReasoningContent)
+    }
+}
+
+fn is_google_reasoning(data: &serde_json::Value) -> bool {
+    match data.get("type").and_then(serde_json::Value::as_str) {
+        Some(t) if t == GOOGLE_THOUGHT_TYPE => true,
+        Some(t) if t == GOOGLE_TEXT_SIGNATURE_TYPE => data
+            .get("thought_signature")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|sig| !sig.is_empty()),
+        _ => false,
     }
 }
 
@@ -318,8 +351,49 @@ fn attached_images(output: &Value) -> impl Iterator<Item = (usize, &str, &str)> 
 
 #[cfg(test)]
 mod tests {
-    use super::{bare_model_id, same_model_id};
-    use crate::ModelRef;
+    use super::{
+        GOOGLE_TEXT_SIGNATURE_TYPE, GOOGLE_THOUGHT_TYPE, ReasoningReplayPolicy, bare_model_id,
+        same_model_id,
+    };
+    use crate::{ModelRef, Part, PartId};
+    use serde_json::json;
+
+    #[test]
+    fn google_thought_replay_and_prompt_expansion_contracts() {
+        let thought = Part::Reasoning {
+            id: PartId::new(),
+            text: "reason".into(),
+            provider_data: Some(json!({"type": GOOGLE_THOUGHT_TYPE, "thought_signature": "sig"})),
+        };
+        let text_sig = Part::Reasoning {
+            id: PartId::new(),
+            text: String::new(),
+            provider_data: Some(json!({
+                "type": GOOGLE_TEXT_SIGNATURE_TYPE,
+                "thought_signature": "sig"
+            })),
+        };
+        let empty_text_sig = Part::Reasoning {
+            id: PartId::new(),
+            text: String::new(),
+            provider_data: Some(json!({"type": GOOGLE_TEXT_SIGNATURE_TYPE})),
+        };
+        let foreign = Part::Reasoning {
+            id: PartId::new(),
+            text: "claude".into(),
+            provider_data: Some(json!({"type": "thinking", "signature": "sig"})),
+        };
+        assert!(ReasoningReplayPolicy::GoogleThought.replays(None, 0, &thought));
+        assert!(ReasoningReplayPolicy::GoogleThought.replays(None, 0, &text_sig));
+        assert!(!ReasoningReplayPolicy::GoogleThought.replays(None, 0, &empty_text_sig));
+        assert!(!ReasoningReplayPolicy::GoogleThought.replays(None, 0, &foreign));
+
+        assert!(ReasoningReplayPolicy::ProviderData.expands_next_prompt());
+        assert!(ReasoningReplayPolicy::ReasoningContent.expands_next_prompt());
+        assert!(!ReasoningReplayPolicy::GoogleThought.expands_next_prompt());
+        assert!(!ReasoningReplayPolicy::SignedCurrentTurn.expands_next_prompt());
+        assert!(!ReasoningReplayPolicy::None.expands_next_prompt());
+    }
 
     #[test]
     fn bare_model_id_and_same_model_id_normalize_routes_and_variants() {

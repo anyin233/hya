@@ -3059,7 +3059,10 @@ providers:
             vec!["low", "medium", "high", "max"]
         );
         let google = parsed.iter().find(|entry| entry.id == "gw-google").unwrap();
-        assert_eq!(google.models[0].reasoning_variants, vec!["high", "max"]);
+        assert_eq!(
+            google.models[0].reasoning_variants,
+            vec!["minimal", "low", "medium", "high", "max"]
+        );
     }
 
     #[test]
