@@ -1,0 +1,3 @@
+# 0.48.0-dev.27
+
+- **The kernel prompt tells the agent to stay inside the task's environment.** New rule: "Stay inside the environment the task gives you. Do not scan, probe, or try to log in to the machine that hosts it, to other machines, or to services that are not part of the task, and do not try to get out of a container or sandbox. If the task cannot be finished without that, say so and stop there." Full mode inherits it through the shared prompt composer. Before, no rule spoke of scope: a headless run that was stuck after an irreversible step scanned the machine hosting its container and tried to log in to it.
