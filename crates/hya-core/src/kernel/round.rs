@@ -6,7 +6,7 @@ use hya_proto::{
     Event, FinishReason, MessageId, ModelRef, PartId, Role, SessionId, TokenUsage, ToolCallId,
     UsagePurpose,
 };
-use hya_provider::EventStream;
+use hya_provider::{EventStream, ProviderError};
 use tokio_util::sync::CancellationToken;
 
 use super::Emit;
@@ -174,6 +174,12 @@ async fn drain(
         };
         let event = match item {
             Ok(event) => event,
+            // Every decoder's final frame is its last meaningful one: a body
+            // that breaks after it loses nothing, and the round is complete.
+            Err(ProviderError::StreamInterrupted(error)) if drained.finish.is_some() => {
+                tracing::warn!(%session, "stream broke after its final frame: {error}");
+                break;
+            }
             Err(error) => {
                 // Keep what streamed before the failure.
                 persist_open(emit, session, message, drained).await?;
