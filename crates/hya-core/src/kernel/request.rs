@@ -7,7 +7,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::View;
-use super::rewrite::is_goal_checkpoint;
+use super::rewrite::{GOAL_CHECKPOINT, is_goal_checkpoint};
 use crate::CoreError;
 
 /// Prompt image data by blob hash (`data:` URLs), loaded from the session's
@@ -60,20 +60,22 @@ pub fn projection_to_messages(
     let bare = agent.as_str() == super::AGENT
         && assistant.is_some_and(|row| row.config_generation.is_none());
     let deadline_stage = |row: &MessageProjection| {
-        if !bare || row.role != Role::System {
-            return false;
-        }
-        let text = collect_text(&row.parts);
-        ["TIME: ", "FINAL ", "clock: "].iter().any(|kind| {
-            text.strip_prefix("HEADLESS RUN — ")
-                .is_some_and(|rest| rest.starts_with(kind))
-        }) || super::is_completion_check(&text)
-            || super::is_empty_turn_notice(&text)
+        bare && row.role == Role::System && is_bare_transient_text(&collect_text(&row.parts))
     };
     messages
         .iter()
+        // A partless round answered by an end continuation never moves past
+        // the notice, so the continuation replaces it.
         .filter(|row| {
-            !(is_goal_checkpoint(row) || deadline_stage(row))
+            !(is_reasoning_dropped_notice_row(row)
+                && messages
+                    .iter()
+                    .any(|later| later.id > row.id && is_end_continuation_notice(later)))
+        })
+        .filter(|row| {
+            !(is_goal_checkpoint(row)
+                || deadline_stage(row)
+                || is_reasoning_dropped_notice_row(row))
                 || (marker.is_none_or(|marker| marker.id < row.id)
                     && assistant.is_some_and(|assistant| {
                         // The marker can move in the projection. These IDs are
@@ -107,10 +109,12 @@ pub fn projection_to_messages(
             },
             // Keep harness notices in the conversation on providers that
             // hoist system messages into the top-level instructions.
-            Role::System if deadline_stage(m) => Message::User {
-                id: m.id,
-                parts: map_parts(&m.parts),
-            },
+            Role::System if deadline_stage(m) || is_reasoning_dropped_notice_row(m) => {
+                Message::User {
+                    id: m.id,
+                    parts: map_parts(&m.parts),
+                }
+            }
             Role::System => Message::System {
                 id: m.id,
                 content: collect_text(&m.parts),
@@ -119,7 +123,54 @@ pub fn projection_to_messages(
         .collect()
 }
 
-fn sent_parts(message: &MessageProjection) -> &[PartProjection] {
+/// A bare-mode notice sent only until the model answers it: a run-deadline
+/// stage or clock, the completion check, or the empty-turn notice.
+fn is_bare_transient_text(text: &str) -> bool {
+    ["TIME: ", "FINAL ", "clock: "].iter().any(|kind| {
+        text.strip_prefix("HEADLESS RUN — ")
+            .is_some_and(|rest| rest.starts_with(kind))
+    }) || super::is_completion_check(text)
+        || super::is_empty_turn_notice(text)
+}
+
+/// The dropped-reasoning notice, transient in both modes.
+fn is_reasoning_dropped_notice_row(row: &MessageProjection) -> bool {
+    row.role == Role::System && super::is_reasoning_dropped_notice(&collect_text(&row.parts))
+}
+
+/// A notice that continues a run after a round without tool calls.
+fn is_end_continuation_notice(row: &MessageProjection) -> bool {
+    if row.role != Role::System {
+        return false;
+    }
+    let text = collect_text(&row.parts);
+    super::is_empty_turn_notice(&text) || super::is_completion_check(&text)
+}
+
+fn user_text(parts: &[Part]) -> String {
+    parts
+        .iter()
+        .filter_map(|part| match part {
+            Part::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether the request ends with a notice that the next request leaves out
+/// once the model has answered it.
+pub(super) fn ends_with_transient_notice(messages: &[Message]) -> bool {
+    match messages.last() {
+        Some(Message::System { content, .. }) => content.starts_with(GOAL_CHECKPOINT),
+        Some(Message::User { parts, .. }) => {
+            let text = user_text(parts);
+            is_bare_transient_text(&text) || super::is_reasoning_dropped_notice(&text)
+        }
+        _ => false,
+    }
+}
+
+pub(super) fn sent_parts(message: &MessageProjection) -> &[PartProjection] {
     &message.parts[message.folded_parts..]
 }
 
@@ -562,5 +613,191 @@ mod tests {
             &next[2],
             Message::Assistant { id, last_step_start: None, .. } if *id == assistant
         ));
+    }
+
+    /// The dropped-reasoning notice is the request's last user message in
+    /// bare and full mode alike, and leaves the request once the assistant
+    /// records a newer part.
+    #[test]
+    fn reasoning_dropped_notice_is_one_user_message_in_both_modes() {
+        use hya_proto::{
+            AgentName, ConfigGeneration, Envelope, Event, EventSeq, MessageId, PartId, SessionId,
+            SessionKind,
+        };
+        let session = SessionId::new();
+        let (user, assistant) = (MessageId::new(), MessageId::new());
+        let started = |message, role| Event::MessageStarted {
+            session,
+            message,
+            role,
+            agent: None,
+            model: None,
+        };
+        let text = |message, delta: &str| {
+            let part = PartId::new();
+            [
+                Event::TextStart {
+                    session,
+                    message,
+                    part,
+                },
+                Event::TextDelta {
+                    session,
+                    message,
+                    part,
+                    delta: delta.to_string(),
+                },
+            ]
+        };
+        let project = |events: &[Event]| {
+            let envelopes: Vec<_> = (1..)
+                .zip(events)
+                .map(|(seq, event)| Envelope {
+                    seq: EventSeq(seq),
+                    ts_millis: 0,
+                    event: event.clone(),
+                })
+                .collect();
+            Projection::from_events(&envelopes)
+        };
+        for (agent, full) in [(super::super::AGENT, false), ("build", true)] {
+            let mut events = vec![Event::SessionCreated {
+                session,
+                parent: None,
+                agent: AgentName::new(agent),
+                model: ModelRef::new("fake"),
+                workdir: "/tmp".to_string(),
+                project: None,
+                kind: SessionKind::Project,
+            }];
+            events.push(started(user, Role::User));
+            events.extend(text(user, "do the task"));
+            events.push(started(assistant, Role::Assistant));
+            if full {
+                events.push(Event::TurnBindingRecorded {
+                    session,
+                    message: assistant,
+                    generation: ConfigGeneration::INITIAL,
+                    system_sha256: "a".repeat(64),
+                    tools_sha256: "b".repeat(64),
+                });
+            }
+            events.extend(text(assistant, "step one"));
+            // Minted after the step's parts, as the kernel does.
+            let notice = MessageId::new();
+            events.extend(super::super::round::system_message_events(
+                session,
+                notice,
+                super::super::REASONING_DROPPED_NOTICE.to_string(),
+            ));
+            let messages = |events: &[Event]| {
+                projection_to_messages(
+                    &AgentName::new(agent),
+                    &project(events),
+                    &ModelRef::new("fake"),
+                    &AttachmentData::new(),
+                )
+            };
+
+            let sent = messages(&events);
+            assert!(
+                matches!(
+                    sent.last(),
+                    Some(Message::User { id, parts }) if *id == notice && matches!(
+                        parts.as_slice(),
+                        [Part::Text { text, .. }] if text == super::super::REASONING_DROPPED_NOTICE
+                    )
+                ),
+                "{agent}: {sent:?}"
+            );
+            assert!(ends_with_transient_notice(&sent), "{agent}");
+
+            events.extend(text(assistant, "step two"));
+            let later = messages(&events);
+            assert!(
+                later.iter().all(|message| message.id() != notice),
+                "{agent}"
+            );
+            assert!(!ends_with_transient_notice(&later), "{agent}");
+        }
+    }
+
+    /// A partless round that ends with an end continuation sends the
+    /// continuation instead of the dropped-reasoning notice again.
+    #[test]
+    fn end_continuation_replaces_an_unanswered_reasoning_notice() {
+        use hya_proto::{
+            AgentName, Envelope, Event, EventSeq, MessageId, PartId, SessionId, SessionKind,
+        };
+        let session = SessionId::new();
+        let (user, assistant) = (MessageId::new(), MessageId::new());
+        let part = PartId::new();
+        let mut events = vec![
+            Event::SessionCreated {
+                session,
+                parent: None,
+                agent: AgentName::new(super::super::AGENT),
+                model: ModelRef::new("fake"),
+                workdir: "/tmp".to_string(),
+                project: None,
+                kind: SessionKind::Project,
+            },
+            Event::MessageStarted {
+                session,
+                message: user,
+                role: Role::User,
+                agent: None,
+                model: None,
+            },
+            Event::TextStart {
+                session,
+                message: user,
+                part,
+            },
+            Event::TextDelta {
+                session,
+                message: user,
+                part,
+                delta: "do the task".to_string(),
+            },
+            Event::MessageStarted {
+                session,
+                message: assistant,
+                role: Role::Assistant,
+                agent: None,
+                model: None,
+            },
+        ];
+        let notice = MessageId::new();
+        events.extend(super::super::round::system_message_events(
+            session,
+            notice,
+            super::super::REASONING_DROPPED_NOTICE.to_string(),
+        ));
+        for continuation in [super::super::EMPTY_TURN, super::super::COMPLETION_CHECK] {
+            let mut events = events.clone();
+            let next = MessageId::new();
+            events.extend(super::super::round::system_message_events(
+                session,
+                next,
+                continuation.to_string(),
+            ));
+            let envelopes: Vec<_> = (1..)
+                .zip(events)
+                .map(|(seq, event)| Envelope {
+                    seq: EventSeq(seq),
+                    ts_millis: 0,
+                    event,
+                })
+                .collect();
+            let sent = projection_to_messages(
+                &AgentName::new(super::super::AGENT),
+                &Projection::from_events(&envelopes),
+                &ModelRef::new("fake"),
+                &AttachmentData::new(),
+            );
+            let ids: Vec<_> = sent.iter().map(Message::id).collect();
+            assert_eq!(ids, vec![user, next]);
+        }
     }
 }

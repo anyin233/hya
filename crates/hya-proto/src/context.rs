@@ -233,6 +233,12 @@ impl<'a> ToolImageReplay<'a> {
         }
     }
 
+    /// Whether this request carries at least one tool-result image attachment.
+    #[must_use]
+    pub fn has_attached(&self) -> bool {
+        !self.attached.is_empty()
+    }
+
     /// Image candidates for a completed result as (MIME type, data, omission notice).
     /// Encoders supply their media check. Estimators can accept candidates without validating data.
     pub fn attachments<'output>(

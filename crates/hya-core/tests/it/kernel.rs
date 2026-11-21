@@ -18,7 +18,7 @@ use hya_proto::{
 use hya_provider::{
     AnthropicMessagesProtocol, COMPACT_CONTEXT_MARKER, Capabilities, CompletionRequest,
     EventStream, FakeProvider, FakeStep, OpenAiChatProtocol, Protocol, Provider, ProviderError,
-    ProviderRouter, ReasoningEffort,
+    ProviderRouter, ReasoningEffort, ReasoningReplayPolicy,
 };
 use hya_store::SessionStore;
 use hya_tool::deadline::{self, Stage};
@@ -321,12 +321,8 @@ impl Fixture {
         self.turn_with_publish(prompt, cancel, &|_| {}).await
     }
 
-    async fn turn_with_publish(
-        &self,
-        prompt: &str,
-        cancel: &CancellationToken,
-        publish: &(dyn Fn(Envelope) + Send + Sync),
-    ) -> Result<FinishReason, CoreError> {
+    /// Write a user message and start an assistant message after it.
+    async fn begin(&self, prompt: &str) -> MessageId {
         let session = self.session;
         let user = MessageId::new();
         let part = PartId::new();
@@ -377,6 +373,17 @@ impl Fixture {
             )
             .await
             .unwrap();
+        message
+    }
+
+    async fn turn_with_publish(
+        &self,
+        prompt: &str,
+        cancel: &CancellationToken,
+        publish: &(dyn Fn(Envelope) + Send + Sync),
+    ) -> Result<FinishReason, CoreError> {
+        let session = self.session;
+        let message = self.begin(prompt).await;
         let emit = StoreEmit {
             store: &self.store,
             publish,
@@ -4168,4 +4175,667 @@ async fn independent_workspace_views_reconcile_moves_same_stamp_and_a_cold_resta
             .iter()
             .any(|s| s.path.ends_with("/offline") && s.size == Some(3))
     );
+}
+
+/// A route over a fake that claims `model` only (every model when `None`),
+/// replays reasoning by `policy`, and records `provider_data` on each
+/// reasoning part the fake streams.
+struct Route {
+    fake: Arc<FakeProvider>,
+    model: Option<ModelRef>,
+    policy: ReasoningReplayPolicy,
+    provider_data: Option<serde_json::Value>,
+}
+
+#[async_trait::async_trait]
+impl Provider for Route {
+    fn id(&self) -> &str {
+        self.fake.id()
+    }
+
+    fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+        if self.model.as_ref().is_some_and(|claimed| claimed != model) {
+            return None;
+        }
+        self.fake.capabilities(model)
+    }
+
+    fn reasoning_replay_policy(&self) -> ReasoningReplayPolicy {
+        self.policy
+    }
+
+    fn sends_tool_images(&self, caps: &Capabilities) -> bool {
+        self.fake.sends_tool_images(caps)
+    }
+
+    async fn stream(
+        &self,
+        req: CompletionRequest,
+        session: SessionId,
+        message: MessageId,
+    ) -> Result<EventStream, ProviderError> {
+        use futures::StreamExt as _;
+        let data = self.provider_data.clone();
+        let stream = self.fake.stream(req, session, message).await?;
+        Ok(Box::pin(stream.map(move |event| {
+            event.map(|event| match event {
+                Event::ReasoningEnd {
+                    session,
+                    message,
+                    part,
+                    provider_data: None,
+                } => Event::ReasoningEnd {
+                    session,
+                    message,
+                    part,
+                    provider_data: data.clone(),
+                },
+                event => event,
+            })
+        })))
+    }
+}
+
+/// A summary-only Responses reasoning item: replayed by hya, but not
+/// carried by an endpoint that needs its encrypted content.
+fn summary_item() -> serde_json::Value {
+    json!({
+        "id": "rsn-1",
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": "step thought"}],
+    })
+}
+
+/// A fixture whose only route replays reasoning by `policy` and records
+/// `provider_data` on reasoning parts.
+async fn route_fixture(
+    name: &str,
+    provider: FakeProvider,
+    policy: ReasoningReplayPolicy,
+    provider_data: Option<serde_json::Value>,
+) -> Fixture {
+    let mut fx = fixture(name, provider).await;
+    fx.router = ProviderRouter::new().with(Arc::new(Route {
+        fake: fx.provider.clone(),
+        model: None,
+        policy,
+        provider_data,
+    }));
+    fx
+}
+
+/// A fixture on a route that replays each reasoning part as a provider item.
+async fn replaying_fixture(name: &str, provider: FakeProvider) -> Fixture {
+    route_fixture(
+        name,
+        provider,
+        ReasoningReplayPolicy::ProviderData,
+        Some(summary_item()),
+    )
+    .await
+}
+
+/// A round that thinks, makes `calls`, and reports `usage`.
+fn thought(calls: Vec<FakeStep>, usage: TokenUsage) -> Vec<FakeStep> {
+    let mut steps = vec![FakeStep::Reasoning("thinking".into())];
+    steps.extend(calls);
+    steps.push(FakeStep::Usage(TokenUsage {
+        output: usage.reasoning + 20,
+        ..usage
+    }));
+    steps.push(FakeStep::Finish(FinishReason::ToolCalls));
+    steps
+}
+
+fn usage(input: u64, reasoning: u64) -> TokenUsage {
+    TokenUsage {
+        input,
+        reasoning,
+        ..TokenUsage::default()
+    }
+}
+
+/// A `todo` round with `input` prompt tokens and `reasoning` thinking tokens.
+fn todo_round(input: u64, reasoning: u64) -> Vec<FakeStep> {
+    thought(call("todo", json!({"ops": []})), usage(input, reasoning))
+}
+
+const REASONING_NOTICE: &str = "[hya] Reasoning replay notice:";
+
+/// Indexes of the requests that carry the dropped-reasoning notice.
+fn reasoning_notice_requests(fx: &Fixture) -> Vec<usize> {
+    let carries = |message: &Message| match message {
+        Message::User { parts, .. } => parts.iter().any(
+            |part| matches!(part, Part::Text { text, .. } if text.starts_with(REASONING_NOTICE)),
+        ),
+        Message::System { content, .. } => content.starts_with(REASONING_NOTICE),
+        Message::Assistant { .. } => false,
+    };
+    (0..)
+        .zip(fx.provider.requests())
+        .filter(|(_, request)| request.messages.iter().any(carries))
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// Step 1's prompt grew by less than half of step 0's replayed reasoning: the
+/// notice ends step 2's request only, and a later drop in the same turn sends
+/// no second one.
+#[tokio::test]
+async fn dropped_reasoning_sends_one_notice_per_turn() {
+    let fx = replaying_fixture(
+        "reasoning-dropped",
+        FakeProvider::scripted_turns(vec![
+            todo_round(1000, 2000),
+            todo_round(1200, 2000),
+            todo_round(1300, 2000),
+            todo_round(1400, 2000),
+            // Dropped again, compared with step 3.
+            todo_round(1500, 2000),
+            text("done"),
+            text("checked"),
+        ]),
+    )
+    .await;
+    assert_eq!(
+        fx.turn("work it out", &CancellationToken::new())
+            .await
+            .unwrap(),
+        FinishReason::Stop
+    );
+
+    let requests = fx.provider.requests();
+    assert_eq!(requests.len(), 7);
+    assert!(matches!(
+        requests[2].messages.last(),
+        Some(Message::User { parts, .. }) if matches!(
+            parts.as_slice(),
+            [Part::Text { text, .. }] if text.starts_with(REASONING_NOTICE)
+        )
+    ));
+    assert_eq!(reasoning_notice_requests(&fx), vec![2]);
+}
+
+/// Rounds the check cannot compare, whose reasoning hya did not replay, or
+/// whose prompt kept the reasoning, never get the notice.
+#[tokio::test]
+async fn reasoning_drop_check_skips_uncomparable_rounds() {
+    use ReasoningReplayPolicy::{None as NoReplay, ProviderData};
+    let unknown = thought(
+        call("todo", json!({"ops": []})),
+        TokenUsage {
+            reasoning_unknown: true,
+            ..usage(1000, 2000)
+        },
+    );
+    let replayed = Some(summary_item());
+    for (case, policy, provider_data, first, second) in [
+        (
+            "kept",
+            ProviderData,
+            replayed.clone(),
+            todo_round(1000, 2000),
+            todo_round(3200, 2000),
+        ),
+        (
+            "no-replay",
+            NoReplay,
+            replayed.clone(),
+            todo_round(1000, 2000),
+            todo_round(1200, 2000),
+        ),
+        // The route replays provider items, but the reasoning had none.
+        (
+            "not-replayed",
+            ProviderData,
+            None,
+            todo_round(1000, 2000),
+            todo_round(1200, 2000),
+        ),
+        (
+            "unknown",
+            ProviderData,
+            replayed.clone(),
+            unknown,
+            todo_round(1200, 2000),
+        ),
+        (
+            "below-threshold",
+            ProviderData,
+            replayed.clone(),
+            todo_round(1000, 500),
+            todo_round(1200, 500),
+        ),
+    ] {
+        let fx = route_fixture(
+            &format!("reasoning-skip-{case}"),
+            FakeProvider::scripted_turns(vec![first, second, text("done"), text("checked")]),
+            policy,
+            provider_data,
+        )
+        .await;
+        fx.turn("work it out", &CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(fx.provider.requests().len(), 4, "{case}");
+        assert!(reasoning_notice_requests(&fx).is_empty(), "{case}");
+    }
+}
+
+/// A request that attaches a tool-result image, or the one after it that
+/// replaces the image with a note, is not compared across.
+#[tokio::test]
+async fn reasoning_drop_check_skips_tool_image_rounds() {
+    let read = || call("read", json!({"path": "board.data"}));
+    for (case, script) in [
+        // Step 1 attaches the image: compared with step 0, which had none.
+        (
+            "current",
+            vec![
+                thought(read(), usage(1000, 2000)),
+                todo_round(1200, 2000),
+                text("done"),
+                text("checked"),
+            ],
+        ),
+        // Step 1 attaches the image; step 2 sends the note in its place.
+        (
+            "previous",
+            vec![
+                read(),
+                todo_round(1000, 2000),
+                todo_round(1200, 2000),
+                text("done"),
+                text("checked"),
+            ],
+        ),
+    ] {
+        let steps = script.len();
+        let fx = replaying_fixture(
+            &format!("reasoning-image-{case}"),
+            FakeProvider::scripted_turns(script).with_tool_images(),
+        )
+        .await;
+        write_board(&fx.dir);
+        fx.turn("look at the board", &CancellationToken::new())
+            .await
+            .unwrap();
+        let requests = fx.provider.requests();
+        assert_eq!(requests.len(), steps, "{case}");
+        assert!(attaches_board(&requests[1]), "{case}");
+        assert!(!attaches_board(&requests[2]), "{case}");
+        assert!(reasoning_notice_requests(&fx).is_empty(), "{case}");
+    }
+}
+
+const BOARD_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAF0lEQVR4nGP4z8BAEiJN9aiGUQ1DSgMAkPn/Afnh+ngAAAAASUVORK5CYII=";
+
+fn write_board(dir: &Path) {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    std::fs::write(dir.join("board.data"), STANDARD.decode(BOARD_PNG).unwrap()).unwrap();
+}
+
+fn attaches_board(request: &CompletionRequest) -> bool {
+    AnthropicMessagesProtocol
+        .encode_for_model(request, None, true)
+        .unwrap()
+        .to_string()
+        .contains(BOARD_PNG)
+}
+
+/// A rewrite between two rounds starts the next request from a new marker,
+/// so its smaller prompt is not compared.
+#[tokio::test]
+async fn reasoning_drop_check_skips_a_rewrite() {
+    let fx = replaying_fixture(
+        "reasoning-rewrite",
+        FakeProvider::scripted_turns(vec![
+            todo_round(1000, 0),
+            thought(
+                call("rewrite", json!({"summary": "state so far"})),
+                usage(1000, 2000),
+            ),
+            todo_round(1200, 2000),
+            text("done"),
+            text("checked"),
+        ]),
+    )
+    .await;
+    fx.turn("work it out", &CancellationToken::new())
+        .await
+        .unwrap();
+    let requests = fx.provider.requests();
+    assert_eq!(requests.len(), 5);
+    assert!(matches!(
+        requests[2].messages.first(),
+        Some(Message::System { content, .. }) if content.starts_with(COMPACT_CONTEXT_MARKER)
+    ));
+    assert!(reasoning_notice_requests(&fx).is_empty());
+}
+
+/// The goal checkpoint ends step 1's request only: neither step 1 (which
+/// carries it) nor step 2 (which drops it) is compared with its predecessor.
+#[tokio::test]
+async fn reasoning_drop_check_skips_transient_notice_rounds() {
+    // Step 0's prompt plus output reaches 60% of the window before step 1,
+    // below the 80% that would rewrite.
+    let fx = replaying_fixture(
+        "reasoning-notice",
+        FakeProvider::scripted_turns(vec![
+            todo_round(10_000, 2000),
+            todo_round(10_200, 2000),
+            todo_round(10_300, 2000),
+            text("done"),
+            text("checked"),
+        ])
+        .with_max_context(20_000),
+    )
+    .await;
+    fx.turn("work it out", &CancellationToken::new())
+        .await
+        .unwrap();
+    let requests = fx.provider.requests();
+    assert_eq!(requests.len(), 5);
+    let checkpoint = |message: Option<&Message>| {
+        matches!(message, Some(Message::System { content, .. })
+            if content.starts_with("[hya] Goal checkpoint:"))
+    };
+    assert!(checkpoint(requests[1].messages.last()));
+    assert!(!requests[2].messages.iter().any(|m| checkpoint(Some(m))));
+    assert!(reasoning_notice_requests(&fx).is_empty());
+}
+
+/// A rewrite before the request that would carry the notice removes it
+/// unsent; the next drop in the turn then sends it.
+#[tokio::test]
+async fn reasoning_notice_removed_unsent_is_sent_on_the_next_drop() {
+    // Step 1's prompt plus output passes 80% of the window: the kernel
+    // rewrites before step 2.
+    let fx = replaying_fixture(
+        "reasoning-notice-rewritten",
+        FakeProvider::scripted_turns(vec![
+            todo_round(1000, 2000),
+            todo_round(1200, 20_000),
+            todo_round(1000, 2000),
+            todo_round(1200, 2000),
+            text("done"),
+            text("checked"),
+        ])
+        .with_max_context(20_000),
+    )
+    .await;
+    fx.turn("work it out", &CancellationToken::new())
+        .await
+        .unwrap();
+    let requests = fx.provider.requests();
+    assert_eq!(requests.len(), 6);
+    assert!(matches!(
+        requests[2].messages.first(),
+        Some(Message::System { content, .. }) if content.starts_with(COMPACT_CONTEXT_MARKER)
+    ));
+    let logged = fx
+        .log()
+        .await
+        .iter()
+        .filter(|event| matches!(event, Event::TextDelta { delta, .. } if delta.starts_with(REASONING_NOTICE)))
+        .count();
+    assert_eq!(logged, 2, "one notice after step 1, one after step 3");
+    assert_eq!(reasoning_notice_requests(&fx), vec![4]);
+}
+
+/// A partless round after the notice gets the empty-turn notice, and the
+/// next request carries that instead of the reasoning notice again.
+#[tokio::test]
+async fn empty_turn_replaces_an_unanswered_reasoning_notice() {
+    let fx = replaying_fixture(
+        "reasoning-notice-empty-turn",
+        FakeProvider::scripted_turns(vec![
+            todo_round(1000, 2000),
+            todo_round(1200, 2000),
+            vec![FakeStep::Finish(FinishReason::Stop)],
+            text("done"),
+            text("checked"),
+        ]),
+    )
+    .await;
+    fx.turn("work it out", &CancellationToken::new())
+        .await
+        .unwrap();
+    let requests = fx.provider.requests();
+    assert_eq!(requests.len(), 5);
+    assert!(matches!(
+        requests[3].messages.last(),
+        Some(Message::User { parts, .. }) if matches!(
+            parts.as_slice(),
+            [Part::Text { text, .. }] if text.starts_with("[hya] Your last turn ended with thinking only")
+        )
+    ));
+    assert_eq!(reasoning_notice_requests(&fx), vec![2]);
+}
+
+/// Every round is served by `fallback` instead of the requested model, as a
+/// full-mode model fallback does; tools run as in bare mode. With `live`,
+/// rounds open on that router, which the scope's router predates.
+struct Fallback<'a> {
+    scope: &'a kernel::Scope<'a>,
+    fx: &'a Fixture,
+    fallback: ModelRef,
+    ctx: ToolCtx,
+    live: Option<ProviderRouter>,
+}
+
+#[async_trait::async_trait]
+impl kernel::ToolGate for Fallback<'_> {
+    async fn call(&mut self, mut call: kernel::ToolCall) -> Result<(), CoreError> {
+        let tool = self
+            .fx
+            .tools
+            .iter()
+            .find(|tool| tool.name() == call.name)
+            .unwrap();
+        let output = tool
+            .execute(&self.ctx, std::mem::take(&mut call.input))
+            .await
+            .unwrap();
+        let (session, message) = (self.scope.session, self.scope.message);
+        self.scope
+            .emit
+            .emit(
+                session,
+                vec![Event::ToolResult {
+                    session,
+                    message,
+                    part: call.part,
+                    call: call.call,
+                    output,
+                    time_ms: 0,
+                }],
+            )
+            .await
+    }
+
+    async fn cancelled(&mut self, _calls: Vec<kernel::ToolCall>) -> Result<(), CoreError> {
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl kernel::Harness for Fallback<'_> {
+    async fn before_round(&mut self, _projection: &Projection) -> Result<bool, CoreError> {
+        Ok(false)
+    }
+
+    async fn request(&mut self, view: &View<'_>) -> Result<CompletionRequest, CoreError> {
+        Ok(kernel::request::request(
+            view,
+            &self.fx.system,
+            self.fx.tools.iter().map(|tool| tool.schema()).collect(),
+            &self.fx.model,
+            &AgentName::new(kernel::AGENT),
+            &AttachmentData::new(),
+            None,
+        ))
+    }
+
+    async fn open(
+        &mut self,
+        request: &CompletionRequest,
+    ) -> Result<Option<(EventStream, ModelRef)>, CoreError> {
+        let mut request = request.clone();
+        request.model = self.fallback.clone();
+        let stream = self
+            .live
+            .as_ref()
+            .unwrap_or(self.scope.provider)
+            .stream(request, self.scope.session, self.scope.message)
+            .await?;
+        Ok(Some((stream, self.fallback.clone())))
+    }
+
+    async fn failed(&mut self, _failure: &kernel::Failure) -> Result<bool, CoreError> {
+        Ok(false)
+    }
+
+    async fn collected(&mut self, _round: &kernel::Round) -> Result<(), CoreError> {
+        Ok(())
+    }
+
+    async fn before_end(&mut self) -> Result<bool, CoreError> {
+        Ok(false)
+    }
+
+    fn done(&self) -> bool {
+        false
+    }
+
+    fn served_route(&self, model: &ModelRef) -> Option<(ReasoningReplayPolicy, bool)> {
+        let live = self.live.as_ref()?;
+        Some((
+            live.reasoning_replay_policy(model),
+            live.sends_tool_images(model),
+        ))
+    }
+}
+
+/// The served fallback's route, not the requested model's, decides whether
+/// reasoning was replayed and images attached.
+#[tokio::test]
+async fn reasoning_drop_check_uses_the_serving_route() {
+    let fallback = ModelRef::new("fake/fallback");
+    for (case, script, notice) in [
+        // Only the fallback replays reasoning: its drop is reported.
+        (
+            "replay",
+            vec![todo_round(1000, 2000), todo_round(1200, 2000), text("done")],
+            vec![2],
+        ),
+        // The fallback route exists only on the live router the harness
+        // reports, not on the scope's.
+        (
+            "live",
+            vec![todo_round(1000, 2000), todo_round(1200, 2000), text("done")],
+            vec![2],
+        ),
+        // Only the fallback attaches images: step 1 carries one.
+        (
+            "image",
+            vec![
+                thought(
+                    call("read", json!({"path": "board.data"})),
+                    usage(1000, 2000),
+                ),
+                todo_round(1200, 2000),
+                text("done"),
+            ],
+            vec![],
+        ),
+    ] {
+        let mut fx = fixture(
+            &format!("reasoning-fallback-{case}"),
+            FakeProvider::scripted_turns(script).with_tool_images(),
+        )
+        .await;
+        let requested = Arc::new(Route {
+            fake: Arc::new(FakeProvider::scripted_turns(Vec::new())),
+            model: Some(fx.model.clone()),
+            policy: ReasoningReplayPolicy::None,
+            provider_data: Some(summary_item()),
+        });
+        let served = ProviderRouter::new()
+            .with(requested.clone())
+            .with(Arc::new(Route {
+                fake: fx.provider.clone(),
+                model: Some(fallback.clone()),
+                policy: ReasoningReplayPolicy::ProviderData,
+                provider_data: Some(summary_item()),
+            }));
+        let live = if case == "live" {
+            fx.router = ProviderRouter::new().with(requested);
+            Some(served)
+        } else {
+            fx.router = served;
+            None
+        };
+        write_board(&fx.dir);
+        let message = fx.begin("work it out").await;
+        let emit = StoreEmit {
+            store: &fx.store,
+            publish: &|_| {},
+        };
+        let scope = kernel::Scope {
+            watches: &fx.watches,
+            store: &fx.store,
+            emit: &emit,
+            complete: None,
+            provider: &fx.router,
+            session: fx.session,
+            message,
+        };
+        let cancel = CancellationToken::new();
+        let mut harness = Fallback {
+            scope: &scope,
+            fx: &fx,
+            fallback: fallback.clone(),
+            ctx: tool_ctx(&fx.dir, &cancel),
+            live,
+        };
+        kernel::drive(&scope, &mut harness, &cancel).await.unwrap();
+        let requests = fx.provider.requests();
+        assert_eq!(requests.len(), 3, "{case}");
+        assert!(requests.iter().all(|request| request.model == fallback));
+        if case == "image" {
+            assert!(attaches_board(&requests[1]));
+        }
+        assert_eq!(reasoning_notice_requests(&fx), notice, "{case}");
+    }
+}
+
+/// A prompt that only begins like the notice does not count as its
+/// delivery: the kernel's own notice is still sent after a drop.
+#[tokio::test]
+async fn reasoning_notice_is_sent_after_a_prompt_quoting_it() {
+    let prompt = format!("{REASONING_NOTICE} pasted from an old log");
+    // Step 0's request ends with the prompt, which reads as a transient
+    // notice, so the drop is measured from step 1 to step 2.
+    let fx = replaying_fixture(
+        "reasoning-notice-quoted",
+        FakeProvider::scripted_turns(vec![
+            todo_round(1000, 0),
+            todo_round(1000, 2000),
+            todo_round(1200, 2000),
+            text("done"),
+            text("checked"),
+        ]),
+    )
+    .await;
+    fx.turn(&prompt, &CancellationToken::new()).await.unwrap();
+    let requests = fx.provider.requests();
+    assert_eq!(requests.len(), 5);
+    assert!(matches!(
+        requests[3].messages.last(),
+        Some(Message::User { parts, .. }) if matches!(
+            parts.as_slice(),
+            [Part::Text { text, .. }] if text.starts_with(REASONING_NOTICE) && *text != prompt
+        )
+    ));
 }

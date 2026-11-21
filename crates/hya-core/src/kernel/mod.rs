@@ -21,10 +21,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use hya_proto::context::{ReasoningReplayPolicy, ToolImageReplay, current_turn_start};
 use hya_proto::event::ViewRef;
 use hya_proto::{
     AgentName, Envelope, Event, EventSeq, FinishReason, Message, MessageId, ModelRef,
-    PartProjection, Projection, Role, SessionId, ToolSchema,
+    PartProjection, Projection, Role, SessionId, TokenUsage, ToolSchema,
 };
 use hya_provider::{
     CompletionRequest, EventStream, ProviderError, ProviderRouter, invalid_tool_arguments,
@@ -66,6 +67,84 @@ const EMPTY_TURN_NOTICES: usize = 2;
 
 fn is_empty_turn_notice(text: &str) -> bool {
     text.split(':').next() == EMPTY_TURN.split(':').next()
+}
+
+/// Minimum prior-round reasoning tokens required before checking whether
+/// the endpoint dropped replayed reasoning from the next prompt.
+const MIN_DROPPED_REASONING_TOKENS: u64 = 1_000;
+
+const REASONING_DROPPED_PREFIX: &str = "[hya] Reasoning replay notice:";
+
+/// Sent once per turn in both modes if provider usage shows the endpoint
+/// dropped a prior step's replayed reasoning (docs/kernel.md).
+const REASONING_DROPPED_NOTICE: &str = "[hya] Reasoning replay notice: the model endpoint did not carry your previous step's private reasoning into the next request. Do not rely on private thinking being available in later steps: keep key derivations, findings, decisions, and next steps in brief visible text alongside your tool calls, in a workspace file, or in the todo list.";
+
+fn is_reasoning_dropped_notice(text: &str) -> bool {
+    text.starts_with(REASONING_DROPPED_PREFIX)
+}
+
+/// What one round with tool calls sent and reported, kept for the next
+/// round's dropped-reasoning check (docs/kernel.md).
+struct PrevRound {
+    /// Model that served the round.
+    model: ModelRef,
+    /// Compaction marker the request started from.
+    marker: Option<MessageId>,
+    /// Tool outputs the request sent as eviction notices.
+    evicted_parts: usize,
+    /// The request attached tool-result images, sent only once.
+    had_tool_image: bool,
+    /// The request ended with a notice sent only once.
+    had_transient_notice: bool,
+    /// Usage the round reported.
+    usage: Option<TokenUsage>,
+}
+
+impl PrevRound {
+    /// Both rounds' usage when `next` sent this round's history plus its
+    /// output, `replayed` this round's reasoning in it, yet `next`'s prompt
+    /// grew by less than half the reasoning this round reported: the endpoint
+    /// left that reasoning out.
+    fn dropped_reasoning(&self, next: &Self, replayed: bool) -> Option<(TokenUsage, TokenUsage)> {
+        let (prev, curr) = (self.usage?, next.usage?);
+        (replayed
+            && self.model == next.model
+            && self.marker == next.marker
+            && self.evicted_parts == next.evicted_parts
+            // A tool-result image or trailing notice in either request lets a
+            // route legitimately change earlier history or reasoning.
+            && !(self.had_tool_image || next.had_tool_image)
+            && !(self.had_transient_notice || next.had_transient_notice)
+            && !prev.reasoning_unknown
+            && prev.prompt() > 0
+            && prev.reasoning >= MIN_DROPPED_REASONING_TOKENS
+            && curr.prompt() > 0
+            && curr.prompt() < prev.prompt().saturating_add(prev.reasoning / 2))
+        .then_some((prev, curr))
+    }
+}
+
+/// Whether `messages` replay, by `policy`, a reasoning part from the last
+/// step of the turn's assistant `message` (the step before this request).
+fn replays_last_step_reasoning(
+    messages: &[Message],
+    message: MessageId,
+    policy: ReasoningReplayPolicy,
+) -> bool {
+    let turn_start = current_turn_start(messages);
+    messages.iter().enumerate().any(|(index, row)| match row {
+        Message::Assistant {
+            id,
+            parts,
+            last_step_start: Some(start),
+            ..
+        } if *id == message => parts
+            .get(*start..)
+            .unwrap_or_default()
+            .iter()
+            .any(|part| policy.replays(turn_start, index, part)),
+        _ => false,
+    })
 }
 
 /// Where kernel events go: durable appends and live-only publishes.
@@ -169,6 +248,12 @@ pub trait Harness: ToolGate {
     async fn before_end(&mut self) -> Result<bool, CoreError>;
     /// Whether the run ends after this round's tool calls.
     fn done(&self) -> bool;
+    /// Replay policy and image-attachment capability of the live route that
+    /// served `model`, when the harness can refresh providers mid-turn;
+    /// `None` uses [`Scope::provider`].
+    fn served_route(&self, _model: &ModelRef) -> Option<(ReasoningReplayPolicy, bool)> {
+        None
+    }
 }
 
 /// Waits before retrying a round that failed on a transient provider error
@@ -682,6 +767,10 @@ pub async fn drive(
         ..
     } = scope;
     let mut step = 0;
+    let mut prev: Option<PrevRound> = None;
+    let mut reasoning_notice_delivered = false;
+    // The notice this run appended and no request has carried yet.
+    let mut pending_notice: Option<MessageId> = None;
     loop {
         if cancel.is_cancelled() {
             return Ok(FinishReason::Cancelled);
@@ -712,8 +801,29 @@ pub async fn drive(
             cut: view.cut(),
             request_sha256: request::request_sha256(&req)?,
         };
+        let visible = request::compacted_messages(&projection);
+        let marker = visible
+            .first()
+            .filter(|row| request::is_marker(row))
+            .map(|row| row.id);
+        let evicted_parts = visible
+            .iter()
+            .flat_map(request::sent_parts)
+            .filter(|part| {
+                matches!(
+                    part,
+                    PartProjection::Tool {
+                        eviction_notice: Some(_),
+                        ..
+                    }
+                )
+            })
+            .count();
+        let had_transient_notice = request::ends_with_transient_notice(&req.messages);
+        let carries_reasoning_notice =
+            pending_notice.is_some_and(|id| req.messages.iter().any(|m| m.id() == id));
         drop(projection);
-        let round = loop {
+        let (round, served) = loop {
             let failure = match harness.open(&req).await {
                 Ok(None) => return Ok(FinishReason::Cancelled),
                 Err(error) => Failure {
@@ -738,7 +848,7 @@ pub async fn drive(
                     )
                     .await
                     {
-                        Ok(round) => break round,
+                        Ok(round) => break (round, served),
                         Err(failure) => failure,
                     }
                 }
@@ -758,6 +868,41 @@ pub async fn drive(
             }
         };
         harness.collected(&round).await?;
+        reasoning_notice_delivered |= carries_reasoning_notice;
+        pending_notice = None;
+        // The route that served the round decides what its request replayed
+        // and attached (a fallback model can differ from `req.model`).
+        let (policy, sends_tool_images) = harness.served_route(&served).unwrap_or_else(|| {
+            (
+                scope.provider.reasoning_replay_policy(&served),
+                scope.provider.sends_tool_images(&served),
+            )
+        });
+        let replayed = replays_last_step_reasoning(&req.messages, message, policy);
+        let this = PrevRound {
+            had_tool_image: ToolImageReplay::new(&req.messages, sends_tool_images).has_attached(),
+            model: served,
+            marker,
+            evicted_parts,
+            had_transient_notice,
+            usage: round.tokens,
+        };
+        let dropped = prev
+            .as_ref()
+            .and_then(|prev| prev.dropped_reasoning(&this, replayed));
+        if let Some((prev_usage, curr_usage)) = dropped {
+            tracing::warn!(
+                name: "reasoning_replay_dropped",
+                %session,
+                step,
+                prev_prompt = prev_usage.prompt(),
+                curr_prompt = curr_usage.prompt(),
+                prev_reasoning = prev_usage.reasoning,
+                "model endpoint did not carry prior step's reasoning into the next prompt"
+            );
+        }
+        let had_calls = !round.tool_calls.is_empty();
+        let notify_dropped = dropped.is_some() && !reasoning_notice_delivered && had_calls;
         emit.emit(
             session,
             vec![step_finished(session, message, step, round.finish)],
@@ -784,6 +929,20 @@ pub async fn drive(
         if harness.done() {
             return Ok(FinishReason::Stop);
         }
+        if notify_dropped {
+            // Minted after the calls' parts: the next request carries it, and
+            // the parts of the next round leave it out of later ones.
+            let notice = MessageId::new();
+            emit.emit(
+                session,
+                round::system_message_events(session, notice, REASONING_DROPPED_NOTICE.to_string()),
+            )
+            .await?;
+            pending_notice = Some(notice);
+        }
+        // A round without calls continues only with a harness notice, so the
+        // next prompt is not comparable with this one.
+        prev = had_calls.then_some(this);
         step += 1;
     }
 }
