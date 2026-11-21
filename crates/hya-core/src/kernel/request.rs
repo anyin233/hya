@@ -68,6 +68,7 @@ pub fn projection_to_messages(
             text.strip_prefix("HEADLESS RUN — ")
                 .is_some_and(|rest| rest.starts_with(kind))
         }) || super::is_completion_check(&text)
+            || super::is_empty_turn_notice(&text)
     };
     messages
         .iter()

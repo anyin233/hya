@@ -56,6 +56,18 @@ fn is_completion_check(text: &str) -> bool {
     text.lines().next() == COMPLETION_CHECK.lines().next()
 }
 
+/// The message a bare run receives after a round with neither answer text nor
+/// a tool call (docs/kernel.md). `{n}` is the round's output-token count; that
+/// sentence is left out when the round reported no usage.
+const EMPTY_TURN: &str = "[hya] Your last turn ended with thinking only: it gave no answer and made no tool call, so nothing was done in it. It ended after {n} output tokens. One turn's output is limited, so think in shorter turns. Continue from what you worked out: make the next tool call now, or give your final answer. Write results you will need later to a file or the todo list instead of holding them in thought.";
+
+/// Empty turns in a row that get [`EMPTY_TURN`]; the next one ends the run.
+const EMPTY_TURN_NOTICES: usize = 2;
+
+fn is_empty_turn_notice(text: &str) -> bool {
+    text.split(':').next() == EMPTY_TURN.split(':').next()
+}
+
 /// Where kernel events go: durable appends and live-only publishes.
 #[async_trait]
 pub trait Emit: Send + Sync {
@@ -187,6 +199,10 @@ struct Bare<'a> {
     attachments: request::AttachmentData,
     /// Retries of the current round so far.
     retries: usize,
+    /// Output tokens the last collected round reported.
+    output_tokens: Option<u64>,
+    /// Empty turns in a row so far.
+    empty_turns: usize,
 }
 
 #[async_trait]
@@ -416,27 +432,61 @@ impl Harness for Bare<'_> {
         Ok(true)
     }
 
-    async fn collected(&mut self, _round: &Round) -> Result<(), CoreError> {
+    async fn collected(&mut self, round: &Round) -> Result<(), CoreError> {
         self.retries = 0;
+        self.output_tokens = round.tokens.map(|tokens| tokens.output);
+        if !round.tool_calls.is_empty() {
+            self.empty_turns = 0;
+        }
         Ok(())
     }
 
-    /// The completion check, once per session after the kernel ran a known
-    /// tool, while more than two final windows remain on any run deadline.
+    /// A turn without answer text continues the run with [`EMPTY_TURN`], at
+    /// most [`EMPTY_TURN_NOTICES`] times in a row. Otherwise the completion
+    /// check, once per session after the kernel ran a known tool, while more
+    /// than two final windows remain on any run deadline.
     async fn before_end(&mut self) -> Result<bool, CoreError> {
+        let Scope {
+            store,
+            emit,
+            session,
+            message,
+            ..
+        } = *self.scope;
+        let projection = store.read_projection_shared(session).await?;
+        let messages = &projection.session.messages;
+        let answered = messages
+            .iter()
+            .find(|row| row.id == message)
+            .and_then(|row| row.parts.get(row.last_step_start.unwrap_or(0)..))
+            .unwrap_or_default()
+            .iter()
+            .any(
+                |part| matches!(part, PartProjection::Text { text, .. } if !text.trim().is_empty()),
+            );
+        if !answered {
+            // Cancelled meanwhile: a logged notice would never be sent.
+            if self.empty_turns == EMPTY_TURN_NOTICES || self.cancel.is_cancelled() {
+                return Ok(false);
+            }
+            self.empty_turns += 1;
+            let notice = match self.output_tokens {
+                Some(n) => EMPTY_TURN.replace("{n}", &n.to_string()),
+                None => EMPTY_TURN.replace(" It ended after {n} output tokens.", ""),
+            };
+            emit.emit(
+                session,
+                round::system_message_events(session, MessageId::new(), notice),
+            )
+            .await?;
+            return Ok(true);
+        }
+        self.empty_turns = 0;
         if hya_tool::deadline::current()
             .is_some_and(|deadline| deadline.remaining() <= 2 * deadline.final_window())
         {
             return Ok(false);
         }
-        let Scope {
-            store,
-            emit,
-            session,
-            ..
-        } = *self.scope;
-        let projection = store.read_projection_shared(session).await?;
-        let messages = &projection.session.messages;
         // A call of an unknown tool only recorded an error; `execute_calls`
         // runs `rewrite` and `todo` itself.
         let ran_tool = messages
@@ -605,6 +655,8 @@ pub async fn run_with_watches(
         agent: AgentName::new(AGENT),
         attachments: request::AttachmentData::new(),
         retries: 0,
+        output_tokens: None,
+        empty_turns: 0,
     };
     drive(&scope, &mut bare, cancel).await
 }

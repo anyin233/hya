@@ -601,6 +601,253 @@ async fn completion_check_is_sent_once_after_a_tool_call() {
     assert_eq!(last_text, Some("final"));
 }
 
+const EMPTY_TURN: &str = "[hya] Your last turn ended with thinking only";
+
+fn notices_logged(log: &[Event]) -> Vec<&str> {
+    log.iter()
+        .filter_map(|event| match event {
+            Event::TextDelta { delta, .. } if delta.starts_with(EMPTY_TURN) => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A round that only reasoned, as an upstream output cap leaves it.
+fn thinking_only(thought: &str, output: Option<u64>) -> Vec<FakeStep> {
+    let mut steps = vec![FakeStep::Reasoning(thought.into())];
+    if let Some(output) = output {
+        steps.push(FakeStep::Usage(TokenUsage {
+            output,
+            ..TokenUsage::default()
+        }));
+    }
+    steps.push(FakeStep::Finish(FinishReason::Stop));
+    steps
+}
+
+async fn last_answer(fx: &Fixture) -> Option<String> {
+    let projection = fx.store.read_projection_shared(fx.session).await.unwrap();
+    let reply = projection
+        .session
+        .messages
+        .iter()
+        .rfind(|message| message.role == Role::Assistant)
+        .unwrap();
+    reply.parts.iter().rev().find_map(|part| match part {
+        hya_proto::PartProjection::Text { text, .. } => Some(text.clone()),
+        _ => None,
+    })
+}
+
+#[tokio::test]
+async fn a_turn_with_thinking_only_gets_a_notice_and_another_round() {
+    let fx = fixture(
+        "empty-turn",
+        FakeProvider::scripted_turns(vec![
+            call("todo", json!({"ops": []})),
+            thinking_only("a long thought", Some(65_536)),
+            text("draft"),
+            text("final"),
+        ]),
+    )
+    .await;
+    let finish = fx.turn("do it", &CancellationToken::new()).await;
+    assert_eq!(finish.unwrap(), FinishReason::Stop);
+    let log = fx.log().await;
+    let notices = notices_logged(&log);
+    assert_eq!(notices.len(), 1);
+    assert!(
+        notices[0].contains("It ended after 65536 output tokens."),
+        "{}",
+        notices[0]
+    );
+    assert_eq!(
+        checks_logged(&log),
+        1,
+        "the completion check is still sent once"
+    );
+    assert_eq!(last_answer(&fx).await.as_deref(), Some("final"));
+
+    // The empty step ends, the notice is logged, and the next step starts.
+    let empty_end = log
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                Event::StepFinished {
+                    step: 1,
+                    finish: FinishReason::Stop,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    assert!(
+        matches!(
+            &log[empty_end + 1..empty_end + 7],
+            [
+                Event::MessageStarted { role: Role::System, .. },
+                Event::TextStart { .. },
+                Event::TextDelta { delta, .. },
+                Event::TextEnd { .. },
+                Event::MessageFinished { role: Role::System, .. },
+                Event::StepStarted { step: 2, .. },
+            ] if delta.starts_with(EMPTY_TURN)
+        ),
+        "{:?}",
+        &log[empty_end..]
+    );
+
+    // The todo round, the empty turn, the answer that gets the check, the final answer.
+    let requests = fx.provider.requests();
+    assert_eq!(requests.len(), 4);
+    let sent_notice = |request: &CompletionRequest| {
+        request.messages.iter().any(|message| matches!(message, Message::User { parts, .. }
+            if matches!(parts.as_slice(), [Part::Text { text, .. }] if text.starts_with(EMPTY_TURN))))
+    };
+    assert!(sent_notice(&requests[2]));
+    assert!(
+        !sent_notice(&requests[3]),
+        "the answered notice leaves the request"
+    );
+    for request in &requests[2..] {
+        assert!(assistant_parts(request).any(|part| matches!(
+            part,
+            Part::Reasoning { text, .. } if text == "a long thought"
+        )));
+    }
+}
+
+#[test]
+fn an_empty_turn_in_the_final_stage_gets_the_notice() {
+    run_deadline_test(
+        "kernel::an_empty_turn_in_the_final_stage_gets_the_notice_child",
+        "empty-final",
+    );
+}
+
+#[tokio::test]
+async fn an_empty_turn_in_the_final_stage_gets_the_notice_child() {
+    if std::env::var("HYA_BARE_DEADLINE_TEST").as_deref() != Ok("empty-final") {
+        return;
+    }
+    let fx = fixture(
+        "empty-turn-final",
+        FakeProvider::scripted_turns(vec![
+            call("todo", json!({"ops": []})),
+            thinking_only("out of time", None),
+            text("done"),
+        ]),
+    )
+    .await;
+    deadline::install(Duration::from_secs(40));
+    assert_eq!(deadline::current().unwrap().stage(), Stage::Final);
+    let finish = fx.turn("do it", &CancellationToken::new()).await;
+    assert_eq!(finish.unwrap(), FinishReason::Stop);
+    assert_eq!(fx.provider.requests().len(), 3);
+    let log = fx.log().await;
+    assert_eq!(notices_logged(&log).len(), 1);
+    assert_eq!(
+        checks_logged(&log),
+        0,
+        "no check this close to the deadline"
+    );
+    assert_eq!(last_answer(&fx).await.as_deref(), Some("done"));
+}
+
+#[tokio::test]
+async fn a_third_empty_turn_in_a_row_ends_the_run() {
+    let fx = fixture(
+        "empty-turn-limit",
+        FakeProvider::scripted_turns(vec![
+            thinking_only("one", None),
+            thinking_only("two", None),
+            thinking_only("three", None),
+            text("unreached"),
+        ]),
+    )
+    .await;
+    let finish = fx.turn("do it", &CancellationToken::new()).await;
+    assert_eq!(finish.unwrap(), FinishReason::Stop);
+    assert_eq!(fx.provider.requests().len(), 3);
+    let log = fx.log().await;
+    let notices = notices_logged(&log);
+    assert_eq!(notices.len(), 2);
+    assert!(
+        notices
+            .iter()
+            .all(|notice| !notice.contains("output tokens")),
+        "no usage, no token sentence: {notices:?}"
+    );
+    assert_eq!(last_answer(&fx).await, None);
+}
+
+#[tokio::test]
+async fn a_tool_call_resets_the_empty_turn_count() {
+    let fx = fixture(
+        "empty-turn-reset",
+        FakeProvider::scripted_turns(vec![
+            thinking_only("one", None),
+            thinking_only("two", None),
+            call("todo", json!({"ops": []})),
+            thinking_only("three", None),
+            thinking_only("four", None),
+            text("draft"),
+            text("final"),
+        ]),
+    )
+    .await;
+    let finish = fx.turn("do it", &CancellationToken::new()).await;
+    assert_eq!(finish.unwrap(), FinishReason::Stop);
+    assert_eq!(fx.provider.requests().len(), 7);
+    let log = fx.log().await;
+    assert_eq!(notices_logged(&log).len(), 4);
+    assert_eq!(checks_logged(&log), 1);
+    assert_eq!(last_answer(&fx).await.as_deref(), Some("final"));
+}
+
+#[tokio::test]
+async fn an_empty_turn_after_the_completion_check_gets_no_second_check() {
+    let fx = fixture(
+        "empty-turn-after-check",
+        FakeProvider::scripted_turns(vec![
+            call("todo", json!({"ops": []})),
+            text("draft"),
+            thinking_only("checking", Some(12)),
+            text("final"),
+            text("unreached"),
+        ]),
+    )
+    .await;
+    let finish = fx.turn("do it", &CancellationToken::new()).await;
+    assert_eq!(finish.unwrap(), FinishReason::Stop);
+    assert_eq!(fx.provider.requests().len(), 4);
+    let log = fx.log().await;
+    assert_eq!(checks_logged(&log), 1);
+    assert_eq!(notices_logged(&log).len(), 1);
+    assert_eq!(last_answer(&fx).await.as_deref(), Some("final"));
+}
+
+#[tokio::test]
+async fn whitespace_only_text_is_an_empty_turn() {
+    let fx = fixture(
+        "empty-turn-whitespace",
+        FakeProvider::scripted_turns(vec![
+            vec![
+                FakeStep::Text(" \n\t ".into()),
+                FakeStep::Finish(FinishReason::Stop),
+            ],
+            text("done"),
+        ]),
+    )
+    .await;
+    let finish = fx.turn("do it", &CancellationToken::new()).await;
+    assert_eq!(finish.unwrap(), FinishReason::Stop);
+    assert_eq!(fx.provider.requests().len(), 2);
+    assert_eq!(notices_logged(&fx.log().await).len(), 1);
+    assert_eq!(last_answer(&fx).await.as_deref(), Some("done"));
+}
+
 #[tokio::test]
 async fn a_logged_completion_check_keeps_its_behavior_after_the_wording_changes() {
     let fx = fixture(
@@ -784,8 +1031,12 @@ async fn a_cancel_as_the_answer_ends_logs_no_completion_check() {
 async fn every_bare_request_carries_the_configured_reasoning_default() {
     let fx = fixture(
         "reasoning-default",
-        FakeProvider::scripted_turns(vec![call("bash", json!({"command": "true"})), text("done")])
-            .with_reasoning_default(ReasoningEffort::Max),
+        FakeProvider::scripted_turns(vec![
+            call("bash", json!({"command": "true"})),
+            text("done"),
+            text("checked"),
+        ])
+        .with_reasoning_default(ReasoningEffort::Max),
     )
     .await;
     let finish = fx.turn("run true", &CancellationToken::new()).await;
@@ -803,6 +1054,7 @@ async fn a2_failures_are_observations() {
             call("edit", json!({"path": "a.txt", "new": "x"})),
             call("read", json!({"path": "missing.txt"})),
             text("next"),
+            text("checked"),
         ]),
     )
     .await;
@@ -1130,6 +1382,7 @@ async fn transient_round_failure_retries_the_same_request() {
                 },
             ],
             text("done"),
+            text("checked"),
         ],
         vec![
             Attempt::Play,
@@ -1191,7 +1444,7 @@ async fn transient_open_failure_retries_the_same_request() {
     todo.push(FakeStep::Finish(FinishReason::ToolCalls));
     let (fx, flaky) = flaky_fixture(
         "retry-open",
-        vec![todo, text("done")],
+        vec![todo, text("done"), text("checked")],
         vec![
             Attempt::Play,
             Attempt::Open(ProviderError::Transport("connection lost".into())),
@@ -2029,6 +2282,7 @@ async fn large_image_result_stays_below_rewrite_pressure() {
         FakeProvider::scripted_turns(vec![
             call("read", json!({"path": "board.png"})),
             text("done"),
+            text("checked"),
         ])
         .with_max_context(8_000)
         .with_tool_images(),
@@ -2721,6 +2975,7 @@ async fn a4_model_rewrite() {
             call("bash", json!({"command": "echo two"})),
             call("rewrite", json!({"summary": "ran two echoes"})),
             text("done"),
+            text("checked"),
         ]),
     )
     .await;
@@ -2868,6 +3123,7 @@ async fn goal_checkpoint_is_asked_once_before_the_rewrite_threshold() {
             round_at(13_000),
             round_at(14_000),
             text("done"),
+            text("checked"),
         ])
         .with_max_context(20_000),
     )
@@ -2897,6 +3153,7 @@ async fn goal_checkpoint_stays_out_after_rewrite() {
             round_at(17_000),
             round_at(14_000),
             text("done"),
+            text("checked"),
         ])
         .with_max_context(20_000),
     )
@@ -3187,6 +3444,7 @@ async fn a6_harness_rewrite_and_restart() {
                 FakeStep::Finish(FinishReason::ToolCalls),
             ],
             text("done"),
+            text("checked"),
         ])
         .with_max_context(1_000),
     )
@@ -3303,6 +3561,7 @@ async fn rewrite_carries_the_latest_todo_result_verbatim() {
             ),
             call("rewrite", json!({"summary": "continue checking"})),
             text("done"),
+            text("checked"),
         ]),
     )
     .await;
@@ -3542,6 +3801,7 @@ async fn outside_change_to_read_file_is_logged_before_the_next_request() {
             call("read", json!({"path": "a.txt"})),
             call("read", json!({"path": "a.txt"})),
             text("done"),
+            text("checked"),
         ]),
     )
     .await;

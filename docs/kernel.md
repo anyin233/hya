@@ -482,9 +482,10 @@ a GPT-family model also gets the `apply_patch` line.
 
 ## How a bare run ends
 
-A bare run ends when a model round answers without a tool call, with one
-exception. The first such answer gets one completion check before the run
-ends: the harness appends the logged system message below, in the same form
+A bare run ends when a model round answers without a tool call, with two
+exceptions: a turn that gives no answer at all (see [Turns without an
+answer](#turns-without-an-answer) below), and the completion check. The
+first answer gets one completion check before the run ends: the harness appends the logged system message below, in the same form
 as the deadline notices, and the kernel runs another round. The next answer
 without a tool call ends the run, and `hya exec --bare` prints that answer by
 default. An answer cut off at the output limit (`length`) also gets the check: the
@@ -531,6 +532,47 @@ stays in the history and carries the work. Nothing configures or disables
 it, and full mode does not send it. The kernel loop asks the harness at this
 point through `Harness::before_end`, only after a `stop` or `length` finish
 and while the run is not cancelled; full mode's harness always ends.
+
+### Turns without an answer
+
+A model can spend a whole turn thinking and stop there, for example when the
+upstream caps one response's output tokens below what hya asks for. Such a
+turn is not an answer. An empty turn is a round that finished `stop` or
+`length` without a tool call, whose parts from the round's start contain no
+text part with a character other than whitespace. Reasoning does not count
+as an answer.
+
+After an empty turn, bare mode neither ends the run nor sends the completion
+check. It appends one logged system message, in the same form as the
+completion check, and runs another round:
+
+```text
+[hya] Your last turn ended with thinking only: it gave no answer and made no tool call, so nothing was done in it. It ended after {n} output tokens. One turn's output is limited, so think in shorter turns. Continue from what you worked out: make the next tool call now, or give your final answer. Write results you will need later to a file or the todo list instead of holding them in thought.
+```
+
+`{n}` is the output-token count the round reported. When the round reported
+no usage, the sentence `It ended after {n} output tokens.` is left out.
+
+At most two empty turns in a row get this message. A third empty turn in a
+row ends the run as any answer without a tool call does, and `hya exec
+--bare` prints an empty answer. A round with a tool call or with answer text
+resets the count. The message is sent in every stage of `--time-budget`,
+also when the completion check no longer is, and never once the run is
+cancelled. Nothing configures it, and full mode does not send it.
+
+The completion check keeps its rules. An empty turn neither triggers it nor
+counts as sending it: when a later round answers with text, the check is sent
+or not exactly as described above. The empty turn's reasoning stays in the
+history and is replayed like that of any completed step. Like the completion
+check, the message is transient: the next request carries it as its last
+(user) message, and requests leave it out once the model has responded.
+
+For example, a round thinks for six minutes and stops after 65,536 output
+tokens without text. The log records the round as `StepFinished` with
+`finish: stop`, then the system message ending in `It ended after 65536
+output tokens.`, then the next `StepStarted`. If that round calls a tool, the
+run goes on as usual; if it answers with text after a tool already ran, the
+completion check follows.
 
 ## When a bare round fails
 
@@ -631,7 +673,7 @@ plugs into that loop at fixed points:
 | Failed round | Retried up to eight times after 5, 10, 20, 40, 60, 60, 60, and 60 s on a transient error opening or reading the stream, or a stream interruption, when the wait fits before Final, also after partial output; the failed attempt's parts are deleted from the message before the wait ([When a bare round fails](#when-a-bare-round-fails)) | After the stream opens, retried up to twice on a link error before any text or tool call |
 | Registry tool call (`ToolGate`) | Execute the tool and record file snapshots and stamps | Hooks, permissions, the full `ToolCtx`, file snapshots and stamps, output capping, steer notices |
 | Unrun calls after a cancel | Failed as `cancelled` | Left open; the turn end closes them as `CANCELLED` |
-| End (`Harness::before_end`, `done`) | The round's finish, after one [completion check](#how-a-bare-run-ends) once a tool call ran | The round's finish; also ends after an accepted `report` |
+| End (`Harness::before_end`, `done`) | The round's finish, after one [completion check](#how-a-bare-run-ends) once a tool call ran; a turn with neither answer text nor a tool call gets a [notice and another round](#turns-without-an-answer), at most twice in a row | The round's finish; also ends after an accepted `report` |
 
 The kernel offers and handles the model's `rewrite` and `todo` calls in both
 modes. `shake`'s `ContextEvicted` events store the exact notice for each
