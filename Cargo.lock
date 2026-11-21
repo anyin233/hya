@@ -1110,7 +1110,7 @@ dependencies = [
 
 [[package]]
 name = "hya-backend"
-version = "0.48.0-dev.29"
+version = "0.48.0-dev.30"
 dependencies = [
  "anyhow",
  "async-trait",
