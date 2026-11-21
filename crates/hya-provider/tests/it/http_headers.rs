@@ -1957,6 +1957,212 @@ async fn http_provider_google_uses_google_thought_policy_and_gemini3_thinking_le
 }
 
 #[tokio::test]
+async fn http_provider_anthropic_sends_thinking_binding_beta_only_when_block_binding_present() {
+    let sse_reply = concat!(
+        "event: message_start\n",
+        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-opus-4-7\",\"usage\":{\"input_tokens\":10,\"output_tokens\":1}}}\n\n",
+        "event: content_block_start\n",
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"done\"}}\n\n",
+        "event: content_block_stop\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "event: message_delta\n",
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n",
+        "event: message_stop\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+
+    let turn2_messages = vec![
+        Message::User {
+            id: MessageId::new(),
+            parts: vec![Part::Text {
+                id: PartId::new(),
+                text: "start".to_string(),
+            }],
+        },
+        Message::Assistant {
+            id: MessageId::new(),
+            agent: AgentName::new("build"),
+            model: ModelRef::new("claude-opus-4-7"),
+            parts: vec![
+                Part::Reasoning {
+                    id: PartId::new(),
+                    text: "reason".to_string(),
+                    provider_data: Some(json!({
+                        "type": "thinking",
+                        "thinking": "reason",
+                        "signature": "sig_1"
+                    })),
+                },
+                Part::Tool {
+                    id: PartId::new(),
+                    call_id: ToolCallId::new(),
+                    name: ToolName::new("bash"),
+                    state: ToolPartState::Completed {
+                        input: json!({}),
+                        output: json!("ok"),
+                        time_ms: 1,
+                    },
+                    provider_data: Some(json!({"call_id": "toolu_1"})),
+                },
+            ],
+            finish: None,
+            tokens: None,
+            last_round: None,
+            last_step_start: None,
+        },
+    ];
+
+    // 1. Adaptive Turn 2+ with replayed signed thinking AND existing caller anthropic-beta merges without duplicate.
+    let (base_url, rx_turn2) = start_sse_server(sse_reply.to_string()).await;
+    let provider = HttpProvider::new(
+        "anthropic",
+        ProviderKind::Anthropic,
+        &base_url,
+        Some("token".to_string()),
+        ["claude-opus-4-7".to_string()],
+    )
+    .unwrap();
+    let mut headers = BTreeMap::new();
+    headers.insert(
+        "Anthropic-Beta".to_string(),
+        "interleaved-thinking-2025-05-14".to_string(),
+    );
+    let turn2_req = CompletionRequest {
+        model: ModelRef::new("anthropic/claude-opus-4-7"),
+        system: None,
+        messages: turn2_messages.clone(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: Some(ReasoningEffort::High),
+        headers,
+    };
+    let _ = provider
+        .stream(turn2_req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    let captured_turn2 = captured_request(rx_turn2).await;
+    let beta_line = captured_turn2
+        .headers
+        .lines()
+        .find(|line| line.to_ascii_lowercase().starts_with("anthropic-beta:"))
+        .expect("anthropic-beta header should be present when block_binding is set");
+    assert!(beta_line.contains("interleaved-thinking-2025-05-14"));
+    assert_eq!(
+        beta_line
+            .matches("thinking-binding-controls-2026-08-01")
+            .count(),
+        1
+    );
+
+    // 2. Adaptive Turn 1 (no replayed thinking) omits thinking-binding-controls-2026-08-01.
+    let (base_url_t1, rx_t1) = start_sse_server(sse_reply.to_string()).await;
+    let provider_t1 = HttpProvider::new(
+        "anthropic",
+        ProviderKind::Anthropic,
+        &base_url_t1,
+        Some("token".to_string()),
+        ["claude-opus-4-7".to_string()],
+    )
+    .unwrap();
+    let t1_req = CompletionRequest {
+        model: ModelRef::new("anthropic/claude-opus-4-7"),
+        system: None,
+        messages: vec![turn2_messages[0].clone()],
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: Some(ReasoningEffort::High),
+        headers: Default::default(),
+    };
+    let _ = provider_t1
+        .stream(t1_req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    let captured_t1 = captured_request(rx_t1).await;
+    assert!(
+        !captured_t1
+            .headers
+            .to_ascii_lowercase()
+            .contains("thinking-binding-controls-2026-08-01")
+    );
+
+    // 3. Adaptive Turn 2+ with ReasoningEffort::Off omits thinking-binding-controls-2026-08-01.
+    let (base_url_off, rx_off) = start_sse_server(sse_reply.to_string()).await;
+    let provider_off = HttpProvider::new(
+        "anthropic",
+        ProviderKind::Anthropic,
+        &base_url_off,
+        Some("token".to_string()),
+        ["claude-opus-4-7".to_string()],
+    )
+    .unwrap();
+    let off_req = CompletionRequest {
+        model: ModelRef::new("anthropic/claude-opus-4-7"),
+        system: None,
+        messages: turn2_messages.clone(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: Some(ReasoningEffort::Off),
+        headers: Default::default(),
+    };
+    let _ = provider_off
+        .stream(off_req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    let captured_off = captured_request(rx_off).await;
+    assert!(
+        !captured_off
+            .headers
+            .to_ascii_lowercase()
+            .contains("thinking-binding-controls-2026-08-01")
+    );
+
+    // 4. Legacy Claude <= 4.5 omits thinking-binding-controls-2026-08-01.
+    let (base_url_legacy, rx_legacy) = start_sse_server(sse_reply.to_string()).await;
+    let provider_legacy = HttpProvider::new(
+        "anthropic",
+        ProviderKind::Anthropic,
+        &base_url_legacy,
+        Some("token".to_string()),
+        ["claude-sonnet-4-5-20250929".to_string()],
+    )
+    .unwrap();
+    let legacy_req = CompletionRequest {
+        model: ModelRef::new("anthropic/claude-sonnet-4-5-20250929"),
+        system: None,
+        messages: turn2_messages,
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: Some(ReasoningEffort::High),
+        headers: Default::default(),
+    };
+    let _ = provider_legacy
+        .stream(legacy_req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    let captured_legacy = captured_request(rx_legacy).await;
+    assert!(
+        !captured_legacy
+            .headers
+            .to_ascii_lowercase()
+            .contains("thinking-binding-controls-2026-08-01")
+    );
+}
+
+#[tokio::test]
 async fn http_provider_forces_single_auth_refresh_on_401_and_retries_once() {
     let (base_url, connections, requests) = start_scripted_server(vec![
         "HTTP/1.1 401 Unauthorized\r\ncontent-length: 12\r\nconnection: close\r\n\r\nstale token.\n".to_string(),

@@ -2047,3 +2047,260 @@ fn google_decodes_and_replays_thoughts_signatures_ids_and_clusters() {
             .is_none()
     );
 }
+
+#[test]
+fn anthropic_decoder_concatenates_signature_deltas_and_ignores_input_transformations() {
+    let chunks = [
+        concat!(
+            "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-opus-4-7\",",
+            "\"usage\":{\"input_tokens\":10,\"output_tokens\":1},",
+            "\"input_transformations\":[{\"type\":\"thinking_block_binding\",\"action\":\"removed\",\"reason\":\"prefix_mismatch\"}]}}",
+        ),
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"plan"}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig_part_1"}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"_part_2"}}"#,
+        r#"{"type":"content_block_stop","index":0}"#,
+        concat!(
+            "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},",
+            "\"usage\":{\"output_tokens\":5},",
+            "\"input_transformations\":[{\"type\":\"thinking_block_binding\",\"action\":\"removed\"}]}",
+        ),
+        r#"{"type":"message_stop"}"#,
+    ];
+    let events = decode_all_anthropic(&AnthropicMessagesProtocol, &chunks);
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::ReasoningEnd {
+            provider_data: Some(data),
+            ..
+        } if data["type"] == "thinking" && data["signature"] == "sig_part_1_part_2"
+    )));
+}
+
+#[test]
+fn anthropic_adaptive_thinking_block_binding_and_legacy_gating() {
+    let user_msg = Message::User {
+        id: MessageId::new(),
+        parts: vec![Part::Text {
+            id: PartId::new(),
+            text: "hi".to_string(),
+        }],
+    };
+
+    // Turn 1 on Claude 4.6/4.7/4.8/5.5: adaptive thinking without replayed thinking omits block_binding
+    // and applies adaptive default max_tokens (>= 16_384) plus output_config.effort.
+    for model_id in [
+        "claude-sonnet-4-6",
+        "claude-opus-4-7",
+        "claude-sonnet-4-8-20260901",
+        "claude-opus-5-5",
+    ] {
+        let req = CompletionRequest {
+            model: ModelRef::new(model_id),
+            system: None,
+            messages: vec![user_msg.clone()],
+            tools: Vec::new(),
+            temperature: None,
+            max_output_tokens: None,
+            reasoning: Some(ReasoningEffort::XHigh),
+            headers: Default::default(),
+        };
+        let body = AnthropicMessagesProtocol.encode(&req).unwrap();
+        assert_eq!(
+            body["thinking"],
+            json!({"type": "adaptive", "display": "summarized"}),
+            "unexpected thinking on turn 1 for {model_id}"
+        );
+        assert!(body["thinking"].get("block_binding").is_none());
+        assert_eq!(body["output_config"], json!({"effort": "xhigh"}));
+        assert!(body["max_tokens"].as_u64().unwrap() >= 16_384);
+    }
+
+    // Turn 2+ with replayed signed thinking on adaptive Claude includes block_binding.
+    let turn2_messages = vec![
+        user_msg,
+        Message::Assistant {
+            id: MessageId::new(),
+            agent: AgentName::new("build"),
+            model: ModelRef::new("claude-opus-4-7"),
+            parts: vec![
+                Part::Reasoning {
+                    id: PartId::new(),
+                    text: "step 1".to_string(),
+                    provider_data: Some(json!({
+                        "type": "thinking",
+                        "thinking": "step 1",
+                        "signature": "sig_turn1"
+                    })),
+                },
+                Part::Tool {
+                    id: PartId::new(),
+                    call_id: ToolCallId::new(),
+                    name: ToolName::new("read"),
+                    state: ToolPartState::Completed {
+                        input: json!({"path": "a"}),
+                        output: json!("ok"),
+                        time_ms: 1,
+                    },
+                    provider_data: Some(json!({"call_id": "toolu_1"})),
+                },
+            ],
+            finish: Some(FinishReason::ToolCalls),
+            tokens: None,
+            last_round: None,
+            last_step_start: None,
+        },
+    ];
+    let turn2 = CompletionRequest {
+        model: ModelRef::new("claude-opus-4-7"),
+        system: None,
+        messages: turn2_messages,
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: Some(ReasoningEffort::High),
+        headers: Default::default(),
+    };
+    let turn2_body = AnthropicMessagesProtocol.encode(&turn2).unwrap();
+    assert_eq!(
+        turn2_body["thinking"],
+        json!({
+            "type": "adaptive",
+            "display": "summarized",
+            "block_binding": {"prefix_mismatch_behavior": "drop_block"}
+        })
+    );
+    assert_eq!(turn2_body["output_config"], json!({"effort": "high"}));
+
+    // Legacy Claude <= 4.5 and non-Claude models keep enabled + budget_tokens and omit output_config/block_binding.
+    for legacy_model in [
+        "claude-sonnet-4-5-20250929",
+        "claude-3-7-sonnet-20250219",
+        "glm-5.3-flash",
+    ] {
+        let mut legacy = turn2.clone();
+        legacy.model = ModelRef::new(legacy_model);
+        if let Some(Message::Assistant { model, .. }) = legacy
+            .messages
+            .iter_mut()
+            .find(|m| matches!(m, Message::Assistant { .. }))
+        {
+            *model = ModelRef::new(legacy_model);
+        }
+        let legacy_body = AnthropicMessagesProtocol.encode(&legacy).unwrap();
+        assert_eq!(legacy_body["thinking"]["type"], "enabled", "{legacy_model}");
+        assert!(legacy_body["thinking"]["budget_tokens"].as_u64().is_some());
+        assert!(legacy_body["thinking"].get("block_binding").is_none());
+        assert!(legacy_body.get("output_config").is_none());
+    }
+}
+
+#[test]
+fn anthropic_preserves_signed_thinking_across_trailing_bare_notices_and_strips_cross_model() {
+    let signed_thinking = Part::Reasoning {
+        id: PartId::new(),
+        text: "still in current turn".to_string(),
+        provider_data: Some(json!({
+            "type": "thinking",
+            "thinking": "still in current turn",
+            "signature": "sig_keep"
+        })),
+    };
+    let redacted = Part::Reasoning {
+        id: PartId::new(),
+        text: String::new(),
+        provider_data: Some(json!({
+            "type": "redacted_thinking",
+            "data": "opaque_redacted_blob"
+        })),
+    };
+    let tool_call = Part::Tool {
+        id: PartId::new(),
+        call_id: ToolCallId::new(),
+        name: ToolName::new("bash"),
+        state: ToolPartState::Completed {
+            input: json!({"command": "echo hi"}),
+            output: json!("ok"),
+            time_ms: 1,
+        },
+        provider_data: Some(json!({"call_id": "toolu_upstream_1"})),
+    };
+    let messages = vec![
+        Message::User {
+            id: MessageId::new(),
+            parts: vec![Part::Text {
+                id: PartId::new(),
+                text: "start task".to_string(),
+            }],
+        },
+        Message::Assistant {
+            id: MessageId::new(),
+            agent: AgentName::new("build"),
+            model: ModelRef::new("claude-opus-4-7"),
+            parts: vec![signed_thinking, redacted, tool_call],
+            finish: Some(FinishReason::ToolCalls),
+            tokens: None,
+            last_round: None,
+            last_step_start: None,
+        },
+        Message::User {
+            id: MessageId::new(),
+            parts: vec![Part::Text {
+                id: PartId::new(),
+                text: "HEADLESS RUN — clock: 360s of 3600s used, 3240s left.".to_string(),
+            }],
+        },
+        Message::User {
+            id: MessageId::new(),
+            parts: vec![Part::Text {
+                id: PartId::new(),
+                text: "[hya] Reasoning replay notice: dropped".to_string(),
+            }],
+        },
+    ];
+
+    // Same model keeps signed thinking + redacted_thinking and coalesces trailing bare notices
+    // with the tool_result user message.
+    let same_req = CompletionRequest {
+        model: ModelRef::new("claude-opus-4-7"),
+        system: None,
+        messages: messages.clone(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: Some(ReasoningEffort::Medium),
+        headers: Default::default(),
+    };
+    let same_body = AnthropicMessagesProtocol.encode(&same_req).unwrap();
+    let encoded_msgs = same_body["messages"].as_array().unwrap();
+    let assistant_content = encoded_msgs[1]["content"].as_array().unwrap();
+    assert_eq!(assistant_content[0]["type"], "thinking");
+    assert_eq!(assistant_content[0]["signature"], "sig_keep");
+    assert_eq!(assistant_content[1]["type"], "redacted_thinking");
+    assert_eq!(assistant_content[2]["id"], "toolu_upstream_1");
+    assert!(same_body["thinking"].get("block_binding").is_some());
+    assert_eq!(
+        encoded_msgs.len(),
+        3,
+        "tool_result and trailing notices must coalesce into one user message"
+    );
+
+    // Cross-model switch strips prior model's thinking/redacted_thinking and falls back from toolu_upstream_1.
+    let switched_req = CompletionRequest {
+        model: ModelRef::new("claude-sonnet-4-6"),
+        system: None,
+        messages,
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: Some(ReasoningEffort::Medium),
+        headers: Default::default(),
+    };
+    let switched_body = AnthropicMessagesProtocol.encode(&switched_req).unwrap();
+    let switched_assistant = switched_body["messages"][1]["content"].as_array().unwrap();
+    assert_eq!(switched_assistant.len(), 1);
+    assert_eq!(switched_assistant[0]["type"], "tool_use");
+    assert_ne!(switched_assistant[0]["id"], "toolu_upstream_1");
+    assert!(switched_body["thinking"].get("block_binding").is_none());
+}

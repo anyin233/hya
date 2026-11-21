@@ -131,7 +131,7 @@ impl ProviderKind {
     /// Static default reasoning labels used without allocating during capability checks.
     fn reasoning_variant_labels(self) -> &'static [&'static str] {
         match self {
-            ProviderKind::Anthropic => &["low", "medium", "high", "max"],
+            ProviderKind::Anthropic => &["low", "medium", "high", "xhigh", "max"],
             ProviderKind::OpenAiCompatible => &["minimal", "low", "medium", "high", "xhigh"],
             ProviderKind::OpenAiResponse | ProviderKind::OpenAiCodex => {
                 &["none", "minimal", "low", "medium", "high", "xhigh", "max"]
@@ -907,6 +907,10 @@ impl HttpProvider {
         if self.prompt_caching {
             add_prompt_cache_breakpoints(&mut body);
         }
+        if self.kind == ProviderKind::Anthropic && body.pointer("/thinking/block_binding").is_some()
+        {
+            merge_anthropic_beta(&mut req.headers, crate::anthropic::THINKING_BINDING_BETA);
+        }
         Ok((req, body))
     }
 
@@ -995,6 +999,28 @@ impl HttpProvider {
             None => identity.push(0),
         }
         Some(identity)
+    }
+}
+
+fn merge_anthropic_beta(headers: &mut BTreeMap<String, String>, token: &str) {
+    let existing_key = headers
+        .keys()
+        .find(|k| k.eq_ignore_ascii_case("anthropic-beta"))
+        .cloned();
+    if let Some(key) = existing_key {
+        let current = headers.get(&key).map(String::as_str).unwrap_or("");
+        if current.split(',').map(str::trim).any(|item| item == token) {
+            return;
+        }
+        let trimmed = current.trim().trim_end_matches(',').trim();
+        let updated = if trimmed.is_empty() {
+            token.to_string()
+        } else {
+            format!("{trimmed}, {token}")
+        };
+        headers.insert(key, updated);
+    } else {
+        headers.insert("anthropic-beta".to_string(), token.to_string());
     }
 }
 
@@ -1499,7 +1525,7 @@ mod tests {
     fn reasoning_variants_are_family_specific() {
         assert_eq!(
             ProviderKind::Anthropic.reasoning_variants(),
-            ["low", "medium", "high", "max"]
+            ["low", "medium", "high", "xhigh", "max"]
         );
         assert_eq!(
             ProviderKind::OpenAiCompatible.reasoning_variants(),

@@ -3056,7 +3056,7 @@ providers:
         let anthropic = parsed.iter().find(|entry| entry.id == "gw-anth").unwrap();
         assert_eq!(
             anthropic.models[0].reasoning_variants,
-            vec!["low", "medium", "high", "max"]
+            vec!["low", "medium", "high", "xhigh", "max"]
         );
         let google = parsed.iter().find(|entry| entry.id == "gw-google").unwrap();
         assert_eq!(
@@ -3553,7 +3553,7 @@ plugins:
         // Entry-level kind override changes only the capability menu.
         assert_eq!(
             models[1].reasoning_variants,
-            vec!["low", "medium", "high", "max"]
+            vec!["low", "medium", "high", "xhigh", "max"]
         );
         assert_eq!(models[1].reasoning_default, None);
         // Explicit reasoning.variants still replaces the overridden kind's menu.
