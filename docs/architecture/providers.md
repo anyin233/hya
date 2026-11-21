@@ -720,11 +720,16 @@ renders it per request ([`wire.rs`](../../crates/hya-provider/src/wire.rs)
   shown: this step's images exceed what one request can carry. Read it again
   in a later step, fewer images at a time.]`.
 - On a route that takes tool-result images, every image of an earlier round
-  gets the line `[The image of this result (<mime>) is not attached to this
-  request. To look at it, make the call again (for a file: read it again).]`;
+  gets the line `[An image is sent to you only in the request right after the
+  call that produced it; later requests, like this one, carry this note
+  instead. This is the normal course, not a failure. To look at the image of
+  this result (<mime>), make the call again (for a file: read it again).]`;
   on a route that does not, it keeps the "not shown to you" line above. The
-  line does not say the image was shown:
-  the budget or the route may have kept it out. Every request that carries
+  line says this is the normal course because models read a bare "not
+  attached" as a failed attachment and stopped reading images. It does not
+  say the image was shown: the round's budget, a rejected media type, or a
+  model without image input at the time may have kept it out of its own
+  round's request. Every request that carries
   image data is slow and costs tokens, and what the model concluded from the
   image stays in its replayed reasoning and text. To look again, the model
   reads the file again; the bare `read` description says so.

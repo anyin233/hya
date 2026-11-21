@@ -251,9 +251,14 @@ impl<'a> ToolImageReplay<'a> {
                      later step, fewer images at a time.]"
                 ))
             } else if self.send {
+                // Not "was sent to you": an earlier round's image may never have
+                // been sent (over that round's budget, or a rejected media type).
                 Some(format!(
-                    "\n\n[The image of this result ({mime}) is not attached to this request. \
-                     To look at it, make the call again (for a file: read it again).]"
+                    "\n\n[An image is sent to you only in the request right after the call \
+                     that produced it; later requests, like this one, carry this note \
+                     instead. This is the normal course, not a failure. To look at the \
+                     image of this result ({mime}), make the call again (for a file: read \
+                     it again).]"
                 ))
             } else {
                 Some(not_shown_notice(mime))

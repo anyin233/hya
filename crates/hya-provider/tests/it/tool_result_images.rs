@@ -16,7 +16,10 @@ use serde_json::{Value, json};
 const PNG: &str = "data:image/png;base64,iVBORw0KGgo=";
 const READ_TEXT: &str = "Image file (image/png, 8 bytes).";
 const NOT_SHOWN: &str = "(image/png) is not shown to you";
-const NOT_ATTACHED: &str = "(image/png) is not attached to this request";
+const NOT_ATTACHED: &str = "An image is sent to you only in the request right after the call \
+     that produced it; later requests, like this one, carry this note instead. This is the \
+     normal course, not a failure. To look at the image of this result (image/png), make the \
+     call again";
 const NOT_FITTED: &str = "(image/png) was not shown: this step's images exceed";
 
 fn tool(name: &str, output: Value) -> Part {
@@ -105,9 +108,7 @@ fn assert_not_sent_again(later: &Value) {
     let later = later.to_string();
     assert!(!later.contains("iVBORw0KGgo"), "{later}");
     assert!(
-        later.contains(&format!(
-            "{READ_TEXT}\\n\\n[The image of this result {NOT_ATTACHED}"
-        )),
+        later.contains(&format!("{READ_TEXT}\\n\\n[{NOT_ATTACHED}")),
         "{later}"
     );
 }
@@ -265,17 +266,17 @@ fn sent(body: &str) -> usize {
     body.matches("iVBORw0KGgo").count()
 }
 
-/// Page `page`'s result carries the notice that starts `[The image {notice}`.
+/// Page `page`'s result carries the notice that starts `[{notice}`.
 fn noticed(body: &str, page: usize, notice: &str) -> bool {
-    body.contains(&format!("Image file page{page}.\\n\\n[The image {notice}"))
+    body.contains(&format!("Image file page{page}.\\n\\n[{notice}"))
 }
 
 fn not_fitted() -> String {
-    format!("attached to this result {NOT_FITTED}")
+    format!("The image attached to this result {NOT_FITTED}")
 }
 
 fn not_attached() -> String {
-    format!("of this result {NOT_ATTACHED}")
+    NOT_ATTACHED.to_string()
 }
 
 /// One round's images go in call order within 2 MiB, the first always.
