@@ -567,6 +567,7 @@ fn tool_payloads_are_counted() {
                 output: serde_json::Value::String("hit\n".repeat(500)),
                 time_ms: 4,
             },
+            provider_data: None,
         }],
         finish: Some(FinishReason::Stop),
         tokens: None,

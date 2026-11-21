@@ -96,6 +96,7 @@ impl Provider for ScriptedProvider {
                     call: ToolCallId::new(),
                     name: ToolName::new("bash"),
                     input: json!({}),
+                    provider_data: None,
                 })),
                 Item::Error => out.push(Err(ProviderError::Decode(
                     "error decoding response body".into(),

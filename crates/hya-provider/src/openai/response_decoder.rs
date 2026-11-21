@@ -106,6 +106,7 @@ impl OpenAiResponsesDecoder {
                     call: entry.call,
                     name: ToolName::new(&entry.name),
                     input: entry.input()?,
+                    provider_data: entry.provider_data.clone(),
                 });
             }
         }
@@ -230,6 +231,13 @@ impl OpenAiResponsesDecoder {
         if let Some(name) = item.get("name").and_then(Value::as_str) {
             entry.name = name.to_string();
         }
+        if let Some(call_id) = item
+            .get("call_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+        {
+            entry.set_provider_field("call_id", Value::String(call_id.to_string()));
+        }
         if let Some(args) = item.get("arguments").and_then(Value::as_str)
             && entry.args.is_empty()
         {
@@ -277,6 +285,7 @@ impl OpenAiResponsesDecoder {
                 call: entry.call,
                 name: ToolName::new(&entry.name),
                 input: entry.input()?,
+                provider_data: entry.provider_data.clone(),
             });
         }
         Ok(out)

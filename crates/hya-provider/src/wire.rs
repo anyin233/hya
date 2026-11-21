@@ -101,6 +101,7 @@ pub(crate) struct ToolAsm {
     pub(crate) args: String,
     pub(crate) started: bool,
     pub(crate) requested: bool,
+    pub(crate) provider_data: Option<Value>,
 }
 
 impl ToolAsm {
@@ -112,6 +113,16 @@ impl ToolAsm {
             args: String::new(),
             started: false,
             requested: false,
+            provider_data: None,
+        }
+    }
+
+    pub(crate) fn set_provider_field(&mut self, key: &str, value: Value) {
+        let map = self
+            .provider_data
+            .get_or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if let Some(obj) = map.as_object_mut() {
+            obj.insert(key.to_string(), value);
         }
     }
     /// The call's input. Argument text that is not valid JSON becomes the
@@ -149,6 +160,22 @@ impl ToolAsm {
 }
 
 /// Walk user text and media in order; each protocol supplies its wire blocks.
+pub(crate) fn wire_tool_call_id<'a>(
+    call_id: &ToolCallId,
+    provider_data: Option<&'a Value>,
+    same_model: bool,
+) -> std::borrow::Cow<'a, str> {
+    if same_model
+        && let Some(upstream) = provider_data
+            .and_then(|data| data.get("call_id"))
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+    {
+        return std::borrow::Cow::Borrowed(upstream);
+    }
+    std::borrow::Cow::Owned(call_id.to_string())
+}
+
 pub(crate) fn user_content(
     parts: &[hya_proto::Part],
     text_block: impl Fn(&str) -> Value,
@@ -238,6 +265,7 @@ mod tests {
                 call_id: ToolCallId::new(),
                 name: "read".into(),
                 state: state.clone(),
+                provider_data: None,
             }],
             finish: None,
             tokens: None,

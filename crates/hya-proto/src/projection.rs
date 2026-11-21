@@ -304,6 +304,9 @@ pub enum PartProjection {
         /// [`Event::ContextEvicted`]. `state` keeps the full output.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         eviction_notice: Option<String>,
+        /// Opaque provider-native metadata recorded when the call was requested.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_data: Option<serde_json::Value>,
     },
 }
 
@@ -1314,6 +1317,7 @@ impl Projection {
                         input: serde_json::Value::Null,
                     },
                     eviction_notice: None,
+                    provider_data: None,
                 },
             ),
             Event::ToolCallRequested {
@@ -1322,6 +1326,7 @@ impl Projection {
                 call,
                 name,
                 input,
+                provider_data,
                 ..
             } => upsert_tool(
                 self,
@@ -1332,6 +1337,7 @@ impl Projection {
                 ToolPartState::Running {
                     input: input.clone(),
                 },
+                provider_data.clone(),
             ),
             Event::ToolResult {
                 message,

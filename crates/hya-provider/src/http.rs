@@ -24,7 +24,7 @@ mod stream;
 use crate::anthropic::{AnthropicMessagesProtocol, add_prompt_cache_breakpoints};
 use crate::google::GoogleProtocol;
 use crate::openai::{
-    GrokBuildProtocol, OpenAiChatProtocol, OpenAiResponsesProtocol, encode_input_items,
+    GrokBuildProtocol, OpenAiChatProtocol, OpenAiResponsesProtocol, encode_input_items_for_model,
 };
 use crate::{
     Capabilities, CompactedWindow, CompletionRequest, EventStream, ModelCatalogSource, Protocol,
@@ -1268,7 +1268,8 @@ impl Provider for HttpProvider {
             .capabilities(model)
             .is_some_and(|caps| self.sends_tool_images(&caps));
         // Encode the same input window the create path would send.
-        let mut input = encode_input_items(messages, images)?;
+        let target = ModelRef::new(&model_id);
+        let mut input = encode_input_items_for_model(messages, images, Some(&target))?;
         if let Some(system) = system.filter(|s| !s.is_empty()) {
             // Prefer instructions-equivalent as a system item at the front when
             // the compact endpoint is given an explicit system prompt.

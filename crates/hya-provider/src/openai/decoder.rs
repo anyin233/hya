@@ -80,6 +80,7 @@ impl OpenAiChatDecoder {
                 call: entry.call,
                 name: ToolName::new(entry.name),
                 input,
+                provider_data: entry.provider_data,
             });
         }
         let finish = match self.finish_reason.as_deref().unwrap_or("stop") {
@@ -188,7 +189,23 @@ impl Decoder for OpenAiChatDecoder {
             for tc in tool_calls {
                 let index = usize::try_from(tc.get("index").and_then(Value::as_u64).unwrap_or(0))
                     .unwrap_or(0);
+                let upstream_id = tc
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_string);
+                let google_sig = tc
+                    .pointer("/extra_content/google/thought_signature")
+                    .and_then(Value::as_str)
+                    .filter(|sig| !sig.is_empty())
+                    .map(str::to_string);
                 let entry = self.tools.entry(index).or_insert_with(ToolAsm::new);
+                if let Some(id) = upstream_id {
+                    entry.set_provider_field("call_id", Value::String(id));
+                }
+                if let Some(sig) = google_sig {
+                    entry.set_provider_field("google_thought_signature", Value::String(sig));
+                }
                 if let Some(name) = tc.pointer("/function/name").and_then(Value::as_str)
                     && !entry.started
                 {

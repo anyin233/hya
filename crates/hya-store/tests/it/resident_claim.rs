@@ -141,6 +141,7 @@ async fn stop_fixture(path: &str) -> StopFixture {
             call: running_call,
             name: ToolName::new("read"),
             input: serde_json::json!({"path": "README.md"}),
+            provider_data: None,
         },
         Event::MemberSpawned {
             session: actor,
@@ -774,6 +775,7 @@ async fn resident_stop_finalization_commits_mail_and_claim_release_together() {
             call: running_call,
             name: ToolName::new("read"),
             input: serde_json::json!({"path": "README.md"}),
+            provider_data: None,
         },
         Event::MemberSpawned {
             session: actor,

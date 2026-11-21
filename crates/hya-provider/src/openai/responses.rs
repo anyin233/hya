@@ -51,7 +51,7 @@ impl Protocol for OpenAiResponsesProtocol {
         _output_limit: Option<u32>,
         images: bool,
     ) -> Result<Value, ProviderError> {
-        let input = encode_input_items(&req.messages, images)?;
+        let input = encode_input_items_for_model(&req.messages, images, Some(&req.model))?;
         let tools: Vec<Value> = req
             .tools
             .iter()
@@ -110,6 +110,14 @@ impl Protocol for OpenAiResponsesProtocol {
 ///
 /// Used by both `/responses` create and `/responses/compact`.
 pub fn encode_input_items(messages: &[Message], images: bool) -> Result<Vec<Value>, ProviderError> {
+    encode_input_items_for_model(messages, images, None)
+}
+
+pub(crate) fn encode_input_items_for_model(
+    messages: &[Message],
+    images: bool,
+    target_model: Option<&hya_proto::ModelRef>,
+) -> Result<Vec<Value>, ProviderError> {
     let images = ToolImages::new(messages, images);
     let mut input = Vec::new();
     for message in messages {
@@ -123,8 +131,10 @@ pub fn encode_input_items(messages: &[Message], images: bool) -> Result<Vec<Valu
                 continue;
             }
             Message::User { parts, .. } => ("user", parts),
-            Message::Assistant { parts, .. } => {
-                emit_assistant(&mut input, parts, &images)?;
+            Message::Assistant { model, parts, .. } => {
+                let same_model = target_model
+                    .is_none_or(|target| hya_proto::context::same_model_id(model, target));
+                emit_assistant(&mut input, parts, same_model, &images)?;
                 continue;
             }
         };
@@ -197,6 +207,7 @@ fn other_kind(value: &Value) -> &'static str {
 fn emit_assistant(
     out: &mut Vec<Value>,
     parts: &[Part],
+    same_model: bool,
     images: &ToolImages<'_>,
 ) -> Result<(), ProviderError> {
     let mut text = String::new();
@@ -205,7 +216,10 @@ fn emit_assistant(
             Part::Text { text: part, .. } => text.push_str(part),
             Part::Reasoning { provider_data, .. } => {
                 flush_text(out, &mut text);
-                if let Some(data) = provider_data {
+                if same_model
+                    && let Some(data) = provider_data
+                    && data.get("type").and_then(Value::as_str) == Some("reasoning")
+                {
                     out.push(data.clone());
                 }
             }
@@ -214,6 +228,7 @@ fn emit_assistant(
                 call_id,
                 name,
                 state,
+                provider_data,
             } => {
                 flush_text(out, &mut text);
                 let input = tool_input(state);
@@ -222,15 +237,17 @@ fn emit_assistant(
                 } else {
                     serde_json::to_string(input)?
                 };
+                let wire_id =
+                    crate::wire::wire_tool_call_id(call_id, provider_data.as_ref(), same_model);
                 out.push(json!({
                     "type": "function_call",
-                    "call_id": call_id.to_string(),
+                    "call_id": wire_id.as_ref(),
                     "name": name.as_str(),
                     "arguments": arguments,
                 }));
                 out.push(json!({
                     "type": "function_call_output",
-                    "call_id": call_id.to_string(),
+                    "call_id": wire_id.as_ref(),
                     "output": function_call_output(tool_result(id, state, images))?,
                 }));
             }

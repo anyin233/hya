@@ -212,6 +212,7 @@ fn historical_todo_results_keep_their_list_and_ids_through_snapshot_replay() {
                 call,
                 name: name.into(),
                 input: json!({}),
+                provider_data: None,
             },
             Event::ToolResult {
                 session,

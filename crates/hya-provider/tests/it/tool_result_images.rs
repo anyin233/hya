@@ -32,6 +32,7 @@ fn tool(name: &str, output: Value) -> Part {
             output,
             time_ms: 1,
         },
+        provider_data: None,
     }
 }
 

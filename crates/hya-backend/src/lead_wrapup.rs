@@ -538,6 +538,7 @@ mod tests {
                 input: serde_json::json!({}),
             },
             eviction_notice: None,
+            provider_data: None,
         }
     }
 

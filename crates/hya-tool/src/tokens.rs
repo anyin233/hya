@@ -568,6 +568,7 @@ mod tests {
                 output,
                 time_ms: 0,
             },
+            provider_data: None,
         }
     }
 

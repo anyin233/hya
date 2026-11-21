@@ -479,6 +479,8 @@ a tool round:
 {"role": "tool", "tool_call_id": "…", "content": "slides_draft.md"}
 ```
 
+**Upstream tool metadata & Gemini compat passthrough.** The chat decoder captures each streamed tool call's upstream `id` (`provider_data.call_id`) and any `extra_content.google.thought_signature` (`provider_data.google_thought_signature`). On subsequent turns targeting the same normalized model (`same_model_id` ignores `<provider>/` and `#<variant>`), the encoder replays the upstream tool `id` in both `tool_calls[].id` and `role: "tool"` `tool_call_id` (falling back to hya's `ToolCallId` across model switches) and re-attaches `extra_content.google.thought_signature` on `tool_calls[]`.
+
 **Media.** User image parts are sent as `{"type":"image_url","image_url":{"url":…}}`
 content items; see [Media parts](#media-parts-non-google-routes). Assistant
 `Part::Media` fails encode with
@@ -542,10 +544,20 @@ and `/responses/compact`.
 ### Encrypted-reasoning replay
 
 When re-emitting an assistant message that contains reasoning parts, the encoder
-pushes each reasoning part's stored `provider_data` item **verbatim** into
-`input`. That is how encrypted reasoning content survives multi-round turns
-instead of being summarized away. The stored item holds `encrypted_content`
-only because the request asked for it through `include` (above).
+pushes each stored `provider_data` item **verbatim** into `input` — holding
+`encrypted_content` because requests set `include: ["reasoning.encrypted_content"]`
+(above) — only when the assistant message's served model matches the request
+model (`same_model_id`) and `provider_data.type == "reasoning"`. Foreign
+`provider_data` envelopes from other protocols (or reasoning items from a
+different Responses model) are omitted so anti-distillation signature checks
+never fail after a model switch. `projection_to_messages` populates historical
+`Message::Assistant.model` from `MessageProjection::served_model()` so this
+comparison reflects the model that actually produced each message.
+
+Tool calls decoded from Responses capture their upstream `call_id` into
+`Part::Tool.provider_data["call_id"]` and replay it on same-model turns in both
+`function_call.call_id` and `function_call_output.call_id`, while omitting the
+server item `id` (`fc_...`) under `store: false`.
 
 ### Media
 

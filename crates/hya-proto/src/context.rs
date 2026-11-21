@@ -83,6 +83,27 @@ pub const REASONING_CONTENT_TYPE: &str = "reasoning_content";
 /// Marker written by older chat decoders; historical sessions still replay it.
 pub const LEGACY_CHAT_REASONING_MARKER: &str = "openai_chat_reasoning_content";
 
+/// Normalize a model reference to its bare upstream model id: strip any
+/// trailing `#<variant>` suffix and any leading `<provider>/` prefix.
+#[must_use]
+pub fn bare_model_id(model: &crate::ModelRef) -> &str {
+    let s = model.as_str();
+    let without_variant = match s.rsplit_once('#') {
+        Some((head, variant)) if !variant.is_empty() => head,
+        _ => s,
+    };
+    without_variant
+        .rsplit_once('/')
+        .map_or(without_variant, |(_, tail)| tail)
+}
+
+/// Whether two model references identify the same upstream model, ignoring
+/// routing prefixes and `#variant` effort suffixes.
+#[must_use]
+pub fn same_model_id(a: &crate::ModelRef, b: &crate::ModelRef) -> bool {
+    bare_model_id(a) == bare_model_id(b)
+}
+
 /// Which reasoning parts a route replays into its next request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReasoningReplayPolicy {
@@ -293,4 +314,31 @@ fn attached_images(output: &Value) -> impl Iterator<Item = (usize, &str, &str)> 
             let data = attachment.get("url")?.as_str()?;
             mime.starts_with("image/").then_some((index, mime, data))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bare_model_id, same_model_id};
+    use crate::ModelRef;
+
+    #[test]
+    fn bare_model_id_and_same_model_id_normalize_routes_and_variants() {
+        assert_eq!(
+            bare_model_id(&ModelRef::new("anthropic/claude-opus-4-7#high")),
+            "claude-opus-4-7"
+        );
+        assert_eq!(bare_model_id(&ModelRef::new("gpt-5.6-sol")), "gpt-5.6-sol");
+        assert!(same_model_id(
+            &ModelRef::new("claude-opus-4-7"),
+            &ModelRef::new("anthropic/claude-opus-4-7#high"),
+        ));
+        assert!(same_model_id(
+            &ModelRef::new("openai/gpt-5.6-sol#xhigh"),
+            &ModelRef::new("12th/gpt-5.6-sol#medium"),
+        ));
+        assert!(!same_model_id(
+            &ModelRef::new("claude-opus-4-7"),
+            &ModelRef::new("claude-sonnet-4-6"),
+        ));
+    }
 }
