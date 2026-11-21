@@ -1290,33 +1290,6 @@ async fn a_stream_interruption_before_any_part_is_retried() {
 }
 
 #[tokio::test]
-async fn a_stream_interruption_after_a_part_is_not_retried() {
-    let (fx, flaky) = flaky_fixture(
-        "interrupted-stream-after-reasoning",
-        vec![text("unreached")],
-        vec![Attempt::Stream(
-            vec![FakeStep::Reasoning("half a thought".into())],
-            ProviderError::StreamInterrupted("stalled stream: no SSE frame within 300s".into()),
-        )],
-    )
-    .await;
-    let error = flaky
-        .turn(&fx, "hi")
-        .await
-        .expect_err("the failed attempt persisted reasoning");
-    assert!(matches!(
-        error,
-        CoreError::Provider(error) if matches!(*error, ProviderError::StreamInterrupted(_))
-    ));
-    flaky.clock.assert_waits(&[]);
-    assert_eq!(flaky.requests.lock().unwrap().len(), 1);
-    assert!(fx.log().await.iter().any(|event| matches!(
-        event,
-        Event::ReasoningReplace { text, .. } if text == "half a thought"
-    )));
-}
-
-#[tokio::test]
 async fn non_transient_round_failure_ends_the_run() {
     let (fx, flaky) = flaky_fixture(
         "retry-invalid",
@@ -1382,30 +1355,219 @@ async fn a_round_returns_the_ninth_failure() {
 }
 
 #[tokio::test]
-async fn a_transient_failure_after_reasoning_is_not_retried() {
+async fn a_stream_cut_after_partial_output_is_retried_without_it() {
     let (fx, flaky) = flaky_fixture(
-        "retry-after-reasoning",
-        vec![text("unreached")],
-        vec![Attempt::Stream(
-            vec![FakeStep::Reasoning("half a thought".into())],
-            server_error("upstream unreachable"),
-        )],
+        "retry-after-partial-output",
+        vec![
+            vec![
+                FakeStep::Reasoning("plan the todo".into()),
+                FakeStep::ToolCall {
+                    name: "todo".into(),
+                    input: json!({"ops": []}),
+                },
+            ],
+            text("done"),
+            text("checked"),
+        ],
+        vec![
+            Attempt::Play,
+            Attempt::Stream(
+                vec![
+                    FakeStep::Reasoning("half a thought".into()),
+                    FakeStep::Text("partial answer".into()),
+                ],
+                ProviderError::StreamInterrupted(
+                    "Transport error: error decoding response body".into(),
+                ),
+            ),
+        ],
     )
     .await;
-    let error = flaky
-        .turn(&fx, "hi")
-        .await
-        .expect_err("the failed attempt persisted reasoning");
     assert_eq!(
-        error.to_string(),
-        "http status 500: in-stream error (server_error): upstream unreachable"
+        flaky.turn(&fx, "plan, then answer").await.unwrap(),
+        FinishReason::Stop
     );
-    flaky.clock.assert_waits(&[]);
-    assert_eq!(flaky.requests.lock().unwrap().len(), 1);
-    assert!(fx.log().await.iter().any(|event| matches!(
+    flaky.clock.assert_waits(&[5]);
+
+    // The todo round, the cut attempt, its retry, and the round after the
+    // completion check.
+    let requests = flaky.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(format!("{:?}", requests[1]), format!("{:?}", requests[2]));
+    for request in &requests[2..] {
+        let sent = format!("{request:?}");
+        assert!(
+            !sent.contains("half a thought") && !sent.contains("partial answer"),
+            "{sent}"
+        );
+    }
+    assert!(assistant_parts(&requests[3]).any(|part| matches!(
+        part,
+        Part::Reasoning { text, .. } if text == "plan the todo"
+    )));
+
+    let envelopes = fx.store.replay(fx.session).await.unwrap();
+    let log: Vec<_> = envelopes.iter().map(|e| e.event.clone()).collect();
+    assert!(log.iter().any(|event| matches!(
         event,
         Event::ReasoningReplace { text, .. } if text == "half a thought"
     )));
+    assert!(log.iter().any(|event| matches!(
+        event,
+        Event::TextReplace { text, .. } if text == "partial answer"
+    )));
+    let views: Vec<_> = log
+        .iter()
+        .filter_map(|event| match event {
+            Event::StepStarted { step, view, .. } if [1, 2].contains(step) => view.clone(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(views.len(), 2);
+    assert_eq!(views[0], views[1], "the retry sends the cut attempt's view");
+
+    let projection = fx.store.read_projection(fx.session).await.unwrap();
+    let reply = projection
+        .session
+        .messages
+        .iter()
+        .rfind(|row| row.role == Role::Assistant)
+        .unwrap();
+    let answers: Vec<_> = reply
+        .parts
+        .iter()
+        .filter_map(|part| match part {
+            hya_proto::PartProjection::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(answers, ["done", "checked"]);
+
+    // Each recorded cut, rebuilt from the log, reproduces the live request.
+    let mut attempts = 0;
+    for envelope in &envelopes {
+        let Event::StepStarted { view, .. } = &envelope.event else {
+            continue;
+        };
+        let recorded = view.as_ref().expect("step has a view");
+        let end = envelopes.partition_point(|entry| entry.seq <= recorded.cut);
+        let projection = Projection::from_events(&envelopes[..end]);
+        let rebuilt = kernel::request::request(
+            &View {
+                projection: &projection,
+            },
+            &fx.system,
+            fx.tools.iter().map(|tool| tool.schema()).collect(),
+            &fx.model,
+            &AgentName::new(kernel::AGENT),
+            &AttachmentData::new(),
+            None,
+        );
+        assert_eq!(
+            kernel::request::request_sha256(&rebuilt).unwrap(),
+            recorded.request_sha256
+        );
+        assert_eq!(format!("{rebuilt:?}"), format!("{:?}", requests[attempts]));
+        attempts += 1;
+    }
+    assert_eq!(attempts, 4);
+}
+
+#[tokio::test]
+async fn a_tool_call_of_a_cut_attempt_is_not_run() {
+    let command = json!({"command": "echo ran >> count.txt"});
+    // The fixture drops the last event: the round's end, after a complete call.
+    let mut cut = call("bash", command.clone());
+    cut.push(FakeStep::Finish(FinishReason::ToolCalls));
+    let (fx, flaky) = flaky_fixture(
+        "retry-after-tool-call",
+        vec![call("bash", command), text("done"), text("checked")],
+        vec![Attempt::Stream(
+            cut,
+            ProviderError::StreamInterrupted(
+                "Transport error: error decoding response body".into(),
+            ),
+        )],
+    )
+    .await;
+    assert_eq!(flaky.turn(&fx, "count").await.unwrap(), FinishReason::Stop);
+    flaky.clock.assert_waits(&[5]);
+    assert_eq!(
+        std::fs::read_to_string(fx.dir.join("count.txt")).unwrap(),
+        "ran\n"
+    );
+
+    let log = fx.log().await;
+    let calls: Vec<_> = log
+        .iter()
+        .filter_map(|event| match event {
+            Event::ToolCallRequested { call, .. } => Some(*call),
+            _ => None,
+        })
+        .collect();
+    let results: Vec<_> = log
+        .iter()
+        .filter_map(|event| match event {
+            Event::ToolResult { call, .. } | Event::ToolError { call, .. } => Some(*call),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(results, [calls[1]], "only the retry's call ran");
+    let requests = flaky.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 4);
+    for request in &requests[2..] {
+        let sent: Vec<_> = assistant_parts(request)
+            .filter(|part| matches!(part, Part::Tool { .. }))
+            .collect();
+        assert_eq!(sent.len(), 1, "{sent:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_round_returns_the_ninth_failure_after_partial_output() {
+    let failures = (1..=9)
+        .map(|attempt| {
+            Attempt::Stream(
+                vec![FakeStep::Reasoning(format!("thought {attempt}"))],
+                server_error(&format!("attempt {attempt}")),
+            )
+        })
+        .collect();
+    let (fx, flaky) = flaky_fixture("retry-partial-limit", vec![text("unreached")], failures).await;
+    let error = flaky
+        .turn(&fx, "hi")
+        .await
+        .expect_err("the ninth failure ends the run");
+    assert_eq!(
+        error.to_string(),
+        "http status 500: in-stream error (server_error): attempt 9"
+    );
+    flaky.clock.assert_waits(&[5, 10, 20, 40, 60, 60, 60, 60]);
+    let requests = flaky.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 9);
+    assert!(
+        requests
+            .iter()
+            .all(|request| format!("{request:?}") == format!("{:?}", requests[0]))
+    );
+    // Every attempt stays in the log; only the last, unretried one stays in the message.
+    let log = fx.log().await;
+    let recorded = log
+        .iter()
+        .filter(|event| matches!(event, Event::ReasoningReplace { .. }))
+        .count();
+    assert_eq!(recorded, 9);
+    let projection = fx.store.read_projection(fx.session).await.unwrap();
+    let reply = projection.session.messages.last().unwrap();
+    assert!(
+        matches!(
+            reply.parts.as_slice(),
+            [hya_proto::PartProjection::Reasoning { text, .. }] if text == "thought 9"
+        ),
+        "{:?}",
+        reply.parts
+    );
 }
 
 #[tokio::test]

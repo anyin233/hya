@@ -348,7 +348,8 @@ impl Harness for Bare<'_> {
         }
     }
 
-    /// Retry a transient provider failure or stream interruption only if the attempt left no part.
+    /// Retry a transient provider failure or stream interruption. Before the
+    /// wait, the failed attempt's parts leave the conversation.
     async fn failed(&mut self, failure: &Failure) -> Result<bool, CoreError> {
         let CoreError::Provider(error) = &failure.error else {
             return Ok(false);
@@ -358,32 +359,42 @@ impl Harness for Bare<'_> {
         };
         let retryable = error.is_retryable_before_stream()
             || matches!(error.as_ref(), ProviderError::StreamInterrupted(_));
-        if !retryable || self.cancel.is_cancelled() {
-            return Ok(false);
-        }
-        let Scope {
-            store,
-            session,
-            message,
-            ..
-        } = *self.scope;
-        let produced_part = failure.step_started
-            && store
-                .with_projection(session, |projection| {
-                    projection.session.messages.iter().any(|row| {
-                        row.id == message
-                            && row
-                                .last_step_start
-                                .is_some_and(|start| start < row.parts.len())
-                    })
-                })
-                .await?;
         let deadline = hya_tool::deadline::current();
-        if produced_part
+        if !retryable
             || self.cancel.is_cancelled()
             || deadline.is_some_and(|d| d.remaining().saturating_sub(d.final_window()) <= wait)
         {
             return Ok(false);
+        }
+        let Scope {
+            store,
+            emit,
+            session,
+            message,
+            ..
+        } = *self.scope;
+        // None of these parts was acted on: `drive` runs a round's tool calls
+        // only after the round collected without error.
+        let discarded: Vec<_> = store
+            .with_projection(session, |projection| {
+                projection
+                    .session
+                    .messages
+                    .iter()
+                    .find(|row| row.id == message && failure.step_started)
+                    .and_then(|row| row.parts.get(row.last_step_start?..))
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|part| Event::PartDeleted {
+                        session,
+                        message,
+                        part: part.id(),
+                    })
+                    .collect()
+            })
+            .await?;
+        if !discarded.is_empty() {
+            emit.emit(session, discarded).await?;
         }
         tracing::warn!(
             name: "bare_round_retry",
@@ -551,8 +562,8 @@ async fn execute_calls(
 /// Run model rounds and tool calls until a round ends without tool calls.
 ///
 /// Returns that round's finish, or `Cancelled`. The caller finishes the
-/// assistant message. Transient provider failures before any part was
-/// persisted can be retried.
+/// assistant message. A round that fails on a transient provider error can be
+/// retried.
 pub async fn run(run: Run<'_>) -> Result<FinishReason, CoreError> {
     run_with_watches(run, &WorkspaceWatches::default()).await
 }

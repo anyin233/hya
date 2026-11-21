@@ -548,21 +548,36 @@ A retry requires all of the following.
   breaks while reading the HTTP body. Transient errors include transport
   errors before the stream and HTTP 429 or 5xx, including in-stream error
   frames classified as 429 or 5xx. An error opening the stream, after the
-  provider's own attempts, follows the same retry rule.
-- The failed attempt persisted no part in the assistant message, including
-  text, reasoning, tool input, or a tool call.
+  provider's own attempts, follows the same retry rule. Other in-stream error
+  frames are not retried.
 - The run is active throughout the wait. With `--time-budget`, the full wait
   must fit before Final, and the budget must still be in Normal or WrapUp
   when the wait ends.
 
-When a retry is ruled out or the eighth retry fails, the run ends with the
-current attempt's error. A completed round resets the retry count.
+A retry does not depend on how far the failed attempt got. The attempt may
+have persisted reasoning, text, tool input, or complete tool calls. None of
+it was acted on: the kernel runs a round's tool calls, including `rewrite`
+and `todo`, only after the round's stream ended without error. When it
+decides to retry, before the wait, the kernel appends one `part_deleted`
+event for each part the attempt persisted. The attempt's own events stay in
+the log as they were recorded, but its parts leave the assistant message.
+They are not sent in the retry or any later request, and are never run. They
+are not part of the answer `hya exec` prints, and they do not count as a
+tool call for the completion check. They are left out of the context
+estimate, `rewrite`, and any fold. A run that ends during the wait keeps
+them deleted. The retry sends the failed attempt's request again, so both
+`StepStarted` events carry the same `view`.
 
-For example, if an in-stream HTTP 500 arrives before the assistant has
-produced any output and the run has time left, bare mode waits 5 seconds
-before sending the same request again. The event log records the failed
-attempt as `StepFinished` with `finish: error`. The retry runs under the next
-step number. If opening the stream returns HTTP 429, the same wait and
+When a retry is ruled out or the eighth retry fails, the run ends with the
+current attempt's error, and that attempt's parts stay in the message. A
+completed round resets the retry count.
+
+For example, the route cuts a stream 90 seconds into a round while the model
+is reasoning, and the run has time left. The event log records the attempt's
+truncated reasoning as `reasoning_replace` and `reasoning_end`, then
+`StepFinished` with `finish: error`, then a `part_deleted` for that reasoning
+part. Bare mode waits 5 seconds and sends the same request again under the
+next step number. If opening the stream returns HTTP 429, the same wait and
 request replay apply. The failed open emits neither `StepStarted` nor
 `StepFinished`, so the next attempt uses the same step number.
 
@@ -602,7 +617,7 @@ plugs into that loop at fixed points:
 | Before the round (`Harness::before_round`) | `kernel::before_round` with no extensions: the 80% Rewrite, then the goal checkpoint | Re-validate the actor claim, rebind a Root turn to a new runtime generation, resolve the round's model, then `kernel::before_round` with the internal bundles' extensions (`hya/compaction`: [`shake` and `remote`](compaction.md)) |
 | Request | Kernel prompt and six tools | The agent's system prompt, filtered tool schemas plus `rewrite` and `todo`, and reasoning effort, then the `chat.params` hook |
 | Opening the stream | The given model | Cross-model fallback or the Workflow route, under a governor stream permit |
-| Failed round | Retried up to eight times after 5, 10, 20, 40, 60, 60, 60, and 60 s when a transient error opening or reading the stream, or a stream interruption, left no assistant part and the wait fits before Final ([When a bare round fails](#when-a-bare-round-fails)) | After the stream opens, retried up to twice on a link error before any text or tool call |
+| Failed round | Retried up to eight times after 5, 10, 20, 40, 60, 60, 60, and 60 s on a transient error opening or reading the stream, or a stream interruption, when the wait fits before Final, also after partial output; the failed attempt's parts are deleted from the message before the wait ([When a bare round fails](#when-a-bare-round-fails)) | After the stream opens, retried up to twice on a link error before any text or tool call |
 | Registry tool call (`ToolGate`) | Execute the tool and record file snapshots and stamps | Hooks, permissions, the full `ToolCtx`, file snapshots and stamps, output capping, steer notices |
 | Unrun calls after a cancel | Failed as `cancelled` | Left open; the turn end closes them as `CANCELLED` |
 | End (`Harness::before_end`, `done`) | The round's finish, after one [completion check](#how-a-bare-run-ends) once a tool call ran | The round's finish; also ends after an accepted `report` |
