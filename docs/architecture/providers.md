@@ -509,8 +509,29 @@ Optional fields when present on the request:
 
 - `instructions` — from `CompletionRequest.system`
 - `reasoning`: `{ "effort": "<level>", "summary": "auto" }`
+- `include`: `["reasoning.encrypted_content"]` — only when `reasoning` is set
+  and not `off` (see below)
 - `temperature`
 - `max_output_tokens`
+
+For example, a request with effort `high` carries:
+
+```json
+{
+  "store": false,
+  "reasoning": { "effort": "high", "summary": "auto" },
+  "include": ["reasoning.encrypted_content"]
+}
+```
+
+With `store: false` the endpoint keeps no server-side state, so a reasoning
+item can be replayed on a later round only if it carries its
+`encrypted_content`; without `include` the endpoint returns summary-only items
+and ignores them when they are echoed back. Both `openai-response` and
+`openai-codex` therefore request it whenever an effort other than `off` is
+set. A request with no effort or effort `off` omits `include`, because
+non-reasoning models reject it (HTTP 400 "Encrypted content is not supported
+with this model").
 
 `GrokBuildProtocol` wraps the same encoder and always adds
 `include: ["reasoning.encrypted_content"]`.
@@ -523,7 +544,8 @@ and `/responses/compact`.
 When re-emitting an assistant message that contains reasoning parts, the encoder
 pushes each reasoning part's stored `provider_data` item **verbatim** into
 `input`. That is how encrypted reasoning content survives multi-round turns
-instead of being summarized away.
+instead of being summarized away. The stored item holds `encrypted_content`
+only because the request asked for it through `include` (above).
 
 ### Media
 
@@ -545,15 +567,60 @@ Handled event `type` values include:
 | Event type | Behavior |
 | --- | --- |
 | `response.reasoning_summary_text.delta` / `response.reasoning_text.delta` | Reasoning delta |
+| `response.output_item.added` (`item.type` = `reasoning`) | Reasoning start (the part takes its place before later output items) |
 | `response.output_item.added` (`item.type` = `function_call`) | Tool assembly start |
-| `response.output_item.done` (`item.type` = `reasoning`) | Reasoning close + `provider_data` |
+| `response.output_item.done` (`item.type` = `reasoning`) | Reasoning close + `provider_data` when the item has a non-empty `encrypted_content`; otherwise the part stays open (see terminal capture) |
 | `response.output_item.done` (`item.type` = `function_call`) | Tool call finalize |
 | `response.function_call_arguments.delta` | Tool args delta |
 | `response.output_text.delta` / `response.output_text.done` | Text stream |
-| `response.completed` | Usage + finish (`ToolCalls` if any tool was seen, else `Stop`) |
-| `response.incomplete` | Usage + `Length` |
+| `response.completed` | Usage + terminal capture (below) + finish (`ToolCalls` if any tool was seen, else `Stop`) |
+| `response.incomplete` | Usage + terminal capture (below) + `Length` |
 | `response.failed` | `ProviderError::Http` from `/response/error/message` |
 | bare `error` | `ProviderError::Http` from error message fields |
+
+Terminal capture: some streams deliver a full `reasoning` item (with
+`encrypted_content`) only in `/response/output` of the terminal frame, either
+without an `output_item.done` or after a summary-only one. For each
+`/response/output[i]` with `type: "reasoning"` whose part at output index `i`
+has not ended yet, the decoder emits `ReasoningStart` (if needed) and one
+`ReasoningEnd { provider_data: Some(item) }` before `MessageFinished`; the
+streamed summary text is kept. If the terminal item has no `encrypted_content`
+either, the summary-only `output_item.done` item is used. Rules that keep the
+replayed history in order and intact:
+
+- A part already closed is left alone: a second `ReasoningEnd` would replace
+  its streamed text with an empty one.
+- A reasoning item with no part yet is skipped, with a warning, when a later
+  output item already started a part: its part would land after that item's
+  and replay out of order. `output_item.added` for reasoning prevents this by
+  opening the part when the item starts.
+- Text still open at an earlier output index gets its `TextEnd` before a
+  terminal reasoning item closes, since the kernel records text at `TextEnd`
+  and would otherwise record it after the reasoning.
+- A part left open by a summary-only `output_item.done` with no terminal item
+  closes at finish with that summary-only item as `provider_data`.
+
+When `/response/input_transformations` lists entries with
+`action: "removed"` and `type: "reasoning"`, the decoder logs one warning
+(`responses upstream removed reasoning items from input`, with the count and
+the `reason` values) — the endpoint dropped replayed reasoning from the input.
+
+Two different upstream behaviours lose replayed reasoning:
+
+- **Prefix-bound removal, reported.** An endpoint that binds each reasoning
+  item to the history before it removes the item when that history changed in
+  place, and reports it in `/response/input_transformations`, for example
+  `{"action": "removed", "type": "reasoning", "reason": "prefix_mismatch"}`.
+  hya changes earlier history in place in known cases: after an image step,
+  `ToolImageReplay` replaces the earlier result's `[input_text, input_image]`
+  content with a text placeholder in the next request; `shake` replaces an
+  older tool output with its `eviction_notice`
+  ([compaction](../compaction.md#shake)); and a transient notice is appended
+  for one request and removed from the next.
+- **Unconditional drop, unreported.** A gateway or transcoding endpoint may
+  return reasoning items without `encrypted_content` and drop every input
+  `type: "reasoning"` item on later requests, even when the history only
+  grew. No HTTP error and no `input_transformations` entry mark it.
 
 Grok Build uses a decoder variant that **requires** a typed terminal
 (`response.completed` or `response.incomplete`); otherwise finish errors with a
