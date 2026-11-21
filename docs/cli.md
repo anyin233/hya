@@ -846,9 +846,10 @@ Final window free for the last step.
 The exact text and rules are in [How a bare run ends](kernel.md#how-a-bare-run-ends).
 
 Bare mode retries a transient provider error or a stream that stalls or breaks
-up to three times after 5, 10, and 20 seconds. A retry requires that the attempt
-persisted no assistant part, the run stays active, and the wait fits before
-Final. See [When a bare round fails](kernel.md#when-a-bare-round-fails).
+up to eight times per round, after 5, 10, 20, 40, and then 60 seconds. A retry
+requires that the run stays active and the wait fits before Final. Output the
+failed attempt already produced is deleted from the message before the retry:
+it is never run and is not part of the printed answer. See [When a bare round fails](kernel.md#when-a-bare-round-fails).
 
 See [Kernel](kernel.md) for tool contracts, rewrite rules, and the differences
 from full mode.
