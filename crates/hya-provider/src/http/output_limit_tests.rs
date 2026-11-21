@@ -275,6 +275,7 @@ fn only_a_model_declared_to_take_images_gets_tool_result_images() {
                 }),
                 time_ms: 1,
             },
+            provider_data: None,
         }],
         finish: None,
         tokens: None,

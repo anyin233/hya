@@ -69,6 +69,7 @@ impl AnthropicDecoder {
                     call: block.tool.call,
                     name: ToolName::new(block.tool.name),
                     input,
+                    provider_data: block.tool.provider_data,
                 });
             }
         }
@@ -191,16 +192,27 @@ impl Decoder for AnthropicDecoder {
                             .and_then(Value::as_str)
                             .unwrap_or_default()
                             .to_string();
+                        let mut tool = ToolAsm {
+                            part,
+                            call,
+                            name: name.clone(),
+                            ..ToolAsm::new()
+                        };
+                        if let Some(upstream_id) = cb
+                            .and_then(|c| c.get("id"))
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                        {
+                            tool.set_provider_field(
+                                "call_id",
+                                Value::String(upstream_id.to_string()),
+                            );
+                        }
                         self.blocks.insert(
                             index,
                             Block {
                                 kind: BlockKind::Tool,
-                                tool: ToolAsm {
-                                    part,
-                                    call,
-                                    name: name.clone(),
-                                    ..ToolAsm::new()
-                                },
+                                tool,
                                 signature: None,
                                 redacted_data: None,
                             },

@@ -530,6 +530,10 @@ pub enum Event {
         name: ToolName,
         /// Parsed tool arguments.
         input: serde_json::Value,
+        /// Opaque provider-native metadata attached to this call (e.g. upstream
+        /// `call_id` or provider signature fields).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_data: Option<serde_json::Value>,
     },
     /// Tool succeeded → `Completed`.
     ToolResult {

@@ -217,6 +217,7 @@ mod tests {
                     output: serde_json::Value::String(output.to_string()),
                     time_ms: 7,
                 },
+                provider_data: None,
             }],
             finish: None,
             tokens: None,
@@ -327,6 +328,7 @@ mod tests {
                     )),
                     time_ms: 1,
                 },
+                provider_data: None,
             })
             .collect();
         let mut messages = vec![Message::Assistant {

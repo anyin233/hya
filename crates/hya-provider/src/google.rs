@@ -310,6 +310,11 @@ impl Decoder for GoogleDecoder {
                     self.saw_tool = true;
                     let name = fc.get("name").and_then(Value::as_str).unwrap_or_default();
                     let args = fc.get("args").cloned().unwrap_or(Value::Null);
+                    let upstream_id = fc
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.is_empty());
+                    let provider_data = upstream_id.map(|id| json!({ "call_id": id }));
                     let part_id = PartId::new();
                     let call = ToolCallId::new();
                     out.push(Event::ToolInputStart {
@@ -326,6 +331,7 @@ impl Decoder for GoogleDecoder {
                         call,
                         name: ToolName::new(name),
                         input: args,
+                        provider_data,
                     });
                 }
             }

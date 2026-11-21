@@ -554,3 +554,94 @@ fn message_times_fold_from_envelope_timestamps() {
         (Some(2_000), Some(2_000))
     );
 }
+
+#[test]
+fn tool_call_requested_and_part_provider_data_roundtrip_and_compat() {
+    use hya_proto::{Part, ToolCallId, ToolName, ToolPartState};
+    use serde_json::json;
+
+    let legacy_event = r#"{"type":"tool_call_requested","session":"hysec_ABCDEFGHIJKLMNOPQRST","message":"00000000-0000-0000-0000-000000000002","part":"00000000-0000-0000-0000-000000000003","call":"00000000-0000-0000-0000-000000000004","name":"read","input":{}}"#;
+    let decoded: Event = serde_json::from_str(legacy_event).expect("legacy ToolCallRequested");
+    assert!(matches!(
+        &decoded,
+        Event::ToolCallRequested {
+            provider_data: None,
+            ..
+        }
+    ));
+    let encoded = serde_json::to_string(&decoded).expect("encode legacy ToolCallRequested");
+    assert!(!encoded.contains("provider_data"), "{encoded}");
+
+    let legacy_part = Part::Tool {
+        id: PartId::new(),
+        call_id: ToolCallId::new(),
+        name: ToolName::new("read"),
+        state: ToolPartState::Pending { input: json!({}) },
+        provider_data: None,
+    };
+    let part_json = serde_json::to_string(&legacy_part).expect("encode Part::Tool");
+    assert!(!part_json.contains("provider_data"), "{part_json}");
+    let decoded_part: Part = serde_json::from_str(&part_json).expect("decode Part::Tool");
+    assert_eq!(decoded_part, legacy_part);
+
+    let session = SessionId::new();
+    let message = MessageId::new();
+    let part = PartId::new();
+    let call = ToolCallId::new();
+    let provider_meta = json!({"call_id": "toolu_01ABC", "thought_signature": "sig_xyz"});
+    let projection = Projection::from_events(&[
+        env(
+            1,
+            Event::MessageStarted {
+                session,
+                message,
+                role: Role::Assistant,
+                agent: None,
+                model: None,
+            },
+        ),
+        env(
+            2,
+            Event::ToolInputStart {
+                session,
+                message,
+                part,
+                call,
+                name: ToolName::new("read"),
+            },
+        ),
+        env(
+            3,
+            Event::ToolCallRequested {
+                session,
+                message,
+                part,
+                call,
+                name: ToolName::new("read"),
+                input: json!({"path": "a.txt"}),
+                provider_data: Some(provider_meta.clone()),
+            },
+        ),
+        env(
+            4,
+            Event::ToolResult {
+                session,
+                message,
+                part,
+                call,
+                output: json!({"output": "ok"}),
+                time_ms: 5,
+            },
+        ),
+    ]);
+    let PartProjection::Tool {
+        provider_data,
+        state,
+        ..
+    } = &projection.session.messages[0].parts[0]
+    else {
+        panic!("expected tool part projection");
+    };
+    assert_eq!(provider_data.as_ref(), Some(&provider_meta));
+    assert!(matches!(state, ToolPartState::Completed { .. }));
+}

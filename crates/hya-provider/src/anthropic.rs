@@ -78,12 +78,13 @@ impl Protocol for AnthropicMessagesProtocol {
                 Message::User { parts, .. } => {
                     push_coalesced(&mut messages, "user", user_content(parts)?)
                 }
-                Message::Assistant { parts, .. } => emit_assistant(
+                Message::Assistant { model, parts, .. } => emit_assistant(
                     &mut messages,
                     turn_start,
                     message_index,
                     parts,
                     Some(message_index) == last_message,
+                    hya_proto::context::same_model_id(model, &req.model),
                     &images,
                 )?,
                 // Mid-conversation system text is where compaction summaries
@@ -224,6 +225,7 @@ fn emit_assistant(
     message_index: usize,
     parts: &[Part],
     is_final_message: bool,
+    same_model: bool,
     images: &ToolImages<'_>,
 ) -> Result<(), ProviderError> {
     let mut clusters: Vec<(Vec<Value>, String, Vec<&Part>)> = Vec::new();
@@ -301,7 +303,7 @@ fn emit_assistant(
                 push_coalesced(out, "assistant", Value::Array(content));
             }
         } else {
-            flush_cluster(out, &reasoning, &text, &tools, images)?;
+            flush_cluster(out, &reasoning, &text, &tools, same_model, images)?;
         }
     }
     Ok(())
@@ -312,6 +314,7 @@ fn flush_cluster(
     reasoning: &[Value],
     text: &str,
     tools: &[&Part],
+    same_model: bool,
     images: &ToolImages<'_>,
 ) -> Result<(), ProviderError> {
     let mut content = reasoning.to_vec();
@@ -323,27 +326,35 @@ fn flush_cluster(
             call_id,
             name,
             state,
+            provider_data,
             ..
         } = p
         {
             let input = tool_input(state);
-            content.push(json!({"type":"tool_use","id":call_id.to_string(),"name":name.as_str(),"input":if input.is_null(){json!({})}else{input.clone()}}));
+            let wire_id =
+                crate::wire::wire_tool_call_id(call_id, provider_data.as_ref(), same_model);
+            content.push(json!({"type":"tool_use","id":wire_id.as_ref(),"name":name.as_str(),"input":if input.is_null(){json!({})}else{input.clone()}}));
         }
     }
     push_coalesced(out, "assistant", Value::Array(content));
     let mut results = Vec::new();
     for &p in tools {
         let Part::Tool {
-            id, call_id, state, ..
+            id,
+            call_id,
+            state,
+            provider_data,
+            ..
         } = p
         else {
             continue;
         };
+        let wire_id = crate::wire::wire_tool_call_id(call_id, provider_data.as_ref(), same_model);
         let result = tool_result(id, state, images);
         let is_error = result.is_error;
         results.push(json!({
             "type": "tool_result",
-            "tool_use_id": call_id.to_string(),
+            "tool_use_id": wire_id.as_ref(),
             "content": tool_result_content(result)?,
             "is_error": is_error,
         }));

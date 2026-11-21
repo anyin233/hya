@@ -95,7 +95,7 @@ pub fn projection_to_messages(
             Role::Assistant => Message::Assistant {
                 id: m.id,
                 agent: agent.clone(),
-                model: model.clone(),
+                model: m.served_model().cloned().unwrap_or_else(|| model.clone()),
                 parts: map_parts(sent_parts(m)),
                 finish: m.finish,
                 tokens: m.tokens,
@@ -280,6 +280,7 @@ pub fn map_parts(parts: &[PartProjection]) -> Vec<Part> {
                 name,
                 state,
                 eviction_notice,
+                provider_data,
             } => Part::Tool {
                 id: *id,
                 call_id: *call,
@@ -294,6 +295,7 @@ pub fn map_parts(parts: &[PartProjection]) -> Vec<Part> {
                     }
                     _ => state.clone(),
                 },
+                provider_data: provider_data.clone(),
             },
         })
         .collect()
@@ -799,5 +801,158 @@ mod tests {
             let ids: Vec<_> = sent.iter().map(Message::id).collect();
             assert_eq!(ids, vec![user, next]);
         }
+    }
+
+    #[test]
+    fn projection_to_messages_preserves_served_model_and_tool_provider_data() {
+        use hya_proto::{
+            AgentName, Envelope, Event, EventSeq, Role, SessionKind, TokenUsage, ToolCallId,
+            ToolName, UsagePurpose,
+        };
+        let session = hya_proto::SessionId::new();
+        let user = hya_proto::MessageId::new();
+        let assistant1 = hya_proto::MessageId::new();
+        let assistant2 = hya_proto::MessageId::new();
+        let part1 = hya_proto::PartId::new();
+        let call1 = ToolCallId::new();
+        let part2 = hya_proto::PartId::new();
+        let provider_meta = serde_json::json!({"call_id": "toolu_01ABC"});
+        let env = |seq, event| Envelope {
+            seq: EventSeq(seq),
+            ts_millis: 0,
+            event,
+        };
+        let projection = Projection::from_events(&[
+            env(
+                1,
+                Event::SessionCreated {
+                    session,
+                    parent: None,
+                    agent: AgentName::new("build"),
+                    model: ModelRef::new("model-a"),
+                    workdir: "/tmp".into(),
+                    project: None,
+                    kind: SessionKind::Project,
+                },
+            ),
+            env(
+                2,
+                Event::MessageStarted {
+                    session,
+                    message: user,
+                    role: Role::User,
+                    agent: None,
+                    model: None,
+                },
+            ),
+            env(
+                3,
+                Event::TextDelta {
+                    session,
+                    message: user,
+                    part: hya_proto::PartId::new(),
+                    delta: "hi".into(),
+                },
+            ),
+            env(
+                4,
+                Event::MessageStarted {
+                    session,
+                    message: assistant1,
+                    role: Role::Assistant,
+                    agent: Some(AgentName::new("build")),
+                    model: Some(ModelRef::new("model-a")),
+                },
+            ),
+            env(
+                5,
+                Event::ToolCallRequested {
+                    session,
+                    message: assistant1,
+                    part: part1,
+                    call: call1,
+                    name: ToolName::new("read"),
+                    input: serde_json::json!({"path": "a"}),
+                    provider_data: Some(provider_meta.clone()),
+                },
+            ),
+            env(
+                6,
+                Event::ToolResult {
+                    session,
+                    message: assistant1,
+                    part: part1,
+                    call: call1,
+                    output: serde_json::json!({"output": "ok"}),
+                    time_ms: 1,
+                },
+            ),
+            env(
+                7,
+                Event::UsageRecorded {
+                    session,
+                    message: Some(assistant1),
+                    step: Some(0),
+                    model: ModelRef::new("fallback/model-a-served"),
+                    purpose: UsagePurpose::Turn,
+                    tokens: TokenUsage {
+                        input: 10,
+                        output: 5,
+                        ..Default::default()
+                    },
+                },
+            ),
+            env(
+                8,
+                Event::MessageStarted {
+                    session,
+                    message: assistant2,
+                    role: Role::Assistant,
+                    agent: None,
+                    model: None,
+                },
+            ),
+            env(
+                9,
+                Event::TextStart {
+                    session,
+                    message: assistant2,
+                    part: part2,
+                },
+            ),
+            env(
+                10,
+                Event::TextReplace {
+                    session,
+                    message: assistant2,
+                    part: part2,
+                    text: "legacy".into(),
+                },
+            ),
+        ]);
+
+        let sent = projection_to_messages(
+            &AgentName::new("build"),
+            &projection,
+            &ModelRef::new("model-b"),
+            &AttachmentData::new(),
+        );
+        let Message::Assistant { model, parts, .. } = &sent[1] else {
+            panic!("expected assistant1");
+        };
+        assert_eq!(model, &ModelRef::new("fallback/model-a-served"));
+        assert!(matches!(
+            &parts[0],
+            Part::Tool { provider_data, .. } if provider_data.as_ref() == Some(&provider_meta)
+        ));
+
+        let Message::Assistant {
+            model: fallback_model,
+            ..
+        } = &sent[2]
+        else {
+            panic!("expected assistant2");
+        };
+        assert_eq!(fallback_model, &ModelRef::new("model-b"));
     }
 }

@@ -318,6 +318,9 @@ pub enum Part {
         name: ToolName,
         /// Current phase and payloads.
         state: ToolPartState,
+        /// Opaque provider-native metadata recorded when the call was requested.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_data: Option<serde_json::Value>,
     },
 }
 

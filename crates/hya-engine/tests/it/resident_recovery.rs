@@ -199,6 +199,7 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
             call: running_call,
             name: ToolName::new("read"),
             input: serde_json::json!({"path": "README.md"}),
+            provider_data: None,
         },
         Event::MemberSpawned {
             session: running_actor,
@@ -851,6 +852,7 @@ async fn superseded_stream_boundary(boundary: SupersededBoundary) {
             call: ToolCallId::new(),
             name: "bash".into(),
             input: serde_json::json!({"command": "count"}),
+            provider_data: None,
         },
     }))
     .unwrap();

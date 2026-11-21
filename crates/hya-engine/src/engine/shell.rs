@@ -421,6 +421,7 @@ impl SessionEngine {
                 call: shell_part.call,
                 name: shell_part.name,
                 input: input.clone(),
+                provider_data: None,
             },
         )
         .await?;

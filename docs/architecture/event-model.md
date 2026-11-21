@@ -250,7 +250,7 @@ snapshot (without provider data), preserving partial thinking for replay.
 | --- | --- | --- | --- |
 | `tool_input_start` | `session`, `message`, `part`, `call: ToolCallId`, `name: ToolName` | → `Pending { input: null }` | Fold: push tool part |
 | `tool_input_delta` | `session`, `message`, `part`, `call`, `name`, `delta: String` | (unchanged) | **live-only**, never persisted; `tool_call_requested` stores the complete input |
-| `tool_call_requested` | `session`, `message`, `part`, `call`, `name`, `input: Value` | → `Running { input }` | Fold: upsert running tool. Turn loop collects these into the round's `tool_calls` list. Argument text that was not valid JSON is recorded as `{"invalid_json_arguments": {"text", "error"}}`; the turn loop answers that call with a `tool_error` and runs no tool ([kernel](../kernel.md#tool-calls-whose-arguments-are-not-valid-json)). |
+| `tool_call_requested` | `session`, `message`, `part`, `call`, `name`, `input: Value`, optional `provider_data: Value` | → `Running { input }` | Fold: upsert running tool and retain optional `provider_data` (such as upstream `call_id` or signature fields). Turn loop collects these into the round's `tool_calls` list. Argument text that was not valid JSON is recorded as `{"invalid_json_arguments": {"text", "error"}}`; the turn loop answers that call with a `tool_error` and runs no tool ([kernel](../kernel.md#tool-calls-whose-arguments-are-not-valid-json)). |
 | `tool_result` | `session`, `message`, `part`, `call`, `output: Value`, `time_ms: u64` | → `Completed { input, output, time_ms }` | Fold |
 | `tool_error` | `session`, `message`, `part`, `call`, `message_text: String`, `value: Option<Value>` | → `Error { input, message, value }` | Fold. Engine commonly sets `value` to `{ "error": { "type": "...", "message": "..." } }`. |
 | `tool_part_updated` | `session`, `message`, `part`, `state: ToolPartState` | → given state | Fold: direct overwrite (fork/copy and out-of-band progress) |
@@ -664,7 +664,9 @@ Projection {
 | --- | --- |
 | `text` | `id`, `text` |
 | `reasoning` | `id`, `text`, `reason?`, `provider_data?` |
-| `tool` | `id`, `call`, `name`, `state` |
+| `tool` | `id`, `call`, `name`, `state`, `eviction_notice?`, `provider_data?` |
+
+Both `Part::Tool` and `PartProjection::Tool` omit `provider_data` on the wire when `None` (`#[serde(default, skip_serializing_if = "Option::is_none")]`), so logs written before this field decode cleanly. Later `tool_result` and `tool_error` updates leave an existing `provider_data` intact.
 
 `Part::Media` exists on the **model-facing** `Message` / `Part` value types
 (for provider request building) but has **no** `PartProjection` counterpart.

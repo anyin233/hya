@@ -620,6 +620,7 @@ fn assistant_tool_request(input: serde_json::Value) -> CompletionRequest {
                             output: json!("hello"),
                             time_ms: 3,
                         },
+                        provider_data: None,
                     },
                 ],
                 finish: None,
@@ -1563,4 +1564,261 @@ fn a_call_with_invalid_argument_json_replays_on_every_route() {
         input
     );
     assert!(input.is_object());
+}
+
+#[test]
+fn anthropic_preserves_upstream_tool_id_on_same_model_and_strips_across_models() {
+    let events = decode_all_anthropic(
+        &AnthropicMessagesProtocol,
+        &[
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01ABC","name":"read"}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"a\"}"}}"#,
+            r#"{"type":"content_block_stop","index":0}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#,
+            r#"{"type":"message_stop"}"#,
+        ],
+    );
+    let (part, call_id, provider_data) = events
+        .iter()
+        .find_map(|event| match event {
+            Event::ToolCallRequested {
+                part,
+                call,
+                provider_data,
+                ..
+            } => Some((*part, *call, provider_data.clone())),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(provider_data, Some(json!({"call_id": "toolu_01ABC"})));
+
+    let make_req = |served_model: &str, target_model: &str| CompletionRequest {
+        model: ModelRef::new(target_model),
+        system: None,
+        messages: vec![
+            Message::User {
+                id: MessageId::new(),
+                parts: vec![Part::Text {
+                    id: PartId::new(),
+                    text: "read a".into(),
+                }],
+            },
+            Message::Assistant {
+                id: MessageId::new(),
+                agent: AgentName::new("build"),
+                model: ModelRef::new(served_model),
+                parts: vec![Part::Tool {
+                    id: part,
+                    call_id,
+                    name: ToolName::new("read"),
+                    state: ToolPartState::Completed {
+                        input: json!({"path": "a"}),
+                        output: json!("hello"),
+                        time_ms: 1,
+                    },
+                    provider_data: provider_data.clone(),
+                }],
+                finish: Some(FinishReason::ToolCalls),
+                tokens: None,
+                last_round: None,
+                last_step_start: None,
+            },
+        ],
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+
+    let same = AnthropicMessagesProtocol
+        .encode(&make_req(
+            "claude-sonnet-4-5",
+            "anthropic/claude-sonnet-4-5#high",
+        ))
+        .unwrap();
+    assert_eq!(same["messages"][1]["content"][0]["id"], "toolu_01ABC");
+    assert_eq!(
+        same["messages"][2]["content"][0]["tool_use_id"],
+        "toolu_01ABC"
+    );
+
+    let cross = AnthropicMessagesProtocol
+        .encode(&make_req("claude-sonnet-4-5", "claude-opus-4-6"))
+        .unwrap();
+    assert_eq!(
+        cross["messages"][1]["content"][0]["id"],
+        call_id.to_string()
+    );
+    assert_eq!(
+        cross["messages"][2]["content"][0]["tool_use_id"],
+        call_id.to_string()
+    );
+}
+
+#[test]
+fn openai_chat_and_responses_preserve_upstream_call_id_and_strip_foreign_state() {
+    // OpenAI Chat captures upstream `id` and `extra_content.google.thought_signature`.
+    let chat_events = decode_all(
+        &OpenAiChatProtocol,
+        &[
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_chat_1","extra_content":{"google":{"thought_signature":"sig_xyz"}},"function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}"#,
+            "[DONE]",
+        ],
+    );
+    let (chat_call, chat_data) = chat_events
+        .iter()
+        .find_map(|event| match event {
+            Event::ToolCallRequested {
+                call,
+                provider_data,
+                ..
+            } => Some((*call, provider_data.clone())),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        chat_data,
+        Some(json!({"call_id": "call_chat_1", "google_thought_signature": "sig_xyz"}))
+    );
+
+    let mut chat_req = assistant_tool_request(json!({}));
+    chat_req.model = ModelRef::new("google/gemini-2.5-pro");
+    if let Message::Assistant { model, parts, .. } = &mut chat_req.messages[1] {
+        *model = ModelRef::new("gemini-2.5-pro");
+        if let Part::Tool {
+            call_id,
+            provider_data,
+            ..
+        } = &mut parts[1]
+        {
+            *call_id = chat_call;
+            *provider_data = chat_data.clone();
+        }
+    }
+    let chat_same = OpenAiChatProtocol.encode(&chat_req).unwrap();
+    assert_eq!(
+        chat_same["messages"][1]["tool_calls"][0]["id"],
+        "call_chat_1"
+    );
+    assert_eq!(
+        chat_same["messages"][1]["tool_calls"][0]["extra_content"]["google"]["thought_signature"],
+        "sig_xyz"
+    );
+    assert_eq!(chat_same["messages"][2]["tool_call_id"], "call_chat_1");
+
+    chat_req.model = ModelRef::new("openai/gpt-5");
+    let chat_cross = OpenAiChatProtocol.encode(&chat_req).unwrap();
+    assert_eq!(
+        chat_cross["messages"][1]["tool_calls"][0]["id"],
+        chat_call.to_string()
+    );
+    assert!(
+        chat_cross["messages"][1]["tool_calls"][0]
+            .get("extra_content")
+            .is_none()
+    );
+
+    // OpenAI Responses captures upstream `call_id` (not `fc_` id), replays same-model
+    // reasoning items, and strips foreign or cross-model reasoning and call IDs.
+    let resp_events = decode_with(
+        &OpenAiResponsesProtocol,
+        &[
+            r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_999","call_id":"call_resp_1","name":"read","arguments":"{}"}}"#,
+            r#"{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_999","call_id":"call_resp_1","name":"read","arguments":"{}"}}"#,
+            r#"{"type":"response.completed","response":{"status":"completed"}}"#,
+        ],
+    );
+    let (resp_call, resp_data) = resp_events
+        .iter()
+        .find_map(|event| match event {
+            Event::ToolCallRequested {
+                call,
+                provider_data,
+                ..
+            } => Some((*call, provider_data.clone())),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(resp_data, Some(json!({"call_id": "call_resp_1"})));
+
+    let make_resp_req =
+        |served_model: &str, target_model: &str, reasoning_data: serde_json::Value| {
+            CompletionRequest {
+                model: ModelRef::new(target_model),
+                system: None,
+                messages: vec![Message::Assistant {
+                    id: MessageId::new(),
+                    agent: AgentName::new("build"),
+                    model: ModelRef::new(served_model),
+                    parts: vec![
+                        Part::Reasoning {
+                            id: PartId::new(),
+                            text: "thought".into(),
+                            provider_data: Some(reasoning_data),
+                        },
+                        Part::Tool {
+                            id: PartId::new(),
+                            call_id: resp_call,
+                            name: ToolName::new("read"),
+                            state: ToolPartState::Completed {
+                                input: json!({}),
+                                output: json!("ok"),
+                                time_ms: 1,
+                            },
+                            provider_data: resp_data.clone(),
+                        },
+                    ],
+                    finish: None,
+                    tokens: None,
+                    last_round: None,
+                    last_step_start: None,
+                }],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: None,
+                reasoning: None,
+                headers: Default::default(),
+            }
+        };
+
+    let native_item = json!({"id": "rs_1", "type": "reasoning", "encrypted_content": "enc"});
+    let resp_same = OpenAiResponsesProtocol
+        .encode(&make_resp_req(
+            "gpt-5.6-sol",
+            "openai/gpt-5.6-sol#high",
+            native_item.clone(),
+        ))
+        .unwrap();
+    assert_eq!(resp_same["input"][0], native_item);
+    assert_eq!(resp_same["input"][1]["call_id"], "call_resp_1");
+    assert!(resp_same["input"][1].get("id").is_none());
+    assert_eq!(resp_same["input"][2]["call_id"], "call_resp_1");
+
+    let resp_cross = OpenAiResponsesProtocol
+        .encode(&make_resp_req("gpt-5.6-sol", "gpt-6-astra", native_item))
+        .unwrap();
+    assert!(
+        resp_cross["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item.get("type").and_then(|v| v.as_str()) != Some("reasoning"))
+    );
+    assert_eq!(resp_cross["input"][0]["call_id"], resp_call.to_string());
+
+    let resp_foreign = OpenAiResponsesProtocol
+        .encode(&make_resp_req(
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            json!({"type": "thinking", "signature": "sig"}),
+        ))
+        .unwrap();
+    assert!(
+        resp_foreign["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item.get("type").and_then(|v| v.as_str()) != Some("thinking"))
+    );
 }

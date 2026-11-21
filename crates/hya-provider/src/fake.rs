@@ -171,6 +171,7 @@ impl FakeProvider {
                         call,
                         name: tool,
                         input: input.clone(),
+                        provider_data: None,
                     });
                 }
                 FakeStep::Usage(usage) => merge_tokens(&mut tokens, *usage),

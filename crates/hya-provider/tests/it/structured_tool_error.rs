@@ -28,6 +28,7 @@ fn request(error_value: Value, message: &str) -> CompletionRequest {
                         message: message.to_string(),
                         value: Some(error_value),
                     },
+                    provider_data: None,
                 },
             ],
             finish: None,

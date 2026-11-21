@@ -14,6 +14,7 @@ mod responses;
 pub use decoder::OpenAiChatDecoder;
 pub use response_decoder::OpenAiResponsesDecoder;
 pub(crate) use responses::GrokBuildProtocol;
+pub(crate) use responses::encode_input_items_for_model;
 pub use responses::{
     COMPACT_CONTEXT_MARKER, OpenAiResponsesProtocol, RESPONSES_COMPACT_ITEMS_MARKER,
     encode_input_items, format_responses_compact_system, parse_responses_compact_items,
@@ -64,8 +65,9 @@ impl Protocol for OpenAiChatProtocol {
                         "content": user_content(parts)?,
                     }));
                 }
-                Message::Assistant { parts, .. } => {
-                    emit_assistant(&mut messages, parts, thinking, &images)?;
+                Message::Assistant { model, parts, .. } => {
+                    let same_model = hya_proto::context::same_model_id(model, &req.model);
+                    emit_assistant(&mut messages, parts, thinking, same_model, &images)?;
                 }
             }
         }
@@ -151,6 +153,7 @@ fn emit_assistant(
     out: &mut Vec<Value>,
     parts: &[Part],
     thinking: bool,
+    same_model: bool,
     images: &ToolImages<'_>,
 ) -> Result<(), ProviderError> {
     for parts in crate::wire::assistant_clusters(parts, replays_reasoning) {
@@ -173,7 +176,7 @@ fn emit_assistant(
             }
         }
         if !cluster.tools.is_empty() || !cluster.text.is_empty() || !cluster.reasoning.is_empty() {
-            flush_cluster(out, &cluster, thinking, images)?;
+            flush_cluster(out, &cluster, thinking, same_model, images)?;
         }
     }
     Ok(())
@@ -183,6 +186,7 @@ fn flush_cluster(
     out: &mut Vec<Value>,
     cluster: &Cluster<'_>,
     thinking: bool,
+    same_model: bool,
     images: &ToolImages<'_>,
 ) -> Result<(), ProviderError> {
     let content = if cluster.text.is_empty() && !thinking {
@@ -206,6 +210,7 @@ fn flush_cluster(
                 call_id,
                 name,
                 state,
+                provider_data,
                 ..
             } = p
             else {
@@ -217,11 +222,23 @@ fn flush_cluster(
             } else {
                 serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string())
             };
-            Some(json!({
-                "id": call_id.to_string(),
+            let wire_id =
+                crate::wire::wire_tool_call_id(call_id, provider_data.as_ref(), same_model);
+            let mut tc = json!({
+                "id": wire_id.as_ref(),
                 "type": "function",
                 "function": { "name": name.as_str(), "arguments": arguments },
-            }))
+            });
+            if same_model
+                && let Some(sig) = provider_data
+                    .as_ref()
+                    .and_then(|d| d.get("google_thought_signature"))
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+            {
+                tc["extra_content"] = json!({ "google": { "thought_signature": sig } });
+            }
+            Some(tc)
         })
         .collect();
     message["tool_calls"] = Value::Array(tool_calls);
@@ -231,17 +248,23 @@ fn flush_cluster(
     let mut shown = Vec::new();
     for &p in &cluster.tools {
         if let Part::Tool {
-            id, call_id, state, ..
+            id,
+            call_id,
+            state,
+            provider_data,
+            ..
         } = p
         {
+            let wire_id =
+                crate::wire::wire_tool_call_id(call_id, provider_data.as_ref(), same_model);
             let result = tool_result(id, state, images);
             out.push(
-                json!({"role": "tool", "tool_call_id": call_id.to_string(), "content": result.text}),
+                json!({"role": "tool", "tool_call_id": wire_id.as_ref(), "content": result.text}),
             );
             if !result.images.is_empty() {
                 shown.push(json!({
                     "type": "text",
-                    "text": format!("Image from the result of tool call {call_id}:"),
+                    "text": format!("Image from the result of tool call {wire_id}:"),
                 }));
             }
             for (mime, data) in result.images {

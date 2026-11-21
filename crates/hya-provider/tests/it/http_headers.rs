@@ -1336,12 +1336,14 @@ async fn responses_terminal_reasoning_replays_before_a_streamed_call() {
                 call,
                 name,
                 state,
+                provider_data,
                 ..
             } => Part::Tool {
                 id: *id,
                 call_id: *call,
                 name: name.clone(),
                 state: state.clone(),
+                provider_data: provider_data.clone(),
             },
         })
         .collect();
@@ -1381,11 +1383,11 @@ async fn responses_terminal_reasoning_replays_before_a_streamed_call() {
             reasoning,
             {
                 "type": "function_call",
-                "call_id": call.to_string(),
+                "call_id": "call_up",
                 "name": "read",
                 "arguments": "{\"path\":\"a.txt\"}"
             },
-            {"type": "function_call_output", "call_id": call.to_string(), "output": "contents"},
+            {"type": "function_call_output", "call_id": "call_up", "output": "contents"},
         ])
     );
 }
@@ -1655,6 +1657,7 @@ async fn http_provider_replays_completed_responses_reasoning_and_tool_round() {
                             output: json!("contents"),
                             time_ms: 3,
                         },
+                        provider_data: None,
                     },
                 ],
                 finish: Some(FinishReason::ToolCalls),
@@ -1862,6 +1865,7 @@ async fn http_provider_posts_signed_anthropic_thinking_before_tool_use() {
                             output: json!("ok"),
                             time_ms: 1,
                         },
+                        provider_data: None,
                     },
                 ],
                 finish: None,

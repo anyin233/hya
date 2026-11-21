@@ -520,6 +520,7 @@ impl Script {
                     call,
                     name: "read".into(),
                     input: serde_json::json!({ "path": word, "n": 1.5 }),
+                    provider_data: None,
                 },
                 1 => Event::ToolResult {
                     session,

@@ -233,6 +233,7 @@ async fn restore_is_derived_from_the_indexed_messages_noncompleted_tools() {
             call,
             name: ToolName::new(name),
             input: serde_json::json!({}),
+            provider_data: None,
         });
         if name == "completed" {
             events.push(Event::ToolResult {

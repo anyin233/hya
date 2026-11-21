@@ -61,6 +61,7 @@ fn crashed_log(open: SessionId, done: SessionId) -> Vec<(SessionId, Event)> {
                 call,
                 name: "bash".into(),
                 input: serde_json::json!({"command": "sleep 100"}),
+                provider_data: None,
             },
         ),
         (
@@ -228,6 +229,7 @@ async fn recovery_keeps_member_rows_whose_task_call_already_returned() {
             call: finished_call,
             name: "task".into(),
             input: serde_json::json!({"description": "a", "prompt": "a"}),
+            provider_data: None,
         },
         spawned(resident, finished_call),
         Event::MemberStatusChanged {
@@ -250,6 +252,7 @@ async fn recovery_keeps_member_rows_whose_task_call_already_returned() {
             call: open_call,
             name: "task".into(),
             input: serde_json::json!({"description": "b", "prompt": "b"}),
+            provider_data: None,
         },
         spawned(orphan, open_call),
     ];
