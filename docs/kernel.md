@@ -104,26 +104,27 @@ specific — what was replayed, whether images were attached — so a full-mode
 fallback model is judged by its own route, not by the requested model's. Full
 mode looks that route up on the engine's live provider router
 (`Harness::served_route`), since a route can be added mid-turn; bare mode uses
-the run's router. The
-previous round must have made tool calls and reported at least
-`MIN_DROPPED_REASONING_TOKENS` (1,000) reasoning tokens with a known split
-(`reasoning_unknown` false), and the current request must replay at least one
-reasoning part from that round: a part of the previous step that the serving
-route's `ReasoningReplayPolicy::replays` sends. Both rounds must report a
-non-zero prompt (`input + cache_read + cache_write`). The next prompt holds the
-previous one plus that round's output, reasoning included, so a drop is
-recorded when
+the run's router. The previous round must have made tool calls and reported at
+least `MIN_DROPPED_REASONING_TOKENS` (1,000) reasoning tokens with a known split
+(`reasoning_unknown` false), the serving route's `ReasoningReplayPolicy` must
+have `expands_next_prompt()` true (`ProviderData` and `ReasoningContent`), and
+the current request must replay at least one reasoning part from that round via
+`ReasoningReplayPolicy::replays`. Both rounds must report a non-zero prompt
+(`input + cache_read + cache_write`). The next prompt holds the previous one
+plus that round's output, reasoning included, so a drop is recorded when
 
 ```text
 curr.prompt < prev.prompt + prev.reasoning / 2
 ```
 
-The replay requirement keeps the check off routes that send no reasoning:
-Google and routes with `ReasoningReplayPolicy::None` replay nothing, and a
-chat route that reports reasoning tokens without streaming
-`reasoning_content` has no part to replay. Anthropic replays signed
-current-turn thinking but reports no thinking split (`reasoning_unknown`), so
-it is not checked either.
+Gating on `expands_next_prompt()` alongside `replays` keeps the check off
+routes that do not bill replayed reasoning back into `prompt`: routes with
+`ReasoningReplayPolicy::None` replay nothing, a chat route that reports
+reasoning tokens without streaming `reasoning_content` has no part to replay,
+`GoogleThought` routes replay compact encrypted `thoughtSignature` tokens
+without re-expanding `promptTokenCount` by prior `thoughtsTokenCount`, and
+`SignedCurrentTurn` (Anthropic) reports no thinking split
+(`reasoning_unknown`).
 
 A pair is not compared when either request legitimately changes or shortens
 earlier history:
