@@ -52,11 +52,47 @@ pub(crate) fn add_prompt_cache_breakpoints(body: &mut Value) {
 /// Anthropic Messages API request encoder + stream decoder factory.
 pub struct AnthropicMessagesProtocol;
 
+/// Anthropic's beta header for thinking block-binding controls.
+pub(crate) const THINKING_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
 /// Anthropic's minimum accepted `thinking.budget_tokens`.
 const MIN_THINKING_BUDGET: u32 = 1024;
 /// `max_tokens` when neither the request nor the model declares one, and the
 /// answer headroom added above a thinking budget.
 const DEFAULT_MAX_TOKENS: u32 = 4096;
+/// Default `max_tokens` floor used when adaptive thinking is requested and no
+/// caller or model output limit was specified.
+const ADAPTIVE_DEFAULT_MAX_TOKENS: u32 = 16_384;
+
+fn parse_claude_version(model_id: &str) -> Option<(u32, u32)> {
+    let bare =
+        hya_proto::context::bare_model_id(&hya_proto::ModelRef::new(model_id)).to_ascii_lowercase();
+    let tokens: Vec<&str> = bare
+        .split(['-', '.', '_', '@', ':'])
+        .filter(|s| !s.is_empty())
+        .collect();
+    let idx = tokens.iter().position(|t| *t == "claude")?;
+    let mut cursor = idx + 1;
+    while matches!(
+        tokens.get(cursor).copied(),
+        Some("opus" | "sonnet" | "haiku")
+    ) {
+        cursor += 1;
+    }
+    let major = tokens
+        .get(cursor)
+        .and_then(|t| t.parse::<u32>().ok())
+        .filter(|&v| (1..=99).contains(&v))?;
+    let minor = tokens
+        .get(cursor + 1)
+        .and_then(|t| t.parse::<u32>().ok())
+        .filter(|&v| v <= 99)
+        .unwrap_or(0);
+    Some((major, minor))
+}
+
+fn uses_anthropic_adaptive_thinking(model_id: &str) -> bool {
+    parse_claude_version(model_id).is_some_and(|version| version >= (4, 6))
+}
 
 impl Protocol for AnthropicMessagesProtocol {
     fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
@@ -73,20 +109,23 @@ impl Protocol for AnthropicMessagesProtocol {
         let mut messages: Vec<Value> = Vec::new();
         let last_message = req.messages.len().checked_sub(1);
         let turn_start = crate::current_turn_start(&req.messages);
+        let mut replayed_thinking = false;
         for (message_index, m) in req.messages.iter().enumerate() {
             match m {
                 Message::User { parts, .. } => {
                     push_coalesced(&mut messages, "user", user_content(parts)?)
                 }
-                Message::Assistant { model, parts, .. } => emit_assistant(
-                    &mut messages,
-                    turn_start,
-                    message_index,
-                    parts,
-                    Some(message_index) == last_message,
-                    hya_proto::context::same_model_id(model, &req.model),
-                    &images,
-                )?,
+                Message::Assistant { model, parts, .. } => {
+                    replayed_thinking |= emit_assistant(
+                        &mut messages,
+                        turn_start,
+                        message_index,
+                        parts,
+                        Some(message_index) == last_message,
+                        hya_proto::context::same_model_id(model, &req.model),
+                        &images,
+                    )?;
+                }
                 // Mid-conversation system text is where compaction summaries
                 // live. The Messages API has no system role inside `messages`,
                 // and folding it into the top-level `system` field would
@@ -115,11 +154,37 @@ impl Protocol for AnthropicMessagesProtocol {
             "messages": messages,
             "stream": true,
         });
-        let budget = req.reasoning.and_then(|e| e.anthropic_budget());
-        let (max_tokens, budget) = resolve_max_tokens(req.max_output_tokens, output_limit, budget);
-        if let Some(budget) = budget {
-            body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
-        }
+        let max_tokens = if uses_anthropic_adaptive_thinking(req.model.as_str()) {
+            if let Some(effort) = req.reasoning.and_then(ReasoningEffort::anthropic_effort) {
+                let mut thinking = json!({
+                    "type": "adaptive",
+                    "display": "summarized",
+                });
+                if replayed_thinking {
+                    thinking["block_binding"] = json!({
+                        "prefix_mismatch_behavior": "drop_block"
+                    });
+                }
+                body["thinking"] = thinking;
+                body["output_config"] = json!({ "effort": effort });
+                let fallback_or_requested = req.max_output_tokens.or(Some(
+                    output_limit
+                        .filter(|limit| *limit > 0)
+                        .unwrap_or(ADAPTIVE_DEFAULT_MAX_TOKENS),
+                ));
+                resolve_max_tokens(fallback_or_requested, output_limit, None).0
+            } else {
+                resolve_max_tokens(req.max_output_tokens, output_limit, None).0
+            }
+        } else {
+            let budget = req.reasoning.and_then(|e| e.anthropic_budget());
+            let (max_tokens, budget) =
+                resolve_max_tokens(req.max_output_tokens, output_limit, budget);
+            if let Some(budget) = budget {
+                body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
+            }
+            max_tokens
+        };
         body["max_tokens"] = json!(max_tokens);
         if let Some(system) = &req.system {
             body["system"] = json!(system);
@@ -227,7 +292,7 @@ fn emit_assistant(
     is_final_message: bool,
     same_model: bool,
     images: &ToolImages<'_>,
-) -> Result<(), ProviderError> {
+) -> Result<bool, ProviderError> {
     let mut clusters: Vec<(Vec<Value>, String, Vec<&Part>)> = Vec::new();
     for parts in crate::wire::assistant_clusters(parts, |_| true) {
         let mut reasoning = Vec::new();
@@ -240,11 +305,13 @@ fn emit_assistant(
                     provider_data,
                     ..
                 } => {
-                    if crate::ReasoningReplayPolicy::SignedCurrentTurn.replays(
-                        turn_start,
-                        message_index,
-                        part,
-                    ) && let Some(data) = provider_data
+                    if same_model
+                        && crate::ReasoningReplayPolicy::SignedCurrentTurn.replays(
+                            turn_start,
+                            message_index,
+                            part,
+                        )
+                        && let Some(data) = provider_data
                     {
                         match (
                             data.get("type").and_then(Value::as_str),
@@ -293,7 +360,11 @@ fn emit_assistant(
             clusters[last - 1].1.push_str(&trailing);
         }
     }
+    let mut replayed_thinking = false;
     for (reasoning, text, tools) in clusters {
+        if !reasoning.is_empty() {
+            replayed_thinking = true;
+        }
         if tools.is_empty() {
             let mut content = reasoning;
             if !text.is_empty() {
@@ -306,7 +377,7 @@ fn emit_assistant(
             flush_cluster(out, &reasoning, &text, &tools, same_model, images)?;
         }
     }
-    Ok(())
+    Ok(replayed_thinking)
 }
 
 fn flush_cluster(

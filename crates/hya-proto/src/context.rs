@@ -127,14 +127,43 @@ pub enum ReasoningReplayPolicy {
     GoogleThought,
 }
 
+/// Whether `text` is an ephemeral harness notice rendered as a trailing
+/// `Message::User` inside an active turn (headless clock/deadline/continuation
+/// notices, goal checkpoints, or dropped-reasoning notices). These notices
+/// belong to the active turn and must not advance [`current_turn_start`].
+#[must_use]
+pub fn is_harness_transient_notice_text(text: &str) -> bool {
+    text.starts_with("[hya] Reasoning replay notice:")
+        || text.starts_with("[hya] Goal checkpoint:")
+        || text.starts_with("[hya] Completion check, sent once before this run ends.")
+        || text.starts_with("[hya] Your last turn ended with thinking only:")
+        || text.strip_prefix("HEADLESS RUN — ").is_some_and(|rest| {
+            ["TIME: ", "FINAL ", "clock: "]
+                .iter()
+                .any(|kind| rest.starts_with(kind))
+        })
+}
+
 /// Index of the latest user message that carries text: assistant messages
 /// after it form the current turn. Compute once per transcript and pass it to
 /// [`ReasoningReplayPolicy::replays`].
 #[must_use]
 pub fn current_turn_start(messages: &[Message]) -> Option<usize> {
     messages.iter().rposition(|message| {
-        matches!(message, Message::User { parts, .. }
-            if parts.iter().any(|part| matches!(part, Part::Text { text, .. } if !text.is_empty())))
+        let Message::User { parts, .. } = message else {
+            return false;
+        };
+        let mut non_empty = false;
+        let mut combined = String::new();
+        for part in parts {
+            if let Part::Text { text, .. } = part
+                && !text.is_empty()
+            {
+                non_empty = true;
+                combined.push_str(text);
+            }
+        }
+        non_empty && !is_harness_transient_notice_text(&combined)
     })
 }
 
@@ -353,10 +382,54 @@ fn attached_images(output: &Value) -> impl Iterator<Item = (usize, &str, &str)> 
 mod tests {
     use super::{
         GOOGLE_TEXT_SIGNATURE_TYPE, GOOGLE_THOUGHT_TYPE, ReasoningReplayPolicy, bare_model_id,
-        same_model_id,
+        current_turn_start, is_harness_transient_notice_text, same_model_id,
     };
-    use crate::{ModelRef, Part, PartId};
+    use crate::{Message, MessageId, ModelRef, Part, PartId};
     use serde_json::json;
+
+    #[test]
+    fn current_turn_start_skips_trailing_harness_transient_notices() {
+        let user_msg = |text: &str| Message::User {
+            id: MessageId::new(),
+            parts: vec![Part::Text {
+                id: PartId::new(),
+                text: text.to_string(),
+            }],
+        };
+        let asst_msg = Message::Assistant {
+            id: MessageId::new(),
+            agent: crate::AgentName::new("build"),
+            model: ModelRef::new("claude-opus-4-7"),
+            parts: Vec::new(),
+            finish: None,
+            tokens: None,
+            last_round: None,
+            last_step_start: None,
+        };
+        let notices = [
+            "HEADLESS RUN — clock: 360s of 3600s used, 3240s left.",
+            "HEADLESS RUN — TIME: 10s left.",
+            "HEADLESS RUN — FINAL turn.",
+            "[hya] Completion check, sent once before this run ends.\n1. Re-read.",
+            "[hya] Your last turn ended with thinking only: continue.",
+            "[hya] Reasoning replay notice: endpoint dropped prior step reasoning.",
+            "[hya] Goal checkpoint: summarize progress.",
+        ];
+        for notice in notices {
+            assert!(is_harness_transient_notice_text(notice), "{notice}");
+            let transcript = vec![user_msg("real prompt"), asst_msg.clone(), user_msg(notice)];
+            assert_eq!(current_turn_start(&transcript), Some(0), "{notice}");
+        }
+        assert!(!is_harness_transient_notice_text("new user prompt"));
+        let multi_turn = vec![
+            user_msg("first turn"),
+            asst_msg.clone(),
+            user_msg("second real turn"),
+            asst_msg,
+            user_msg("HEADLESS RUN — clock: 60s"),
+        ];
+        assert_eq!(current_turn_start(&multi_turn), Some(2));
+    }
 
     #[test]
     fn google_thought_replay_and_prompt_expansion_contracts() {

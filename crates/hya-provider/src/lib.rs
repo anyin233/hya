@@ -326,6 +326,19 @@ impl ReasoningEffort {
         }
     }
 
+    /// Anthropic `output_config.effort` label for adaptive-thinking Claude models.
+    #[must_use]
+    pub fn anthropic_effort(self) -> Option<&'static str> {
+        match self {
+            Self::Off => None,
+            Self::Minimal | Self::Low => Some("low"),
+            Self::Medium => Some("medium"),
+            Self::High => Some("high"),
+            Self::XHigh => Some("xhigh"),
+            Self::Max => Some("max"),
+        }
+    }
+
     /// Google `thinkingBudget` when effort is high enough; `Max` scales by model id.
     #[must_use]
     pub fn google_budget(self, model_id: &str) -> Option<u32> {
@@ -421,6 +434,14 @@ mod reasoning_effort_tests {
         assert_eq!(R::Max.anthropic_budget(), Some(31999));
         assert_eq!(R::Minimal.anthropic_budget(), None);
         assert_eq!(R::Off.anthropic_budget(), None);
+
+        assert_eq!(R::Off.anthropic_effort(), None);
+        assert_eq!(R::Minimal.anthropic_effort(), Some("low"));
+        assert_eq!(R::Low.anthropic_effort(), Some("low"));
+        assert_eq!(R::Medium.anthropic_effort(), Some("medium"));
+        assert_eq!(R::High.anthropic_effort(), Some("high"));
+        assert_eq!(R::XHigh.anthropic_effort(), Some("xhigh"));
+        assert_eq!(R::Max.anthropic_effort(), Some("max"));
     }
 
     #[test]

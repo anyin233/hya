@@ -653,34 +653,53 @@ Responses kinds that support compact expose `POST {base}/responses/compact` via
 [`anthropic.rs`](../../crates/hya-provider/src/anthropic.rs) encodes requests
 for Anthropic Messages:
 
-- system prompt is placed only in the top-level `system` field
-- **`Message::System` rows in the message history are dropped** — they never
-  become wire messages; only `CompletionRequest.system` reaches Anthropic
-- tools use Anthropic `input_schema`
+- top-level system prompt is placed in `system`
+- mid-conversation `Message::System` rows (compaction summaries and notices)
+  are encoded as coalesced `user` text at the position they were injected so
+  the top-level `system` prompt-cache prefix stays stable
+- tools use Anthropic `input_schema`; decoded `tool_use.id` (`provider_data.call_id`)
+  is replayed in both `tool_use.id` and `tool_result.tool_use_id` on same-model turns
 - assistant `tool_use` blocks are paired with following user `tool_result`
   blocks
 - `stop_reason: tool_use` maps to `FinishReason::ToolCalls`
 - `stop_reason: max_tokens` maps to `FinishReason::Length`
 
-### `max_tokens` and thinking budget
+### Adaptive thinking, `max_tokens`, and thinking budget
 
 The encoder always emits `{ model, messages, stream: true, max_tokens }` (plus
-optional `system`, `tools`, `thinking`).
+optional `system`, `tools`, `thinking`, `output_config`).
 
-- When the model has a known output limit, the route has already set
-  `CompletionRequest.max_output_tokens` to it (or clamped an explicit value);
-  see [Per-model limits](#per-model-limits).
-- When `max_output_tokens` is still absent (no known limit), **`max_tokens`
-  defaults to 4096**, which caps output length on Anthropic routes.
-- When a thinking budget is set from reasoning effort
-  (`reasoning.anthropic_budget()`), the body includes
-  `thinking: { type: "enabled", budget_tokens: <budget> }`, and `max_tokens` is
-  raised to `budget + 4096` if the current value would not already exceed the
-  budget (`max_tokens <= budget`).
-- A known limit caps that raise. If the capped `max_tokens` cannot exceed the
-  budget, the budget shrinks to `max(max_tokens - 4096, max_tokens / 2)`; if the
-  result is below Anthropic's 1024-token minimum, `thinking` is omitted. The
-  body therefore always satisfies `budget_tokens < max_tokens <= limit`.
+- **Adaptive thinking (Claude 4.6 / 4.7 / 4.8 / 5.x+)**: models whose parsed
+  Claude version is `>= (4, 6)` never receive `budget_tokens`. When reasoning
+  effort is non-`Off`:
+  - `thinking` is encoded as
+    `{"type": "adaptive", "display": "summarized"}`
+  - `output_config` is encoded as
+    `{"effort": "low" | "medium" | "high" | "xhigh" | "max"}` (`Minimal` maps
+    to `"low"`)
+  - if any current-turn signed `thinking` or `redacted_thinking` block is
+    replayed in `messages`, `thinking.block_binding` is set to
+    `{"prefix_mismatch_behavior": "drop_block"}` and `HttpProvider` merges the
+    beta token `thinking-binding-controls-2026-08-01` into the `anthropic-beta`
+    request header (deduplicated, preserving caller beta tokens)
+  - `max_tokens` uses the explicit request limit, else the model's known
+    output limit, else **16384** (`ADAPTIVE_DEFAULT_MAX_TOKENS`), clamped to any
+    known model output limit
+- **Extended-thinking budget (Claude <= 4.5 and non-Claude compatible models)**:
+  - When the model has a known output limit, the route has already set
+    `CompletionRequest.max_output_tokens` to it (or clamped an explicit value);
+    see [Per-model limits](#per-model-limits).
+  - When `max_output_tokens` is still absent (no known limit), **`max_tokens`
+    defaults to 4096**, which caps output length on Anthropic routes.
+  - When a thinking budget is set from reasoning effort
+    (`reasoning.anthropic_budget()`), the body includes
+    `thinking: { type: "enabled", budget_tokens: <budget> }`, and `max_tokens`
+    is raised to `budget + 4096` if the current value would not already exceed
+    the budget (`max_tokens <= budget`).
+  - A known limit caps that raise. If the capped `max_tokens` cannot exceed the
+    budget, the budget shrinks to `max(max_tokens - 4096, max_tokens / 2)`; if
+    the result is below Anthropic's 1024-token minimum, `thinking` is omitted.
+    The body therefore always satisfies `budget_tokens < max_tokens <= limit`.
 
 ### Media
 
@@ -691,18 +710,23 @@ encode with
 `ProviderError::Incompatible("Anthropic messages does not support assistant media type <mime>")`.
 
 Like the OpenAI decoder, the Anthropic decoder converts provider-specific
-stream events into the same hya event variants.
+stream events into the same hya event variants, concatenates chunked
+`signature_delta` fragments onto the active thinking block, and logs a warning if
+`input_transformations` reports dropped thinking blocks.
 
 Anthropic thinking blocks are preserved for replay through the canonical
 `Part::Reasoning.provider_data` envelope. A signed block stores
 `{"type":"thinking","signature":"..."}` at `ReasoningEnd`; a redacted block
 stores `{"type":"redacted_thinking","data":"..."}` and emits no readable
-reasoning delta. During encoding, only reasoning after the latest user message
-containing text is replayed, and only these envelopes are accepted. Replayed
-thinking blocks precede text and `tool_use` blocks in each assistant cluster.
-Legacy histories that place final text after tool calls fold that text back before
-the tool calls in the final assistant cluster to avoid Anthropic treating the
-request as an assistant prefill.
+reasoning delta. During encoding, only signed reasoning belonging to the active
+assistant turn after the latest real user message (`current_turn_start` skips
+trailing harness transient notices rendered as `Message::User`, such as bare
+clock/deadline/continuation/goal/dropped-reasoning notices) and produced by the
+same normalized model (`same_model_id`) is replayed, and only these envelopes
+are accepted. Replayed thinking blocks precede text and `tool_use` blocks in
+each assistant cluster. Legacy histories that place final text after tool calls
+fold that text back before the tool calls in the final assistant cluster to
+avoid Anthropic treating the request as an assistant prefill.
 
 ## Google Protocol
 
