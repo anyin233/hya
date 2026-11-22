@@ -1064,9 +1064,9 @@ restore prompt for the next start.
 | Signal during the run | What happens | `cause` | Exit status |
 | --- | --- | --- | --- |
 | SIGINT (Ctrl-C) | Drain: every in-flight turn in every session is cancelled and closed; the transcript/trajectory is still printed | `user_cancel` | **130** |
-| second SIGINT while draining | Exit immediately after emitting one store durability status line on stderr; the next start's crash recovery closes what is left (`cause: interrupted`) | — | **130** |
+| second SIGINT while draining | Join yielded Bash jobs, then emit one store durability status line on stderr and exit. The next start's crash recovery closes what is left (`cause: interrupted`) | — | **130** |
 | SIGTERM | Drain as above | `shutdown` | **143** |
-| first SIGINT / SIGTERM during store exit drain or `--json` final replay | Stop waiting on the drain, emit the single store durability status line on stderr, flush stdout, and exit with that signal's code | — | **130** / **143** |
+| first SIGINT / SIGTERM during store exit drain or `--json` final replay | Join yielded Bash jobs, emit the current store durability status on stderr, flush stdout, and exit with that signal's code | — | **130** / **143** |
 
 The turn drain waits at most **5 s** (`DRAIN_DEADLINE`) for cancelled turns to
 close themselves, then closes any still-open message itself; store exit drain
