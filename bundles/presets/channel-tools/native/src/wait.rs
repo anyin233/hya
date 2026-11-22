@@ -1,5 +1,5 @@
 //! The `wait` tool: block until subagents finish — report or are archived; idle never counts — or new mail for the caller arrives (harness mail included; each message is returned once and marked read); overrides the extended-tools `wait` via `overrides: hya/extended-tools` in this family's exposure policy.
-use hya_tool::{Tool, ToolCtx, ToolError, WaitSpec, wait_tool_schema};
+use hya_tool::{Tool, ToolCtx, ToolError, ToolResultPolicy, WaitSpec, wait_tool_schema};
 use serde_json::Value;
 
 /// Wake on mail too.
@@ -16,6 +16,10 @@ impl Tool for WaitTool {
 
     fn schema(&self) -> hya_proto::ToolSchema {
         wait_tool_schema(WAKE_ON_MAIL)
+    }
+
+    fn result_policy(&self) -> ToolResultPolicy {
+        ToolResultPolicy::SelfBudgeted
     }
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
