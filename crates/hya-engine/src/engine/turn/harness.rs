@@ -209,8 +209,10 @@ impl SessionEngine {
             offered: Vec::new(),
             permit: None,
             retries: 0,
-            empty_turns: 0,
+            serving_model: None,
+            workflow_candidate: None,
             reasoning_tokens: None,
+            empty_turns: 0,
             output_tokens: None,
             last_finish: None,
             total_tokens: None,
@@ -279,8 +281,10 @@ struct TurnHarness<'a> {
     permit: Option<OwnedSemaphorePermit>,
     /// Retries of the current round.
     retries: usize,
-    empty_turns: usize,
+    serving_model: Option<ModelRef>,
+    workflow_candidate: Option<usize>,
     reasoning_tokens: Option<u64>,
+    empty_turns: usize,
     output_tokens: Option<u64>,
     last_finish: Option<FinishReason>,
     total_tokens: Option<TokenUsage>,
@@ -586,12 +590,21 @@ impl Harness for TurnHarness<'_> {
             root_session_cache: &mut self.root_session_cache,
         };
         let open = async {
-            match workflow_route {
-                Some(route) => match engine
-                    .stream_with_workflow_route(request, session, message, route)
+            match (workflow_route, self.serving_model.as_ref()) {
+                (Some(route), _) => match engine
+                    .stream_with_workflow_route(
+                        request,
+                        session,
+                        message,
+                        route,
+                        self.workflow_candidate,
+                    )
                     .await
                 {
-                    Ok(opened) => Ok(opened),
+                    Ok((stream, index)) => {
+                        self.workflow_candidate = Some(index);
+                        Ok::<_, CoreError>((stream, route.route().candidates[index].model.clone()))
+                    }
                     Err(error) => {
                         route
                             .finalize(Some(workflow_provider_failure_class(&error)))
@@ -599,7 +612,13 @@ impl Harness for TurnHarness<'_> {
                         Err(error.into())
                     }
                 },
-                None => Ok(engine
+                (None, Some(model)) => Ok((
+                    engine
+                        .stream_model_candidate(request, model, session, message)
+                        .await?,
+                    model.clone(),
+                )),
+                (None, None) => Ok(engine
                     .stream_with_model_fallback(request, session, message, lineage)
                     .await?),
             }
@@ -607,15 +626,21 @@ impl Harness for TurnHarness<'_> {
         tokio::select! {
             biased;
             () = cancel.cancelled() => Ok(None),
-            opened = open => opened.map(Some),
+            opened = open => {
+                let (stream, model) = opened?;
+                self.serving_model = Some(model.clone());
+                Ok(Some((stream, model)))
+            },
         }
     }
 
     async fn failed(&mut self, failure: &Failure) -> Result<bool, CoreError> {
         // Workflow opens have already finalized on error in open().
-        if self.workflow_route.is_some() && !failure.step_started {
+        if !failure.step_started && self.workflow_route.is_some() {
             return Ok(false);
         }
+        // Before the first successful open there is no pin. A failed reopen
+        // during recovery still belongs to the model that served the stream.
         let deadline = hya_tool::deadline::current();
         if let Some(&wait) = kernel::ROUND_RETRY_WAITS.get(self.retries)
             && !failure.saw_tool_call
@@ -685,6 +710,8 @@ impl Harness for TurnHarness<'_> {
         if let Some(route) = self.workflow_route {
             route.finalize(None).await?;
         }
+        self.serving_model = None;
+        self.workflow_candidate = None;
         self.reasoning_tokens = round.tokens.map(|tokens| tokens.reasoning);
         self.last_finish = Some(round.finish);
         self.output_tokens = round.tokens.map(|tokens| tokens.output);

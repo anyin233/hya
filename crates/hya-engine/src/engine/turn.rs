@@ -25,6 +25,8 @@ use crate::{AgentResourcePolicy, TurnBinding};
 mod harness;
 pub(super) mod messages;
 pub(super) mod rewrite_host;
+#[cfg(test)]
+mod route_retry_test;
 mod tool_gate;
 
 pub use messages::advertise_tool;
@@ -415,17 +417,18 @@ impl SessionEngine {
     ///
     /// The route remains request-local. Only pre-stream retryable failures can
     /// advance it, and a returned stream is never replayed on another model.
-    /// Returns the stream with the selected candidate's model.
+    /// Returns the stream with the selected candidate's index.
     async fn stream_with_workflow_route(
         &self,
         request: &CompletionRequest,
         session: SessionId,
         message: MessageId,
         route: &WorkflowTurnRoute,
-    ) -> Result<(EventStream, ModelRef), ProviderError> {
+        pinned: Option<usize>,
+    ) -> Result<(EventStream, usize), ProviderError> {
         let candidates = &route.route().candidates;
         let mut pending_failure = None;
-        for index in route.route().selected_index..candidates.len() {
+        for index in pinned.unwrap_or(route.route().selected_index)..candidates.len() {
             let candidate = &candidates[index];
             route.begin_attempt(index);
             let mut attempt = request.clone();
@@ -438,14 +441,17 @@ impl SessionEngine {
                 .await
             {
                 Ok(stream) => {
-                    route.selected(index, pending_failure);
-                    return Ok((stream, candidate.model.clone()));
+                    if pinned.is_none() {
+                        route.selected(index, pending_failure);
+                    }
+                    return Ok((stream, index));
                 }
                 Err(error) => {
                     let failure = workflow_provider_failure_class(&error);
                     pending_failure = Some(failure);
                     let advance = (error.is_retryable_before_stream()
                         || matches!(error, ProviderError::UnknownModel(_)))
+                        && pinned.is_none()
                         && index + 1 < candidates.len();
                     route.record_failure(index, failure);
                     if !advance {

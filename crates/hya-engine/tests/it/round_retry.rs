@@ -445,6 +445,48 @@ async fn terminal_failure_after_retry_closes_once() {
 }
 
 #[tokio::test]
+async fn retry_exhaustion_closes_once() -> Result<(), Box<dyn std::error::Error>> {
+    let attempts = kernel::ROUND_RETRY_WAITS.len() + 1;
+    let (engine, agent, session, opens) =
+        fixture(vec![vec![Item::Reasoning, Item::Interrupted]; attempts]).await;
+    let mut events = engine.bus().subscribe();
+    let worker = tokio::spawn({
+        let engine = engine.clone();
+        async move {
+            engine
+                .run_turn(session, &agent, CancellationToken::new())
+                .await
+        }
+    });
+    for wait in kernel::ROUND_RETRY_WAITS {
+        while !matches!(events.recv().await?.event, Event::PartDeleted { .. }) {}
+        tokio::time::pause();
+        tokio::time::advance(wait + Duration::from_millis(1)).await;
+        tokio::time::resume();
+    }
+    assert!(
+        matches!(worker.await?, Err(CoreError::Provider(ref error)) if matches!(error.as_ref(), ProviderError::StreamInterrupted(_)))
+    );
+    assert_eq!(*opens.lock().unwrap_or_else(|e| e.into_inner()), attempts);
+    let events = engine.store().replay(session).await?;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(
+                e.event,
+                Event::MessageFinished {
+                    role: hya_proto::Role::Assistant,
+                    finish: FinishReason::Error,
+                    ..
+                }
+            ))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn cancellation_during_backoff_is_prompt() -> Result<(), Box<dyn std::error::Error>> {
     let (engine, agent, session, opens) = fixture(vec![
         vec![Item::Reasoning, Item::Error],

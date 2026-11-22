@@ -220,7 +220,7 @@ installs a plane mapping each preferred `ModelRef` to its ordered candidate
 chain, populated from configured `categories:` entries when the app runtime
 builds the engine. Members resolved onto a category candidate — including a
 servability pick that is not the configured preference — carry the forward
-suffix of their chain. Cancelling the retry wait ends the turn as cancelled.
+suffix of their chain. If a serving stream fails before a tool request, its retry uses the same model. Billed usage remains attributed to the serving model for each attempt. Cancelling the retry wait ends the turn as cancelled.
 
 **When it advances.** Only while no `EventStream` exists. If the preferred
 model fails with an error classified by `is_retryable_before_stream()`, or no
