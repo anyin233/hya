@@ -72,6 +72,7 @@ impl StopSignals {
             _ = self.interrupt.recv() => {
                 eprintln!("hya: interrupted again; exiting without finishing the drain");
                 let _ = std::io::stdout().flush();
+                hya_tool::deadline::shutdown_background_jobs().await;
                 store.drain_and_report_exit(Duration::ZERO).await;
                 std::process::exit(StopSignal::Interrupt.exit_code());
             }
@@ -94,6 +95,7 @@ impl StopSignals {
                     eprintln!("hya: interrupted again; exiting without finishing the drain");
                 }
                 let _ = std::io::stdout().flush();
+                hya_tool::deadline::shutdown_background_jobs().await;
                 store.drain_and_report_exit(Duration::ZERO).await;
                 exit_stopped(sig);
             }

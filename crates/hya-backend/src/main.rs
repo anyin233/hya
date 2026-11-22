@@ -277,6 +277,7 @@ async fn cmd_exec(
             .context("run turn")
         })
         .await;
+        hya_tool::deadline::shutdown_background_jobs().await;
         // End of the run: nothing may keep streaming after `exec` returns. Every
         // other in-flight member turn is drained before the trajectory is flushed, so stdout and the log end
         // on terminal events.

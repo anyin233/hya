@@ -15,17 +15,14 @@ const ROOT: &str = "You are hya";
 /// Every harness notice opens with this; the hya-main prompt names `HEADLESS RUN` bare.
 const NOTICE: &str = "HEADLESS RUN —";
 
-/// Run `hya exec --json [extra..] prompt` direct (its own db, so it does not
-/// route to the env's `serve`) with the env's config and FakeLlm.
-async fn run_exec(env: &E2eEnv, extra: &[&str], prompt: &str) -> Output {
+/// Use the fixture's config and FakeLlm with a separate database so exec runs in process.
+fn exec_command(env: &E2eEnv) -> tokio::process::Command {
     let backend = &env.backend;
     let root = backend.project.parent().expect("e2e root");
-    let run = tokio::process::Command::new(&backend.binary)
-        .args(["--yolo", "--model", "fake/model", "--db"])
+    let mut cmd = tokio::process::Command::new(&backend.binary);
+    cmd.args(["--yolo", "--model", "fake/model", "--db"])
         .arg(root.join("exec.db"))
-        .args(["exec", "--json"])
-        .args(extra)
-        .arg(prompt)
+        .arg("exec")
         .current_dir(&backend.project)
         .env("HOME", root.join("home"))
         .env("XDG_CONFIG_HOME", &backend.xdg_config_home)
@@ -33,12 +30,22 @@ async fn run_exec(env: &E2eEnv, extra: &[&str], prompt: &str) -> Output {
         .env("XDG_STATE_HOME", root.join("state"))
         .env("XDG_CACHE_HOME", root.join("cache"))
         .env_remove("HYA_MODEL")
-        .kill_on_drop(true)
-        .output();
-    tokio::time::timeout(Duration::from_secs(90), run)
-        .await
-        .expect("exec finished within 90 s")
-        .expect("spawn hya exec")
+        .kill_on_drop(true);
+    cmd
+}
+
+async fn run_exec(env: &E2eEnv, extra: &[&str], prompt: &str) -> Output {
+    tokio::time::timeout(
+        Duration::from_secs(90),
+        exec_command(env)
+            .arg("--json")
+            .args(extra)
+            .arg(prompt)
+            .output(),
+    )
+    .await
+    .expect("exec finished within 90 s")
+    .expect("spawn hya exec")
 }
 
 async fn run_lead(script: Vec<ScriptStep>, extra: &[&str]) -> (E2eEnv, Output, Vec<String>) {
@@ -482,6 +489,83 @@ fn assert_stopped_sleep(
         std::io::Error::last_os_error().raw_os_error(),
         Some(libc::ESRCH)
     );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn sigterm_during_post_turn_store_drain_joins_yielded_bash()
+-> Result<(), Box<dyn std::error::Error>> {
+    use sqlx::Connection as _;
+    use tokio::io::{AsyncBufReadExt as _, BufReader};
+    for bare in [false, true] {
+        let env = E2eEnvBuilder::new()
+            .scripts(vec![
+                tool_step(
+                    "bash",
+                    json!({"command":"echo $$ > sleep.pid; exec sleep 60","timeout":1}),
+                ),
+                bash("touch ready; while [ ! -e release ]; do sleep .05; done"),
+                text_step("DRAIN_ANSWER"),
+                text_step("DRAIN_ANSWER"),
+            ])
+            .build()
+            .await?;
+        let project = &env.backend.project;
+        let root = project.parent().ok_or("missing test root")?;
+        let tmp = root.join("jobs");
+        std::fs::create_dir(&tmp)?;
+        let mut cmd = exec_command(&env);
+        if bare {
+            cmd.arg("--bare");
+        }
+        let mut child = cmd
+            .args(["--time-budget", "180", "run Bash"])
+            .env("TMPDIR", &tmp)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+        let pid = i32::try_from(child.id().ok_or("missing exec PID")?)?;
+        let mut stdout = BufReader::new(child.stdout.take().ok_or("missing stdout")?).lines();
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while !project.join("ready").exists() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await?;
+        // Pending appends hold exec in its exit drain after the final transcript prints.
+        let options = sqlx::sqlite::SqliteConnectOptions::new().filename(root.join("exec.db"));
+        let mut db = sqlx::SqliteConnection::connect_with(&options).await?;
+        sqlx::query("BEGIN EXCLUSIVE").execute(&mut db).await?;
+        std::fs::write(project.join("release"), b"")?;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while let Some(line) = stdout.next_line().await? {
+                if line.contains("DRAIN_ANSWER") {
+                    return Ok::<(), std::io::Error>(());
+                }
+            }
+            Err(std::io::Error::other(
+                "exec exited before the post-turn transcript",
+            ))
+        })
+        .await??;
+        assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
+        let output =
+            tokio::time::timeout(Duration::from_secs(10), child.wait_with_output()).await??;
+        assert_eq!(
+            output.status.code(),
+            Some(143),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let jobs: Vec<_> = std::fs::read_dir(&tmp)?.collect::<Result<_, _>>()?;
+        let jobs: Vec<_> = jobs
+            .iter()
+            .filter(|e| e.file_name().as_encoded_bytes().starts_with(b"hya-bash-"))
+            .collect();
+        assert_eq!(jobs.len(), 1);
+        assert_stopped_sleep(&env, &jobs[0].path().join("exit_code"))?;
+    }
     Ok(())
 }
 
