@@ -40,7 +40,7 @@ enum Outcome {
     /// Stream text, report `usage`, finish with stop.
     Text(TokenUsage),
     /// Deliver the provider's usage frame, then fail mid-stream.
-    UsageThenError(TokenUsage),
+    UsageThenError(TokenUsage, ProviderError),
     /// Cancel the turn and never finish the stream.
     CancelAndHang(CancellationToken),
 }
@@ -118,7 +118,7 @@ impl Provider for UsageProvider {
                 session,
                 message,
             ))),
-            Outcome::UsageThenError(usage) => Ok(Box::pin(stream::iter([
+            Outcome::UsageThenError(usage, error) => Ok(Box::pin(stream::iter([
                 Ok(Event::MessageFinished {
                     session,
                     message,
@@ -127,7 +127,7 @@ impl Provider for UsageProvider {
                     tokens: Some(usage),
                     cause: None,
                 }),
-                Err(ProviderError::Decode("invalid usage frame".to_string())),
+                Err(error),
             ]))),
             Outcome::CancelAndHang(cancel) => {
                 cancel.cancel();
@@ -323,6 +323,55 @@ async fn rounds_on_different_models_record_the_serving_model_per_round() {
 }
 
 #[tokio::test]
+async fn billed_retry_stays_on_the_fallback_model() -> Result<(), hya_engine::CoreError> {
+    let a = ModelRef::new("model-a");
+    let b = ModelRef::new("model-b");
+    let first = usage(40, 9, Some(4));
+    let next = usage(20, 6, Some(1));
+    let fixture = fixture(
+        |_| {
+            vec![
+                UsageProvider::new(
+                    "model-a",
+                    vec![Outcome::PreStreamFailure, Outcome::Text(next)],
+                ),
+                UsageProvider::new(
+                    "model-b",
+                    vec![
+                        Outcome::UsageThenError(
+                            first,
+                            ProviderError::Decode("unexpected EOF in response body".into()),
+                        ),
+                        Outcome::Text(next),
+                    ],
+                ),
+            ]
+        },
+        Some(HashMap::from([(a.clone(), vec![a, b.clone()])])),
+    )
+    .await;
+    assert_eq!(
+        fixture
+            .engine
+            .run_turn(fixture.session, &fixture.agent, CancellationToken::new())
+            .await?,
+        FinishReason::Stop
+    );
+    let records = usage_records(&fixture).await;
+    let billed: Vec<_> = records
+        .iter()
+        .map(|(_, step, model, _, tokens)| (*step, model, *tokens))
+        .collect();
+    assert_eq!(billed, [(Some(0), &b, first), (Some(1), &b, next)]);
+    let projection = fixture.engine.read_projection(fixture.session).await?;
+    assert_eq!(
+        projection.session.usage.by_model[&b].output,
+        first.output + next.output
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn cancelled_message_keeps_the_usage_of_billed_rounds() {
     let cancel = CancellationToken::new();
     let round = usage(70, 11, None);
@@ -375,7 +424,10 @@ async fn errored_round_keeps_the_usage_received_before_the_failure() {
         |_| {
             vec![UsageProvider::new(
                 "model-a",
-                vec![Outcome::UsageThenError(round)],
+                vec![Outcome::UsageThenError(
+                    round,
+                    ProviderError::Decode("invalid usage frame".into()),
+                )],
             )]
         },
         None,
