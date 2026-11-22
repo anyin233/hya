@@ -400,6 +400,42 @@ async fn budgeted_descendant_output_path_reaches_exec_json()
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn exec_joins_yielded_bash_before_exit() -> Result<(), Box<dyn std::error::Error>> {
+    let (_env, output, _) = run_lead(
+        vec![
+            tool_step("bash", json!({"command": "exec sleep 60", "timeout": 1})),
+            text_step("Done."),
+        ],
+        &["--time-budget", "180"],
+    )
+    .await;
+    let meta = bash_metadata(&output)?;
+    assert_eq!(meta["stillRunning"], true);
+    let pid = i32::try_from(meta["pgid"].as_u64().ok_or("missing pgid")?)?;
+    // Signal zero checks whether the exec'd sleep still exists.
+    assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+    let path = std::path::Path::new(meta["exitPath"].as_str().ok_or("missing exitPath")?);
+    assert_eq!(std::fs::read_to_string(path)?, "137\n");
+    std::fs::remove_dir_all(path.parent().ok_or("missing job directory")?)?;
+    Ok(())
+}
+
+fn bash_metadata(output: &Output) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    for line in std::str::from_utf8(&output.stdout)?.lines() {
+        let event: hya_proto::Envelope = serde_json::from_str(line)?;
+        if let hya_proto::Event::ToolResult { output, .. } = event.event {
+            return Ok(output["metadata"].clone());
+        }
+    }
+    Err("missing Bash tool result".into())
+}
+
 #[tokio::test]
 async fn unknown_tool_cannot_trigger_completion_check() {
     let (_, _, requests) = run_lead(

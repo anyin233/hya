@@ -12,7 +12,9 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 // Tokio's clock, so a paused test runtime moves the stages with its timers.
+use tokio::sync::oneshot;
 use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 
 use hya_proto::SessionId;
 
@@ -38,6 +40,8 @@ pub struct RunDeadline {
     start: Instant,
     budget: Duration,
     notified: Mutex<HashMap<SessionId, Told>>,
+    shutdown: CancellationToken,
+    jobs: Mutex<Vec<oneshot::Receiver<()>>>,
 }
 
 /// The stage a session was last told of, and the tenth of the budget that
@@ -78,6 +82,19 @@ pub fn current() -> Option<&'static RunDeadline> {
     HOST.get().copied().unwrap_or(&DEADLINE).get()
 }
 
+/// Cancel yielded jobs and wait for their supervisors before leaving exec.
+pub async fn shutdown_background_jobs() {
+    if let Some(deadline) = current() {
+        deadline.shutdown_background_jobs().await;
+    }
+}
+
+/// Dropping the supervisor's sender closes its completion receiver.
+#[must_use]
+pub struct BackgroundJobGuard {
+    _completion: oneshot::Sender<()>,
+}
+
 /// This copy's cell, for the loader to hand to a bundle.
 pub(crate) fn cell() -> &'static OnceLock<RunDeadline> {
     &DEADLINE
@@ -100,6 +117,29 @@ impl RunDeadline {
             start,
             budget,
             notified: Mutex::new(HashMap::new()),
+            shutdown: CancellationToken::new(),
+            jobs: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Register a yielded job before handing it to its supervisor.
+    pub fn register_background_job(&self) -> (CancellationToken, BackgroundJobGuard) {
+        let (tx, rx) = oneshot::channel();
+        let mut jobs = self.jobs.lock().unwrap_or_else(PoisonError::into_inner);
+        jobs.retain_mut(|job| matches!(job.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
+        jobs.push(rx);
+        (
+            self.shutdown.clone(),
+            BackgroundJobGuard { _completion: tx },
+        )
+    }
+
+    /// Called after tool producers have drained. Join every remaining supervisor.
+    pub async fn shutdown_background_jobs(&self) {
+        self.shutdown.cancel();
+        let jobs = std::mem::take(&mut *self.jobs.lock().unwrap_or_else(PoisonError::into_inner));
+        for job in jobs {
+            let _ = job.await;
         }
     }
 

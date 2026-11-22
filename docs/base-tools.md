@@ -465,7 +465,7 @@ waits up to 90 seconds. If the command is still running at the ordinary wait
 limit, the result has `metadata.stillRunning: true`, `timedOut: false`,
 `exit: null`, numeric `pgid`, and string `outputPath` and `exitPath`.
 Read the output while the command runs. The exit file appears atomically when
-the whole group exits, including background writers. While the host runs, cancellation or budget expiry kills a yielded group and publishes its signal exit code. The notice gives quoted commands
+the whole group exits, including background writers. Cancellation, budget expiry, or exec shutdown kills a yielded group. Exec waits for its supervisor to reap the shell and atomically publish the exit code before returning. The notice gives quoted commands
 to inspect output or stop the group. At the end-of-budget cap Bash kills the
 group and returns `timedOut: true`. An exhausted budget skips the spawn.
 PTY waits terminate the group on timeout. All Bash modes set

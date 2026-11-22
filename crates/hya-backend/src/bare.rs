@@ -45,6 +45,7 @@ pub(crate) async fn exec_entry(
                 )
                 .await;
             signals.drain_store_on_exit(&store, stop.is_some()).await;
+            deadline::shutdown_background_jobs().await;
             crate::stop_signals::exit_if_stopped(stop);
             result.unwrap_or(Ok(()))
         }
