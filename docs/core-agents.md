@@ -96,8 +96,8 @@ scope, ownership and acceptance criteria. Copy the original hard constraints,
 edge-case notes and negative requirements verbatim into `context` or the
 relevant `prompt`. Omit `effort` to use the explicit `model#effort` suffix or the child agent's default shown by `list_agents`. An explicit effort must be supported by the child model.
 
-The lead resolves competing derivations or formulas by checking real inputs
-or the specification directly. A `hya-reviewer` P0 or P1 finding includes a
+The lead resolves single-thread reasoning and competing interpretations with
+the smallest check against real inputs or the specification that distinguishes them. A `hya-reviewer` P0 or P1 finding includes a
 concrete failing case so the lead can test it before dismissing the finding.
 `wait` lists reported subagents as finished and already archived.
 See the [task input and worked example](architecture/agent-tool-surface.md#task).
