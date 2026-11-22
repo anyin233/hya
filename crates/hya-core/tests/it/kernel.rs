@@ -2787,6 +2787,67 @@ async fn bash_group_lifetime_child() {
     }
 }
 
+#[test]
+fn bash_shutdown_awaits_admitted_jobs_and_rejects_late_spawns() {
+    for case in ["with-budget", "without-budget"] {
+        run_bash_child("kernel::bash_shutdown_child", case);
+    }
+}
+
+#[tokio::test]
+async fn bash_shutdown_child() {
+    use hya_tool::process_group::{BudgetGroup, GroupOutcome};
+    use tokio::{process::Command, time::sleep};
+    let Ok(case) = std::env::var("HYA_BASH_TEST") else {
+        return;
+    };
+    if case == "with-budget" {
+        deadline::install(Duration::from_secs(180));
+    }
+    let cancel = CancellationToken::new();
+    let exit = std::env::temp_dir().join("exit_code");
+    let run = |command, wait| {
+        BudgetGroup::run(
+            command,
+            deadline::current(),
+            &cancel,
+            sleep(wait),
+            false,
+            exit.clone(),
+        )
+    };
+    let sleeper = || {
+        let mut command = Command::new("sleep");
+        command.arg("60");
+        command
+    };
+    let Ok(GroupOutcome::Yielded(pgid)) = run(sleeper(), Duration::ZERO).await else {
+        panic!("expected a yielded group");
+    };
+
+    // Leave a foreground caller suspended across shutdown, just as a second
+    // signal can suspend the outer run future. Registration already happened.
+    let mut foreground = std::pin::pin!(run(sleeper(), Duration::from_secs(60)));
+    assert!(futures::poll!(&mut foreground).is_pending());
+    let mut first_drain = Box::pin(deadline::shutdown_background_jobs());
+    assert!(futures::poll!(&mut first_drain).is_pending());
+    drop(first_drain);
+    // Spawning this nonexistent executable would return an I/O error.
+    let late = run(Command::new("nonexistent-late-command"), Duration::ZERO).await;
+    assert!(matches!(late, Err(ToolError::Cancelled)));
+    tokio::time::timeout(Duration::from_secs(5), deadline::shutdown_background_jobs())
+        .await
+        .expect("shutdown resumed and completed");
+    assert_eq!(std::fs::read_to_string(exit).unwrap(), "137\n");
+    // SAFETY: signal zero only queries the test process group.
+    assert_eq!(unsafe { libc::killpg(pgid as libc::pid_t, 0) }, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+    assert!(matches!(foreground.await, Err(ToolError::Cancelled)));
+}
+
 /// A wait the run's time budget cut short still kills the command's group,
 /// including a job it started: the run is ending and nothing could follow
 /// the command up.

@@ -167,6 +167,7 @@ pub(crate) async fn start_headless_with_signals(
     };
     eprintln!("hya: stopping — draining store before exit");
     signals.drain_store_on_exit(&store, true).await;
+    hya_tool::deadline::shutdown_background_jobs().await;
     exit_stopped(stop);
 }
 

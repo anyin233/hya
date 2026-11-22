@@ -596,32 +596,27 @@ async fn execute_budgeted_file(
         .stdin(Stdio::null())
         .stdout(file.try_clone()?)
         .stderr(file);
-    let mut group = hya_tool::process_group::BudgetGroup::spawn(process, true)?;
-    let pgid = group.pgid();
-    let status = tokio::select! {
-        biased;
-        () = cancel.cancelled() => {
-            group.stop().await?;
-            return Err(ToolError::Cancelled);
-        }
-        status = group.wait_for_group() => Some(status?),
-        () = timer => group.try_wait()?,
-    };
-    let completion = if let Some(status) = status {
-        Completion::Finished(status.code())
-    } else if timeout.deadline_left.is_some() || left < wait {
-        group.stop().await?;
-        Completion::TimedOut
-    } else {
-        let exit_path = dir.join("exit_code");
-        let cancel = cancel.child_token();
-        job.cancel = Some(cancel.clone());
-        group.supervise(exit_path.clone(), cancel, Some(deadline));
-        Completion::StillRunning {
+    use hya_tool::process_group::{BudgetGroup, GroupOutcome};
+    let exit_path = dir.join("exit_code");
+    let cancel = cancel.child_token();
+    job.cancel = Some(cancel.clone());
+    let completion = match BudgetGroup::run(
+        process,
+        Some(deadline),
+        &cancel,
+        timer,
+        timeout.deadline_left.is_some() || left < wait,
+        exit_path.clone(),
+    )
+    .await?
+    {
+        GroupOutcome::Finished(status) => Completion::Finished(status.code()),
+        GroupOutcome::Stopped => Completion::TimedOut,
+        GroupOutcome::Yielded(pgid) => Completion::StillRunning {
             pgid,
             output_path: path.clone(),
             exit_path,
-        }
+        },
     };
     let mut file = File::open(&path)?;
     let output = if matches!(completion, Completion::StillRunning { .. }) {
