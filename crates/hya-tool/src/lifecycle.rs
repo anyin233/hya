@@ -350,15 +350,22 @@ impl WaitOutcome {
             .iter()
             .chain(&self.already_finished)
             .any(|member| member.state == WaitMemberState::Reported);
-        let mut bare = size(&self.render(&bodies, &empty, reminder));
+        let members = self.finished.len() + self.already_finished.len() + self.running.len();
+        let mut visible = members;
+        let mut bare = size(&self.render(&bodies, &empty, reminder, visible));
         if reminder && bare > WAIT_RESULT_BUDGET {
             reminder = false;
-            bare = size(&self.render(&bodies, &empty, reminder));
+            bare = size(&self.render(&bodies, &empty, reminder, visible));
         }
         let mut included = bodies.len();
         while bare > WAIT_RESULT_BUDGET && included > 0 {
             included -= 1;
-            bare = size(&self.render(&bodies[..included], &empty[..included], reminder));
+            bare = size(&self.render(&bodies[..included], &empty[..included], reminder, visible));
+        }
+        // When member names appear twice, keep their structured rows first.
+        while bare > WAIT_RESULT_BUDGET && visible > 0 {
+            visible -= 1;
+            bare = size(&self.render(&[], &[], false, visible));
         }
         let bodies = &bodies[..included];
         let lengths = &lengths[..included];
@@ -366,7 +373,10 @@ impl WaitOutcome {
             .saturating_sub(bare)
             .min(lengths.iter().sum());
         loop {
-            let result = self.render(bodies, &water_fill(lengths, budget), reminder);
+            let mut result = self.render(bodies, &water_fill(lengths, budget), reminder, visible);
+            if bare > WAIT_RESULT_BUDGET {
+                result["output"] = json!("");
+            }
             // JSON escaping can grow the text past its char count: shrink
             // until the whole envelope fits.
             if budget == 0 || size(&result) <= WAIT_RESULT_BUDGET {
@@ -410,7 +420,13 @@ impl WaitOutcome {
         bodies
     }
 
-    fn render(&self, bodies: &[PreviewBody<'_>], shown: &[usize], reminder: bool) -> Value {
+    fn render(
+        &self,
+        bodies: &[PreviewBody<'_>],
+        shown: &[usize],
+        reminder: bool,
+        visible: usize,
+    ) -> Value {
         let mut lines = Vec::new();
         let headline = match self.woke_by {
             WaitWake::Members => "Subagents finished.",
@@ -434,10 +450,11 @@ impl WaitOutcome {
             }
             line
         };
-        for member in &self.finished {
+        for member in self.finished.iter().take(visible) {
             lines.push(member_line(member, state_label(member.state)));
         }
-        for member in &self.already_finished {
+        let remaining = visible.saturating_sub(self.finished.len());
+        for member in self.already_finished.iter().take(remaining) {
             let tag = format!("already {}", state_label(member.state));
             lines.push(member_line(member, &tag));
         }
@@ -447,7 +464,10 @@ impl WaitOutcome {
                     .to_string(),
             );
         }
-        for member in &self.running {
+        let running = &self.running[..remaining
+            .saturating_sub(self.already_finished.len())
+            .min(self.running.len())];
+        for member in running {
             if member.state == WaitMemberState::Idle {
                 lines.push(format!(
                     "- {} [idle: ended its turn without `report`; nothing queued]",
@@ -461,14 +481,20 @@ impl WaitOutcome {
                 ));
             }
         }
-        let working: Vec<&str> = self
-            .running
+        let working: Vec<&str> = running
             .iter()
             .filter(|member| member.state == WaitMemberState::Working)
             .map(|member| member.handle.as_str())
             .collect();
         if !working.is_empty() {
             lines.push(format!("Still running: {}", working.join(", ")));
+        }
+        let omitted =
+            self.finished.len() + self.already_finished.len() + self.running.len() - visible;
+        if omitted > 0 {
+            lines.push(format!(
+                "… and {omitted} more member(s). All targets are listed in metadata."
+            ));
         }
         if !self.mail.is_empty() {
             lines.push(format!(
@@ -1186,6 +1212,55 @@ mod tests {
             result.to_string().chars().count() <= WAIT_RESULT_BUDGET,
             "size {}",
             result.to_string().len()
+        );
+    }
+
+    #[test]
+    fn twenty_long_handles_condense_output_and_survive_host_spilling() {
+        let finished = (0..20)
+            .map(|i| {
+                let mut m = member(
+                    &format!("main/{}-exusiai-{i:02}", "a".repeat(32)),
+                    WaitMemberState::Reported,
+                    Some(&"x".repeat(3000)),
+                );
+                m.channel = Some(format!("DM-{i:08}"));
+                m
+            })
+            .collect();
+        let outcome = WaitOutcome {
+            woke_by: WaitWake::Members,
+            finished,
+            already_finished: vec![],
+            running: vec![],
+            mail: vec![],
+            waited_ms: 0,
+        };
+        let result = outcome.to_tool_result();
+        assert!(result.to_string().chars().count() <= WAIT_RESULT_BUDGET);
+        assert!(
+            result["output"]
+                .as_str()
+                .is_some_and(|s| s.contains("more member(s)"))
+        );
+        assert_eq!(
+            result["metadata"]["finished"].as_array().map(Vec::len),
+            Some(20)
+        );
+        for (i, m) in outcome.finished.iter().enumerate() {
+            let row = &result["metadata"]["finished"][i];
+            assert_eq!(row["handle"], m.handle);
+            assert_eq!(row["report_chars"], 3000);
+            assert_eq!(row["report_truncated"], true);
+        }
+        assert_eq!(
+            crate::cap_tool_output_spilling(
+                result.clone(),
+                crate::ToolResultPolicy::Default,
+                &crate::handle::ArtifactStore::new(std::env::temp_dir()),
+                "wait"
+            ),
+            result
         );
     }
 
