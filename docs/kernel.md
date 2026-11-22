@@ -708,9 +708,10 @@ request carries it as its last (user) message, and once the assistant message
 has a part after it (the model's response to the check), requests leave it
 out. What the model does in response (its reasoning, text and tool calls)
 stays in the history and carries the work. Nothing configures or disables
-it, and full mode does not send it. The kernel loop asks the harness at this
+it. The full-mode headless lead applies its completion check between turns.
+The kernel loop asks the harness at this
 point through `Harness::before_end`, only after a `stop` or `length` finish
-and while the run is not cancelled; full mode's harness always ends.
+and while the run is not cancelled.
 
 ### Turns without an answer
 

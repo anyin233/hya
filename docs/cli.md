@@ -918,11 +918,11 @@ added by the continuation driver; late-stage worker guidance still asks for
 archiving work that cannot be integrated in time.
 These guards add no CLI flags, RPC routes, or wire types; `--json` includes the
 notices and continuation events in the same session's canonical JSONL stream.
-In direct full mode, a lead that used a tool receives one completion check when
+In direct full mode, a lead that called a known tool receives one completion check when
 it would otherwise stop and more than two Final windows remain. For example,
 `hya exec --time-budget 900 "build and verify the package"` can use that
 extra turn to compare the files it produced against the request. The logged
-system notice suppresses duplicate checks when the session continues.
+system notice suppresses duplicate checks when the session continues. It starts a fresh count of consecutive ignored continuation notices.
 
 Routed runs retain the server's single-prompt-turn behavior.
 

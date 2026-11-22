@@ -73,7 +73,18 @@ pub(crate) async fn run_lead(
                     .messages
                     .iter()
                     .flat_map(|row| &row.parts)
-                    .any(|part| matches!(part, PartProjection::Tool { .. }))
+                    .any(|part| match part {
+                        PartProjection::Tool {
+                            name,
+                            state: hya_proto::ToolPartState::Error { message, .. },
+                            ..
+                        } => message != &format!("unknown tool: {name}"),
+                        PartProjection::Tool {
+                            state: hya_proto::ToolPartState::Completed { .. },
+                            ..
+                        } => true,
+                        _ => false,
+                    })
                 && !projection.session.messages.iter().any(|row| {
                     row.role == Role::System
                         && row.parts.iter().any(|part| {
@@ -87,6 +98,7 @@ pub(crate) async fn run_lead(
                 engine
                     .inject_system_message(session, hya_core::kernel::COMPLETION_CHECK.to_string())
                     .await?;
+                ignored = 0;
                 last_notice = None;
                 continue;
             }
