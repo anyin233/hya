@@ -238,9 +238,14 @@ Read clears the no-op/duplicate marker.
 All coding tools honor `ToolCtx` cancellation. Read and Grep authorize one
 kind-blind external parent resource (the target's lexical parent) before
 metadata, existence, or target-kind probing. Cancellation while waiting for a lock or during I/O
-returns the typed `cancelled` error. Bash cancellation/timeout terminates and
+returns the typed `cancelled` error. Bash cancellation or a terminating timeout kills and
 reaps the complete process group, including a PTY descendant that retains the
 slave after leader exit. File contents never enter logs or error payloads.
+Budgeted Unix non-PTY Bash yields the process group when its requested wait
+or budget/10 limit expires. The result exposes `stillRunning: true`, numeric
+`pgid`, and string `outputPath` and `exitPath` in metadata. The end-of-budget
+cap terminates the group. See [Budgeted Bash timeouts](../base-tools.md#budgeted-bash-timeouts).
+
 Durable `Event::ToolResult`/`Event::ToolError` and the shared projection remain
 the only result path. Hashline snapshots are process-local and are lost on
 restart; current-file anchor validation still works after restart.
@@ -532,7 +537,7 @@ even inside an already-approved tool call. Canonicalization costs a few
 | `grep` | Search root, file or directory, when outside (kind-blind canonical `<parent>/*`). |
 | `find` | Resolved search root directory when outside (canonical `<root>/*`); asserts `Action::Glob` on the pattern first. |
 | `ls` | Resolved directory when outside (canonical `<dir>/*`), then `Action::Read` on the directory. |
-| `bash` (including hidden `shell`) | **Nothing path-based.** Its `cwd` may be any directory and its command's file effects are not inspected; only `Action::Bash` invocation rules apply. Its output artifacts stay under `<workdir>/.hya/tool-output`. |
+| `bash` (including hidden `shell`) | **Nothing path-based.** Its `cwd` may be any directory and its command's file effects are not inspected; only `Action::Bash` invocation rules apply. Budgeted Unix non-PTY jobs capture output in private temporary directories. Other spill artifacts stay under `<workdir>/.hya/tool-output`. |
 
 ### Per-turn external directories
 

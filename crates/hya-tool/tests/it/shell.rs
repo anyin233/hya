@@ -103,6 +103,9 @@ fn assert_result_shape(result: &Value, command: &str) {
         "timedOut",
         "timeoutClamped",
         "deadlineCapped",
+        "stillRunning",
+        "pgid",
+        "exitPath",
         "timeoutSeconds",
         "truncated",
     ]);
@@ -1335,9 +1338,9 @@ fn deadline_caps_shell_timeouts_across_native_library() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn deadline_capped_shell_child() {
+async fn deadline_capped_shell_child() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::var_os("HYA_SHELL_DEADLINE_TEST").is_none() {
-        return;
+        return Ok(());
     }
     let registry = ToolRegistry::from_tool_families(&["hya/base-tools"]);
     // Under 10 s left the cap is its 5 s floor, whatever half of the rest is.
@@ -1374,5 +1377,101 @@ async fn deadline_capped_shell_child() {
             assert!(result["output"].as_str().unwrap().contains("budget-ok"));
         }
     }
+    let stopped = execute_with_guard(
+        tool.tool.as_ref(),
+        &ctx,
+        json!({"command":"echo $$; exec sleep 30"}),
+    )
+    .await?;
+    assert_eq!(stopped["metadata"]["timedOut"], true);
+    let pid: i32 = stopped["output"]
+        .as_str()
+        .ok_or("missing output")?
+        .lines()
+        .last()
+        .ok_or("missing pid")?
+        .parse()?;
+    // SAFETY: signal zero probes the process without changing it.
+    assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
     std::fs::remove_dir_all(workdir).unwrap();
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn budgeted_shell_yields_live_output() -> Result<(), Box<dyn std::error::Error>> {
+    let status = std::process::Command::new(std::env::current_exe()?)
+        .args([
+            "--exact",
+            "shell::budgeted_shell_yield_child",
+            "--nocapture",
+        ])
+        .env("HYA_SHELL_YIELD_TEST", "1")
+        .status()?;
+    assert!(status.success());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn budgeted_shell_yield_child() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::var_os("HYA_SHELL_YIELD_TEST").is_none() {
+        return Ok(());
+    }
+    hya_tool::deadline::install(Duration::from_secs(50));
+    let registry = ToolRegistry::from_tool_families(&["hya/base-tools"]);
+    let tool = registry.resolve("bash").ok_or("bash missing")?;
+    let workdir = tempdir();
+    let ctx = ctx_with(vec![allow(Action::Bash, "*")], workdir.clone());
+    let command = "echo $PYTHONUNBUFFERED; sleep 6; head -c 131072 /dev/zero; exit 7";
+    let result = execute_with_guard(tool.tool.as_ref(), &ctx, json!({"command":command})).await?;
+    assert_result_shape(&result, command);
+    let meta = &result["metadata"];
+    assert_eq!(meta["stillRunning"], true);
+    assert_eq!(meta["timedOut"], false);
+    assert_eq!(meta["timeoutSeconds"], 5.0);
+    assert!(meta["exit"].is_null());
+    assert!(meta["pgid"].is_u64());
+    let preview = result["output"].as_str().ok_or("missing preview")?;
+    assert!(preview.contains("budget/10") && preview.ends_with("1\n"));
+    let exit = Path::new(meta["exitPath"].as_str().ok_or("missing exitPath")?);
+    tokio::time::timeout(Duration::from_secs(6), async {
+        while !exit.exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await?;
+    assert_eq!(std::fs::read_to_string(exit)?, "7\n");
+    assert_eq!(
+        std::fs::metadata(meta["outputPath"].as_str().ok_or("missing outputPath")?)?.len(),
+        131074
+    );
+    std::fs::remove_dir_all(exit.parent().ok_or("missing job directory")?)?;
+    std::fs::remove_dir_all(workdir)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn python_output_is_unbuffered_unless_overridden() -> Result<(), Box<dyn std::error::Error>> {
+    let registry = ToolRegistry::from_tool_families(&["hya/base-tools"]);
+    let tool = registry.resolve("bash").ok_or("bash missing")?;
+    let workdir = tempdir();
+    let ctx = ctx_with(vec![allow(Action::Bash, "*")], workdir.clone());
+    for pty in [false, true] {
+        for (env, expected) in [
+            (json!({}), "1"),
+            (json!({"PYTHONUNBUFFERED":"override"}), "override"),
+        ] {
+            let result = execute_with_guard(
+                tool.tool.as_ref(),
+                &ctx,
+                json!({"command":"printf %s \"$PYTHONUNBUFFERED\"", "env":env, "pty":pty}),
+            )
+            .await?;
+            assert_eq!(result["output"], expected);
+        }
+    }
+    std::fs::remove_dir_all(workdir)?;
+    Ok(())
 }

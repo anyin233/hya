@@ -1011,6 +1011,9 @@ fn is_allowed_metadata_key(key: &str, include_diff: bool) -> bool {
             | "timeoutSeconds"
             | "timeoutClamped"
             | "deadlineCapped"
+            | "pgid"
+            | "stillRunning"
+            | "exitPath"
             | "pty"
             | "cwd"
             | "entries"
@@ -1082,7 +1085,7 @@ fn bound_metadata_field(
         "diff" | "patch" => return None,
         "filediff" => bound_filediff(value, include_diff, facts),
         "preview" | "output" | "text" => bound_display_value(value, facts),
-        "outputPath" => {
+        "outputPath" | "exitPath" => {
             let Value::String(path) = value else {
                 facts.metadata = true;
                 return None;
@@ -1881,6 +1884,9 @@ fn is_adapter_metadata_flag(key: &str) -> bool {
             | "timeoutSeconds"
             | "timeoutClamped"
             | "deadlineCapped"
+            | "pgid"
+            | "stillRunning"
+            | "exitPath"
             | "pty"
             | "cwd"
             | "lineStart"
