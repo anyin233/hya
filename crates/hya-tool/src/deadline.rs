@@ -93,7 +93,9 @@ fn clamp_secs(value: f64, low: f64, high: f64) -> Duration {
 }
 
 impl RunDeadline {
-    fn new(start: Instant, budget: Duration) -> Self {
+    /// Measure a run's budget from the supplied clock instant.
+    #[must_use]
+    pub fn new(start: Instant, budget: Duration) -> Self {
         Self {
             start,
             budget,

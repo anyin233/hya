@@ -84,12 +84,10 @@ impl TimeoutSettings {
             self.clamped = false;
         }
         // Compare both caps against the original request so the end cap wins a tie.
-        let (end, capped) = deadline.cap(requested);
+        let (end, _) = deadline.cap(None);
         let left = deadline.remaining();
         let end = end.min(left);
-        if (capped || requested.is_none_or(|wait| wait > left))
-            && self.duration.is_none_or(|wait| end <= wait)
-        {
+        if self.duration.is_none_or(|wait| end <= wait) {
             self.duration = Some(end);
             self.seconds = end.as_secs_f64().round();
             self.deadline_left = Some(left.as_secs());
@@ -603,9 +601,12 @@ async fn execute_budgeted_file(
     job.pgid = Some(pgid);
     let status = tokio::select! {
         biased;
-        () = cancel.cancelled() => return Err(ToolError::Cancelled),
-        () = timer => child.try_wait()?,
-        status = child.wait() => Some(status?),
+        () = cancel.cancelled() => {
+            terminate_pipe_child(&mut child, job.pgid.take()).await?;
+            return Err(ToolError::Cancelled);
+        }
+        status = wait_for_group(&mut child, pgid) => Some(status?),
+        () = timer => child.try_wait()?.filter(|_| !process_group_alive(Some(pgid))),
     };
     let completion = if let Some(status) = status {
         job.pgid = None;
@@ -616,7 +617,14 @@ async fn execute_budgeted_file(
         Completion::TimedOut
     } else {
         let exit_path = dir.join("exit_code");
-        tokio::spawn(record_exit(child, exit_path.clone()));
+        let end = tokio::time::Instant::now() + deadline.remaining();
+        tokio::spawn(record_exit(
+            child,
+            pgid,
+            exit_path.clone(),
+            end,
+            cancel.clone(),
+        ));
         Completion::StillRunning {
             pgid,
             output_path: path.clone(),
@@ -637,13 +645,40 @@ async fn execute_budgeted_file(
 }
 
 #[cfg(unix)]
-async fn record_exit(mut child: Child, path: PathBuf) -> io::Result<()> {
-    use std::os::unix::process::ExitStatusExt as _;
+async fn wait_for_group(child: &mut Child, pgid: u32) -> io::Result<std::process::ExitStatus> {
+    // Tokio caches the leader's status if this wait resumes after yielding.
     let status = child.wait().await?;
-    let code = status.code().or_else(|| status.signal().map(|s| 128 + s));
+    while process_group_alive(Some(pgid)) {
+        tokio::time::sleep(Duration::from_millis(15)).await;
+    }
+    Ok(status)
+}
+
+#[cfg(unix)]
+async fn record_exit(
+    mut child: Child,
+    pgid: u32,
+    path: PathBuf,
+    end: tokio::time::Instant,
+    cancel: CancellationToken,
+) -> Result<(), ToolError> {
+    use std::os::unix::process::ExitStatusExt as _;
+    let status = tokio::select! {
+        biased;
+        () = cancel.cancelled() => None,
+        () = tokio::time::sleep_until(end) => None,
+        status = wait_for_group(&mut child, pgid) => Some(status?),
+    };
+    let code = if let Some(status) = status {
+        status.code().or_else(|| status.signal().map(|s| 128 + s))
+    } else {
+        terminate_pipe_child(&mut child, Some(pgid)).await?;
+        Some(128 + libc::SIGKILL)
+    };
     let tmp = path.with_extension("tmp");
     tokio::fs::write(&tmp, format!("{}\n", json!(code))).await?;
-    tokio::fs::rename(tmp, path).await
+    tokio::fs::rename(tmp, path).await?;
+    Ok(())
 }
 
 /// Capture pipe output concurrently while waiting for the process.
@@ -1627,6 +1662,96 @@ mod tests {
             "<shell_metadata>\nTimeout shortened to 155 seconds: the run ends in 200 seconds."
         ));
         assert!(prefix.contains("terminated the command after 155 seconds"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn explicit_five_seconds_ties_end_cap() -> Result<(), ToolError> {
+        let deadline = RunDeadline::new(tokio::time::Instant::now(), Duration::from_secs(8));
+        let settings = timeout_settings(Some(5.0))?.capped_by(Some(&deadline));
+        assert_eq!(settings.deadline_left, Some(8));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn budgeted_shell_waits_for_background_output() -> Result<(), ToolError> {
+        let cwd = Path::new(".");
+        let deadline = RunDeadline::new(tokio::time::Instant::now(), Duration::from_secs(60));
+        let run = execute_budgeted_file(
+            "(sleep 0.2; echo bg-ok) &",
+            BTreeMap::new(),
+            cwd,
+            cwd.into(),
+            timeout_settings(Some(2.0))?,
+            &deadline,
+            &CancellationToken::new(),
+        )
+        .await?;
+        assert!(matches!(run.completion, Completion::Finished(Some(0))));
+        assert_eq!(run.output.inline, b"bg-ok\n");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn yielded_groups_stop_on_cancel_or_deadline() -> Result<(), ToolError> {
+        for (command, cancel_early) in [("sleep 60", true), ("echo started; (sleep 60) &", false)] {
+            let cancel = CancellationToken::new();
+            let cwd = Path::new(".");
+            let deadline = RunDeadline::new(tokio::time::Instant::now(), Duration::from_secs(2));
+            let mut timeout = timeout_settings(Some(1.0))?;
+            timeout.duration = Some(Duration::from_millis(100));
+            let run = execute_budgeted_file(
+                command,
+                BTreeMap::new(),
+                cwd,
+                cwd.into(),
+                timeout,
+                &deadline,
+                &cancel,
+            )
+            .await?;
+            let result = shape_result(
+                command.into(),
+                cwd.into(),
+                false,
+                timeout,
+                Duration::ZERO,
+                run,
+                &cancel,
+            )?;
+            let meta = &result["metadata"];
+            assert_eq!(meta["stillRunning"], true);
+            let pgid = meta["pgid"]
+                .as_u64()
+                .ok_or(io::Error::other("missing pgid"))? as u32;
+            assert!(process_group_alive(Some(pgid)));
+            let path = Path::new(
+                meta["exitPath"]
+                    .as_str()
+                    .ok_or(io::Error::other("missing exitPath"))?,
+            );
+            let output = std::fs::read_to_string(
+                meta["outputPath"]
+                    .as_str()
+                    .ok_or(io::Error::other("missing outputPath"))?,
+            )?;
+            if cancel_early {
+                cancel.cancel();
+            } else {
+                assert_eq!(output, "started\n");
+            }
+            tokio::time::timeout(Duration::from_secs(4), async {
+                while !path.exists() || process_group_alive(Some(pgid)) {
+                    tokio::time::sleep(Duration::from_millis(15)).await;
+                }
+            })
+            .await
+            .map_err(|e| contextual_io("wait for group termination", e))?;
+            assert_eq!(std::fs::read_to_string(path)?.trim(), "137");
+            std::fs::remove_dir_all(path.parent().ok_or(io::Error::other("missing job dir"))?)?;
+        }
+        Ok(())
     }
 
     #[test]

@@ -246,7 +246,11 @@ a decode error in `output`. Read attaches only successfully decoded images.
 PDFs retain their separate attachment handling.
 
 Budgeted Unix non-PTY Bash yields the process group when its requested wait
-or budget/10 limit expires. The result exposes `stillRunning: true`, numeric
+or budget/10 limit expires. The wait covers the whole process group, including
+background writers after Bash exits. A yielded group is supervised until
+completion, cancellation, or the run deadline. Cancellation and expiry kill
+the group before publishing its exit code. The end cap wins an exact tie
+with the requested wait. The result exposes `stillRunning: true`, numeric
 `pgid`, and string `outputPath` and `exitPath` in metadata. The end-of-budget
 cap terminates the group. See [Budgeted Bash timeouts](../base-tools.md#budgeted-bash-timeouts).
 

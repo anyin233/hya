@@ -364,3 +364,38 @@ async fn completion_check_runs_once_only_after_tool_use_with_time_to_spare() {
         }
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn budgeted_descendant_output_path_reaches_exec_json()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (_, output, _) = run_lead(vec![
+        tool_step("bash", json!({"command": "(for i in {1..200}; do [ -e release ] && break; sleep .05; done; echo bg-ok; touch finished) &", "timeout": 1})),
+        bash("touch release; while [ ! -e finished ]; do sleep .05; done"),
+        text_step("Done."),
+    ], &["--time-budget", "180"]).await;
+    let events: Vec<hya_proto::Envelope> = std::str::from_utf8(&output.stdout)?
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<Result<_, _>>()?;
+    let meta = events
+        .iter()
+        .find_map(|e| match &e.event {
+            hya_proto::Event::ToolResult { output, .. }
+                if output["metadata"]["stillRunning"] == true =>
+            {
+                Some(&output["metadata"])
+            }
+            _ => None,
+        })
+        .ok_or("missing yielded tool result")?;
+    assert!(meta["pgid"].as_u64().is_some());
+    let path = std::path::Path::new(
+        meta["outputPath"]
+            .as_str()
+            .ok_or("missing live output path")?,
+    );
+    assert_eq!(std::fs::read_to_string(path)?, "bg-ok\n");
+    std::fs::remove_dir_all(path.parent().ok_or("missing job directory")?)?;
+    Ok(())
+}
