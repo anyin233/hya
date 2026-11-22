@@ -554,6 +554,12 @@ never fail after a model switch. `projection_to_messages` populates historical
 `Message::Assistant.model` from `MessageProjection::served_model()` so this
 comparison reflects the model that actually produced each message.
 
+The API rejects a reasoning item sent without the answer or call that
+followed it, so the encoder holds each item until the assistant's next text or
+tool call and sends it right before that. An item with neither after it — a
+step stopped while thinking, or a later reasoning item of the same message
+taking its place — is left out of `input`; the transcript keeps it.
+
 Tool calls decoded from Responses capture their upstream `call_id` into
 `Part::Tool.provider_data["call_id"]` and replay it on same-model turns in both
 `function_call.call_id` and `function_call_output.call_id`, while omitting the

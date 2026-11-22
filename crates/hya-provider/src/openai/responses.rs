@@ -211,17 +211,21 @@ fn emit_assistant(
     images: &ToolImages<'_>,
 ) -> Result<(), ProviderError> {
     let mut text = String::new();
+    // The API rejects a reasoning item without the answer or call that
+    // followed it, as after a step stopped while thinking: such an item is
+    // left out (a later one replaces it), and the transcript keeps it.
+    let mut reasoning = None;
     for part in parts {
         match part {
             Part::Text { text: part, .. } => text.push_str(part),
             Part::Reasoning { provider_data, .. } => {
-                flush_text(out, &mut text);
-                if same_model
-                    && let Some(data) = provider_data
-                    && data.get("type").and_then(Value::as_str) == Some("reasoning")
-                {
-                    out.push(data.clone());
-                }
+                flush_text(out, &mut reasoning, &mut text);
+                reasoning = provider_data
+                    .as_ref()
+                    .filter(|data| {
+                        same_model && data.get("type").and_then(Value::as_str) == Some("reasoning")
+                    })
+                    .cloned();
             }
             Part::Tool {
                 id,
@@ -230,7 +234,8 @@ fn emit_assistant(
                 state,
                 provider_data,
             } => {
-                flush_text(out, &mut text);
+                flush_text(out, &mut reasoning, &mut text);
+                out.extend(reasoning.take());
                 let input = tool_input(state);
                 let arguments = if input.is_null() {
                     "{}".to_string()
@@ -258,7 +263,7 @@ fn emit_assistant(
             }
         }
     }
-    flush_text(out, &mut text);
+    flush_text(out, &mut reasoning, &mut text);
     Ok(())
 }
 
@@ -278,8 +283,10 @@ fn function_call_output(result: crate::wire::ToolResult<'_>) -> Result<Value, Pr
     Ok(Value::Array(content))
 }
 
-fn flush_text(out: &mut Vec<Value>, text: &mut String) {
+/// Push the pending text, after the reasoning item it answers.
+fn flush_text(out: &mut Vec<Value>, reasoning: &mut Option<Value>, text: &mut String) {
     if !text.is_empty() {
+        out.extend(reasoning.take());
         out.push(json!({"role": "assistant", "content": text}));
         text.clear();
     }
@@ -368,6 +375,101 @@ mod tests {
         assert_eq!(input[1], items[1]);
         assert_eq!(input[2]["role"], "user");
         assert_eq!(input[2]["content"], "next turn");
+    }
+
+    /// A reasoning item goes out only paired with the answer or call that
+    /// followed it; one left alone by a stopped step stays out.
+    #[test]
+    fn reasoning_items_are_sent_only_with_what_followed_them() {
+        let rs = |id: &str| json!({"id": id, "type": "reasoning", "encrypted_content": "opaque"});
+        let reasoning = |id: &str| Part::Reasoning {
+            id: PartId::new(),
+            text: "thought".into(),
+            provider_data: Some(rs(id)),
+        };
+        let text = |body: &str| Part::Text {
+            id: PartId::new(),
+            text: body.into(),
+        };
+        let call = Part::Tool {
+            id: PartId::new(),
+            call_id: hya_proto::ToolCallId::new(),
+            name: hya_proto::ToolName::new("read"),
+            state: hya_proto::ToolPartState::Completed {
+                input: json!({"path": "a.txt"}),
+                output: json!("contents"),
+                time_ms: 1,
+            },
+            provider_data: None,
+        };
+        let assistant = |parts| Message::Assistant {
+            id: MessageId::new(),
+            agent: hya_proto::AgentName::new("build"),
+            model: hya_proto::ModelRef::new("model"),
+            parts,
+            finish: None,
+            tokens: None,
+            last_round: None,
+            last_step_start: None,
+        };
+        let user = Message::User {
+            id: MessageId::new(),
+            parts: vec![text("notice")],
+        };
+        let kinds = |input: &[Value]| -> Vec<String> {
+            input
+                .iter()
+                .map(|item| {
+                    item.get("id")
+                        .or_else(|| item.get("type"))
+                        .or_else(|| item.get("role"))
+                        .and_then(Value::as_str)
+                        .unwrap()
+                        .to_string()
+                })
+                .collect()
+        };
+
+        let alone =
+            encode_input_items(&[assistant(vec![reasoning("rs_cut")]), user], false).unwrap();
+        assert_eq!(alone, [json!({"role": "user", "content": "notice"})]);
+
+        let replaced = encode_input_items(
+            &[assistant(vec![
+                reasoning("rs_cut"),
+                reasoning("rs_next"),
+                call.clone(),
+            ])],
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            kinds(&replaced),
+            ["rs_next", "function_call", "function_call_output"]
+        );
+
+        let paired = encode_input_items(
+            &[assistant(vec![
+                reasoning("rs_1"),
+                text("answer"),
+                reasoning("rs_2"),
+                call,
+            ])],
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            kinds(&paired),
+            [
+                "rs_1",
+                "assistant",
+                "rs_2",
+                "function_call",
+                "function_call_output"
+            ]
+        );
+        assert_eq!(paired[0], rs("rs_1"));
+        assert_eq!(paired[2], rs("rs_2"));
     }
 
     #[test]

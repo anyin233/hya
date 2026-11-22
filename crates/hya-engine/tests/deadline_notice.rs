@@ -1,4 +1,5 @@
-//! Deadline instructions must name a tool the Workflow actor can call.
+//! Deadline instructions must name a tool the Workflow actor can call, also
+//! in the notice after a reasoning-only round was cut at a deadline stage.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 // Own binary: `hya_tool::deadline::install` sets a process-wide deadline.
@@ -6,11 +7,15 @@
 mod support;
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use hya_engine::{
     AgentSpec, CreateSession, EventBus, ResidentSupervisor, SessionEngine, SubagentGovernor,
     SubagentLimits, WorkflowRunContext, WorkflowStatus, run_workflow,
 };
-use hya_proto::{AgentName, Event, FinishReason, MessageId, ModelRef, SessionId};
+use hya_proto::context::REASONING_DEADLINE_NOTICE_PREFIX;
+use hya_proto::{
+    AgentName, Event, FinishReason, Message, MessageId, ModelRef, Part, PartId, SessionId,
+};
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
     ProviderRouter,
@@ -27,7 +32,11 @@ use tokio_util::sync::CancellationToken;
 
 struct NoticeProvider {
     inner: FakeProvider,
+    /// Each session's first round only reasons, without end.
+    think_first: bool,
     report_offered: Mutex<BTreeMap<SessionId, bool>>,
+    /// The last user text of each request, by session.
+    last_user: Mutex<Vec<(SessionId, String)>>,
 }
 
 #[async_trait]
@@ -44,25 +53,70 @@ impl Provider for NoticeProvider {
         session: SessionId,
         message: MessageId,
     ) -> Result<EventStream, ProviderError> {
-        self.report_offered.lock().unwrap().insert(
-            session,
-            req.tools.iter().any(|tool| tool.name.as_str() == "report"),
-        );
+        let first = self
+            .report_offered
+            .lock()
+            .unwrap()
+            .insert(
+                session,
+                req.tools.iter().any(|tool| tool.name.as_str() == "report"),
+            )
+            .is_none();
+        let last_user = req.messages.iter().rev().find_map(|message| match message {
+            Message::User { parts, .. } => Some(
+                parts
+                    .iter()
+                    .filter_map(|part| match part {
+                        Part::Text { text, .. } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<String>(),
+            ),
+            _ => None,
+        });
+        self.last_user
+            .lock()
+            .unwrap()
+            .push((session, last_user.unwrap_or_default()));
+        if self.think_first && first {
+            let part = PartId::new();
+            let events = [
+                Event::ReasoningStart {
+                    session,
+                    message,
+                    part,
+                    reason: None,
+                },
+                Event::ReasoningDelta {
+                    session,
+                    message,
+                    part,
+                    delta: "weighing the options".into(),
+                },
+            ];
+            return Ok(futures::stream::iter(events.map(Ok::<_, ProviderError>))
+                .chain(futures::stream::pending())
+                .boxed());
+        }
         self.inner.stream(req, session, message).await
     }
 }
 
 #[tokio::test]
 async fn workflow_worker_and_verifier_deadline_notices_follow_offered_report_tool() {
-    // Short budgets begin in Final; no wall-clock delay or global test race.
-    hya_tool::deadline::install(Duration::from_secs(40));
+    // A 30 s budget begins in Over (announced as Final) with no time left
+    // past its 30 s grace, so `reasoning_grace()` is zero: a cut needs no
+    // wall-clock wait, and there is no global test race.
+    hya_tool::deadline::install(Duration::from_secs(30));
     let mut wrong_notices = Vec::new();
-    for (governed, connected, allowed) in [
-        (false, true, true),
-        (true, true, true),
-        (true, false, true),
-        (true, true, false),
-    ] {
+    for (think_first, governed, connected, allowed) in [false, true].into_iter().flat_map(|think| {
+        [
+            (think, false, true, true),
+            (think, true, true, true),
+            (think, true, false, true),
+            (think, true, true, false),
+        ]
+    }) {
         let tool = vec![
             FakeStep::ToolCall {
                 name: "glob".into(),
@@ -74,9 +128,17 @@ async fn workflow_worker_and_verifier_deadline_notices_follow_offered_report_too
             FakeStep::Text(r#"{"met":true,"reason":"done"}"#.into()),
             FakeStep::Finish(FinishReason::Stop),
         ];
+        // Thinking first, the cut notice replaces the tool result's notice.
+        let scripts = if think_first {
+            vec![answer.clone(), answer]
+        } else {
+            vec![tool.clone(), answer.clone(), tool, answer]
+        };
         let provider = Arc::new(NoticeProvider {
-            inner: FakeProvider::scripted_turns(vec![tool.clone(), answer.clone(), tool, answer]),
+            inner: FakeProvider::scripted_turns(scripts),
+            think_first,
             report_offered: Mutex::default(),
+            last_user: Mutex::default(),
         });
         let (permission, _) = PermissionPlane::new(PermissionRules::new(vec![
             Rule::new(Action::Tool, "glob", Mode::Allow),
@@ -178,6 +240,11 @@ async fn workflow_worker_and_verifier_deadline_notices_follow_offered_report_too
                     {
                         Some(output.to_string())
                     }
+                    Event::TextDelta { delta, .. }
+                        if delta.starts_with(REASONING_DEADLINE_NOTICE_PREFIX) =>
+                    {
+                        Some(delta)
+                    }
                     _ => None,
                 })
                 .collect::<Vec<_>>();
@@ -193,9 +260,23 @@ async fn workflow_worker_and_verifier_deadline_notices_follow_offered_report_too
                     ))
                     .collect::<Vec<_>>()
             );
+            if think_first {
+                assert!(notices[0].starts_with(REASONING_DEADLINE_NOTICE_PREFIX));
+                // The round after the cut sends the notice as its last user message.
+                let sent: Vec<_> = provider
+                    .last_user
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(session, _)| *session == child)
+                    .map(|(_, text)| text.clone())
+                    .collect();
+                assert_eq!(sent.len(), 2, "child {child}: {sent:?}");
+                assert_eq!(sent[1], notices[0]);
+            }
             let expected = governed && connected && allowed;
             if notices[0].contains("call `report`") != expected {
-                wrong_notices.push(format!("governed={governed}, connected={connected}, allowed={allowed}, child={child}: {}", notices[0]));
+                wrong_notices.push(format!("think_first={think_first}, governed={governed}, connected={connected}, allowed={allowed}, child={child}: {}", notices[0]));
             }
         }
         supervisor

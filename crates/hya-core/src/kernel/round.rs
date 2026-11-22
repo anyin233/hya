@@ -1,5 +1,7 @@
 //! One model round: drain a provider stream into durable events.
 
+use std::pin::Pin;
+
 use async_trait::async_trait;
 use futures::StreamExt;
 use hya_proto::{
@@ -7,6 +9,8 @@ use hya_proto::{
     UsagePurpose,
 };
 use hya_provider::{EventStream, ProviderError};
+use hya_tool::deadline::{RunDeadline, Stage};
+use tokio::time::Sleep;
 use tokio_util::sync::CancellationToken;
 
 use super::Emit;
@@ -32,6 +36,18 @@ pub struct Round {
     pub finish: FinishReason,
     /// Usage the provider reported for the round.
     pub tokens: Option<TokenUsage>,
+    /// The stream showed only reasoning until a run-deadline stage, so it
+    /// was stopped there (docs/kernel.md).
+    pub deadline_cut: Option<DeadlineCut>,
+}
+
+/// A reasoning-only stream stopped at a run-deadline stage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeadlineCut {
+    /// The stage the run had reached (`WrapUp` or `Final`).
+    pub stage: Stage,
+    /// The reasoning the step streamed before the cut.
+    pub reasoning: String,
 }
 
 /// A round that failed, with whether the model had already produced output.
@@ -83,9 +99,16 @@ struct Drained {
     // Parts still streaming, in stream order.
     text: Open,
     reasoning: Open,
+    // Reasoning parts already ended, in stream order.
+    reasoned: Vec<String>,
+    // Ended reasoning parts that carry data a route replays.
+    replayable: Vec<PartId>,
     finish: Option<FinishReason>,
     tokens: Option<TokenUsage>,
     saw_text: bool,
+    saw_tool_start: bool,
+    saw_reasoning: bool,
+    deadline_cut: Option<DeadlineCut>,
 }
 
 /// Drain `stream`, then record the round's usage as `UsageRecorded`, also
@@ -141,6 +164,7 @@ pub async fn collect(
             tool_calls: drained.tool_calls,
             finish: drained.finish.unwrap_or(FinishReason::Stop),
             tokens: drained.tokens,
+            deadline_cut: drained.deadline_cut,
         }),
         Err(error) => Err(Failure {
             error,
@@ -160,11 +184,35 @@ async fn drain(
     drained: &mut Drained,
     cancel: &CancellationToken,
 ) -> Result<(), CoreError> {
+    // Armed once, by the round's first reasoning: waiting for the first
+    // byte is never cut, and a stream that keeps reasoning still meets it.
+    let mut checkpoint: Option<(&RunDeadline, Stage, Pin<Box<Sleep>>)> = None;
     loop {
+        let reasoning_only = !(drained.saw_text || drained.saw_tool_start);
         let item = tokio::select! {
             biased;
             () = cancel.cancelled() => {
                 drained.finish = Some(FinishReason::Cancelled);
+                break;
+            }
+            // Ahead of the stream, so buffered chunks cannot hold off a
+            // checkpoint that has passed.
+            Some(stage) = async {
+                let (deadline, next, sleep) = checkpoint.as_mut()?;
+                sleep.await;
+                // A late wake can find the run past the stage it waited for.
+                Some(deadline.stage().max(*next).min(Stage::Final))
+            }, if reasoning_only && checkpoint.is_some() => {
+                let reasoning = drained
+                    .reasoned
+                    .iter()
+                    .chain(drained.reasoning.0.iter().map(|(_, body)| body))
+                    .filter(|body| !body.is_empty())
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                drained.deadline_cut = Some(DeadlineCut { stage, reasoning });
+                drained.finish = Some(FinishReason::Stop);
                 break;
             }
             item = stream.next() => match item {
@@ -193,6 +241,8 @@ async fn drain(
                 ..
             } => {
                 drained.finish = Some(reported);
+                // The step is over, even if the stream stays open.
+                checkpoint = None;
                 if let Some(update) = reported_tokens {
                     drained
                         .tokens
@@ -234,12 +284,31 @@ async fn drain(
                 emit.emit(session, text_events(session, message, part, body))
                     .await?;
             }
+            Event::ToolInputStart { .. } => {
+                drained.saw_tool_start = true;
+                emit.emit(session, vec![event]).await?;
+            }
             Event::ToolInputDelta { .. } => emit.live(event),
             Event::ReasoningStart { part, .. } => {
                 drained.reasoning.0.push((part, String::new()));
                 emit.emit(session, vec![event]).await?;
             }
             Event::ReasoningDelta { part, delta, .. } => {
+                if !(delta.is_empty()
+                    || drained.finish.is_some()
+                    || drained.saw_reasoning
+                    || drained.saw_text
+                    || drained.saw_tool_start)
+                {
+                    drained.saw_reasoning = true;
+                    // A step that starts near or past the checkpoint gets the
+                    // grace to finish thinking (docs/kernel.md).
+                    checkpoint = hya_tool::deadline::current().and_then(|deadline| {
+                        let (delay, stage) = deadline.next_checkpoint(session)?;
+                        let wait = delay.max(deadline.reasoning_grace());
+                        Some((deadline, stage, Box::pin(tokio::time::sleep(wait))))
+                    });
+                }
                 drained.reasoning.append(part, &delta);
                 emit.live(Event::ReasoningDelta {
                     session,
@@ -254,6 +323,10 @@ async fn drain(
                 ..
             } => {
                 let body = drained.reasoning.take(part).unwrap_or_default();
+                drained.reasoned.push(body.clone());
+                if provider_data.is_some() {
+                    drained.replayable.push(part);
+                }
                 emit.emit(
                     session,
                     reasoning_events(session, message, part, body, provider_data),
@@ -267,6 +340,7 @@ async fn drain(
                 ref input,
                 ..
             } => {
+                drained.saw_tool_start = true;
                 drained.tool_calls.push(ToolCall {
                     part,
                     call,
@@ -278,7 +352,24 @@ async fn drain(
             event => emit.emit(session, vec![event]).await?,
         }
     }
-    persist_open(emit, session, message, drained).await
+    persist_open(emit, session, message, drained).await?;
+    if drained.deadline_cut.is_some() && !drained.replayable.is_empty() {
+        // No answer or call of the cut step follows its reasoning, and a route
+        // that replays the reasoning would pair it with a later step's: keep
+        // the text, drop the replay data (docs/kernel.md).
+        let strip = drained
+            .replayable
+            .iter()
+            .map(|&part| Event::ReasoningEnd {
+                session,
+                message,
+                part,
+                provider_data: None,
+            })
+            .collect();
+        emit.emit(session, strip).await?;
+    }
+    Ok(())
 }
 
 /// Persist text and reasoning parts whose end never arrived.

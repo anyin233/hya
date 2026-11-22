@@ -30,7 +30,7 @@ use super::super::{
 };
 use super::messages::{AttachmentData, prompt_digests, system_prompt};
 use super::rewrite_host::{HostErrors, TurnLog, TurnModels, TurnTranscript};
-use super::tool_gate::TurnToolGate;
+use super::tool_gate::{TurnToolGate, can_report};
 use super::{
     RequestLineage, TurnExecution, TurnRebindInputs, workflow_failure_class,
     workflow_provider_failure_class,
@@ -663,6 +663,16 @@ impl Harness for TurnHarness<'_> {
         // An accepted `report` ends the member's episode: the round's other
         // tool calls have completed and are recorded.
         self.report_latch.is_set()
+    }
+
+    fn deadline_subagent(&self) -> Result<bool, CoreError> {
+        can_report(
+            self.engine,
+            &self.binding,
+            &self.live_agent,
+            self.parent_session,
+            &self.offered,
+        )
     }
 
     /// Rounds open on the live router (a fallback route can be added

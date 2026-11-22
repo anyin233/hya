@@ -39,7 +39,7 @@ use tokio_util::sync::CancellationToken;
 use crate::error::CoreError;
 use rewrite::Initiator;
 pub use rewrite::{before_round, rewrite_now};
-pub use round::{CompleteText, Failure, Round, ToolCall};
+pub use round::{CompleteText, DeadlineCut, Failure, Round, ToolCall};
 pub use view::View;
 
 /// Agent name the kernel renders assistant messages with in requests.
@@ -81,6 +81,36 @@ const REASONING_DROPPED_NOTICE: &str = "[hya] Reasoning replay notice: the model
 
 fn is_reasoning_dropped_notice(text: &str) -> bool {
     text.starts_with(REASONING_DROPPED_PREFIX)
+}
+
+/// Most characters of a cut step's reasoning that its notice quotes.
+const DEADLINE_CUT_REASONING_CHARS: usize = 1_200;
+
+/// The notice after a reasoning-only step was cut at a deadline stage
+/// (docs/kernel.md): the stage notice and the end of the cut reasoning.
+fn deadline_cut_notice(cut: &DeadlineCut, stage_notice: Option<String>) -> String {
+    let mut notice = format!(
+        "{} the run reached a deadline stage while your last step was still thinking, before \
+         any answer or tool call, so that step was stopped. Do not restart the deliberation: \
+         act on what you have worked out, with the next tool call or your final answer.",
+        hya_proto::context::REASONING_DEADLINE_NOTICE_PREFIX
+    );
+    if let Some(stage_notice) = stage_notice {
+        notice.push_str("\n\n");
+        notice.push_str(&stage_notice);
+    }
+    let reasoning = cut.reasoning.trim();
+    if !reasoning.is_empty() {
+        let skip = reasoning
+            .chars()
+            .count()
+            .saturating_sub(DEADLINE_CUT_REASONING_CHARS);
+        let tail: String = reasoning.chars().skip(skip).collect();
+        notice.push_str("\n\nWhere your thinking stopped");
+        notice.push_str(if skip > 0 { " (its end):\n…" } else { ":\n" });
+        notice.push_str(&tail);
+    }
+    notice
 }
 
 /// What one round with tool calls sent and reported, kept for the next
@@ -253,6 +283,11 @@ pub trait Harness: ToolGate {
     /// `None` uses [`Scope::provider`].
     fn served_route(&self, _model: &ModelRef) -> Option<(ReasoningReplayPolicy, bool)> {
         None
+    }
+    /// Whether the run's deadline notices take the text for an agent that
+    /// delivers by `report`.
+    fn deadline_subagent(&self) -> Result<bool, CoreError> {
+        Ok(false)
     }
 }
 
@@ -771,6 +806,8 @@ pub async fn drive(
     let mut reasoning_notice_delivered = false;
     // The notice this run appended and no request has carried yet.
     let mut pending_notice: Option<MessageId> = None;
+    // A cut whose notice follows the next round's rewrite.
+    let mut pending_cut: Option<DeadlineCut> = None;
     loop {
         if cancel.is_cancelled() {
             return Ok(FinishReason::Cancelled);
@@ -781,6 +818,23 @@ pub async fn drive(
             if cancel.is_cancelled() {
                 return Ok(FinishReason::Cancelled);
             }
+            projection = store.read_projection_shared(session).await?;
+        }
+        if let Some(cut) = pending_cut.take() {
+            // Minted after any compaction marker of that rewrite, which
+            // would otherwise leave the notice out of the request.
+            let subagent = harness.deadline_subagent()?;
+            let stage_notice =
+                hya_tool::deadline::current().map(|deadline| deadline.notice(cut.stage, subagent));
+            emit.emit(
+                session,
+                round::system_message_events(
+                    session,
+                    MessageId::new(),
+                    deadline_cut_notice(&cut, stage_notice),
+                ),
+            )
+            .await?;
             projection = store.read_projection_shared(session).await?;
         }
         let mut batch = scope
@@ -912,6 +966,17 @@ pub async fn drive(
         if round.finish == FinishReason::Cancelled {
             harness.cancelled(round.tool_calls).await?;
             return Ok(FinishReason::Cancelled);
+        }
+        if let Some(cut) = round.deadline_cut {
+            // The cut's notice tells the stage, so the next round's own
+            // stage notice or clock line would repeat it.
+            if let Some(deadline) = hya_tool::deadline::current() {
+                deadline.mark_notified(session, cut.stage);
+            }
+            pending_cut = Some(cut);
+            prev = None;
+            step += 1;
+            continue;
         }
         // Only a normal end of the model's turn asks the harness to go on,
         // and not once cancelled.
