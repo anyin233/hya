@@ -404,10 +404,12 @@ When several apply at one evaluation the order is `members`, `mail`,
 `stalled`, `nothing_to_wait_for`, `timeout`.
 
 **Result shape and budget.** The result is `{title, output, metadata}`, and
-the wait budgets it itself: the whole envelope, serialized, stays within
-`WAIT_RESULT_BUDGET` = 4500 characters, under the generic 5000-character tool
-output cap, so the cap never cuts it and `metadata` always arrives intact.
-`output` starts with a row for each member. The result reserves space for these rows and all metadata before including preview sections in order. A report whose preview is omitted has `report_truncated: true`.
+the wait budgets the serialized envelope to `WAIT_RESULT_BUDGET` (4,500 characters),
+below the generic 5,000-character cap. It reserves space for every metadata row
+before adding report previews. An omitted report has `report_truncated: true`.
+On large teams, trailing member lines in `output` become a count. The
+`finished`, `already_finished`, and `running` arrays keep every target.
+If metadata alone exceeds the budget, it takes priority over the output text.
 
 ```text
 Subagents finished.
