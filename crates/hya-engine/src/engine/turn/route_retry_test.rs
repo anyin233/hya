@@ -13,6 +13,7 @@ use std::sync::Mutex;
 struct DisconnectingProvider {
     calls: Mutex<Vec<ModelRef>>,
     cancel_on_interruption: Option<CancellationToken>,
+    cancel_on_reopen: Option<CancellationToken>,
 }
 
 #[async_trait::async_trait]
@@ -62,6 +63,10 @@ impl Provider for DisconnectingProvider {
                 },
             )));
         }
+        if let Some(cancel) = &self.cancel_on_reopen {
+            cancel.cancel();
+            return Err(ProviderError::Transport("pinned reopen failed".into()));
+        }
         Ok(Box::pin(futures::stream::iter([Err(
             ProviderError::Decode("invalid frame".into()),
         )])))
@@ -71,21 +76,29 @@ impl Provider for DisconnectingProvider {
 #[tokio::test]
 async fn interrupted_workflow_retries_only_its_serving_candidate_and_finalizes_once()
 -> Result<(), Box<dyn std::error::Error>> {
-    check_interrupted_route(false).await
+    check_interrupted_route(false, false).await
 }
 
 #[tokio::test]
 async fn cancelled_interrupted_step_finalizes_once_before_backoff()
 -> Result<(), Box<dyn std::error::Error>> {
-    check_interrupted_route(true).await
+    check_interrupted_route(true, false).await
+}
+
+#[tokio::test]
+async fn cancellation_at_pinned_reopen_failure_records_cancelled()
+-> Result<(), Box<dyn std::error::Error>> {
+    check_interrupted_route(false, true).await
 }
 
 async fn check_interrupted_route(
     cancel_on_interruption: bool,
+    cancel_on_reopen: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let cancel = CancellationToken::new();
     let provider = Arc::new(DisconnectingProvider {
         cancel_on_interruption: cancel_on_interruption.then(|| cancel.clone()),
+        cancel_on_reopen: cancel_on_reopen.then(|| cancel.clone()),
         ..Default::default()
     });
     let engine = SessionEngine::new(
@@ -147,8 +160,12 @@ async fn check_interrupted_route(
         outcomes
     };
     let (result, outcomes) = tokio::join!(turn, record);
-    if cancel_on_interruption {
-        assert!(matches!(result, Err(CoreError::Cancelled)), "{result:?}");
+    if cancel_on_interruption || cancel_on_reopen {
+        if cancel_on_reopen {
+            assert!(matches!(result, Ok(FinishReason::Cancelled)), "{result:?}");
+        } else {
+            assert!(matches!(result, Err(CoreError::Cancelled)), "{result:?}");
+        }
         assert!(
             engine
                 .store()
@@ -169,7 +186,7 @@ async fn check_interrupted_route(
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .len(),
-            2
+            if cancel_on_reopen { 3 } else { 2 }
         );
         assert!(matches!(
             &outcomes[..],
