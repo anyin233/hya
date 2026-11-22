@@ -474,6 +474,56 @@ async fn unknown_tool_cannot_trigger_completion_check() {
 }
 
 #[tokio::test]
+async fn vetoed_unknown_tool_cannot_trigger_completion_check()
+-> Result<(), Box<dyn std::error::Error>> {
+    let env = E2eEnvBuilder::new()
+        .route(
+            ROOT,
+            vec![
+                tool_step("no_such_tool", json!({})),
+                text_step("Done."),
+                text_step("UNUSED"),
+            ],
+        )
+        .build()
+        .await?;
+    let plugin = env.backend.project.join("veto.py");
+    std::fs::write(
+        &plugin,
+        r#"import json, sys
+for line in sys.stdin:
+    req = json.loads(line)
+    if 'id' not in req: continue
+    result = {}
+    if req['method'] == 'initialize':
+        result = {'protocol_version':1,'plugin':{'id':'veto','version':'1.0.0','kind':'rust'},'hooks':[{'name':'tool.execute.before'}],'tools':[]}
+    elif req['method'] == 'hook/tool.execute.before':
+        result = {'outcome':'veto', 'reason':'fixture veto'}
+    print(json.dumps({'jsonrpc':'2.0','id':req['id'],'result':result}), flush=True)
+"#,
+    )?;
+    let config = env.backend.xdg_config_home.join("hya/config.yaml");
+    let settings = std::fs::read_to_string(&config)?.replace(
+        "plugins: {}",
+        &format!(
+            "plugins:\n  veto:\n    command: [python3, {}]",
+            serde_json::to_string(&plugin)?
+        ),
+    );
+    std::fs::write(config, settings)?;
+    let output = run_exec(&env, &["--time-budget", "900"], "do the task").await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let events = String::from_utf8(output.stdout)?;
+    assert!(events.contains("blocked by plugin: fixture veto"));
+    assert_eq!(env.fake.route_remaining(ROOT)?, Some(1));
+    Ok(())
+}
+
+#[tokio::test]
 async fn completion_check_resets_ignored_notice_count() {
     let announce = || text_step("Now verify the file format:");
     let (_, _, requests) = run_lead(

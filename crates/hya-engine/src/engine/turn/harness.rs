@@ -82,6 +82,7 @@ impl SessionEngine {
             actor_claim,
             guidance,
             workflow_route,
+            ran_known_tool,
             explicit_model,
             rebind,
             effort_fallback,
@@ -190,6 +191,7 @@ impl SessionEngine {
             apply_default_overlays,
             explicit_model,
             workflow_route,
+            ran_known_tool,
             guidance,
             external_dirs,
             workspace,
@@ -236,6 +238,7 @@ impl SessionEngine {
 
 /// One full-mode turn's state across the kernel's rounds.
 struct TurnHarness<'a> {
+    ran_known_tool: Option<&'a mut bool>,
     engine: &'a SessionEngine,
     session: SessionId,
     message: MessageId,
@@ -714,6 +717,14 @@ impl Harness for TurnHarness<'_> {
     }
 
     async fn collected(&mut self, round: &Round) -> Result<(), CoreError> {
+        if let Some(ran) = self.ran_known_tool.as_deref_mut()
+            && !*ran
+        {
+            *ran = round.tool_calls.iter().any(|call| {
+                [kernel::tools::REWRITE, kernel::tools::TODO].contains(&call.name.as_str())
+                    || self.resources.resolve_tool(&call.name).is_some()
+            });
+        }
         if let Some(route) = self.workflow_route {
             route.finalize(None).await?;
         }
