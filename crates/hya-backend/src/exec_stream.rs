@@ -3,7 +3,7 @@
 //! Events are persisted per-envelope by the engine regardless; this module
 //! streams the same durable envelopes to stdout as they are broadcast, so an
 //! abnormally terminated run still leaves a usable partial trajectory on
-//! stdout (the run2 lesson). Envelopes are filtered to the exec session (optionally its descendants) and
+//! stdout. Envelopes are filtered to the exec session (optionally its descendants) and
 //! to durable seqs (`seq == 0` frames are live-only and never persisted),
 //! deduplicated by seq — concurrent writers (turn loop, resident batches,
 //! mailbox) can publish out of seq order, so arrival order is usually but not
@@ -27,38 +27,82 @@ pub(crate) enum StreamScope {
     Tree {
         root: SessionId,
         sessions: HashSet<SessionId>,
+        seen_sessions: HashSet<SessionId>,
+        store: Box<SessionStore>,
     },
 }
 
 impl StreamScope {
-    fn accepts(&mut self, envelope: &Envelope) -> bool {
+    fn accepts(&self, envelope: &Envelope) -> bool {
         if envelope.seq.0 == 0 {
             return false;
         }
         match self {
             Self::Single(id) => envelope.event.session() == Some(*id),
-            Self::Tree { sessions, .. } => {
-                if let Event::SessionCreated {
-                    session,
-                    parent: Some(parent),
-                    ..
-                } = &envelope.event
-                    && sessions.contains(parent)
-                {
-                    sessions.insert(*session);
-                }
-                envelope
-                    .event
-                    .session()
-                    .is_some_and(|id| sessions.contains(&id))
-            }
+            Self::Tree { sessions, .. } => envelope
+                .event
+                .session()
+                .is_some_and(|id| sessions.contains(&id)),
         }
     }
 
-    pub(crate) fn tree(root: SessionId) -> Self {
+    // A scoped replay already checked the authoritative parentage, including
+    // events missed on the bus. Seed membership before processing live frames.
+    fn replayed(&mut self, envelope: &Envelope) {
+        if let Self::Tree {
+            sessions,
+            seen_sessions,
+            ..
+        } = self
+            && let Some(id) = envelope.event.session()
+        {
+            sessions.insert(id);
+            seen_sessions.insert(id);
+        }
+    }
+
+    async fn observe_live(&mut self, env: &Envelope) -> Result<(), StoreError> {
+        let Self::Tree {
+            sessions,
+            seen_sessions,
+            store,
+            ..
+        } = self
+        else {
+            return Ok(());
+        };
+        let Some(id) = env.event.session() else {
+            return Ok(());
+        };
+        if env.seq.0 != 0
+            && seen_sessions.insert(id)
+            && let Event::SessionCreated {
+                parent: Some(parent),
+                ..
+            } = &env.event
+            && sessions.contains(parent)
+        {
+            // The original creation may predate this subscription or a lag gap.
+            let timeout = store.read_timeout();
+            let first = tokio::time::timeout(timeout, store.replay_page(id, 0, 1))
+                .await
+                .map_err(|_| StoreError::StorageTimeout {
+                    operation: "tree child creation",
+                    timeout,
+                })??;
+            if first.first().is_some_and(|e| e.seq == env.seq) {
+                sessions.insert(id);
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn tree(root: SessionId, store: SessionStore) -> Self {
         Self::Tree {
             root,
             sessions: HashSet::from([root]),
+            seen_sessions: HashSet::from([root]),
+            store: Box::new(store),
         }
     }
 
@@ -151,6 +195,26 @@ impl<W: std::io::Write> JsonStreamPrinter<W> {
         Ok(true)
     }
 
+    async fn live(&mut self, envelope: &Envelope) -> std::io::Result<()> {
+        match self.scope.observe_live(envelope).await {
+            Ok(()) => {
+                self.print(envelope)?;
+            }
+            Err(error) if error.is_storage_fault() => {
+                self.first_lag_fault
+                    .get_or_insert_with(|| error.to_string());
+            }
+            Err(error) => return Err(std::io::Error::other(error)),
+        }
+        Ok(())
+    }
+
+    fn replayed(&mut self, envelope: &Envelope) -> std::io::Result<()> {
+        self.scope.replayed(envelope);
+        self.print(envelope)?;
+        Ok(())
+    }
+
     /// Flush the underlying writer.
     pub(crate) fn flush(&mut self) -> std::io::Result<()> {
         self.out.flush()
@@ -177,7 +241,7 @@ where
     // (notably `session_created`) print first, keeping stdout ordered.
     if let Ok(envelopes) = replay(ReplayPass::Initial).await {
         for envelope in &envelopes {
-            printer.print(envelope)?;
+            printer.replayed(envelope)?;
         }
     }
     loop {
@@ -185,13 +249,13 @@ where
             biased;
             result = rx.recv() => match result {
                 Ok(envelope) => {
-                    printer.print(&envelope)?;
+                    printer.live(&envelope).await?;
                 }
                 Err(broadcast::error::RecvError::Lagged(_missed)) => {
                     match replay(ReplayPass::Lag).await {
                         Ok(envelopes) => {
                             for envelope in &envelopes {
-                                printer.print(envelope)?;
+                                printer.replayed(envelope)?;
                             }
                         }
                         Err(error) if error.is_storage_fault() => {
@@ -213,7 +277,7 @@ where
     // Drain anything buffered between the turn completing and `done` firing so
     // stdout never drops trailing durable events.
     while let Ok(envelope) = rx.try_recv() {
-        printer.print(&envelope)?;
+        printer.live(&envelope).await?;
     }
     Ok(printer)
 }
@@ -243,7 +307,7 @@ where
     match replay().await {
         Ok(envelopes) => {
             for env in &envelopes {
-                printer.print(env)?;
+                printer.replayed(env)?;
             }
         }
         Err(error) if error.is_storage_fault() => {
@@ -375,6 +439,18 @@ mod tests {
     #[tokio::test]
     async fn tree_stream_prints_descendants_in_arrival_order() -> anyhow::Result<()> {
         let [root, member, grandchild, other] = std::array::from_fn(|_| SessionId::new());
+        let store = SessionStore::connect_memory().await?;
+        // An unrelated root existed before subscription. Only its conflicting
+        // create arrives live. A second unrelated root is observed live first.
+        let old = SessionId::new();
+        for (id, e) in [
+            (root, envelope(1, root)),
+            (member, child(2, member, root)),
+            (grandchild, child(3, grandchild, member)),
+            (old, envelope(4, old)),
+        ] {
+            store.append_event(id, &e.event).await?;
+        }
         let (tx, rx) = broadcast::channel(16);
         for event in [
             child(2, member, root),
@@ -384,6 +460,9 @@ mod tests {
             title(6, grandchild),
             envelope(5, other),
             title(7, other),
+            child(8, other, root),
+            child(9, old, root),
+            title(10, old),
         ] {
             tx.send(event)?;
         }
@@ -392,7 +471,7 @@ mod tests {
         let out = SharedBuf::default();
         stream_until_done(
             rx,
-            StreamScope::tree(root),
+            StreamScope::tree(root, store),
             done_rx,
             |_| std::future::ready(Ok(vec![envelope(1, root)])),
             out.clone(),
@@ -413,7 +492,7 @@ mod tests {
         let out = SharedBuf::default();
         let printer = stream_until_done(
             rx,
-            StreamScope::tree(root),
+            StreamScope::tree(root, SessionStore::connect_memory().await?),
             done_rx,
             |pass| {
                 std::future::ready(Ok(match pass {
