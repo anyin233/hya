@@ -424,6 +424,17 @@ impl WaitOutcome {
             let tag = format!("already {}", state_label(member.state));
             lines.push(member_line(member, &tag));
         }
+        if self
+            .finished
+            .iter()
+            .chain(&self.already_finished)
+            .any(|member| member.state == WaitMemberState::Reported)
+        {
+            lines.push(
+                "Reported subagents are automatically archived; do not call `archive` on them."
+                    .to_string(),
+            );
+        }
         for member in &self.running {
             if member.state == WaitMemberState::Idle {
                 lines.push(format!(
@@ -1085,6 +1096,37 @@ mod tests {
         assert_eq!(metadata["running"][0]["state"], "working");
         assert_eq!(metadata["mail"][0]["from"], "main/reviewer-b");
         assert_eq!(metadata["mail"][0]["channel"], "DM-0000000b");
+    }
+
+    #[test]
+    fn archive_note_applies_once_to_new_and_previous_reports_only() {
+        let note = "Reported subagents are automatically archived; do not call `archive` on them.";
+        for (new, previous) in [(true, false), (false, true), (true, true), (false, false)] {
+            let state = |reported| {
+                if reported {
+                    WaitMemberState::Reported
+                } else {
+                    WaitMemberState::Archived
+                }
+            };
+            let outcome = WaitOutcome {
+                woke_by: WaitWake::Members,
+                finished: vec![member("main/new", state(new), Some(&"x".repeat(5000)))],
+                already_finished: vec![member("main/old", state(previous), None)],
+                running: vec![],
+                mail: vec![],
+                waited_ms: 0,
+            };
+            let result = outcome.to_tool_result();
+            let output = result["output"].as_str().unwrap_or_default();
+            assert!(output.starts_with("Subagents finished.\n"));
+            assert_eq!(
+                output.lines().filter(|line| *line == note).count(),
+                usize::from(new || previous)
+            );
+            assert_eq!(result["metadata"]["finished"][0]["report_truncated"], true);
+            assert!(result.to_string().chars().count() <= WAIT_RESULT_BUDGET);
+        }
     }
 
     /// Without a DM channel the preview does not invent a pointer.

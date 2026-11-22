@@ -153,7 +153,7 @@ impl Tool for TaskTool {
                 },
                 "effort": {
                     "type": "string",
-                    "description": "Thinking effort for this subagent (e.g. low, medium, high, none). Must be one the child's model supports. Omit to use the agent's default effort, shown by `list_agents`."
+                    "description": "Optional thinking effort override for this subagent. Omit to inherit the child agent's default effort; only pass a value the child's model advertises in list_agents."
                 },
                 "command": {
                     "type": "string",

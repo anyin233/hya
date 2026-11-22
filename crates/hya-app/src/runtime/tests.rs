@@ -1229,6 +1229,44 @@ async fn websearch_only_config_reaches_runtime() {
 }
 
 #[tokio::test]
+async fn webfetch_config_controls_engine_exposure_independently_of_search() -> anyhow::Result<()> {
+    let dir = tempdir();
+    let _env = EnvGuard::with_home(&dir, &dir);
+    std::fs::create_dir_all(dir.join("hya"))?;
+    for enabled in [true, false] {
+        std::fs::write(
+            dir.join("hya/config.yaml"),
+            format!("tools: {{webfetch: {{enabled: {enabled}}}}}"),
+        )?;
+        let runtime = resolve_runtime_strict(None).await?;
+        let agent = agent_with_model(&runtime.model, None);
+        let mut built = build_session_engine(
+            SessionStore::connect_memory().await?,
+            runtime.router,
+            &agent,
+            runtime.mcp,
+            runtime.plugins,
+            (runtime.websearch, runtime.permission, runtime.settings),
+        )
+        .await?;
+        let schemas = built.engine().tool_schemas();
+        assert_eq!(
+            schemas
+                .iter()
+                .any(|schema| schema.name.as_str() == "webfetch"),
+            enabled
+        );
+        assert!(
+            schemas
+                .iter()
+                .any(|schema| schema.name.as_str() == "websearch")
+        );
+        built.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn disabled_websearch_is_not_exposed_by_engine() {
     let _env = StableEnvGuard::new();
     let store = SessionStore::connect_memory().await.unwrap();

@@ -165,6 +165,12 @@ impl EngineSettings {
     pub(crate) fn scopes(&self) -> hya_engine::CatalogScopeCacheConfig {
         resolve_catalog_scope_cache(self.file.catalog_scopes.as_ref())
     }
+    pub(crate) fn webfetch_enabled(&self) -> bool {
+        self.file
+            .tools
+            .as_ref()
+            .is_none_or(|tools| tools.webfetch.enabled)
+    }
     pub(crate) fn code_mode(&self) -> CodeMode {
         self.file
             .tools
@@ -200,9 +206,30 @@ struct CatalogScopesFile {
 #[derive(Debug, Deserialize)]
 struct ToolsConfig {
     #[serde(default)]
+    webfetch: WebFetchConfig,
+    #[serde(default)]
     websearch: WebSearchConfig,
     #[serde(default)]
     code: CodeToolConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WebFetchConfig {
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for WebFetchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -2921,6 +2948,24 @@ providers:
         }
         assert!(mode("tools:\n  code:\n    mode: always\n").is_err());
         assert!(mode("tools:\n  code:\n    enabled: true\n").is_err());
+    }
+
+    #[test]
+    fn parses_webfetch_enabled_and_rejects_unknown_fields() -> anyhow::Result<()> {
+        for (yaml, enabled) in [
+            ("{}", true),
+            ("tools: {}", true),
+            ("tools: {webfetch: {}}", true),
+            ("tools: {webfetch: {enabled: true}}", true),
+            ("tools: {webfetch: {enabled: false}}", false),
+        ] {
+            let settings = EngineSettings {
+                file: parse_config(yaml)?,
+            };
+            assert_eq!(settings.webfetch_enabled(), enabled, "{yaml}");
+        }
+        assert!(parse_config("tools: {webfetch: {enable: false}}").is_err());
+        Ok(())
     }
 
     #[test]
