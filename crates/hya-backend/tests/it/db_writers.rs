@@ -287,6 +287,9 @@ async fn exec_that_cannot_be_routed_exits_75_naming_the_server() -> TestResult {
         "{stderr}"
     );
     assert!(stderr.contains(&server.url), "{stderr}");
+    let output = scratch.run(&["exec", "--json", "--include-subagents", "tree"])?;
+    assert_eq!(output.status.code(), Some(EXIT_DB_IN_USE));
+    assert!(String::from_utf8(output.stderr)?.contains("--include-subagents"));
     assert!(server_sessions(&server.url).await?.is_empty());
     drop(server);
     Ok(())

@@ -784,6 +784,7 @@ runs whose prompt context is exactly what you passed.
 ```sh
 hya exec "summarize this repo"
 hya exec --json "summarize this repo"
+hya exec --json --include-subagents "delegate the checks" > tree.jsonl
 hya exec --bare --json "say hi" > run.jsonl
 hya exec --time-budget 900 "implement the requested change"
 ```
@@ -988,6 +989,14 @@ stop that daemon or select another database. The budget supplies guidance and
 tool timeout caps; it also bounds continuation turns and does not itself kill
 the process. An outside harness owns the final wall-clock limit. Without the flag,
 no deadline is installed and existing timeouts apply.
+
+`--include-subagents` extends the local full-mode `exec --json` stream to the
+root and every descendant, including grandchildren. Each line is the same
+durable event envelope with its original session ID and global sequence number.
+Live events print in arrival order. Startup, lag recovery, and final catch-up
+replay the tree in sequence order and skip numbers already printed.
+The flag requires `--json`, conflicts with `--bare`, and exits 75 if a
+running server owns the database. Omit it to stream only the root session.
 
 `--json` streams live: envelopes print as events commit (`exec --bare --json`
 writes directly from `JsonEmit` as each kernel append finishes without running

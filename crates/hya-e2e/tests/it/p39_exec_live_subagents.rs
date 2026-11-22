@@ -48,13 +48,15 @@ fn busy_worker(secs: u32) -> Vec<ScriptStep> {
 
 /// Run `hya exec --json` direct (its own db, so it does not route to the
 /// env's `serve`) with the env's config and FakeLlm.
-async fn run_exec(env: &E2eEnv, prompt: &str) -> Output {
+async fn run_exec(env: &E2eEnv, flags: &[&str], prompt: &str) -> Output {
     let backend = &env.backend;
     let root = backend.project.parent().expect("e2e root");
     let run = tokio::process::Command::new(&backend.binary)
         .args(["--yolo", "--model", "fake/model", "--db"])
         .arg(root.join("exec.db"))
-        .args(["exec", "--json", prompt])
+        .args(["exec", "--json"])
+        .args(flags)
+        .arg(prompt)
         .current_dir(&backend.project)
         .env("HOME", root.join("home"))
         .env("XDG_CONFIG_HOME", &backend.xdg_config_home)
@@ -97,7 +99,7 @@ async fn t2_38_exec_alone_continues_after_a_worker_goes_idle() {
             text_step("ROOT_EXTRA"),
         ])
         .build().await.expect("e2e env");
-    let output = run_exec(&env, "delegate, then finish").await;
+    let output = run_exec(&env, &[], "delegate, then finish").await;
     assert!(
         output.status.success(),
         "{}; {}",
@@ -181,7 +183,7 @@ async fn t2_38_exec_lead_collects_a_live_worker_before_the_run_ends() {
         .build()
         .await
         .expect("e2e env");
-    let output = run_exec(&env, "delegate the unit").await;
+    let output = run_exec(&env, &["--include-subagents"], "delegate the unit").await;
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success(),
@@ -200,6 +202,25 @@ async fn t2_38_exec_lead_collects_a_live_worker_before_the_run_ends() {
             }
         }
     }
+    let log: Vec<hya_proto::Envelope> = stdout
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<Result<_, _>>()
+        .unwrap_or_else(|error| panic!("invalid JSONL: {error}"));
+    let member = log.iter().find_map(|e| match e.event {
+        hya_proto::Event::SessionCreated {
+            session,
+            parent: Some(_),
+            ..
+        } => Some(session),
+        _ => None,
+    });
+    assert!(member.is_some_and(|id| log.iter().any(|e| matches!(&e.event,
+        hya_proto::Event::ToolCallRequested { session, name, .. } if *session == id && name.as_str() == "report"))));
+    assert_eq!(
+        log.iter().map(|e| e.seq).collect::<BTreeSet<_>>().len(),
+        log.len()
+    );
     // The worker was not stopped: it ran its whole script and reported.
     assert_eq!(env.fake.route_remaining(WORKER).unwrap(), Some(0));
     let requests = lead_requests(&env);
@@ -242,7 +263,7 @@ async fn t2_39_exec_ends_after_two_ignored_notices() {
         .await
         .expect("e2e env");
     let started = Instant::now();
-    let output = run_exec(&env, "delegate the unit").await;
+    let output = run_exec(&env, &[], "delegate the unit").await;
     assert!(
         output.status.success(),
         "exec failed: {}; {}",
@@ -278,7 +299,7 @@ async fn t2_49_exec_wait_reports_an_idle_worker_as_stalled() {
             text_step("ROOT_EXTRA"),
         ])
         .build().await.expect("e2e env");
-    let output = run_exec(&env, "delegate, collect, and archive if stalled").await;
+    let output = run_exec(&env, &[], "delegate, collect, and archive if stalled").await;
     assert!(
         output.status.success(),
         "exec failed: {}; {}",

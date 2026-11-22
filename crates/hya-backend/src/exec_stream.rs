@@ -3,7 +3,7 @@
 //! Events are persisted per-envelope by the engine regardless; this module
 //! streams the same durable envelopes to stdout as they are broadcast, so an
 //! abnormally terminated run still leaves a usable partial trajectory on
-//! stdout (the run2 lesson). Envelopes are filtered to the exec session and
+//! stdout (the run2 lesson). Envelopes are filtered to the exec session (optionally its descendants) and
 //! to durable seqs (`seq == 0` frames are live-only and never persisted),
 //! deduplicated by seq — concurrent writers (turn loop, resident batches,
 //! mailbox) can publish out of seq order, so arrival order is usually but not
@@ -17,15 +17,63 @@
 
 use std::collections::HashSet;
 
-use hya_proto::{Envelope, SessionId};
+use hya_proto::{Envelope, Event, SessionId};
 use hya_store::{SessionStore, StoreError};
 use tokio::sync::{broadcast, oneshot};
 
-/// Whether `envelope` belongs on the exec JSONL stream for `session`: same
-/// session and a durable seq (`0` is live-only).
-#[must_use]
-pub(crate) fn eligible(envelope: &Envelope, session: SessionId) -> bool {
-    envelope.event.session() == Some(session) && envelope.seq.0 != 0
+#[derive(Clone)]
+pub(crate) enum StreamScope {
+    Single(SessionId),
+    Tree {
+        root: SessionId,
+        sessions: HashSet<SessionId>,
+    },
+}
+
+impl StreamScope {
+    fn accepts(&mut self, envelope: &Envelope) -> bool {
+        if envelope.seq.0 == 0 {
+            return false;
+        }
+        match self {
+            Self::Single(id) => envelope.event.session() == Some(*id),
+            Self::Tree { sessions, .. } => {
+                if let Event::SessionCreated {
+                    session,
+                    parent: Some(parent),
+                    ..
+                } = &envelope.event
+                    && sessions.contains(parent)
+                {
+                    sessions.insert(*session);
+                }
+                envelope
+                    .event
+                    .session()
+                    .is_some_and(|id| sessions.contains(&id))
+            }
+        }
+    }
+
+    pub(crate) fn tree(root: SessionId) -> Self {
+        Self::Tree {
+            root,
+            sessions: HashSet::from([root]),
+        }
+    }
+
+    pub(crate) async fn replay(
+        &self,
+        store: &SessionStore,
+        pass: ReplayPass,
+    ) -> Result<Vec<Envelope>, StoreError> {
+        match (self, pass) {
+            (Self::Single(id), ReplayPass::Initial) => store.replay(*id).await,
+            (Self::Single(id), ReplayPass::Lag) => bounded_replay(store, *id).await,
+            (Self::Tree { root, .. }, ReplayPass::Initial) => store.replay_tree(*root).await,
+            (Self::Tree { root, .. }, ReplayPass::Lag) => bounded_replay_tree(store, *root).await,
+        }
+    }
 }
 
 pub(crate) fn write_envelope(
@@ -60,21 +108,23 @@ pub(crate) enum ReplayPass {
     Lag,
 }
 
-/// Dispatch a [`ReplayPass`] against `store`.
-pub(crate) async fn replay_for_pass(
+async fn bounded_replay_tree(
     store: &SessionStore,
-    session: SessionId,
-    pass: ReplayPass,
+    root: SessionId,
 ) -> Result<Vec<Envelope>, StoreError> {
-    match pass {
-        ReplayPass::Initial => store.replay(session).await,
-        ReplayPass::Lag => bounded_replay(store, session).await,
-    }
+    let timeout = store.read_timeout();
+    tokio::time::timeout(timeout, store.replay_tree(root))
+        .await
+        .map_err(|_| StoreError::StorageTimeout {
+            operation: "replay_tree",
+            timeout,
+        })?
 }
 
 /// Incremental JSONL writer deduplicating by durable seq.
 pub(crate) struct JsonStreamPrinter<W: std::io::Write> {
     out: W,
+    scope: StreamScope,
     printed: HashSet<u64>,
     first_lag_fault: Option<String>,
 }
@@ -82,9 +132,10 @@ pub(crate) struct JsonStreamPrinter<W: std::io::Write> {
 impl<W: std::io::Write> JsonStreamPrinter<W> {
     /// Start with nothing printed; live-only frames stay excluded by the
     /// durable-seq rule.
-    pub(crate) fn new(out: W) -> Self {
+    pub(crate) fn new(out: W, scope: StreamScope) -> Self {
         Self {
             out,
+            scope,
             printed: HashSet::new(),
             first_lag_fault: None,
         }
@@ -92,12 +143,8 @@ impl<W: std::io::Write> JsonStreamPrinter<W> {
 
     /// Print `envelope` when eligible and not yet printed. Returns whether
     /// the envelope was printed.
-    pub(crate) fn print(
-        &mut self,
-        envelope: &Envelope,
-        session: SessionId,
-    ) -> std::io::Result<bool> {
-        if !eligible(envelope, session) || !self.printed.insert(envelope.seq.0) {
+    pub(crate) fn print(&mut self, envelope: &Envelope) -> std::io::Result<bool> {
+        if !self.scope.accepts(envelope) || !self.printed.insert(envelope.seq.0) {
             return Ok(false);
         }
         write_envelope(&mut self.out, envelope)?;
@@ -115,7 +162,7 @@ impl<W: std::io::Write> JsonStreamPrinter<W> {
 /// authority). Returns the printer for a final tail flush.
 pub(crate) async fn stream_until_done<W, F, Fut>(
     mut rx: broadcast::Receiver<Envelope>,
-    session: SessionId,
+    scope: StreamScope,
     mut done: oneshot::Receiver<()>,
     mut replay: F,
     out: W,
@@ -125,12 +172,12 @@ where
     F: FnMut(ReplayPass) -> Fut,
     Fut: std::future::Future<Output = Result<Vec<Envelope>, StoreError>>,
 {
-    let mut printer = JsonStreamPrinter::new(out);
+    let mut printer = JsonStreamPrinter::new(out, scope);
     // Catch-up pass: envelopes persisted before this subscription existed
     // (notably `session_created`) print first, keeping stdout ordered.
     if let Ok(envelopes) = replay(ReplayPass::Initial).await {
         for envelope in &envelopes {
-            printer.print(envelope, session)?;
+            printer.print(envelope)?;
         }
     }
     loop {
@@ -138,13 +185,13 @@ where
             biased;
             result = rx.recv() => match result {
                 Ok(envelope) => {
-                    printer.print(&envelope, session)?;
+                    printer.print(&envelope)?;
                 }
                 Err(broadcast::error::RecvError::Lagged(_missed)) => {
                     match replay(ReplayPass::Lag).await {
                         Ok(envelopes) => {
                             for envelope in &envelopes {
-                                printer.print(envelope, session)?;
+                                printer.print(envelope)?;
                             }
                         }
                         Err(error) if error.is_storage_fault() => {
@@ -166,7 +213,7 @@ where
     // Drain anything buffered between the turn completing and `done` firing so
     // stdout never drops trailing durable events.
     while let Ok(envelope) = rx.try_recv() {
-        printer.print(&envelope, session)?;
+        printer.print(&envelope)?;
     }
     Ok(printer)
 }
@@ -182,7 +229,6 @@ where
 /// recorded lag warning.
 pub(crate) async fn finish_json_stream<W, E, F, Fut>(
     mut printer: JsonStreamPrinter<W>,
-    session: SessionId,
     replay: F,
     mut err: E,
 ) -> anyhow::Result<()>
@@ -197,7 +243,7 @@ where
     match replay().await {
         Ok(envelopes) => {
             for env in &envelopes {
-                printer.print(env, session)?;
+                printer.print(env)?;
             }
         }
         Err(error) if error.is_storage_fault() => {
@@ -285,14 +331,14 @@ mod tests {
     fn printer_filters_session_durable_seq_and_deduplicates() {
         let session = SessionId::new();
         let other = SessionId::new();
-        let mut printer = JsonStreamPrinter::new(Vec::new());
+        let mut printer = JsonStreamPrinter::new(Vec::new(), StreamScope::Single(session));
 
-        assert!(!printer.print(&envelope(0, session), session).unwrap());
-        assert!(!printer.print(&envelope(1, other), session).unwrap());
-        assert!(printer.print(&envelope(1, session), session).unwrap());
+        assert!(!printer.print(&envelope(0, session)).unwrap());
+        assert!(!printer.print(&envelope(1, other)).unwrap());
+        assert!(printer.print(&envelope(1, session)).unwrap());
         // Duplicates are dropped regardless of arrival order.
-        assert!(!printer.print(&envelope(1, session), session).unwrap());
-        assert!(printer.print(&envelope(3, session), session).unwrap());
+        assert!(!printer.print(&envelope(1, session)).unwrap());
+        assert!(printer.print(&envelope(3, session)).unwrap());
 
         let written = String::from_utf8(printer.out).unwrap();
         let lines: Vec<&str> = written.lines().collect();
@@ -308,14 +354,92 @@ mod tests {
     #[test]
     fn printer_handles_out_of_order_arrival_from_concurrent_writers() {
         let session = SessionId::new();
-        let mut printer = JsonStreamPrinter::new(Vec::new());
+        let mut printer = JsonStreamPrinter::new(Vec::new(), StreamScope::Single(session));
         // Concurrent writers (turn loop, resident batches, mailbox) can
         // publish a higher seq before a lower one; both must print.
-        assert!(printer.print(&envelope(3, session), session).unwrap());
-        assert!(printer.print(&envelope(2, session), session).unwrap());
-        assert!(!printer.print(&envelope(3, session), session).unwrap());
+        assert!(printer.print(&envelope(3, session)).unwrap());
+        assert!(printer.print(&envelope(2, session)).unwrap());
+        assert!(!printer.print(&envelope(3, session)).unwrap());
         let written = String::from_utf8(printer.out).unwrap();
         assert_eq!(written.lines().count(), 2);
+    }
+
+    fn child(seq: u64, id: SessionId, parent: SessionId) -> Envelope {
+        let mut created = envelope(seq, id);
+        if let Event::SessionCreated { parent: field, .. } = &mut created.event {
+            *field = Some(parent);
+        }
+        created
+    }
+
+    #[tokio::test]
+    async fn tree_stream_prints_descendants_in_arrival_order() -> anyhow::Result<()> {
+        let [root, member, grandchild, other] = std::array::from_fn(|_| SessionId::new());
+        let (tx, rx) = broadcast::channel(16);
+        for event in [
+            child(2, member, root),
+            child(3, grandchild, member),
+            title(6, grandchild),
+            title(4, member),
+            title(6, grandchild),
+            envelope(5, other),
+            title(7, other),
+        ] {
+            tx.send(event)?;
+        }
+        drop(tx);
+        let (_done, done_rx) = oneshot::channel();
+        let out = SharedBuf::default();
+        stream_until_done(
+            rx,
+            StreamScope::tree(root),
+            done_rx,
+            |_| std::future::ready(Ok(vec![envelope(1, root)])),
+            out.clone(),
+        )
+        .await?;
+        assert_eq!(out.seqs(), [1, 2, 3, 6, 4]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tree_lag_and_final_replay_recover_missed_descendants() -> anyhow::Result<()> {
+        let [root, member, grandchild] = std::array::from_fn(|_| SessionId::new());
+        let (tx, rx) = broadcast::channel(1);
+        tx.send(child(2, member, root))?;
+        tx.send(title(4, member))?;
+        drop(tx);
+        let (_done, done_rx) = oneshot::channel();
+        let out = SharedBuf::default();
+        let printer = stream_until_done(
+            rx,
+            StreamScope::tree(root),
+            done_rx,
+            |pass| {
+                std::future::ready(Ok(match pass {
+                    ReplayPass::Initial => vec![envelope(1, root)],
+                    ReplayPass::Lag => {
+                        vec![envelope(1, root), child(2, member, root), title(3, member)]
+                    }
+                }))
+            },
+            out.clone(),
+        )
+        .await?;
+        finish_json_stream(
+            printer,
+            || {
+                std::future::ready(Ok(vec![
+                    title(4, member),
+                    child(5, grandchild, member),
+                    title(6, grandchild),
+                ]))
+            },
+            Vec::new(),
+        )
+        .await?;
+        assert_eq!(out.seqs(), [1, 2, 3, 4, 5, 6]);
+        Ok(())
     }
 
     #[tokio::test]
@@ -333,7 +457,7 @@ mod tests {
         let replay_calls = std::cell::Cell::new(0);
         let printer = stream_until_done(
             bus.1,
-            session,
+            StreamScope::Single(session),
             done_rx,
             |pass| {
                 assert_eq!(pass, ReplayPass::Initial);
@@ -369,7 +493,7 @@ mod tests {
         let mut calls = 0;
         let printer = stream_until_done(
             rx,
-            session,
+            StreamScope::Single(session),
             done_rx,
             |pass| {
                 calls += 1;
@@ -408,7 +532,7 @@ mod tests {
             std::time::Duration::from_secs(1),
             stream_until_done(
                 rx,
-                session,
+                StreamScope::Single(session),
                 done_rx,
                 |pass| {
                     let call = replay_calls.get() + 1;
@@ -490,7 +614,7 @@ mod tests {
             std::time::Duration::from_secs(1),
             stream_until_done(
                 rx,
-                session,
+                StreamScope::Single(session),
                 done_rx,
                 |pass| {
                     calls += 1;
@@ -528,7 +652,6 @@ mod tests {
         let mut stderr = Vec::new();
         finish_json_stream(
             printer,
-            session,
             || {
                 std::future::ready(Ok(vec![
                     title(2, session),
@@ -555,7 +678,7 @@ mod tests {
         let out = SharedBuf::default();
         let printer = stream_until_done(
             rx,
-            session,
+            StreamScope::Single(session),
             done_rx,
             |pass| {
                 assert_eq!(pass, ReplayPass::Initial);
@@ -569,7 +692,6 @@ mod tests {
         let mut stderr = Vec::new();
         finish_json_stream(
             printer,
-            session,
             || {
                 final_called = true;
                 std::future::ready(Ok(vec![
@@ -674,7 +796,7 @@ mod tests {
             let out = SharedBuf::default();
             let printer = stream_until_done(
                 rx,
-                session,
+                StreamScope::Single(session),
                 done_rx,
                 |pass| {
                     assert_eq!(pass, ReplayPass::Initial);
@@ -688,12 +810,7 @@ mod tests {
             let mut stderr = Vec::new();
             tokio::time::timeout(
                 std::time::Duration::from_millis(400),
-                finish_json_stream(
-                    printer,
-                    session,
-                    || bounded_replay(&store, session),
-                    &mut stderr,
-                ),
+                finish_json_stream(printer, || bounded_replay(&store, session), &mut stderr),
             )
             .await
             .expect("stalled final replay must be bounded by READ_TIMEOUT")
@@ -722,7 +839,7 @@ mod tests {
         let out = SharedBuf::default();
         let printer = stream_until_done(
             rx,
-            session,
+            StreamScope::Single(session),
             done_rx,
             |pass| {
                 assert_eq!(pass, ReplayPass::Initial);
@@ -735,7 +852,6 @@ mod tests {
         let mut stderr = Vec::new();
         finish_json_stream(
             printer,
-            session,
             || bounded_replay(&cold_store, session),
             &mut stderr,
         )
@@ -747,11 +863,10 @@ mod tests {
         assert_eq!(out.seqs(), vec![1]);
 
         // 3. Non-storage errors (e.g. corrupt key / JSON decode) still propagate.
-        let printer = JsonStreamPrinter::new(Vec::new());
+        let printer = JsonStreamPrinter::new(Vec::new(), StreamScope::Single(session));
         let mut stderr = Vec::new();
         let err = finish_json_stream(
             printer,
-            session,
             || async { Err(StoreError::SessionKeyData("corrupt key".into())) },
             &mut stderr,
         )
@@ -775,7 +890,7 @@ mod tests {
         let mut replays = 0;
         let printer = stream_until_done(
             receiver,
-            session,
+            StreamScope::Single(session),
             completed,
             |pass| {
                 replays += 1;
@@ -798,7 +913,6 @@ mod tests {
         let mut stderr = Vec::new();
         finish_json_stream(
             printer,
-            session,
             || {
                 std::future::ready(match final_op {
                     Some(op) => Err(StoreError::StorageTimeout {
@@ -909,7 +1023,8 @@ mod tests {
             drop(lock);
         });
         let started = std::time::Instant::now();
-        let initial = replay_for_pass(&store, session, ReplayPass::Initial)
+        let initial = StreamScope::Single(session)
+            .replay(&store, ReplayPass::Initial)
             .await
             .expect("initial healthy replay must wait past 40ms read_timeout");
         let elapsed = started.elapsed();
@@ -922,7 +1037,8 @@ mod tests {
 
         // Held stall (> 40ms): Lag cuts off at read_timeout.
         let _held = ShmLock::acquire(&db);
-        let lag = replay_for_pass(&store, session, ReplayPass::Lag)
+        let lag = StreamScope::Single(session)
+            .replay(&store, ReplayPass::Lag)
             .await
             .expect_err("lag replay is fallback-guarded and cuts off at read_timeout");
         assert!(matches!(
@@ -947,7 +1063,7 @@ mod tests {
             async move {
                 stream_until_done(
                     rx,
-                    session,
+                    StreamScope::Single(session),
                     done_rx,
                     |pass| async move {
                         match pass {
@@ -968,13 +1084,7 @@ mod tests {
         let printer = stream_task.await.unwrap().unwrap();
         let mut stderr = Vec::new();
         let logical = StoreError::SessionKeyData("corrupt key in final replay".into());
-        let res = finish_json_stream(
-            printer,
-            session,
-            || async move { Err(logical) },
-            &mut stderr,
-        )
-        .await;
+        let res = finish_json_stream(printer, || async move { Err(logical) }, &mut stderr).await;
         let err = res.expect_err("non-storage final error must still propagate");
         assert!(
             err.to_string().contains("corrupt key in final replay"),
@@ -1012,12 +1122,15 @@ mod tests {
 
         let session = SessionId::new();
         let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let mut printer = JsonStreamPrinter::new(std::io::BufWriter::new(OrderWriter {
-            events: std::sync::Arc::clone(&events),
-            write_tag: "stdout-write",
-            flush_tag: "stdout-flush",
-        }));
-        printer.print(&title(1, session), session).unwrap();
+        let mut printer = JsonStreamPrinter::new(
+            std::io::BufWriter::new(OrderWriter {
+                events: std::sync::Arc::clone(&events),
+                write_tag: "stdout-write",
+                flush_tag: "stdout-flush",
+            }),
+            StreamScope::Single(session),
+        );
+        printer.print(&title(1, session)).unwrap();
         assert!(
             events.lock().unwrap().is_empty(),
             "buffered stdout must not flush before finish_json_stream"
@@ -1030,7 +1143,6 @@ mod tests {
         };
         finish_json_stream(
             printer,
-            session,
             || async {
                 Err(StoreError::StorageTimeout {
                     operation: "replay",

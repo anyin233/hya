@@ -128,9 +128,9 @@ enum WaitOutcome {
     LogicalError(StoreError),
 }
 
-struct QueuedOp {
+pub(super) struct QueuedOp {
     blobs: Vec<(SessionId, String, Vec<u8>)>,
-    events: Vec<(SessionId, Envelope, String)>,
+    pub(super) events: Vec<(SessionId, Envelope, String)>,
 }
 
 struct QueueEntry {
@@ -530,6 +530,18 @@ impl WriteQueue {
         }
         let tx = inner.writer_pool.begin_with("BEGIN IMMEDIATE").await?;
         Ok((tx, guard))
+    }
+
+    /// Keep the acknowledged tail alive while a tree replay takes its SQL snapshot.
+    pub(super) fn acknowledged_batches(&self) -> Vec<Arc<QueuedOp>> {
+        self.0
+            .0
+            .state()
+            .queue
+            .iter()
+            .filter(|entry| entry.cache_applied)
+            .map(|entry| Arc::clone(&entry.op))
+            .collect()
     }
 
     /// Snapshot acknowledged queued envelopes for `session` strictly after `after` in submission order.

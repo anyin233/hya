@@ -111,6 +111,13 @@ fn state_dir() -> std::path::PathBuf {
     dir
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExecOutput {
+    Transcript,
+    Json,
+    TreeJson,
+}
+
 /// `hya exec` on `db`, respecting the database lock
 /// ([`db_writer`]): through the server that owns a file database, else
 /// in process while holding its lock (in-memory stores are not locked).
@@ -119,12 +126,20 @@ async fn exec_entry(
     model_override: Option<String>,
     db: &str,
     yolo: bool,
-    json: bool,
+    output: ExecOutput,
     pure: bool,
     time_budget: Option<u64>,
 ) -> anyhow::Result<()> {
     match db_writer::claim_or_memory(db, "exec").await? {
         db_writer::Writer::Server(server) => {
+            if output == ExecOutput::TreeJson {
+                db_writer::exit_unroutable(
+                    "exec",
+                    db,
+                    &server,
+                    "--include-subagents requires an in-process JSON stream",
+                );
+            }
             if pure {
                 db_writer::exit_unroutable(
                     "exec",
@@ -147,13 +162,22 @@ async fn exec_entry(
                     prompt,
                     model: model_override,
                     yolo,
-                    json,
+                    json: output == ExecOutput::Json,
                 },
             )
             .await
         }
         db_writer::Writer::Direct(store) => {
-            cmd_exec(prompt, model_override, store, yolo, json, pure, time_budget).await
+            cmd_exec(
+                prompt,
+                model_override,
+                store,
+                yolo,
+                output,
+                pure,
+                time_budget,
+            )
+            .await
         }
     }
 }
@@ -181,7 +205,7 @@ async fn cmd_exec(
     model_override: Option<String>,
     store: SessionStore,
     yolo: bool,
-    json: bool,
+    output: ExecOutput,
     pure: bool,
     time_budget: Option<u64>,
 ) -> anyhow::Result<()> {
@@ -203,21 +227,28 @@ async fn cmd_exec(
         // `--json` streams durable envelopes live from the event bus (db
         // persistence is unchanged and per-event): an abnormally terminated run
         // still leaves a usable partial trajectory on stdout.
-        let mut json_printer = json.then(|| {
+        let mut json_printer = (output != ExecOutput::Transcript).then(|| {
+            let scope = if output == ExecOutput::TreeJson {
+                exec_stream::StreamScope::tree(session)
+            } else {
+                exec_stream::StreamScope::Single(session)
+            };
+            let replay_scope = scope.clone();
+            let final_scope = scope.clone();
             let rx = engine.bus().subscribe();
             let engine_for_stream = engine.clone();
             let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
-            let task = tokio::spawn(exec_stream::stream_until_done(
-                rx,
-                session,
-                done_rx,
-                move |pass| {
-                    let store = engine_for_stream.store().clone();
-                    async move { exec_stream::replay_for_pass(&store, session, pass).await }
-                },
-                std::io::stdout(),
-            ));
-            (task, done_tx)
+            let task = tokio::spawn(async move {
+                exec_stream::stream_until_done(
+                    rx,
+                    scope,
+                    done_rx,
+                    |pass| replay_scope.replay(engine_for_stream.store(), pass),
+                    std::io::stdout(),
+                )
+                .await
+            });
+            (task, done_tx, final_scope)
         });
         let cancel = CancellationToken::new();
         let resident_supervisor = built.resident_supervisor();
@@ -263,7 +294,7 @@ async fn cmd_exec(
                 )
                 .await;
         }
-        if let Some((task, done_tx)) = json_printer.take() {
+        if let Some((task, done_tx, final_scope)) = json_printer.take() {
             let store_for_replay = engine.store().clone();
             signals
                 .finish_with_store_report(&exit_store, stop_seen, async move {
@@ -278,11 +309,7 @@ async fn cmd_exec(
                     // on stderr if a storage fault or timeout intervenes.
                     exec_stream::finish_json_stream(
                         printer,
-                        session,
-                        || {
-                            let store = store_for_replay.clone();
-                            async move { exec_stream::bounded_replay(&store, session).await }
-                        },
+                        || final_scope.replay(&store_for_replay, exec_stream::ReplayPass::Lag),
                         std::io::stderr(),
                     )
                     .await
@@ -697,6 +724,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Exec {
             mut prompt,
             json,
+            include_subagents,
             time_budget,
             bare,
         }) => {
@@ -713,7 +741,14 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             if bare {
                 bare::exec_entry(prompt, model, &db, time_budget, json).await
             } else {
-                exec_entry(prompt, model, &db, yolo, json, pure, time_budget).await
+                let output = if include_subagents {
+                    ExecOutput::TreeJson
+                } else if json {
+                    ExecOutput::Json
+                } else {
+                    ExecOutput::Transcript
+                };
+                exec_entry(prompt, model, &db, yolo, output, pure, time_budget).await
             }
         }
         Some(Command::Serve {
