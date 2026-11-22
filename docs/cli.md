@@ -919,7 +919,7 @@ archiving work that cannot be integrated in time.
 These guards add no CLI flags, RPC routes, or wire types; `--json` includes the
 notices and continuation events in the same session's canonical JSONL stream.
 In direct full mode, a lead that called a known tool receives one completion check when
-it would otherwise stop and more than two Final windows remain. For example,
+it would otherwise stop and more than two Final windows remain. Each round resolves calls against its own tool registry, including sidecar tools, plus the kernel primitives. A plugin veto of an unknown name leaves the lead ineligible. For example,
 `hya exec --time-budget 900 "build and verify the package"` can use that
 extra turn to compare the files it produced against the request. The logged
 system notice suppresses duplicate checks when the session continues. It starts a fresh count of consecutive ignored continuation notices.

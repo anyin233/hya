@@ -38,6 +38,7 @@ pub(super) fn tool_available(name: &str, interaction_available: bool) -> bool {
 }
 
 struct TurnExecution<'a> {
+    ran_known_tool: Option<&'a mut bool>,
     binding: TurnBinding,
     resources: Arc<CompiledResourceView>,
     agents: Arc<[AgentDef]>,
@@ -79,6 +80,7 @@ struct TurnRebindInputs<'a> {
 
 /// Request-local context shared by one governed turn activation.
 pub(crate) struct TurnRequestContext<'a> {
+    ran_known_tool: Option<&'a mut bool>,
     cancel: CancellationToken,
     external_dirs: &'a [PathBuf],
     guidance: Option<Arc<str>>,
@@ -109,6 +111,7 @@ impl<'a> TurnRequestContext<'a> {
             actor_claim,
             explicit_model: None,
             workflow_route,
+            ran_known_tool: None,
             lease: None,
             admitted_prompt: None,
         }
@@ -487,6 +490,24 @@ impl SessionEngine {
         )
         .await
     }
+    /// Run a headless lead turn and remember calls resolved by any of its
+    /// round bindings, including kernel primitives and activation sidecars.
+    pub async fn run_headless_lead_turn(
+        &self,
+        session: SessionId,
+        agent: &AgentSpec,
+        cancel: CancellationToken,
+        admitted_prompt: Option<MessageId>,
+        ran_known_tool: &mut bool,
+    ) -> Result<FinishReason, CoreError> {
+        self.ensure_external_turn_allowed(session).await?;
+        let mut request = TurnRequestContext::new(cancel, &[], None, None, None)
+            .with_admitted_prompt(admitted_prompt);
+        request.ran_known_tool = Some(ran_known_tool);
+        self.run_turn_with_external_dirs_and_claim(session, agent, TurnActivation::Root, request)
+            .await
+    }
+
     /// Run a turn with temporary ExternalDirectory allow rules for `external_dirs`.
     pub async fn run_turn_with_external_dirs(
         &self,
@@ -833,6 +854,7 @@ impl SessionEngine {
             actor_claim,
             workflow_route,
             explicit_model,
+            ran_known_tool,
             lease: _,
             admitted_prompt: _,
         } = request;
@@ -1007,6 +1029,7 @@ impl SessionEngine {
             drop(message_guard);
 
             let execution = TurnExecution {
+                ran_known_tool,
                 binding,
                 resources,
                 agents,

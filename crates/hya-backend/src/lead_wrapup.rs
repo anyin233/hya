@@ -43,17 +43,16 @@ pub(crate) async fn run_lead(
     let mut last_notice: Option<MessageId> = None;
     let mut initial_prompt = Some(initial_prompt);
     let mut completion_checked = false;
+    let mut ran_known_tool = false;
     let deadline = hya_tool::deadline::current();
     loop {
         let finish = engine
-            .run_turn_with_external_dirs_and_guidance(
+            .run_headless_lead_turn(
                 session,
                 agent,
                 cancel.clone(),
-                &[],
-                None,
-                None,
                 initial_prompt.take(),
+                &mut ran_known_tool,
             )
             .await?;
         if !matches!(finish, FinishReason::Stop | FinishReason::Length) {
@@ -68,23 +67,7 @@ pub(crate) async fn run_lead(
         if pending.is_empty() {
             if !completion_checked
                 && deadline.is_some_and(|d| d.remaining() > 2 * d.final_window())
-                && projection
-                    .session
-                    .messages
-                    .iter()
-                    .flat_map(|row| &row.parts)
-                    .any(|part| match part {
-                        PartProjection::Tool {
-                            name,
-                            state: hya_proto::ToolPartState::Error { message, .. },
-                            ..
-                        } => message != &format!("unknown tool: {name}"),
-                        PartProjection::Tool {
-                            state: hya_proto::ToolPartState::Completed { .. },
-                            ..
-                        } => true,
-                        _ => false,
-                    })
+                && ran_known_tool
                 && !projection.session.messages.iter().any(|row| {
                     row.role == Role::System
                         && row.parts.iter().any(|part| {
