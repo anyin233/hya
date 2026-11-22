@@ -133,7 +133,7 @@ process, timer, and HTTP operations use the bundle's reactor.
 
 ### Bash process completion
 
-`bash` captures stdout and stderr through pipes by default; `pty: true` attaches
+`bash` captures stdout and stderr through pipes in unbudgeted runs by default; `pty: true` attaches
 both streams to a real terminal. A daemon that calls `setsid()` can retain those
 output descriptors after the command exits. Both capture modes bound the final
 drain so such a daemon cannot hang the tool or turn a successful command into a
@@ -452,22 +452,24 @@ Verified bytes use the disposable native cache described in
 ## Budgeted Bash timeouts
 
 An in-process `hya exec --time-budget 900 "implement the change"` installs a
-wall-clock deadline shared with the native Bash library. Bash keeps the normal
-300-second default, `timeout: 0` disables its requested timeout, and positive
-values clamp to `1..=3600` seconds. With a run budget, all of these are additionally
-capped to `max(remaining - grace, 5s)` by `RunDeadline::cap`. A shorter requested
-timeout is preserved. This changes only the execution timeout; the fixed 200 ms
-orphan grace, 100 ms post-kill drain and bounded final drain still apply.
+wall-clock deadline shared with the native Bash library. The default wait is
+300 seconds. Positive requests clamp to 1–3600 seconds and zero disables the
+requested timeout. A budget caps each wait at one tenth of the original budget
+(minimum five seconds) and reserves time for the next step. The end-of-budget
+cap takes precedence on ties and sets `metadata.deadlineCapped: true`.
+`metadata.timeoutSeconds` records the effective wait.
 
-A capped result retains `{title, output, metadata}`. `metadata.timeoutSeconds`
-is the effective rounded limit (`number`), `metadata.deadlineCapped: true`
-(`boolean`, omitted when not shortened) survives the host output cap, and
-`output` includes a `<shell_metadata>` explanation naming the limit and seconds
-remaining. `timeoutClamped: true` continues to describe ordinary argument
-clamping when the run deadline did not replace it. For example, with 200 seconds
-left in a 900-second run, a 300-second request runs for about 155 seconds,
-reserving the 45-second guard. Member `wait` uses the same cap; its existing
-request and response fields are unchanged.
+On Unix, budgeted non-PTY Bash writes both streams directly to a private
+temporary file. For example, in a 900-second run, `{"command":"make","timeout":300}`
+waits up to 90 seconds. If the command is still running at the ordinary wait
+limit, the result has `metadata.stillRunning: true`, `timedOut: false`,
+`exit: null`, numeric `pgid`, and string `outputPath` and `exitPath`.
+Read the output while the command runs. The exit file appears atomically when
+the shell exits while the host is running. The notice gives quoted commands
+to inspect output or stop the group. At the end-of-budget cap Bash kills the
+group and returns `timedOut: true`. An exhausted budget skips the spawn.
+PTY waits terminate the group on timeout. All Bash modes set
+`PYTHONUNBUFFERED=1` before applying explicit `env` overrides.
 
 ## Output limit audit
 

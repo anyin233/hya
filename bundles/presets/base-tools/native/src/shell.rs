@@ -61,6 +61,8 @@ struct TimeoutSettings {
     seconds: f64,
     duration: Option<Duration>,
     clamped: bool,
+    budget_tenth_capped: bool,
+    default_wait: bool,
     /// Whole seconds the run had left when its deadline shortened the timeout.
     deadline_left: Option<u64>,
 }
@@ -68,29 +70,50 @@ struct TimeoutSettings {
 impl TimeoutSettings {
     /// Shorten the timeout to what a budgeted run has left (see
     /// [`RunDeadline::cap`]); no timeout is capped too.
-    fn capped_by(self, deadline: Option<&RunDeadline>) -> Self {
+    fn capped_by(mut self, deadline: Option<&RunDeadline>) -> Self {
         let Some(deadline) = deadline else {
             return self;
         };
-        let (duration, capped) = deadline.cap(self.duration);
-        if !capped {
-            return self;
+        let requested = self.duration;
+        let tenth =
+            (deadline.budget() / 10).max(Duration::from_secs(hya_tool::deadline::MIN_TOOL_SECS));
+        if requested.is_none_or(|wait| wait > tenth) {
+            self.duration = Some(tenth);
+            self.seconds = tenth.as_secs_f64();
+            self.budget_tenth_capped = true;
+            self.clamped = false;
         }
-        Self {
-            seconds: duration.as_secs_f64().round(),
-            duration: Some(duration),
-            clamped: false,
-            deadline_left: Some(deadline.remaining().as_secs()),
+        // Compare both caps against the original request so the end cap wins a tie.
+        let (end, capped) = deadline.cap(requested);
+        let left = deadline.remaining();
+        let end = end.min(left);
+        if (capped || requested.is_none_or(|wait| wait > left))
+            && self.duration.is_none_or(|wait| end <= wait)
+        {
+            self.duration = Some(end);
+            self.seconds = end.as_secs_f64().round();
+            self.deadline_left = Some(left.as_secs());
+            self.budget_tenth_capped = false;
+            self.clamped = false;
         }
+        self
     }
 }
 
 /// Completion state retained for a structured Bash result.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 enum Completion {
     Finished(Option<i32>),
     TimedOut,
     Cancelled,
+    #[cfg(unix)]
+    NotStarted,
+    #[cfg(unix)]
+    StillRunning {
+        pgid: u32,
+        output_path: PathBuf,
+        exit_path: PathBuf,
+    },
 }
 
 /// Captured bytes and the armed owner of an optional complete artifact.
@@ -99,6 +122,8 @@ struct OutputCapture {
     output_path: Option<PathBuf>,
     artifact_root: PathBuf,
     artifact_owner: Option<ArtifactOwner>,
+    #[cfg(unix)]
+    job: Option<Job>,
 }
 
 /// Own one staged Bash output artifact until a successful result publishes it.
@@ -306,6 +331,8 @@ impl OutputSink {
             output_path,
             artifact_root: self.artifact_root,
             artifact_owner,
+            #[cfg(unix)]
+            job: None,
         })
     }
 }
@@ -343,7 +370,7 @@ impl Tool for ShellTool {
                     "timeout": {
                         "type": "number",
                         "minimum": 0,
-                        "description": "Timeout in seconds. Defaults to 300 seconds; finite values are clamped to 1-3600 seconds, and 0 disables the deadline."
+                        "description": "Timeout in seconds. Defaults to 300 seconds; finite values are clamped to 1-3600 seconds, and 0 disables the requested timeout. Under a run time budget, waits are capped at budget/10 (minimum 5 seconds). On Unix a non-PTY command still running then yields stillRunning with live output and exit paths; the end-of-budget cap stops it."
                     },
                     "cwd": { "type": "string" },
                     "pty": { "type": "boolean" }
@@ -369,7 +396,7 @@ impl Tool for ShellTool {
             pty,
         } = serde_json::from_value(input)
             .map_err(|error| ToolError::Input(format!("invalid Bash input: {error}")))?;
-        let timeout = timeout_settings(timeout)?.capped_by(hya_tool::deadline::current());
+        let timeout = timeout_settings(timeout)?;
         if ctx.cancel.is_cancelled() {
             return Err(ToolError::Cancelled);
         }
@@ -383,6 +410,30 @@ impl Tool for ShellTool {
 
         let started = Instant::now();
         let artifact_root = normalize(&absolutize(&ctx.workdir)).join(".hya/tool-output");
+        let deadline = hya_tool::deadline::current();
+        let timeout = timeout.capped_by(deadline);
+        #[cfg(unix)]
+        if !pty && let Some(deadline) = deadline {
+            let captured = execute_budgeted_file(
+                &command,
+                env,
+                &cwd,
+                artifact_root,
+                timeout,
+                deadline,
+                &ctx.cancel,
+            )
+            .await?;
+            return shape_result(
+                command,
+                cwd,
+                false,
+                timeout,
+                started.elapsed(),
+                captured,
+                &ctx.cancel,
+            );
+        }
         let captured = if pty {
             #[cfg(unix)]
             {
@@ -439,6 +490,8 @@ fn timeout_settings(requested: Option<f64>) -> Result<TimeoutSettings, ToolError
             seconds: DEFAULT_TIMEOUT_SECONDS,
             duration: Some(Duration::from_secs(300)),
             clamped: false,
+            budget_tenth_capped: false,
+            default_wait: true,
             deadline_left: None,
         });
     };
@@ -452,6 +505,8 @@ fn timeout_settings(requested: Option<f64>) -> Result<TimeoutSettings, ToolError
             seconds: 0.0,
             duration: None,
             clamped: false,
+            budget_tenth_capped: false,
+            default_wait: false,
             deadline_left: None,
         });
     }
@@ -460,6 +515,8 @@ fn timeout_settings(requested: Option<f64>) -> Result<TimeoutSettings, ToolError
         seconds,
         duration: Some(Duration::from_secs_f64(seconds)),
         clamped: seconds != requested,
+        budget_tenth_capped: false,
+        default_wait: false,
         deadline_left: None,
     })
 }
@@ -468,6 +525,125 @@ fn timeout_settings(requested: Option<f64>) -> Result<TimeoutSettings, ToolError
 fn resolve_cwd(ctx: &ToolCtx, requested: Option<&str>) -> PathBuf {
     let base = normalize(&absolutize(&ctx.workdir));
     requested.map_or_else(|| base.clone(), |path| resolve_file(&base, path))
+}
+
+#[cfg(unix)]
+struct Job {
+    pgid: Option<u32>,
+    dir: Option<PathBuf>,
+}
+
+#[cfg(unix)]
+impl Drop for Job {
+    fn drop(&mut self) {
+        let _ = terminate_pipe_process_group(self.pgid.take());
+        if let Some(dir) = self.dir.take() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
+#[cfg(unix)]
+async fn execute_budgeted_file(
+    command: &str,
+    env: BTreeMap<String, String>,
+    cwd: &Path,
+    artifact_root: PathBuf,
+    timeout: TimeoutSettings,
+    deadline: &RunDeadline,
+    cancel: &CancellationToken,
+) -> Result<CapturedRun, ToolError> {
+    use std::os::unix::ffi::OsStringExt as _;
+    use std::process::Stdio;
+
+    let mut output = OutputSink::new(artifact_root).finish()?;
+    let mut template = std::env::temp_dir()
+        .join("hya-bash-XXXXXX")
+        .into_os_string()
+        .into_vec();
+    template.push(0);
+    // SAFETY: writable NUL-terminated template with the six required trailing Xs.
+    if unsafe { libc::mkdtemp(template.as_mut_ptr().cast()) }.is_null() {
+        return Err(io::Error::last_os_error().into());
+    }
+    template.pop();
+    let dir = PathBuf::from(std::ffi::OsString::from_vec(template));
+    let mut job = Job {
+        pgid: None,
+        dir: Some(dir.clone()),
+    };
+    let path = dir.join("output");
+    let file = OpenOptions::new()
+        .append(true)
+        .create_new(true)
+        .open(&path)?;
+    let left = deadline.remaining();
+    if left.is_zero() {
+        return Ok(CapturedRun {
+            completion: Completion::NotStarted,
+            output,
+        });
+    }
+    let wait = timeout.duration.unwrap_or(left);
+    let timer = tokio::time::sleep(wait.min(left));
+    let mut child = tokio::process::Command::new("bash")
+        .arg("-c")
+        .arg(command)
+        .current_dir(cwd)
+        .env("PYTHONUNBUFFERED", "1")
+        .envs(env)
+        .stdin(Stdio::null())
+        .stdout(file.try_clone()?)
+        .stderr(file)
+        .process_group(0)
+        .spawn()?;
+    let pgid = child
+        .id()
+        .ok_or_else(|| io::Error::other("spawned Bash has no PID"))?;
+    job.pgid = Some(pgid);
+    let status = tokio::select! {
+        biased;
+        () = cancel.cancelled() => return Err(ToolError::Cancelled),
+        () = timer => child.try_wait()?,
+        status = child.wait() => Some(status?),
+    };
+    let completion = if let Some(status) = status {
+        job.pgid = None;
+        Completion::Finished(status.code())
+    } else if timeout.deadline_left.is_some() || left < wait {
+        terminate_pipe_child(&mut child, job.pgid).await?;
+        job.pgid = None;
+        Completion::TimedOut
+    } else {
+        let exit_path = dir.join("exit_code");
+        tokio::spawn(record_exit(child, exit_path.clone()));
+        Completion::StillRunning {
+            pgid,
+            output_path: path.clone(),
+            exit_path,
+        }
+    };
+    let mut file = File::open(&path)?;
+    let len = file.metadata()?.len();
+    std::io::Read::by_ref(&mut file)
+        .take(len.min(MAX_OUTPUT_BYTES as u64))
+        .read_to_end(&mut output.inline)?;
+    if len > MAX_OUTPUT_BYTES as u64 {
+        output.output_path = Some(path);
+    }
+    // Keep the guard through result shaping in case publication fails or is cancelled.
+    output.job = Some(job);
+    Ok(CapturedRun { completion, output })
+}
+
+#[cfg(unix)]
+async fn record_exit(mut child: Child, path: PathBuf) -> io::Result<()> {
+    use std::os::unix::process::ExitStatusExt as _;
+    let status = child.wait().await?;
+    let code = status.code().or_else(|| status.signal().map(|s| 128 + s));
+    let tmp = path.with_extension("tmp");
+    tokio::fs::write(&tmp, format!("{}\n", json!(code))).await?;
+    tokio::fs::rename(tmp, path).await
 }
 
 /// Capture pipe output concurrently while waiting for the process.
@@ -492,6 +668,7 @@ async fn execute_pipes(
         .current_dir(&cwd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .env("PYTHONUNBUFFERED", "1")
         .envs(env);
     #[cfg(unix)]
     process.process_group(0);
@@ -886,6 +1063,7 @@ fn run_pty_blocking(
         .arg("-c")
         .arg(&command)
         .current_dir(&cwd)
+        .env("PYTHONUNBUFFERED", "1")
         .envs(env)
         .spawn(pts)
         .map_err(|error| ToolError::Other(format!("spawn Bash PTY process: {error}")))?;
@@ -1112,7 +1290,7 @@ fn shape_result(
     let timed_out = matches!(captured.completion, Completion::TimedOut);
     let exit = match captured.completion {
         Completion::Finished(code) => code,
-        Completion::TimedOut | Completion::Cancelled => None,
+        _ => None,
     };
     let mut output_path = captured.output.output_path.clone();
     let mut displayed_output_path = output_path
@@ -1121,36 +1299,55 @@ fn shape_result(
         .transpose()?;
     let mut truncated = output_path.is_some();
     let signaled = matches!(captured.completion, Completion::Finished(None));
-    let mut prefix = shell_notice_prefix(
-        timeout,
-        displayed_output_path.as_deref(),
-        timed_out,
-        exit,
-        signaled,
-    );
-
-    // Measure the untruncated lossy preview first.  Rendering applies the
-    // inline cap, so measuring its result would hide a late spill condition.
+    let mut metadata = Map::new();
+    let mut notice = String::new();
+    #[cfg(unix)]
+    match &captured.completion {
+        Completion::StillRunning { pgid, output_path, exit_path } => {
+            let out = validate_output_path(output_path)?;
+            let exit = validate_output_path(exit_path)?;
+            metadata.insert("stillRunning".into(), json!(true));
+            metadata.insert("pgid".into(), json!(pgid));
+            metadata.insert("outputPath".into(), json!(out));
+            metadata.insert("exitPath".into(), json!(exit));
+            let reason = if timeout.budget_tenth_capped { "budget/10" } else if timeout.default_wait { "default 300s" } else { "requested timeout" };
+            let quote = |p: &str| format!("'{}'", p.replace('\'', r"'\''"));
+            let (out, exit) = (quote(&out), quote(&exit));
+            notice = format!("<shell_metadata>\nWaited {} seconds ({reason}). Process group {pgid} is still running. Read live output with tail -n 20 {out}, read its exit code with cat {exit}, or stop it with kill -- -{pgid}.\n</shell_metadata>\n\n", timeout.seconds);
+        }
+        Completion::NotStarted => notice = "<shell_metadata>\nCommand not started because the run budget expired.\n</shell_metadata>\n\n".into(),
+        _ => {}
+    }
+    let prefix_for = |path: Option<&str>| {
+        format!(
+            "{notice}{}",
+            shell_notice_prefix(timeout, path, timed_out, exit, signaled)
+        )
+    };
+    let mut prefix = prefix_for(displayed_output_path.as_deref());
     if shell_output_len(&prefix, &captured.output.inline) > MAX_OUTPUT_BYTES
         && output_path.is_none()
     {
-        captured
-            .output
-            .spill_inline()
-            .map_err(|error| contextual_io("spill Bash output capture", error))?;
-        output_path = captured.output.output_path.clone();
+        #[cfg(unix)]
+        if let Completion::StillRunning {
+            output_path: path, ..
+        } = &captured.completion
+        {
+            output_path = Some(path.clone());
+        }
+        if output_path.is_none() {
+            captured
+                .output
+                .spill_inline()
+                .map_err(|error| contextual_io("spill Bash output capture", error))?;
+            output_path = captured.output.output_path.clone();
+        }
         displayed_output_path = output_path
             .as_deref()
             .map(validate_output_path)
             .transpose()?;
-        truncated = output_path.is_some();
-        prefix = shell_notice_prefix(
-            timeout,
-            displayed_output_path.as_deref(),
-            timed_out,
-            exit,
-            signaled,
-        );
+        truncated = true;
+        prefix = prefix_for(displayed_output_path.as_deref());
     }
     let output = render_shell_output(
         &prefix,
@@ -1158,7 +1355,8 @@ fn shape_result(
         displayed_output_path.as_deref(),
     );
 
-    let mut metadata = Map::new();
+    #[cfg(unix)]
+    let timed_out = timed_out || matches!(captured.completion, Completion::NotStarted);
     metadata.insert("exit".to_string(), json!(exit));
     metadata.insert("timedOut".to_string(), json!(timed_out));
     metadata.insert("truncated".to_string(), json!(truncated));
@@ -1185,6 +1383,14 @@ fn shape_result(
     });
     if cancel.is_cancelled() {
         return Err(ToolError::Cancelled);
+    }
+    #[cfg(unix)]
+    if let Some(job) = &mut captured.output.job
+        && (matches!(captured.completion, Completion::StillRunning { .. })
+            || (truncated && captured.output.artifact_owner.is_none()))
+    {
+        job.pgid = None;
+        job.dir = None;
     }
     captured.output.disarm_artifact();
     Ok(result)
@@ -1412,6 +1618,8 @@ mod tests {
             seconds: 155.0,
             duration: Some(Duration::from_secs(155)),
             clamped: false,
+            budget_tenth_capped: false,
+            default_wait: false,
             deadline_left: Some(200),
         };
         let prefix = shell_notice_prefix(timeout, None, true, None, false);
