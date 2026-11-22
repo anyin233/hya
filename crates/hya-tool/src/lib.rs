@@ -48,6 +48,8 @@ pub mod nested;
 mod output_cap;
 /// Allow/ask/deny permission plane: invocation policy, resource rules, and asks.
 pub mod permission;
+#[cfg(unix)]
+pub mod process_group;
 /// Read-only activity query scoped to the caller's Project.
 pub mod project_activity;
 /// Project-root path boundary shared by the builtin file tools (ADR-0026).

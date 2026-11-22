@@ -8,7 +8,7 @@
 //! the host's cell ([`crate::native_bundle::share_deadline_v1`]).
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{LazyLock, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 // Tokio's clock, so a paused test runtime moves the stages with its timers.
@@ -40,6 +40,11 @@ pub struct RunDeadline {
     start: Instant,
     budget: Duration,
     notified: Mutex<HashMap<SessionId, Told>>,
+    background: BackgroundJobs,
+}
+
+#[derive(Debug, Default)]
+struct BackgroundJobs {
     shutdown: CancellationToken,
     jobs: Mutex<Vec<oneshot::Receiver<()>>>,
 }
@@ -86,6 +91,8 @@ pub fn current() -> Option<&'static RunDeadline> {
 pub async fn shutdown_background_jobs() {
     if let Some(deadline) = current() {
         deadline.shutdown_background_jobs().await;
+    } else {
+        UNBUDGETED_JOBS.shutdown().await;
     }
 }
 
@@ -109,21 +116,16 @@ fn clamp_secs(value: f64, low: f64, high: f64) -> Duration {
     Duration::from_secs_f64(value.clamp(low, high))
 }
 
-impl RunDeadline {
-    /// Measure a run's budget from the supplied clock instant.
-    #[must_use]
-    pub fn new(start: Instant, budget: Duration) -> Self {
-        Self {
-            start,
-            budget,
-            notified: Mutex::new(HashMap::new()),
-            shutdown: CancellationToken::new(),
-            jobs: Mutex::new(Vec::new()),
-        }
-    }
+static UNBUDGETED_JOBS: LazyLock<BackgroundJobs> = LazyLock::new(BackgroundJobs::default);
 
+#[cfg(unix)]
+pub(crate) fn register_unbudgeted_job() -> (CancellationToken, BackgroundJobGuard) {
+    UNBUDGETED_JOBS.register()
+}
+
+impl BackgroundJobs {
     /// Register a yielded job before handing it to its supervisor.
-    pub fn register_background_job(&self) -> (CancellationToken, BackgroundJobGuard) {
+    fn register(&self) -> (CancellationToken, BackgroundJobGuard) {
         let (tx, rx) = oneshot::channel();
         let mut jobs = self.jobs.lock().unwrap_or_else(PoisonError::into_inner);
         jobs.retain_mut(|job| matches!(job.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
@@ -135,12 +137,35 @@ impl RunDeadline {
     }
 
     /// Called after tool producers have drained. Join every remaining supervisor.
-    pub async fn shutdown_background_jobs(&self) {
+    async fn shutdown(&self) {
         self.shutdown.cancel();
         let jobs = std::mem::take(&mut *self.jobs.lock().unwrap_or_else(PoisonError::into_inner));
         for job in jobs {
             let _ = job.await;
         }
+    }
+}
+
+impl RunDeadline {
+    /// Measure a run's budget from the supplied clock instant.
+    #[must_use]
+    pub fn new(start: Instant, budget: Duration) -> Self {
+        Self {
+            start,
+            budget,
+            notified: Mutex::new(HashMap::new()),
+            background: BackgroundJobs::default(),
+        }
+    }
+
+    /// Register a yielded job before starting its supervisor.
+    pub fn register_background_job(&self) -> (CancellationToken, BackgroundJobGuard) {
+        self.background.register()
+    }
+
+    /// Stop and join yielded jobs before exiting.
+    pub async fn shutdown_background_jobs(&self) {
+        self.background.shutdown().await;
     }
 
     /// The whole budget.

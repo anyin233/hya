@@ -428,6 +428,65 @@ async fn exec_joins_yielded_bash_before_exit() -> Result<(), Box<dyn std::error:
 
 #[cfg(unix)]
 #[tokio::test]
+async fn bare_exec_joins_yielded_bash_before_exit() -> Result<(), Box<dyn std::error::Error>> {
+    let env = E2eEnvBuilder::new()
+        .scripts(vec![
+            tool_step(
+                "bash",
+                json!({"command": "echo $$ > sleep.pid; exec sleep 60", "timeout": 1}),
+            ),
+            text_step("Done."),
+            text_step("Done."),
+        ])
+        .build()
+        .await?;
+    let output = run_exec(&env, &["--bare", "--time-budget", "180"], "run Bash").await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let events = std::str::from_utf8(&output.stdout)?
+        .lines()
+        .map(serde_json::from_str::<hya_proto::Envelope>)
+        .collect::<Result<Vec<_>, _>>()?;
+    let note = events
+        .iter()
+        .find_map(|event| match &event.event {
+            hya_proto::Event::ToolResult { output, .. } => output["still_running"].as_str(),
+            _ => None,
+        })
+        .ok_or("missing bare still_running result")?;
+    let exit = std::path::Path::new(
+        note.split('\'')
+            .find(|s| s.ends_with("/exit_code"))
+            .ok_or("missing exit path")?,
+    );
+    assert_stopped_sleep(&env, exit)?;
+    std::fs::remove_dir_all(exit.parent().ok_or("missing job directory")?)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn assert_stopped_sleep(
+    env: &E2eEnv,
+    exit: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert_eq!(std::fs::read_to_string(exit)?, "137\n");
+    let pid = env
+        .read_project_file("sleep.pid")?
+        .trim()
+        .parse::<libc::pid_t>()?;
+    assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn completed_budgeted_bash_preserves_full_output_path()
 -> Result<(), Box<dyn std::error::Error>> {
     let (env, output, _) = run_lead(
