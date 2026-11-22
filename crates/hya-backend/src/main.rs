@@ -338,6 +338,7 @@ async fn cmd_exec(
     let shutdown_res = signals
         .finish_with_store_report(&exit_store, already_stopped, headless.shutdown())
         .await;
+    hya_tool::deadline::shutdown_background_jobs().await;
     let (turn, stop) = body_result?;
     shutdown_res?;
     exit_if_stopped(stop);

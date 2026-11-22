@@ -527,14 +527,16 @@ fn resolve_cwd(ctx: &ToolCtx, requested: Option<&str>) -> PathBuf {
 
 #[cfg(unix)]
 struct Job {
-    pgid: Option<u32>,
+    cancel: Option<CancellationToken>,
     dir: Option<PathBuf>,
 }
 
 #[cfg(unix)]
 impl Drop for Job {
     fn drop(&mut self) {
-        let _ = terminate_pipe_process_group(self.pgid.take());
+        if let Some(cancel) = self.cancel.take() {
+            cancel.cancel();
+        }
         if let Some(dir) = self.dir.take() {
             let _ = std::fs::remove_dir_all(dir);
         }
@@ -567,7 +569,7 @@ async fn execute_budgeted_file(
     template.pop();
     let dir = PathBuf::from(std::ffi::OsString::from_vec(template));
     let mut job = Job {
-        pgid: None,
+        cancel: None,
         dir: Some(dir.clone()),
     };
     let path = dir.join("output");
@@ -584,7 +586,12 @@ async fn execute_budgeted_file(
     }
     let wait = timeout.duration.unwrap_or(left);
     let timer = tokio::time::sleep(wait.min(left));
-    let mut child = tokio::process::Command::new("bash")
+    let (reader, writer) = std::io::pipe()?;
+    set_nonblocking(reader.as_raw_fd())?;
+    let sentinel = tokio::io::unix::AsyncFd::new(reader)?;
+    let writer_fd = writer.as_raw_fd();
+    let mut process = tokio::process::Command::new("bash");
+    process
         .arg("-c")
         .arg(command)
         .current_dir(cwd)
@@ -593,38 +600,51 @@ async fn execute_budgeted_file(
         .stdin(Stdio::null())
         .stdout(file.try_clone()?)
         .stderr(file)
-        .process_group(0)
-        .spawn()?;
+        .process_group(0);
+    // Both descriptors start close-on-exec. Clear the writer flag only in
+    // this child so a concurrent spawn cannot inherit another group's pipe.
+    // SAFETY: fcntl is async-signal-safe and writer stays open through spawn.
+    unsafe {
+        process.pre_exec(move || {
+            if libc::fcntl(writer_fd, libc::F_SETFD, 0) < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let child = process.spawn()?;
+    drop(writer);
     let pgid = child
         .id()
         .ok_or_else(|| io::Error::other("spawned Bash has no PID"))?;
-    job.pgid = Some(pgid);
+    let mut group = BudgetGroup { child, sentinel };
     let status = tokio::select! {
         biased;
         () = cancel.cancelled() => {
-            terminate_pipe_child(&mut child, job.pgid.take()).await?;
+            group.stop().await?;
             return Err(ToolError::Cancelled);
         }
-        status = wait_for_group(&mut child, pgid) => Some(status?),
-        () = timer => child.try_wait()?.filter(|_| !process_group_alive(Some(pgid))),
+        status = group.wait_for_group() => Some(status?),
+        () = timer => group.try_wait()?,
     };
     let completion = if let Some(status) = status {
-        job.pgid = None;
         Completion::Finished(status.code())
     } else if timeout.deadline_left.is_some() || left < wait {
-        terminate_pipe_child(&mut child, job.pgid).await?;
-        job.pgid = None;
+        group.stop().await?;
         Completion::TimedOut
     } else {
         let exit_path = dir.join("exit_code");
         let end = tokio::time::Instant::now() + deadline.remaining();
-        tokio::spawn(record_exit(
-            child,
-            pgid,
-            exit_path.clone(),
-            end,
-            cancel.clone(),
-        ));
+        let cancel = cancel.child_token();
+        job.cancel = Some(cancel.clone());
+        let (shutdown, guard) = deadline.register_background_job();
+        let record_path = exit_path.clone();
+        tokio::spawn(async move {
+            let _guard = guard;
+            if let Err(error) = record_exit(group, record_path, end, cancel, shutdown).await {
+                eprintln!("record Bash exit for group {pgid}: {error}");
+            }
+        });
         Completion::StillRunning {
             pgid,
             output_path: path.clone(),
@@ -645,34 +665,82 @@ async fn execute_budgeted_file(
 }
 
 #[cfg(unix)]
-async fn wait_for_group(child: &mut Child, pgid: u32) -> io::Result<std::process::ExitStatus> {
-    // Tokio caches the leader's status if this wait resumes after yielding.
-    let status = child.wait().await?;
-    while process_group_alive(Some(pgid)) {
-        tokio::time::sleep(Duration::from_millis(15)).await;
+struct BudgetGroup {
+    child: Child,
+    sentinel: tokio::io::unix::AsyncFd<std::io::PipeReader>,
+}
+
+#[cfg(unix)]
+impl Drop for BudgetGroup {
+    fn drop(&mut self) {
+        // Tokio clears the PID when the leader has been reaped.
+        let _ = terminate_pipe_process_group(self.child.id());
     }
-    Ok(status)
+}
+
+#[cfg(unix)]
+impl BudgetGroup {
+    fn eof(reader: &std::io::PipeReader) -> io::Result<()> {
+        let mut reader = reader;
+        let mut buf = [0; 1024];
+        while reader.read(&mut buf)? != 0 {}
+        Ok(())
+    }
+
+    async fn wait_for_group(&mut self) -> io::Result<std::process::ExitStatus> {
+        // Keep the leader waitable (and its PGID reserved) until all inherited
+        // writers close. Zombies have already closed their file descriptors.
+        self.sentinel
+            .async_io(tokio::io::Interest::READABLE, Self::eof)
+            .await?;
+        self.child.wait().await
+    }
+
+    fn try_wait(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
+        match Self::eof(self.sentinel.get_ref()) {
+            Ok(()) => self.child.try_wait(),
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn stop(&mut self) -> Result<(), ToolError> {
+        let pgid = self.child.id();
+        terminate_pipe_child(&mut self.child, pgid).await?;
+        // A descendant may have left the group while retaining the sentinel.
+        if let Ok(result) = tokio::time::timeout(
+            POST_KILL_DRAIN_GRACE,
+            self.sentinel
+                .async_io(tokio::io::Interest::READABLE, Self::eof),
+        )
+        .await
+        {
+            result?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(unix)]
 async fn record_exit(
-    mut child: Child,
-    pgid: u32,
+    mut group: BudgetGroup,
     path: PathBuf,
     end: tokio::time::Instant,
     cancel: CancellationToken,
+    shutdown: CancellationToken,
 ) -> Result<(), ToolError> {
     use std::os::unix::process::ExitStatusExt as _;
     let status = tokio::select! {
         biased;
-        () = cancel.cancelled() => None,
-        () = tokio::time::sleep_until(end) => None,
-        status = wait_for_group(&mut child, pgid) => Some(status?),
+        () = cancel.cancelled() => group.try_wait()?,
+        () = shutdown.cancelled() => group.try_wait()?,
+        () = tokio::time::sleep_until(end) => group.try_wait()?,
+        status = group.wait_for_group() => Some(status?),
     };
     let code = if let Some(status) = status {
         status.code().or_else(|| status.signal().map(|s| 128 + s))
     } else {
-        terminate_pipe_child(&mut child, Some(pgid)).await?;
+        group.stop().await?;
         Some(128 + libc::SIGKILL)
     };
     let tmp = path.with_extension("tmp");
@@ -1424,7 +1492,7 @@ fn shape_result(
         && (matches!(captured.completion, Completion::StillRunning { .. })
             || (truncated && captured.output.artifact_owner.is_none()))
     {
-        job.pgid = None;
+        job.cancel = None;
         job.dir = None;
     }
     captured.output.disarm_artifact();
@@ -1689,13 +1757,28 @@ mod tests {
         .await?;
         assert!(matches!(run.completion, Completion::Finished(Some(0))));
         assert_eq!(run.output.inline, b"bg-ok\n");
+        let run = execute_budgeted_file(
+            "sleep .1 & exit 7",
+            BTreeMap::new(),
+            cwd,
+            cwd.into(),
+            timeout_settings(Some(1.0))?,
+            &deadline,
+            &CancellationToken::new(),
+        )
+        .await?;
+        assert!(matches!(run.completion, Completion::Finished(Some(7))));
         Ok(())
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn yielded_groups_stop_on_cancel_or_deadline() -> Result<(), ToolError> {
-        for (command, cancel_early) in [("sleep 60", true), ("echo started; (sleep 60) &", false)] {
+        for (command, trigger) in [
+            ("sleep 60", "cancel"),
+            ("echo started; (sleep 60) &", "deadline"),
+            ("sleep 60", "shutdown"),
+        ] {
             let cancel = CancellationToken::new();
             let cwd = Path::new(".");
             let deadline = RunDeadline::new(tokio::time::Instant::now(), Duration::from_secs(2));
@@ -1736,13 +1819,17 @@ mod tests {
                     .as_str()
                     .ok_or(io::Error::other("missing outputPath"))?,
             )?;
-            if cancel_early {
+            if trigger == "shutdown" {
+                deadline.shutdown_background_jobs().await;
+                assert!(path.is_file());
+                assert!(!process_group_alive(Some(pgid)));
+            } else if trigger == "cancel" {
                 cancel.cancel();
             } else {
                 assert_eq!(output, "started\n");
             }
             tokio::time::timeout(Duration::from_secs(4), async {
-                while !path.exists() || process_group_alive(Some(pgid)) {
+                while !path.exists() {
                     tokio::time::sleep(Duration::from_millis(15)).await;
                 }
             })
