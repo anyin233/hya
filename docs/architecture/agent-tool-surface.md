@@ -460,7 +460,7 @@ the report, present only when the caller is the target's parent. A mail
 entry's `chars` is the length of its body as received (at most 600, the
 `[NEW MAIL]` bound).
 When either `finished` or `already_finished` includes a reported member, `output`
-reminds the caller that the member was automatically archived. Calling `archive`
+reminds the caller that the member was automatically archived when the reminder fits alongside all member rows and metadata. Calling `archive`
 on that member is unnecessary.
 `already_finished` and `mail` are omitted when empty. The wait runs inside the
 caller's turn and is woken through the engine bus (team-lifecycle events on the

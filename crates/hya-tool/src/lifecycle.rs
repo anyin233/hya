@@ -344,12 +344,22 @@ impl WaitOutcome {
             .collect();
         let size = |result: &Value| result.to_string().chars().count();
         // Everything but the body text (header, headings, pointers, metadata).
-        let bare = size(&self.render(&bodies, &vec![0; bodies.len()]));
+        let empty = vec![0; bodies.len()];
+        let mut reminder = self
+            .finished
+            .iter()
+            .chain(&self.already_finished)
+            .any(|member| member.state == WaitMemberState::Reported);
+        let mut bare = size(&self.render(&bodies, &empty, reminder));
+        if reminder && bare > WAIT_RESULT_BUDGET {
+            reminder = false;
+            bare = size(&self.render(&bodies, &empty, reminder));
+        }
         let mut budget = WAIT_RESULT_BUDGET
             .saturating_sub(bare)
             .min(lengths.iter().sum());
         loop {
-            let result = self.render(&bodies, &water_fill(&lengths, budget));
+            let result = self.render(&bodies, &water_fill(&lengths, budget), reminder);
             // JSON escaping can grow the text past its char count: shrink
             // until the whole envelope fits.
             if budget == 0 || size(&result) <= WAIT_RESULT_BUDGET {
@@ -393,7 +403,7 @@ impl WaitOutcome {
         bodies
     }
 
-    fn render(&self, bodies: &[PreviewBody<'_>], shown: &[usize]) -> Value {
+    fn render(&self, bodies: &[PreviewBody<'_>], shown: &[usize], reminder: bool) -> Value {
         let mut lines = Vec::new();
         let headline = match self.woke_by {
             WaitWake::Members => "Subagents finished.",
@@ -424,12 +434,7 @@ impl WaitOutcome {
             let tag = format!("already {}", state_label(member.state));
             lines.push(member_line(member, &tag));
         }
-        if self
-            .finished
-            .iter()
-            .chain(&self.already_finished)
-            .any(|member| member.state == WaitMemberState::Reported)
-        {
+        if reminder {
             lines.push(
                 "Reported subagents are automatically archived; do not call `archive` on them."
                     .to_string(),
@@ -1127,6 +1132,48 @@ mod tests {
             assert_eq!(result["metadata"]["finished"][0]["report_truncated"], true);
             assert!(result.to_string().chars().count() <= WAIT_RESULT_BUDGET);
         }
+    }
+
+    #[test]
+    fn fifteen_reports_keep_every_row_when_archive_note_would_overflow() {
+        let finished = (0..15)
+            .map(|i| {
+                let mut m = member(
+                    &format!("main/wk-{i:02}"),
+                    WaitMemberState::Reported,
+                    Some(&"x".repeat(100)),
+                );
+                m.channel = Some(format!("DM-{i:08}"));
+                m
+            })
+            .collect();
+        let outcome = WaitOutcome {
+            woke_by: WaitWake::Members,
+            finished,
+            already_finished: vec![],
+            running: vec![],
+            mail: vec![],
+            waited_ms: 0,
+        };
+        let result = outcome.to_tool_result();
+        let output = result["output"].as_str().unwrap_or_default();
+        assert_eq!(
+            result["metadata"]["finished"].as_array().map(Vec::len),
+            Some(15)
+        );
+        for member in &outcome.finished {
+            assert!(output.contains(&format!("- {} [reported]", member.handle)));
+        }
+        assert!(
+            !output.contains("automatically archived"),
+            "size {}",
+            result.to_string().len()
+        );
+        assert!(
+            result.to_string().chars().count() <= WAIT_RESULT_BUDGET,
+            "size {}",
+            result.to_string().len()
+        );
     }
 
     /// Without a DM channel the preview does not invent a pointer.
