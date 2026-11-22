@@ -468,6 +468,7 @@ Read the output while the command runs. The exit file appears atomically when
 the whole group exits, including background writers. Cancellation, budget expiry, or exec shutdown kills a yielded group. Exec waits for its supervisor to reap the shell and atomically publish the exit code before returning. The notice gives quoted commands
 to inspect output or stop the group. At the end-of-budget cap Bash kills the
 group and returns `timedOut: true`. An exhausted budget skips the spawn.
+For a completed or timed-out command whose output exceeds 50 KiB, `metadata.outputPath` points to the full capture under `.hya/tool-output/`.
 PTY waits terminate the group on timeout. All Bash modes set
 `PYTHONUNBUFFERED=1` before applying explicit `env` overrides.
 
