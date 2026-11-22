@@ -465,7 +465,12 @@ waits up to 90 seconds. If the command is still running at the ordinary wait
 limit, the result has `metadata.stillRunning: true`, `timedOut: false`,
 `exit: null`, numeric `pgid`, and string `outputPath` and `exitPath`.
 Read the output while the command runs. The exit file appears atomically when
-the whole group exits, including background writers. Cancellation, budget expiry, or exec shutdown kills a yielded group. Exec waits for its supervisor to reap the shell and atomically publish the exit code before returning. The notice gives quoted commands
+the shell exits and its inherited group sentinel closes. On Linux, Bash also
+waits for live group members that closed the sentinel, including children
+launched with Python’s `subprocess.Popen`. Zombie descendants count as exited.
+Cancellation, budget expiry, or exec shutdown kills a yielded group. Exec waits
+for its supervisor to reap the shell and publish the exit code before returning.
+The notice gives quoted commands
 to inspect output or stop the group. At the end-of-budget cap Bash kills the
 group and returns `timedOut: true`. An exhausted budget skips the spawn.
 For a completed or timed-out command whose output exceeds 50 KiB, `metadata.outputPath` points to the full capture under `.hya/tool-output/`.

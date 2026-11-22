@@ -970,10 +970,11 @@ is printed. Other programs that buffer output when writing to a file may
 still show it late.
 The model receives the `output` string, which ends with `[exit code: N]`,
 `[still running: …]`, `[stopped: …]`, or `[not started: …]`.
-The exit code is written if the command ends while the run lasts. To wait
-again, sleep briefly in a later call before reading the output. Nothing
-stops a command left running, or a job a command started with `&`, when
-the run ends normally.
+A yielded job keeps running across calls. To check it, read the output or
+exit code file in a later call. When the run ends, is cancelled, or reaches
+its deadline, Bash kills any remaining yielded group and writes `137` to its
+exit code file before exit. Without a budget, a job started with `&` can
+outlive a shell that has already returned its exit code.
 [Kernel tool reference](kernel.md#built-in-tools)
 In full mode the one-tenth wait (minimum five seconds) also applies to
 the default and to `timeout: 0`. In a 900-second run with 200 seconds left,

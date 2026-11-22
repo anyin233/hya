@@ -12,7 +12,7 @@ use hya_tool::{Tool, ToolCtx, ToolError, deadline};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 
 /// Seconds a call waits for its command when it names no `timeout`.
 const DEFAULT_TIMEOUT_SECS: u64 = 300;
@@ -55,7 +55,7 @@ impl Tool for Bash {
     fn schema(&self) -> ToolSchema {
         super::schema(
             "bash",
-            "Run a shell command in the working directory with `bash -c` if Bash is on PATH, otherwise with `sh -c`. Returns combined stdout and stderr followed by one status line: `[exit code: N]`, `[still running: …]`, `[stopped: …]`, or `[not started: …]`. For output over 30,000 bytes, `output` shows the first 10,000 and last 20,000 bytes and names the file that holds all of it. `timeout` is how long this call waits. With a run time budget, one call waits at most a tenth of the budget. A command still running then is not stopped: the call returns what it has printed so far, and the command keeps running in the background, with its further output going to a file named in the result. A job the command starts with `&` also keeps running after the call returns; redirect its output to a file to keep it. If the end-of-budget cap ends the wait, Bash stops the command.",
+            "Run a shell command in the working directory with `bash -c` if Bash is on PATH, otherwise with `sh -c`. Returns combined stdout and stderr followed by one status line: `[exit code: N]`, `[still running: …]`, `[stopped: …]`, or `[not started: …]`. For output over 30,000 bytes, `output` shows the first 10,000 and last 20,000 bytes and names the file that holds all of it. `timeout` is how long this call waits. With a run time budget, one call waits at most a tenth of the budget. A command still running then is not stopped: the call returns what it has printed so far, and the command keeps running in the background, with its further output going to a file named in the result. Yielded commands are stopped when the run ends. Without a budget, a job started with `&` can outlive its shell; redirect its output to a file to keep it. If the end-of-budget cap ends the wait, Bash stops the command.",
             json!({
                 "type": "object",
                 "properties": {
@@ -89,7 +89,6 @@ impl Tool for Bash {
         template.pop();
         let dir = PathBuf::from(OsString::from_vec(template));
         let mut job = Job {
-            pgid: None,
             dir: Some(dir.clone()),
         };
         let path = dir.join("output");
@@ -99,7 +98,8 @@ impl Tool for Bash {
             .create_new(true)
             .open(&path)?;
         // The shared cap has a floor. A call cannot use more than the run has left.
-        let (limit, capped) = match deadline::current() {
+        let deadline = deadline::current();
+        let (limit, capped) = match deadline {
             Some(deadline) => {
                 let wait = requested.min(deadline.budget() / 10);
                 let (cap, capped) = deadline.cap(Some(wait));
@@ -128,32 +128,29 @@ impl Tool for Bash {
             .env("PYTHONUNBUFFERED", "1")
             .stdin(Stdio::null())
             .stdout(file.try_clone()?)
-            .stderr(file)
-            .process_group(0);
-        let mut child = process.spawn()?;
-        let pgid = child
-            .id()
-            .ok_or_else(|| io::Error::other("the spawned shell has no process id"))?;
-        job.pgid = Some(pgid);
+            .stderr(file);
+        let mut group = hya_tool::process_group::BudgetGroup::spawn(process, deadline.is_some())?;
+        let pgid = group.pgid();
         let status = tokio::select! {
             biased;
-            () = ctx.cancel.cancelled() => return Err(ToolError::Cancelled),
-            () = &mut timer => child.try_wait()?,
-            status = child.wait() => Some(status?),
+            () = ctx.cancel.cancelled() => {
+                group.stop().await?;
+                return Err(ToolError::Cancelled);
+            }
+            () = &mut timer => group.try_wait()?,
+            status = group.wait_for_group() => Some(status?),
         };
         // What `output` reports is what the file held when the wait ended.
         let printed = std::fs::metadata(&path)?.len();
         if status.is_none() && capped {
             // Kill before reading: processes left in the group could keep writing.
-            job.kill();
+            group.stop().await?;
         }
         let output = read_output(&path, printed).await?;
         if printed > MAX_OUTPUT_BYTES {
             job.dir = None;
         }
         if let Some(status) = status {
-            // A job the command started with `&` keeps running, as after any shell exits.
-            job.pgid = None;
             let code = json!(exit_code(status));
             return Ok(json!({
                 "exit_code": code,
@@ -171,10 +168,7 @@ impl Tool for Bash {
             }));
         }
         let exit = dir.join("exit_code");
-        tokio::spawn(record_exit(child, exit.clone()));
-        // Disarmed only here, with no await before the return, so a dropped call kills the command
-        // rather than leave a job nobody was told about.
-        job.pgid = None;
+        group.supervise(exit.clone(), ctx.cancel.clone(), deadline);
         job.dir = None;
         let reason = if limit < requested {
             "the run's time budget lets one call wait at most a tenth of it"
@@ -185,7 +179,7 @@ impl Tool for Bash {
         };
         let (out, exit) = (quoted(&path), quoted(&exit));
         let note = format!(
-            "This call waited {limit:?} ({reason}). The command was still running then and was left running in the background as process group {pgid}; it was not stopped. All its output, what is shown above and whatever it prints from now on, goes to {out}. If it ends while this run is still going, its exit code is written to {exit}. To follow it, run for example `tail -n 20 {out}` and `cat {exit}`. To wait again, sleep briefly in another call before reading the output. To stop it if it is no longer needed, run `kill -- -{pgid}`."
+            "This call waited {limit:?} ({reason}). The command was still running then and was left running in the background as process group {pgid}; it was not stopped. All its output, what is shown above and whatever it prints from now on, goes to {out}. Its exit code is written to {exit} when it finishes or the run stops it. To follow it, run for example `tail -n 20 {out}` and `cat {exit}`. To wait again, sleep briefly in another call before reading the output. To stop it if it is no longer needed, run `kill -- -{pgid}`."
         );
         Ok(json!({
             "exit_code": null,
@@ -231,20 +225,6 @@ async fn read_output(path: &Path, len: u64) -> io::Result<String> {
     ))
 }
 
-/// Waits for a command this call left running and writes its exit code to `exit`.
-async fn record_exit(mut child: Child, exit: PathBuf) {
-    let partial = exit.with_extension("tmp");
-    let written = async {
-        let status = child.wait().await?;
-        tokio::fs::write(&partial, format!("{}\n", json!(exit_code(status)))).await?;
-        // The rename makes the file appear complete or not at all.
-        tokio::fs::rename(&partial, &exit).await
-    };
-    if let Err(error) = written.await {
-        tracing::warn!(exit = %exit.display(), "exit code of a background command not recorded: {error}");
-    }
-}
-
 /// `path` single-quoted for a shell command line.
 fn quoted(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', r"'\''"))
@@ -258,32 +238,13 @@ fn exit_code(status: ExitStatus) -> Option<i32> {
         .or_else(|| status.signal().map(|signal| 128 + signal))
 }
 
-/// The command's process group and the call's directory: dropping it kills the group and removes
-/// the directory with its files.
+/// Removes the temporary directory unless the result gives it to the caller.
 struct Job {
-    pgid: Option<u32>,
     dir: Option<PathBuf>,
-}
-
-impl Job {
-    /// Signals the group at most once: once the group is gone its id can be reused.
-    fn kill(&mut self) {
-        if let Some(pgid) = self
-            .pgid
-            .take()
-            .and_then(|pid| libc::pid_t::try_from(pid).ok())
-        {
-            // SAFETY: killpg only sends a signal; a group already gone yields ESRCH.
-            unsafe {
-                libc::killpg(pgid, libc::SIGKILL);
-            }
-        }
-    }
 }
 
 impl Drop for Job {
     fn drop(&mut self) {
-        self.kill();
         if let Some(dir) = &self.dir {
             // Drop cannot report an error; a directory left behind is only stray temp files.
             let _ = std::fs::remove_dir_all(dir);

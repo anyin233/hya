@@ -347,9 +347,10 @@ A call ends in one of four ways:
   `[exit code: N]`, including `[exit code: 0]` on success. A command killed
   by a signal reports `128 + signal`. Bash removes the call's directory
   when the captured output fits the limit.
-  A job the command started with `&` keeps running, as it does after any
-  shell exits. Redirect its output to a file of its own to keep it when
-  Bash removes the directory.
+  With a time budget, Bash waits for the process group. Without a budget,
+  a job the command started with `&` keeps running when its shell exits.
+  Redirect its output to a file of its own to keep it when Bash removes
+  the directory.
 - **The wait ends first** (the call's `timeout`, the default, or a tenth
   of the run's budget). The command keeps running. The result has
   `exit_code: null`, the output printed until the wait ended, and a
@@ -358,11 +359,11 @@ A call ends in one of four ways:
   how to follow it (`tail`, `cat`, with the paths single-quoted for the
   shell), wait again (sleep briefly in a later call before reading the
   output), or stop it (`kill -- -<pgid>`). The running `hya` process writes
-  its exit code (or `128 + signal`) to `exit_code` when it sees the command
-  end. A command that outlives that process leaves no `exit_code` file.
-  Nothing stops such a command, or a job started with `&`, when the run
-  ends normally. The last line of `output` is `[still running: …]` with
-  the `still_running` sentence.
+  its exit code (or `128 + signal`) to `exit_code` when it finishes.
+  Yielded groups survive across calls. When the run ends, is cancelled, or
+  reaches its deadline, Bash kills any remaining yielded group and writes
+  `137` to `exit_code` before exit. The last line of `output` is
+  `[still running: …]` with the `still_running` sentence.
 - **The run's budget cuts the wait short.** This happens when the
   end-of-budget cap is shorter than the wait above. If the command is
   still running at that cap, Bash kills its process group.

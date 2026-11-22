@@ -586,10 +586,6 @@ async fn execute_budgeted_file(
     }
     let wait = timeout.duration.unwrap_or(left);
     let timer = tokio::time::sleep(wait.min(left));
-    let (reader, writer) = std::io::pipe()?;
-    set_nonblocking(reader.as_raw_fd())?;
-    let sentinel = tokio::io::unix::AsyncFd::new(reader)?;
-    let writer_fd = writer.as_raw_fd();
     let mut process = tokio::process::Command::new("bash");
     process
         .arg("-c")
@@ -599,25 +595,9 @@ async fn execute_budgeted_file(
         .envs(env)
         .stdin(Stdio::null())
         .stdout(file.try_clone()?)
-        .stderr(file)
-        .process_group(0);
-    // Both descriptors start close-on-exec. Clear the writer flag only in
-    // this child so a concurrent spawn cannot inherit another group's pipe.
-    // SAFETY: fcntl is async-signal-safe and writer stays open through spawn.
-    unsafe {
-        process.pre_exec(move || {
-            if libc::fcntl(writer_fd, libc::F_SETFD, 0) < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let child = process.spawn()?;
-    drop(writer);
-    let pgid = child
-        .id()
-        .ok_or_else(|| io::Error::other("spawned Bash has no PID"))?;
-    let mut group = BudgetGroup { child, sentinel };
+        .stderr(file);
+    let mut group = hya_tool::process_group::BudgetGroup::spawn(process, true)?;
+    let pgid = group.pgid();
     let status = tokio::select! {
         biased;
         () = cancel.cancelled() => {
@@ -634,17 +614,9 @@ async fn execute_budgeted_file(
         Completion::TimedOut
     } else {
         let exit_path = dir.join("exit_code");
-        let end = tokio::time::Instant::now() + deadline.remaining();
         let cancel = cancel.child_token();
         job.cancel = Some(cancel.clone());
-        let (shutdown, guard) = deadline.register_background_job();
-        let record_path = exit_path.clone();
-        tokio::spawn(async move {
-            let _guard = guard;
-            if let Err(error) = record_exit(group, record_path, end, cancel, shutdown).await {
-                eprintln!("record Bash exit for group {pgid}: {error}");
-            }
-        });
+        group.supervise(exit_path.clone(), cancel, Some(deadline));
         Completion::StillRunning {
             pgid,
             output_path: path.clone(),
@@ -674,91 +646,6 @@ async fn execute_budgeted_file(
         sink.finish()?
     };
     Ok(CapturedRun { completion, output })
-}
-
-#[cfg(unix)]
-struct BudgetGroup {
-    child: Child,
-    sentinel: tokio::io::unix::AsyncFd<std::io::PipeReader>,
-}
-
-#[cfg(unix)]
-impl Drop for BudgetGroup {
-    fn drop(&mut self) {
-        // Tokio clears the PID when the leader has been reaped.
-        let _ = terminate_pipe_process_group(self.child.id());
-    }
-}
-
-#[cfg(unix)]
-impl BudgetGroup {
-    fn eof(reader: &std::io::PipeReader) -> io::Result<()> {
-        let mut reader = reader;
-        let mut buf = [0; 1024];
-        while reader.read(&mut buf)? != 0 {}
-        Ok(())
-    }
-
-    async fn wait_for_group(&mut self) -> io::Result<std::process::ExitStatus> {
-        // Keep the leader waitable (and its PGID reserved) until all inherited
-        // writers close. Zombies have already closed their file descriptors.
-        self.sentinel
-            .async_io(tokio::io::Interest::READABLE, Self::eof)
-            .await?;
-        self.child.wait().await
-    }
-
-    fn try_wait(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
-        match Self::eof(self.sentinel.get_ref()) {
-            Ok(()) => self.child.try_wait(),
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
-
-    async fn stop(&mut self) -> Result<(), ToolError> {
-        let pgid = self.child.id();
-        terminate_pipe_child(&mut self.child, pgid).await?;
-        // A descendant may have left the group while retaining the sentinel.
-        if let Ok(result) = tokio::time::timeout(
-            POST_KILL_DRAIN_GRACE,
-            self.sentinel
-                .async_io(tokio::io::Interest::READABLE, Self::eof),
-        )
-        .await
-        {
-            result?;
-        }
-        Ok(())
-    }
-}
-
-#[cfg(unix)]
-async fn record_exit(
-    mut group: BudgetGroup,
-    path: PathBuf,
-    end: tokio::time::Instant,
-    cancel: CancellationToken,
-    shutdown: CancellationToken,
-) -> Result<(), ToolError> {
-    use std::os::unix::process::ExitStatusExt as _;
-    let status = tokio::select! {
-        biased;
-        () = cancel.cancelled() => group.try_wait()?,
-        () = shutdown.cancelled() => group.try_wait()?,
-        () = tokio::time::sleep_until(end) => group.try_wait()?,
-        status = group.wait_for_group() => Some(status?),
-    };
-    let code = if let Some(status) = status {
-        status.code().or_else(|| status.signal().map(|s| 128 + s))
-    } else {
-        group.stop().await?;
-        Some(128 + libc::SIGKILL)
-    };
-    let tmp = path.with_extension("tmp");
-    tokio::fs::write(&tmp, format!("{}\n", json!(code))).await?;
-    tokio::fs::rename(tmp, path).await?;
-    Ok(())
 }
 
 /// Capture pipe output concurrently while waiting for the process.
@@ -1777,6 +1664,80 @@ mod tests {
         )
         .await?;
         assert!(matches!(run.completion, Completion::Finished(Some(7))));
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn budgeted_shell_tracks_descendants_that_close_inherited_fds() -> Result<(), ToolError> {
+        let cwd = Path::new(".");
+        for (seconds, cancel_job) in [("0.25", false), ("60", true), ("60", false)] {
+            let deadline = RunDeadline::new(tokio::time::Instant::now(), Duration::from_secs(180));
+            let cancel = CancellationToken::new();
+            let command = format!(
+                r#"python3 -c 'import subprocess; print(subprocess.Popen(["sleep", "{seconds}"]).pid)'"#
+            );
+            let timeout = timeout_settings(Some(1.0))?;
+            let run = execute_budgeted_file(
+                &command,
+                BTreeMap::new(),
+                cwd,
+                cwd.into(),
+                timeout,
+                &deadline,
+                &cancel,
+            )
+            .await?;
+            let pid = String::from_utf8_lossy(&run.output.inline)
+                .trim()
+                .parse::<u32>()
+                .map_err(io::Error::other)?;
+            if seconds == "60" {
+                let result = shape_result(
+                    command,
+                    cwd.into(),
+                    false,
+                    timeout,
+                    Duration::ZERO,
+                    run,
+                    &cancel,
+                )?;
+                let meta = &result["metadata"];
+                assert_eq!(meta["stillRunning"], true);
+                assert!(Path::new(&format!("/proc/{pid}")).exists());
+                let exit = Path::new(
+                    meta["exitPath"]
+                        .as_str()
+                        .ok_or(io::Error::other("missing exitPath"))?,
+                );
+                if cancel_job {
+                    cancel.cancel();
+                    tokio::time::timeout(Duration::from_secs(3), async {
+                        while !exit.exists() {
+                            tokio::time::sleep(Duration::from_millis(15)).await;
+                        }
+                    })
+                    .await
+                    .map_err(io::Error::other)?;
+                }
+                deadline.shutdown_background_jobs().await;
+                assert_eq!(std::fs::read_to_string(exit)?, "137\n");
+                std::fs::remove_dir_all(
+                    exit.parent()
+                        .ok_or(io::Error::other("missing job directory"))?,
+                )?;
+            } else {
+                assert!(matches!(run.completion, Completion::Finished(Some(0))));
+            }
+            match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+                Ok(stat) => assert!(stat.rsplit_once(')').is_some_and(|(_, fields)| matches!(
+                    fields.split_whitespace().next(),
+                    Some("Z" | "X" | "x")
+                ))),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
         Ok(())
     }
 
