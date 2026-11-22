@@ -169,6 +169,8 @@ impl Tool for Todo {
         super::TODO
     }
 
+    // The advertised contract requires op. Only non-validating callers can
+    // reach the decoder's omitted-op and status-as-op compatibility forms.
     fn schema(&self) -> ToolSchema {
         let id = json!({"type": "string", "description": "Item id from the todo list"});
         let content = json!({"type": "string", "pattern": r"\S"});

@@ -437,6 +437,8 @@ checkpoint.
 | Remove | `op: "remove"`, `id: string` | Remove the item. |
 
 The allowed statuses are `pending`, `in_progress`, `blocked`, and `completed`.
+The canonical schema requires an explicit `op` from the table. Callers that
+bypass schema validation can also use the decoder’s compatibility forms.
 When `op` is omitted, a `content` field without an `id` adds an item. An `id`
 with `content`, `status`, or both updates that item. With an `id` and no
 `status` field, a status in `op` also updates the item. For example,
