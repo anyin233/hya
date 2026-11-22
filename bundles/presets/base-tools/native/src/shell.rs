@@ -556,7 +556,7 @@ async fn execute_budgeted_file(
     use std::os::unix::ffi::OsStringExt as _;
     use std::process::Stdio;
 
-    let mut output = OutputSink::new(artifact_root).finish()?;
+    let mut sink = OutputSink::new(artifact_root);
     let mut template = std::env::temp_dir()
         .join("hya-bash-XXXXXX")
         .into_os_string()
@@ -581,7 +581,7 @@ async fn execute_budgeted_file(
     if left.is_zero() {
         return Ok(CapturedRun {
             completion: Completion::NotStarted,
-            output,
+            output: sink.finish()?,
         });
     }
     let wait = timeout.duration.unwrap_or(left);
@@ -652,15 +652,27 @@ async fn execute_budgeted_file(
         }
     };
     let mut file = File::open(&path)?;
-    let len = file.metadata()?.len();
-    std::io::Read::by_ref(&mut file)
-        .take(len.min(MAX_OUTPUT_BYTES as u64))
-        .read_to_end(&mut output.inline)?;
-    if len > MAX_OUTPUT_BYTES as u64 {
-        output.output_path = Some(path);
-    }
-    // Keep the guard through result shaping in case publication fails or is cancelled.
-    output.job = Some(job);
+    let output = if matches!(completion, Completion::StillRunning { .. }) {
+        let mut output = sink.finish()?;
+        let len = file.metadata()?.len();
+        file.take(len.min(MAX_OUTPUT_BYTES as u64))
+            .read_to_end(&mut output.inline)?;
+        if len > MAX_OUTPUT_BYTES as u64 {
+            output.output_path = Some(path);
+        }
+        output.job = Some(job);
+        output
+    } else {
+        let mut buf = [0; PIPE_BUFFER_BYTES];
+        loop {
+            let count = file.read(&mut buf)?;
+            if count == 0 {
+                break;
+            }
+            sink.push(&buf[..count])?;
+        }
+        sink.finish()?
+    };
     Ok(CapturedRun { completion, output })
 }
 
@@ -1488,10 +1500,7 @@ fn shape_result(
         return Err(ToolError::Cancelled);
     }
     #[cfg(unix)]
-    if let Some(job) = &mut captured.output.job
-        && (matches!(captured.completion, Completion::StillRunning { .. })
-            || (truncated && captured.output.artifact_owner.is_none()))
-    {
+    if let Some(job) = &mut captured.output.job {
         job.cancel = None;
         job.dir = None;
     }
@@ -1838,6 +1847,34 @@ mod tests {
             assert_eq!(std::fs::read_to_string(path)?.trim(), "137");
             std::fs::remove_dir_all(path.parent().ok_or(io::Error::other("missing job dir"))?)?;
         }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn completed_budgeted_spill_is_an_owned_artifact() -> Result<(), ToolError> {
+        let root = std::env::temp_dir().join(format!("hya-budget-spill-{}", std::process::id()));
+        let deadline = RunDeadline::new(tokio::time::Instant::now(), Duration::from_secs(60));
+        let run = execute_budgeted_file(
+            "head -c 60000 /dev/zero",
+            BTreeMap::new(),
+            Path::new("."),
+            root.clone(),
+            timeout_settings(None)?,
+            &deadline,
+            &CancellationToken::new(),
+        )
+        .await?;
+        assert!(matches!(run.completion, Completion::Finished(Some(0))));
+        let path = run
+            .output
+            .output_path
+            .as_ref()
+            .ok_or(io::Error::other("missing spill"))?;
+        assert_eq!(path.parent(), Some(root.as_path()));
+        assert_eq!(std::fs::read(path)?, vec![0; 60000]);
+        drop(run);
+        std::fs::remove_dir(root)?;
         Ok(())
     }
 

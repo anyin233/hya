@@ -426,6 +426,29 @@ async fn exec_joins_yielded_bash_before_exit() -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn completed_budgeted_bash_preserves_full_output_path()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (env, output, _) = run_lead(
+        vec![
+            bash(r"head -c 60000 /dev/zero | tr '\0' x"),
+            text_step("Done."),
+        ],
+        &["--time-budget", "180"],
+    )
+    .await;
+    let meta = bash_metadata(&output)?;
+    assert_eq!(meta["exit"], 0);
+    let path = std::path::Path::new(meta["outputPath"].as_str().ok_or("missing outputPath")?);
+    assert_eq!(
+        path.parent(),
+        Some(env.backend.project.join(".hya/tool-output").as_path())
+    );
+    assert_eq!(std::fs::read(path)?, vec![b'x'; 60000]);
+    Ok(())
+}
+
 fn bash_metadata(output: &Output) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     for line in std::str::from_utf8(&output.stdout)?.lines() {
         let event: hya_proto::Envelope = serde_json::from_str(line)?;
