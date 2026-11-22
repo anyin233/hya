@@ -28,6 +28,8 @@ use tokio_util::sync::CancellationToken;
 #[derive(Clone)]
 enum Item {
     Reasoning,
+    EmptyReasoning,
+    BilledReasoning,
     Text(&'static str),
     Tool,
     Error,
@@ -77,6 +79,28 @@ impl Provider for ScriptedProvider {
         let mut out = Vec::new();
         for item in script {
             match item {
+                Item::EmptyReasoning => out.push(Ok(Event::ReasoningStart {
+                    session,
+                    message,
+                    part: PartId::new(),
+                    reason: None,
+                })),
+                Item::BilledReasoning => out.extend(
+                    FakeProvider::materialize(
+                        &[
+                            FakeStep::Usage(hya_proto::TokenUsage {
+                                output: 2,
+                                reasoning: 2,
+                                ..Default::default()
+                            }),
+                            FakeStep::Finish(FinishReason::Stop),
+                        ],
+                        session,
+                        message,
+                    )
+                    .into_iter()
+                    .map(Ok),
+                ),
                 Item::Reasoning => out.extend(
                     FakeProvider::materialize(
                         &[FakeStep::Reasoning("thinking".into())],
@@ -366,7 +390,12 @@ async fn interrupted_partial_text_is_deleted_before_retry() -> Result<(), CoreEr
 
 #[tokio::test]
 async fn only_reasoning_or_length_requests_empty_turn_rescue() -> Result<(), CoreError> {
-    for (first, expected) in [(Item::Reasoning, 2), (Item::Text(""), 1)] {
+    for (first, expected) in [
+        (Item::Reasoning, 2),
+        (Item::BilledReasoning, 2),
+        (Item::EmptyReasoning, 1),
+        (Item::Text(""), 1),
+    ] {
         let (engine, agent, session, opens) =
             fixture(vec![vec![first], vec![Item::Text("rescued")]]).await;
         assert_eq!(

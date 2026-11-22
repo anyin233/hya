@@ -738,7 +738,10 @@ row ends the run as any answer without a tool call does, and `hya exec
 --bare` prints an empty answer. A round with a tool call or with answer text
 resets the count. The message is sent in every stage of `--time-budget`,
 also when the completion check no longer is, and never once the run is
-cancelled. Nothing configures it, and full mode does not send it.
+cancelled. Full mode sends the notice only before the Final stage. A full-mode
+`stop` requires non-whitespace reasoning or a positive reported reasoning-token
+count. An empty reasoning block alone leaves the worker idle. A `length` finish
+remains eligible without reasoning.
 
 The completion check keeps its rules. An empty turn neither triggers it nor
 counts as sending it: when a later round answers with text, the check is sent

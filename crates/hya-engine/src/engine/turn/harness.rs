@@ -210,6 +210,7 @@ impl SessionEngine {
             permit: None,
             retries: 0,
             empty_turns: 0,
+            reasoning_tokens: None,
             output_tokens: None,
             last_finish: None,
             total_tokens: None,
@@ -279,6 +280,7 @@ struct TurnHarness<'a> {
     /// Retries of the current round.
     retries: usize,
     empty_turns: usize,
+    reasoning_tokens: Option<u64>,
     output_tokens: Option<u64>,
     last_finish: Option<FinishReason>,
     total_tokens: Option<TokenUsage>,
@@ -677,6 +679,7 @@ impl Harness for TurnHarness<'_> {
         if let Some(route) = self.workflow_route {
             route.finalize(None).await?;
         }
+        self.reasoning_tokens = round.tokens.map(|tokens| tokens.reasoning);
         self.last_finish = Some(round.finish);
         self.output_tokens = round.tokens.map(|tokens| tokens.output);
         if !round.tool_calls.is_empty() {
@@ -716,7 +719,8 @@ impl Harness for TurnHarness<'_> {
         }
         let has_reasoning = parts
             .iter()
-            .any(|part| matches!(part, PartProjection::Reasoning { .. }));
+            .any(|part| matches!(part, PartProjection::Reasoning { text, .. } if !text.trim().is_empty()))
+            || self.reasoning_tokens.is_some_and(|n| n > 0);
         if (!has_reasoning && self.last_finish != Some(FinishReason::Length))
             || self.empty_turns >= kernel::EMPTY_TURN_NOTICES
             || self.cancel.is_cancelled()
