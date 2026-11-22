@@ -445,28 +445,29 @@ async fn terminal_failure_after_retry_closes_once() {
 }
 
 #[tokio::test]
-async fn cancellation_during_backoff_is_prompt() {
+async fn cancellation_during_backoff_is_prompt() -> Result<(), Box<dyn std::error::Error>> {
     let (engine, agent, session, opens) = fixture(vec![
         vec![Item::Reasoning, Item::Error],
         vec![Item::Reasoning, Item::Error],
     ])
     .await;
     let cancel = CancellationToken::new();
-    let started = Instant::now();
+    let mut events = engine.bus().subscribe();
     let task = {
         let e = engine.clone();
         let c = cancel.clone();
         tokio::spawn(async move { e.run_turn(session, &agent, c).await })
     };
-    while *opens.lock().unwrap() == 0 {
-        tokio::task::yield_now().await;
-    }
+    while !matches!(events.recv().await?.event, Event::PartDeleted { .. }) {}
+    let started = Instant::now();
     cancel.cancel();
     assert!(matches!(
-        task.await.unwrap(),
+        task.await?,
         Ok(FinishReason::Cancelled) | Err(CoreError::Cancelled)
     ));
+    assert_eq!(*opens.lock().unwrap_or_else(|e| e.into_inner()), 1);
     assert!(started.elapsed() < Duration::from_secs(1));
+    Ok(())
 }
 
 #[tokio::test]

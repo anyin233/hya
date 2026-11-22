@@ -661,9 +661,15 @@ impl Harness for TurnHarness<'_> {
                 () = self.cancel.cancelled() => {}
                 () = tokio::time::sleep(wait) => {}
             }
-            if !self.cancel.is_cancelled()
-                && deadline.is_none_or(|d| d.stage() < hya_tool::deadline::Stage::Final)
-            {
+            if self.cancel.is_cancelled() {
+                if let Some(route) = self.workflow_route {
+                    route
+                        .finalize(Some(hya_proto::WorkflowRouteFailureClass::Cancelled))
+                        .await?;
+                }
+                return Err(CoreError::Cancelled);
+            }
+            if deadline.is_none_or(|d| d.stage() < hya_tool::deadline::Stage::Final) {
                 return Ok(true);
             }
         }
