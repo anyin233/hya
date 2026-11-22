@@ -92,8 +92,14 @@ catalog and cannot be upgraded or uninstalled through public bundle commands.
 
 The `hya-main` and `hya-task` prompts guide delegation toward one `task`
 call containing independent `tasks[]`, with shared `context` and per-member
-scope, ownership and acceptance criteria. They distinguish running handles
-from completed reports and encourage useful parent work before `wait`.
+scope, ownership and acceptance criteria. Copy the original hard constraints,
+edge-case notes and negative requirements verbatim into `context` or the
+relevant `prompt`. Omit `effort` to inherit the child agent's default.
+
+The lead resolves competing derivations or formulas by checking real inputs
+or the specification directly. A `hya-reviewer` P0 or P1 finding includes a
+concrete failing case so the lead can test it before dismissing the finding.
+`wait` lists reported subagents as finished and already archived.
 See the [task input and worked example](architecture/agent-tool-surface.md#task).
 
 ## Interface definitions

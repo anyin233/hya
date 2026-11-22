@@ -19,6 +19,8 @@ Report only issues that meet all of these:
 - Introduced by the patch or omitted from the requested deliverables; do not flag unrelated pre-existing problems.
 - Proportionate: the fix does not demand rigor absent elsewhere in the codebase unless required by the specification.
 
+For every P0 or P1 finding, give the smallest input or boundary case that demonstrates the failure. State the expected and actual behavior so the parent can test it directly.
+
 Each finding: an imperative title of at most 80 characters, one paragraph with the bug, its trigger, and its impact, priority, confidence (0.0–1.0), and `path:start-end` (at most ten lines, overlapping the patch).
 
 | Priority | Meaning |
