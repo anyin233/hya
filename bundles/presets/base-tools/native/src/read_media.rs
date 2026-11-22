@@ -53,6 +53,26 @@ pub(crate) async fn attachment_value(
         }
     }
     let bytes = tokio::fs::read(path).await?;
+    let bytes = if let Some(format) = image::ImageFormat::from_mime_type(mime) {
+        let (bytes, decoded) = tokio::task::spawn_blocking(move || {
+            let decoded = image::ImageReader::with_format(std::io::Cursor::new(&bytes), format)
+                .decode()
+                .map(drop);
+            (bytes, decoded)
+        })
+        .await
+        .map_err(std::io::Error::other)?;
+        if let Err(error) = decoded {
+            return Ok(json!({
+                "title": relative_title(path, workdir),
+                "output": format!("Malformed or incomplete image ({mime}, {} bytes). Decoding failed: {error}. Check the program that wrote the file.", bytes.len()),
+                "metadata": {"preview": "Image could not be decoded", "truncated": false, "loaded": []},
+            }));
+        }
+        bytes
+    } else {
+        bytes
+    };
     let message = if is_pdf_attachment(mime) {
         "PDF read successfully"
     } else {
@@ -208,4 +228,27 @@ fn is_binary_file(path: &Path, bytes: &[u8]) -> bool {
 fn relative_title(path: &Path, workdir: &Path) -> String {
     path.strip_prefix(workdir)
         .map_or_else(|_| display_path(path), display_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn corrupt_png_is_explained_without_an_attachment() -> std::io::Result<()> {
+        let dir = std::env::temp_dir().join(format!("hya-read-{}", hya_proto::SessionId::new()));
+        tokio::fs::create_dir(&dir).await?;
+        let path = dir.join("corrupt.png");
+        tokio::fs::write(&path, b"\x89PNG\r\n\x1a\n").await?;
+        let result = attachment_value(&path, &dir, "image/png").await?;
+        tokio::fs::remove_dir_all(dir).await?;
+        assert_eq!(result["title"], "corrupt.png");
+        assert!(
+            result["output"]
+                .as_str()
+                .is_some_and(|text| text.contains("Malformed"))
+        );
+        assert!(result.get("attachments").is_none());
+        Ok(())
+    }
 }

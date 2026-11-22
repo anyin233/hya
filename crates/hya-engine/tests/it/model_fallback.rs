@@ -430,14 +430,14 @@ async fn post_stream_error_is_delivered_once_and_never_failed_over() {
 }
 
 #[tokio::test]
-async fn empty_chain_preserves_single_attempt_behavior() {
+async fn empty_chain_retries_transient_open_on_original_model() {
     let solo_attempts = attempts_counter();
     let unused_attempts = attempts_counter();
     let solo = ScriptedModelProvider::new(
         "solo",
         vec![
             Outcome::PreStreamFailure(ProviderError::Transport("down".to_string())),
-            Outcome::Complete("SHOULD_NEVER_STREAM"),
+            Outcome::Complete("RECOVERED_ON_RETRY"),
         ],
         solo_attempts.clone(),
     );
@@ -446,24 +446,20 @@ async fn empty_chain_preserves_single_attempt_behavior() {
         vec![Outcome::Complete("UNUSED_TEXT")],
         unused_attempts.clone(),
     );
-    // No with_model_fallbacks installed: today's behavior exactly.
     let fixt = fixture(vec![solo, unused], None, "solo").await;
 
-    let error = fixt
+    let result = fixt
         .engine
         .run_turn(fixt.session, &fixt.agent, CancellationToken::new())
-        .await
-        .unwrap_err();
-    match &error {
-        CoreError::Provider(inner) => {
-            assert!(matches!(inner.as_ref(), ProviderError::Transport(_)));
-        }
-        other => panic!("expected transport error, got: {other:?}"),
-    }
+        .await;
+    assert!(matches!(result, Ok(FinishReason::Stop)));
+    assert!(assistant_text(&fixt).await.contains("RECOVERED_ON_RETRY"));
     assert_eq!(
-        solo_attempts.lock().unwrap().len(),
-        1,
-        "unset plane must keep the exact single direct-router attempt"
+        solo_attempts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len(),
+        2
     );
     assert_eq!(
         unused_attempts.lock().unwrap().len(),
@@ -790,7 +786,7 @@ async fn model_fallback_refuses_a_model_already_tried() {
     let alpha = ScriptedModelProvider::new(
         "alpha",
         vec![
-            Outcome::PreStreamFailure(ProviderError::Transport("reset".to_string())),
+            Outcome::PreStreamFailure(ProviderError::Incompatible("wrong capability".to_string())),
             Outcome::Complete("ALPHA_AGAIN"),
         ],
         attempts.clone(),
@@ -806,7 +802,7 @@ async fn model_fallback_refuses_a_model_already_tried() {
 
     assert!(matches!(
         provider_error(&error),
-        ProviderError::Transport(_)
+        ProviderError::Incompatible(_)
     ));
     assert_eq!(
         *attempts.lock().unwrap(),

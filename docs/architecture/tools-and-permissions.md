@@ -241,6 +241,10 @@ metadata, existence, or target-kind probing. Cancellation while waiting for a lo
 returns the typed `cancelled` error. Bash cancellation or a terminating timeout kills and
 reaps the complete process group, including a PTY descendant that retains the
 slave after leader exit. File contents never enter logs or error payloads.
+For example, reading a truncated PNG returns `{title, output, metadata}` with
+a decode error in `output`. Read attaches only successfully decoded images.
+PDFs retain their separate attachment handling.
+
 Budgeted Unix non-PTY Bash yields the process group when its requested wait
 or budget/10 limit expires. The result exposes `stillRunning: true`, numeric
 `pgid`, and string `outputPath` and `exitPath` in metadata. The end-of-budget

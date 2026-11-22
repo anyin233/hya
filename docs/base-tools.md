@@ -491,7 +491,7 @@ and artifact spill; coding results use its structured field/envelope bounds.
 
 | Tool | Own limit before the host pass |
 | --- | --- |
-| `read` | File/directory text fitted to 50 KiB; file default 2,000 lines. An image whose attachment would exceed the host's 2 MiB attachment budget (a file over about 1.5 MiB) is not attached; the text says so and suggests downscaling or cropping it with a program. Titles, paths, PDF attachments and channel-read data are not all bounded by this text limit. |
+| `read` | File/directory text fitted to 50 KiB; file default 2,000 lines. PNG, JPEG, GIF and WebP must decode before attachment. A malformed image returns an explanation with the usual title, output and metadata fields. An image whose attachment would exceed the host's 2 MiB attachment budget (a file over about 1.5 MiB) is not attached; the text says so and suggests downscaling or cropping it with a program. Titles, paths, PDF attachments and channel-read data are not all bounded by this text limit. |
 | `write` | Output and display text each 50 KiB; diagnostic text has row limits but raw diagnostic metadata does not; title/path and the whole envelope have no equivalent cap. |
 | `edit` | Output and patch each 50 KiB; fallback text only included when at most 50 KiB. Raw diagnostic metadata and title/path still need host bounds. |
 | `grep` | Output and serialized display budgets 50 KiB; match limit at most 200, context at most five, display at most 4,096 rows; warnings at most 16 / 4,096 bytes total. Host row and envelope limits differ. |

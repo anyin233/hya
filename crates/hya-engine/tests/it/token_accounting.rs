@@ -511,7 +511,8 @@ fn anthropic_encoder_and_estimator_agree_on_replayed_reasoning() {
         })
         .collect();
     let request = hya_provider::CompletionRequest {
-        model: ModelRef::new("claude"),
+        // Signed thinking can be replayed only on the model that generated it.
+        model: ModelRef::new("test/model"),
         system: None,
         messages,
         tools: Vec::new(),

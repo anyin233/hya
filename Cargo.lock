@@ -1155,6 +1155,7 @@ dependencies = [
  "base64 0.22.1",
  "hya-proto",
  "hya-tool",
+ "image",
  "libc",
  "pty-process",
  "regex",

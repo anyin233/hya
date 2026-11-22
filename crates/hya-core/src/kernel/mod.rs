@@ -46,13 +46,14 @@ pub use view::View;
 pub const AGENT: &str = "kernel";
 
 /// The message a bare run receives once before it ends (docs/kernel.md).
-const COMPLETION_CHECK: &str = "[hya] Completion check, sent once before this run ends. Compare the result with the request itself, not with your memory of it.
+pub const COMPLETION_CHECK: &str = "[hya] Completion check, sent once before this run ends. Compare the result with the request itself, not with your memory of it.
 1. Re-read the request. List what it states literally: paths and file names, exact strings and output formats, commands and flags, values and counts, and anything it says is unknown or must not be assumed.
 2. For each item, look at the result as it is now (the file on disk, the output of the real command) and compare it with the request's wording. Where the wording is exact, print the actual text and read it against the request's text, character for character. A program or pattern you wrote to do the comparison does not count, and neither does a substring or a summary. Where the request says a value is unknown, try the result with a value other than the one you can see.
 3. If something differs, fix it and check again. If everything already matches, change nothing.
 Then give your final answer.";
 
-fn is_completion_check(text: &str) -> bool {
+/// Whether a logged message is the shared completion check.
+pub fn is_completion_check(text: &str) -> bool {
     // The opening line identifies logged checks across changes to the instructions.
     text.lines().next() == COMPLETION_CHECK.lines().next()
 }
@@ -60,13 +61,22 @@ fn is_completion_check(text: &str) -> bool {
 /// The message a bare run receives after a round with neither answer text nor
 /// a tool call (docs/kernel.md). `{n}` is the round's output-token count; that
 /// sentence is left out when the round reported no usage.
-const EMPTY_TURN: &str = "[hya] Your last turn ended with thinking only: it gave no answer and made no tool call, so nothing was done in it. It ended after {n} output tokens. One turn's output is limited, so think in shorter turns. Continue from what you worked out: make the next tool call now, or give your final answer. Write results you will need later to a file or the todo list instead of holding them in thought.";
+pub const EMPTY_TURN: &str = "[hya] Your last turn ended with thinking only: it gave no answer and made no tool call, so nothing was done in it. It ended after {n} output tokens. One turn's output is limited, so think in shorter turns. Continue from what you worked out: make the next tool call now, or give your final answer. Write results you will need later to a file or the todo list instead of holding them in thought.";
 
 /// Empty turns in a row that get [`EMPTY_TURN`]; the next one ends the run.
-const EMPTY_TURN_NOTICES: usize = 2;
+pub const EMPTY_TURN_NOTICES: usize = 2;
 
-fn is_empty_turn_notice(text: &str) -> bool {
+/// Whether a logged message is a thinking-only continuation.
+pub fn is_empty_turn_notice(text: &str) -> bool {
     text.split(':').next() == EMPTY_TURN.split(':').next()
+}
+
+/// Format the shared continuation notice with the usage reported for the step.
+pub fn empty_turn_notice(output_tokens: Option<u64>) -> String {
+    match output_tokens {
+        Some(n) => EMPTY_TURN.replace("{n}", &n.to_string()),
+        None => EMPTY_TURN.replace(" It ended after {n} output tokens.", ""),
+    }
 }
 
 /// Minimum prior-round reasoning tokens required before checking whether
@@ -293,7 +303,7 @@ pub trait Harness: ToolGate {
 
 /// Waits before retrying a round that failed on a transient provider error
 /// (docs/kernel.md).
-const ROUND_RETRY_WAITS: [Duration; 8] = [
+pub const ROUND_RETRY_WAITS: [Duration; 8] = [
     Duration::from_secs(5),
     Duration::from_secs(10),
     Duration::from_secs(20),
@@ -590,10 +600,7 @@ impl Harness for Bare<'_> {
                 return Ok(false);
             }
             self.empty_turns += 1;
-            let notice = match self.output_tokens {
-                Some(n) => EMPTY_TURN.replace("{n}", &n.to_string()),
-                None => EMPTY_TURN.replace(" It ended after {n} output tokens.", ""),
-            };
+            let notice = empty_turn_notice(self.output_tokens);
             emit.emit(
                 session,
                 round::system_message_events(session, MessageId::new(), notice),

@@ -127,7 +127,7 @@ impl Provider for UsageProvider {
                     tokens: Some(usage),
                     cause: None,
                 }),
-                Err(ProviderError::Transport("stream reset".to_string())),
+                Err(ProviderError::Decode("invalid usage frame".to_string())),
             ]))),
             Outcome::CancelAndHang(cancel) => {
                 cancel.cancel();

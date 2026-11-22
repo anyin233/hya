@@ -417,7 +417,11 @@ async fn read_returns_open_code_attachment_for_png_files() {
     let workdir = tempdir();
     tokio::fs::write(
         workdir.join("image.png"),
-        [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+        [
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+            8, 0, 0, 0, 0, 58, 126, 155, 85, 0, 0, 0, 10, 73, 68, 65, 84, 120, 156, 99, 96, 0, 0,
+            0, 2, 0, 1, 72, 175, 164, 113, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+        ],
     )
     .await
     .unwrap();
@@ -433,7 +437,7 @@ async fn read_returns_open_code_attachment_for_png_files() {
     // Then
     // The text is model-independent; the provider encoder adds the image or
     // says that it is not shown.
-    assert_eq!(out["output"], "Image file (image/png, 8 bytes).");
+    assert_eq!(out["output"], "Image file (image/png, 67 bytes).");
     assert_eq!(out["metadata"]["preview"], "Image read successfully");
     assert_eq!(out["metadata"]["truncated"], false);
     assert_eq!(out["metadata"]["loaded"], json!([]));
@@ -441,7 +445,7 @@ async fn read_returns_open_code_attachment_for_png_files() {
     assert_eq!(out["attachments"][0]["mime"], "image/png");
     assert_eq!(
         out["attachments"][0]["url"],
-        "data:image/png;base64,iVBORw0KGgo="
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg=="
     );
 }
 
