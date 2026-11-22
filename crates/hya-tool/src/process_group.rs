@@ -13,12 +13,16 @@ use tokio_util::sync::CancellationToken;
 
 use crate::deadline::{self, RunDeadline};
 
+const POLL_INTERVAL: Duration = Duration::from_millis(15);
+
 /// A shell in its own process group. Budgeted calls keep the leader waitable
 /// until the group finishes, so its PGID cannot be reused during supervision.
 pub struct BudgetGroup {
     child: Child,
     pgid: u32,
     sentinel: Option<AsyncFd<PipeReader>>,
+    #[cfg(target_os = "linux")]
+    quiet_scan: Option<(Vec<(u32, u64)>, tokio::time::Instant)>,
 }
 
 impl BudgetGroup {
@@ -55,6 +59,8 @@ impl BudgetGroup {
             child,
             pgid,
             sentinel,
+            #[cfg(target_os = "linux")]
+            quiet_scan: None,
         })
     }
 
@@ -69,7 +75,7 @@ impl BudgetGroup {
         Ok(())
     }
 
-    fn exited(&self) -> io::Result<bool> {
+    fn exited(&mut self) -> io::Result<bool> {
         // SAFETY: waitid fills a zeroed siginfo_t; WNOWAIT keeps the leader's PID reserved.
         let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
         if unsafe {
@@ -89,40 +95,21 @@ impl BudgetGroup {
         }
         #[cfg(target_os = "linux")]
         {
-            // Descendants may close the inherited writer (e.g. subprocess.Popen).
-            // Zombie descendants have exited even if their new parent has yet to reap them.
-            let group = self.pgid.to_string();
-            for entry in std::fs::read_dir("/proc")? {
-                let entry = entry?;
-                let name = entry.file_name();
-                let pid = name.as_encoded_bytes();
-                if !pid.iter().all(u8::is_ascii_digit) || pid == group.as_bytes() {
-                    continue;
-                }
-                let stat = match std::fs::read(entry.path().join("stat")) {
-                    Ok(stat) => stat,
-                    Err(e)
-                        if e.kind() == io::ErrorKind::NotFound
-                            || e.raw_os_error() == Some(libc::ESRCH) =>
-                    {
-                        continue;
-                    }
-                    Err(e) => return Err(e),
-                };
-                // comm can contain spaces, closing parentheses and non-UTF8 bytes.
-                if let Some(end) = stat.iter().rposition(|&b| b == b')') {
-                    let tail = &stat[end + 1..];
-                    let mut fields = tail
-                        .split(|b| b.is_ascii_whitespace())
-                        .filter(|s| !s.is_empty());
-                    if !matches!(fields.next(), Some(b"Z" | b"X" | b"x"))
-                        && fields.nth(1) == Some(group.as_bytes())
-                    {
-                        return Ok(false);
-                    }
-                }
+            // A fork can move the last live member past a directory iterator.
+            // Keep the leader waitable until two polls agree on the identities left behind.
+            let Some(zombies) = group_zombies(std::path::Path::new("/proc"), self.pgid)? else {
+                self.quiet_scan = None;
+                return Ok(false);
+            };
+            if let Some((previous, since)) = &self.quiet_scan
+                && previous == &zombies
+            {
+                return Ok(since.elapsed() >= POLL_INTERVAL);
             }
+            self.quiet_scan = Some((zombies, tokio::time::Instant::now()));
+            Ok(false)
         }
+        #[cfg(not(target_os = "linux"))]
         Ok(true)
     }
 
@@ -133,7 +120,7 @@ impl BudgetGroup {
                 .async_io(tokio::io::Interest::READABLE, Self::eof)
                 .await?;
             while !self.exited()? {
-                tokio::time::sleep(Duration::from_millis(15)).await;
+                tokio::time::sleep(POLL_INTERVAL).await;
             }
         }
         self.child.wait().await
@@ -168,9 +155,12 @@ impl BudgetGroup {
 
     /// Kill group members and reap the shell. A writer outside the group can stay open.
     pub async fn stop(&mut self) -> io::Result<()> {
-        self.kill()?;
-        while !self.exited()? {
-            tokio::time::sleep(Duration::from_millis(15)).await;
+        loop {
+            self.kill()?;
+            if self.exited()? {
+                break;
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
         }
         self.child.wait().await?;
         Ok(())
@@ -226,5 +216,118 @@ impl BudgetGroup {
 impl Drop for BudgetGroup {
     fn drop(&mut self) {
         let _ = self.kill();
+    }
+}
+
+/// Return the zombie process identities, or None if any member could still do work.
+#[cfg(target_os = "linux")]
+fn group_zombies(proc_root: &std::path::Path, pgid: u32) -> io::Result<Option<Vec<(u32, u64)>>> {
+    let mut zombies = Vec::new();
+    for entry in std::fs::read_dir(proc_root)? {
+        let entry = entry?;
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let path = entry.path();
+        let Some(leader) = proc_stat(&path)? else {
+            continue;
+        };
+        if leader.group != pgid {
+            continue;
+        }
+        if !leader.dead {
+            return Ok(None);
+        }
+
+        // A process can still have live threads after its main thread exits.
+        let Some(tasks) = still_present(std::fs::read_dir(path.join("task")))? else {
+            continue;
+        };
+        for task in tasks {
+            if let Some(stat) = proc_stat(&task?.path())?
+                && !stat.dead
+            {
+                return Ok(None);
+            }
+        }
+        zombies.push((pid, leader.start));
+    }
+    zombies.sort_unstable();
+    Ok(Some(zombies))
+}
+
+#[cfg(target_os = "linux")]
+struct ProcStat {
+    dead: bool,
+    group: u32,
+    start: u64,
+}
+
+#[cfg(target_os = "linux")]
+fn proc_stat(path: &std::path::Path) -> io::Result<Option<ProcStat>> {
+    let Some(stat) = still_present(std::fs::read(path.join("stat")))? else {
+        return Ok(None);
+    };
+    // comm may contain spaces, closing parentheses, and non-UTF8 bytes.
+    let invalid = || {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid stat in {}", path.display()),
+        )
+    };
+    let end = stat.iter().rposition(|&b| b == b')').ok_or_else(invalid)?;
+    let mut fields = std::str::from_utf8(&stat[end + 1..])
+        .map_err(|_| invalid())?
+        .split_ascii_whitespace();
+    let dead = matches!(fields.next(), Some("Z" | "X" | "x")); // field 3
+    let group = fields
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(invalid)?; // field 5
+    let start = fields
+        .nth(16)
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(invalid)?; // field 22
+    Ok(Some(ProcStat { dead, group, start }))
+}
+
+#[cfg(target_os = "linux")]
+fn still_present<T>(result: io::Result<T>) -> io::Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound || e.raw_os_error() == Some(libc::ESRCH) => {
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn zombie_process_is_quiet_only_after_its_last_thread_exits() -> io::Result<()> {
+        let root = std::env::temp_dir().join(format!("group-scan-{}", hya_proto::SessionId::new()));
+        let member = root.join("42");
+        let worker = member.join("task/43");
+        fs::create_dir_all(&worker)?;
+        let stat = |state| {
+            format!(
+                "42 (name ) with spaces) {state} 1 10 {} 999 0",
+                "0 ".repeat(16)
+            )
+        };
+        fs::write(member.join("stat"), stat('Z'))?;
+        fs::write(worker.join("stat"), stat('S'))?;
+        assert_eq!(group_zombies(&root, 10)?, None);
+        fs::write(worker.join("stat"), stat('X'))?;
+        assert_eq!(group_zombies(&root, 10)?, Some(vec![(42, 999)]));
+        fs::remove_dir_all(root)
     }
 }

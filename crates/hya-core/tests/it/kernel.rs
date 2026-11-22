@@ -2683,6 +2683,110 @@ async fn bash_budget_share_child() {
     assert_bash_yield(&result, &mut left, &format!("{waited} ({reason})")).await;
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn bash_waits_for_worker_threads_and_fork_handoffs() {
+    for case in ["full", "bare"] {
+        run_bash_child("kernel::bash_group_lifetime_child", case);
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn bash_group_lifetime_child() {
+    let Ok(case) = std::env::var("HYA_BASH_TEST") else {
+        return;
+    };
+    let dir = std::env::temp_dir();
+    let build = std::process::Command::new("cc")
+        .args(["-pthread", "-o", "worker"])
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/worker_thread.c"
+        ))
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    deadline::install(Duration::from_secs(180));
+    let bash = match case.as_str() {
+        "full" => hya_tool::ToolRegistry::from_tool_families(&["hya/base-tools"])
+            .get("bash")
+            .unwrap(),
+        "bare" => kernel::tools::builtin()
+            .into_iter()
+            .find(|tool| tool.name() == "bash")
+            .unwrap(),
+        _ => return,
+    };
+    let pid_file = dir.join("worker-ids");
+    for cancel in [false, true] {
+        let token = CancellationToken::new();
+        let mut ctx = tool_ctx(&dir, &token);
+        ctx.permission = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+            Action::Bash,
+            "*",
+            Mode::Allow,
+        )]))
+        .0;
+        // Both intermediate shells exit as soon as they have forked their child.
+        let call = bash.execute(
+            &ctx,
+            json!({"command": "( (./worker & exit) & exit) & exit 7"}),
+        );
+        let observe = async {
+            let (pid, tid) = loop {
+                if let Ok(ids) = std::fs::read_to_string(&pid_file)
+                    && let Some((pid, tid)) = ids.split_once(' ')
+                    && std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                        .is_ok_and(|s| s.contains(") Z "))
+                {
+                    break (pid.to_owned(), tid.to_owned());
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            };
+            let worker = PathBuf::from(format!("/proc/{pid}/task/{tid}"));
+            assert!(worker.exists());
+            if cancel {
+                token.cancel();
+            } else {
+                std::fs::write(dir.join("go"), "").unwrap();
+            }
+            worker
+        };
+        let (result, worker) = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::join!(call, observe)
+        })
+        .await
+        .expect("group completion");
+        assert!(!worker.exists(), "worker still present at completion");
+        if cancel {
+            assert!(matches!(result, Err(ToolError::Cancelled)), "{result:?}");
+        } else {
+            let result = result.unwrap();
+            assert!(
+                result["output"]
+                    .as_str()
+                    .unwrap()
+                    .contains("worker finished"),
+                "{result}"
+            );
+            let exit = if case == "full" {
+                &result["metadata"]["exit"]
+            } else {
+                &result["exit_code"]
+            };
+            assert_eq!(exit, 7);
+            std::fs::remove_file(dir.join("go")).unwrap();
+        }
+        std::fs::remove_file(&pid_file).unwrap();
+    }
+}
+
 /// A wait the run's time budget cut short still kills the command's group,
 /// including a job it started: the run is ending and nothing could follow
 /// the command up.
