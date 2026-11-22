@@ -228,6 +228,10 @@ message StreamEvent {
     // Match members by child session, including nested members whose spawn
     // belongs to another parent's log. This never changes the task outcome.
     MemberLifecycleChanged member_lifecycle_changed = 28;
+    // A part was removed from a message (durable): a part deleted through
+    // `DeleteMessagePart`, or a part of a failed bare round attempt that is
+    // retried. Drop the part with this id from the message.
+    PartDeleted part_deleted = 29;
   }
 }
 
@@ -270,6 +274,14 @@ message PartsAdded {
   string message = 1;
   // The added parts, in message order.
   repeated PartInfo parts = 2;
+}
+
+// A part removed from a message.
+message PartDeleted {
+  // Owning message identifier.
+  string message = 1;
+  // The removed part's identifier.
+  string part = 2;
 }
 
 // A session revert or its undo.
