@@ -1194,8 +1194,9 @@ mod tests {
     #[test]
     fn twenty_nested_members_keep_their_metadata_through_host_spilling() {
         let finished = (0..20).map(|i| {
+            let prefix = crate::sanitize_handle_prefix(&format!("integration-platform-worker-{i:02}"));
             let handle = format!(
-                "main/distributed-integration-reviewer-exusiai-the-new-covenant/distributed-integration-worker-{i:02}-skadi-the-corrupting-heart"
+                "main/distributed-integration-reviewer-exusiai-the-new-covenant/{prefix}-skadi-the-corrupting-heart"
             );
             WaitMember {
                 channel: Some(format!("DM-{i:08}")),
