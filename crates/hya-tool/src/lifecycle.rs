@@ -355,11 +355,18 @@ impl WaitOutcome {
             reminder = false;
             bare = size(&self.render(&bodies, &empty, reminder));
         }
+        let mut included = bodies.len();
+        while bare > WAIT_RESULT_BUDGET && included > 0 {
+            included -= 1;
+            bare = size(&self.render(&bodies[..included], &empty[..included], reminder));
+        }
+        let bodies = &bodies[..included];
+        let lengths = &lengths[..included];
         let mut budget = WAIT_RESULT_BUDGET
             .saturating_sub(bare)
             .min(lengths.iter().sum());
         loop {
-            let result = self.render(&bodies, &water_fill(&lengths, budget), reminder);
+            let result = self.render(bodies, &water_fill(lengths, budget), reminder);
             // JSON escaping can grow the text past its char count: shrink
             // until the whole envelope fits.
             if budget == 0 || size(&result) <= WAIT_RESULT_BUDGET {
@@ -503,7 +510,7 @@ impl WaitOutcome {
                     .iter()
                     .zip(shown)
                     .find(|(body, _)| body.member == Some(member.handle.as_str()))
-                    .map_or(chars, |(_, shown)| *shown);
+                    .map_or(0, |(_, shown)| *shown);
                 meta["report_chars"] = json!(chars);
                 meta["report_truncated"] = json!(shown < chars);
             }
@@ -1139,9 +1146,9 @@ mod tests {
         let finished = (0..15)
             .map(|i| {
                 let mut m = member(
-                    &format!("main/wk-{i:02}"),
+                    &format!("main/{}-exusiai-{i:02}", "a".repeat(32)),
                     WaitMemberState::Reported,
-                    Some(&"x".repeat(100)),
+                    Some(&"x".repeat(3000)),
                 );
                 m.channel = Some(format!("DM-{i:08}"));
                 m
@@ -1161,9 +1168,15 @@ mod tests {
             result["metadata"]["finished"].as_array().map(Vec::len),
             Some(15)
         );
-        for member in &outcome.finished {
+        for (i, member) in outcome.finished.iter().enumerate() {
             assert!(output.contains(&format!("- {} [reported]", member.handle)));
+            let meta = &result["metadata"]["finished"][i];
+            assert_eq!(meta["handle"], member.handle);
+            assert_eq!(meta["report_chars"], 3000);
+            assert_eq!(meta["report_truncated"], true);
         }
+        assert!(output.matches("Report from ").count() < 15);
+        assert_eq!(crate::cap_tool_output(result.clone()), result);
         assert!(
             !output.contains("automatically archived"),
             "size {}",

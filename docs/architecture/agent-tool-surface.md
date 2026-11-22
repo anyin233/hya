@@ -407,7 +407,7 @@ When several apply at one evaluation the order is `members`, `mail`,
 the wait budgets it itself: the whole envelope, serialized, stays within
 `WAIT_RESULT_BUDGET` = 4500 characters, under the generic 5000-character tool
 output cap, so the cap never cuts it and `metadata` always arrives intact.
-`output` always starts with a compact header, then the previews:
+`output` starts with a row for each member. The result reserves space for these rows and all metadata before including preview sections in order. A report whose preview is omitted has `report_truncated: true`.
 
 ```text
 Subagents finished.
