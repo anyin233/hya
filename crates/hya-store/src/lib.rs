@@ -973,6 +973,73 @@ impl SessionStore {
         self.replay_page(session, 0, 0).await
     }
 
+    /// Replay a root and all its descendants in durable global sequence order,
+    /// including acknowledged writes still waiting for SQLite.
+    pub async fn replay_tree(&self, root: SessionId) -> Result<Vec<Envelope>, StoreError> {
+        // Capture the queue first: a concurrent flush can overlap the SELECT,
+        // but cannot remove an envelope from both snapshots.
+        let queued = self
+            .write_queue
+            .as_ref()
+            .map(|q| q.acknowledged_batches())
+            .unwrap_or_default();
+        let rows = self
+            .run_read_bounded("replay_tree", async {
+                sqlx::query(
+                    "WITH RECURSIVE tree(id) AS (
+                SELECT ? UNION SELECT s.id FROM session s JOIN tree t ON s.parent_id = t.id
+            ) SELECT seq, session_id, ts, payload FROM event_log
+              WHERE session_id IN (SELECT id FROM tree) ORDER BY seq",
+                )
+                .bind(root.storage_key())
+                .fetch_all(self.read_pool_checked()?)
+                .await
+                .map_err(StoreError::from)
+            })
+            .await?;
+        let mut sessions = std::collections::HashSet::from([root]);
+        let mut envelopes = Vec::with_capacity(rows.len());
+        for row in rows {
+            let session = decode_session_key(row.try_get::<&[u8], _>("session_id")?)?;
+            let seq: i64 = row.try_get("seq")?;
+            sessions.insert(session);
+            envelopes.push(Envelope {
+                seq: EventSeq(seq.max(0) as u64),
+                ts_millis: row.try_get("ts")?,
+                event: decode_event(row.try_get("payload")?, session, seq)?,
+            });
+        }
+        if !queued.is_empty() {
+            // Queued creates are in submission order, with parents before
+            // children (the session table enforces the parent foreign key).
+            for batch in &queued {
+                for (_, envelope, _) in &batch.events {
+                    if let Event::SessionCreated {
+                        session,
+                        parent: Some(parent),
+                        ..
+                    } = &envelope.event
+                        && sessions.contains(parent)
+                    {
+                        sessions.insert(*session);
+                    }
+                }
+            }
+            for batch in queued {
+                envelopes.extend(
+                    batch
+                        .events
+                        .iter()
+                        .filter(|(session, _, _)| sessions.contains(session))
+                        .map(|(_, envelope, _)| envelope.clone()),
+                );
+            }
+            envelopes.sort_unstable_by_key(|env| env.seq);
+            envelopes.dedup_by_key(|env| env.seq);
+        }
+        Ok(envelopes)
+    }
+
     /// Read a sequence page without decoding the preceding event log.
     /// A zero limit requests the entire remaining tail.
     pub async fn replay_page(
@@ -1842,6 +1909,73 @@ mod event_contract_tests {
                 }
             }
         }
+    }
+
+    #[tokio::test]
+    async fn tree_replay_merges_persisted_and_queued_descendants()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let _guard = file_store_test_lock().await;
+        let dir = std::env::temp_dir().join(format!("hya-tree-{}", SessionId::new()));
+        std::fs::create_dir(&dir)?;
+        let db = dir.join("tree.db");
+        let store = SessionStore::connect_with_timeouts(
+            db.to_str().ok_or("invalid db path")?,
+            Duration::from_millis(100),
+            Duration::from_secs(2),
+        )
+        .await?;
+        let (root, child, grandchild, other) = (
+            SessionId::new(),
+            SessionId::new(),
+            SessionId::new(),
+            SessionId::new(),
+        );
+        let created = |session, parent| Event::SessionCreated {
+            session,
+            parent,
+            agent: "build".into(),
+            model: "fake".into(),
+            workdir: ".".into(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        };
+        store.append_event(root, &created(root, None)).await?;
+        store.append_event(other, &created(other, None)).await?;
+        let held = store.writer_pool.begin_with("BEGIN IMMEDIATE").await?;
+        for (session, parent) in [(child, root), (grandchild, child)] {
+            store
+                .append_event(session, &created(session, Some(parent)))
+                .await?;
+        }
+        store
+            .append_event(
+                other,
+                &Event::SessionTitled {
+                    session: other,
+                    title: "elsewhere".into(),
+                },
+            )
+            .await?;
+        assert!(matches!(store.health(), StoreHealth::Degraded { .. }));
+        let queued = store.replay_tree(root).await?;
+        assert_eq!(
+            queued
+                .iter()
+                .filter_map(|env| env.event.session())
+                .collect::<Vec<_>>(),
+            vec![root, child, grandchild]
+        );
+        assert!(queued.windows(2).all(|pair| pair[0].seq < pair[1].seq));
+        held.rollback().await?;
+        let report = store.drain_for_exit(Duration::from_secs(5)).await;
+        assert!(matches!(report, ExitDrainReport::Recovered { .. }));
+        assert_eq!(
+            serde_json::to_value(store.replay_tree(root).await?)?,
+            serde_json::to_value(queued)?
+        );
+        drop(store);
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
     }
 
     #[tokio::test]

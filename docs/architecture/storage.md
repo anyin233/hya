@@ -747,6 +747,11 @@ SQLite or migration error.
 
 The same store replay powers:
 
+- `SessionStore::replay_tree(root: SessionId) -> Result<Vec<Envelope>, StoreError>`
+  asynchronously reads the root and all descendants for local `exec --json
+  --include-subagents`. The recursive query uses the session parent index.
+  A snapshot of acknowledged queued writes includes descendants awaiting their
+  first database commit. Results are deduplicated and sorted by global sequence.
 - `SessionEngine::replay` and `SessionStore::replay_page` (matching `origin/main`, full-mode local `exec --json` runs live streaming plus an unbounded healthy startup catch-up and full-session replay on lag and at the end of every run, whereas `exec --bare --json` streams directly from `JsonEmit` without `exec_stream` replay and routed `exec --json` forwards server `/v1` events and propagates raw SDK replay errors; for full-mode local `exec --json`, lag and final replay reads — not startup catch-up — are bounded by `READ_TIMEOUT` = 5 s regardless of write health; non-storage errors at lag are ignored during live streaming as on `origin/main`, and on a storage fault or timeout during either a lag replay or the final replay `exec --json` flushes stdout, writes one warning line to stderr even if the final replay later succeeds or fails with a non-storage error, and exits with the run's result while non-storage final errors propagate after flushing stdout and emitting any recorded lag warning; the stream contains what was broadcast, what the final read's SQL snapshot shows, and the acknowledged queue tail, so an event whose producer was cancelled and whose SQLite COMMIT lands after that final snapshot is not in it)
 - `GET /v1/sessions/{session}/events` (curated replay; `include_raw` returns
   the raw envelope lines)

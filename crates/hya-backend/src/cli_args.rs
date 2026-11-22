@@ -260,6 +260,9 @@ pub(crate) enum Command {
         /// Emit the event stream as JSONL instead of a rendered transcript.
         #[arg(long)]
         json: bool,
+        /// Include durable events from every descendant in the local JSONL stream.
+        #[arg(long, requires = "json", conflicts_with = "bare")]
+        include_subagents: bool,
         /// Wall-clock budget in seconds for in-process runs, including --bare.
         /// Enables deadline notices and caps tool timeouts. The outside harness
         /// enforces the process deadline.
