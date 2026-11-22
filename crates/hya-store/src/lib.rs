@@ -983,18 +983,48 @@ impl SessionStore {
             .as_ref()
             .map(|q| q.acknowledged_batches())
             .unwrap_or_default();
-        let rows = self
+        let (rows, mut known_sessions) = self
             .run_read_bounded("replay_tree", async {
-                sqlx::query(
+                let mut read = self.read_pool_checked()?.begin().await?;
+                let rows = sqlx::query(
                     "WITH RECURSIVE tree(id) AS (
                 SELECT ? UNION SELECT s.id FROM session s JOIN tree t ON s.parent_id = t.id
             ) SELECT seq, session_id, ts, payload FROM event_log
               WHERE session_id IN (SELECT id FROM tree) ORDER BY seq",
                 )
                 .bind(root.storage_key())
-                .fetch_all(self.read_pool_checked()?)
-                .await
-                .map_err(StoreError::from)
+                .fetch_all(&mut *read)
+                .await?;
+                let creates: std::collections::HashSet<_> = queued
+                    .iter()
+                    .flat_map(|batch| &batch.events)
+                    .filter_map(|(_, envelope, _)| match envelope.event {
+                        Event::SessionCreated { session, .. } => Some(session),
+                        _ => None,
+                    })
+                    .collect();
+                let mut known = std::collections::HashSet::new();
+                // Read both tables at one snapshot even if the queue flushes meanwhile.
+                let ids: Vec<_> = creates.into_iter().collect();
+                for chunk in ids.chunks(500) {
+                    let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+                        "SELECT id FROM session WHERE id IN (",
+                    );
+                    let mut values = query.separated(",");
+                    for id in chunk {
+                        values.push_bind(id.storage_key());
+                    }
+                    query.push(")");
+                    for key in query
+                        .build_query_scalar::<Vec<u8>>()
+                        .fetch_all(&mut *read)
+                        .await?
+                    {
+                        known.insert(decode_session_key(&key)?);
+                    }
+                }
+                read.commit().await?;
+                Ok((rows, known))
             })
             .await?;
         let mut sessions = std::collections::HashSet::from([root]);
@@ -1015,11 +1045,10 @@ impl SessionStore {
             for batch in &queued {
                 for (_, envelope, _) in &batch.events {
                     if let Event::SessionCreated {
-                        session,
-                        parent: Some(parent),
-                        ..
+                        session, parent, ..
                     } = &envelope.event
-                        && sessions.contains(parent)
+                        && known_sessions.insert(*session)
+                        && parent.is_some_and(|id| sessions.contains(&id))
                     {
                         sessions.insert(*session);
                     }
@@ -1942,7 +1971,16 @@ mod event_contract_tests {
         store.append_event(root, &created(root, None)).await?;
         store.append_event(other, &created(other, None)).await?;
         let held = store.writer_pool.begin_with("BEGIN IMMEDIATE").await?;
-        for (session, parent) in [(child, root), (grandchild, child)] {
+        let queued_root = SessionId::new();
+        store
+            .append_event(queued_root, &created(queued_root, None))
+            .await?;
+        for (session, parent) in [
+            (child, root),
+            (grandchild, child),
+            (other, root),
+            (queued_root, child),
+        ] {
             store
                 .append_event(session, &created(session, Some(parent)))
                 .await?;

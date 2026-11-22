@@ -991,7 +991,7 @@ the process. An outside harness owns the final wall-clock limit. Without the fla
 no deadline is installed and existing timeouts apply.
 
 `--include-subagents` extends the local full-mode `exec --json` stream to the
-root and every descendant, including grandchildren. Each line is the same
+root and every descendant, including grandchildren. The first creation fixes a session’s parent. Repeated creation events cannot bring an unrelated session into live output or replay. Each line is the same
 durable event envelope with its original session ID and global sequence number.
 Live events print in arrival order. Startup, lag recovery, and final catch-up
 replay the tree in sequence order and skip numbers already printed.

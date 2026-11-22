@@ -229,7 +229,7 @@ async fn cmd_exec(
         // still leaves a usable partial trajectory on stdout.
         let mut json_printer = (output != ExecOutput::Transcript).then(|| {
             let scope = if output == ExecOutput::TreeJson {
-                exec_stream::StreamScope::tree(session)
+                exec_stream::StreamScope::tree(session, engine.store().clone())
             } else {
                 exec_stream::StreamScope::Single(session)
             };
