@@ -399,3 +399,36 @@ async fn budgeted_descendant_output_path_reaches_exec_json()
     std::fs::remove_dir_all(path.parent().ok_or("missing job directory")?)?;
     Ok(())
 }
+
+#[tokio::test]
+async fn unknown_tool_cannot_trigger_completion_check() {
+    let (_, _, requests) = run_lead(
+        vec![
+            tool_step("no_such_tool", json!({})),
+            text_step("Done."),
+            text_step("UNUSED"),
+        ],
+        &["--time-budget", "900"],
+    )
+    .await;
+    assert_eq!(requests.len(), 2);
+}
+
+#[tokio::test]
+async fn completion_check_resets_ignored_notice_count() {
+    let announce = || text_step("Now verify the file format:");
+    let (_, _, requests) = run_lead(
+        vec![
+            bash("true"),
+            announce(),
+            announce(),
+            text_step("Done."),
+            announce(),
+            announce(),
+            text_step("Checked."),
+        ],
+        &["--time-budget", "900"],
+    )
+    .await;
+    assert_eq!(requests.len(), 7);
+}
