@@ -46,7 +46,15 @@ pub struct RunDeadline {
 #[derive(Debug, Default)]
 struct BackgroundJobs {
     shutdown: CancellationToken,
-    jobs: Mutex<Vec<oneshot::Receiver<()>>>,
+    state: Mutex<JobState>,
+    // Keep the in-flight batch across concurrent or interrupted shutdown calls.
+    draining: tokio::sync::Mutex<Vec<oneshot::Receiver<()>>>,
+}
+
+#[derive(Debug, Default)]
+struct JobState {
+    closed: bool,
+    jobs: Vec<oneshot::Receiver<()>>,
 }
 
 /// The stage a session was last told of, and the tenth of the budget that
@@ -87,7 +95,7 @@ pub fn current() -> Option<&'static RunDeadline> {
     HOST.get().copied().unwrap_or(&DEADLINE).get()
 }
 
-/// Cancel yielded jobs and wait for their supervisors before leaving exec.
+/// Close Bash admission and wait for foreground and yielded jobs before leaving exec.
 pub async fn shutdown_background_jobs() {
     if let Some(deadline) = current() {
         deadline.shutdown_background_jobs().await;
@@ -119,29 +127,42 @@ fn clamp_secs(value: f64, low: f64, high: f64) -> Duration {
 static UNBUDGETED_JOBS: LazyLock<BackgroundJobs> = LazyLock::new(BackgroundJobs::default);
 
 #[cfg(unix)]
-pub(crate) fn register_unbudgeted_job() -> (CancellationToken, BackgroundJobGuard) {
-    UNBUDGETED_JOBS.register()
+pub(crate) fn register_job(
+    deadline: Option<&RunDeadline>,
+) -> Result<(CancellationToken, BackgroundJobGuard), crate::ToolError> {
+    deadline
+        .map_or(&*UNBUDGETED_JOBS, |d| &d.background)
+        .register()
 }
 
 impl BackgroundJobs {
-    /// Register a yielded job before handing it to its supervisor.
-    fn register(&self) -> (CancellationToken, BackgroundJobGuard) {
+    fn register(&self) -> Result<(CancellationToken, BackgroundJobGuard), crate::ToolError> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.closed {
+            return Err(crate::ToolError::Cancelled);
+        }
         let (tx, rx) = oneshot::channel();
-        let mut jobs = self.jobs.lock().unwrap_or_else(PoisonError::into_inner);
-        jobs.retain_mut(|job| matches!(job.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
-        jobs.push(rx);
-        (
+        state
+            .jobs
+            .retain_mut(|job| matches!(job.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
+        state.jobs.push(rx);
+        Ok((
             self.shutdown.clone(),
             BackgroundJobGuard { _completion: tx },
-        )
+        ))
     }
 
-    /// Called after tool producers have drained. Join every remaining supervisor.
     async fn shutdown(&self) {
-        self.shutdown.cancel();
-        let jobs = std::mem::take(&mut *self.jobs.lock().unwrap_or_else(PoisonError::into_inner));
-        for job in jobs {
+        let mut batch = self.draining.lock().await;
+        {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            state.closed = true;
+            self.shutdown.cancel();
+            batch.append(&mut state.jobs);
+        }
+        while let Some(job) = batch.last_mut() {
             let _ = job.await;
+            batch.pop();
         }
     }
 }
@@ -156,11 +177,6 @@ impl RunDeadline {
             notified: Mutex::new(HashMap::new()),
             background: BackgroundJobs::default(),
         }
-    }
-
-    /// Register a yielded job before starting its supervisor.
-    pub fn register_background_job(&self) -> (CancellationToken, BackgroundJobGuard) {
-        self.background.register()
     }
 
     /// Stop and join yielded jobs before exiting.

@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use hya_proto::ToolSchema;
+use hya_tool::process_group::{BudgetGroup, GroupOutcome};
 use hya_tool::{Tool, ToolCtx, ToolError, deadline};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -119,7 +120,6 @@ impl Tool for Bash {
         }
         // Creating the timer here starts the clock before spawning the shell.
         let timer = tokio::time::sleep(limit);
-        tokio::pin!(timer);
         let mut process = Command::new(SHELL.as_path());
         process
             .arg("-c")
@@ -129,46 +129,37 @@ impl Tool for Bash {
             .stdin(Stdio::null())
             .stdout(file.try_clone()?)
             .stderr(file);
-        let mut group = hya_tool::process_group::BudgetGroup::spawn(process, deadline.is_some())?;
-        let pgid = group.pgid();
-        let status = tokio::select! {
-            biased;
-            () = ctx.cancel.cancelled() => {
-                group.stop().await?;
-                return Err(ToolError::Cancelled);
-            }
-            () = &mut timer => group.try_wait()?,
-            status = group.wait_for_group() => Some(status?),
-        };
-        // What `output` reports is what the file held when the wait ended.
+        let exit = dir.join("exit_code");
+        let cancel = ctx.cancel.child_token();
+        let abandoned = cancel.clone().drop_guard();
+        let status =
+            BudgetGroup::run(process, deadline, &cancel, timer, capped, exit.clone()).await?;
         let printed = std::fs::metadata(&path)?.len();
-        if status.is_none() && capped {
-            // Kill before reading: processes left in the group could keep writing.
-            group.stop().await?;
-        }
         let output = read_output(&path, printed).await?;
         if printed > MAX_OUTPUT_BYTES {
             job.dir = None;
         }
-        if let Some(status) = status {
-            let code = json!(exit_code(status));
-            return Ok(json!({
-                "exit_code": code,
-                "output": with_status(output, &format!("exit code: {code}")),
-            }));
-        }
-        if capped {
-            let note = format!(
-                "The command was still running after {limit:?} (the run's time budget capped the timeout). Bash killed its process group. The output above was captured before the kill."
-            );
-            return Ok(json!({
-                "exit_code": null,
-                "output": with_status(output, &format!("stopped: {note}")),
-                "timed_out": note,
-            }));
-        }
-        let exit = dir.join("exit_code");
-        group.supervise(exit.clone(), ctx.cancel.clone(), deadline);
+        let pgid = match status {
+            GroupOutcome::Finished(status) => {
+                let code = json!(exit_code(status));
+                return Ok(json!({
+                    "exit_code": code,
+                    "output": with_status(output, &format!("exit code: {code}")),
+                }));
+            }
+            GroupOutcome::Stopped => {
+                let note = format!(
+                    "The command was still running after {limit:?} (the run's time budget capped the timeout). Bash killed its process group."
+                );
+                return Ok(json!({
+                    "exit_code": null,
+                    "output": with_status(output, &format!("stopped: {note}")),
+                    "timed_out": note,
+                }));
+            }
+            GroupOutcome::Yielded(pgid) => pgid,
+        };
+        abandoned.disarm();
         job.dir = None;
         let reason = if limit < requested {
             "the run's time budget lets one call wait at most a tenth of it"

@@ -9,11 +9,23 @@ use std::time::Duration;
 
 use tokio::io::unix::AsyncFd;
 use tokio::process::{Child, Command};
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
+use crate::ToolError;
 use crate::deadline::{self, RunDeadline};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(15);
+
+/// Result of the foreground wait for a file-backed shell.
+pub enum GroupOutcome {
+    /// The shell completed within the foreground wait.
+    Finished(ExitStatus),
+    /// The run budget stopped the command.
+    Stopped,
+    /// The supervisor still owns this process group and its exit file.
+    Yielded(u32),
+}
 
 /// A shell in its own process group. Budgeted calls keep the leader waitable
 /// until the group finishes, so its PGID cannot be reused during supervision.
@@ -27,7 +39,7 @@ pub struct BudgetGroup {
 
 impl BudgetGroup {
     /// Start the shell. For an unbudgeted bare call, completion follows the leader alone.
-    pub fn spawn(mut command: Command, wait_for_descendants: bool) -> io::Result<Self> {
+    fn spawn(mut command: Command, wait_for_descendants: bool) -> io::Result<Self> {
         command.process_group(0);
         let (sentinel, writer) = if wait_for_descendants {
             let (reader, writer) = std::io::pipe()?;
@@ -64,9 +76,60 @@ impl BudgetGroup {
         })
     }
 
-    /// PID of the shell that leads this group.
-    pub fn pgid(&self) -> u32 {
-        self.pgid
+    /// Admit before spawning. The same task owns the registration and shell
+    /// from foreground execution through a possible yield and exit-file rename.
+    pub async fn run(
+        command: Command,
+        deadline: Option<&RunDeadline>,
+        cancel: &CancellationToken,
+        timer: tokio::time::Sleep,
+        stop_on_timeout: bool,
+        exit: PathBuf,
+    ) -> Result<GroupOutcome, ToolError> {
+        let (shutdown, registration) = deadline::register_job(deadline)?;
+        if cancel.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
+        let mut group = Self::spawn(command, deadline.is_some())?;
+        let end = deadline.map(|d| tokio::time::Instant::now() + d.remaining());
+        let cancel = cancel.child_token();
+        let abandoned = cancel.clone().drop_guard();
+        let (reply, result) = oneshot::channel();
+        tokio::spawn(async move {
+            let _registration = registration;
+            let foreground = async {
+                let status = tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => {
+                        group.stop().await?;
+                        return Err(ToolError::Cancelled);
+                    }
+                    () = shutdown.cancelled() => {
+                        group.stop().await?;
+                        return Err(ToolError::Cancelled);
+                    }
+                    status = group.wait_for_group() => Some(status?),
+                    () = timer => group.try_wait()?,
+                };
+                if let Some(status) = status {
+                    Ok(GroupOutcome::Finished(status))
+                } else if stop_on_timeout {
+                    group.stop().await?;
+                    Ok(GroupOutcome::Stopped)
+                } else {
+                    Ok(GroupOutcome::Yielded(group.pgid))
+                }
+            }
+            .await;
+            let yielded = matches!(foreground, Ok(GroupOutcome::Yielded(_)));
+            let _ = reply.send(foreground);
+            if yielded && let Err(error) = group.supervise(exit, cancel, shutdown, end).await {
+                eprintln!("record Bash exit for group {}: {error}", group.pgid);
+            }
+        });
+        let outcome = result.await.map_err(io::Error::other)?;
+        abandoned.disarm();
+        outcome
     }
 
     fn eof(mut reader: &PipeReader) -> io::Result<()> {
@@ -114,7 +177,7 @@ impl BudgetGroup {
     }
 
     /// Wait for completion and reap the leader.
-    pub async fn wait_for_group(&mut self) -> io::Result<ExitStatus> {
+    async fn wait_for_group(&mut self) -> io::Result<ExitStatus> {
         if let Some(sentinel) = &self.sentinel {
             sentinel
                 .async_io(tokio::io::Interest::READABLE, Self::eof)
@@ -127,7 +190,7 @@ impl BudgetGroup {
     }
 
     /// Reap only if the entire supervised group is finished.
-    pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
         if let Some(sentinel) = &self.sentinel {
             match Self::eof(sentinel.get_ref()) {
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(None),
@@ -154,7 +217,7 @@ impl BudgetGroup {
     }
 
     /// Kill group members and reap the shell. A writer outside the group can stay open.
-    pub async fn stop(&mut self) -> io::Result<()> {
+    async fn stop(&mut self) -> io::Result<()> {
         loop {
             self.kill()?;
             if self.exited()? {
@@ -166,50 +229,35 @@ impl BudgetGroup {
         Ok(())
     }
 
-    /// Register before returning the job to its caller. Exit status publication
-    /// finishes before shutdown releases the registration.
-    pub fn supervise(
-        mut self,
+    async fn supervise(
+        &mut self,
         path: PathBuf,
         cancel: CancellationToken,
-        deadline: Option<&RunDeadline>,
-    ) {
-        let (shutdown, guard) = deadline.map_or_else(
-            deadline::register_unbudgeted_job,
-            RunDeadline::register_background_job,
-        );
-        let end = deadline.map(|d| tokio::time::Instant::now() + d.remaining());
-        tokio::spawn(async move {
-            let _guard = guard;
-            let result: io::Result<()> = async {
-                let timeout = async {
-                    match end {
-                        Some(end) => tokio::time::sleep_until(end).await,
-                        None => std::future::pending().await,
-                    }
-                };
-                let status = tokio::select! {
-                    biased;
-                    () = cancel.cancelled() => self.try_wait()?,
-                    () = shutdown.cancelled() => self.try_wait()?,
-                    () = timeout => self.try_wait()?,
-                    status = self.wait_for_group() => Some(status?),
-                };
-                let code = if let Some(status) = status {
-                    status.code().or_else(|| status.signal().map(|s| 128 + s))
-                } else {
-                    self.stop().await?;
-                    Some(128 + libc::SIGKILL)
-                };
-                let tmp = path.with_extension("tmp");
-                tokio::fs::write(&tmp, format!("{}\n", serde_json::json!(code))).await?;
-                tokio::fs::rename(tmp, path).await
+        shutdown: CancellationToken,
+        end: Option<tokio::time::Instant>,
+    ) -> io::Result<()> {
+        let timeout = async {
+            match end {
+                Some(end) => tokio::time::sleep_until(end).await,
+                None => std::future::pending().await,
             }
-            .await;
-            if let Err(error) = result {
-                eprintln!("record Bash exit for group {}: {error}", self.pgid);
-            }
-        });
+        };
+        let status = tokio::select! {
+            biased;
+            () = cancel.cancelled() => self.try_wait()?,
+            () = shutdown.cancelled() => self.try_wait()?,
+            () = timeout => self.try_wait()?,
+            status = self.wait_for_group() => Some(status?),
+        };
+        let code = if let Some(status) = status {
+            status.code().or_else(|| status.signal().map(|s| 128 + s))
+        } else {
+            self.stop().await?;
+            Some(128 + libc::SIGKILL)
+        };
+        let tmp = path.with_extension("tmp");
+        tokio::fs::write(&tmp, format!("{}\n", serde_json::json!(code))).await?;
+        tokio::fs::rename(tmp, path).await
     }
 }
 

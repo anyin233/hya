@@ -464,6 +464,9 @@ temporary file. For example, in a 900-second run, `{"command":"make","timeout":3
 waits up to 90 seconds. If the command is still running at the ordinary wait
 limit, the result has `metadata.stillRunning: true`, `timedOut: false`,
 `exit: null`, numeric `pgid`, and string `outputPath` and `exitPath`.
+Shutdown closes admission before starting its drain. Calls that arrive after
+closure return a cancellation before spawning Bash. For an admitted command
+the drain waits for process cleanup and, if it yielded, publication of its exit file.
 Read the output while the command runs. The exit file appears atomically when
 the shell exits and its inherited group sentinel closes. On Linux, Bash also
 waits for live group members that closed the sentinel, including children
