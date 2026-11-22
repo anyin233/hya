@@ -94,7 +94,7 @@ The `hya-main` and `hya-task` prompts guide delegation toward one `task`
 call containing independent `tasks[]`, with shared `context` and per-member
 scope, ownership and acceptance criteria. Copy the original hard constraints,
 edge-case notes and negative requirements verbatim into `context` or the
-relevant `prompt`. Omit `effort` to inherit the child agent's default.
+relevant `prompt`. Omit `effort` to use the explicit `model#effort` suffix or the child agent's default shown by `list_agents`. An explicit effort must be supported by the child model.
 
 The lead resolves competing derivations or formulas by checking real inputs
 or the specification directly. A `hya-reviewer` P0 or P1 finding includes a
