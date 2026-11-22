@@ -231,7 +231,7 @@ registering a resident actor, sending mail, or starting a provider request. It
 records the first routable candidate index and every provider stream group
 starts there without wrapping to an earlier entry. Only `UnknownModel`,
 transport failure, HTTP 429, and HTTP 5xx can advance before a stream exists.
-After a stream opens, retries of that step use the same candidate index and reasoning effort. Exhaustion or cancellation records one terminal outcome for the whole stream group. Stage routes
+After a stream opens, retries of that step use the same candidate index and reasoning effort. Exhaustion or cancellation records one terminal outcome for the whole stream group. Cancellation while closing an interrupted step or waiting to retry records the `Cancelled` failure class. Stage routes
 remain request-local and are not inserted into the engine's global category
 fallback map. Stages that share one resident actor key must have the same
 effective worker route.
