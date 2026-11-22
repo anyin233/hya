@@ -271,11 +271,8 @@ pub struct WaitMember {
     pub channel: Option<String>,
 }
 
-/// Most serialized characters one `wait` tool result may take — the whole
-/// `{title, output, metadata}` envelope as the generic output cap measures it
-/// — kept well under [`crate::MAX_TOOL_OUTPUT_CHARS`] so the cap never
-/// replaces the result with its tail.
-pub const WAIT_RESULT_BUDGET: usize = 4500;
+/// Maximum number of display characters in the output of a wait.
+pub const WAIT_OUTPUT_BUDGET_CHARS: usize = 4_500;
 
 /// One new mail message returned by a channel-aware `wait`. Each message is
 /// returned once: the wait advances the caller's durable inbox cursor
@@ -326,8 +323,7 @@ struct PreviewBody<'a> {
 impl WaitOutcome {
     /// Tool result JSON: `{title, output, metadata}`.
     ///
-    /// Self-budgeted to [`WAIT_RESULT_BUDGET`] serialized characters so the
-    /// generic output cap never cuts it. `output` leads with a compact header
+    /// The output is limited to [`WAIT_OUTPUT_BUDGET_CHARS`] characters. It leads with a compact header
     /// — why the wait woke, one line per target (handle, state, outcome),
     /// the still-running handles, and the new-mail count — then bounded
     /// previews of every report and mail body, sharing what is left of the
@@ -342,8 +338,7 @@ impl WaitOutcome {
             .iter()
             .map(|body| body.text.chars().count())
             .collect();
-        let size = |result: &Value| result.to_string().chars().count();
-        // Everything but the body text (header, headings, pointers, metadata).
+        // Reserve space for headings and truncation notices before dividing the preview budget.
         let empty = vec![0; bodies.len()];
         let mut reminder = self
             .finished
@@ -352,38 +347,41 @@ impl WaitOutcome {
             .any(|member| member.state == WaitMemberState::Reported);
         let members = self.finished.len() + self.already_finished.len() + self.running.len();
         let mut visible = members;
-        let mut bare = size(&self.render(&bodies, &empty, reminder, visible));
-        if reminder && bare > WAIT_RESULT_BUDGET {
+        let mut bare = self
+            .render_output(&bodies, &empty, reminder, visible)
+            .chars()
+            .count();
+        if reminder && bare > WAIT_OUTPUT_BUDGET_CHARS {
             reminder = false;
-            bare = size(&self.render(&bodies, &empty, reminder, visible));
+            bare = self
+                .render_output(&bodies, &empty, reminder, visible)
+                .chars()
+                .count();
         }
         let mut included = bodies.len();
-        while bare > WAIT_RESULT_BUDGET && included > 0 {
+        while bare > WAIT_OUTPUT_BUDGET_CHARS && included > 0 {
             included -= 1;
-            bare = size(&self.render(&bodies[..included], &empty[..included], reminder, visible));
+            bare = self
+                .render_output(&bodies[..included], &empty[..included], reminder, visible)
+                .chars()
+                .count();
         }
         // When member names appear twice, keep their structured rows first.
-        while bare > WAIT_RESULT_BUDGET && visible > 0 {
+        while bare > WAIT_OUTPUT_BUDGET_CHARS && visible > 0 {
             visible -= 1;
-            bare = size(&self.render(&[], &[], false, visible));
+            bare = self
+                .render_output(&[], &[], reminder, visible)
+                .chars()
+                .count();
         }
         let bodies = &bodies[..included];
         let lengths = &lengths[..included];
-        let mut budget = WAIT_RESULT_BUDGET
+        let budget = WAIT_OUTPUT_BUDGET_CHARS
             .saturating_sub(bare)
             .min(lengths.iter().sum());
-        loop {
-            let mut result = self.render(bodies, &water_fill(lengths, budget), reminder, visible);
-            if bare > WAIT_RESULT_BUDGET {
-                result["output"] = json!("");
-            }
-            // JSON escaping can grow the text past its char count: shrink
-            // until the whole envelope fits.
-            if budget == 0 || size(&result) <= WAIT_RESULT_BUDGET {
-                return result;
-            }
-            budget = budget * 9 / 10;
-        }
+        let shown = water_fill(lengths, budget);
+        let output = self.render_output(bodies, &shown, reminder, visible);
+        self.result(output, bodies, &shown)
     }
 
     fn preview_bodies(&self) -> Vec<PreviewBody<'_>> {
@@ -420,13 +418,13 @@ impl WaitOutcome {
         bodies
     }
 
-    fn render(
+    fn render_output(
         &self,
         bodies: &[PreviewBody<'_>],
         shown: &[usize],
         reminder: bool,
         visible: usize,
-    ) -> Value {
+    ) -> String {
         let mut lines = Vec::new();
         let headline = match self.woke_by {
             WaitWake::Members => "Subagents finished.",
@@ -518,6 +516,10 @@ impl WaitOutcome {
             lines.push(format!("{cut}\n[… {omitted} more chars{pointer}]"));
         }
 
+        lines.join("\n")
+    }
+
+    fn result(&self, output: String, bodies: &[PreviewBody<'_>], shown: &[usize]) -> Value {
         let member_meta = |member: &WaitMember| {
             let mut meta = json!({
                 "handle": member.handle,
@@ -581,7 +583,7 @@ impl WaitOutcome {
                 WaitWake::Timeout => "timeout",
                 WaitWake::NothingToWaitFor => "nothing to wait for",
             }),
-            "output": lines.join("\n"),
+            "output": output,
             "metadata": metadata,
         })
     }
@@ -1039,13 +1041,9 @@ mod tests {
         }
     }
 
-    /// Run 6 (seq 173427): four reports overflowed the generic cap, which
-    /// kept only the tail. The rendered result budgets itself: the header
-    /// (why it woke, every target, the mail count) always leads, every report
-    /// gets a bounded preview ending in a readable pointer, and the whole
-    /// envelope fits under the cap so its metadata survives intact.
+    /// Long reports share the preview budget and retain their full-text pointers.
     #[test]
-    fn a_wait_with_four_long_reports_keeps_its_header_and_metadata_under_the_cap() {
+    fn four_long_reports_keep_their_header_and_metadata() {
         let report = |n: usize| format!("REPORT_{n}_START {} REPORT_{n}_END", "x".repeat(3000));
         let finished: Vec<WaitMember> = (1..=4)
             .map(|n| WaitMember {
@@ -1074,17 +1072,6 @@ mod tests {
             waited_ms: 7,
         };
         let result = outcome.to_tool_result();
-        let serialized = result.to_string().chars().count();
-        assert!(
-            serialized <= WAIT_RESULT_BUDGET && WAIT_RESULT_BUDGET < crate::MAX_TOOL_OUTPUT_CHARS,
-            "{serialized} chars"
-        );
-        assert_eq!(
-            crate::cap_tool_output(result.clone()),
-            result,
-            "the generic cap leaves the wait result untouched"
-        );
-
         let output = result["output"].as_str().unwrap();
         assert!(output.starts_with("Subagents finished.\n"), "{output}");
         let header_end = output.find("REPORT_1_START").unwrap();
@@ -1163,12 +1150,12 @@ mod tests {
                 usize::from(new || previous)
             );
             assert_eq!(result["metadata"]["finished"][0]["report_truncated"], true);
-            assert!(result.to_string().chars().count() <= WAIT_RESULT_BUDGET);
+            assert!(result["output"].as_str().unwrap().chars().count() <= WAIT_OUTPUT_BUDGET_CHARS);
         }
     }
 
     #[test]
-    fn fifteen_reports_keep_every_row_when_archive_note_would_overflow() {
+    fn fifteen_reports_keep_every_member_row() {
         let finished = (0..15)
             .map(|i| {
                 let mut m = member(
@@ -1201,33 +1188,20 @@ mod tests {
             assert_eq!(meta["report_chars"], 3000);
             assert_eq!(meta["report_truncated"], true);
         }
-        assert!(output.matches("Report from ").count() < 15);
-        assert_eq!(crate::cap_tool_output(result.clone()), result);
-        assert!(
-            !output.contains("automatically archived"),
-            "size {}",
-            result.to_string().len()
-        );
-        assert!(
-            result.to_string().chars().count() <= WAIT_RESULT_BUDGET,
-            "size {}",
-            result.to_string().len()
-        );
+        assert!(output.chars().count() <= WAIT_OUTPUT_BUDGET_CHARS);
     }
 
     #[test]
-    fn twenty_long_handles_condense_output_and_survive_host_spilling() {
-        let finished = (0..20)
-            .map(|i| {
-                let mut m = member(
-                    &format!("main/{}-exusiai-{i:02}", "a".repeat(32)),
-                    WaitMemberState::Reported,
-                    Some(&"x".repeat(3000)),
-                );
-                m.channel = Some(format!("DM-{i:08}"));
-                m
-            })
-            .collect();
+    fn twenty_nested_members_keep_their_metadata_through_host_spilling() {
+        let finished = (0..20).map(|i| {
+            let handle = format!(
+                "main/distributed-integration-reviewer-exusiai-the-new-covenant/distributed-integration-worker-{i:02}-skadi-the-corrupting-heart"
+            );
+            WaitMember {
+                channel: Some(format!("DM-{i:08}")),
+                ..member(&handle, WaitMemberState::Reported, Some(&"x".repeat(3000)))
+            }
+        }).collect();
         let outcome = WaitOutcome {
             woke_by: WaitWake::Members,
             finished,
@@ -1236,32 +1210,24 @@ mod tests {
             mail: vec![],
             waited_ms: 0,
         };
-        let result = outcome.to_tool_result();
-        assert!(result.to_string().chars().count() <= WAIT_RESULT_BUDGET);
-        assert!(
-            result["output"]
-                .as_str()
-                .is_some_and(|s| s.contains("more member(s)"))
+        let result = crate::cap_tool_output_spilling(
+            outcome.to_tool_result(),
+            crate::ToolResultPolicy::SelfBudgeted,
+            &crate::handle::ArtifactStore::new(std::env::temp_dir()),
+            "wait",
         );
-        assert_eq!(
-            result["metadata"]["finished"].as_array().map(Vec::len),
-            Some(20)
-        );
-        for (i, m) in outcome.finished.iter().enumerate() {
-            let row = &result["metadata"]["finished"][i];
-            assert_eq!(row["handle"], m.handle);
+        assert_eq!(result["title"], "wait: members");
+        let output = result["output"].as_str().unwrap();
+        assert!(output.starts_with("Subagents finished."));
+        assert!(output.chars().count() <= WAIT_OUTPUT_BUDGET_CHARS);
+        assert!(result["metadata"].to_string().chars().count() > crate::MAX_TOOL_OUTPUT_CHARS);
+        let rows = result["metadata"]["finished"].as_array().unwrap();
+        assert_eq!(rows.len(), outcome.finished.len());
+        for (row, member) in rows.iter().zip(&outcome.finished) {
+            assert_eq!(row["handle"], member.handle);
             assert_eq!(row["report_chars"], 3000);
             assert_eq!(row["report_truncated"], true);
         }
-        assert_eq!(
-            crate::cap_tool_output_spilling(
-                result.clone(),
-                crate::ToolResultPolicy::Default,
-                &crate::handle::ArtifactStore::new(std::env::temp_dir()),
-                "wait"
-            ),
-            result
-        );
     }
 
     /// Without a DM channel the preview does not invent a pointer.
@@ -1280,7 +1246,7 @@ mod tests {
             waited_ms: 0,
         };
         let result = outcome.to_tool_result();
-        assert!(result.to_string().chars().count() <= WAIT_RESULT_BUDGET);
+        assert!(result["output"].as_str().unwrap().chars().count() <= WAIT_OUTPUT_BUDGET_CHARS);
         let output = result["output"].as_str().unwrap();
         assert!(!output.contains("channel://"), "{output}");
         assert!(output.contains("more chars"), "{output}");

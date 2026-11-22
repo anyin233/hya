@@ -403,13 +403,13 @@ call never returns the same news twice:
 When several apply at one evaluation the order is `members`, `mail`,
 `stalled`, `nothing_to_wait_for`, `timeout`.
 
-**Result shape and budget.** The result is `{title, output, metadata}`, and
-the wait budgets the serialized envelope to `WAIT_RESULT_BUDGET` (4,500 characters),
-below the generic 5,000-character cap. It reserves space for every metadata row
-before adding report previews. An omitted report has `report_truncated: true`.
-On large teams, trailing member lines in `output` become a count. The
-`finished`, `already_finished`, and `running` arrays keep every target.
-If metadata alone exceeds the budget, it takes priority over the output text.
+**Result shape and budget.** Both versions of `wait` return `{title, output, metadata}`
+with `ToolResultPolicy::SelfBudgeted`. The tool limits `output` to 4,500
+characters (`WAIT_OUTPUT_BUDGET_CHARS`) by shortening report and mail previews
+and condensing trailing member lines. An omitted report has `report_truncated: true`.
+The host passes the object through intact. Its `finished`, `already_finished`,
+and `running` metadata arrays retain every target even when their serialized
+size exceeds the generic 5,000-character spill threshold.
 
 ```text
 Subagents finished.

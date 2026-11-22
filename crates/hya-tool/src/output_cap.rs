@@ -179,6 +179,7 @@ fn head_and_tail(text: &str, n: usize, artifact: Option<&str>) -> String {
 pub fn cap_tool_output_with_policy(output: Value, policy: ToolResultPolicy) -> Value {
     match policy {
         ToolResultPolicy::Default => cap_tool_output(output),
+        ToolResultPolicy::SelfBudgeted => output,
         ToolResultPolicy::Coding => cap_coding_result(output, false),
         ToolResultPolicy::CodingWithDiff => cap_coding_result(output, true),
     }

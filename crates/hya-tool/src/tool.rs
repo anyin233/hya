@@ -214,6 +214,8 @@ pub enum ToolResultPolicy {
     /// Apply the legacy display-text cap to arbitrary JSON values.
     #[default]
     Default,
+    /// Preserve a structured result whose tool already bounds its display text.
+    SelfBudgeted,
     /// Preserve a bounded coding-tool presentation envelope.
     Coding,
     /// Preserve a coding envelope and an independently bounded edit diff.
