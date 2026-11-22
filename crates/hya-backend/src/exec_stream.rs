@@ -27,7 +27,7 @@ pub(crate) enum StreamScope {
     Tree {
         root: SessionId,
         sessions: HashSet<SessionId>,
-        seen_sessions: HashSet<SessionId>,
+        outsiders: HashSet<SessionId>,
         store: Box<SessionStore>,
     },
 }
@@ -49,22 +49,17 @@ impl StreamScope {
     // A scoped replay already checked the authoritative parentage, including
     // events missed on the bus. Seed membership before processing live frames.
     fn replayed(&mut self, envelope: &Envelope) {
-        if let Self::Tree {
-            sessions,
-            seen_sessions,
-            ..
-        } = self
+        if let Self::Tree { sessions, .. } = self
             && let Some(id) = envelope.event.session()
         {
             sessions.insert(id);
-            seen_sessions.insert(id);
         }
     }
 
     async fn observe_live(&mut self, env: &Envelope) -> Result<(), StoreError> {
         let Self::Tree {
             sessions,
-            seen_sessions,
+            outsiders,
             store,
             ..
         } = self
@@ -74,25 +69,40 @@ impl StreamScope {
         let Some(id) = env.event.session() else {
             return Ok(());
         };
-        if env.seq.0 != 0
-            && seen_sessions.insert(id)
-            && let Event::SessionCreated {
-                parent: Some(parent),
-                ..
-            } = &env.event
-            && sessions.contains(parent)
-        {
-            // The original creation may predate this subscription or a lag gap.
-            let timeout = store.read_timeout();
-            let first = tokio::time::timeout(timeout, store.replay_page(id, 0, 1))
-                .await
-                .map_err(|_| StoreError::StorageTimeout {
-                    operation: "tree child creation",
-                    timeout,
-                })??;
-            if first.first().is_some_and(|e| e.seq == env.seq) {
-                sessions.insert(id);
+        if env.seq.0 == 0 || sessions.contains(&id) || outsiders.contains(&id) {
+            return Ok(());
+        }
+        let mut path = HashSet::new();
+        let mut cursor = id;
+        let timeout = store.read_timeout();
+        let member = tokio::time::timeout(timeout, async {
+            loop {
+                if sessions.contains(&cursor) {
+                    return Ok::<_, StoreError>(Some(true));
+                }
+                if outsiders.contains(&cursor) || !path.insert(cursor) {
+                    return Ok(Some(false));
+                }
+                let first = store.replay_page(cursor, 0, 1).await?;
+                match first.first().map(|env| &env.event) {
+                    Some(Event::SessionCreated {
+                        parent: Some(parent),
+                        ..
+                    }) => cursor = *parent,
+                    Some(Event::SessionCreated { parent: None, .. }) => return Ok(Some(false)),
+                    _ => return Ok(None),
+                }
             }
+        })
+        .await
+        .map_err(|_| StoreError::StorageTimeout {
+            operation: "tree child creation",
+            timeout,
+        })?;
+        match member? {
+            Some(true) => sessions.extend(path),
+            Some(false) => outsiders.extend(path),
+            None => {}
         }
         Ok(())
     }
@@ -101,7 +111,7 @@ impl StreamScope {
         Self::Tree {
             root,
             sessions: HashSet::from([root]),
-            seen_sessions: HashSet::from([root]),
+            outsiders: HashSet::new(),
             store: Box::new(store),
         }
     }
@@ -1031,49 +1041,79 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    fn lock_wal_reads(db: &std::path::Path) -> std::io::Result<std::fs::File> {
+        use std::os::fd::AsRawFd as _;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(format!("{}-shm", db.display()))?;
+        let lock = libc::flock {
+            l_type: libc::F_WRLCK as _,
+            l_whence: libc::SEEK_SET as _,
+            l_start: 120,
+            l_len: 8,
+            l_pid: 0,
+        };
+        // An OFD lock is released when its file is dropped.
+        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_OFD_SETLK, &lock) } < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(file)
+    }
+
+    #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn replay_for_pass_bounds_only_lag_with_read_timeout() {
+    async fn child_live_frame_retries_ancestry_after_storage_timeout() -> anyhow::Result<()> {
+        let [root, parent, member] = std::array::from_fn(|_| SessionId::new());
+        let dir = std::env::temp_dir().join(format!("hya-tree-retry-{root}"));
+        std::fs::create_dir(&dir)?;
+        let db = dir.join("tree.db");
+        let store = SessionStore::connect_with_timeouts(
+            db.to_str().ok_or_else(|| anyhow::anyhow!("db path"))?,
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_millis(80),
+        )
+        .await?;
+        let created = child(3, member, parent);
+        for env in [envelope(1, root), child(2, parent, root), created.clone()] {
+            store
+                .append_event(
+                    env.event
+                        .session()
+                        .ok_or_else(|| anyhow::anyhow!("session"))?,
+                    &env.event,
+                )
+                .await?;
+        }
+        assert_eq!(store.replay_page(member, 0, 1).await?.len(), 1);
+        let (tx, mut rx) = broadcast::channel(8);
+        let mut printer =
+            JsonStreamPrinter::new(SharedBuf::default(), StreamScope::tree(root, store));
+        let lock = lock_wal_reads(&db)?;
+        tx.send(created)?;
+        printer.live(&rx.recv().await?).await?;
+        assert!(
+            printer
+                .first_lag_fault
+                .as_deref()
+                .is_some_and(|msg| msg.contains("timeout"))
+        );
+        drop(lock);
+        tx.send(title(4, member))?;
+        printer.live(&rx.recv().await?).await?;
+        assert_eq!(printer.out.seqs(), [4]);
+        drop(printer);
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn replay_for_pass_bounds_only_lag_with_read_timeout() -> anyhow::Result<()> {
         struct CleanDir(std::path::PathBuf);
         impl Drop for CleanDir {
             fn drop(&mut self) {
                 let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
-        struct ShmLock(std::fs::File);
-        impl ShmLock {
-            fn acquire(db: &std::path::Path) -> Self {
-                use std::os::unix::io::AsRawFd as _;
-                let shm_path = format!("{}-shm", db.display());
-                let file = std::fs::OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(&shm_path)
-                    .unwrap();
-                let lock = libc::flock {
-                    l_type: libc::F_WRLCK as libc::c_short,
-                    l_whence: libc::SEEK_SET as libc::c_short,
-                    l_start: 120,
-                    l_len: 8,
-                    l_pid: 0,
-                };
-                assert_eq!(
-                    unsafe { libc::fcntl(file.as_raw_fd(), libc::F_OFD_SETLK, &lock) },
-                    0
-                );
-                Self(file)
-            }
-        }
-        impl Drop for ShmLock {
-            fn drop(&mut self) {
-                use std::os::unix::io::AsRawFd as _;
-                let lock = libc::flock {
-                    l_type: libc::F_UNLCK as libc::c_short,
-                    l_whence: libc::SEEK_SET as libc::c_short,
-                    l_start: 120,
-                    l_len: 8,
-                    l_pid: 0,
-                };
-                unsafe { libc::fcntl(self.0.as_raw_fd(), libc::F_OFD_SETLK, &lock) };
             }
         }
         let _dir =
@@ -1096,7 +1136,7 @@ mod tests {
         assert_eq!(store.replay(session).await.unwrap().len(), 1);
 
         // Stall 90ms (> 40ms read_timeout, << 5s write_timeout): Initial waits and succeeds.
-        let lock = ShmLock::acquire(&db);
+        let lock = lock_wal_reads(&db)?;
         let unlocker = std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(90));
             drop(lock);
@@ -1115,7 +1155,7 @@ mod tests {
         assert_eq!(initial.len(), 1);
 
         // Held stall (> 40ms): Lag cuts off at read_timeout.
-        let _held = ShmLock::acquire(&db);
+        let _held = lock_wal_reads(&db)?;
         let lag = StreamScope::Single(session)
             .replay(&store, ReplayPass::Lag)
             .await
@@ -1127,6 +1167,7 @@ mod tests {
                 ..
             }
         ));
+        Ok(())
     }
 
     #[tokio::test]

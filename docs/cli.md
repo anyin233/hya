@@ -993,7 +993,7 @@ no deadline is installed and existing timeouts apply.
 `--include-subagents` extends the local full-mode `exec --json` stream to the
 root and every descendant, including grandchildren. The first creation fixes a session’s parent. Repeated creation events cannot bring an unrelated session into live output or replay. Each line is the same
 durable event envelope with its original session ID and global sequence number.
-Live events print in arrival order. Startup, lag recovery, and final catch-up
+Live events print in arrival order. If a storage fault delays the ancestry lookup, the next durable event for that session retries it. Startup, lag recovery, and final catch-up
 replay the tree in sequence order and skip numbers already printed.
 The flag requires `--json`, conflicts with `--bare`, and exits 75 if a
 running server owns the database. Omit it to stream only the root session.
