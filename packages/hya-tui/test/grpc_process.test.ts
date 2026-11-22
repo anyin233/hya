@@ -83,8 +83,13 @@ test.skipIf(!backendBin)("OpenTUI gRPC transport drives a real hya backend", asy
       }, liveController.signal, () => { subscribed = true })
       for (let attempt = 0; attempt < 40 && !subscribed; attempt++) await Bun.sleep(25)
       expect(subscribed).toBe(true)
-      await client.createTurn(session.id, "second turn over grpc")
+      const secondTurn = await client.createTurn(session.id, "second turn over grpc")
       await streaming
+      // A message can finish while the turn still holds its session lease.
+      const completed = await client.request<{ state: string }>(
+        "POST", `/v1/sessions/${session.id}/turns/${secondTurn.id}/wait?timeoutMs=5000`, {},
+      )
+      expect(completed.state).not.toBe("TURN_STATE_RUNNING")
     } finally {
       clearTimeout(liveTimeout)
     }
