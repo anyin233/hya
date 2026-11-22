@@ -606,46 +606,51 @@ impl Harness for TurnHarness<'_> {
         };
         let open = async {
             match (workflow_route, self.serving_model.as_ref()) {
-                (Some(route), _) => match engine
-                    .stream_with_workflow_route(
-                        request,
-                        session,
-                        message,
-                        route,
-                        self.workflow_candidate,
-                    )
-                    .await
-                {
-                    Ok((stream, index)) => {
-                        self.workflow_candidate = Some(index);
-                        Ok::<_, CoreError>((stream, route.route().candidates[index].model.clone()))
-                    }
-                    Err(error) => {
-                        route
-                            .finalize(Some(workflow_provider_failure_class(&error)))
-                            .await?;
-                        Err(error.into())
-                    }
-                },
+                (Some(route), _) => {
+                    let (stream, index) = engine
+                        .stream_with_workflow_route(
+                            request,
+                            session,
+                            message,
+                            route,
+                            self.workflow_candidate,
+                        )
+                        .await?;
+                    self.workflow_candidate = Some(index);
+                    Ok((stream, route.route().candidates[index].model.clone()))
+                }
                 (None, Some(model)) => Ok((
                     engine
                         .stream_model_candidate(request, model, session, message)
                         .await?,
                     model.clone(),
                 )),
-                (None, None) => Ok(engine
-                    .stream_with_model_fallback(request, session, message, lineage)
-                    .await?),
+                (None, None) => {
+                    engine
+                        .stream_with_model_fallback(request, session, message, lineage)
+                        .await
+                }
             }
         };
-        tokio::select! {
+        let opened = tokio::select! {
             biased;
-            () = cancel.cancelled() => Ok(None),
-            opened = open => {
-                let (stream, model) = opened?;
+            () = cancel.cancelled() => return Ok(None),
+            opened = open => opened,
+        };
+        match opened {
+            Ok((stream, model)) => {
                 self.serving_model = Some(model.clone());
                 Ok(Some((stream, model)))
-            },
+            }
+            Err(_) if cancel.is_cancelled() => Ok(None),
+            Err(error) => {
+                if let Some(route) = workflow_route {
+                    route
+                        .finalize(Some(workflow_provider_failure_class(&error)))
+                        .await?;
+                }
+                Err(error.into())
+            }
         }
     }
 
