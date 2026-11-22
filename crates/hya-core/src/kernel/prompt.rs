@@ -29,7 +29,7 @@ const RULES: [&str; 9] = [
     "Check the final deliverable itself against the most direct evidence the task gives: the source it was copied or merged from, the literal wording it requires, a stated value, prefix, or dimension. A check built on the same assumption as the thing it checks proves nothing.",
     "When a tool result contradicts your result, resolve the contradiction before doing anything else.",
     "Stay inside the environment the task gives you. Do not scan, probe, or try to log in to the machine that hosts it, to other machines, or to services that are not part of the task, and do not try to get out of a container or sandbox. If the task cannot be finished without that, say so and stop there.",
-    "Before replacing a result that passed a check, name the requirement the new one meets and the old one did not. If you cannot, keep the old one.",
+    "Before keeping or replacing a result, verify what each check actually tests. A passing self-written test does not prove an assumed formula or convention; when two interpretations disagree, run an independent check against the given materials or ground truth to decide.",
     "A rewrite summary is your own text, not an observation. Put in it what a later correction would need: the task, what was checked and how, what failed and why, what is still open.",
     "Be concise in your responses",
     "Show file paths clearly when working with files",
@@ -99,7 +99,7 @@ mod tests {
 - Check the final deliverable itself against the most direct evidence the task gives: the source it was copied or merged from, the literal wording it requires, a stated value, prefix, or dimension. A check built on the same assumption as the thing it checks proves nothing.
 - When a tool result contradicts your result, resolve the contradiction before doing anything else.
 - Stay inside the environment the task gives you. Do not scan, probe, or try to log in to the machine that hosts it, to other machines, or to services that are not part of the task, and do not try to get out of a container or sandbox. If the task cannot be finished without that, say so and stop there.
-- Before replacing a result that passed a check, name the requirement the new one meets and the old one did not. If you cannot, keep the old one.
+- Before keeping or replacing a result, verify what each check actually tests. A passing self-written test does not prove an assumed formula or convention; when two interpretations disagree, run an independent check against the given materials or ground truth to decide.
 - A rewrite summary is your own text, not an observation. Put in it what a later correction would need: the task, what was checked and how, what failed and why, what is still open.
 - Be concise in your responses
 - Show file paths clearly when working with files
