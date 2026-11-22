@@ -89,7 +89,7 @@ fall back to `hya-task`.
 | `subagent_type` | Agent id — the only way to choose the agent (also per member); empty/omitted normalizes to `"hya-task"`. It also names the member: the handle leaf is `<subagent_type>-<operator>`, where the resolved agent id is sanitized (lowercased; other characters → `-`; at most 32 characters) and the harness appends one random operator name (`"subagent_type": "hya-scout"` → `main/hya-scout-suzuran`; omitted → `main/hya-task-amiya`). |
 | `category` | Logical model-category override. |
 | `model` | Concrete provider/model override (wins over category). A `#level` suffix (`anthropic/claude-sonnet-4-5#low`) sets the child's thinking effort. |
-| `effort` | Thinking effort for this spawn (also per member): `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, as the child's model accepts. Wins over a `model` suffix and over the agent's default effort (`list_agents` shows it). A level the child's model does not accept fails the call with `INVALID_EFFORT: \`<level>\` for \`<model>\`` and spawns nothing. The result names the child's model, suffix included: `<task id="…" model="provider/model#level" state="…">`. |
+| `effort` | Omit to inherit the child’s default. For a per-spawn or per-member override the effort levels are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, as the child's model accepts. Wins over a `model` suffix and over the agent's default effort (`list_agents` shows it). A level the child's model does not accept fails the call with `INVALID_EFFORT: \`<level>\` for \`<model>\`` and spawns nothing. The result names the child's model, suffix included: `<task id="…" model="provider/model#level" state="…">`. |
 | `command` | Optional command that triggered the task. |
 | `inline_agent` | Request-scoped overlay. Published fields are `name`, `prompt`, `category`, and `model`; nested `description` is not advertised. |
 | `context` | Optional string prepended to each prompt, separated by two newlines; shared goal, interfaces and constraints. Works in single and batch forms. |
@@ -459,6 +459,9 @@ in-progress text is never surfaced as a report. `channel` is the DM holding
 the report, present only when the caller is the target's parent. A mail
 entry's `chars` is the length of its body as received (at most 600, the
 `[NEW MAIL]` bound).
+When either `finished` or `already_finished` includes a reported member, `output`
+reminds the caller that the member was automatically archived. Calling `archive`
+on that member is unnecessary.
 `already_finished` and `mail` are omitted when empty. The wait runs inside the
 caller's turn and is woken through the engine bus (team-lifecycle events on the
 root or caller log), never by a resident wake of the caller — that would queue
@@ -539,6 +542,9 @@ intentional compatibility, not a second command surface.
 [crates/hya-tool/src/tool.rs](../../crates/hya-tool/src/tool.rs))
 
 ### Webfetch
+
+The tool is enabled by default. Setting `tools.webfetch.enabled: false` removes
+`webfetch` and its `fetch` alias from the engine registry at startup.
 
 Parameters: `url` (http/https only), `format` = `text` | `markdown` (default) |
 `html`, and `timeout` in seconds — default 30 s, clamped to a maximum of 120 s.

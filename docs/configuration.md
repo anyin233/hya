@@ -34,7 +34,7 @@ use built-in defaults:
 | `permission` | Static invocation rules (`allow` / `ask` / `deny`) and default permission model. | [Permissions](#permissions) |
 | `mcp` | Local stdio and remote HTTP MCP servers (`mcp.<server>`). | [MCP Servers](#mcp-servers) |
 | `plugins` | Out-of-process stdio JSON-RPC plugins (`rust`, `bun`, `claude`). | [Plugins](#plugins) |
-| `tools` | Tool-plane settings: `tools.websearch` (`exa` or `parallel`) and `tools.code.mode` (`normal`, `with_tools`, `only`). | [Web Search](#web-search), [Code Mode](#code-mode) |
+| `tools` | Tool settings for `tools.webfetch.enabled`, `tools.websearch` (`exa` or `parallel`), and `tools.code.mode` (`normal`, `with_tools`, `only`). | [Web Fetch](#web-fetch), [Web Search](#web-search), [Code Mode](#code-mode) |
 | `subagents` | Concurrency permits and per-team resident turn/mail/spawn governor budgets. | [Subagent Limits](#subagent-limits) |
 | `compaction` | The tail `shake` keeps, the terminal handoff's output cap, and the token accounting mode. | [Compaction](compaction.md) |
 | `goal` | Independent evaluator model (`goal.evaluator_model`) for `-p` Goal mode and `loop`. | [Goal and Loop Authoring](goal-loop-authoring.md) |
@@ -1250,6 +1250,18 @@ running turn still uses them; the next bind of that Project rebuilds the scope
 and starts them again. Scopes are checked at every bind and by a sweep every
 60 seconds, so an idle server releases them too. A scope that a live turn is
 bound to is never dropped.
+
+## Web Fetch
+
+`tools.webfetch.enabled` is a boolean and defaults to `true`. To disable the
+built-in URL fetch tool and its `fetch` alias while keeping web search available,
+set this in the startup configuration:
+
+```yaml
+tools:
+  webfetch:
+    enabled: false
+```
 
 ## Web Search
 

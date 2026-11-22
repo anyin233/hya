@@ -1171,6 +1171,9 @@ async fn build_session_engine_with_mcp_defer(
     let (websearch, invocation_policy, settings) = tool_config;
     let router = Arc::new(router);
     let registry = ToolRegistry::builtins();
+    if !settings.webfetch_enabled() {
+        registry.remove("webfetch");
+    }
     if !websearch.enabled {
         registry.remove("websearch");
     }

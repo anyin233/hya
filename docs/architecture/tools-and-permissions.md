@@ -65,7 +65,7 @@ stay globally unique inside a registry. `hya-tool` exposes the mechanism in
 | `find` | `{ "pattern": string, "path"?: string }` | `{path, size}` matches (no row cap). |
 | `grep` | `{ "pattern": string, "path"?: string, "glob"?: string, "ignoreCase"?: boolean, "literal"?: boolean, "context"?: integer 0..5, "limit"?: integer 1..200 }` (closed) | Hashline match/context rows, summary, and bounded per-file display metadata. |
 | `bash` | `{ "command": string, "env"?: object<string,string>, "timeout"?: number, "cwd"?: string, "pty"?: boolean }` (closed) | Structured command/output result with exit, timeout, truncation, and artifact metadata. |
-| `webfetch` (`fetch`) | `{ "url": string, "format"?: "text"\|"markdown"\|"html", "timeout"?: number }` | Fetched web content or image attachment. |
+| `webfetch` (`fetch`) | `{ "url": string, "format"?: "text"\|"markdown"\|"html", "timeout"?: number }` | Fetched web content or image attachment. Set `tools.webfetch.enabled: false` to remove the tool and its alias. |
 | `websearch` (`search`) | `{ "query": string, "numResults"?: number, "livecrawl"?: string, "type"?: string, "contextMaxCharacters"?: number }` | Search results from the configured `WebSearchPlane`. |
 | `ask_user` (`question`) | `{ "questions": [{ "question", "header", "options": [{ "label", "description" }], "multiple"?, "allow_custom"?, "default"? }] }` (alias `question`) | Structured per-question answers `{question, answer, cancelled}`; unanswered renders as `Unanswered`; plane failures error. |
 | `lsp` | `{ "operation", "filePath", "line", "character", "query"? }` | LSP provider response. |

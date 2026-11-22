@@ -437,6 +437,11 @@ checkpoint.
 | Remove | `op: "remove"`, `id: string` | Remove the item. |
 
 The allowed statuses are `pending`, `in_progress`, `blocked`, and `completed`.
+When `op` is omitted, a `content` field without an `id` adds an item. An `id`
+with `content`, `status`, or both updates that item. With an `id` and no
+`status` field, a status in `op` also updates the item. For example,
+`{"ops":[{"op":"completed","id":"#1"}]}` marks item 1 complete.
+
 Operations apply in order. This call adds a criterion with an initial status.
 
 ```json
