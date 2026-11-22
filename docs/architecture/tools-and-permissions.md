@@ -247,7 +247,9 @@ PDFs retain their separate attachment handling.
 
 Budgeted Unix non-PTY Bash yields the process group when its requested wait
 or budget/10 limit expires. The wait covers the whole process group, including
-background writers after Bash exits. A yielded group is supervised until
+background writers after Bash exits. On Linux, completion includes the last
+worker thread of each descendant and requires two matching scans of the
+remaining zombie process identities. A yielded group is supervised until
 completion, cancellation, or the run deadline. Cancellation and expiry kill
 the group before publishing its exit code. The end cap wins an exact tie
 with the requested wait. The result exposes `stillRunning: true`, numeric
