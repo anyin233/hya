@@ -292,6 +292,18 @@ struct TurnHarness<'a> {
 }
 
 impl TurnHarness<'_> {
+    async fn check_failure_cancelled(&self) -> Result<(), CoreError> {
+        if self.cancel.is_cancelled() {
+            if let Some(route) = self.workflow_route {
+                route
+                    .finalize(Some(hya_proto::WorkflowRouteFailureClass::Cancelled))
+                    .await?;
+            }
+            return Err(CoreError::Cancelled);
+        }
+        Ok(())
+    }
+
     /// Swap in a new runtime generation when the registry has one.
     async fn rebind(&mut self, projection: &Projection) -> Result<(), CoreError> {
         let Some(inputs) = &self.rebind else {
@@ -639,6 +651,7 @@ impl Harness for TurnHarness<'_> {
         if !failure.step_started && self.workflow_route.is_some() {
             return Ok(false);
         }
+        self.check_failure_cancelled().await?;
         // Before the first successful open there is no pin. A failed reopen
         // during recovery still belongs to the model that served the stream.
         let deadline = hya_tool::deadline::current();
@@ -686,18 +699,12 @@ impl Harness for TurnHarness<'_> {
                 () = self.cancel.cancelled() => {}
                 () = tokio::time::sleep(wait) => {}
             }
-            if self.cancel.is_cancelled() {
-                if let Some(route) = self.workflow_route {
-                    route
-                        .finalize(Some(hya_proto::WorkflowRouteFailureClass::Cancelled))
-                        .await?;
-                }
-                return Err(CoreError::Cancelled);
-            }
+            self.check_failure_cancelled().await?;
             if deadline.is_none_or(|d| d.stage() < hya_tool::deadline::Stage::Final) {
                 return Ok(true);
             }
         }
+        self.check_failure_cancelled().await?;
         if let Some(route) = self.workflow_route {
             route
                 .finalize(Some(workflow_failure_class(&failure.error, self.cancel)))
