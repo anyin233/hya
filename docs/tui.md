@@ -373,6 +373,7 @@ can be found or started after a crash, the controller status state says `Server 
 stream was down at the moment of a stop never gets the reason and treats the
 stop as a crash. A TUI with a fixed `--server` and no `--db` never moves; it
 keeps retrying that URL.
+When a provider attempt is retried, each durable `partDeleted` frame immediately removes that part from the visible message, including stale projected text during backoff.
 During a provider round, assistant deltas with `seq == 0` are live-only and
 process-local. A restart may lose those in-flight deltas, and reconnect does
 not retry a provider round or repeat its tool/file side effects. The durable
