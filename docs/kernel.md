@@ -137,7 +137,8 @@ earlier history:
   carries a text note instead);
 - either request ends with a one-request notice: a goal checkpoint, a
   deadline stage or clock line, the completion check, the empty-turn notice,
-  or this notice itself;
+  the [reasoning-only deadline notice](#reasoning-only-deadline-guard), or
+  this notice itself;
 - the previous round made no tool calls (a continuation follows it).
 
 A detected drop logs the warning `reasoning_replay_dropped` (session, step,
@@ -192,6 +193,94 @@ and fails on any unequal view. Full-mode replay also needs the resolved
 round configuration, any referenced attachment blobs, and reproducible
 hook output. Legacy URI media entries can acquire fresh part IDs during
 request assembly.
+
+### Reasoning-only deadline guard
+
+With `--time-budget`, deadline notices otherwise reach the model only between
+rounds (bare mode) or on a tool result (full mode). A model step that streams
+nothing but reasoning has no such point: it could think past WrapUp and Final
+until the process is killed, without ever reading a notice. The kernel
+therefore stops a model stream at the run's next deadline stage while that
+stream has shown only reasoning, and continues the turn with a notice.
+
+The guard applies in bare and full mode alike whenever the run has a deadline
+(`hya_tool::deadline::current()`); there is nothing to configure. A round
+arms it once, on its first non-empty `ReasoningDelta` before any text or tool
+call. Waiting for the first byte (request prefill) is never cut, nor is a
+stream that never reasons.
+
+- It waits for the next stage the session has not been told of: WrapUp, or
+  Final once WrapUp was told (or when the budget is too short for a WrapUp
+  window), but at least the reasoning grace, `delay.max(reasoning_grace())`.
+  The grace (3 % of the budget, 15–30 s, and at most half of what is left
+  before `Over`; 27 s for a 900 s budget) lets a short step that starts just
+  before a stage, or after a stage the session was not yet told of, finish
+  its thought and act; in full mode its tool result then carries the stage
+  notice. Rounds that start reasoning more than the grace before WrapUp are
+  stopped at WrapUp itself.
+- Once armed, the guard is checked ahead of the stream (after a cancel), so
+  buffered stream chunks cannot hold off a checkpoint that has passed.
+- The first visible text (`TextStart` or `TextDelta`) or tool call
+  (`ToolInputStart` or `ToolCallRequested`) disarms it for the rest of the
+  round, so an answer or a file write in progress is never cut.
+- Once the session was told of Final it is not armed again: the model's last
+  step runs to its end.
+- The step's own end (`MessageFinished`) disarms it, even while the stream
+  stays open until EOF, so a finished step keeps its reported finish.
+
+A cut is not a cancel. The round keeps the reasoning it streamed (closed parts
+and the open one, persisted as on any stream end), its step finishes as
+`stop`, and the next round of the same turn starts with a system message.
+The kernel appends it after that round's rewrite (`Harness::before_round`),
+so a compaction marker the rewrite creates precedes it and cannot hide it
+from the request. That holds also when a full-mode native compaction folds
+the turn's own assistant message behind the marker: the notice stays in the
+request until that message records its next part:
+
+> [hya] Reasoning interrupted at budget checkpoint: the run reached a deadline
+> stage while your last step was still thinking, before any answer or tool
+> call, so that step was stopped. Do not restart the deliberation: act on what
+> you have worked out, with the next tool call or your final answer.
+
+followed by the stage's own `HEADLESS RUN — TIME` or `FINAL` notice (the
+`report` text for an agent that delivers by `report`, as on a tool result),
+and, when the step had reasoned, its last 1,200 characters under "Where your
+thinking stopped", so a route that drops replayed reasoning still shows where
+the model was. The stage counts as told (`RunDeadline::mark_notified`), so
+the next round gets no second notice of that stage, nor a clock line in the
+same budget tenth, while the next stage is still announced as usual. Like the
+dropped-reasoning notice, it is sent as a user message, in the next request
+only, and an end continuation after a partless round replaces it.
+
+The stopped step's reasoning stays in the transcript, but a reasoning block
+of that step that had already closed loses its replay data (a second
+`ReasoningEnd` with no `provider_data`, which clients see as a repeated
+`partCompleted`). Nothing of the step followed that block, and a route that
+replays reasoning would otherwise send it before a later step's direct tool
+call or answer. On the OpenAI Responses route, the encoder also leaves out of
+`input` any encrypted reasoning item that no answer or call follows, since the
+API rejects such an item
+([Encrypted-reasoning replay](architecture/providers.md#encrypted-reasoning-replay)).
+
+Interfaces:
+
+- `RunDeadline::next_checkpoint(session) -> Option<(Duration, Stage)>`
+  (`hya-tool`): time until the next untold stage (zero once it has started),
+  and that stage; `None` once the session was told of Final. `RunDeadline`
+  reads Tokio's clock, so a paused test runtime moves its stages.
+- `RunDeadline::reasoning_grace() -> Duration` (`hya-tool`):
+  `clamp(0.03 × budget, 15 s, 30 s).min((remaining − grace) / 2)`, the least
+  time a reasoning step gets before a cut.
+- `Round::deadline_cut: Option<DeadlineCut>` (`hya-core`): set when
+  `round::collect` stopped the stream; `DeadlineCut` carries the stage reached
+  (`WrapUp` or `Final`) and the reasoning streamed before the cut.
+- `Harness::deadline_subagent() -> Result<bool, CoreError>` (`hya-core`):
+  whether the stage notice takes the `report` text. Bare mode answers `false`;
+  full mode's `TurnHarness` uses the same check as its tool-result notices.
+- `hya_proto::context::REASONING_DEADLINE_NOTICE_PREFIX`: the notice's opening
+  line. `is_harness_transient_notice_text` recognises it, so the notice does
+  not start a new turn, and `request.rs` sends the logged system message as a
+  user message until the model's next part.
 
 ## Built-in tools
 

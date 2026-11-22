@@ -51,6 +51,24 @@ pub(super) struct TurnToolGate<'a> {
     pub(super) offered: &'a [ToolSchema],
 }
 
+/// Whether a turn's agent delivers by `report`, so its deadline notices
+/// take the text for that.
+pub(super) fn can_report(
+    engine: &SessionEngine,
+    binding: &TurnBinding,
+    agent: &AgentSpec,
+    parent_session: Option<SessionId>,
+    offered: &[ToolSchema],
+) -> Result<bool, CoreError> {
+    let policy = crate::ChannelPolicy::from_binding(binding)
+        .map_err(CoreError::bundle)?
+        .snapshot_for(agent.name.as_str());
+    Ok(parent_session.is_some()
+        && engine.lifecycle.is_connected()
+        && crate::lifecycle::report_allowed(policy)
+        && offered.iter().any(|tool| tool.name.as_str() == "report"))
+}
+
 impl TurnToolGate<'_> {
     /// Run `tc` and record its outcome; an `Err` ends the turn.
     pub(super) async fn call(&mut self, mut tc: ToolCall) -> Result<(), CoreError> {
@@ -328,13 +346,8 @@ impl TurnToolGate<'_> {
                     }
                     if let Some(deadline) = hya_tool::deadline::current() {
                         if let Some(stage) = deadline.take_notice(session) {
-                            let policy = crate::ChannelPolicy::from_binding(binding)
-                                .map_err(CoreError::bundle)?
-                                .snapshot_for(live_agent.name.as_str());
-                            let can_report = parent_session.is_some()
-                                && engine.lifecycle.is_connected()
-                                && crate::lifecycle::report_allowed(policy)
-                                && offered.iter().any(|tool| tool.name.as_str() == "report");
+                            let can_report =
+                                can_report(engine, binding, live_agent, parent_session, offered)?;
                             let notice = deadline.notice(stage, can_report);
                             append_steer_notice(&mut output, &format!("\n\n{notice}"));
                         } else if let Some(clock) = deadline.take_clock(session) {

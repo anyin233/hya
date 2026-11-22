@@ -127,13 +127,20 @@ pub enum ReasoningReplayPolicy {
     GoogleThought,
 }
 
+/// Opening of the notice sent after a reasoning-only model step was cut at a
+/// run-deadline stage (docs/kernel.md).
+pub const REASONING_DEADLINE_NOTICE_PREFIX: &str =
+    "[hya] Reasoning interrupted at budget checkpoint:";
+
 /// Whether `text` is an ephemeral harness notice rendered as a trailing
 /// `Message::User` inside an active turn (headless clock/deadline/continuation
-/// notices, goal checkpoints, or dropped-reasoning notices). These notices
+/// notices, goal checkpoints, dropped-reasoning notices, or the notice after a
+/// reasoning-only step was cut at a deadline stage). These notices
 /// belong to the active turn and must not advance [`current_turn_start`].
 #[must_use]
 pub fn is_harness_transient_notice_text(text: &str) -> bool {
     text.starts_with("[hya] Reasoning replay notice:")
+        || text.starts_with(REASONING_DEADLINE_NOTICE_PREFIX)
         || text.starts_with("[hya] Goal checkpoint:")
         || text.starts_with("[hya] Completion check, sent once before this run ends.")
         || text.starts_with("[hya] Your last turn ended with thinking only:")
@@ -414,6 +421,7 @@ mod tests {
             "[hya] Your last turn ended with thinking only: continue.",
             "[hya] Reasoning replay notice: endpoint dropped prior step reasoning.",
             "[hya] Goal checkpoint: summarize progress.",
+            "[hya] Reasoning interrupted at budget checkpoint: act now.",
         ];
         for notice in notices {
             assert!(is_harness_transient_notice_text(notice), "{notice}");

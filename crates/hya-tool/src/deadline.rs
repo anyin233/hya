@@ -9,7 +9,10 @@
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+// Tokio's clock, so a paused test runtime moves the stages with its timers.
+use tokio::time::Instant;
 
 use hya_proto::SessionId;
 
@@ -139,6 +142,15 @@ impl RunDeadline {
         clamp_secs(0.05 * self.budget.as_secs_f64(), 30.0, 120.0)
     }
 
+    /// Least time a model step that has started reasoning gets before a
+    /// checkpoint may cut it: about a short step, and at most half of what is
+    /// left before [`Stage::Over`].
+    #[must_use]
+    pub fn reasoning_grace(&self) -> Duration {
+        clamp_secs(0.03 * self.budget.as_secs_f64(), 15.0, 30.0)
+            .min(self.remaining().saturating_sub(self.grace()) / 2)
+    }
+
     /// The stage now.
     #[must_use]
     pub fn stage(&self) -> Stage {
@@ -174,6 +186,35 @@ impl RunDeadline {
             Some(requested) if requested <= limit => (requested, false),
             _ => (limit, true),
         }
+    }
+
+    /// The next stage `session` has not been told of, and how long until it
+    /// starts (zero once it has); `None` once it was told of
+    /// [`Stage::Final`]. A model stream that has shown only reasoning is cut
+    /// at this point.
+    #[must_use]
+    pub fn next_checkpoint(&self, session: SessionId) -> Option<(Duration, Stage)> {
+        let told = self
+            .notified
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&session)
+            .map_or(Stage::Normal, |told| told.stage);
+        if told >= Stage::Final {
+            return None;
+        }
+        let now = self.stage().min(Stage::Final);
+        if now > told {
+            return Some((Duration::ZERO, now));
+        }
+        let (window, stage) =
+            if told == Stage::Normal && self.wrap_up_window() > self.final_window() {
+                (self.wrap_up_window(), Stage::WrapUp)
+            } else {
+                (self.final_window(), Stage::Final)
+            };
+        let at = self.budget.saturating_sub(window);
+        Some((at.saturating_sub(self.elapsed()), stage))
     }
 
     /// The stage to announce to `session` now, at most once per stage per
@@ -396,6 +437,74 @@ mod tests {
             deadline.notice(Stage::Final, true),
             "HEADLESS RUN — FINAL 40s: call `report` now with what you have."
         );
+    }
+
+    /// D5: the next checkpoint follows what the session was told, and
+    /// nothing follows a Final notice.
+    #[test]
+    fn d5_next_checkpoint_follows_what_was_told() {
+        // B = 900: WrapUp at 585 s used, Final at 792 s.
+        let lead = session();
+        let early = started(900, 100);
+        let (delay, stage) = early.next_checkpoint(lead).expect("not told of Final");
+        assert_eq!(stage, Stage::WrapUp);
+        assert!((484..=485).contains(&delay.as_secs()), "{delay:?}");
+        let wrap_up = started(900, 600);
+        assert_eq!(
+            wrap_up.next_checkpoint(lead),
+            Some((Duration::ZERO, Stage::WrapUp)),
+            "a stage nobody announced is due now"
+        );
+        wrap_up.mark_notified(lead, Stage::WrapUp);
+        let (delay, stage) = wrap_up.next_checkpoint(lead).expect("not told of Final");
+        assert_eq!(stage, Stage::Final);
+        assert!((191..=192).contains(&delay.as_secs()), "{delay:?}");
+        // Told of WrapUp early, as a lead continuation notice does.
+        let member = session();
+        early.mark_notified(member, Stage::WrapUp);
+        assert_eq!(
+            early.next_checkpoint(member).map(|(_, stage)| stage),
+            Some(Stage::Final)
+        );
+        // A stream that ran from Normal past Final reports Final; so does Over.
+        assert_eq!(
+            started(900, 800).next_checkpoint(session()),
+            Some((Duration::ZERO, Stage::Final))
+        );
+        assert_eq!(
+            started(900, 890).next_checkpoint(session()),
+            Some((Duration::ZERO, Stage::Final))
+        );
+        // A budget whose WrapUp window is not wider than Final's goes to Final.
+        // B = 150: WrapUp 75 s, Final 90 s.
+        let (delay, stage) = started(150, 0)
+            .next_checkpoint(session())
+            .expect("not told of Final");
+        assert_eq!(stage, Stage::Final);
+        assert!((59..=60).contains(&delay.as_secs()), "{delay:?}");
+        wrap_up.mark_notified(lead, Stage::Final);
+        assert_eq!(wrap_up.next_checkpoint(lead), None);
+        let over = started(900, 890);
+        over.mark_notified(member, Stage::Final);
+        assert_eq!(over.next_checkpoint(member), None);
+    }
+
+    /// D6: the reasoning grace is 3 % of the budget within 15–30 s, and at
+    /// most half of what is left before Over.
+    #[test]
+    fn d6_reasoning_grace_follows_budget_and_time_left() {
+        let grace = |budget, elapsed| started(budget, elapsed).reasoning_grace().as_millis();
+        // B = 900: 27 s early, at WrapUp and at Final; G = 45 s.
+        assert_eq!(grace(900, 0), 27_000);
+        assert_eq!(grace(900, 585), 27_000);
+        assert_eq!(grace(900, 792), 27_000);
+        // R = 50: (50 - 45) / 2.
+        assert!((2_499..=2_500).contains(&grace(900, 850)));
+        assert_eq!(grace(900, 860), 0, "Over");
+        assert_eq!(grace(1800, 0), 30_000);
+        assert_eq!(grace(28800, 0), 30_000);
+        // B = 30 starts in Over: no grace.
+        assert_eq!(grace(30, 0), 0);
     }
 
     /// D3: once per stage per session, and only upward.

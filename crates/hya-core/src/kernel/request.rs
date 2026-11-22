@@ -1,3 +1,4 @@
+use hya_proto::context::REASONING_DEADLINE_NOTICE_PREFIX;
 use hya_proto::{
     Message, MessageProjection, ModelRef, Part, PartId, PartProjection, Projection, Role,
     ToolPartState,
@@ -55,10 +56,16 @@ pub fn projection_to_messages(
     attachments: &AttachmentData,
 ) -> Vec<Message> {
     let messages = compacted_messages(projection);
-    let assistant = messages.iter().rfind(|row| row.role == Role::Assistant);
+    // The turn's message, also when a compaction folded it behind the marker.
+    let latest_assistant = projection
+        .session
+        .messages
+        .iter()
+        .rfind(|row| row.role == Role::Assistant);
+    let visible_assistant = messages.iter().rfind(|row| row.role == Role::Assistant);
     let marker = messages.first().filter(|row| is_marker(row));
     let bare = agent.as_str() == super::AGENT
-        && assistant.is_some_and(|row| row.config_generation.is_none());
+        && latest_assistant.is_some_and(|row| row.config_generation.is_none());
     let deadline_stage = |row: &MessageProjection| {
         bare && row.role == Role::System && is_bare_transient_text(&collect_text(&row.parts))
     };
@@ -67,17 +74,15 @@ pub fn projection_to_messages(
         // A partless round answered by an end continuation never moves past
         // the notice, so the continuation replaces it.
         .filter(|row| {
-            !(is_reasoning_dropped_notice_row(row)
+            !(is_kernel_notice_row(row)
                 && messages
                     .iter()
                     .any(|later| later.id > row.id && is_end_continuation_notice(later)))
         })
         .filter(|row| {
-            !(is_goal_checkpoint(row)
-                || deadline_stage(row)
-                || is_reasoning_dropped_notice_row(row))
+            !(is_goal_checkpoint(row) || deadline_stage(row) || is_kernel_notice_row(row))
                 || (marker.is_none_or(|marker| marker.id < row.id)
-                    && assistant.is_some_and(|assistant| {
+                    && latest_assistant.is_some_and(|assistant| {
                         // The marker can move in the projection. These IDs are
                         // minted in creation order by the running turn.
                         assistant.id < row.id
@@ -104,17 +109,15 @@ pub fn projection_to_messages(
                 // (empty) before its first request, so no older step counts.
                 last_step_start: m
                     .last_step_start
-                    .filter(|_| assistant.is_some_and(|assistant| assistant.id == m.id))
+                    .filter(|_| visible_assistant.is_some_and(|assistant| assistant.id == m.id))
                     .map(|start| start.saturating_sub(m.folded_parts)),
             },
             // Keep harness notices in the conversation on providers that
             // hoist system messages into the top-level instructions.
-            Role::System if deadline_stage(m) || is_reasoning_dropped_notice_row(m) => {
-                Message::User {
-                    id: m.id,
-                    parts: map_parts(&m.parts),
-                }
-            }
+            Role::System if deadline_stage(m) || is_kernel_notice_row(m) => Message::User {
+                id: m.id,
+                parts: map_parts(&m.parts),
+            },
             Role::System => Message::System {
                 id: m.id,
                 content: collect_text(&m.parts),
@@ -133,9 +136,14 @@ fn is_bare_transient_text(text: &str) -> bool {
         || super::is_empty_turn_notice(text)
 }
 
-/// The dropped-reasoning notice, transient in both modes.
-fn is_reasoning_dropped_notice_row(row: &MessageProjection) -> bool {
-    row.role == Role::System && super::is_reasoning_dropped_notice(&collect_text(&row.parts))
+/// The dropped-reasoning notice or the notice after a reasoning-only step
+/// was cut at a deadline stage, transient in both modes.
+fn is_kernel_notice_row(row: &MessageProjection) -> bool {
+    row.role == Role::System && is_kernel_notice(&collect_text(&row.parts))
+}
+
+fn is_kernel_notice(text: &str) -> bool {
+    super::is_reasoning_dropped_notice(text) || text.starts_with(REASONING_DEADLINE_NOTICE_PREFIX)
 }
 
 /// A notice that continues a run after a round without tool calls.
@@ -164,7 +172,7 @@ pub(super) fn ends_with_transient_notice(messages: &[Message]) -> bool {
         Some(Message::System { content, .. }) => content.starts_with(GOAL_CHECKPOINT),
         Some(Message::User { parts, .. }) => {
             let text = user_text(parts);
-            is_bare_transient_text(&text) || super::is_reasoning_dropped_notice(&text)
+            is_bare_transient_text(&text) || is_kernel_notice(&text)
         }
         _ => false,
     }
@@ -617,11 +625,11 @@ mod tests {
         ));
     }
 
-    /// The dropped-reasoning notice is the request's last user message in
-    /// bare and full mode alike, and leaves the request once the assistant
-    /// records a newer part.
+    /// The dropped-reasoning notice and the deadline-cut notice are each the
+    /// request's last user message in bare and full mode alike, and leave
+    /// the request once the assistant records a newer part.
     #[test]
-    fn reasoning_dropped_notice_is_one_user_message_in_both_modes() {
+    fn kernel_notices_are_one_user_message_in_both_modes() {
         use hya_proto::{
             AgentName, ConfigGeneration, Envelope, Event, EventSeq, MessageId, PartId, SessionId,
             SessionKind,
@@ -662,7 +670,18 @@ mod tests {
                 .collect();
             Projection::from_events(&envelopes)
         };
-        for (agent, full) in [(super::super::AGENT, false), ("build", true)] {
+        let cut = super::super::deadline_cut_notice(
+            &super::super::DeadlineCut {
+                stage: hya_tool::deadline::Stage::WrapUp,
+                reasoning: "so the parser needs one more case".to_string(),
+            },
+            Some("HEADLESS RUN — TIME: 1s of 2s used, 1s left.".to_string()),
+        );
+        let notices = [super::super::REASONING_DROPPED_NOTICE.to_string(), cut];
+        for ((agent, full), notice_text) in [(super::super::AGENT, false), ("build", true)]
+            .into_iter()
+            .flat_map(|mode| notices.iter().map(move |text| (mode, text)))
+        {
             let mut events = vec![Event::SessionCreated {
                 session,
                 parent: None,
@@ -690,7 +709,7 @@ mod tests {
             events.extend(super::super::round::system_message_events(
                 session,
                 notice,
-                super::super::REASONING_DROPPED_NOTICE.to_string(),
+                notice_text.clone(),
             ));
             let messages = |events: &[Event]| {
                 projection_to_messages(
@@ -707,7 +726,7 @@ mod tests {
                     sent.last(),
                     Some(Message::User { id, parts }) if *id == notice && matches!(
                         parts.as_slice(),
-                        [Part::Text { text, .. }] if text == super::super::REASONING_DROPPED_NOTICE
+                        [Part::Text { text, .. }] if text == notice_text
                     )
                 ),
                 "{agent}: {sent:?}"
@@ -722,6 +741,318 @@ mod tests {
             );
             assert!(!ends_with_transient_notice(&later), "{agent}");
         }
+    }
+
+    /// The deadline-cut notice reaches the request after a compaction that
+    /// cut through the stopped step only when it was minted after the
+    /// marker, as `drive` does; minted before, the marker hides it.
+    #[test]
+    fn deadline_cut_notice_after_a_compaction_reaches_the_request() {
+        use hya_proto::{
+            AgentName, CompactionStrategy, ConfigGeneration, Envelope, Event, EventSeq, MessageId,
+            PartId, SessionId, SessionKind, StepCut,
+        };
+        let session = SessionId::new();
+        let started = |message, role| Event::MessageStarted {
+            session,
+            message,
+            role,
+            agent: None,
+            model: None,
+        };
+        let text = |message, delta: &str| {
+            let part = PartId::new();
+            [
+                Event::TextStart {
+                    session,
+                    message,
+                    part,
+                },
+                Event::TextDelta {
+                    session,
+                    message,
+                    part,
+                    delta: delta.to_string(),
+                },
+            ]
+        };
+        let notice_text = super::super::deadline_cut_notice(
+            &super::super::DeadlineCut {
+                stage: hya_tool::deadline::Stage::WrapUp,
+                reasoning: "half a plan".to_string(),
+            },
+            None,
+        );
+        for (agent, full) in [(super::super::AGENT, false), ("build", true)] {
+            for notice_first in [false, true] {
+                let (user, assistant, thought) =
+                    (MessageId::new(), MessageId::new(), PartId::new());
+                let mut events = vec![Event::SessionCreated {
+                    session,
+                    parent: None,
+                    agent: AgentName::new(agent),
+                    model: ModelRef::new("fake"),
+                    workdir: "/tmp".to_string(),
+                    project: None,
+                    kind: SessionKind::Project,
+                }];
+                events.push(started(user, Role::User));
+                events.extend(text(user, "do the task"));
+                events.push(started(assistant, Role::Assistant));
+                if full {
+                    events.push(Event::TurnBindingRecorded {
+                        session,
+                        message: assistant,
+                        generation: ConfigGeneration::INITIAL,
+                        system_sha256: "a".repeat(64),
+                        tools_sha256: "b".repeat(64),
+                    });
+                }
+                events.extend([
+                    Event::ReasoningStart {
+                        session,
+                        message: assistant,
+                        part: thought,
+                        reason: None,
+                    },
+                    Event::ReasoningReplace {
+                        session,
+                        message: assistant,
+                        part: thought,
+                        text: "half a plan".to_string(),
+                    },
+                    Event::ReasoningEnd {
+                        session,
+                        message: assistant,
+                        part: thought,
+                        provider_data: None,
+                    },
+                ]);
+                let notice_events = |notice| {
+                    super::super::round::system_message_events(session, notice, notice_text.clone())
+                };
+                let early = notice_first.then(MessageId::new);
+                if let Some(notice) = early {
+                    events.extend(notice_events(notice));
+                }
+                let marker = MessageId::new();
+                events.push(started(marker, Role::System));
+                events.extend(text(marker, "HYA_COMPACTED_CONTEXT\nsummary"));
+                events.push(Event::ContextCompacted {
+                    session,
+                    message: marker,
+                    strategy: CompactionStrategy::Rewrite,
+                    from_message: assistant,
+                    to_message: assistant,
+                    folded_count: 1,
+                    input_tokens_est: 100,
+                    threshold: 75,
+                    step_cut: Some(StepCut {
+                        through_part: thought,
+                        kept_head: user,
+                    }),
+                });
+                let notice = early.unwrap_or_else(MessageId::new);
+                if !notice_first {
+                    events.extend(notice_events(notice));
+                }
+                let envelopes: Vec<_> = (1..)
+                    .zip(events)
+                    .map(|(seq, event)| Envelope {
+                        seq: EventSeq(seq),
+                        ts_millis: 0,
+                        event,
+                    })
+                    .collect();
+                let sent = projection_to_messages(
+                    &AgentName::new(agent),
+                    &Projection::from_events(&envelopes),
+                    &ModelRef::new("fake"),
+                    &AttachmentData::new(),
+                );
+                let delivered = matches!(
+                    sent.last(),
+                    Some(Message::User { id, parts }) if *id == notice && matches!(
+                        parts.as_slice(),
+                        [Part::Text { text, .. }] if *text == notice_text
+                    )
+                );
+                assert_eq!(
+                    delivered, !notice_first,
+                    "{agent}, notice first: {notice_first}: {sent:?}"
+                );
+            }
+        }
+    }
+
+    /// A native compaction (no step cut) that folds the turn's assistant
+    /// behind its marker keeps the cut notice minted after it, until the
+    /// assistant records a newer part; a notice minted before it stays out.
+    #[test]
+    fn deadline_cut_notice_survives_a_native_compaction_of_the_turn() {
+        use hya_proto::{
+            AgentName, CompactionStrategy, ConfigGeneration, Envelope, Event, EventSeq, MessageId,
+            PartId, SessionId, SessionKind,
+        };
+        let session = SessionId::new();
+        let started = |message, role| Event::MessageStarted {
+            session,
+            message,
+            role,
+            agent: None,
+            model: None,
+        };
+        let text = |message, delta: &str| {
+            let part = PartId::new();
+            [
+                Event::TextStart {
+                    session,
+                    message,
+                    part,
+                },
+                Event::TextDelta {
+                    session,
+                    message,
+                    part,
+                    delta: delta.to_string(),
+                },
+            ]
+        };
+        let notice_text = super::super::deadline_cut_notice(
+            &super::super::DeadlineCut {
+                stage: hya_tool::deadline::Stage::WrapUp,
+                reasoning: "half a plan".to_string(),
+            },
+            None,
+        );
+        let user_texts = |messages: &[Message]| -> Vec<String> {
+            messages
+                .iter()
+                .filter_map(|message| match message {
+                    Message::User { parts, .. } => Some(user_text(parts)),
+                    _ => None,
+                })
+                .collect()
+        };
+        for (agent, full) in [(super::super::AGENT, false), ("build", true)] {
+            let (user, assistant, thought) = (MessageId::new(), MessageId::new(), PartId::new());
+            let mut events = vec![Event::SessionCreated {
+                session,
+                parent: None,
+                agent: AgentName::new(agent),
+                model: ModelRef::new("fake"),
+                workdir: "/tmp".to_string(),
+                project: None,
+                kind: SessionKind::Project,
+            }];
+            events.push(started(user, Role::User));
+            events.extend(text(user, "do the task"));
+            events.push(started(assistant, Role::Assistant));
+            if full {
+                events.push(Event::TurnBindingRecorded {
+                    session,
+                    message: assistant,
+                    generation: ConfigGeneration::INITIAL,
+                    system_sha256: "a".repeat(64),
+                    tools_sha256: "b".repeat(64),
+                });
+            }
+            events.extend([
+                Event::ReasoningStart {
+                    session,
+                    message: assistant,
+                    part: thought,
+                    reason: None,
+                },
+                Event::ReasoningReplace {
+                    session,
+                    message: assistant,
+                    part: thought,
+                    text: "half a plan".to_string(),
+                },
+                Event::ReasoningEnd {
+                    session,
+                    message: assistant,
+                    part: thought,
+                    provider_data: None,
+                },
+            ]);
+            let early = "[hya] Reasoning interrupted at budget checkpoint: an older one";
+            events.extend(super::super::round::system_message_events(
+                session,
+                MessageId::new(),
+                early.to_string(),
+            ));
+            let marker = MessageId::new();
+            events.push(started(marker, Role::System));
+            events.extend(text(marker, "HYA_COMPACTED_CONTEXT\nsummary"));
+            events.push(Event::ContextCompacted {
+                session,
+                message: marker,
+                strategy: CompactionStrategy::Native,
+                from_message: user,
+                to_message: assistant,
+                folded_count: 2,
+                input_tokens_est: 100,
+                threshold: 75,
+                step_cut: None,
+            });
+            events.extend(super::super::round::system_message_events(
+                session,
+                MessageId::new(),
+                notice_text.clone(),
+            ));
+            let messages = |events: &[Event]| {
+                let envelopes: Vec<_> = (1..)
+                    .zip(events.iter().cloned())
+                    .map(|(seq, event)| Envelope {
+                        seq: EventSeq(seq),
+                        ts_millis: 0,
+                        event,
+                    })
+                    .collect();
+                projection_to_messages(
+                    &AgentName::new(agent),
+                    &Projection::from_events(&envelopes),
+                    &ModelRef::new("fake"),
+                    &AttachmentData::new(),
+                )
+            };
+            let sent = messages(&events);
+            assert_eq!(
+                user_texts(&sent),
+                vec![notice_text.clone()],
+                "{agent}: {sent:?}"
+            );
+            assert!(matches!(sent.last(), Some(Message::User { .. })), "{agent}");
+            events.extend(text(assistant, "acting on it"));
+            let later = messages(&events);
+            assert!(user_texts(&later).is_empty(), "{agent}: {later:?}");
+        }
+    }
+
+    /// The deadline-cut notice quotes at most the last 1,200 characters of
+    /// the cut reasoning, whole characters only.
+    #[test]
+    fn deadline_cut_notice_quotes_the_end_of_long_reasoning() {
+        let cut = |reasoning: String| {
+            super::super::deadline_cut_notice(
+                &super::super::DeadlineCut {
+                    stage: hya_tool::deadline::Stage::Final,
+                    reasoning,
+                },
+                None,
+            )
+        };
+        let long = cut(format!("{} so write the file", "é".repeat(1_300)));
+        let Some((_, tail)) = long.split_once("Where your thinking stopped (its end):\n…") else {
+            panic!("no quoted tail: {long}");
+        };
+        assert_eq!(tail.chars().count(), 1_200);
+        assert!(tail.ends_with("é so write the file"), "{tail}");
+        let short = cut("  check the header  ".to_string());
+        assert!(short.ends_with("Where your thinking stopped:\ncheck the header"));
+        assert!(!cut(" \n".to_string()).contains("Where your thinking stopped"));
     }
 
     /// A partless round that ends with an end continuation sends the
