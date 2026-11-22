@@ -327,3 +327,40 @@ async fn headless_tool_surface_preserves_unknown_and_malformed_call_errors() {
         "input"
     );
 }
+
+#[tokio::test]
+async fn completion_check_runs_once_only_after_tool_use_with_time_to_spare() {
+    let check = "[hya] Completion check, sent once";
+    for (budget, tool, should_check) in [
+        ("900", true, true),
+        ("180", true, false),
+        ("900", false, false),
+    ] {
+        let mut script = Vec::new();
+        if tool {
+            script.push(bash("echo verified > checked"));
+        }
+        script.extend([
+            text_step("Done."),
+            text_step("Checked."),
+            text_step("UNUSED"),
+        ]);
+        let (env, _, requests) = run_lead(script, &["--time-budget", budget]).await;
+        assert_eq!(
+            requests.iter().filter(|r| r.contains(check)).count(),
+            usize::from(should_check)
+        );
+        assert_eq!(
+            requests.len(),
+            1 + usize::from(tool) + usize::from(should_check)
+        );
+        if tool {
+            assert_eq!(
+                std::fs::read_to_string(env.backend.project.join("checked"))
+                    .as_deref()
+                    .ok(),
+                Some("verified\n")
+            );
+        }
+    }
+}

@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use hya_proto::{
-    AgentName, Event, FinishReason, MessageId, ModelRef, Projection, SessionId, TokenUsage,
-    ToolSchema,
+    AgentName, Event, FinishReason, MessageId, ModelRef, PartProjection, Projection, SessionId,
+    TokenUsage, ToolSchema,
 };
 use hya_provider::{CompletionRequest, EventStream, ProviderError};
 use hya_store::ActorClaim;
@@ -45,9 +45,6 @@ use crate::kernel::{self, Failure, Harness, Round, ToolCall, ToolGate, View};
 use crate::prompt::{PromptEnv, discover_context_files, render_environment_and_context, today};
 use crate::runtime_registry::CompiledResourceView;
 use crate::workflow::WorkflowTurnRoute;
-
-/// Maximum additional provider opens for one engine round.
-const MAX_ROUND_RETRIES: u32 = 2;
 
 impl SessionEngine {
     /// Drive the streaming rounds of one turn activation on the kernel loop,
@@ -212,6 +209,9 @@ impl SessionEngine {
             offered: Vec::new(),
             permit: None,
             retries: 0,
+            empty_turns: 0,
+            output_tokens: None,
+            last_finish: None,
             total_tokens: None,
             effort_fallback,
         };
@@ -277,7 +277,10 @@ struct TurnHarness<'a> {
     /// blocked in the `task` tool (awaiting its children) holds none.
     permit: Option<OwnedSemaphorePermit>,
     /// Retries of the current round.
-    retries: u32,
+    retries: usize,
+    empty_turns: usize,
+    output_tokens: Option<u64>,
+    last_finish: Option<FinishReason>,
     total_tokens: Option<TokenUsage>,
     effort_fallback: super::super::TurnEffortFallback,
 }
@@ -607,40 +610,77 @@ impl Harness for TurnHarness<'_> {
     }
 
     async fn failed(&mut self, failure: &Failure) -> Result<bool, CoreError> {
-        // Opening already applies model fallback and finalizes any failed Workflow route.
-        if !failure.step_started {
+        // Workflow opens have already finalized on error in open().
+        if self.workflow_route.is_some() && !failure.step_started {
             return Ok(false);
         }
-        let retryable = self.retries < MAX_ROUND_RETRIES
+        let deadline = hya_tool::deadline::current();
+        if let Some(&wait) = kernel::ROUND_RETRY_WAITS.get(self.retries)
             && !failure.saw_tool_call
-            && !failure.saw_text
-            && is_retryable_round_error(&failure.error);
-        if !retryable {
-            if let Some(route) = self.workflow_route {
-                route
-                    .finalize(Some(workflow_failure_class(&failure.error, self.cancel)))
+            && is_retryable_round_error(&failure.error)
+            && !self.cancel.is_cancelled()
+            && deadline.is_none_or(|d| d.remaining().saturating_sub(d.final_window()) > wait)
+        {
+            self.permit = None;
+            if failure.step_started {
+                let session = self.session;
+                let message = self.message;
+                let discarded: Vec<_> = self
+                    .engine
+                    .store
+                    .with_projection(session, |projection| {
+                        projection
+                            .session
+                            .messages
+                            .iter()
+                            .find(|row| row.id == message)
+                            .and_then(|row| row.parts.get(row.last_step_start?..))
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|part| Event::PartDeleted {
+                                session,
+                                message,
+                                part: part.id(),
+                            })
+                            .collect()
+                    })
                     .await?;
+                if !discarded.is_empty() {
+                    self.engine
+                        .emit_batch_for_actor(self.actor_claim, session, discarded)
+                        .await?;
+                }
             }
-            return Ok(false);
+            self.retries += 1;
+            tracing::warn!(session = %self.session, retry = self.retries, error = %failure.error,
+                "provider round failed; waiting {wait:?} before retry");
+            tokio::select! {
+                biased;
+                () = self.cancel.cancelled() => {}
+                () = tokio::time::sleep(wait) => {}
+            }
+            if !self.cancel.is_cancelled()
+                && deadline.is_none_or(|d| d.stage() < hya_tool::deadline::Stage::Final)
+            {
+                return Ok(true);
+            }
         }
-        self.retries += 1;
-        tracing::warn!(
-            session = %self.session,
-            retry = self.retries,
-            "provider round failed before text or tool output; retrying"
-        );
-        let delay = std::time::Duration::from_secs(1 << (self.retries - 1))
-            + std::time::Duration::from_millis(50 * u64::from(self.retries));
-        tokio::select! {
-            biased;
-            () = self.cancel.cancelled() => Err(CoreError::Cancelled),
-            () = tokio::time::sleep(delay) => Ok(true),
+        if let Some(route) = self.workflow_route {
+            route
+                .finalize(Some(workflow_failure_class(&failure.error, self.cancel)))
+                .await?;
         }
+        Ok(false)
     }
 
     async fn collected(&mut self, round: &Round) -> Result<(), CoreError> {
         if let Some(route) = self.workflow_route {
             route.finalize(None).await?;
+        }
+        self.last_finish = Some(round.finish);
+        self.output_tokens = round.tokens.map(|tokens| tokens.output);
+        if !round.tool_calls.is_empty() {
+            self.empty_turns = 0;
         }
         if let Some(tokens) = round.tokens {
             self.total_tokens
@@ -656,7 +696,45 @@ impl Harness for TurnHarness<'_> {
     }
 
     async fn before_end(&mut self) -> Result<bool, CoreError> {
-        Ok(false)
+        let projection = self
+            .engine
+            .store
+            .read_projection_shared(self.session)
+            .await?;
+        let parts = projection
+            .session
+            .messages
+            .iter()
+            .find(|row| row.id == self.message)
+            .and_then(|row| row.parts.get(row.last_step_start.unwrap_or(0)..))
+            .unwrap_or_default();
+        if parts.iter().any(
+            |part| matches!(part, PartProjection::Text { text, .. } if !text.trim().is_empty()),
+        ) {
+            self.empty_turns = 0;
+            return Ok(false);
+        }
+        let has_reasoning = parts
+            .iter()
+            .any(|part| matches!(part, PartProjection::Reasoning { .. }));
+        if (!has_reasoning && self.last_finish != Some(FinishReason::Length))
+            || self.empty_turns >= kernel::EMPTY_TURN_NOTICES
+            || self.cancel.is_cancelled()
+            || hya_tool::deadline::current()
+                .is_some_and(|d| d.stage() >= hya_tool::deadline::Stage::Final)
+        {
+            return Ok(false);
+        }
+        self.empty_turns += 1;
+        let notice = kernel::empty_turn_notice(self.output_tokens);
+        self.engine
+            .emit_batch_for_actor(
+                self.actor_claim,
+                self.session,
+                kernel::round::system_message_events(self.session, MessageId::new(), notice),
+            )
+            .await?;
+        Ok(true)
     }
 
     fn done(&self) -> bool {
@@ -689,22 +767,20 @@ impl Harness for TurnHarness<'_> {
     }
 }
 
-/// Mid-stream retries are limited to link failures that are safe to replay before
-/// any assistant text or tool request was delivered. Decode is deliberately
+/// Retry transient opens and interrupted streams before a tool request. Decode is deliberately
 /// narrow: only the known truncated response-body diagnostics are included.
 fn is_retryable_round_error(error: &CoreError) -> bool {
     let CoreError::Provider(error) = error else {
         return false;
     };
     match error.as_ref() {
-        ProviderError::Transport(_) => true,
-        ProviderError::HttpStatus { status, .. } => *status == 429 || (500..=599).contains(status),
+        ProviderError::StreamInterrupted(_) => true,
         ProviderError::Decode(message) => {
             let message = message.to_ascii_lowercase();
             message == "error decoding response body"
                 || message.contains("unexpected eof")
                 || message.contains("unexpected end of file")
         }
-        _ => false,
+        _ => error.is_retryable_before_stream(),
     }
 }

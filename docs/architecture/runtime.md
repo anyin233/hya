@@ -424,16 +424,19 @@ cancellation is observed, or execution returns an error.
 
 ### Provider round retry
 
-If a provider stream fails after opening but before any text part or tool call,
-the engine may retry that round up to **two** times. Eligible failures are
-transport failures, HTTP 429/5xx failures, and decode failures whose diagnostic
-is exactly `error decoding response body`, `unexpected eof`, or `unexpected end
-of file`. Each failed attempt appends `StepFinished { finish: error }`; the
-engine waits approximately 1s then 2s (with a small jitter) before opening a
-fresh stream and emitting the next `StepStarted`. Cancellation is observed
-during the wait. Text, tool calls, cancellation, actor-claim loss, store/tool
-errors, and any other decode/HTTP errors are never retried. Exhausting the
-budget follows the normal terminal error path.
+Direct full-mode turns retry transient provider open errors and interruptions
+during a stream until the first tool request. Eligible errors include transport
+failures, HTTP 429/5xx, interrupted streams and truncated response-body
+diagnostics. Workflow routes finalize an open error immediately and can retry
+an interrupted stream before a tool request. A started attempt closes with
+`StepFinished { finish: error }`. Its partial parts are removed with
+`PartDeleted` before waiting 5, 10, 20, 40, 60, 60, 60 and 60 seconds on
+successive retries. Cancellation and the run's Final window bound the waits.
+
+When the final model step contains reasoning only or reaches its length limit
+without an answer, the engine appends a system notice asking for a tool call
+or an answer and starts another step. It does this at most twice consecutively
+before the Final window. A content-free stop passes through to the caller.
 
 > **Stream permit lifetime (deadlock invariant)**  
 > The governor stream permit is held **only** around provider streaming and is

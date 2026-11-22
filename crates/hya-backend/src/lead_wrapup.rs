@@ -42,6 +42,7 @@ pub(crate) async fn run_lead(
     let (mut ignored, mut notices) = (0u32, 0u32);
     let mut last_notice: Option<MessageId> = None;
     let mut initial_prompt = Some(initial_prompt);
+    let mut completion_checked = false;
     let deadline = hya_tool::deadline::current();
     loop {
         let finish = engine
@@ -65,6 +66,30 @@ pub(crate) async fn run_lead(
         let projection = engine.read_projection_shared(session).await?;
         let pending = Pending::of(&projection, finish);
         if pending.is_empty() {
+            if !completion_checked
+                && deadline.is_some_and(|d| d.remaining() > 2 * d.final_window())
+                && projection
+                    .session
+                    .messages
+                    .iter()
+                    .flat_map(|row| &row.parts)
+                    .any(|part| matches!(part, PartProjection::Tool { .. }))
+                && !projection.session.messages.iter().any(|row| {
+                    row.role == Role::System
+                        && row.parts.iter().any(|part| {
+                            matches!(part, PartProjection::Text { text, .. }
+                        if hya_core::kernel::is_completion_check(text))
+                        })
+                })
+                && !cancel.is_cancelled()
+            {
+                completion_checked = true;
+                engine
+                    .inject_system_message(session, hya_core::kernel::COMPLETION_CHECK.to_string())
+                    .await?;
+                last_notice = None;
+                continue;
+            }
             return Ok(finish);
         }
         if let Some(notice) = last_notice {

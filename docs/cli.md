@@ -917,6 +917,12 @@ added by the continuation driver; late-stage worker guidance still asks for
 archiving work that cannot be integrated in time.
 These guards add no CLI flags, RPC routes, or wire types; `--json` includes the
 notices and continuation events in the same session's canonical JSONL stream.
+In direct full mode, a lead that used a tool receives one completion check when
+it would otherwise stop and more than two Final windows remain. For example,
+`hya exec --time-budget 900 "build and verify the package"` can use that
+extra turn to compare the files it produced against the request. The logged
+system notice suppresses duplicate checks when the session continues.
+
 Routed runs retain the server's single-prompt-turn behavior.
 
 `--time-budget <SECS>` accepts a positive integer (`u64`, at least 1). It
@@ -968,10 +974,13 @@ again, sleep briefly in a later call before reading the output. Nothing
 stops a command left running, or a job a command started with `&`, when
 the run ends normally.
 [Kernel tool reference](kernel.md#built-in-tools)
-In full mode the cap includes Bash's omitted timeout and `timeout: 0`. Bash reports
-`metadata.deadlineCapped: true` when shortened and explains the effective
-limit in `<shell_metadata>`. For example, a 900-second run with 200 seconds
-left caps a 300-second Bash call to about 155 seconds, reserving 45 seconds.
+In full mode the one-tenth wait (minimum five seconds) also applies to
+the default and to `timeout: 0`. In a 900-second run with 200 seconds left,
+a Unix non-PTY call that requests 300 seconds yields after 90 seconds with
+`metadata.stillRunning: true` and paths for live output and the exit code.
+When the end-of-budget limit shortens that wait, Bash reports
+`metadata.deadlineCapped: true` and kills the group at the effective limit.
+[Budgeted Bash timeouts](base-tools.md#budgeted-bash-timeouts)
 
 The flag is for an in-process run. When a running daemon owns `--db`, it exits
 75 through the normal unroutable-command diagnostic before creating a session;

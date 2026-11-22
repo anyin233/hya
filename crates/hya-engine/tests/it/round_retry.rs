@@ -31,6 +31,8 @@ enum Item {
     Text(&'static str),
     Tool,
     Error,
+    Interrupted,
+    Fatal,
 }
 struct ScriptedProvider {
     scripts: Mutex<VecDeque<Vec<Item>>>,
@@ -98,6 +100,10 @@ impl Provider for ScriptedProvider {
                     input: json!({}),
                     provider_data: None,
                 })),
+                Item::Interrupted => out.push(Err(ProviderError::StreamInterrupted(
+                    "connection closed".into(),
+                ))),
+                Item::Fatal => out.push(Err(ProviderError::Decode("invalid schema".into()))),
                 Item::Error => out.push(Err(ProviderError::Decode(
                     "error decoding response body".into(),
                 ))),
@@ -317,24 +323,72 @@ async fn full_mode_request_replays_to_recorded_view() {
 }
 
 #[tokio::test]
-async fn does_not_retry_after_text() {
-    let (engine, agent, session, opens) =
-        fixture(vec![vec![Item::Text("partial"), Item::Error]]).await;
-    assert!(
+async fn interrupted_partial_text_is_deleted_before_retry() -> Result<(), CoreError> {
+    let (engine, agent, session, opens) = fixture(vec![
+        vec![Item::Text("partial"), Item::Interrupted],
+        vec![Item::Text("final answer")],
+    ])
+    .await;
+    assert_eq!(
         engine
             .run_turn(session, &agent, CancellationToken::new())
-            .await
-            .is_err()
+            .await?,
+        FinishReason::Stop
     );
-    assert_eq!(*opens.lock().unwrap(), 1);
+    assert_eq!(*opens.lock().unwrap_or_else(|e| e.into_inner()), 2);
+    let events = engine.store().replay(session).await?;
+    let deleted = events
+        .iter()
+        .position(|e| matches!(e.event, Event::PartDeleted { .. }));
+    let retry = events
+        .iter()
+        .rposition(|e| matches!(e.event, Event::StepStarted { .. }));
+    assert!(
+        deleted
+            .zip(retry)
+            .is_some_and(|(deleted, retry)| deleted < retry)
+    );
+    let projection = Projection::from_events(&events);
+    let assistant_texts: Vec<_> = projection
+        .session
+        .messages
+        .iter()
+        .filter(|row| row.role == hya_proto::Role::Assistant)
+        .flat_map(|row| &row.parts)
+        .filter_map(|part| match part {
+            hya_proto::PartProjection::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(assistant_texts, ["final answer"]);
+    Ok(())
 }
 
 #[tokio::test]
-async fn three_reasoning_failures_are_terminal_error_once() {
+async fn only_reasoning_or_length_requests_empty_turn_rescue() -> Result<(), CoreError> {
+    for (first, expected) in [(Item::Reasoning, 2), (Item::Text(""), 1)] {
+        let (engine, agent, session, opens) =
+            fixture(vec![vec![first], vec![Item::Text("rescued")]]).await;
+        assert_eq!(
+            engine
+                .run_turn(session, &agent, CancellationToken::new())
+                .await?,
+            FinishReason::Stop
+        );
+        assert_eq!(*opens.lock().unwrap_or_else(|e| e.into_inner()), expected);
+        let projection = engine.store().read_projection(session).await?;
+        let notices = projection.session.messages.iter().flat_map(|m| &m.parts).filter(|p|
+            matches!(p, hya_proto::PartProjection::Text { text, .. } if kernel::is_empty_turn_notice(text))).count();
+        assert_eq!(notices, expected - 1);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn terminal_failure_after_retry_closes_once() {
     let (engine, agent, session, opens) = fixture(vec![
         vec![Item::Reasoning, Item::Error],
-        vec![Item::Reasoning, Item::Error],
-        vec![Item::Reasoning, Item::Error],
+        vec![Item::Reasoning, Item::Fatal],
     ])
     .await;
     assert!(
@@ -343,7 +397,7 @@ async fn three_reasoning_failures_are_terminal_error_once() {
             .await
             .is_err()
     );
-    assert_eq!(*opens.lock().unwrap(), 3);
+    assert_eq!(*opens.lock().unwrap_or_else(|e| e.into_inner()), 2);
     let events = engine.store().replay(session).await.unwrap();
     assert_eq!(
         events

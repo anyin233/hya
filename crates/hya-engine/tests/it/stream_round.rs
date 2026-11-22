@@ -176,7 +176,7 @@ impl Provider for PartialFailureProvider {
                 part,
                 delta: "partial".to_string(),
             }),
-            Err(ProviderError::Transport("mid-stream failure".to_string())),
+            Err(ProviderError::Decode("invalid event payload".to_string())),
         ])))
     }
 }

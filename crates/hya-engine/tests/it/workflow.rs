@@ -157,7 +157,9 @@ impl Provider for RecordingProvider {
         let reply = if directive_of(&user_text).starts_with("EXPLORE") {
             "EXPLORER_REPORT"
         } else if user_text.contains("FAIL_ME") {
-            return Err(ProviderError::Transport("member scripted failure".into()));
+            return Err(ProviderError::Incompatible(
+                "member scripted failure".into(),
+            ));
         } else if user_text.contains("independent verifier") {
             if self.hang_verifier.load(Ordering::SeqCst) {
                 self.verifier_started.notify_one();
@@ -179,7 +181,7 @@ impl Provider for RecordingProvider {
                 format!("{{\"met\": {met}, \"reason\": \"scripted\"}}"),
             );
         } else if user_text.contains("FAIL_LOOP_RESUME") {
-            return Err(ProviderError::Transport(
+            return Err(ProviderError::Incompatible(
                 "resumed loop worker scripted failure".into(),
             ));
         } else {
