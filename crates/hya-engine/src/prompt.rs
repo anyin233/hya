@@ -97,7 +97,7 @@ pub fn team_quick_reference(has: impl Fn(&str) -> bool, depth: u32) -> Option<St
     let mut lines: Vec<&str> = Vec::new();
     if has("task") {
         lines.push(
-            "- Batch independent work in one `task` call with tasks[] and shared context; each item has its own prompt, subagent_type and optional overrides. Assign non-overlapping scopes and acceptance criteria. `task` is non-blocking: it returns the children's handles after registration (choose the agent with its subagent_type parameter; the harness names the member <subagent_type>-<operator>, so subagent_type scout becomes scout-suzuran under your path). Running means launched, not finished. Continue independent work before `wait`; do not spawn/wait serially for independent siblings. Results arrive later as mail — watch for `[NEW MAIL]` notices appended to tool results.",
+            "- A `task` result marked running acknowledges launch. Continue independent work while the children run; use their returned handles for follow-up. Results arrive later as mail.",
         );
     }
     if mail {
@@ -280,14 +280,13 @@ mod tests {
     }
 
     #[test]
-    fn team_reference_chooses_the_agent_by_subagent_type() {
+    fn team_reference_explains_launch_and_delivery() {
         let out = reference(&FULL_TOOLS, 0);
         assert!(
-            out.contains("choose the agent with its subagent_type parameter")
-                && out.contains("<subagent_type>-<operator>"),
+            out.contains("running acknowledges launch")
+                && out.contains("Results arrive later as mail"),
             "{out}"
         );
-        assert!(!out.contains("name parameter"), "{out}");
     }
 
     #[test]

@@ -90,7 +90,9 @@ their id, kind, version, digest, exported ids, and
 `immutable: true, installable: false`. They do not enter the installed bundle
 catalog and cannot be upgraded or uninstalled through public bundle commands.
 
-The `hya-main` and `hya-task` prompts guide delegation toward one `task`
+The scout, task worker and reviewer stay within their assigned workspace and task inputs, including during read-only inspection. Their briefs exclude credentials, harness internals and unrelated system paths.
+
+The `task` tool describes how to launch one
 call containing independent `tasks[]`, with shared `context` and per-member
 scope, ownership and acceptance criteria. Copy the original hard constraints,
 edge-case notes and negative requirements verbatim into `context` or the
