@@ -22,8 +22,23 @@ export interface PasteSettings {
   wrap: boolean
 }
 
+/** Sections of the startup list (state/startup.ts), in their default order. */
+export const startupSections = ["context", "skills", "commands", "mcp", "bundles", "extensions"] as const
+export type StartupSection = typeof startupSections[number]
+
+/** `[startup]`: the list at the start of the transcript. */
+export interface StartupSettings {
+  enabled: boolean
+  /** `compact`: one line per section; `full`: grouped by source with paths. */
+  resources: "compact" | "full"
+  sections: StartupSection[]
+  /** Only problem items. */
+  quiet: boolean
+}
+
 /** The resolved structure the TUI draws. Field names match `tui.toml`. */
 export interface TuiStructure {
+  startup: StartupSettings
   statusline: { enabled: boolean; segments: StatusSegment[]; placement: "below" | "band" }
   composer: { style: "box" | "band"; border_info: StatusSegment[]; paste: PasteSettings }
   sidebar: { enabled: boolean }
@@ -31,7 +46,7 @@ export interface TuiStructure {
 export type ComponentName = keyof TuiStructure
 
 /** Components whose `enabled` switch `/set <component> on|off` changes for the session. */
-export const switchableComponents = ["statusline", "sidebar"] as const satisfies readonly ComponentName[]
+export const switchableComponents = ["startup", "statusline", "sidebar"] as const satisfies readonly ComponentName[]
 
 export const builtinPresetNames = ["minimal", "statusline", "dock", "workspace"] as const
 export type BuiltinPreset = typeof builtinPresetNames[number]
@@ -41,6 +56,7 @@ export const defaultPreset: BuiltinPreset = "statusline"
 export const availablePresets: readonly BuiltinPreset[] = ["minimal", "statusline", "workspace"]
 
 const base = (): TuiStructure => ({
+  startup: { enabled: true, resources: "compact", sections: [...startupSections], quiet: false },
   statusline: { enabled: true, segments: [...defaultSegments], placement: "below" },
   composer: { style: "box", border_info: [], paste: { collapse_lines: 10, collapse_chars: 1000, wrap: true } },
   sidebar: { enabled: false },

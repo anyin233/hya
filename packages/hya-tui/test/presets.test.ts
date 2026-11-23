@@ -13,6 +13,7 @@ test("statusline is the default; dock is reserved until the dock components exis
 
 test("the built-in presets differ only in the components ADR-0036 lists", () => {
   expect(builtinPreset("statusline")).toEqual({
+    startup: { enabled: true, resources: "compact", sections: ["context", "skills", "commands", "mcp", "bundles", "extensions"], quiet: false },
     statusline: { enabled: true, segments: [...defaultSegments], placement: "below" },
     composer: { style: "box", border_info: [], paste: { collapse_lines: 10, collapse_chars: 1000, wrap: true } },
     sidebar: { enabled: false },

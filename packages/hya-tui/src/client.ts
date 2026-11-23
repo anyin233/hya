@@ -429,6 +429,16 @@ export interface AgentModelState {
   effortSource?: string
 }
 
+/** `SkillSummary` of `Bootstrap.skills` (the TUI never reads `content`). */
+export interface SkillSummary {
+  name: string
+  description?: string
+  /** `builtin`, `user`, `project`, or `bundle`; older backends say `builtin` for user skills. */
+  source?: string
+  /** The skill file (`<built-in>` for compiled-in skills). */
+  location?: string
+}
+
 export interface CommandSummary {
   name: string
   description?: string
@@ -472,6 +482,10 @@ export interface Bootstrap {
   agents?: AgentSummary[]
   models?: ModelSummary[]
   interactions?: Interaction[]
+  /** The startup list's `[Skills]` (state/startup.ts). */
+  skills?: SkillSummary[]
+  /** The startup list's `[Commands]` (`source: command`). */
+  commands?: CommandSummary[]
 }
 
 export interface StreamEvent {

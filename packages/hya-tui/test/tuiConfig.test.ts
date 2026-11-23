@@ -111,6 +111,9 @@ test("bad items are ignored one by one; later-version keys say so; the rest appl
     'style = "cards"',
     "[startup]",
     "quiet = true",
+    'sections = ["skills", "nope"]',
+    "[todos]",
+    "max_rows = 2",
     "[keys.workspace]",
     '"alt+s" = "/sessions"',
   ].join("\n")))
@@ -119,8 +122,9 @@ test("bad items are ignored one by one; later-version keys say so; the rest appl
   expect(resolved.warnings).toEqual([
     "version 2 is newer than this TUI (1); reading the keys it knows",
     "Unknown key colour; ignored",
-    "[startup] is not supported in this version; ignored",
+    "[todos] is not supported in this version; ignored",
     "[keys] is not supported in this version; ignored",
+    "startup.sections: unknown section nope; ignored",
     "statusline.enabled: expected true or false; ignored",
     'statusline.placement = "band" is not supported in this version; ignored',
     "statusline.segments: unknown segment nope; ignored",
@@ -130,6 +134,7 @@ test("bad items are ignored one by one; later-version keys say so; the rest appl
     "composer.attachments is not supported in this version; ignored",
   ])
   expect(resolved.structure.composer.paste).toEqual({ collapse_lines: 5, collapse_chars: 1000, wrap: true })
+  expect(resolved.structure.startup).toMatchObject({ quiet: true, sections: ["skills"] })
   expect(resolved.sources["composer.paste.collapse_lines"]).toBe("tui.toml")
   expect(resolved.sources["composer.paste.wrap"]).toBe("preset statusline")
 })

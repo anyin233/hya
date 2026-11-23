@@ -10,8 +10,12 @@ for (const width of [1100, 700]) {
     await term.press("Enter")
     await expect.poll(() => term.find("Commands")).toBeNull()
     await term.waitForText("No messages yet. Type a prompt below.")
-    // Session context never sits above the transcript.
-    await expect.poll(async () => (await term.find("No messages yet. Type a prompt below."))?.row).toBe(1)
+    // Session context never sits above the transcript: only the startup list (ADR-0036) comes first.
+    await expect.poll(async () => {
+      const lines = await term.lines()
+      const at = lines.findIndex((line) => line.includes("No messages yet. Type a prompt below."))
+      return at > 0 && lines.slice(0, at).every((line) => !line.trim() || /^\s*\[(Skills|Slash commands|Bundles|Extensions|MCP|Context)\]/.test(line))
+    }).toBe(true)
     expect(await term.find("hya ·")).toBeNull()
     expect(await term.find("Layout · 5 panes")).toBeNull()
     expect(await term.find("Alt+arrows select pane")).toBeNull()
@@ -25,7 +29,7 @@ for (const width of [1100, 700]) {
     await expect.poll(async () => (await term.lines())[rows - 1]).toMatch(/^ \S.* · manual\b/)
     await term.resize(width === 1100 ? 700 : 1100, 640)
     await term.waitForText("clean input draft")
-    expect((await term.find("No messages yet. Type a prompt below."))!.row).toBeLessThanOrEqual(2)
+    await term.waitForText("No messages yet. Type a prompt below.")
     // Layout editing belongs to the workspace preset: refused without a usage dump in the transcript.
     await term.press("Control+x")
     await term.type("/layout assign invalid")

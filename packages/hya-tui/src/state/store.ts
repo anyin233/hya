@@ -37,6 +37,7 @@ import type {
   ProviderSummary,
   SavedRule,
   SessionInfo,
+  SkillSummary,
   TodoItem,
   TokenUsage,
   VcsStatus,
@@ -117,6 +118,10 @@ export interface AppState {
   readonly structure: TuiStructure
   /** Lines at the start of the transcript that outlive session switches: `tui.toml` warnings and one-time notices. */
   readonly startupNotices: readonly string[]
+  /** `Bootstrap.skills`, for the startup list's `[Skills]` (state/startup.ts). */
+  readonly skills: readonly SkillSummary[]
+  /** The startup list of what was loaded has its data: MCP settled and bundles listed (app/controller.ts `loadStartupResources`). */
+  readonly startupReady: boolean
   readonly apiOutput: string
   readonly status: string
   /** The full-screen Provider View (`/key`, state/providers.ts), while open. */
@@ -342,6 +347,8 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     paneLayout: defaultPaneLayout(),
     structure: builtinPreset("workspace"),
     startupNotices: [],
+    skills: [],
+    startupReady: false,
     apiOutput: "Use /api METHOD /v1/path [JSON object] to call any HTTP/JSON endpoint.\n\n" + operations(),
     status: startupStatus,
     providerView: undefined,
@@ -556,6 +563,7 @@ export function createAppStore() {
         set("interactions", mergeInteractions(bootstrap.interactions ?? [], liveAsks, answered))
         set("serverVersion", bootstrap.location?.version ?? "")
         set("serverPid", bootstrap.location?.pid || undefined)
+        if (bootstrap.skills) set("skills", bootstrap.skills)
       })
     },
 
@@ -847,6 +855,9 @@ export function createAppStore() {
     setPaneLayout(layout: PaneLayout): void { set("paneLayout", normalizePaneFocus(layout)) },
     setStructure(structure: TuiStructure): void { set("structure", structure) },
     setStartupNotices(lines: readonly string[]): void { set("startupNotices", lines) },
+    setStartupReady(ready: boolean): void { set("startupReady", ready) },
+    /** A muted notice at the end of the transcript (`/resources`); gone on a session switch. */
+    addTranscriptNotice(text: string): void { addNotice(text, `notice-${++noticeIds}`) },
     setStatus(text: string): void { set("status", text) },
     setApiOutput(text: string): void { set("apiOutput", text) },
 
