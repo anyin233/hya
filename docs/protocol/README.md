@@ -1385,8 +1385,14 @@ one-time ticket. `GET /v1/pty/{id}/connect?ticket=...` upgrades to a
 WebSocket speaking the same frames as the gRPC `StreamPty` rpc:
 
 - client → server: `{"input": "<base64>"}`, `{"resize": {"cols": 120,
-  "rows": 40}}`, `{"ping": true}`
-- server → client: `{"output": "<base64>"}`, `{"exit": 0}`, `{"pong": true}`
+  "rows": 40}}`, `{"ping": true}`, `{"upload": {"id", "name", "mime",
+  "data"}}`
+- server → client: `{"output": "<base64>"}`, `{"exit": 0}`, `{"pong": true}`,
+  `{"uploadFailed": {"id", "reason"}}`
+
+`upload` is the WebUI host's file upload (ADR-0037, docs/tui-web.md); these
+backend PTY sessions refuse it with `uploadFailed` (`uploads are not supported
+by hya serve PTY sessions`) and never send `uploaded`.
 
 The first server frame replays the current buffer. Resize currently relies
 on the shell's own TTY sizing; a runtime resize API is tracked in the
