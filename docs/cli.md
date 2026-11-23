@@ -900,8 +900,10 @@ A parameter opener may precede a long value, but its result closing tag must
 end the output. Ordinary endings such as `Vec<Calls>` and `syscalls>` do not
 count as tool calls. Corrective notices name DSML without repeating its raw
 marker glyphs.
-An opening such as “First, I’ll check the logs” or “我先查看配置文件” announces
-pending work. The driver ignores a trailing separator paragraph when checking the last sentence.
+The driver skips trailing separator paragraphs. If the final paragraph has
+at most 400 characters, it checks the last sentence for a clause such as
+“First, I’ll check the logs” or “我先查看配置文件” that announces pending work.
+A paragraph ending with a colon signals unfinished work regardless of length.
 Done/failed roster entries and idle actors belonging to the finished Workflow
 run do not hold it open. Completed/blocked todos do not hold the run open.
 Use `wait` to collect workers or `archive` workers whose results are no longer
