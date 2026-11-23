@@ -14,7 +14,8 @@ use hya_proto::{ToolName, ToolSchema};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::io::AsyncReadExt;
-use tokio::process::{Child, ChildStderr, ChildStdout};
+use tokio::process::Child;
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
@@ -441,6 +442,7 @@ impl Tool for ShellTool {
                     cwd.clone(),
                     artifact_root,
                     timeout,
+                    deadline,
                     ctx.cancel.clone(),
                 )
                 .await?
@@ -458,6 +460,7 @@ impl Tool for ShellTool {
                 cwd.clone(),
                 artifact_root,
                 timeout,
+                deadline,
                 ctx.cancel.clone(),
             )
             .await?
@@ -656,6 +659,7 @@ async fn execute_pipes(
     cwd: PathBuf,
     artifact_root: PathBuf,
     timeout: TimeoutSettings,
+    deadline: Option<&RunDeadline>,
     cancel: CancellationToken,
 ) -> Result<CapturedRun, ToolError> {
     let mut process = tokio::process::Command::new("bash");
@@ -669,44 +673,42 @@ async fn execute_pipes(
         .envs(env);
     #[cfg(unix)]
     process.process_group(0);
+    let (shutdown, registration) = hya_tool::deadline::register_job(deadline)?;
+    if cancel.is_cancelled() || shutdown.is_cancelled() {
+        return Err(ToolError::Cancelled);
+    }
     let mut child = process
         .spawn()
         .map_err(|error| contextual_io("spawn Bash process", error))?;
     let process_group = child.id();
-    let mut stdout = child.stdout.take().ok_or_else(|| {
-        contextual_io(
-            "capture Bash stdout",
-            io::Error::other("stdout pipe was not attached"),
+    let worker_cancel = cancel.child_token();
+    let _abandoned = worker_cancel.clone().drop_guard();
+    let (reply, result) = oneshot::channel();
+    tokio::spawn(async move {
+        let _registration = registration;
+        let mut sink = OutputSink::new(artifact_root);
+        let captured = match capture_pipes(
+            &mut child,
+            process_group,
+            &mut sink,
+            timeout.duration,
+            &worker_cancel,
+            &shutdown,
         )
-    })?;
-    let mut stderr = child.stderr.take().ok_or_else(|| {
-        contextual_io(
-            "capture Bash stderr",
-            io::Error::other("stderr pipe was not attached"),
-        )
-    })?;
-    let mut sink = OutputSink::new(artifact_root);
-    let completion = match capture_pipes(
-        &mut child,
-        process_group,
-        &mut stdout,
-        &mut stderr,
-        &mut sink,
-        timeout.duration,
-        &cancel,
-    )
-    .await
-    {
-        Ok(completion) => completion,
-        Err(error) => {
-            let cleanup = terminate_pipe_child(&mut child, process_group).await;
-            return Err(with_cleanup_error(error, cleanup));
-        }
-    };
-    let output = sink
-        .finish()
-        .map_err(|error| contextual_io("finish Bash output capture", error))?;
-    Ok(CapturedRun { completion, output })
+        .await
+        {
+            Ok(completion) => sink
+                .finish()
+                .map(|output| CapturedRun { completion, output })
+                .map_err(|error| contextual_io("finish Bash output capture", error)),
+            Err(error) => {
+                let cleanup = terminate_pipe_child(&mut child, process_group).await;
+                Err(with_cleanup_error(error, cleanup))
+            }
+        };
+        let _ = reply.send(captured);
+    });
+    result.await.map_err(io::Error::other)?
 }
 
 /// Drain both pipes after reaping, bounding capture of foreign-session writers.
@@ -716,31 +718,53 @@ async fn execute_pipes(
 async fn capture_pipes(
     child: &mut Child,
     process_group: Option<u32>,
-    stdout: &mut ChildStdout,
-    stderr: &mut ChildStderr,
     sink: &mut OutputSink,
     timeout: Option<Duration>,
     cancel: &CancellationToken,
+    shutdown: &CancellationToken,
 ) -> Result<Completion, ToolError> {
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other("missing Bash stdout pipe"))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| io::Error::other("missing Bash stderr pipe"))?;
     let mut deadline = timeout.and_then(|duration| Instant::now().checked_add(duration));
     let mut drain_cutoff = None;
     let mut stdout_done = false;
     let mut stderr_done = false;
     let mut reaped = false;
     let mut completion = None;
-    let mut cancellation_seen = false;
+    let mut terminated = false;
     let mut stdout_buffer = [0_u8; PIPE_BUFFER_BYTES];
     let mut stderr_buffer = [0_u8; PIPE_BUFFER_BYTES];
 
     loop {
+        if !terminated {
+            let cancelled = cancel.is_cancelled() || shutdown.is_cancelled();
+            if cancelled || deadline.is_some_and(|at| Instant::now() >= at) {
+                terminate_pipe_child(child, process_group).await?;
+                reaped = true;
+                terminated = true;
+                completion = Some(if cancelled {
+                    Completion::Cancelled
+                } else {
+                    Completion::TimedOut
+                });
+                deadline = None;
+                drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
+            }
+        }
         if reaped && stdout_done && stderr_done {
             break;
         }
         if drain_cutoff.is_some_and(|at| Instant::now() >= at) {
-            drain_ready_pipe(stdout, sink)
+            drain_ready_pipe(&mut stdout, sink)
                 .await
                 .map_err(|error| contextual_io("drain Bash stdout", error))?;
-            drain_ready_pipe(stderr, sink)
+            drain_ready_pipe(&mut stderr, sink)
                 .await
                 .map_err(|error| contextual_io("drain Bash stderr", error))?;
             break;
@@ -749,118 +773,27 @@ async fn capture_pipes(
         if reaped && drain_cutoff.is_none() && !process_group_alive(process_group) {
             drain_cutoff = Some(Instant::now() + ORPHAN_PIPE_GRACE);
         }
-        if !reaped {
-            if cancel.is_cancelled() {
-                terminate_pipe_child(child, process_group).await?;
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled(), if !terminated => {}
+            _ = shutdown.cancelled(), if !terminated => {}
+            _ = wait_for_deadline(deadline) => {}
+            _ = wait_for_deadline(drain_cutoff) => {}
+            _ = tokio::time::sleep(Duration::from_millis(100)), if cfg!(unix) && reaped && drain_cutoff.is_none() => {}
+            result = child.wait(), if !reaped => {
+                let status = result.map_err(|error| contextual_io("wait for Bash process", error))?;
                 reaped = true;
-                completion = Some(Completion::Cancelled);
-                cancellation_seen = true;
-                deadline = None;
-                drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
-                continue;
+                completion = Some(Completion::Finished(status.code()));
             }
-            if deadline.is_some_and(|at| Instant::now() >= at) {
-                terminate_pipe_child(child, process_group).await?;
-                reaped = true;
-                completion = Some(Completion::TimedOut);
-                deadline = None;
-                drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
-                continue;
+            result = stdout.read(&mut stdout_buffer), if !stdout_done => {
+                let count = result.map_err(|error| contextual_io("read Bash stdout", error))?;
+                stdout_done = count == 0;
+                sink.push(&stdout_buffer[..count]).map_err(|error| contextual_io("capture Bash stdout", error))?;
             }
-        } else {
-            if !cancellation_seen && cancel.is_cancelled() {
-                terminate_pipe_process_group(process_group)?;
-                completion = Some(Completion::Cancelled);
-                cancellation_seen = true;
-                deadline = None;
-                drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
-            }
-            if deadline.is_some_and(|at| Instant::now() >= at) {
-                terminate_pipe_process_group(process_group)?;
-                completion = Some(Completion::TimedOut);
-                deadline = None;
-                drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
-            }
-        }
-
-        if !reaped {
-            tokio::select! {
-                biased;
-                _ = cancel.cancelled(), if !cancellation_seen => {
-                    terminate_pipe_child(child, process_group).await?;
-                    reaped = true;
-                    completion = Some(Completion::Cancelled);
-                    cancellation_seen = true;
-                    deadline = None;
-                    drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
-                }
-                _ = wait_for_deadline(deadline) => {
-                    terminate_pipe_child(child, process_group).await?;
-                    reaped = true;
-                    completion = Some(Completion::TimedOut);
-                    deadline = None;
-                    drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
-                }
-                result = child.wait() => {
-                    let status = result.map_err(|error| contextual_io("wait for Bash process", error))?;
-                    reaped = true;
-                    completion = Some(Completion::Finished(status.code()));
-                }
-                result = stdout.read(&mut stdout_buffer), if !stdout_done => {
-                    let count = result.map_err(|error| contextual_io("read Bash stdout", error))?;
-                    if count == 0 {
-                        stdout_done = true;
-                    } else {
-                        sink.push(&stdout_buffer[..count])
-                            .map_err(|error| contextual_io("capture Bash stdout", error))?;
-                    }
-                }
-                result = stderr.read(&mut stderr_buffer), if !stderr_done => {
-                    let count = result.map_err(|error| contextual_io("read Bash stderr", error))?;
-                    if count == 0 {
-                        stderr_done = true;
-                    } else {
-                        sink.push(&stderr_buffer[..count])
-                            .map_err(|error| contextual_io("capture Bash stderr", error))?;
-                    }
-                }
-            }
-        } else {
-            tokio::select! {
-                biased;
-                _ = wait_for_deadline(drain_cutoff) => {},
-                _ = tokio::time::sleep(Duration::from_millis(100)), if cfg!(unix) && drain_cutoff.is_none() => {}
-                _ = cancel.cancelled(), if !cancellation_seen => {
-                    terminate_pipe_process_group(process_group)?;
-                    completion = Some(Completion::Cancelled);
-                    cancellation_seen = true;
-                    deadline = None;
-                    drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
-                }
-                _ = wait_for_deadline(deadline) => {
-                    terminate_pipe_process_group(process_group)?;
-                    completion = Some(Completion::TimedOut);
-                    deadline = None;
-                    drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
-                }
-                result = stdout.read(&mut stdout_buffer), if !stdout_done => {
-                    let count = result.map_err(|error| contextual_io("read Bash stdout", error))?;
-                    if count == 0 {
-                        stdout_done = true;
-                    } else {
-                        sink.push(&stdout_buffer[..count])
-                            .map_err(|error| contextual_io("capture Bash stdout", error))?;
-                    }
-                }
-                result = stderr.read(&mut stderr_buffer), if !stderr_done => {
-                    let count = result.map_err(|error| contextual_io("read Bash stderr", error))?;
-                    if count == 0 {
-                        stderr_done = true;
-                    } else {
-                        sink.push(&stderr_buffer[..count])
-                            .map_err(|error| contextual_io("capture Bash stderr", error))?;
-                    }
-                }
+            result = stderr.read(&mut stderr_buffer), if !stderr_done => {
+                let count = result.map_err(|error| contextual_io("read Bash stderr", error))?;
+                stderr_done = count == 0;
+                sink.push(&stderr_buffer[..count]).map_err(|error| contextual_io("capture Bash stderr", error))?;
             }
         }
     }
@@ -949,49 +882,42 @@ async fn terminate_pipe_child(
     child: &mut Child,
     process_group: Option<u32>,
 ) -> Result<(), ToolError> {
-    terminate_pipe_process_group(process_group)?;
+    #[cfg(unix)]
+    if let Some(pgid) = process_group {
+        hya_tool::process_group::kill_group(pgid)?;
+    }
     #[cfg(not(unix))]
-    child
-        .kill()
-        .await
-        .map_err(|error| contextual_io("terminate Bash process", error))?;
+    {
+        let _ = process_group;
+        if child.id().is_some() {
+            child
+                .kill()
+                .await
+                .map_err(|error| contextual_io("terminate Bash process", error))?;
+        }
+    }
+    #[cfg(unix)]
+    let quiesce = async {
+        if let Some(pgid) = process_group {
+            tokio::task::spawn_blocking(move || {
+                hya_tool::process_group::finish_group_termination(pgid)
+            })
+            .await
+            .map_err(io::Error::other)??;
+        }
+        Ok::<(), io::Error>(())
+    };
+    // Linux can recognize a quiet group while its waitable leader pins the PGID.
+    #[cfg(target_os = "linux")]
+    let quiet = quiesce.await;
     child
         .wait()
         .await
-        .map(|_| ())
-        .map_err(|error| contextual_io("reap Bash process", error))
-}
-
-/// Terminate a non-PTY process group even after its direct shell was reaped.
-///
-/// # Errors
-/// Returns a contextual tool error when the process group cannot be signalled.
-fn terminate_pipe_process_group(process_group: Option<u32>) -> Result<(), ToolError> {
+        .map_err(|error| contextual_io("reap Bash process", error))?;
+    #[cfg(all(unix, not(target_os = "linux")))]
+    let quiet = quiesce.await;
     #[cfg(unix)]
-    if let Some(pid) = process_group {
-        let pid = libc::pid_t::try_from(pid).map_err(|_| {
-            contextual_io(
-                "terminate Bash process group",
-                io::Error::new(io::ErrorKind::InvalidInput, "child pid does not fit pid_t"),
-            )
-        })?;
-        let group = pid.checked_neg().ok_or_else(|| {
-            contextual_io(
-                "terminate Bash process group",
-                io::Error::new(io::ErrorKind::InvalidInput, "child pid cannot be negated"),
-            )
-        })?;
-        // SAFETY: the process was spawned by this adapter with its own group.
-        let result = unsafe { libc::kill(group, libc::SIGKILL) };
-        if result < 0 {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::ESRCH) {
-                return Err(contextual_io("terminate Bash process group", error));
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = process_group;
+    quiet?;
     Ok(())
 }
 
@@ -1003,29 +929,51 @@ async fn execute_pty(
     cwd: PathBuf,
     artifact_root: PathBuf,
     timeout: TimeoutSettings,
+    deadline: Option<&RunDeadline>,
     cancel: CancellationToken,
 ) -> Result<CapturedRun, ToolError> {
-    let control = Arc::new(AtomicU8::new(CONTROL_RUNNING));
-    let worker_control = Arc::clone(&control);
-    let worker = tokio::task::spawn_blocking(move || {
-        run_pty_blocking(
-            command,
-            env,
-            cwd,
-            artifact_root,
-            timeout.duration,
-            worker_control,
-        )
+    let (shutdown, registration) = hya_tool::deadline::register_job(deadline)?;
+    if cancel.is_cancelled() || shutdown.is_cancelled() {
+        return Err(ToolError::Cancelled);
+    }
+    let worker_cancel = cancel.child_token();
+    let _abandoned = worker_cancel.clone().drop_guard();
+    let (reply, result) = oneshot::channel();
+    tokio::spawn(async move {
+        let _registration = registration;
+        let control = Arc::new(AtomicU8::new(CONTROL_RUNNING));
+        let worker_control = Arc::clone(&control);
+        let shutdown_for_worker = shutdown.clone();
+        let mut worker = tokio::task::spawn_blocking(move || {
+            run_pty_blocking(
+                command,
+                env,
+                cwd,
+                artifact_root,
+                timeout.duration,
+                worker_control,
+                shutdown_for_worker,
+            )
+        });
+        let stopped = async {
+            tokio::select! {
+                () = worker_cancel.cancelled() => {},
+                () = shutdown.cancelled() => {},
+            }
+        };
+        let captured = tokio::select! {
+            result = &mut worker => result,
+            () = stopped => {
+                control.store(CONTROL_CANCELLED, Ordering::Release);
+                worker.await
+            }
+        };
+        let _ = reply.send(captured);
     });
-    let mut worker = Box::pin(worker);
-    let result = tokio::select! {
-        result = &mut worker => result,
-        _ = cancel.cancelled() => {
-            control.store(CONTROL_CANCELLED, Ordering::Release);
-            (&mut worker).await
-        }
-    };
-    result.map_err(|error| ToolError::Other(format!("Bash PTY worker failed: {error}")))?
+    result
+        .await
+        .map_err(io::Error::other)?
+        .map_err(|error| ToolError::Other(format!("Bash PTY worker failed: {error}")))?
 }
 
 /// Spawn and capture a PTY child while polling its nonblocking master.
@@ -1037,25 +985,20 @@ fn run_pty_blocking(
     artifact_root: PathBuf,
     timeout: Option<Duration>,
     control: Arc<AtomicU8>,
+    shutdown: CancellationToken,
 ) -> Result<CapturedRun, ToolError> {
     use pty_process::blocking::{Command, open};
     use std::os::fd::AsRawFd;
 
     let mut sink = OutputSink::new(artifact_root);
-    if control.load(Ordering::Acquire) == CONTROL_CANCELLED {
-        let output = sink
-            .finish()
-            .map_err(|error| contextual_io("finish Bash PTY output", error))?;
-        return Ok(CapturedRun {
-            completion: Completion::Cancelled,
-            output,
-        });
-    }
     let deadline = timeout.and_then(|duration| Instant::now().checked_add(duration));
     let (mut master, pts) =
         open().map_err(|error| ToolError::Other(format!("Bash PTY setup failed: {error}")))?;
     set_nonblocking(master.as_raw_fd())
         .map_err(|error| contextual_io("set Bash PTY master nonblocking", error))?;
+    if control.load(Ordering::Acquire) == CONTROL_CANCELLED || shutdown.is_cancelled() {
+        return Err(ToolError::Cancelled);
+    }
     let mut child = Command::new("bash")
         .arg("-c")
         .arg(&command)
@@ -1074,9 +1017,9 @@ fn run_pty_blocking(
     let mut completion = None;
     loop {
         let requested = control.load(Ordering::Acquire);
-        if requested == CONTROL_CANCELLED {
+        if requested == CONTROL_CANCELLED || shutdown.is_cancelled() {
             if !group_terminated {
-                terminate_pty_child(&mut child, Some(process_group), leader_reaped)?;
+                terminate_pty_child(&mut child, process_group, leader_reaped)?;
                 group_terminated = true;
                 drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
                 leader_reaped = true;
@@ -1086,7 +1029,7 @@ fn run_pty_blocking(
         {
             control.store(CONTROL_TIMED_OUT, Ordering::Release);
             if !group_terminated {
-                terminate_pty_child(&mut child, Some(process_group), leader_reaped)?;
+                terminate_pty_child(&mut child, process_group, leader_reaped)?;
                 group_terminated = true;
                 drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
                 leader_reaped = true;
@@ -1103,7 +1046,7 @@ fn run_pty_blocking(
                 Ok(None) => {}
                 Err(error) => {
                     let wait_error = contextual_io("poll Bash PTY process", error);
-                    let cleanup = terminate_pty_child(&mut child, Some(process_group), false);
+                    let cleanup = terminate_pty_child(&mut child, process_group, false);
                     return Err(with_cleanup_error(wait_error, cleanup));
                 }
             }
@@ -1121,7 +1064,7 @@ fn run_pty_blocking(
         if drain_cutoff.is_some_and(|at| Instant::now() >= at) {
             if let Err(error) = drain_ready_fd(master.as_raw_fd(), &mut sink) {
                 let drain_error = contextual_io("drain Bash PTY output", error);
-                let cleanup = terminate_pty_child(&mut child, Some(process_group), leader_reaped);
+                let cleanup = terminate_pty_child(&mut child, process_group, leader_reaped);
                 return Err(with_cleanup_error(drain_error, cleanup));
             }
             break;
@@ -1143,7 +1086,7 @@ fn run_pty_blocking(
                 continue;
             }
             let poll_error = contextual_io("poll Bash PTY master", error);
-            let cleanup = terminate_pty_child(&mut child, Some(process_group), leader_reaped);
+            let cleanup = terminate_pty_child(&mut child, process_group, leader_reaped);
             return Err(with_cleanup_error(poll_error, cleanup));
         }
         if polled == 0 {
@@ -1154,8 +1097,7 @@ fn run_pty_blocking(
             Ok(count) => {
                 if let Err(error) = sink.push(&buffer[..count]) {
                     let capture_error = contextual_io("capture Bash PTY output", error);
-                    let cleanup =
-                        terminate_pty_child(&mut child, Some(process_group), leader_reaped);
+                    let cleanup = terminate_pty_child(&mut child, process_group, leader_reaped);
                     return Err(with_cleanup_error(capture_error, cleanup));
                 }
             }
@@ -1167,7 +1109,7 @@ fn run_pty_blocking(
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
             Err(error) => {
                 let read_error = contextual_io("read Bash PTY master", error);
-                let cleanup = terminate_pty_child(&mut child, Some(process_group), leader_reaped);
+                let cleanup = terminate_pty_child(&mut child, process_group, leader_reaped);
                 return Err(with_cleanup_error(read_error, cleanup));
             }
         }
@@ -1209,47 +1151,23 @@ fn set_nonblocking(fd: std::os::fd::RawFd) -> io::Result<()> {
 #[cfg(unix)]
 fn terminate_pty_child(
     child: &mut std::process::Child,
-    process_group: Option<u32>,
+    process_group: u32,
     leader_reaped: bool,
 ) -> Result<(), ToolError> {
-    terminate_pty_process_group(process_group)?;
+    hya_tool::process_group::kill_group(process_group)?;
+    #[cfg(target_os = "linux")]
+    let quiet = hya_tool::process_group::finish_group_termination(process_group);
     if !leader_reaped {
         child
             .wait()
-            .map(|_| ())
             .map_err(|error| contextual_io("reap Bash PTY process", error))?;
     }
+    #[cfg(not(target_os = "linux"))]
+    let quiet = hya_tool::process_group::finish_group_termination(process_group);
+    quiet?;
     Ok(())
 }
 
-/// Terminate the process group that owns a PTY slave.
-#[cfg(unix)]
-fn terminate_pty_process_group(process_group: Option<u32>) -> Result<(), ToolError> {
-    let Some(pid) = process_group else {
-        return Ok(());
-    };
-    let pid = libc::pid_t::try_from(pid).map_err(|_| {
-        contextual_io(
-            "terminate Bash PTY process group",
-            io::Error::new(io::ErrorKind::InvalidInput, "child pid does not fit pid_t"),
-        )
-    })?;
-    let group = pid.checked_neg().ok_or_else(|| {
-        contextual_io(
-            "terminate Bash PTY process group",
-            io::Error::new(io::ErrorKind::InvalidInput, "child pid cannot be negated"),
-        )
-    })?;
-    // SAFETY: pty-process makes this child a session/process-group leader.
-    let result = unsafe { libc::kill(group, libc::SIGKILL) };
-    if result < 0 {
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::ESRCH) {
-            return Err(contextual_io("terminate Bash PTY process group", error));
-        }
-    }
-    Ok(())
-}
 /// Return whether any member remains in the saved process group.
 #[cfg(unix)]
 fn process_group_alive(process_group: Option<u32>) -> bool {

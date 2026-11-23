@@ -72,9 +72,15 @@ impl Told {
     };
 }
 
-static DEADLINE: OnceLock<RunDeadline> = OnceLock::new();
+#[derive(Default)]
+pub(crate) struct ProcessDeadline {
+    deadline: OnceLock<RunDeadline>,
+    unbudgeted: BackgroundJobs,
+}
+
+static DEADLINE: LazyLock<ProcessDeadline> = LazyLock::new(ProcessDeadline::default);
 /// In a native bundle's copy of this crate: the host's [`DEADLINE`].
-static HOST: OnceLock<&'static OnceLock<RunDeadline>> = OnceLock::new();
+static HOST: OnceLock<&'static ProcessDeadline> = OnceLock::new();
 
 /// Start the run's clock with `budget`.
 ///
@@ -82,7 +88,8 @@ static HOST: OnceLock<&'static OnceLock<RunDeadline>> = OnceLock::new();
 /// When called a second time: one process runs one budgeted run.
 pub fn install(budget: Duration) {
     assert!(
-        DEADLINE
+        host()
+            .deadline
             .set(RunDeadline::new(Instant::now(), budget))
             .is_ok(),
         "run deadline installed twice"
@@ -92,15 +99,18 @@ pub fn install(budget: Duration) {
 /// The run's deadline, when it has a budget.
 #[must_use]
 pub fn current() -> Option<&'static RunDeadline> {
-    HOST.get().copied().unwrap_or(&DEADLINE).get()
+    host().deadline.get()
 }
 
 /// Close Bash admission and wait for foreground and yielded jobs before leaving exec.
 pub async fn shutdown_background_jobs() {
     if let Some(deadline) = current() {
-        deadline.shutdown_background_jobs().await;
+        tokio::join!(
+            deadline.shutdown_background_jobs(),
+            host().unbudgeted.shutdown()
+        );
     } else {
-        UNBUDGETED_JOBS.shutdown().await;
+        host().unbudgeted.shutdown().await;
     }
 }
 
@@ -111,12 +121,12 @@ pub struct BackgroundJobGuard {
 }
 
 /// This copy's cell, for the loader to hand to a bundle.
-pub(crate) fn cell() -> &'static OnceLock<RunDeadline> {
+pub(crate) fn cell() -> &'static ProcessDeadline {
     &DEADLINE
 }
 
 /// Read the host's cell from now on (in a bundle's copy, once at load).
-pub(crate) fn adopt(host: &'static OnceLock<RunDeadline>) {
+pub(crate) fn adopt(host: &'static ProcessDeadline) {
     assert!(HOST.set(host).is_ok(), "host deadline adopted twice");
 }
 
@@ -124,14 +134,19 @@ fn clamp_secs(value: f64, low: f64, high: f64) -> Duration {
     Duration::from_secs_f64(value.clamp(low, high))
 }
 
-static UNBUDGETED_JOBS: LazyLock<BackgroundJobs> = LazyLock::new(BackgroundJobs::default);
+fn host() -> &'static ProcessDeadline {
+    HOST.get().copied().unwrap_or_else(cell)
+}
 
-#[cfg(unix)]
-pub(crate) fn register_job(
+/// Admit a shell before spawning it. Keep the guard until its cleanup completes.
+///
+/// # Errors
+/// Returns [`crate::ToolError::Cancelled`] once shutdown closes admission.
+pub fn register_job(
     deadline: Option<&RunDeadline>,
 ) -> Result<(CancellationToken, BackgroundJobGuard), crate::ToolError> {
     deadline
-        .map_or(&*UNBUDGETED_JOBS, |d| &d.background)
+        .map_or(&host().unbudgeted, |d| &d.background)
         .register()
 }
 

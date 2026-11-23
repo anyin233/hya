@@ -241,7 +241,7 @@ pub unsafe fn with_runtime_v1(
     }
 }
 
-/// Read the host's run deadline from this bundle's copy of `hya-tool`.
+/// Share the host's run deadline and unbudgeted job registry with this bundle.
 ///
 /// Native libraries export a C wrapper that calls this function; the host
 /// calls it once, right after loading the library.
@@ -252,7 +252,7 @@ pub unsafe fn with_runtime_v1(
 /// build; it lives for the process.
 pub unsafe fn share_deadline_v1(cell: *const libc::c_void) {
     // SAFETY: the checked host passes its 'static cell of the same layout.
-    crate::deadline::adopt(unsafe { &*cell.cast() });
+    crate::deadline::adopt(unsafe { &*cell.cast::<crate::deadline::ProcessDeadline>() });
 }
 
 /// Digest of the lockstep Rust ABI required by first-party bundle libraries.

@@ -1475,3 +1475,100 @@ async fn python_output_is_unbuffered_unless_overridden() -> Result<(), Box<dyn s
     std::fs::remove_dir_all(workdir)?;
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn host_shutdown_drains_suspended_native_bash_calls() {
+    for mode in ["pipes", "pty", "budgeted-pty"] {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "shell::native_bash_shutdown_child",
+                "--nocapture",
+            ])
+            .env("HYA_BASH_SHUTDOWN_TEST", mode)
+            .status()
+            .unwrap();
+        assert!(status.success(), "{mode}");
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn native_bash_shutdown_child() {
+    use hya_tool::deadline;
+    let Ok(mode) = std::env::var("HYA_BASH_SHUTDOWN_TEST") else {
+        return;
+    };
+    // Hold the first drain open even if the shell exits between polls.
+    let (unbudgeted_shutdown, hold) = deadline::register_job(None).unwrap();
+    if mode == "budgeted-pty" {
+        deadline::install(Duration::from_secs(180));
+    }
+    let pty = mode != "pipes";
+    let tool = hya_tool::native_bundle::load("hya/base-tools")
+        .unwrap()
+        .tools
+        .into_iter()
+        .find(|t| t.name() == "bash")
+        .unwrap();
+    let dir = tempdir();
+    let _dir_guard = TempDirGuard::new(&dir);
+    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir.clone());
+    let cleanup = DaemonCleanup {
+        shell_pid: dir.join("leader"),
+        daemon_pid: dir.join("descendant"),
+    };
+    let mut call = tool.execute(
+        &ctx,
+        json!({
+            "command": "echo $$ > leader; sleep 60 & echo $! > descendant; wait",
+            "pty": pty,
+        }),
+    );
+    tokio::select! {
+        result = &mut call => panic!("shell finished before shutdown: {result:?}"),
+        _ = wait_for_pid(&cleanup.daemon_pid) => {}
+    }
+    // The caller stays alive and unpolled throughout both drains.
+    let leader = wait_for_pid(&cleanup.shell_pid).await;
+    let descendant = wait_for_pid(&cleanup.daemon_pid).await;
+    let mut first = Box::pin(deadline::shutdown_background_jobs());
+    assert!(futures::poll!(&mut first).is_pending());
+    drop(first);
+    assert!(unbudgeted_shutdown.is_cancelled());
+    drop(hold);
+
+    tokio::time::timeout(Duration::from_secs(5), deadline::shutdown_background_jobs())
+        .await
+        .expect("resumed shutdown");
+    assert!(!process_is_alive(leader), "leader was not reaped");
+    if process_is_alive(descendant) {
+        #[cfg(target_os = "linux")]
+        {
+            match std::fs::read_to_string(format!("/proc/{descendant}/stat")) {
+                Ok(stat) => assert!(
+                    stat.rsplit_once(')').is_some_and(|(_, fields)| matches!(
+                        fields.split_whitespace().next(),
+                        Some("Z" | "X" | "x")
+                    )),
+                    "live descendant after shutdown: {stat}"
+                ),
+                Err(error) => assert_eq!(error.kind(), std::io::ErrorKind::NotFound),
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        panic!("live descendant after shutdown");
+    }
+    // A spawn in this missing directory would produce an I/O error.
+    let late = execute_with_guard(
+        tool.as_ref(),
+        &ctx,
+        json!({
+            "command": "true", "pty": pty, "cwd": "nonexistent"
+        }),
+    )
+    .await;
+    assert!(matches!(late, Err(ToolError::Cancelled)), "{late:?}");
+    assert!(matches!(call.await, Err(ToolError::Cancelled)));
+}
