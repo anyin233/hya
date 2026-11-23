@@ -32,23 +32,22 @@ Sessions, Todos, and Context sidebars ([Layout](tui.md#layout)).
 | --- | --- |
 | `minimal` | Transcript and input. The model and the permission mode are written on the input's top border; no status row. |
 | `statusline` (default) | Transcript, input, and the status row below it. |
-| `workspace` | The tiled workspace: Projects on the left; Sessions, Todos, and Context on the right from 150 columns; the layout tree, `/layout`, the layout editor, and drag resizing. Below 150 columns, or while `/sidebar off` hides Context, the status row returns. |
-| `dock` | Reserved for the status band with todo and subagent rows (a later version); selecting it warns and uses `statusline`. |
+| `workspace` | The tiled workspace: Projects on the left; Sessions, Todos, and Context on the right from 150 columns; the layout tree, `/layout`, the layout editor, and drag resizing. Below 150 columns, or while `/sidebar off` hides them, the status row and the dock's todo rows take over. |
+| `dock` | omp-style: no box around the input; its line starts with `╰─` right under a status band, and open todos and running subagents get rows above it (the dock). |
 
-| Component value | `minimal` | `statusline` | `workspace` |
-| --- | --- | --- | --- |
-| `startup.enabled` | `true` | `true` | `true` |
-| `startup.resources` | `"compact"` | `"compact"` | `"compact"` |
-| `statusline.enabled` | `false` | `true` | `true` |
-| `statusline.segments` | `["model", "mode", "cwd", "git", "ctx", "tokens"]` | same | same |
-| `statusline.placement` | `"below"` | `"below"` | `"below"` |
-| `composer.style` | `"box"` | `"box"` | `"box"` |
-| `composer.border_info` | `["model", "mode"]` | `[]` | `[]` |
-| `composer.paste.collapse_lines` | `10` | `10` | `10` |
-| `composer.paste.collapse_chars` | `1000` | `1000` | `1000` |
-| `composer.paste.wrap` | `true` | `true` | `true` |
-| `composer.paste.image_resize` | `true` | `true` | `true` |
-| `sidebar.enabled` | `false` | `false` | `true` |
+| Component value | `minimal` | `statusline` | `dock` | `workspace` |
+| --- | --- | --- | --- | --- |
+| `startup.enabled` | `true` | `true` | `true` | `true` |
+| `startup.resources` | `"compact"` | `"compact"` | `"compact"` | `"compact"` |
+| `statusline.enabled` | `false` | `true` | `true` | `true` |
+| `statusline.segments` | `["model", "mode", "cwd", "git", "ctx", "tokens"]` | same | same | same |
+| `statusline.placement` | `"below"` | `"below"` | `"band"` | `"below"` |
+| `composer.style` | `"box"` | `"box"` | `"band"` | `"box"` |
+| `composer.border_info` | `["model", "mode"]` | `[]` | `[]` | `[]` |
+| `composer.paste.*` | defaults | defaults | defaults | defaults |
+| `todos.enabled` | `false` | `false` | `true` (3 rows) | `true` (yields to a visible Todos pane) |
+| `subagents.enabled` | `false` | `false` | `true` | `true` (yields to a visible Subagents pane) |
+| `sidebar.enabled` | `false` | `false` | `false` | `true` |
 
 Bundle TUI panels with `placement: "sidebar"` join the workspace tree; in the
 single-column presets they appear once the sidebar component is on
@@ -123,7 +122,7 @@ configured.
 | `/config edit` | Open `tui.toml` in `$VISUAL`/`$EDITOR` (writing the template first when it is missing), then reload. |
 | `/config init` | Write the commented template when the file does not exist; refuse otherwise. |
 | `/set preset <name>` | Use another preset for this session; the file is not written. A preset switch drops earlier `/set <component>` changes. |
-| `/set <startup\|statusline\|sidebar> on\|off` | Turn a component on or off for this session. |
+| `/set <startup\|statusline\|todos\|subagents\|sidebar> on\|off` | Turn a component on or off for this session. |
 | `/resources` | Append the full startup list (every section, grouped by source, `none` for an empty one) to the transcript. |
 | `/sidebar`, `/projects-sidebar` | In a preset without sidebars, `on` (or a toggle) is `/set sidebar on`; in the workspace they keep their usual meaning ([Layout](tui.md#layout)). |
 
@@ -140,7 +139,7 @@ A configuration error never blocks startup.
 | TOML syntax error | The whole file is ignored (`Ignored <path> (line N): <error>; using the statusline preset`). |
 | Unknown key, wrong type, unknown segment | That item is ignored with a warning; the lower layer's value stays. |
 | Unknown preset, `extends` cycle, more than 8 presets in a chain, a `[presets.*]` named like a built-in | The default preset with a warning. |
-| A key or value of a later version (`placement = "band"`, `[startup]`, `[composer.attachments]`, `[theme]`, `[keys]`, …) | Ignored: `… is not supported in this version; ignored`. |
+| A key or value of a later version (`[layout]`, `[composer.attachments]`, `sidebar.left`, `[theme]`, `[keys]`, …) | Ignored: `… is not supported in this version; ignored`. |
 | `version` above 1 | A warning; the keys this version knows still apply. |
 
 Warnings appear at the start of the transcript, in the startup list, under
@@ -153,6 +152,33 @@ no `tui.toml` shows once, at the start of the transcript:
 `[Layout] The default layout is now statusline. For the sidebars, write
 preset = "workspace" in tui.toml …`. It records `"statusline-default"` in
 `tui.json` `seenNotices` and never switches the preset by itself.
+
+## Dock
+
+Between the transcript and the input, in this order: pending asks of other
+sessions, running subagents (`[subagents]`), open todos (`[todos]`), the
+permission or question prompt, and the yolo confirmation. Each group takes
+rows only while it has something to say:
+
+```text
+ ↳ hya-scout-skade · Running grep TODO
+ ◐ fix the bug
+ ○ write tests
+ … +2 more · /todos
+ gpt-6.1 · high · manual · hya · ⎇ main · ctx ━━─── 42%
+╰─ Message, !shell, or @file · / commands
+```
+
+- Todos: in progress (`◐`) first, then pending (`○`) and blocked (`✗`); done
+  items are counted, not listed. The rows disappear when every item is done.
+- Subagents: one `↳ <handle> · <activity>` row per subagent of the open session
+  that is starting, running, or waiting for an answer (warning color); at most
+  three, then `+N more · /subagents`.
+- The input stays anchored at the bottom: a group appearing or going away moves
+  the transcript's bottom edge, not the input.
+- Deduplication: in the workspace preset the todo rows yield to a visible Todos
+  pane and the subagent rows to a visible Subagents pane.
+- The running-turn line stays right below the transcript, above the dock.
 
 ## Startup list
 
@@ -234,8 +260,11 @@ and returns when the width or `/sidebar off` hides it.
 | `presets.<name>.<component>` | table | — | Same keys as the top-level component table. |
 | `statusline.enabled` | boolean | `true` | |
 | `statusline.segments` | array of segment names | `["model", "mode", "cwd", "git", "ctx", "tokens"]` | `model`, `mode`, `ctx`, `connection`, `agent`, `cwd`, `git`, `tokens`, `session`; duplicates are dropped. |
-| `statusline.placement` | `"below"` \| `"band"` | `"below"` | `"band"` is reserved for a later version. |
-| `composer.style` | `"box"` \| `"band"` | `"box"` | `"band"` is reserved for a later version. |
+| `statusline.placement` | `"below"` \| `"band"` | `"below"` | `"band"`: right above a band input (`composer.style = "band"`); with a boxed input it goes below. |
+| `composer.style` | `"box"` \| `"band"` | `"box"` | `"band"`: no box; the input line starts with `╰─` (`╰!` for a shell command) in the focus color while it has the keyboard, under the status band, or a rule with `border_info` when there is none. |
+| `todos.enabled` | boolean | `false` | Open todo rows in the dock. |
+| `todos.max_rows` | integer 1–6 | `3` | Rows at most; the last one says `+N more · /todos` when more are open. |
+| `subagents.enabled` | boolean | `false` | Running subagent rows in the dock. |
 | `composer.border_info` | array of segment names | `[]` | |
 | `composer.paste.collapse_lines` | integer ≥ 0 | `10` | A text paste of more lines becomes a paste chip ([Paste and attachments](tui.md#paste-and-attachments)); `0` never folds. |
 | `composer.paste.collapse_chars` | integer ≥ 1 | `1000` | Or of more characters. |

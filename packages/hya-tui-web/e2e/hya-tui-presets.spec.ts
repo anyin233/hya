@@ -4,7 +4,7 @@
 
 import { writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
-import { expect, hyaTui, test, textStep } from "./hya"
+import { expect, hyaTui, test, textStep, toolStep } from "./hya"
 import type { Tui } from "./harness"
 
 /** CSS width whose PTY conversion (tui-exp/driver.ts `viewportCells`) gives exactly `columns`. */
@@ -137,5 +137,54 @@ test.describe("session layer", () => {
     await term.waitForText(input)
     await term.waitForText(/manual/)
     expect(await term.find("The default layout is now")).toBeNull()
+  })
+})
+
+test.describe("dock", () => {
+  test.use({
+    preset: "dock",
+    model: {
+      permission: "allow",
+      steps: [
+        toolStep("todo", { ops: [{ op: "add", content: "write tests" }, { op: "add", content: "fix the bug" }, { op: "add", content: "update docs" }, { op: "add", content: "release" }] }),
+        textStep("Added todos."),
+      ],
+    },
+  })
+
+  for (const columns of [80, 120]) {
+    test(`a ╰─ input under a status band; open todos above it, at most three rows (${columns} columns)`, async ({ tui, backend }, testInfo) => {
+      const term = await tui(hyaTui(backend), { viewport: { width: widthFor(columns), height: 640 } })
+      await term.waitForText(`╰─ ${input}`)
+      const { rows } = await term.size()
+      // The input is the last row, the status band right above it; no box around the input.
+      await expect.poll(async () => (await term.lines())[rows - 2]).toMatch(/^ \S.* · manual\b/)
+      expect((await term.lines())[rows - 1]).toMatch(/^╰─ Message/)
+      expect(await term.find("┌───")).toBeNull()
+      await term.type("plan it")
+      await term.press("Enter")
+      await term.waitForText("Added todos.", 20_000)
+      await term.waitForText("○ write tests")
+      await term.waitForText("○ fix the bug")
+      await term.waitForText("… +2 more · /todos")
+      expect(await term.find("○ update docs")).toBeNull()
+      // The dock sits right above the band: the input did not move.
+      const lines = await term.lines()
+      expect(lines[rows - 1]).toMatch(/^╰─ /)
+      expect(lines[rows - 3]).toMatch(/\+2 more/)
+      await term.attach(testInfo, `dock-${columns}`)
+    })
+  }
+
+  test("/set todos off hides the rows for the session", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend))
+    await term.waitForText(`╰─ ${input}`)
+    await term.type("plan it")
+    await term.press("Enter")
+    await term.waitForText("○ write tests", 20_000)
+    await term.press("Control+x")
+    await term.type("/set todos off")
+    await term.press("Enter")
+    await expect.poll(() => term.find("○ write tests")).toBeNull()
   })
 })

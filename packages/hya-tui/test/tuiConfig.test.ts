@@ -68,7 +68,7 @@ test("named presets extend a built-in one; the chain applies outermost first", (
   expect(resolved.structure.statusline.segments).toEqual(["mode"])
   expect(resolved.sources["statusline.enabled"]).toBe("preset focus")
   expect(resolved.sources["statusline.segments"]).toBe("preset focus2")
-  expect(presetNames(raw)).toEqual(["minimal", "statusline", "workspace", "focus", "focus2"])
+  expect(presetNames(raw)).toEqual(["minimal", "statusline", "dock", "workspace", "focus", "focus2"])
   // Without extends a named preset starts from the default.
   expect(resolveTuiConfig(parse('preset = "a"\n[presets.a]\nsidebar = { enabled = true }\n')).chain).toEqual(["a", "statusline"])
 })
@@ -84,10 +84,9 @@ test("unknown presets, cycles, and chains deeper than 8 fall back to the default
   const tooDeep = resolveTuiConfig(parse(`preset = "p0"\n${deep}\n`))
   expect(tooDeep.preset).toBe("statusline")
   expect(tooDeep.warnings[0]).toContain("more than 8 presets")
-  // dock is reserved for the dock components.
   const dock = resolveTuiConfig(parse('preset = "dock"\n'))
-  expect(dock.preset).toBe("statusline")
-  expect(dock.warnings[0]).toContain("preset dock is not supported in this version")
+  expect(dock.preset).toBe("dock")
+  expect(dock.warnings).toEqual([])
   // A user preset cannot shadow a built-in one.
   const shadow = resolveTuiConfig(parse('[presets.minimal]\nsidebar = { enabled = true }\n'))
   expect(shadow.warnings[0]).toContain("presets.minimal: minimal is a built-in preset")
@@ -113,20 +112,22 @@ test("bad items are ignored one by one; later-version keys say so; the rest appl
     "quiet = true",
     'sections = ["skills", "nope"]',
     "[todos]",
-    "max_rows = 2",
+    "max_rows = 9",
+    "[layout]",
+    "enabled = true",
     "[keys.workspace]",
     '"alt+s" = "/sessions"',
   ].join("\n")))
-  expect(resolved.structure.statusline).toEqual({ enabled: true, segments: ["model"], placement: "below" })
+  expect(resolved.structure.statusline).toEqual({ enabled: true, segments: ["model"], placement: "band" })
   expect(resolved.structure.composer.style).toBe("box")
   expect(resolved.warnings).toEqual([
     "version 2 is newer than this TUI (1); reading the keys it knows",
     "Unknown key colour; ignored",
-    "[todos] is not supported in this version; ignored",
+    "[layout] is not supported in this version; ignored",
     "[keys] is not supported in this version; ignored",
     "startup.sections: unknown section nope; ignored",
+    "todos.max_rows: expected an integer from 1 to 6; ignored",
     "statusline.enabled: expected true or false; ignored",
-    'statusline.placement = "band" is not supported in this version; ignored',
     "statusline.segments: unknown segment nope; ignored",
     'composer.style: expected "box" or "band"; ignored',
     "composer.paste.collapse_chars: expected an integer ≥ 1; ignored",

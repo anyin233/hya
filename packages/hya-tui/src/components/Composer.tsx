@@ -21,7 +21,8 @@ import { initialVimState, vimKey, type VimResult } from "../composer/vim"
 import { composerKeyBindings, resolveBinding } from "../keys/bindings"
 import { isKeyDisabled, resolveCommandBinding } from "../keys/custom"
 import { layoutBreakpoints, projectsSidebarVisible, sidebarTooNarrowNotice } from "../state/layout"
-import { borderInfoText } from "../state/statusline"
+import { bandRule, borderInfoText, statusLineShown } from "../state/statusline"
+import { StatusLine } from "./StatusLine"
 import { paneLeaves } from "../state/panes"
 import { subagentsWorking } from "../state/subagents"
 import { focusedPane, keyboardOwner } from "../state/focus"
@@ -85,6 +86,8 @@ interface FileMenu {
  */
 function BaseComposer(props: { width: number; decorationRows?: () => number }) {
   const { store, controller, ui } = useApp()
+  /** `composer.style = "band"` (ADR-0036 `dock`): no box; a status band or rule above a `╰─` input line. */
+  const band = () => store.state.structure.composer.style === "band"
   /** `composer.border_info` (ADR-0036; the minimal preset's model and mode) on the input's top border. */
   const borderInfo = () => {
     const segments = store.state.structure.composer.border_info
@@ -809,7 +812,7 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
   const workspaceInput = { onKey: onWorkspaceKey, onPaste: onWorkspacePaste }
   const editorInput = { onKey: onEditorKey, onPaste: onEditorPaste }
   ui.workspaceInput = workspaceInput
-  const composerHeight = () => (store.state.secretEntry ? 4 : rows() + 2)
+  const composerHeight = () => (store.state.secretEntry ? 4 : band() ? rows() + 1 : rows() + 2)
     + (menu() ? menu()!.items.length + 3 : 0) + rowsAbove().length + (pasteNotice() ? 1 : 0) + (props.decorationRows?.() ?? 0)
   ui.composerHeight = composerHeight
   queueMicrotask(() => ui.invalidateLayout?.())
@@ -825,6 +828,45 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
     if (ui.composerHeight === composerHeight) ui.composerHeight = undefined
     if (editorPaneId && ui.paneInputs?.get(editorPaneId) === editorInput) ui.paneInputs.delete(editorPaneId)
   })
+
+  /**
+   * The textarea. The boxed and the band input each make their own (OpenTUI
+   * turns a box's border back on whenever its border color changes, so one box
+   * cannot switch styles); a style switch keeps the draft through
+   * `ui.composerInput`, which every edit updates.
+   */
+  const input = () => (
+    <textarea
+      ref={(element: TextareaRenderable) => {
+        editor = element
+        const saved = ui.composerInput
+        if (saved?.text) {
+          replaced = saved.text
+          element.setText(saved.text)
+          element.cursorOffset = Math.min(saved.cursor, saved.text.length)
+          setValue(saved.text)
+          measure()
+        }
+      }}
+      width={band() ? undefined : "100%"}
+      flexGrow={1}
+      height={rows()}
+      placeholder={readOnly() ? "Read-only subagent view · / opens commands · Esc returns" : "Message, !shell, or @file · / commands"}
+      textColor={colors.fg}
+      focusedTextColor={colors.fg}
+      cursorColor={colors.focus}
+      cursorStyle={store.state.vim ? { style: store.state.vimMode === "normal" ? "block" : "line", blinking: store.state.vimMode !== "normal" } : { style: "line", blinking: true }}
+      wrapMode="word"
+      keyBindings={[...composerKeyBindings]}
+      focused={composerFocused()}
+      onSubmit={submit}
+      onContentChange={sync}
+      onCursorChange={() => {
+        if (editor) ui.composerInput = { text: editor.plainText, cursor: editor.cursorOffset }
+        updateMention()
+      }}
+    />
+  )
 
   return (
     <box width="100%" flexShrink={0} flexDirection="column">
@@ -865,48 +907,34 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
           </box>
         )}
       </Show>
-      <box
-        width="100%"
-        height={rows() + 2}
-        flexShrink={0}
-        border
-        borderColor={composerFocused() ? colors.focus : colors.border}
-        titleColor={shell() ? colors.heading : colors.muted} title={shell() ? "! shell" : borderInfo()}
-        titleAlignment={shell() ? "left" : "right"}
-        backgroundColor={colors.panel}
-        paddingX={1}
-        visible={!store.state.secretEntry}
-      >
-        <textarea
-          ref={(element: TextareaRenderable) => {
-            editor = element
-            const saved = ui.composerInput
-            if (saved?.text) {
-              replaced = saved.text
-              element.setText(saved.text)
-              element.cursorOffset = Math.min(saved.cursor, saved.text.length)
-              setValue(saved.text)
-              measure()
-            }
-          }}
+      <Show when={band() && !store.state.secretEntry}>
+        <Show when={statusLineShown(store.state, store.state.columns, "band")} fallback={
+          <text height={1} wrapMode="none" fg={colors.border}>{bandRule(store.state, Math.max(1, Math.floor(props.width)))}</text>
+        }>
+          <StatusLine width={props.width} />
+        </Show>
+      </Show>
+      <Show when={band()} fallback={
+        <box
           width="100%"
-          height={rows()}
-          placeholder={readOnly() ? "Read-only subagent view · / opens commands · Esc returns" : "Message, !shell, or @file · / commands"}
-          textColor={colors.fg}
-          focusedTextColor={colors.fg}
-          cursorColor={colors.focus}
-          cursorStyle={store.state.vim ? { style: store.state.vimMode === "normal" ? "block" : "line", blinking: store.state.vimMode !== "normal" } : { style: "line", blinking: true }}
-          wrapMode="word"
-          keyBindings={[...composerKeyBindings]}
-          focused={composerFocused()}
-          onSubmit={submit}
-          onContentChange={sync}
-          onCursorChange={() => {
-            if (editor) ui.composerInput = { text: editor.plainText, cursor: editor.cursorOffset }
-            updateMention()
-          }}
-        />
-      </box>
+          height={rows() + 2}
+          flexShrink={0}
+          border
+          borderColor={composerFocused() ? colors.focus : colors.border}
+          titleColor={shell() ? colors.heading : colors.muted} title={shell() ? "! shell" : borderInfo()}
+          titleAlignment={shell() ? "left" : "right"}
+          backgroundColor={colors.panel}
+          paddingX={1}
+          visible={!store.state.secretEntry}
+        >
+          {input()}
+        </box>
+      }>
+        <box width="100%" height={rows()} flexShrink={0} flexDirection="row" backgroundColor={colors.panel} visible={!store.state.secretEntry}>
+          <text width={3} height={1} flexShrink={0} wrapMode="none" fg={composerFocused() ? colors.focus : colors.border}>{shell() ? "╰! " : "╰─ "}</text>
+          {input()}
+        </box>
+      </Show>
     </box>
   )
 }

@@ -139,12 +139,23 @@ export function borderInfoText(state: AppState, segments: readonly StatusSegment
 }
 
 /**
- * Whether the status line is drawn: the component is on, and no visible
+ * Whether the status line is drawn at `placement` (below the input, or as the
+ * band right above a band input): the component is on, and no visible
  * Context pane already shows these facts (ADR-0036 "Deduplication"; the
  * workspace preset below 150 columns hides its sidebar, so the line returns).
  */
-export function statusLineShown(state: AppState, columns: number): boolean {
-  if (!state.structure.statusline.enabled) return false
+export function statusLineShown(state: AppState, columns: number, placement: "below" | "band" = "below"): boolean {
+  const settings = state.structure.statusline
+  if (!settings.enabled) return false
+  // A band needs the band input (`composer.style = "band"`); with a boxed input it goes below.
+  const effective = settings.placement === "band" && state.structure.composer.style === "band" ? "band" : "below"
+  if (effective !== placement) return false
   if (!state.structure.sidebar.enabled) return true
   return !paneLeaves(visiblePaneRoot(state.paneLayout.root, columns, state.sidebar, state.projectsSidebar)).some((pane) => pane.kind === "context")
+}
+
+/** The rule of a band input without a status band: `─` across, `composer.border_info` at the right end. */
+export function bandRule(state: AppState, columns: number, env: Record<string, string | undefined> = process.env): string {
+  const info = borderInfoText(state, state.structure.composer.border_info, Math.max(0, columns - 4), env)
+  return "─".repeat(Math.max(0, columns - Bun.stringWidth(info) - (info ? 1 : 0))) + info + (info ? "─" : "")
 }

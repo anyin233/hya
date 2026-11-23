@@ -13,6 +13,7 @@ import { workingLineText } from "../state/activity"
 import { currentPrompt } from "../state/prompts"
 import { pendingLines } from "../state/format"
 import { statusLineShown } from "../state/statusline"
+import { dockRowCount } from "../state/dock"
 export { jobsText } from "./paneRegistry"
 
 /** One stable mounted instance per id; tree edits change its bounds, never its parent. */
@@ -103,7 +104,7 @@ export function PaneWorkspace() {
     void store.state.draft; void store.state.secretEntry
     const prompt = currentPrompt(store.state)?.view, pending = pendingLines(store.state, size().width).length
     return (ui.composerHeight?.() ?? 3) + (prompt ? 4 + prompt.body.length + prompt.options.length : 0)
-      + (pending ? Math.min(3, pending) + 2 : 0) + (store.state.modeConfirm ? 1 : 0) + (statusLineShown(store.state, size().width) ? 1 : 0)
+      + (pending ? Math.min(3, pending) + 2 : 0) + (store.state.modeConfirm ? 1 : 0) + (statusLineShown(store.state, size().width) ? 1 : 0) + dockRowCount(store.state, size().width)
   }
   const rects = createMemo(() => { revision(); return layoutRects(visibleRoot(), { left: 0, top: 0, right: size().width, bottom: size().height }, minimum) })
   createEffect(() => {

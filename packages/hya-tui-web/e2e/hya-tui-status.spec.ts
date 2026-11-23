@@ -166,12 +166,15 @@ test.describe("live todo panel", () => {
     await term.waitForText("Messages 2")
     expect(await term.find("Todos 0/1")).toBeNull()
 
-    // Hiding the sidebar removes its metadata without adding conversation headings.
+    // Hiding the sidebar removes its metadata without adding conversation headings; the dock above
+    // the input takes over the open todo (ADR-0036 deduplication).
     await term.press("Control+x")
     await term.type("/sidebar")
     await term.press("Enter")
     await expect.poll(() => term.find("Todos")).toBeNull()
-    expect(await term.find("○ write tests")).toBeNull()
+    const lines = await term.lines()
+    const input = lines.findLastIndex((line) => line.includes("Message, !shell"))
+    expect(lines[input - 2]).toMatch(/ ○ write tests/)
   })
 })
 
