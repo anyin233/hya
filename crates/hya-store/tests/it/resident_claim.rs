@@ -487,6 +487,53 @@ async fn terminal_takeover_archives_an_active_claim() {
 }
 
 #[tokio::test]
+async fn finalizing_a_done_resident_still_on_the_roster_is_idempotent() {
+    // The root resident keeps its roster entry after the claim is released.
+    let store = SessionStore::connect_memory().await.unwrap();
+    let root = SessionId::new();
+    let handle = hya_proto::scope::ROOT_HANDLE;
+    store
+        .append_event(
+            root,
+            &Event::AgentRegistered {
+                session: root,
+                agent_session: root,
+                handle: handle.into(),
+                parent: None,
+                agent_type: AgentName::new("resident"),
+                mode: SubagentMode::Resident,
+            },
+        )
+        .await
+        .unwrap();
+    let claim = store
+        .try_claim_new(root, root, OwnerRunId::new())
+        .await
+        .unwrap();
+    let finalize = || {
+        finalize_resident(
+            &store,
+            &claim,
+            root,
+            handle,
+            MemberRunStatus::Done,
+            "finished",
+        )
+    };
+    let first = finalize().await.unwrap();
+    assert!(first.iter().any(|e| matches!(
+        e.event,
+        Event::AgentActivityChanged {
+            status: RosterStatus::Done,
+            ..
+        }
+    )));
+    let history = store.replay(root).await.unwrap();
+    assert!(finalize().await.unwrap().is_empty());
+    assert_eq!(store.replay(root).await.unwrap(), history);
+}
+
+#[tokio::test]
 async fn archive_activity_matches_member_outcome() {
     for (status, expected) in [
         (MemberRunStatus::Done, RosterStatus::Done),
