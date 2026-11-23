@@ -698,6 +698,10 @@ async fn execute_pipes(
                 .map(|output| CapturedRun { completion, output })
                 .map_err(|error| contextual_io("finish Bash output capture", error)),
             Err(error) => {
+                // Outside Linux the group poll may already have reaped the leader.
+                if child.id().is_none() {
+                    process_group = None;
+                }
                 let cleanup = terminate_pipe_child(&mut child, &mut process_group).await;
                 Err(with_cleanup_error(error, cleanup))
             }
@@ -1019,15 +1023,20 @@ fn run_pty_blocking(
     let mut group = hya_tool::process_group::ProcessGroup::new(pgid);
 
     let mut buffer = [0_u8; PIPE_BUFFER_BYTES];
-    let mut active_group = Some(pgid);
+    let mut pinned_group = Some(pgid);
     let mut drain_cutoff = None;
     let mut eof = false;
     let mut completion = None;
     loop {
         let cancelled = cancel.is_cancelled() || shutdown.is_cancelled();
         if cancelled || deadline.is_some_and(|at| Instant::now() >= at) {
-            if active_group.is_some() {
-                terminate_pty_child(&mut child, &mut active_group)?;
+            if completion.is_none() {
+                // Non-Linux group supervision can outlive the leader. Explicit
+                // cancellation still terminates that group while it is monitored.
+                let mut target = pinned_group.take();
+                #[cfg(not(target_os = "linux"))]
+                target.get_or_insert(pgid);
+                terminate_pty_child(&mut child, &mut target)?;
                 drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
             }
             completion = Some(if cancelled {
@@ -1035,10 +1044,16 @@ fn run_pty_blocking(
             } else {
                 Completion::TimedOut
             });
-        } else if active_group.is_some() {
-            match group.finished(|| child.try_wait()) {
+        } else if completion.is_none() {
+            match group.finished(|| {
+                let status = child.try_wait()?;
+                if status.is_some() {
+                    pinned_group = None;
+                }
+                Ok(status)
+            }) {
                 Ok(true) => {
-                    active_group = None;
+                    pinned_group = None;
                     let status = child
                         .wait()
                         .map_err(|error| contextual_io("reap Bash PTY process", error))?;
@@ -1048,18 +1063,18 @@ fn run_pty_blocking(
                 Ok(false) => {}
                 Err(error) => {
                     let wait_error = contextual_io("poll Bash PTY process group", error);
-                    let cleanup = terminate_pty_child(&mut child, &mut active_group);
+                    let cleanup = terminate_pty_child(&mut child, &mut pinned_group);
                     return Err(with_cleanup_error(wait_error, cleanup));
                 }
             }
         }
-        if active_group.is_none() && eof {
+        if completion.is_some() && eof {
             break;
         }
         if drain_cutoff.is_some_and(|at| Instant::now() >= at) {
             if let Err(error) = drain_ready_fd(master.as_raw_fd(), &mut sink) {
                 let drain_error = contextual_io("drain Bash PTY output", error);
-                let cleanup = terminate_pty_child(&mut child, &mut active_group);
+                let cleanup = terminate_pty_child(&mut child, &mut pinned_group);
                 return Err(with_cleanup_error(drain_error, cleanup));
             }
             break;
@@ -1081,7 +1096,7 @@ fn run_pty_blocking(
                 continue;
             }
             let poll_error = contextual_io("poll Bash PTY master", error);
-            let cleanup = terminate_pty_child(&mut child, &mut active_group);
+            let cleanup = terminate_pty_child(&mut child, &mut pinned_group);
             return Err(with_cleanup_error(poll_error, cleanup));
         }
         if polled == 0 {
@@ -1092,7 +1107,7 @@ fn run_pty_blocking(
             Ok(count) => {
                 if let Err(error) = sink.push(&buffer[..count]) {
                     let capture_error = contextual_io("capture Bash PTY output", error);
-                    let cleanup = terminate_pty_child(&mut child, &mut active_group);
+                    let cleanup = terminate_pty_child(&mut child, &mut pinned_group);
                     return Err(with_cleanup_error(capture_error, cleanup));
                 }
             }
@@ -1104,7 +1119,7 @@ fn run_pty_blocking(
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
             Err(error) => {
                 let read_error = contextual_io("read Bash PTY master", error);
-                let cleanup = terminate_pty_child(&mut child, &mut active_group);
+                let cleanup = terminate_pty_child(&mut child, &mut pinned_group);
                 return Err(with_cleanup_error(read_error, cleanup));
             }
         }
