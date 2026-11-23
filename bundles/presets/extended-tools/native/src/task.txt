@@ -1,4 +1,4 @@
-Launch independent subagents concurrently with one task call: {"context":"shared goal and interfaces","tasks":[{"description":"Map entry points","subagent_type":"hya-scout","prompt":"Find routing entry points; report paths and contracts."},{"description":"Inspect test coverage","subagent_type":"hya-scout","prompt":"Find routing tests and missing cases; report evidence."}]}.
+Prefer one tasks[] batch for independent work. Never serialize independent siblings with spawn/wait pairs. Example: {"context":"shared goal and interfaces","tasks":[{"description":"Map entry points","subagent_type":"hya-scout","prompt":"Find routing entry points; report paths and contracts."},{"description":"Inspect test coverage","subagent_type":"hya-scout","prompt":"Find routing tests and missing cases; report evidence."}]}.
 
 Give each task a bounded scope, explicit file ownership/non-goals and observable acceptance; copy every hard constraint, edge-case note, and negative requirement verbatim into shared context or the relevant prompt. Avoid overlapping edits; assign one integration owner. Dependent work starts only after its prerequisites are available.
 

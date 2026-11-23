@@ -95,9 +95,10 @@ and task inputs, including during read-only inspection. Their scope excludes
 harness internals, unrelated system paths, or credentials not provided for
 the task. A credential provided for the assignment is an in-scope input.
 
-The `task` tool describes how to launch one
-call containing independent `tasks[]`, with shared `context` and per-member
-scope, ownership and acceptance criteria. Copy the original hard constraints,
+The lead delegates only focused, independent work. Submit independent
+assignments together in one `task` call with a `tasks[]` array. Each item
+has its own scope, ownership and acceptance criteria. Use the returned
+`<subagent_type>-<operator>` handle to follow up with that child. Copy the original hard constraints,
 edge-case notes and negative requirements verbatim into `context` or the
 relevant `prompt`. Omit `effort` to use the explicit `model#effort` suffix or the child agent's default shown by `list_agents`. An explicit effort must be supported by the child model.
 

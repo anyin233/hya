@@ -97,7 +97,7 @@ pub fn team_quick_reference(has: impl Fn(&str) -> bool, depth: u32) -> Option<St
     let mut lines: Vec<&str> = Vec::new();
     if has("task") {
         lines.push(
-            "- A `task` result marked running acknowledges launch. Continue independent work while the children run; use their returned handles for follow-up. Results arrive later as mail.",
+            "- A `task` result marked running acknowledges launch. Continue independent work while the children run; address follow-up mail to the returned handle for that child. Results arrive later as mail.",
         );
     }
     if mail {
