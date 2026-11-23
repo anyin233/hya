@@ -1074,7 +1074,9 @@ On Unix, a foreground Bash call waits for same-group descendants even if the
 shell has exited and those descendants closed their output. For example,
 `(sleep 1 0<&- 1>&- 2>&-) & exit 7` waits for the sleep and returns the
 shell's exit code of 7. A writer that starts a separate session gets a bounded
-output drain once the original group finishes.
+output drain once the original group finishes. On Linux, termination keeps the
+leader waitable during the group scan and releases the saved group ID before
+reaping the leader, including when the scan reports an error.
 
 The turn drain waits at most **5 s** (`DRAIN_DEADLINE`) for cancelled turns to
 close themselves, then closes any still-open message itself; store exit drain
