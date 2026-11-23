@@ -249,6 +249,25 @@ impl RunDeadline {
             .min(self.remaining().saturating_sub(self.grace()) / 2)
     }
 
+    /// Maximum time a single step may spend only reasoning.
+    #[must_use]
+    pub fn reasoning_step_cap(&self) -> Duration {
+        clamp_secs(0.30 * self.remaining().as_secs_f64(), 90.0, 420.0).max(self.reasoning_grace())
+    }
+
+    /// Wait from the first reasoning delta until a stage or the per-step cap.
+    #[must_use]
+    pub fn next_reasoning_cut(&self, session: SessionId) -> Option<(Duration, Option<Stage>)> {
+        let (delay, stage) = self.next_checkpoint(session)?;
+        let stage_wait = delay.max(self.reasoning_grace());
+        let cap = self.reasoning_step_cap();
+        Some(if stage_wait <= cap {
+            (stage_wait, Some(stage))
+        } else {
+            (cap, None)
+        })
+    }
+
     /// The stage now.
     #[must_use]
     pub fn stage(&self) -> Stage {
@@ -355,13 +374,19 @@ impl RunDeadline {
         let told = notified.entry(session).or_insert(Told::START);
         (told.tenth < tenth).then(|| {
             told.tenth = tenth;
-            format!(
-                "HEADLESS RUN — clock: {}s of {}s used, {}s left.",
-                self.elapsed().as_secs(),
-                self.budget.as_secs(),
-                self.remaining().as_secs()
-            )
+            self.clock_line()
         })
+    }
+
+    /// Current elapsed and remaining time for a budget notice.
+    #[must_use]
+    pub fn clock_line(&self) -> String {
+        format!(
+            "HEADLESS RUN — clock: {}s of {}s used, {}s left.",
+            self.elapsed().as_secs(),
+            self.budget.as_secs(),
+            self.remaining().as_secs()
+        )
     }
 
     /// Whole tenths of the budget used so far.
@@ -401,9 +426,7 @@ impl RunDeadline {
             (Stage::Final | Stage::Over, false) => format!(
                 "HEADLESS RUN — FINAL {left}s: {elapsed}s of {budget}s used. Write any missing \
                  deliverable now from the work you have, commit if the request asks for a \
-                 commit, then end your turn. Do not edit a file you have already delivered in \
-                 place: if it needs a change, change a copy, run the check the file passed, and \
-                 replace the file only if the copy passes. Start only commands that finish well \
+                 commit, then end your turn. If a delivered file already passes your checks, do not edit it in place — test any change on a copy first and replace the file only if the copy still passes. If a delivered file is unverified or failing, fix it directly and verify it now. Start only commands that finish well \
                  within the time left."
             ),
             (Stage::Normal | Stage::WrapUp, true) => format!(
@@ -527,9 +550,7 @@ mod tests {
             deadline.notice(Stage::Final, false),
             "HEADLESS RUN — FINAL 40s: 0s of 40s used. Write any missing deliverable now from \
              the work you have, commit if the request asks for a commit, then end your turn. \
-             Do not edit a file you have already delivered in place: if it needs a change, \
-             change a copy, run the check the file passed, and replace the file only if the \
-             copy passes. Start only commands that finish well within the time left."
+             If a delivered file already passes your checks, do not edit it in place — test any change on a copy first and replace the file only if the copy still passes. If a delivered file is unverified or failing, fix it directly and verify it now. Start only commands that finish well within the time left."
         );
         assert_eq!(
             deadline.notice(Stage::Final, true),
@@ -539,6 +560,24 @@ mod tests {
 
     /// D5: the next checkpoint follows what the session was told, and
     /// nothing follows a Final notice.
+    #[tokio::test(start_paused = true)]
+    async fn reasoning_step_cap_leaves_the_next_stage_due() {
+        let deadline = started(900, 0);
+        let session = session();
+        assert_eq!(
+            deadline.next_reasoning_cut(session),
+            Some((Duration::from_secs(270), None))
+        );
+        tokio::time::advance(Duration::from_secs(585)).await;
+        assert_eq!(deadline.take_notice(session), Some(Stage::WrapUp));
+        assert_eq!(
+            deadline.next_reasoning_cut(session),
+            Some((Duration::from_millis(94_500), None))
+        );
+        deadline.mark_notified(session, Stage::Final);
+        assert_eq!(deadline.next_reasoning_cut(session), None);
+    }
+
     #[test]
     fn d5_next_checkpoint_follows_what_was_told() {
         // B = 900: WrapUp at 585 s used, Final at 792 s.

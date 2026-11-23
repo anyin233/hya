@@ -84,9 +84,7 @@ Tool results keep their original payloads.
 The lead agent’s Final notice includes this instruction to preserve a checked
 deliverable as the time limit approaches.
 
-> Do not edit a file you have already delivered in place: if it needs a change,
-> change a copy, run the check the file passed, and replace the file only if
-> the copy passes.
+> If a delivered file already passes your checks, do not edit it in place — test any change on a copy first and replace the file only if the copy still passes. If a delivered file is unverified or failing, fix it directly and verify it now.
 
 ### Dropped-reasoning notice
 
@@ -216,8 +214,11 @@ stream that never reasons.
   before `Over`; 27 s for a 900 s budget) lets a short step that starts just
   before a stage, or after a stage the session was not yet told of, finish
   its thought and act; in full mode its tool result then carries the stage
-  notice. Rounds that start reasoning more than the grace before WrapUp are
-  stopped at WrapUp itself.
+  notice. A step also has a cap of 30% of its remaining budget at the first
+  reasoning delta, clamped to 90–420 seconds and at least the grace.
+  Whichever comes first interrupts the step. For a fresh 900-second run the
+  cap is 270 seconds. A cut before a stage sends the clock and asks for a
+  concrete tool call. The stage remains due at its usual time.
 - Once armed, the guard is checked ahead of the stream (after a cancel), so
   buffered stream chunks cannot hold off a checkpoint that has passed.
 - The first visible text (`TextStart` or `TextDelta`) or tool call
@@ -244,7 +245,7 @@ request until that message records its next part:
 
 followed by the stage's own `HEADLESS RUN — TIME` or `FINAL` notice (the
 `report` text for an agent that delivers by `report`, as on a tool result),
-and, when the step had reasoned, its last 1,200 characters under "Where your
+and, when the step had reasoned, its first 1,200 and last 2,000 characters (all text through 3,200) under "Where your
 thinking stopped", so a route that drops replayed reasoning still shows where
 the model was. The stage counts as told (`RunDeadline::mark_notified`), so
 the next round gets no second notice of that stage, nor a clock line in the
@@ -736,6 +737,8 @@ completion check, and runs another round:
 `{n}` is the output-token count the round reported. When the round reported
 no usage, the sentence `It ended after {n} output tokens.` is left out.
 
+In either mode, the notice arrives as the trailing user message for one request. It includes the same bounded reasoning excerpt as a deadline cut. The rescued step retains its transcript text and loses its provider replay metadata before that request.
+
 At most two empty turns in a row get this message. A third empty turn in a
 row ends the run as any answer without a tool call does, and `hya exec
 --bare` prints an empty answer. A round with a tool call or with answer text
@@ -748,14 +751,12 @@ remains eligible without reasoning.
 
 The completion check keeps its rules. An empty turn neither triggers it nor
 counts as sending it: when a later round answers with text, the check is sent
-or not exactly as described above. The empty turn's reasoning stays in the
-history and is replayed like that of any completed step. Like the completion
-check, the message is transient: the next request carries it as its last
+or not exactly as described above. The message is transient: the next request carries it as its last
 (user) message, and requests leave it out once the model has responded.
 
 For example, a round thinks for six minutes and stops after 65,536 output
 tokens without text. The log records the round as `StepFinished` with
-`finish: stop`, then the system message ending in `It ended after 65536
+`finish: stop`, then the system message containing `It ended after 65536
 output tokens.`, then the next `StepStarted`. If that round calls a tool, the
 run goes on as usual; if it answers with text after a tool already ran, the
 completion check follows.

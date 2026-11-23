@@ -308,7 +308,7 @@ async fn collect(
     (round, log.0.into_inner().unwrap())
 }
 
-/// A stream that keeps reasoning is cut at WrapUp with all its reasoning,
+/// A stream that keeps reasoning meets the per-step cap with all its reasoning,
 /// closed blocks and the open one, while its deltas still arrive.
 async fn reasoning_only_round_is_cut() {
     let turn = Turn::new();
@@ -321,22 +321,27 @@ async fn reasoning_only_round_is_cut() {
     )
     .await;
     let elapsed = deadline::current().unwrap().elapsed();
-    assert!(
-        (WRAP_UP..=WRAP_UP + secs(5)).contains(&elapsed),
-        "{elapsed:?}"
-    );
+    assert!((secs(270)..=secs(275)).contains(&elapsed), "{elapsed:?}");
     assert!(round.tool_calls.is_empty());
     assert_eq!(round.finish, FinishReason::Stop);
     let Some(DeadlineCut { stage, reasoning }) = round.deadline_cut else {
-        panic!("reasoning-only stream crossed WrapUp uncut");
+        panic!("reasoning-only stream exceeded its cap");
     };
-    assert_eq!(stage, Stage::WrapUp);
+    assert_eq!(stage, None);
+    assert_eq!(
+        deadline::current()
+            .unwrap()
+            .next_checkpoint(turn.session)
+            .unwrap()
+            .1,
+        Stage::WrapUp
+    );
     let thought = reasoning
         .strip_prefix("plan the parser\n\n")
         .unwrap_or_else(|| panic!("{reasoning}"));
-    // One delta per 5 s, up to 585 s.
+    // One delta per 5 s, up to 270 s.
     assert!(
-        (116..=117).contains(&thought.len()) && thought.chars().all(|c| c == 'x'),
+        (53..=54).contains(&thought.len()) && thought.chars().all(|c| c == 'x'),
         "{thought}"
     );
     // The open part is persisted with what streamed before the cut.
@@ -447,7 +452,7 @@ async fn a_long_step_after_an_untold_stage_is_cut() {
     let Some(DeadlineCut { stage, reasoning }) = round.deadline_cut else {
         panic!("reasoning past the grace was not cut");
     };
-    assert_eq!(stage, Stage::WrapUp);
+    assert_eq!(stage, Some(Stage::WrapUp));
     assert_eq!(
         reasoning,
         format!("compare the options{}", " again".repeat(5))
@@ -702,7 +707,7 @@ async fn wrap_up_cut_then_answer() {
         SessionId::new(),
         200_000,
         vec![
-            thinks(secs(0), "the schema needs a version field"),
+            thinks(secs(500), "the schema needs a version field"),
             Box::new(|turn| paced(turn.text(WRAP_UP, "done").into_iter())),
         ],
     )
@@ -760,7 +765,7 @@ async fn final_cut_is_not_repeated() {
         session,
         200_000,
         vec![
-            thinks(secs(0), "checking the last case"),
+            thinks(secs(730), "checking the last case"),
             Box::new(|turn| {
                 let part = PartId::new();
                 let mut events = turn.reasoning(FINAL, part, "one more check", false);
