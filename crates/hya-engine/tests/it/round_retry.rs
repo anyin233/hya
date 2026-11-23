@@ -421,8 +421,27 @@ async fn only_reasoning_or_length_requests_empty_turn_rescue() -> Result<(), Cor
                 .messages
                 .iter()
                 .flat_map(|row| &row.parts);
-            assert!(parts.clone().any(|part| matches!(part, hya_proto::PartProjection::Reasoning { text, provider_data: None, .. } if text == "thinking")));
+            assert!(parts.clone().any(|part| matches!(part, hya_proto::PartProjection::Reasoning { text, provider_data: Some(data), .. } if text == "thinking" && data == &json!({"id": "prior-step"}))));
             assert!(parts.any(|part| matches!(part, hya_proto::PartProjection::Text { text, .. } if text.ends_with("Where your previous thinking left off:\nthinking"))));
+            let messages = kernel::request::projection_to_messages(
+                &agent.name,
+                &projection,
+                &agent.model,
+                &AttachmentData::new(),
+            );
+            let notice_id = projection
+                .session
+                .messages
+                .iter()
+                .find(|row| {
+                    row.parts.iter().any(|p| {
+                        matches!(p,
+                hya_proto::PartProjection::Text {text, ..} if kernel::is_empty_turn_notice(text))
+                    })
+                })
+                .unwrap()
+                .id;
+            assert!(messages.iter().all(|m| m.id() != notice_id));
         }
     }
     Ok(())

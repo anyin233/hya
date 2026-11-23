@@ -165,6 +165,9 @@ fn emit_assistant(
                 }
                 Part::Tool { .. } => cluster.tools.push(part),
                 Part::Reasoning { text, .. } if replays_reasoning(part) => {
+                    if !cluster.reasoning.is_empty() && !text.is_empty() {
+                        cluster.reasoning.push_str("\n\n");
+                    }
                     cluster.reasoning.push_str(text);
                 }
                 Part::Reasoning { .. } => {}

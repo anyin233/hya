@@ -751,6 +751,27 @@ fn chat_reasoning(text: &str) -> Part {
 }
 
 #[test]
+fn openai_chat_separates_reasoning_parts_in_one_assistant_message() {
+    let mut req = assistant_tool_request(json!({"path": "a"}));
+    let Message::Assistant { parts, .. } = &mut req.messages[1] else {
+        panic!("assistant fixture");
+    };
+    parts.splice(
+        0..0,
+        [
+            chat_reasoning("first thought"),
+            chat_reasoning(""),
+            chat_reasoning("next thought"),
+        ],
+    );
+    let body = OpenAiChatProtocol.encode(&req).unwrap();
+    assert_eq!(
+        body["messages"][1]["reasoning_content"],
+        "first thought\n\nnext thought"
+    );
+}
+
+#[test]
 fn openai_chat_replays_reasoning_content_on_every_assistant_message() {
     let mut req = assistant_tool_request(json!({"path": "a"}));
     // An earlier turn whose tool call carried no reasoning, then the current

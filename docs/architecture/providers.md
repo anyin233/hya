@@ -463,7 +463,8 @@ earlier assistant message. The route's replay policy is
 `ReasoningReplayPolicy::ReasoningContent`: reasoning parts marked
 `{"type": "reasoning_content"}` (or the older
 `{"openai_chat_reasoning_content": true}`) are resent on every turn as the wire
-message's `reasoning_content`. Once a transcript holds any such part, every
+message's `reasoning_content`. Nonempty reasoning parts in the same assistant
+message are separated by two newlines. Once a transcript holds any such part, every
 assistant wire message carries `reasoning_content`; it is `""` when that
 message had none. Reasoning from other protocols (for example Anthropic
 thinking before a model switch) is never sent. A transcript without

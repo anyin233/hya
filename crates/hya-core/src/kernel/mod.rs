@@ -109,47 +109,25 @@ pub fn format_reasoning_excerpt(reasoning: &str) -> String {
     )
 }
 
-/// Preserve the step's thinking in a one-request notice and retire its replay metadata.
+/// Carry completed reasoning into the next request, including on routes that omit its replay.
 pub fn empty_turn_events(
     session: SessionId,
-    message: MessageId,
     parts: &[PartProjection],
     tokens: Option<u64>,
 ) -> Vec<Event> {
-    let mut events = Vec::new();
-    let mut thoughts = Vec::new();
-    for part in parts {
-        if let PartProjection::Reasoning {
-            id,
-            text,
-            provider_data,
-            ..
-        } = part
-        {
-            if provider_data.is_some() {
-                events.push(Event::ReasoningEnd {
-                    session,
-                    message,
-                    part: *id,
-                    provider_data: None,
-                });
-            }
-            if !text.trim().is_empty() {
-                thoughts.push(text.trim());
-            }
-        }
-    }
+    let thoughts: Vec<_> = parts
+        .iter()
+        .filter_map(|part| match part {
+            PartProjection::Reasoning { text, .. } if !text.trim().is_empty() => Some(text.trim()),
+            _ => None,
+        })
+        .collect();
     let mut notice = empty_turn_notice(tokens);
     if !thoughts.is_empty() {
         notice.push_str("\n\nWhere your previous thinking left off:\n");
         notice.push_str(&format_reasoning_excerpt(&thoughts.join("\n\n")));
     }
-    events.extend(round::system_message_events(
-        session,
-        MessageId::new(),
-        notice,
-    ));
-    events
+    round::system_message_events(session, MessageId::new(), notice)
 }
 
 fn deadline_cut_notice(cut: &DeadlineCut, clock_or_stage: Option<String>) -> String {
@@ -654,7 +632,7 @@ impl Harness for Bare<'_> {
             self.empty_turns += 1;
             emit.emit(
                 session,
-                empty_turn_events(session, message, parts, self.output_tokens),
+                empty_turn_events(session, parts, self.output_tokens),
             )
             .await?;
             return Ok(true);
