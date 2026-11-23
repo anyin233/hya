@@ -1607,6 +1607,37 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn budgeted_shell_finishes_while_a_detached_writer_is_alive() -> Result<(), ToolError> {
+        let cwd = Path::new(".");
+        let deadline = RunDeadline::new(tokio::time::Instant::now(), Duration::from_secs(180));
+        let started = Instant::now();
+        let run = execute_budgeted_file(
+            "python3 -c 'import os,time; os.setsid(); time.sleep(30)' & echo $!",
+            BTreeMap::new(),
+            cwd,
+            cwd.into(),
+            timeout_settings(Some(10.0))?,
+            &deadline,
+            &CancellationToken::new(),
+        )
+        .await?;
+        let pid = String::from_utf8_lossy(&run.output.inline)
+            .trim()
+            .parse::<libc::pid_t>()
+            .map_err(io::Error::other)?;
+        assert!(pid > 0);
+        // SAFETY: query and stop the specific background child printed by Bash.
+        let session = unsafe { libc::getsid(pid) };
+        let killed = unsafe { libc::kill(pid, libc::SIGKILL) };
+        assert_eq!(session, pid);
+        assert_eq!(killed, 0);
+        assert!(matches!(run.completion, Completion::Finished(Some(0))));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        Ok(())
+    }
+
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn budgeted_shell_tracks_descendants_that_close_inherited_fds() -> Result<(), ToolError> {

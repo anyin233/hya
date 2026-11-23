@@ -105,6 +105,8 @@ impl ProcessGroup {
 /// until the group finishes, so its PGID cannot be reused during supervision.
 pub struct BudgetGroup {
     child: Child,
+    wait_for_descendants: bool,
+    reaped_status: Option<ExitStatus>,
     sentinel: Option<AsyncFd<PipeReader>>,
     monitor: ProcessGroup,
 }
@@ -142,6 +144,8 @@ impl BudgetGroup {
         Ok(Self {
             child,
             monitor: ProcessGroup::new(pgid),
+            wait_for_descendants,
+            reaped_status: None,
             sentinel,
         })
     }
@@ -208,33 +212,52 @@ impl BudgetGroup {
         Ok(())
     }
 
-    /// Wait for completion and reap the leader.
+    fn group_finished(&mut self) -> io::Result<bool> {
+        self.monitor.finished(|| {
+            if self.reaped_status.is_none() {
+                self.reaped_status = self.child.try_wait()?;
+            }
+            Ok(self.reaped_status)
+        })
+    }
+
+    /// Wait for the original group. A detached writer can keep the pipe open.
     async fn wait_for_group(&mut self) -> io::Result<ExitStatus> {
-        if let Some(sentinel) = &self.sentinel {
-            sentinel
-                .async_io(tokio::io::Interest::READABLE, Self::eof)
-                .await?;
-            while !self.monitor.finished(|| self.child.try_wait())? {
+        while self.wait_for_descendants && !self.group_finished()? {
+            if let Some(sentinel) = &self.sentinel {
+                tokio::select! {
+                    result = sentinel.async_io(tokio::io::Interest::READABLE, Self::eof) => {
+                        result?;
+                        self.sentinel = None;
+                    }
+                    () = tokio::time::sleep(POLL_INTERVAL) => {}
+                }
+            } else {
                 tokio::time::sleep(POLL_INTERVAL).await;
             }
         }
-        self.sentinel = None;
-        self.child.wait().await
+        match self.reaped_status {
+            Some(status) => Ok(status),
+            None => self.child.wait().await,
+        }
     }
 
-    /// Reap only if the entire supervised group is finished.
+    /// Return the leader's status only when supervision has finished.
     fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
         if let Some(sentinel) = &self.sentinel {
             match Self::eof(sentinel.get_ref()) {
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(None),
-                result => result?,
-            }
-            if !self.monitor.finished(|| self.child.try_wait())? {
-                return Ok(None);
+                Ok(()) => self.sentinel = None,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e),
             }
         }
-        self.sentinel = None;
-        self.child.try_wait()
+        if self.wait_for_descendants && !self.group_finished()? {
+            return Ok(None);
+        }
+        match self.reaped_status {
+            Some(status) => Ok(Some(status)),
+            None => self.child.try_wait(),
+        }
     }
 
     fn kill(&self) -> io::Result<()> {

@@ -468,9 +468,10 @@ Shutdown closes admission before starting its drain. Calls that arrive after
 closure return a cancellation before spawning Bash. For an admitted command
 the drain waits for process cleanup and, if it yielded, publication of its exit file.
 Read the output while the command runs. The exit file appears atomically when
-the shell exits and its inherited group sentinel closes. On Linux, Bash also
-waits for live group members that closed the sentinel, including children
-launched with Python’s `subprocess.Popen`. Zombie descendants count as exited.
+the shell and its supervised group finish. A process that starts a new session
+with `setsid()` can keep inherited file descriptors open after Bash returns.
+On Linux, Bash waits for live group members even when they close their
+inherited descriptors. Zombie descendants count as exited.
 Cancellation, budget expiry, or exec shutdown kills a yielded group. Exec waits
 for its supervisor to reap the shell and publish the exit code before returning.
 During termination, Bash sends its last group signal while the leader’s PID is
