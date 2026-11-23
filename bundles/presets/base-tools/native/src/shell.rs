@@ -2,8 +2,7 @@ use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read as _, Seek as _, Write as _};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
@@ -28,9 +27,6 @@ const DEFAULT_TIMEOUT_SECONDS: f64 = 300.0;
 const MIN_TIMEOUT_SECONDS: f64 = 1.0;
 const MAX_TIMEOUT_SECONDS: f64 = 3600.0;
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;
-const CONTROL_RUNNING: u8 = 0;
-const CONTROL_CANCELLED: u8 = 1;
-const CONTROL_TIMED_OUT: u8 = 2;
 const PIPE_BUFFER_BYTES: usize = 8192;
 const FINAL_DRAIN_BYTES: usize = 1024 * 1024;
 const POST_KILL_DRAIN_GRACE: Duration = Duration::from_millis(100);
@@ -680,7 +676,7 @@ async fn execute_pipes(
     let mut child = process
         .spawn()
         .map_err(|error| contextual_io("spawn Bash process", error))?;
-    let process_group = child.id();
+    let mut process_group = child.id();
     let worker_cancel = cancel.child_token();
     let _abandoned = worker_cancel.clone().drop_guard();
     let (reply, result) = oneshot::channel();
@@ -689,7 +685,7 @@ async fn execute_pipes(
         let mut sink = OutputSink::new(artifact_root);
         let captured = match capture_pipes(
             &mut child,
-            process_group,
+            &mut process_group,
             &mut sink,
             timeout.duration,
             &worker_cancel,
@@ -717,7 +713,7 @@ async fn execute_pipes(
 /// Returns contextual errors for pipe reads, child waits, or process cleanup.
 async fn capture_pipes(
     child: &mut Child,
-    process_group: Option<u32>,
+    process_group: &mut Option<u32>,
     sink: &mut OutputSink,
     timeout: Option<Duration>,
     cancel: &CancellationToken,
@@ -741,11 +737,18 @@ async fn capture_pipes(
     let mut stdout_buffer = [0_u8; PIPE_BUFFER_BYTES];
     let mut stderr_buffer = [0_u8; PIPE_BUFFER_BYTES];
 
+    #[cfg(unix)]
+    let mut group = hya_tool::process_group::ProcessGroup::new(
+        process_group.ok_or_else(|| io::Error::other("spawned Bash has no PID"))?,
+    );
+    #[cfg(unix)]
+    let mut poll = tokio::time::interval(Duration::from_millis(15));
     loop {
         if !terminated {
             let cancelled = cancel.is_cancelled() || shutdown.is_cancelled();
             if cancelled || deadline.is_some_and(|at| Instant::now() >= at) {
-                terminate_pipe_child(child, process_group).await?;
+                terminate_pipe_child(child, *process_group).await?;
+                *process_group = None;
                 reaped = true;
                 terminated = true;
                 completion = Some(if cancelled {
@@ -769,21 +772,30 @@ async fn capture_pipes(
                 .map_err(|error| contextual_io("drain Bash stderr", error))?;
             break;
         }
-        #[cfg(unix)]
-        if reaped && drain_cutoff.is_none() && !process_group_alive(process_group) {
-            drain_cutoff = Some(Instant::now() + ORPHAN_PIPE_GRACE);
-        }
+        let wait = async {
+            #[cfg(unix)]
+            {
+                poll.tick().await;
+                if !group.finished(|| child.try_wait())? {
+                    return Ok(None);
+                }
+            }
+            child.wait().await.map(Some)
+        };
         tokio::select! {
             biased;
             _ = cancel.cancelled(), if !terminated => {}
             _ = shutdown.cancelled(), if !terminated => {}
             _ = wait_for_deadline(deadline) => {}
             _ = wait_for_deadline(drain_cutoff) => {}
-            _ = tokio::time::sleep(Duration::from_millis(100)), if cfg!(unix) && reaped && drain_cutoff.is_none() => {}
-            result = child.wait(), if !reaped => {
-                let status = result.map_err(|error| contextual_io("wait for Bash process", error))?;
-                reaped = true;
-                completion = Some(Completion::Finished(status.code()));
+            result = wait, if !reaped => {
+                if let Some(status) = result.map_err(|error| contextual_io("wait for Bash process group", error))? {
+                    reaped = true;
+                    *process_group = None;
+                    completion = Some(Completion::Finished(status.code()));
+                    #[cfg(unix)]
+                    { drain_cutoff = Some(Instant::now() + ORPHAN_PIPE_GRACE); }
+                }
             }
             result = stdout.read(&mut stdout_buffer), if !stdout_done => {
                 let count = result.map_err(|error| contextual_io("read Bash stdout", error))?;
@@ -938,42 +950,20 @@ async fn execute_pty(
     }
     let worker_cancel = cancel.child_token();
     let _abandoned = worker_cancel.clone().drop_guard();
-    let (reply, result) = oneshot::channel();
-    tokio::spawn(async move {
+    tokio::task::spawn_blocking(move || {
         let _registration = registration;
-        let control = Arc::new(AtomicU8::new(CONTROL_RUNNING));
-        let worker_control = Arc::clone(&control);
-        let shutdown_for_worker = shutdown.clone();
-        let mut worker = tokio::task::spawn_blocking(move || {
-            run_pty_blocking(
-                command,
-                env,
-                cwd,
-                artifact_root,
-                timeout.duration,
-                worker_control,
-                shutdown_for_worker,
-            )
-        });
-        let stopped = async {
-            tokio::select! {
-                () = worker_cancel.cancelled() => {},
-                () = shutdown.cancelled() => {},
-            }
-        };
-        let captured = tokio::select! {
-            result = &mut worker => result,
-            () = stopped => {
-                control.store(CONTROL_CANCELLED, Ordering::Release);
-                worker.await
-            }
-        };
-        let _ = reply.send(captured);
-    });
-    result
-        .await
-        .map_err(io::Error::other)?
-        .map_err(|error| ToolError::Other(format!("Bash PTY worker failed: {error}")))?
+        run_pty_blocking(
+            command,
+            env,
+            cwd,
+            artifact_root,
+            timeout.duration,
+            worker_cancel,
+            shutdown,
+        )
+    })
+    .await
+    .map_err(|error| ToolError::Other(format!("Bash PTY worker failed: {error}")))?
 }
 
 /// Spawn and capture a PTY child while polling its nonblocking master.
@@ -984,7 +974,7 @@ fn run_pty_blocking(
     cwd: PathBuf,
     artifact_root: PathBuf,
     timeout: Option<Duration>,
-    control: Arc<AtomicU8>,
+    cancel: CancellationToken,
     shutdown: CancellationToken,
 ) -> Result<CapturedRun, ToolError> {
     use pty_process::blocking::{Command, open};
@@ -996,7 +986,7 @@ fn run_pty_blocking(
         open().map_err(|error| ToolError::Other(format!("Bash PTY setup failed: {error}")))?;
     set_nonblocking(master.as_raw_fd())
         .map_err(|error| contextual_io("set Bash PTY master nonblocking", error))?;
-    if control.load(Ordering::Acquire) == CONTROL_CANCELLED || shutdown.is_cancelled() {
+    if cancel.is_cancelled() || shutdown.is_cancelled() {
         return Err(ToolError::Cancelled);
     }
     let mut child = Command::new("bash")
@@ -1007,64 +997,51 @@ fn run_pty_blocking(
         .envs(env)
         .spawn(pts)
         .map_err(|error| ToolError::Other(format!("spawn Bash PTY process: {error}")))?;
-    let process_group = child.id();
+    let pgid = child.id();
+    let mut group = hya_tool::process_group::ProcessGroup::new(pgid);
 
     let mut buffer = [0_u8; PIPE_BUFFER_BYTES];
-    let mut leader_reaped = false;
-    let mut group_terminated = false;
+    let mut active_group = Some(pgid);
     let mut drain_cutoff = None;
     let mut eof = false;
     let mut completion = None;
     loop {
-        let requested = control.load(Ordering::Acquire);
-        if requested == CONTROL_CANCELLED || shutdown.is_cancelled() {
-            if !group_terminated {
-                terminate_pty_child(&mut child, process_group, leader_reaped)?;
-                group_terminated = true;
+        let cancelled = cancel.is_cancelled() || shutdown.is_cancelled();
+        if cancelled || deadline.is_some_and(|at| Instant::now() >= at) {
+            if let Some(pgid) = active_group.take() {
+                terminate_pty_child(&mut child, Some(pgid))?;
                 drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
-                leader_reaped = true;
             }
-            completion = Some(Completion::Cancelled);
-        } else if requested == CONTROL_TIMED_OUT || deadline.is_some_and(|at| Instant::now() >= at)
-        {
-            control.store(CONTROL_TIMED_OUT, Ordering::Release);
-            if !group_terminated {
-                terminate_pty_child(&mut child, process_group, leader_reaped)?;
-                group_terminated = true;
-                drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
-                leader_reaped = true;
-            }
-            completion = Some(Completion::TimedOut);
-        }
-
-        if !leader_reaped {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    leader_reaped = true;
-                    completion.get_or_insert(Completion::Finished(status.code()));
+            completion = Some(if cancelled {
+                Completion::Cancelled
+            } else {
+                Completion::TimedOut
+            });
+        } else if active_group.is_some() {
+            match group.finished(|| child.try_wait()) {
+                Ok(true) => {
+                    let status = child
+                        .wait()
+                        .map_err(|error| contextual_io("reap Bash PTY process", error))?;
+                    active_group = None;
+                    completion = Some(Completion::Finished(status.code()));
+                    drain_cutoff = Some(Instant::now() + ORPHAN_PIPE_GRACE);
                 }
-                Ok(None) => {}
+                Ok(false) => {}
                 Err(error) => {
-                    let wait_error = contextual_io("poll Bash PTY process", error);
-                    let cleanup = terminate_pty_child(&mut child, process_group, false);
+                    let wait_error = contextual_io("poll Bash PTY process group", error);
+                    let cleanup = terminate_pty_child(&mut child, active_group);
                     return Err(with_cleanup_error(wait_error, cleanup));
                 }
             }
         }
-
-        // A PTY master may report EIO/HUP when the leader exits even though a
-        // descendant still owns the slave.  EOF is terminal only after the
-        // saved process group is absent.
-        if leader_reaped && !process_group_alive(Some(process_group)) {
-            if eof {
-                break;
-            }
-            drain_cutoff.get_or_insert_with(|| Instant::now() + ORPHAN_PIPE_GRACE);
+        if active_group.is_none() && eof {
+            break;
         }
         if drain_cutoff.is_some_and(|at| Instant::now() >= at) {
             if let Err(error) = drain_ready_fd(master.as_raw_fd(), &mut sink) {
                 let drain_error = contextual_io("drain Bash PTY output", error);
-                let cleanup = terminate_pty_child(&mut child, process_group, leader_reaped);
+                let cleanup = terminate_pty_child(&mut child, active_group);
                 return Err(with_cleanup_error(drain_error, cleanup));
             }
             break;
@@ -1086,7 +1063,7 @@ fn run_pty_blocking(
                 continue;
             }
             let poll_error = contextual_io("poll Bash PTY master", error);
-            let cleanup = terminate_pty_child(&mut child, process_group, leader_reaped);
+            let cleanup = terminate_pty_child(&mut child, active_group);
             return Err(with_cleanup_error(poll_error, cleanup));
         }
         if polled == 0 {
@@ -1097,7 +1074,7 @@ fn run_pty_blocking(
             Ok(count) => {
                 if let Err(error) = sink.push(&buffer[..count]) {
                     let capture_error = contextual_io("capture Bash PTY output", error);
-                    let cleanup = terminate_pty_child(&mut child, process_group, leader_reaped);
+                    let cleanup = terminate_pty_child(&mut child, active_group);
                     return Err(with_cleanup_error(capture_error, cleanup));
                 }
             }
@@ -1109,16 +1086,10 @@ fn run_pty_blocking(
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
             Err(error) => {
                 let read_error = contextual_io("read Bash PTY master", error);
-                let cleanup = terminate_pty_child(&mut child, process_group, leader_reaped);
+                let cleanup = terminate_pty_child(&mut child, active_group);
                 return Err(with_cleanup_error(read_error, cleanup));
             }
         }
-    }
-    if !leader_reaped {
-        let status = child
-            .wait()
-            .map_err(|error| contextual_io("reap Bash PTY process", error))?;
-        completion.get_or_insert(Completion::Finished(status.code()));
     }
     // Close the master after EOF or the final drain grace.
     drop(master);
@@ -1151,17 +1122,17 @@ fn set_nonblocking(fd: std::os::fd::RawFd) -> io::Result<()> {
 #[cfg(unix)]
 fn terminate_pty_child(
     child: &mut std::process::Child,
-    process_group: u32,
-    leader_reaped: bool,
+    process_group: Option<u32>,
 ) -> Result<(), ToolError> {
+    let Some(process_group) = process_group else {
+        return Ok(());
+    };
     hya_tool::process_group::kill_group(process_group)?;
     #[cfg(target_os = "linux")]
     let quiet = hya_tool::process_group::finish_group_termination(process_group);
-    if !leader_reaped {
-        child
-            .wait()
-            .map_err(|error| contextual_io("reap Bash PTY process", error))?;
-    }
+    child
+        .wait()
+        .map_err(|error| contextual_io("reap Bash PTY process", error))?;
     #[cfg(not(target_os = "linux"))]
     let quiet = hya_tool::process_group::finish_group_termination(process_group);
     quiet?;
@@ -1169,7 +1140,7 @@ fn terminate_pty_child(
 }
 
 /// Return whether any member remains in the saved process group.
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 fn process_group_alive(process_group: Option<u32>) -> bool {
     let Some(process_group) = process_group else {
         return false;

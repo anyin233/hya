@@ -1480,16 +1480,22 @@ async fn python_output_is_unbuffered_unless_overridden() -> Result<(), Box<dyn s
 #[test]
 fn host_shutdown_drains_suspended_native_bash_calls() {
     for mode in ["pipes", "pty", "budgeted-pty"] {
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "shell::native_bash_shutdown_child",
-                "--nocapture",
-            ])
-            .env("HYA_BASH_SHUTDOWN_TEST", mode)
-            .status()
-            .unwrap();
-        assert!(status.success(), "{mode}");
+        for exits_first in ["yes", "no"] {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "shell::native_bash_shutdown_child",
+                    "--nocapture",
+                ])
+                .env("HYA_BASH_SHUTDOWN_TEST", mode)
+                .env("HYA_BASH_LEADER_EXITS_FIRST", exits_first)
+                .status()
+                .unwrap();
+            assert!(
+                status.success(),
+                "{mode}, leader exits first = {exits_first}"
+            );
+        }
     }
 }
 
@@ -1519,10 +1525,32 @@ async fn native_bash_shutdown_child() {
         shell_pid: dir.join("leader"),
         daemon_pid: dir.join("descendant"),
     };
+    let natural = execute_with_guard(
+        tool.as_ref(),
+        &ctx,
+        json!({
+            "command": "trap '' HUP; (exec 0<&- 1>&- 2>&-; sleep 0.25; touch completed) & exit 0",
+            "pty": pty,
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(natural["metadata"]["exit"], 0);
+    assert!(
+        dir.join("completed").exists(),
+        "{mode} returned before descendant completion"
+    );
+
+    let exits_first = std::env::var("HYA_BASH_LEADER_EXITS_FIRST").unwrap() == "yes";
+    let command = if exits_first {
+        "trap '' HUP; echo $$ > leader; (sleep 60 0<&- 1>&- 2>&-) & echo $! > descendant; exit 0"
+    } else {
+        "echo $$ > leader; sleep 60 & echo $! > descendant; wait"
+    };
     let mut call = tool.execute(
         &ctx,
         json!({
-            "command": "echo $$ > leader; sleep 60 & echo $! > descendant; wait",
+            "command": command,
             "pty": pty,
         }),
     );
@@ -1533,6 +1561,30 @@ async fn native_bash_shutdown_child() {
     // The caller stays alive and unpolled throughout both drains.
     let leader = wait_for_pid(&cleanup.shell_pid).await;
     let descendant = wait_for_pid(&cleanup.daemon_pid).await;
+    if exits_first {
+        #[cfg(target_os = "linux")]
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let stat = std::fs::read_to_string(format!("/proc/{leader}/stat"))
+                    .expect("leader must remain waitable while its descendant lives");
+                if stat
+                    .rsplit_once(')')
+                    .unwrap()
+                    .1
+                    .trim_start()
+                    .starts_with("Z ")
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        #[cfg(not(target_os = "linux"))]
+        wait_for_process_exit(leader).await;
+        assert!(futures::poll!(&mut call).is_pending());
+    }
     let mut first = Box::pin(deadline::shutdown_background_jobs());
     assert!(futures::poll!(&mut first).is_pending());
     drop(first);
