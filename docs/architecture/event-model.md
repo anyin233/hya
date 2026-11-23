@@ -175,7 +175,7 @@ preferred model plus ordered fallback candidates and per-candidate reasoning.
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
 | `step_started` | `session`, `message`, `step: u32`, optional `view: ViewRef` | Fold: records the message's current step part offset. The reducer ignores `view`. |
-| `step_finished` | `session`, `message`, `step: u32`, `finish: FinishReason` | **no-op**. `finish` defaults to `stop` when replaying older logs that lacked the field (`#[serde(default = "default_step_finish_reason")]`). |
+| `step_finished` | `session`, `message`, `step: u32`, `finish: FinishReason`, optional `error: String` | **no-op**. `finish` defaults to `stop` when replaying older logs that lacked the field (`#[serde(default = "default_step_finish_reason")]`). When a started provider step fails mid-stream (`finish: error`), `error` carries a single-line summary of the failure bounded to 512 characters; omitted on normal finishes and older logs. |
 
 One pair marks one provider stream round inside an assistant message. The
 round's billed usage and serving model are recorded separately by

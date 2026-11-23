@@ -1430,12 +1430,26 @@ async fn transient_round_failure_retries_the_same_request() {
     let steps: Vec<_> = log
         .iter()
         .filter_map(|event| match event {
-            Event::StepFinished { step, finish, .. } => Some((*step, *finish)),
+            Event::StepFinished {
+                step,
+                finish,
+                error,
+                ..
+            } => Some((*step, *finish, error.clone())),
             _ => None,
         })
         .collect();
-    assert_eq!(steps[1], (1, FinishReason::Error), "{steps:?}");
-    assert_eq!(steps[2], (2, FinishReason::Stop), "{steps:?}");
+    assert_eq!(steps[1].0, 1, "{steps:?}");
+    assert_eq!(steps[1].1, FinishReason::Error, "{steps:?}");
+    assert!(
+        steps[1]
+            .2
+            .as_deref()
+            .is_some_and(|detail| detail.contains("upstream unreachable")),
+        "failed step should record bounded error summary: {:?}",
+        steps[1]
+    );
+    assert_eq!(steps[2], (2, FinishReason::Stop, None), "{steps:?}");
     let views: Vec<_> = log
         .iter()
         .filter_map(|event| match event {

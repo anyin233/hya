@@ -398,6 +398,9 @@ pub enum Event {
         /// Provider finish for this round (default `stop` when absent).
         #[serde(default = "default_step_finish_reason")]
         finish: FinishReason,
+        /// Bounded single-line error summary when a started step failed (omitted otherwise).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
     /// Begin a text part (empty until deltas/replace).
     TextStart {
@@ -1964,6 +1967,47 @@ mod tests {
         let projected = projection.session.messages.first().expect("message");
         assert_eq!(projected.finish, Some(FinishReason::Cancelled));
         assert_eq!(projected.cause, Some(FinishCause::Shutdown));
+    }
+
+    #[test]
+    fn old_log_step_finished_without_error_decodes_and_error_round_trips() {
+        let session = SessionId::new();
+        let message = MessageId::new();
+        let legacy = serde_json::json!({
+            "type": "step_finished",
+            "session": session,
+            "message": message,
+            "step": 2,
+            "finish": "error",
+        });
+        let decoded: Event = serde_json::from_value(legacy).expect("legacy step_finished decodes");
+        assert_eq!(
+            decoded,
+            Event::StepFinished {
+                session,
+                message,
+                step: 2,
+                finish: FinishReason::Error,
+                error: None,
+            }
+        );
+        let serialized = serde_json::to_value(&decoded).expect("serialize");
+        assert!(serialized.get("error").is_none());
+
+        let with_error = Event::StepFinished {
+            session,
+            message,
+            step: 3,
+            finish: FinishReason::Error,
+            error: Some("provider stream interrupted: connection reset".to_string()),
+        };
+        let wire = serde_json::to_value(&with_error).expect("serialize with error");
+        assert_eq!(
+            wire.get("error").and_then(|v| v.as_str()),
+            Some("provider stream interrupted: connection reset")
+        );
+        let back: Event = serde_json::from_value(wire).expect("round-trip");
+        assert_eq!(back, with_error);
     }
 
     #[test]
