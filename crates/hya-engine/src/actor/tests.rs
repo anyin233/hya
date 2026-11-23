@@ -2174,6 +2174,7 @@ async fn o2_interactive_turn_release_retires_the_finished_team() {
         &supervisor,
         root,
         hya_tool::WaitSpec::parse(&serde_json::json!({"timeout_secs": 0}), true).unwrap(),
+        None,
     )
     .await
     .unwrap();
