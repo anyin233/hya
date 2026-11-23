@@ -6,7 +6,7 @@ use crate::support;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_engine::{
@@ -215,10 +215,11 @@ async fn model_tool_authorizes_after_lookup_and_before_hook_with_call_correlatio
     assert!(asks.try_recv().is_err(), "one invocation must prompt once");
 }
 
-struct MaskingAfterHost;
+#[derive(Default)]
+pub(super) struct MaskFirstResult(AtomicBool);
 
 #[async_trait::async_trait]
-impl HookDispatcher for MaskingAfterHost {
+impl HookDispatcher for MaskFirstResult {
     fn dispatch_event(&self, _envelope: &Envelope) {}
 
     async fn command_execute_before(
@@ -246,11 +247,15 @@ impl HookDispatcher for MaskingAfterHost {
         ToolExecuteBeforeOutcome::Continue { input: input.input }
     }
 
-    async fn tool_execute_after(&self, _input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
+    async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
         ToolExecuteAfterOutcome::Continue {
-            result: ToolOutcomeNative::Ok {
-                output: json!({ "masked": true }),
-                time_ms: 0,
+            result: if self.0.swap(true, Ordering::SeqCst) {
+                input.result
+            } else {
+                ToolOutcomeNative::Ok {
+                    output: json!({ "masked": true }),
+                    time_ms: 0,
+                }
             },
         }
     }
@@ -353,7 +358,7 @@ async fn tool_after_cannot_mask_permission_denial() {
         perm,
         EventBus::default(),
     )
-    .with_hooks(Arc::new(MaskingAfterHost));
+    .with_hooks(Arc::new(MaskFirstResult::default()));
 
     let session = engine
         .create(CreateSession {
@@ -434,7 +439,7 @@ async fn normal_turn_after_hook_rewrite_removes_unpublished_bash_artifact() {
         permission,
         EventBus::default(),
     )
-    .with_hooks(Arc::new(MaskingAfterHost));
+    .with_hooks(Arc::new(MaskFirstResult::default()));
     let session = engine
         .create(CreateSession {
             parent: None,

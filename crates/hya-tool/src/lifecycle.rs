@@ -32,6 +32,8 @@ pub enum LifecycleRequest {
         session: SessionId,
         /// Claim captured by the calling turn; roots use `None`.
         actor_claim: Option<ActorClaim>,
+        /// Cursor to commit with the calling tool result.
+        wait_ack: Option<WaitAckSlot>,
         /// Parsed request.
         spec: WaitSpec,
         /// Rejection text or the outcome.
@@ -677,6 +679,39 @@ impl ReportLatch {
     }
 }
 
+/// The inbox cursor and observer watermark for the mail returned by one wait.
+#[derive(Debug)]
+pub struct WaitMailAck {
+    /// Team-log acknowledgement to append alongside the result.
+    pub event: hya_proto::Event,
+    /// Observer watermark captured before reading the inbox.
+    pub mark: u64,
+    /// Whether to notify the observer of incoming mail at this watermark.
+    pub consumed_incoming: bool,
+}
+
+/// Handoff from the wait service to the owner of the tool-result transaction.
+#[derive(Clone, Debug, Default)]
+pub struct WaitAckSlot(Arc<std::sync::Mutex<Option<WaitMailAck>>>);
+
+impl WaitAckSlot {
+    /// Stage the acknowledgement for the page the wait is returning.
+    pub fn stage(&self, ack: WaitMailAck) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ack);
+    }
+
+    /// Claim the acknowledgement after the tool's final result is known.
+    pub fn take(&self) -> Option<WaitMailAck> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+}
+
 /// Session-scoped facade tools use to request lifecycle transitions.
 #[derive(Clone)]
 pub struct LifecyclePlane {
@@ -685,6 +720,7 @@ pub struct LifecyclePlane {
     actor_claim: Option<ActorClaim>,
     channel_policy: Option<ChannelPolicySnapshot>,
     report_latch: Option<ReportLatch>,
+    wait_ack: Option<WaitAckSlot>,
 }
 
 impl Default for LifecyclePlane {
@@ -705,6 +741,7 @@ impl LifecyclePlane {
                 actor_claim: None,
                 channel_policy: None,
                 report_latch: None,
+                wait_ack: None,
             },
             rx,
         )
@@ -719,6 +756,7 @@ impl LifecyclePlane {
             actor_claim: None,
             channel_policy: None,
             report_latch: None,
+            wait_ack: None,
         }
     }
 
@@ -760,6 +798,13 @@ impl LifecyclePlane {
     #[must_use]
     pub fn with_report_latch(mut self, latch: ReportLatch) -> Self {
         self.report_latch = Some(latch);
+        self
+    }
+
+    /// Commit a wait's mail cursor with its tool result through this slot.
+    #[must_use]
+    pub fn with_wait_ack(mut self, slot: WaitAckSlot) -> Self {
+        self.wait_ack = Some(slot);
         self
     }
 
@@ -843,6 +888,7 @@ impl LifecyclePlane {
             .send(LifecycleRequest::Wait {
                 session,
                 actor_claim: self.actor_claim,
+                wait_ack: self.wait_ack.clone(),
                 spec,
                 reply: reply_tx,
             })

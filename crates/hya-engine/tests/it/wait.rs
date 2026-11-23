@@ -14,7 +14,7 @@ use crate::support;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -47,7 +47,7 @@ struct GateProvider {
     root: Mutex<Option<SessionId>>,
     gate_members: AtomicBool,
     gates: Mutex<HashMap<SessionId, Arc<Notify>>>,
-    wait_calls: AtomicUsize,
+    tool_batches: Mutex<HashMap<SessionId, Vec<FakeStep>>>,
     /// Every turn's final answer; empty leaves a member idle without a report.
     answer: Mutex<String>,
 }
@@ -58,7 +58,7 @@ impl Default for GateProvider {
             root: Mutex::default(),
             gate_members: AtomicBool::default(),
             gates: Mutex::default(),
-            wait_calls: AtomicUsize::new(0),
+            tool_batches: Mutex::default(),
             answer: Mutex::new("done with the unit".to_string()),
         }
     }
@@ -115,16 +115,8 @@ impl Provider for GateProvider {
         }
         let answer = self.answer.lock().unwrap().clone();
         let mut steps = Vec::new();
-        if !is_root
-            && self
-                .wait_calls
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
-                .is_ok()
-        {
-            steps.push(FakeStep::ToolCall {
-                name: "wait".into(),
-                input: json!({"timeout_secs": 0}),
-            });
+        if let Some(batch) = self.tool_batches.lock().unwrap().remove(&session) {
+            steps = batch;
             steps.push(FakeStep::Finish(FinishReason::ToolCalls));
         } else {
             if !answer.is_empty() {
@@ -848,12 +840,13 @@ async fn mail_a_wait_returned_is_never_delivered_again() {
     assert!(second.mail.is_empty(), "{second:?}");
 
     // New mail on the channel minted after the turn began is still steered.
+    let fresh_status = format!("FRESH_STATUS{}", "界".repeat(588));
     team.engine
         .mail_send(
             child,
             MailEndpoint::Channel(dm.clone()),
             MailKind::Message,
-            "FRESH_STATUS".to_string(),
+            fresh_status.clone(),
         )
         .await
         .unwrap();
@@ -862,7 +855,7 @@ async fn mail_a_wait_returned_is_never_delivered_again() {
         .await
         .unwrap()
         .expect("mail on a channel created mid-turn is steered");
-    assert!(notice.contains("FRESH_STATUS"), "{notice}");
+    assert!(notice.contains(&fresh_status), "{notice}");
     assert!(!notice.contains("RESEND_FULL_REPORT"), "{notice}");
 
     // Preparing a steer notice does not deliver it. Let wait deliver the fresh
@@ -1155,6 +1148,107 @@ async fn direct_mail_survives_twenty_finished_subagent_reports() {
     team.provider.release(parent);
 }
 
+fn wait_call() -> FakeStep {
+    FakeStep::ToolCall {
+        name: "wait".into(),
+        input: json!({"timeout_secs": 0}),
+    }
+}
+
+/// Run the real mail-aware wait with one unread notice under the lead turn lease.
+async fn run_wait_turn(
+    team: &Team,
+    engine: &SessionEngine,
+    batch: Vec<FakeStep>,
+) -> Result<FinishReason, hya_engine::CoreError> {
+    let lease = hold_lead_turn(team);
+    let prompt = engine
+        .admit_user_prompt(team.root, "check for mail".into())
+        .await
+        .unwrap();
+    super::report::mail_main_from_peer(engine, team.root, "direct notice").await;
+    team.provider
+        .tool_batches
+        .lock()
+        .unwrap()
+        .insert(team.root, batch);
+    engine
+        .run_admitted_turn(
+            lease,
+            &spec("hya-main"),
+            CancellationToken::new(),
+            &[],
+            None,
+            None,
+            prompt,
+        )
+        .await
+}
+
+#[tokio::test]
+async fn replaced_wait_result_leaves_mail_for_the_next_wait() {
+    let team = team().await;
+    let engine = (*team.engine)
+        .clone()
+        .with_hooks(Arc::new(super::hooks_seam::MaskFirstResult::default()));
+    run_wait_turn(&team, &engine, vec![wait_call(), wait_call()])
+        .await
+        .unwrap();
+    let events = engine.replay(team.root).await.unwrap();
+    let deliveries: Vec<_> = events
+        .iter()
+        .filter_map(|e| match &e.event {
+            Event::ToolResult { output, .. } if output == &json!({"masked": true}) => {
+                Some("masked")
+            }
+            Event::ToolResult { output, .. } => {
+                assert!(provider_wait_output(output).contains("direct notice"));
+                Some("delivered")
+            }
+            Event::MailConsumed { .. } => Some("ack"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(deliveries, ["masked", "delivered", "ack"]);
+}
+
+#[tokio::test]
+async fn wait_commits_mail_and_result_in_one_transaction() {
+    for reject in [Some("tool_result"), Some("mail_consumed"), None] {
+        let team = team().await;
+        if let Some(tag) = reject {
+            let mut tx = team.engine.store().begin_transaction().await.unwrap();
+            sqlx::query(&format!("CREATE TRIGGER reject_delivery BEFORE INSERT ON event_log WHEN json_extract(NEW.payload, '$.type') = '{tag}' BEGIN SELECT RAISE(ABORT, 'injected wait write failure'); END"))
+                .execute(&mut *tx).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        let result = run_wait_turn(&team, &team.engine, vec![wait_call()]).await;
+        let events = team.engine.replay(team.root).await.unwrap();
+        let delivered = events
+            .iter()
+            .filter_map(|e| match &e.event {
+                Event::ToolResult { output, .. } => {
+                    assert!(provider_wait_output(output).contains("direct notice"));
+                    Some("result")
+                }
+                Event::MailConsumed { through, .. } => {
+                    assert_eq!(*through, 1);
+                    Some("ack")
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if reject.is_some() {
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("injected wait write failure"), "{error}");
+            assert!(delivered.is_empty(), "{reject:?}: {delivered:?}");
+        } else {
+            result.unwrap();
+            assert_eq!(delivered, ["result", "ack"]);
+        }
+    }
+}
+
 #[tokio::test]
 async fn direct_mail_pages_survive_tool_result_steering_and_provider_encoding() {
     let team = team().await;
@@ -1183,11 +1277,21 @@ async fn direct_mail_pages_survive_tool_result_steering_and_provider_encoding() 
         team.engine.bus().publish(envelope);
     }
     let mut bus = team.engine.bus().subscribe();
-    team.provider.wait_calls.store(3, Ordering::SeqCst);
+    team.provider.tool_batches.lock().unwrap().insert(
+        member,
+        vec![
+            wait_call(),
+            FakeStep::ToolCall {
+                name: "list_agents".into(),
+                input: json!({}),
+            },
+            wait_call(),
+        ],
+    );
     team.provider.gate_members.store(false, Ordering::SeqCst);
     team.provider.release(member);
     let mut delivered = 0;
-    for page in 0..3 {
+    for call in 0..3 {
         let result = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 match bus.recv().await.unwrap().event {
@@ -1207,10 +1311,13 @@ async fn direct_mail_pages_survive_tool_result_steering_and_provider_encoding() 
         .expect("wait tool result");
         let text = provider_wait_output(&result);
         let rows = result["metadata"]["mail"].as_array();
-        if page == 2 {
-            assert!(rows.is_none(), "{result}");
-            assert_eq!(delivered, notices.len());
-            break;
+        if call == 1 {
+            assert!(result["agents"].is_array(), "{result}");
+            assert!(
+                !text.contains("NEW MAIL") && !text.contains("notice "),
+                "{text}"
+            );
+            continue;
         }
         let count = rows.unwrap().len();
         assert!(count > 0);
@@ -1224,10 +1331,28 @@ async fn direct_mail_pages_survive_tool_result_steering_and_provider_encoding() 
         delivered += count;
         assert_eq!(
             result["metadata"].get("more_mail"),
-            (page == 0).then_some(&serde_json::Value::Bool(true))
+            (call == 0).then_some(&serde_json::Value::Bool(true))
         );
-        assert_eq!(text.contains("call `wait` again"), page == 0);
+        assert_eq!(text.contains("call `wait` again"), call == 0);
     }
+    assert_eq!(delivered, notices.len());
+    let cursors: Vec<_> = team
+        .engine
+        .replay(team.root)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| match e.event {
+            Event::MailConsumed {
+                handle: recipient,
+                through,
+                ..
+            } if recipient == handle => Some(through),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(cursors.len(), 2, "{cursors:?}");
+    assert!(cursors[0] < cursors[1]);
 }
 
 #[tokio::test]

@@ -356,17 +356,7 @@ impl SteerMailbox {
         }
         let mut notice = String::from("\n\n--- [NEW MAIL · answer or acknowledge via dm] ---");
         for mail in shown {
-            // Truncate on a char boundary — bodies are UTF-8 and a raw byte
-            // slice panics on multi-byte characters.
-            let body = if mail.body.len() > 600 {
-                let mut end = 600;
-                while end > 0 && !mail.body.is_char_boundary(end) {
-                    end -= 1;
-                }
-                format!("{}…", &mail.body[..end])
-            } else {
-                mail.body.clone()
-            };
+            let body = crate::member_wait::mail_preview(&mail.body);
             // Name the channel inline so the reader can `read channel://<id>`
             // directly instead of guessing id spellings (`##DM-x`, `#dm-x`).
             let channel = mail

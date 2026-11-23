@@ -63,6 +63,7 @@ pub async fn run_lifecycle_service(
                     session,
                     actor_claim,
                     spec,
+                    wait_ack,
                     mut reply,
                 } => {
                     // A dropped receiver (the tool call was cancelled or its
@@ -75,6 +76,7 @@ pub async fn run_lifecycle_service(
                             &supervisor,
                             session,
                             spec,
+                            wait_ack.as_ref(),
                         ) => result.map_err(|e| e.to_string()),
                     };
                     let _ = reply.send(result);

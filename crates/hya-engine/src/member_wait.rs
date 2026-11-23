@@ -105,6 +105,7 @@ pub(crate) async fn wait_for_members(
     supervisor: &ResidentSupervisor,
     caller: SessionId,
     spec: WaitSpec,
+    wait_ack: Option<&hya_tool::WaitAckSlot>,
 ) -> Result<WaitOutcome, CoreError> {
     let started = Instant::now();
     // Subscribe before the first snapshot so no transition is lost between.
@@ -232,18 +233,21 @@ pub(crate) async fn wait_for_members(
                     [cursor..inbox.through]
                     .iter()
                     .any(|index| projection.team.mail[*index].from != caller_path);
-                engine
-                    .emit_for_actor(
-                        actor_claim,
-                        root,
-                        Event::MailConsumed {
-                            session: root,
-                            handle: caller_path.clone(),
-                            through: u64::try_from(inbox.through).unwrap_or(u64::MAX),
-                        },
-                    )
-                    .await?;
-                engine.notify_mail_consumed(caller, mark, consumed_incoming);
+                let event = Event::MailConsumed {
+                    session: root,
+                    handle: caller_path.clone(),
+                    through: u64::try_from(inbox.through).unwrap_or(u64::MAX),
+                };
+                if let Some(slot) = wait_ack {
+                    slot.stage(hya_tool::WaitMailAck {
+                        event,
+                        mark: mark.unwrap_or_default(),
+                        consumed_incoming: consumed_incoming && mark.is_some(),
+                    });
+                } else {
+                    engine.emit_for_actor(actor_claim, root, event).await?;
+                    engine.notify_mail_consumed(caller, mark, consumed_incoming);
+                }
             }
             for (member, last) in &standing.stalled {
                 supervisor.record_wait_stall(caller, *member, *last);
@@ -555,7 +559,7 @@ fn scan_inbox(
                 MailEndpoint::Channel(channel) => Some(channel.clone()),
                 MailEndpoint::Handle(_) => None,
             },
-            preview: preview(&message.body),
+            preview: mail_preview(message.body.trim()),
         });
     }
     if wake_on_mail {
@@ -589,11 +593,9 @@ fn relevant(event: &Event, root: SessionId, caller: SessionId) -> bool {
             .is_some_and(|session| session == root || session == caller)
 }
 
-fn preview(text: &str) -> String {
-    let text = text.trim();
-    if text.chars().count() <= PREVIEW_CHARS {
-        return text.to_string();
+pub(crate) fn mail_preview(text: &str) -> String {
+    match text.char_indices().nth(PREVIEW_CHARS) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text.to_owned(),
     }
-    let cut: String = text.chars().take(PREVIEW_CHARS).collect();
-    format!("{cut}…")
 }

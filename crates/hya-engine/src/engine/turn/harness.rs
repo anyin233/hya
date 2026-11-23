@@ -199,6 +199,7 @@ impl SessionEngine {
             cancel,
             depth,
             steer,
+            defer_steer: false,
             recorded_digests,
             report_latch: ReportLatch::new(),
             nested_engine: None,
@@ -261,6 +262,7 @@ struct TurnHarness<'a> {
     cancel: &'a CancellationToken,
     depth: u32,
     steer: SteerMailbox,
+    defer_steer: bool,
     /// Prompt digests last recorded in `TurnBindingRecorded`.
     recorded_digests: (String, String),
     /// Set when a `report` of this turn is accepted: the turn ends right
@@ -400,7 +402,7 @@ impl TurnHarness<'_> {
 #[async_trait]
 impl ToolGate for TurnHarness<'_> {
     async fn call(&mut self, call: ToolCall) -> Result<(), CoreError> {
-        TurnToolGate {
+        let mut gate = TurnToolGate {
             engine: self.engine,
             session: self.session,
             message: self.message,
@@ -416,11 +418,13 @@ impl ToolGate for TurnHarness<'_> {
             report_latch: &self.report_latch,
             nested_engine: &mut self.nested_engine,
             steer: &mut self.steer,
+            defer_steer: self.defer_steer,
             parent_session: self.parent_session,
             offered: &self.offered,
-        }
-        .call(call)
-        .await
+        };
+        gate.call(call).await?;
+        self.defer_steer = gate.defer_steer;
+        Ok(())
     }
 
     /// Unrun calls stay open; the turn end closes them as `CANCELLED`.
@@ -435,6 +439,7 @@ impl Harness for TurnHarness<'_> {
     /// resolve the round's model and attachments, then run the kernel's
     /// context reduction with the engine's extensions (`hya/compaction`).
     async fn before_round(&mut self, projection: &Projection) -> Result<bool, CoreError> {
+        self.defer_steer = false;
         let engine = self.engine;
         engine.validate_actor_claim(self.actor_claim).await?;
         if activation_hook_for(self.session).is_some_and(|hooks| !hooks.is_healthy()) {
