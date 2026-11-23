@@ -44,33 +44,17 @@ impl ProcessGroup {
         }
     }
 
-    /// On Linux keep the leader waitable to reserve its PGID. Other Unix systems
-    /// must reap it before a signal-zero probe can observe the group's absence.
+    /// Linux and macOS can inspect the group while the leader reserves its PGID.
+    /// Other Unix systems reap it before probing for the group's absence.
     pub fn finished(
         &mut self,
         _try_reap: impl FnOnce() -> io::Result<Option<ExitStatus>>,
     ) -> io::Result<bool> {
-        #[cfg(target_os = "linux")]
-        {
-            // SAFETY: waitid fills a zeroed siginfo_t; WNOWAIT keeps the leader's PID reserved.
-            let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
-            if unsafe {
-                libc::waitid(
-                    libc::P_PID,
-                    self.pgid,
-                    &mut info,
-                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-                )
-            } < 0
-            {
-                return Err(io::Error::last_os_error());
-            }
-            // SAFETY: si_pid is the child PID for this waitid result, or zero if still running.
-            if unsafe { info.si_pid() } != self.pgid as libc::pid_t {
-                return Ok(false);
-            }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if !leader_exited(self.pgid)? {
+            return Ok(false);
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         if _try_reap()?.is_none() {
             return Ok(false);
         }
@@ -94,7 +78,25 @@ impl ProcessGroup {
             self.quiet_scan = Some((zombies, std::time::Instant::now()));
             Ok(false)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
+        {
+            // Darwin includes the waitable leader. Two slots distinguish it
+            // from a group that still has children and may need cancellation.
+            let mut pids = [0 as libc::pid_t; 2];
+            // SAFETY: the supplied size is the writable PID array's byte length.
+            let count = unsafe {
+                libc::proc_listpgrppids(
+                    self.pgid as libc::pid_t,
+                    pids.as_mut_ptr().cast(),
+                    size_of_val(&pids) as libc::c_int,
+                )
+            };
+            if count <= 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(count == 1 && pids[0] == self.pgid as libc::pid_t)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         Ok(!signal_group(self.pgid, 0)?)
     }
 }
@@ -236,7 +238,7 @@ impl BudgetGroup {
     }
 
     fn kill(&self) -> io::Result<()> {
-        if self.sentinel.is_some() || self.child.id().is_some() {
+        if self.child.id().is_some() {
             kill_group(self.monitor.pgid)?;
         }
         Ok(())
@@ -244,14 +246,12 @@ impl BudgetGroup {
 
     /// Kill group members and reap the shell. A writer outside the group can stay open.
     async fn stop(&mut self) -> io::Result<()> {
-        loop {
-            kill_group(self.monitor.pgid)?;
-            if self.monitor.finished(|| self.child.try_wait())? {
-                break;
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
+        if let Some(pgid) = self.child.id() {
+            tokio::task::spawn_blocking(move || finish_group_termination(pgid))
+                .await
+                .map_err(io::Error::other)??;
+            self.child.wait().await?;
         }
-        self.child.wait().await?;
         self.sentinel = None;
         Ok(())
     }
@@ -318,12 +318,42 @@ fn signal_group(pgid: u32, signal: libc::c_int) -> io::Result<bool> {
     }
 }
 
-/// Wait for a signalled group to become quiescent. Outside Linux, reap the leader first.
-/// Runs on a blocking worker. A descendant can fork concurrently with SIGKILL.
+/// Observe the leader's exit without releasing its PID.
+fn leader_exited(pgid: u32) -> io::Result<bool> {
+    // SAFETY: waitid writes one siginfo_t. WNOWAIT leaves the child waitable;
+    // WNOHANG leaves the signal number zero when no exit is available.
+    let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+    if unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pgid as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    } < 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(info.si_signo == libc::SIGCHLD)
+}
+
+/// Terminate a group on a blocking worker while its leader still reserves its PGID.
+/// A descendant can fork concurrently with SIGKILL.
 pub fn finish_group_termination(pgid: u32) -> io::Result<()> {
     let until = std::time::Instant::now() + Duration::from_secs(2);
+    #[cfg(target_os = "linux")]
     let mut group = ProcessGroup::new(pgid);
-    while kill_group(pgid)? && !group.members_quiet()? {
+    loop {
+        kill_group(pgid)?;
+        #[cfg(target_os = "linux")]
+        if group.members_quiet()? {
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        if leader_exited(pgid)? {
+            kill_group(pgid)?;
+            return Ok(());
+        }
         if std::time::Instant::now() >= until {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
@@ -332,7 +362,6 @@ pub fn finish_group_termination(pgid: u32) -> io::Result<()> {
         }
         std::thread::sleep(POLL_INTERVAL);
     }
-    Ok(())
 }
 
 /// Return the zombie process identities, or None if any member could still do work.
