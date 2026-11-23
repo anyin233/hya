@@ -116,4 +116,19 @@ message Bootstrap {
   bool formatter_available = 11;
   // Cursor for the session list; fetch sessions with `Session.List`.
   string sessions_cursor = 12;
+  // `AGENTS.md` files a full-mode session in this directory reads into its
+  // initial context, parent first (from the directory up to `$HOME`).
+  // Empty without a directory scope and with `hya serve --pure`.
+  repeated ContextFile context_files = 13;
+}
+
+// One context file (`AGENTS.md`) of `Bootstrap.context_files`.
+message ContextFile {
+  // Absolute path on the backend machine.
+  string path = 1;
+  // `project` (in the directory itself), `parent` (an ancestor directory),
+  // or `user` (`$HOME/AGENTS.md`).
+  string scope = 2;
+  // File size in bytes.
+  uint64 bytes = 3;
 }

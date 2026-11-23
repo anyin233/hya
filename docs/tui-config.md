@@ -171,8 +171,8 @@ section, sorted by name and cut with `+N` at the width:
 | Section | Source | Problems (warning color, shown with `quiet` too) |
 | --- | --- | --- |
 | `[Config]`, `[Layout]` | `tui.toml` warnings and the one-time default-change notice | Always |
-| `[Context]` | Context files the backend loaded (a later backend version) | — |
-| `[Skills]` | `Bootstrap.skills`; the full list groups them by source and skill directory | — |
+| `[Context]` | `Bootstrap.contextFiles`: the `AGENTS.md` files a session here reads, parent first; the full list groups them by `project`, `parent`, `user` with sizes | — |
+| `[Skills]` | `Bootstrap.skills`; the full list groups them by `source` (`builtin`, `bundle`, `project`, `user`) and skill directory | — |
 | `[Slash commands]` | Custom commands (`CommandSummary.source = command`) | — |
 | `[MCP]` | `GetMcpStatus`, asked again every 0.5 s while a server is still connecting, for at most 10 s; then once | A failed server, a server that needs a login |
 | `[Bundles]` | `ListBundles`; `(disabled)` and `(shadowed)` are marked, not problems | An unreadable bundle |

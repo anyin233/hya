@@ -120,6 +120,8 @@ export interface AppState {
   readonly startupNotices: readonly string[]
   /** `Bootstrap.skills`, for the startup list's `[Skills]` (state/startup.ts). */
   readonly skills: readonly SkillSummary[]
+  /** `Bootstrap.contextFiles`, the startup list's `[Context]`; `undefined` before the bootstrap. */
+  readonly contextFiles: NonNullable<Bootstrap["contextFiles"]> | undefined
   /** The startup list of what was loaded has its data: MCP settled and bundles listed (app/controller.ts `loadStartupResources`). */
   readonly startupReady: boolean
   readonly apiOutput: string
@@ -348,6 +350,7 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     structure: builtinPreset("workspace"),
     startupNotices: [],
     skills: [],
+    contextFiles: undefined,
     startupReady: false,
     apiOutput: "Use /api METHOD /v1/path [JSON object] to call any HTTP/JSON endpoint.\n\n" + operations(),
     status: startupStatus,
@@ -564,6 +567,8 @@ export function createAppStore() {
         set("serverVersion", bootstrap.location?.version ?? "")
         set("serverPid", bootstrap.location?.pid || undefined)
         if (bootstrap.skills) set("skills", bootstrap.skills)
+        // protojson omits an empty list, so an older backend and an empty chain look alike: both list none.
+        set("contextFiles", bootstrap.contextFiles ?? [])
       })
     },
 

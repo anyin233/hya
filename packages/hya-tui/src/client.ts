@@ -484,8 +484,10 @@ export interface Bootstrap {
   interactions?: Interaction[]
   /** The startup list's `[Skills]` (state/startup.ts). */
   skills?: SkillSummary[]
-  /** The startup list's `[Commands]` (`source: command`). */
+  /** The startup list's `[Slash commands]` (`source: command`). */
   commands?: CommandSummary[]
+  /** The startup list's `[Context]`: the `AGENTS.md` files a session here reads (absent on older backends). */
+  contextFiles?: { path: string; scope?: string; bytes?: string | number }[]
 }
 
 export interface StreamEvent {

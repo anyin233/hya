@@ -4179,6 +4179,28 @@
           },
           "sessions_cursor": {
             "type": "string"
+          },
+          "context_files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContextFile"
+            }
+          }
+        }
+      },
+      "ContextFile": {
+        "type": "object",
+        "description": "One context file (`AGENTS.md`) of `Bootstrap.context_files`.",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },

@@ -1549,7 +1549,7 @@ One invocable skill.
 |---|---|---|
 | `name` (1) | `string` | Skill name used with `/skill` and the skill plane. |
 | `description` (2) | `string` | One-line description of what the skill does. |
-| `source` (3) | `string` | Where the skill was discovered (`builtin`, `bundle`, `project`, ...). |
+| `source` (3) | `string` | Where the skill was discovered: `builtin` (compiled in), `bundle` (a runtime resource), `project` (under the directory or a Project root), or `user` (any other file, such as `~/.codex/skills`). |
 | `content` (4) | `string` | Full skill markdown body (frontmatter + content). |
 | `location` (5) | `string` | Where the skill file lives (`<built-in>` for compiled-in skills). |
 
@@ -2615,6 +2615,17 @@ One-round-trip startup snapshot for frontends.
 | `saved_rules` (10) | `repeated SavedRule` | Saved permission rules. |
 | `formatter_available` (11) | `bool` | Formatter availability advertised to the frontend. |
 | `sessions_cursor` (12) | `string` | Cursor for the session list; fetch sessions with `Session.List`. |
+| `context_files` (13) | `repeated ContextFile` | `AGENTS.md` files a full-mode session in this directory reads into its initial context, parent first (from the directory up to `$HOME`). Empty without a directory scope and with `hya serve --pure`. |
+
+### `ContextFile`
+
+One context file (`AGENTS.md`) of `Bootstrap.context_files`.
+
+| Field | Type | Description |
+|---|---|---|
+| `path` (1) | `string` | Absolute path on the backend machine. |
+| `scope` (2) | `string` | `project` (in the directory itself), `parent` (an ancestor directory), or `user` (`$HOME/AGENTS.md`). |
+| `bytes` (3) | `uint64` | File size in bytes. |
 
 ### `ProjectInfo`
 

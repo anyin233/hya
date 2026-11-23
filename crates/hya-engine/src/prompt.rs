@@ -39,6 +39,43 @@ pub fn discover_context_files(workdir: &Path) -> Vec<(String, String)> {
         .collect()
 }
 
+/// One `AGENTS.md` that [`discover_context_files`] reads, as frontends list it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContextFileEntry {
+    /// Absolute path.
+    pub path: PathBuf,
+    /// `project` (in `workdir` itself), `parent` (an ancestor), or `user`
+    /// (`$HOME/AGENTS.md`).
+    pub scope: &'static str,
+    /// File size in bytes.
+    pub bytes: u64,
+}
+
+/// The files [`discover_context_files`] reads for `workdir`, with their scope
+/// and size, parent-first, without reading their contents.
+#[must_use]
+pub fn context_file_entries(workdir: &Path) -> Vec<ContextFileEntry> {
+    let start = std::fs::canonicalize(workdir).unwrap_or_else(|_| workdir.to_path_buf());
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| std::fs::canonicalize(&home).unwrap_or(home));
+    context_chain(workdir)
+        .into_iter()
+        .filter_map(|path| {
+            let bytes = std::fs::metadata(&path).ok()?.len();
+            let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+            let scope = if home.as_deref() == Some(dir.as_path()) {
+                "user"
+            } else if dir == start {
+                "project"
+            } else {
+                "parent"
+            };
+            Some(ContextFileEntry { path, scope, bytes })
+        })
+        .collect()
+}
+
 /// `AGENTS.md` paths from `workdir` up to `$HOME`, parent-first.
 fn context_chain(workdir: &Path) -> Vec<PathBuf> {
     let start = std::fs::canonicalize(workdir).unwrap_or_else(|_| workdir.to_path_buf());
@@ -319,6 +356,36 @@ mod tests {
         assert!(out.contains("## Project context: AGENTS.md"));
         assert!(out.contains("Prefer spaces."));
         assert!(!out.contains("You are hya"));
+    }
+
+    #[test]
+    fn context_file_entries_scope_and_size_follow_discovery() {
+        let base = std::env::temp_dir().join(format!("hya-ctx-entries-{}", std::process::id()));
+        let child = base.join("child");
+        assert!(std::fs::create_dir_all(&child).is_ok());
+        assert!(std::fs::write(base.join("AGENTS.md"), "PARENT").is_ok());
+        assert!(std::fs::write(child.join("AGENTS.md"), "CHILD!").is_ok());
+        let entries = context_file_entries(&child);
+        let base = std::fs::canonicalize(&base).unwrap_or(base);
+        let parent = entries
+            .iter()
+            .find(|entry| entry.path == base.join("AGENTS.md"));
+        let own = entries
+            .iter()
+            .find(|entry| entry.path == base.join("child/AGENTS.md"));
+        assert_eq!(
+            parent.map(|entry| (entry.scope, entry.bytes)),
+            Some(("parent", 6))
+        );
+        assert_eq!(
+            own.map(|entry| (entry.scope, entry.bytes)),
+            Some(("project", 6))
+        );
+        // Parent first, like the prompt.
+        let order: Vec<_> = entries.iter().map(|entry| entry.path.clone()).collect();
+        let at = |path: &Path| order.iter().position(|item| item == path);
+        assert!(at(&base.join("AGENTS.md")) < at(&base.join("child/AGENTS.md")));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
