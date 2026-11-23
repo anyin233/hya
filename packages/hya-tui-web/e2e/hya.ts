@@ -5,7 +5,8 @@
 // only these specs know about hya.
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process"
-import { mkdtemp, rm } from "node:fs/promises"
+import { existsSync } from "node:fs"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -132,6 +133,21 @@ type Options = {
    * `mcp: {}`.
    */
   mcpServers: Record<string, McpServerOption> | undefined
+  /**
+   * TUI structure preset (docs/tui-config.md): `test.use({ preset: "workspace" })`
+   * writes `preset = "workspace"` to the isolated `tui.toml` (next to the
+   * effective `tui.json`, or `$XDG_CONFIG_HOME/hya/tui.toml` for
+   * `launchTest`) before the TUI starts, unless the spec already wrote one.
+   * Unset (the default) writes nothing, so the TUI uses its default preset.
+   */
+  preset: string | undefined
+}
+
+/** Write `preset = "<name>"` to `path` unless a spec already wrote that file. */
+async function writePreset(path: string, preset: string | undefined): Promise<void> {
+  if (!preset || existsSync(path)) return
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(path, `preset = ${JSON.stringify(preset)}\n`)
 }
 
 const setupOf = (fakeModel: FakeModel | undefined, model: FakeModelOption | undefined, projectBundles: Record<string, BundleFiles> | undefined, mcpServers?: Record<string, McpServerOption>): BackendSetup => ({
@@ -150,6 +166,7 @@ const withOptions = base.extend<{ fakeModel: FakeModel | undefined } & Options>(
   model: [undefined, { option: true }],
   projectBundles: [undefined, { option: true }],
   mcpServers: [undefined, { option: true }],
+  preset: [undefined, { option: true }],
   fakeModel: async ({ model }, use) => {
     if (!model) {
       await use(undefined)
@@ -178,9 +195,12 @@ export const launchTest = withOptions.extend<{ workspace: Workspace }>({
     await rm(root, { recursive: true, force: true })
   },
   // Capture the final screen while the fake model (a workspace dependency) still runs.
-  tui: async ({ tui, workspace: _workspace }, use, testInfo) => {
+  tui: async ({ tui, workspace, preset }, use, testInfo) => {
     let last: Tui | undefined
-    await use(async (command, options) => (last = await tui(command, options)))
+    await use(async (command, options) => {
+      await writePreset(join(workspace.env.XDG_CONFIG_HOME!, "hya", "tui.toml"), preset)
+      return (last = await tui(command, options))
+    })
     if (last) await last.attach(testInfo, "final-screen").catch(() => {})
   },
 })
@@ -207,11 +227,13 @@ export const test = withOptions.extend<Fixtures>({
   // The TUI inherits the runner's environment, so its preferences file
   // (theme) would be the developer's own `~/.config/hya/tui.json`; point it
   // at the backend's isolated config directory unless the spec sets one.
-  tui: async ({ tui, backend }, use, testInfo) => {
+  tui: async ({ tui, backend, preset }, use, testInfo) => {
     let last: Tui | undefined
     const isolated = { HYA_TUI_CONFIG: join(dirname(backend.dir), "config", "hya", "tui.json") }
     await use(async (command, options = {}) => {
-      last = await tui(command, { ...options, env: { ...isolated, ...options.env } })
+      const env: Record<string, string> = { ...isolated, ...options.env }
+      await writePreset(env.HYA_TUI_TOML ?? join(dirname(env.HYA_TUI_CONFIG!), "tui.toml"), preset)
+      last = await tui(command, { ...options, env })
       // Plain v1 TUI starts create their initial session asynchronously.
       // Wait for admission before tests immediately issue commands or API reads.
       if (command.includes("--server") && !command.includes("--continue") && !command.includes("--remote") && !command.includes("--session")) await waitForSession(backend)
