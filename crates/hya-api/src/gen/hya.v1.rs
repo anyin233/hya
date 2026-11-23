@@ -13052,7 +13052,7 @@ pub struct CreateConnectTokenResponse {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PtyClientFrame {
     /// Frame payload; exactly one kind is set.
-    #[prost(oneof = "pty_client_frame::Frame", tags = "4, 1, 2, 3")]
+    #[prost(oneof = "pty_client_frame::Frame", tags = "4, 1, 2, 3, 5")]
     pub frame: ::core::option::Option<pty_client_frame::Frame>,
 }
 /// Nested message and enum types in `PtyClientFrame`.
@@ -13072,7 +13072,48 @@ pub mod pty_client_frame {
         /// Liveness ping.
         #[prost(bool, tag = "3")]
         Ping(bool),
+        /// A file pasted or dropped into a WebUI tab (ADR-0037). The WebUI host
+        /// stores it and answers `uploaded` with its path or `upload_failed`;
+        /// `hya serve` PTY sessions always answer `upload_failed`.
+        #[prost(message, tag = "5")]
+        Upload(super::PtyUpload),
     }
+}
+/// One file uploaded from the browser.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PtyUpload {
+    /// Client-chosen id, echoed in the answer.
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    /// File name as the browser reported it; the host sanitizes it.
+    #[prost(string, tag = "2")]
+    pub name: ::prost::alloc::string::String,
+    /// MIME type the browser reported; may be empty.
+    #[prost(string, tag = "3")]
+    pub mime: ::prost::alloc::string::String,
+    /// File bytes.
+    #[prost(bytes = "vec", tag = "4")]
+    pub data: ::prost::alloc::vec::Vec<u8>,
+}
+/// An upload stored on the host.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PtyUploaded {
+    /// The `PtyUpload.id` it answers.
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    /// Absolute path of the stored file on the host machine.
+    #[prost(string, tag = "2")]
+    pub path: ::prost::alloc::string::String,
+}
+/// An upload the host refused.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PtyUploadFailed {
+    /// The `PtyUpload.id` it answers.
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    /// Why, for the user.
+    #[prost(string, tag = "2")]
+    pub reason: ::prost::alloc::string::String,
 }
 /// Session attachment envelope for the gRPC terminal stream.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -13098,7 +13139,7 @@ pub struct PtyResize {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PtyServerFrame {
     /// Frame payload; exactly one kind is set.
-    #[prost(oneof = "pty_server_frame::Frame", tags = "1, 2, 3")]
+    #[prost(oneof = "pty_server_frame::Frame", tags = "1, 2, 3, 4, 5")]
     pub frame: ::core::option::Option<pty_server_frame::Frame>,
 }
 /// Nested message and enum types in `PtyServerFrame`.
@@ -13115,6 +13156,12 @@ pub mod pty_server_frame {
         /// Liveness pong.
         #[prost(bool, tag = "3")]
         Pong(bool),
+        /// An upload was stored (answer to `PtyClientFrame.upload`).
+        #[prost(message, tag = "4")]
+        Uploaded(super::PtyUploaded),
+        /// An upload was refused.
+        #[prost(message, tag = "5")]
+        UploadFailed(super::PtyUploadFailed),
     }
 }
 /// Generated client implementations.

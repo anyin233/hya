@@ -12,3 +12,18 @@ body {
   position: absolute;
   inset: 0;
 }
+
+/* An upload the host refused (ADR-0037); removed after a few seconds. */
+.notice {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  max-width: 60%;
+  padding: 6px 10px;
+  border: 1px solid #e5c07b;
+  border-radius: 4px;
+  background: #1b2129;
+  color: #e5c07b;
+  font: 13px Menlo, "DejaVu Sans Mono", monospace;
+  z-index: 10;
+}

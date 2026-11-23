@@ -2451,7 +2451,7 @@ instead:
 | --- | --- | --- | --- |
 | `hya` in a local terminal | Terminal paste | Ctrl+V | Drag or paste its path |
 | `hya` after `ssh` | Terminal paste | Not readable: `The clipboard here belongs to the SSH host …` | Its path does not exist there: `… is on your machine, not on the SSH host · upload it in the WebUI, or copy it over with scp` |
-| The WebUI (browser, e.g. over an SSH port forward) | Browser paste | Not yet (a later version uploads it) | Not yet |
+| The WebUI (browser, e.g. over an SSH port forward) | Browser paste | Paste it in the tab: uploaded to the host, then an image chip | Drop it on the tab (or paste a copied file): uploaded, then a chip ([WebUI uploads](tui-web.md#pasting-and-dropping-files)) |
 | `hya --connect` on your machine, remote backend | Terminal paste | Ctrl+V | Read here: images and text files become chips |
 
 The SSH check is `SSH_CONNECTION`, `SSH_TTY`, or `SSH_CLIENT` in the TUI's

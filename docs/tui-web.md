@@ -167,6 +167,32 @@ an empty one shows the page's own title (`hya`) again (`src/title.ts`
 `pageTitle`). Generic: the page does not know who set the title or what it
 means. The hya TUI is one program that sets it ([tui.md](tui.md#terminal-title)).
 
+### Pasting and dropping files
+
+Pasting a file into the tab (a screenshot from the clipboard, a file copied in
+a file manager) or dropping files onto it uploads them to the host machine
+(ADR-0037): the page sends each file as an `upload` frame, the host stores it
+as `$TMPDIR/hya-tui-web-<pid>/<connection>/<name>` (directory mode 0700, file
+0600) and answers with the path, and the page then pastes the stored paths,
+single-quoted and separated by spaces, into the terminal — what a native
+terminal does with a dragged file. A text paste keeps xterm.js's own handling.
+
+- The name is reduced to its last segment; characters other than letters,
+  digits, space, `.`, `_`, `-`, `+`, `@` become `_`; a leading dot goes; at most
+  120 characters; a name already stored gets a `2-` (`3-`, …) prefix.
+- At most 20 MiB per file and 32 files per tab; an empty file is refused. A
+  refused file shows a notice in the page's bottom-right corner (`Not uploaded ·
+  big.mov: larger than 20 MiB`) and is not pasted.
+- The files go away when the tab's connection closes, and the whole directory
+  when the host stops.
+- The host stays generic: it stores bytes and returns paths; the program on the
+  PTY decides what a pasted path means. The hya TUI turns an image path into an
+  image chip and a text file outside the workspace into a file chip
+  ([tui.md](tui.md#paste-and-attachments)).
+
+For example, copy a screenshot, click the WebUI tab, and press Ctrl+V (Cmd+V):
+the TUI's input shows `[image #1 image.png]`.
+
 ### Running the tests
 
 ```sh
@@ -758,10 +784,17 @@ Messages are text frames in the protojson form of the `hya.v1`
 | client → host | `{"input": "<base64>"}` | Write bytes to the PTY. |
 | client → host | `{"resize": {"cols": C, "rows": R}}` | Resize the PTY (the child gets SIGWINCH). |
 | client → host | `{"ping": true}` | Host answers `{"pong": true}`. |
+| client → host | `{"upload": {"id": "u1", "name": "shot.png", "mime": "image/png", "data": "<base64>"}}` | Store a pasted or dropped file ([Pasting and dropping files](#pasting-and-dropping-files)); `id` is the client's, echoed in the answer. |
 | host → client | `{"output": "<base64>"}` | PTY output bytes. |
 | host → client | `{"exit": N}` | Child exit code; the host then closes the socket (1000). |
+| host → client | `{"uploaded": {"id": "u1", "path": "/tmp/hya-tui-web-123/1/shot.png"}}` | The upload was stored at `path`. |
+| host → client | `{"uploadFailed": {"id": "u1", "reason": "larger than 20 MiB"}}` | The upload was refused. |
 
-Unknown or malformed client frames are ignored. `attach` is not used.
+Unknown or malformed client frames are ignored. `attach` is not used. A
+WebSocket message may be up to `maxFrameBytes` (a 20 MiB file in base64 plus
+64 KiB). `hya serve`'s own PTY sessions (`/v1/pty/{id}/connect`, gRPC
+`StreamPty`) answer every `upload` with `uploadFailed`
+(`uploads are not supported by hya serve PTY sessions`).
 
 ### Page test hook `window.hyaTerm`
 

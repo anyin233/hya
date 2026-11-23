@@ -22034,6 +22034,9 @@ impl serde::Serialize for PtyClientFrame {
                 pty_client_frame::Frame::Ping(v) => {
                     struct_ser.serialize_field("ping", v)?;
                 }
+                pty_client_frame::Frame::Upload(v) => {
+                    struct_ser.serialize_field("upload", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -22050,6 +22053,7 @@ impl<'de> serde::Deserialize<'de> for PtyClientFrame {
             "input",
             "resize",
             "ping",
+            "upload",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -22058,6 +22062,7 @@ impl<'de> serde::Deserialize<'de> for PtyClientFrame {
             Input,
             Resize,
             Ping,
+            Upload,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -22083,6 +22088,7 @@ impl<'de> serde::Deserialize<'de> for PtyClientFrame {
                             "input" => Ok(GeneratedField::Input),
                             "resize" => Ok(GeneratedField::Resize),
                             "ping" => Ok(GeneratedField::Ping),
+                            "upload" => Ok(GeneratedField::Upload),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -22130,6 +22136,13 @@ impl<'de> serde::Deserialize<'de> for PtyClientFrame {
                                 return Err(serde::de::Error::duplicate_field("ping"));
                             }
                             frame__ = map_.next_value::<::std::option::Option<_>>()?.map(pty_client_frame::Frame::Ping);
+                        }
+                        GeneratedField::Upload => {
+                            if frame__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("upload"));
+                            }
+                            frame__ = map_.next_value::<::std::option::Option<_>>()?.map(pty_client_frame::Frame::Upload)
+;
                         }
                     }
                 }
@@ -22278,6 +22291,12 @@ impl serde::Serialize for PtyServerFrame {
                 pty_server_frame::Frame::Pong(v) => {
                     struct_ser.serialize_field("pong", v)?;
                 }
+                pty_server_frame::Frame::Uploaded(v) => {
+                    struct_ser.serialize_field("uploaded", v)?;
+                }
+                pty_server_frame::Frame::UploadFailed(v) => {
+                    struct_ser.serialize_field("uploadFailed", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -22293,6 +22312,9 @@ impl<'de> serde::Deserialize<'de> for PtyServerFrame {
             "output",
             "exit",
             "pong",
+            "uploaded",
+            "upload_failed",
+            "uploadFailed",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -22300,6 +22322,8 @@ impl<'de> serde::Deserialize<'de> for PtyServerFrame {
             Output,
             Exit,
             Pong,
+            Uploaded,
+            UploadFailed,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -22324,6 +22348,8 @@ impl<'de> serde::Deserialize<'de> for PtyServerFrame {
                             "output" => Ok(GeneratedField::Output),
                             "exit" => Ok(GeneratedField::Exit),
                             "pong" => Ok(GeneratedField::Pong),
+                            "uploaded" => Ok(GeneratedField::Uploaded),
+                            "uploadFailed" | "upload_failed" => Ok(GeneratedField::UploadFailed),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -22363,6 +22389,20 @@ impl<'de> serde::Deserialize<'de> for PtyServerFrame {
                                 return Err(serde::de::Error::duplicate_field("pong"));
                             }
                             frame__ = map_.next_value::<::std::option::Option<_>>()?.map(pty_server_frame::Frame::Pong);
+                        }
+                        GeneratedField::Uploaded => {
+                            if frame__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("uploaded"));
+                            }
+                            frame__ = map_.next_value::<::std::option::Option<_>>()?.map(pty_server_frame::Frame::Uploaded)
+;
+                        }
+                        GeneratedField::UploadFailed => {
+                            if frame__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("uploadFailed"));
+                            }
+                            frame__ = map_.next_value::<::std::option::Option<_>>()?.map(pty_server_frame::Frame::UploadFailed)
+;
                         }
                     }
                 }
@@ -22535,6 +22575,368 @@ impl<'de> serde::Deserialize<'de> for PtySession {
             }
         }
         deserializer.deserialize_struct("hya.v1.PtySession", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for PtyUpload {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.id.is_empty() {
+            len += 1;
+        }
+        if !self.name.is_empty() {
+            len += 1;
+        }
+        if !self.mime.is_empty() {
+            len += 1;
+        }
+        if !self.data.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.PtyUpload", len)?;
+        if !self.id.is_empty() {
+            struct_ser.serialize_field("id", &self.id)?;
+        }
+        if !self.name.is_empty() {
+            struct_ser.serialize_field("name", &self.name)?;
+        }
+        if !self.mime.is_empty() {
+            struct_ser.serialize_field("mime", &self.mime)?;
+        }
+        if !self.data.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("data", pbjson::private::base64::encode(&self.data).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PtyUpload {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "id",
+            "name",
+            "mime",
+            "data",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Id,
+            Name,
+            Mime,
+            Data,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "id" => Ok(GeneratedField::Id),
+                            "name" => Ok(GeneratedField::Name),
+                            "mime" => Ok(GeneratedField::Mime),
+                            "data" => Ok(GeneratedField::Data),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PtyUpload;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.PtyUpload")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PtyUpload, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut id__ = None;
+                let mut name__ = None;
+                let mut mime__ = None;
+                let mut data__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Id => {
+                            if id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("id"));
+                            }
+                            id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Mime => {
+                            if mime__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("mime"));
+                            }
+                            mime__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Data => {
+                            if data__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("data"));
+                            }
+                            data__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(PtyUpload {
+                    id: id__.unwrap_or_default(),
+                    name: name__.unwrap_or_default(),
+                    mime: mime__.unwrap_or_default(),
+                    data: data__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.PtyUpload", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for PtyUploadFailed {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.id.is_empty() {
+            len += 1;
+        }
+        if !self.reason.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.PtyUploadFailed", len)?;
+        if !self.id.is_empty() {
+            struct_ser.serialize_field("id", &self.id)?;
+        }
+        if !self.reason.is_empty() {
+            struct_ser.serialize_field("reason", &self.reason)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PtyUploadFailed {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "id",
+            "reason",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Id,
+            Reason,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "id" => Ok(GeneratedField::Id),
+                            "reason" => Ok(GeneratedField::Reason),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PtyUploadFailed;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.PtyUploadFailed")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PtyUploadFailed, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut id__ = None;
+                let mut reason__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Id => {
+                            if id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("id"));
+                            }
+                            id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Reason => {
+                            if reason__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("reason"));
+                            }
+                            reason__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(PtyUploadFailed {
+                    id: id__.unwrap_or_default(),
+                    reason: reason__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.PtyUploadFailed", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for PtyUploaded {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.id.is_empty() {
+            len += 1;
+        }
+        if !self.path.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.PtyUploaded", len)?;
+        if !self.id.is_empty() {
+            struct_ser.serialize_field("id", &self.id)?;
+        }
+        if !self.path.is_empty() {
+            struct_ser.serialize_field("path", &self.path)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PtyUploaded {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "id",
+            "path",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Id,
+            Path,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "id" => Ok(GeneratedField::Id),
+                            "path" => Ok(GeneratedField::Path),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PtyUploaded;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.PtyUploaded")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PtyUploaded, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut id__ = None;
+                let mut path__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Id => {
+                            if id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("id"));
+                            }
+                            id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Path => {
+                            if path__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("path"));
+                            }
+                            path__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(PtyUploaded {
+                    id: id__.unwrap_or_default(),
+                    path: path__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.PtyUploaded", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for QuestionRequested {

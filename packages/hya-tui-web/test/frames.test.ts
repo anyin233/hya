@@ -18,6 +18,19 @@ describe("hya.v1 PTY frames", () => {
     expect(decodeClientFrame(encodeClientFrame({ ping: true }))).toEqual({ ping: true })
   })
 
+  test("uploads and their answers round-trip (ADR-0037)", () => {
+    const data = new Uint8Array([0x89, 0x50, 0x4e, 0x47])
+    const text = encodeClientFrame({ upload: { id: "u1", name: "shot 1.png", mime: "image/png", data } })
+    expect(JSON.parse(text)).toEqual({ upload: { id: "u1", name: "shot 1.png", mime: "image/png", data: "iVBORw==" } })
+    expect(decodeClientFrame(text)).toEqual({ upload: { id: "u1", name: "shot 1.png", mime: "image/png", data } })
+    // protojson omits empty strings.
+    expect(decodeClientFrame(JSON.stringify({ upload: { id: "u2", data: "" } }))).toEqual({ upload: { id: "u2", name: "", mime: "", data: new Uint8Array() } })
+    expect(decodeServerFrame(encodeServerFrame({ uploaded: { id: "u1", path: "/tmp/x/shot 1.png" } }))).toEqual({ uploaded: { id: "u1", path: "/tmp/x/shot 1.png" } })
+    expect(JSON.parse(encodeServerFrame({ uploadFailed: { id: "u1", reason: "too large" } }))).toEqual({ uploadFailed: { id: "u1", reason: "too large" } })
+    expect(decodeServerFrame(JSON.stringify({ uploadFailed: { id: "u1", reason: "uploads are not supported by hya serve PTY sessions" } }))).toEqual({ uploadFailed: { id: "u1", reason: "uploads are not supported by hya serve PTY sessions" } })
+    expect(decodeClientFrame(JSON.stringify({ upload: { id: 3, data: "" } }))).toBeNull()
+  })
+
   test("malformed or unknown frames decode to null", () => {
     expect(decodeClientFrame("not json")).toBeNull()
     expect(decodeClientFrame(JSON.stringify({ attach: { id: "x" } }))).toBeNull()

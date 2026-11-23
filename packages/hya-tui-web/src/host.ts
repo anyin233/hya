@@ -4,7 +4,9 @@
 
 import type { Server, ServerWebSocket, Subprocess } from "bun"
 import page from "../web/index.html"
+import { rmSync } from "node:fs"
 import { decodeClientFrame, encodeServerFrame } from "./frames"
+import { maxFrameBytes, uploadRoot, UploadStore } from "./uploads"
 
 export type HostOptions = {
   /** argv spawned for every browser connection. */
@@ -34,7 +36,7 @@ export type Host = {
   stop(): Promise<void>
 }
 
-type Connection = { cols: number; rows: number; proc?: Subprocess }
+type Connection = { cols: number; rows: number; proc?: Subprocess; uploads?: UploadStore }
 
 function size(value: string | null, fallback: number): number {
   const parsed = Number(value)
@@ -55,9 +57,13 @@ export function startHost(options: HostOptions): Host {
   const connections = new Set<ServerWebSocket<Connection>>()
   const processes = new Set<Subprocess>()
   const env = { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor", ...options.env }
+  // Pasted or dropped files (ADR-0037), one directory per connection.
+  const uploads = uploadRoot()
+  let connectionIds = 0
 
   function open(ws: ServerWebSocket<Connection>) {
     connections.add(ws)
+    ws.data.uploads = new UploadStore(uploads, ++connectionIds)
     const proc = Bun.spawn(options.command, {
       cwd: options.cwd,
       env,
@@ -89,11 +95,13 @@ export function startHost(options: HostOptions): Host {
     if (!frame || !terminal || terminal.closed) return
     if ("input" in frame) terminal.write(frame.input)
     else if ("resize" in frame) terminal.resize(frame.resize.cols, frame.resize.rows)
+    else if ("upload" in frame) ws.send(encodeServerFrame(ws.data.uploads!.store(frame.upload)))
     else ws.send(encodeServerFrame({ pong: true }))
   }
 
   function close(ws: ServerWebSocket<Connection>) {
     connections.delete(ws)
+    ws.data.uploads?.clear()
     const proc = ws.data.proc
     if (proc && proc.exitCode === null) proc.kill("SIGHUP")
   }
@@ -115,7 +123,7 @@ export function startHost(options: HostOptions): Host {
       if (server.upgrade(request, { data })) return undefined
       return new Response("Expected a WebSocket upgrade", { status: 400 })
     },
-    websocket: { open, message, close },
+    websocket: { open, message, close, maxPayloadLength: maxFrameBytes },
   })
 
   return {
@@ -141,6 +149,7 @@ export function startHost(options: HostOptions): Host {
       // Let each tab receive its `exit` frame before the sockets close.
       if (running.length > 0) await Bun.sleep(100)
       await server.stop(true)
+      rmSync(uploads, { recursive: true, force: true })
     },
   }
 }

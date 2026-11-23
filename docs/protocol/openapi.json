@@ -4634,6 +4634,52 @@
           },
           "ping": {
             "type": "boolean"
+          },
+          "upload": {
+            "$ref": "#/components/schemas/PtyUpload"
+          }
+        }
+      },
+      "PtyUpload": {
+        "type": "object",
+        "description": "One file uploaded from the browser.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "mime": {
+            "type": "string"
+          },
+          "data": {
+            "type": "string",
+            "contentEncoding": "base64"
+          }
+        }
+      },
+      "PtyUploaded": {
+        "type": "object",
+        "description": "An upload stored on the host.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "PtyUploadFailed": {
+        "type": "object",
+        "description": "An upload the host refused.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
           }
         }
       },
@@ -4677,6 +4723,12 @@
           },
           "pong": {
             "type": "boolean"
+          },
+          "uploaded": {
+            "$ref": "#/components/schemas/PtyUploaded"
+          },
+          "upload_failed": {
+            "$ref": "#/components/schemas/PtyUploadFailed"
           }
         }
       },
