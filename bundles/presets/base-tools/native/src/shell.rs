@@ -698,7 +698,7 @@ async fn execute_pipes(
                 .map(|output| CapturedRun { completion, output })
                 .map_err(|error| contextual_io("finish Bash output capture", error)),
             Err(error) => {
-                let cleanup = terminate_pipe_child(&mut child, process_group).await;
+                let cleanup = terminate_pipe_child(&mut child, &mut process_group).await;
                 Err(with_cleanup_error(error, cleanup))
             }
         };
@@ -747,8 +747,7 @@ async fn capture_pipes(
         if !terminated {
             let cancelled = cancel.is_cancelled() || shutdown.is_cancelled();
             if cancelled || deadline.is_some_and(|at| Instant::now() >= at) {
-                terminate_pipe_child(child, *process_group).await?;
-                *process_group = None;
+                terminate_pipe_child(child, process_group).await?;
                 reaped = true;
                 terminated = true;
                 completion = Some(if cancelled {
@@ -892,43 +891,62 @@ async fn wait_for_deadline(deadline: Option<Instant>) {
 /// Returns a contextual tool error if the group cannot be terminated or reaped.
 async fn terminate_pipe_child(
     child: &mut Child,
-    process_group: Option<u32>,
+    process_group: &mut Option<u32>,
 ) -> Result<(), ToolError> {
     #[cfg(unix)]
-    if let Some(pgid) = process_group {
-        hya_tool::process_group::kill_group(pgid)?;
+    {
+        terminate_pipe_group(
+            child,
+            process_group,
+            hya_tool::process_group::finish_group_termination,
+        )
+        .await
     }
     #[cfg(not(unix))]
     {
-        let _ = process_group;
-        if child.id().is_some() {
+        if process_group.is_some() {
             child
-                .kill()
-                .await
+                .start_kill()
                 .map_err(|error| contextual_io("terminate Bash process", error))?;
+            *process_group = None;
         }
+        reap_pipe_child(child).await
     }
-    #[cfg(unix)]
-    let quiesce = async {
-        if let Some(pgid) = process_group {
-            tokio::task::spawn_blocking(move || {
-                hya_tool::process_group::finish_group_termination(pgid)
-            })
+}
+
+async fn reap_pipe_child(child: &mut Child) -> Result<(), ToolError> {
+    if child.id().is_some() {
+        child
+            .wait()
             .await
-            .map_err(io::Error::other)??;
-        }
-        Ok::<(), io::Error>(())
+            .map_err(|error| contextual_io("reap Bash process", error))?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn terminate_pipe_group(
+    child: &mut Child,
+    process_group: &mut Option<u32>,
+    finish_group: fn(u32) -> io::Result<()>,
+) -> Result<(), ToolError> {
+    let Some(pgid) = *process_group else {
+        return reap_pipe_child(child).await;
     };
-    // Linux can recognize a quiet group while its waitable leader pins the PGID.
+    hya_tool::process_group::kill_group(pgid)?;
+    let quiesce = async {
+        tokio::task::spawn_blocking(move || finish_group(pgid))
+            .await
+            .map_err(io::Error::other)?
+    };
     #[cfg(target_os = "linux")]
     let quiet = quiesce.await;
-    child
-        .wait()
-        .await
-        .map_err(|error| contextual_io("reap Bash process", error))?;
-    #[cfg(all(unix, not(target_os = "linux")))]
+    // Releasing the leader's PID ends ownership. Even a failed quiescence
+    // check must leave the outer error handler with no group to signal.
+    *process_group = None;
+    reap_pipe_child(child).await?;
+    #[cfg(not(target_os = "linux"))]
     let quiet = quiesce.await;
-    #[cfg(unix)]
     quiet?;
     Ok(())
 }
@@ -1008,8 +1026,8 @@ fn run_pty_blocking(
     loop {
         let cancelled = cancel.is_cancelled() || shutdown.is_cancelled();
         if cancelled || deadline.is_some_and(|at| Instant::now() >= at) {
-            if let Some(pgid) = active_group.take() {
-                terminate_pty_child(&mut child, Some(pgid))?;
+            if active_group.is_some() {
+                terminate_pty_child(&mut child, &mut active_group)?;
                 drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
             }
             completion = Some(if cancelled {
@@ -1020,17 +1038,17 @@ fn run_pty_blocking(
         } else if active_group.is_some() {
             match group.finished(|| child.try_wait()) {
                 Ok(true) => {
+                    active_group = None;
                     let status = child
                         .wait()
                         .map_err(|error| contextual_io("reap Bash PTY process", error))?;
-                    active_group = None;
                     completion = Some(Completion::Finished(status.code()));
                     drain_cutoff = Some(Instant::now() + ORPHAN_PIPE_GRACE);
                 }
                 Ok(false) => {}
                 Err(error) => {
                     let wait_error = contextual_io("poll Bash PTY process group", error);
-                    let cleanup = terminate_pty_child(&mut child, active_group);
+                    let cleanup = terminate_pty_child(&mut child, &mut active_group);
                     return Err(with_cleanup_error(wait_error, cleanup));
                 }
             }
@@ -1041,7 +1059,7 @@ fn run_pty_blocking(
         if drain_cutoff.is_some_and(|at| Instant::now() >= at) {
             if let Err(error) = drain_ready_fd(master.as_raw_fd(), &mut sink) {
                 let drain_error = contextual_io("drain Bash PTY output", error);
-                let cleanup = terminate_pty_child(&mut child, active_group);
+                let cleanup = terminate_pty_child(&mut child, &mut active_group);
                 return Err(with_cleanup_error(drain_error, cleanup));
             }
             break;
@@ -1063,7 +1081,7 @@ fn run_pty_blocking(
                 continue;
             }
             let poll_error = contextual_io("poll Bash PTY master", error);
-            let cleanup = terminate_pty_child(&mut child, active_group);
+            let cleanup = terminate_pty_child(&mut child, &mut active_group);
             return Err(with_cleanup_error(poll_error, cleanup));
         }
         if polled == 0 {
@@ -1074,7 +1092,7 @@ fn run_pty_blocking(
             Ok(count) => {
                 if let Err(error) = sink.push(&buffer[..count]) {
                     let capture_error = contextual_io("capture Bash PTY output", error);
-                    let cleanup = terminate_pty_child(&mut child, active_group);
+                    let cleanup = terminate_pty_child(&mut child, &mut active_group);
                     return Err(with_cleanup_error(capture_error, cleanup));
                 }
             }
@@ -1086,7 +1104,7 @@ fn run_pty_blocking(
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
             Err(error) => {
                 let read_error = contextual_io("read Bash PTY master", error);
-                let cleanup = terminate_pty_child(&mut child, active_group);
+                let cleanup = terminate_pty_child(&mut child, &mut active_group);
                 return Err(with_cleanup_error(read_error, cleanup));
             }
         }
@@ -1122,19 +1140,20 @@ fn set_nonblocking(fd: std::os::fd::RawFd) -> io::Result<()> {
 #[cfg(unix)]
 fn terminate_pty_child(
     child: &mut std::process::Child,
-    process_group: Option<u32>,
+    process_group: &mut Option<u32>,
 ) -> Result<(), ToolError> {
-    let Some(process_group) = process_group else {
+    let Some(pgid) = *process_group else {
         return Ok(());
     };
-    hya_tool::process_group::kill_group(process_group)?;
+    hya_tool::process_group::kill_group(pgid)?;
     #[cfg(target_os = "linux")]
-    let quiet = hya_tool::process_group::finish_group_termination(process_group);
+    let quiet = hya_tool::process_group::finish_group_termination(pgid);
+    *process_group = None;
     child
         .wait()
         .map_err(|error| contextual_io("reap Bash PTY process", error))?;
     #[cfg(not(target_os = "linux"))]
-    let quiet = hya_tool::process_group::finish_group_termination(process_group);
+    let quiet = hya_tool::process_group::finish_group_termination(pgid);
     quiet?;
     Ok(())
 }
@@ -1471,6 +1490,28 @@ fn contextual_io(operation: &str, error: impl std::fmt::Display) -> ToolError {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn failed_quiescence_reaps_and_releases_the_pipe_group() {
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("60")
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let mut group = child.id();
+        let error = terminate_pipe_group(&mut child, &mut group, |_| {
+            Err(io::Error::other("injected quiescence failure"))
+        })
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("injected quiescence failure"));
+        assert_eq!(child.id(), None);
+        assert_eq!(group, None);
+        terminate_pipe_group(&mut child, &mut group, |_| panic!("released group"))
+            .await
+            .unwrap();
+    }
 
     #[test]
     fn spilled_output_preview_keeps_unique_tail_marker() {
