@@ -340,7 +340,9 @@ pub fn finish_group_termination(pgid: u32) -> io::Result<()> {
 fn group_zombies(proc_root: &std::path::Path, pgid: u32) -> io::Result<Option<Vec<(u32, u64)>>> {
     let mut zombies = Vec::new();
     for entry in std::fs::read_dir(proc_root)? {
-        let entry = entry?;
+        let Some(entry) = still_present(entry)? else {
+            continue;
+        };
         let Some(pid) = entry
             .file_name()
             .to_str()
@@ -364,7 +366,10 @@ fn group_zombies(proc_root: &std::path::Path, pgid: u32) -> io::Result<Option<Ve
             continue;
         };
         for task in tasks {
-            if let Some(stat) = proc_stat(&task?.path())?
+            let Some(task) = still_present(task)? else {
+                continue;
+            };
+            if let Some(stat) = proc_stat(&task.path())?
                 && !stat.dead
             {
                 return Ok(None);
@@ -415,7 +420,12 @@ fn proc_stat(path: &std::path::Path) -> io::Result<Option<ProcStat>> {
 fn still_present<T>(result: io::Result<T>) -> io::Result<Option<T>> {
     match result {
         Ok(value) => Ok(Some(value)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound || e.raw_os_error() == Some(libc::ESRCH) => {
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::PermissionDenied | io::ErrorKind::NotFound
+            ) || e.raw_os_error() == Some(libc::ESRCH) =>
+        {
             Ok(None)
         }
         Err(e) => Err(e),
@@ -426,6 +436,34 @@ fn still_present<T>(result: io::Result<T>) -> io::Result<Option<T>> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn inaccessible_proc_entries_are_skipped() -> io::Result<()> {
+        assert_eq!(
+            still_present::<()>(Err(io::ErrorKind::PermissionDenied.into()))?,
+            None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn restricted_sibling_does_not_hide_target_zombies() -> io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!("group-scan-{}", hya_proto::SessionId::new()));
+        fs::create_dir_all(root.join("42/task"))?;
+        let stat = |group| format!("42 (shell) Z 1 {group} {} 999 0", "0 ".repeat(16));
+        fs::write(root.join("42/stat"), stat(10))?;
+        let sibling = root.join("51");
+        fs::create_dir(&sibling)?;
+        fs::write(sibling.join("stat"), stat(51))?;
+        fs::set_permissions(&sibling, fs::Permissions::from_mode(0))?;
+        let result = group_zombies(&root, 10);
+        fs::set_permissions(&sibling, fs::Permissions::from_mode(0o700))?;
+        fs::remove_dir_all(root)?;
+        assert_eq!(result?, Some(vec![(42, 999)]));
+        Ok(())
+    }
 
     #[test]
     fn zombie_process_is_quiet_only_after_its_last_thread_exits() -> io::Result<()> {
