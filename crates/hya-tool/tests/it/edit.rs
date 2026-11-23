@@ -1369,6 +1369,75 @@ async fn edit_runs_lsp_after_mutation_and_returns_diagnostics() {
 }
 
 #[tokio::test]
+async fn edit_missing_hash_returns_only_authorized_live_context() {
+    let workdir = tempdir();
+    let target = workdir.join("notes.txt");
+    let original = format!(
+        "{}{}",
+        "row\r\n".repeat(1096),
+        "alpha\r\nbeta\r\ngamma\r\ndelta\r\n"
+    );
+    std::fs::write(&target, &original).unwrap();
+    let tool = ToolRegistry::builtins().get("edit").unwrap();
+    let input = |path: &Path, pos: &str| {
+        json!({
+            "path": path, "edits": [{"op":"replace", "pos":pos, "lines":["changed"]}]
+        })
+    };
+    let ctx = ctx_with(
+        vec![
+            allow(Action::Read, "*"),
+            deny(Action::ExternalDirectory, "*"),
+        ],
+        workdir.clone(),
+    );
+    for pos in ["1098#", "1098#:copied", "1098", "1098:copied"] {
+        let error = tool
+            .execute(&ctx, input(&target, pos))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("[E_BAD_REF]") && error.contains("No edits were applied."),
+            "{error}"
+        );
+        assert!(error.contains("1098#JB:beta"), "{error}");
+    }
+    let error = tool
+        .execute(&ctx, input(&target, "9999#"))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("File has 1100 visible lines; line 9999 is out of range."),
+        "{error}"
+    );
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), original);
+
+    let outside = tempdir().join("outside.txt");
+    std::fs::write(&outside, &original).unwrap();
+    let binary = workdir.join("binary");
+    std::fs::write(&binary, b"private\0content").unwrap();
+    let denied = ctx_with(vec![deny(Action::Read, "*")], workdir.clone());
+    let missing = workdir.join("missing");
+    let plain = tool
+        .execute(&ctx, input(&missing, "1#"))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(plain.contains("[E_BAD_REF]") && !plain.contains("Current anchors"));
+    for (ctx, path) in [(&ctx, binary), (&ctx, outside), (&denied, target)] {
+        assert_eq!(
+            tool.execute(ctx, input(&path, "1#"))
+                .await
+                .unwrap_err()
+                .to_string(),
+            plain
+        );
+    }
+}
+
+#[tokio::test]
 async fn edit_requires_external_directory_permission_before_mutation() {
     // Given
     let workdir = tempdir();
