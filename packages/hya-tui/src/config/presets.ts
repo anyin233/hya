@@ -41,6 +41,10 @@ export interface StartupSettings {
 /** The resolved structure the TUI draws. Field names match `tui.toml`. */
 export interface TuiStructure {
   startup: StartupSettings
+  /** Open todo rows above the input (the dock). */
+  todos: { enabled: boolean; max_rows: number }
+  /** Running subagent rows above the input (the dock). */
+  subagents: { enabled: boolean }
   statusline: { enabled: boolean; segments: StatusSegment[]; placement: "below" | "band" }
   composer: { style: "box" | "band"; border_info: StatusSegment[]; paste: PasteSettings }
   sidebar: { enabled: boolean }
@@ -48,17 +52,19 @@ export interface TuiStructure {
 export type ComponentName = keyof TuiStructure
 
 /** Components whose `enabled` switch `/set <component> on|off` changes for the session. */
-export const switchableComponents = ["startup", "statusline", "sidebar"] as const satisfies readonly ComponentName[]
+export const switchableComponents = ["startup", "statusline", "todos", "subagents", "sidebar"] as const satisfies readonly ComponentName[]
 
 export const builtinPresetNames = ["minimal", "statusline", "dock", "workspace"] as const
 export type BuiltinPreset = typeof builtinPresetNames[number]
 export const defaultPreset: BuiltinPreset = "statusline"
 
-/** Built-in presets this version draws; `dock` arrives with the dock components (p2 Phase 4). */
-export const availablePresets: readonly BuiltinPreset[] = ["minimal", "statusline", "workspace"]
+/** Built-in presets this version draws. */
+export const availablePresets: readonly BuiltinPreset[] = ["minimal", "statusline", "dock", "workspace"]
 
 const base = (): TuiStructure => ({
   startup: { enabled: true, resources: "compact", sections: [...startupSections], quiet: false },
+  todos: { enabled: false, max_rows: 3 },
+  subagents: { enabled: false },
   statusline: { enabled: true, segments: [...defaultSegments], placement: "below" },
   composer: { style: "box", border_info: [], paste: { collapse_lines: 10, collapse_chars: 1000, wrap: true, image_resize: true } },
   sidebar: { enabled: false },
@@ -73,10 +79,17 @@ export function builtinPreset(name: BuiltinPreset): TuiStructure {
       structure.composer.border_info = ["model", "mode"]
       break
     case "statusline":
+      break
     case "dock":
+      structure.composer.style = "band"
+      structure.statusline.placement = "band"
+      structure.todos.enabled = true
+      structure.subagents.enabled = true
       break
     case "workspace":
       structure.sidebar.enabled = true
+      structure.todos.enabled = true
+      structure.subagents.enabled = true
       break
   }
   return structure
@@ -90,6 +103,6 @@ export function isBuiltinPreset(name: string): name is BuiltinPreset {
 export const presetDescriptions: Record<BuiltinPreset, string> = {
   minimal: "transcript and input; model and mode on the input border",
   statusline: "transcript, input, and one status row below it (default)",
-  dock: "omp-style status band with todo and subagent rows (not in this version)",
+  dock: "status band right above a ╰─ input, with open todo and running subagent rows",
   workspace: "the tiled workspace: Projects, Sessions, Todos, Context sidebars and the layout tree",
 }

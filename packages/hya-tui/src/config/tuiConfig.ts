@@ -145,9 +145,11 @@ const sectionList: Rule = {
 }
 const rules: { [Component in ComponentName]: Record<keyof TuiStructure[Component] & string, Rule | TableRule> } = {
   startup: { enabled: bool, resources: oneOf(["compact", "full"]), sections: sectionList, quiet: bool },
-  statusline: { enabled: bool, segments: segmentList, placement: oneOf(["below", "band"], ["band"]) },
+  todos: { enabled: bool, max_rows: integer(1, 6) },
+  subagents: { enabled: bool },
+  statusline: { enabled: bool, segments: segmentList, placement: oneOf(["below", "band"]) },
   composer: {
-    style: oneOf(["box", "band"], ["band"]),
+    style: oneOf(["box", "band"]),
     border_info: segmentList,
     paste: { table: { collapse_lines: integer(0), collapse_chars: integer(1), wrap: bool, image_resize: bool } },
   },
@@ -156,12 +158,14 @@ const rules: { [Component in ComponentName]: Record<keyof TuiStructure[Component
 /** Keys of a known component that a later version reads. */
 const laterKeys: Record<ComponentName, readonly string[]> = {
   startup: [],
+  todos: [],
+  subagents: [],
   statusline: [],
   composer: ["attachments"],
   sidebar: ["left", "right", "min_columns"],
 }
 /** Component tables a later version reads (startup list, dock rows, layout tree). */
-const laterComponents = ["todos", "subagents", "layout", "transcript"] as const
+const laterComponents = ["layout", "transcript"] as const
 /** Reserved tables (ADR-0036 D9). */
 const reservedTables = ["theme", "keys"] as const
 const componentNames = Object.keys(rules) as ComponentName[]
@@ -372,14 +376,23 @@ ${presets}
 # sections = ["context", "skills", "commands", "mcp", "bundles", "extensions"]
 # quiet = false           # true: only problems
 
+[todos]
+# Open todo rows above the input (the dock preset turns them on).
+# enabled = false
+# max_rows = 3            # 1 to 6
+
+[subagents]
+# Running subagent rows above the input.
+# enabled = false
+
 [statusline]
 # enabled = true
 # Segments, left to right: ${statusSegments.join(", ")}
 # segments = ["model", "mode", "cwd", "git", "ctx", "tokens"]
-# placement = "below"
+# placement = "below"   # below the input, or "band": right above it (with composer.style = "band")
 
 [composer]
-# style = "box"
+# style = "box"           # box, or "band": no border, the input line starts with ╰─
 # Segments written on the input border (the minimal preset uses ["model", "mode"]).
 # border_info = []
 

@@ -1027,7 +1027,9 @@ context occupancy:
 ```
 
 `minimal` drops the status row and writes the model and mode on the input
-border. `workspace` is the tiled workspace below, with the sidebars, the
+border. `dock` draws the input without a box, as a `╰─` line under a status
+band, with open todos and running subagents above it
+([Dock](tui-config.md#dock)). `workspace` is the tiled workspace below, with the sidebars, the
 layout tree, and the layout editor; write `preset = "workspace"` in
 `tui.toml`, or run `/set preset workspace` for one session. The rest of this
 section describes the workspace; the rules on boxes, prompts, pending
