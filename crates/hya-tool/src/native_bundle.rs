@@ -278,6 +278,7 @@ pub fn abi_digest_v1() -> [u8; 32] {
     hash.update(std::mem::align_of::<tokio::runtime::Handle>().to_be_bytes());
     hash.update(include_bytes!("tool.rs"));
     hash.update(include_bytes!("deadline.rs"));
+    hash.update(include_bytes!("lifecycle.rs"));
     hash.update(include_bytes!("rewrite.rs"));
     hash.update(include_bytes!("tokens.rs"));
     hash.finalize().into()

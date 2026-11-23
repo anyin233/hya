@@ -432,18 +432,22 @@ Found two issues …
 The header has the reason it woke, one line per finished/already-finished
 target (handle, state, outcome), idle targets, the still-running handles, and
 the new-mail count. Direct mail without a channel, including a `LEADER FAILED`
-notice from the harness, gets preview space first because the inbox cursor has
-advanced. Reports, archive notes, and channel-backed mail share the remaining
-space. Within each group short bodies are shown whole and longer ones share the
-rest equally. Reports appear before mail in the output.
+notice from the harness, gets space first. Each direct message's received
+preview (up to 600 characters plus an ellipsis for longer bodies) appears
+verbatim in the model-visible `output`. Reports, archive notes, and
+channel-backed mail share the remaining space. Reports appear before mail.
 
-A shortened preview gives the omitted character count. For channel-backed mail
-and reports with a readable parent DM, it also gives `read channel://<id>`.
-A shortened direct message points to `metadata.mail`. If crowding shortens or
-entirely omits a direct message, its metadata entry includes `"truncated": true`
-and `body` with the exact received text. A direct message shown in full needs
-only `from` and `chars`. Channel-backed entries retain `from`, `channel`, and
-`chars`.
+When those direct previews cannot all fit in 4,500 characters, the channel-aware
+`wait` returns the largest leading page that fits, sets `metadata.more_mail`
+to `true`, and asks the model to call `wait` again. The durable inbox cursor
+stops immediately before the first deferred message. For example, ten
+600-character notices require multiple calls. On the final page the
+continuation hint and `more_mail` field are absent.
+
+A shortened channel-backed preview gives the omitted character count and
+`read channel://<id>`. Reports with a readable parent DM give the same link.
+Each delivered mail has a metadata entry with `from`, `chars`, and, for
+channel-backed mail, `channel`.
 
 Example metadata for a wait with channel-backed mail:
 
@@ -492,7 +496,7 @@ each message previewed in `output` (the body is bounded to 600 chars like the
 chars}`. Mail is **new** only past the caller's durable inbox
 cursor — the same `MailConsumed` cursor in-turn steering and resident wakes
 use — and a wait that returns commits the cursor through the mail it
-accounted for: the channel-aware wait through the whole inbox, the
+accounted for: the channel-aware wait through the returned page, the
 member-only wait through the leading run of report mails of targets it
 reported `finished`. So a returned message is never returned by a later
 `wait`, never repeated in a `[NEW MAIL]` notice, and never re-injected by a

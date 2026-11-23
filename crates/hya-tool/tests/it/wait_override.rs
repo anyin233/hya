@@ -53,6 +53,7 @@ async fn requested_mail_wake(registry: &ToolRegistry) -> bool {
             already_finished: Vec::new(),
             running: Vec::new(),
             mail: Vec::new(),
+            more_mail: false,
             waited_ms: 0,
         }))
         .unwrap();
