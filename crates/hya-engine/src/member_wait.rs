@@ -137,7 +137,12 @@ pub(crate) async fn wait_for_members(
             entry.resident_cursor.max(work.inbox_through)
         })
     });
-    let cursor = usize::try_from(cursor).unwrap_or(usize::MAX);
+    let durable_cursor = usize::try_from(cursor).unwrap_or(usize::MAX);
+    let cursor = durable_cursor.max(
+        wait_ack
+            .and_then(hya_tool::WaitAckSlot::staged_through)
+            .unwrap_or(0),
+    );
     // The lead has no parent: without subagents there is nobody to hear from.
     let mail_only = targets.is_empty() && spec.wake_on_mail && caller != root;
     // Leave the run's final-notice grace free of blocking tools.
@@ -228,7 +233,7 @@ pub(crate) async fn wait_for_members(
                 outcome.mail.truncate(fits);
                 inbox.through = inbox.mail_indices[fits];
             }
-            if inbox.through > cursor {
+            let ack = (inbox.through > cursor).then(|| {
                 let consumed_incoming = projection.team.inboxes[&caller_path]
                     [cursor..inbox.through]
                     .iter()
@@ -238,16 +243,17 @@ pub(crate) async fn wait_for_members(
                     handle: caller_path.clone(),
                     through: u64::try_from(inbox.through).unwrap_or(u64::MAX),
                 };
-                if let Some(slot) = wait_ack {
-                    slot.stage(hya_tool::WaitMailAck {
-                        event,
-                        mark: mark.unwrap_or_default(),
-                        consumed_incoming: consumed_incoming && mark.is_some(),
-                    });
-                } else {
-                    engine.emit_for_actor(actor_claim, root, event).await?;
-                    engine.notify_mail_consumed(caller, mark, consumed_incoming);
+                hya_tool::WaitMailAck {
+                    event,
+                    mark: mark.unwrap_or_default(),
+                    consumed_incoming: consumed_incoming && mark.is_some(),
                 }
+            });
+            if let Some(slot) = wait_ack {
+                slot.record(outcome.more_mail, ack);
+            } else if let Some(ack) = ack {
+                engine.emit_for_actor(actor_claim, root, ack.event).await?;
+                engine.notify_mail_consumed(caller, mark, ack.consumed_incoming);
             }
             for (member, last) in &standing.stalled {
                 supervisor.record_wait_stall(caller, *member, *last);

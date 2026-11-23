@@ -137,6 +137,7 @@ struct Team {
     provider: Arc<GateProvider>,
     root: SessionId,
     lifecycle: LifecyclePlane,
+    lead: AgentSpec,
 }
 
 async fn team() -> Team {
@@ -144,26 +145,33 @@ async fn team() -> Team {
 }
 
 async fn team_with_limits(limits: hya_engine::SubagentLimits) -> Team {
+    team_with_runtime(
+        limits,
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        "hya-main",
+    )
+    .await
+}
+
+async fn team_with_runtime(
+    limits: hya_engine::SubagentLimits,
+    runtime: Arc<hya_engine::RuntimeRegistry>,
+    agent: &str,
+) -> Team {
     let provider = Arc::new(GateProvider::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let router = Arc::new(ProviderRouter::new().with(provider.clone()));
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(Vec::new()));
     let (lifecycle, rx) = LifecyclePlane::new();
     let engine = Arc::new(
-        SessionEngine::new(
-            store,
-            router,
-            support::test_runtime(Arc::new(ToolRegistry::builtins())),
-            permission,
-            EventBus::default(),
-        )
-        .with_governor(hya_engine::SubagentGovernor::new(limits))
-        .with_lifecycle(lifecycle.clone()),
+        SessionEngine::new(store, router, runtime, permission, EventBus::default())
+            .with_governor(hya_engine::SubagentGovernor::new(limits))
+            .with_lifecycle(lifecycle.clone()),
     );
     let root = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("hya-main"),
+            agent: AgentName::new(agent),
             model: ModelRef::new("fake"),
             workdir: ".".to_string(),
             project: None,
@@ -173,11 +181,17 @@ async fn team_with_limits(limits: hya_engine::SubagentLimits) -> Team {
         .unwrap();
     *provider.root.lock().unwrap() = Some(root);
     let supervisor = ResidentSupervisor::start(engine.clone());
-    let lead = spec("hya-main");
+    let lead = spec(agent);
     let binding = engine.bind_runtime(&lead.workdir).unwrap();
-    let resources = binding.agent_resource_policy("hya-main").unwrap();
+    let resources = binding.agent_resource_policy(agent).unwrap();
     supervisor
-        .ensure_main(root, lead, (binding, Arc::from([]), resources), None, None)
+        .ensure_main(
+            root,
+            lead.clone(),
+            (binding, Arc::from([]), resources),
+            None,
+            None,
+        )
         .await
         .unwrap();
     tokio::spawn(run_lifecycle_service(
@@ -192,6 +206,7 @@ async fn team_with_limits(limits: hya_engine::SubagentLimits) -> Team {
         provider,
         root,
         lifecycle,
+        lead,
     }
 }
 
@@ -207,9 +222,18 @@ fn spec(name: &str) -> AgentSpec {
 
 /// Spawn a member under `parent`; `gated` parks its first turn until release.
 async fn spawn(team: &Team, parent: SessionId, gated: bool) -> (SessionId, String) {
-    let agent = spec("hya-scout");
+    spawn_agent(team, parent, gated, "hya-scout").await
+}
+
+async fn spawn_agent(
+    team: &Team,
+    parent: SessionId,
+    gated: bool,
+    name: &str,
+) -> (SessionId, String) {
+    let agent = spec(name);
     let binding = team.engine.bind_runtime(&agent.workdir).unwrap();
-    let resources = binding.agent_resource_policy("hya-scout").unwrap();
+    let resources = binding.agent_resource_policy(name).unwrap();
     team.provider.gate_members.store(gated, Ordering::SeqCst);
     let (session, handle) = team
         .supervisor
@@ -1175,7 +1199,7 @@ async fn run_wait_turn(
     engine
         .run_admitted_turn(
             lease,
-            &spec("hya-main"),
+            &team.lead,
             CancellationToken::new(),
             &[],
             None,
@@ -1185,68 +1209,246 @@ async fn run_wait_turn(
         .await
 }
 
+/// Run two real waits under one outer tool-result transaction.
+struct ReadPages;
+
+#[async_trait]
+impl hya_tool::Tool for ReadPages {
+    fn name(&self) -> &str {
+        "read_pages"
+    }
+
+    fn schema(&self) -> hya_proto::ToolSchema {
+        hya_proto::ToolSchema {
+            name: self.name().into(),
+            description: "Read successive mail pages".into(),
+            input_schema: json!({"type":"object"}),
+            output_schema: None,
+        }
+    }
+
+    async fn execute(
+        &self,
+        ctx: &hya_tool::ToolCtx,
+        input: serde_json::Value,
+    ) -> Result<serde_json::Value, ToolError> {
+        let first = ctx
+            .nested
+            .call("receive", json!({"timeout_secs":0}))
+            .await?;
+        if input["fail"] == true {
+            return Err(ToolError::Other("discard first page".into()));
+        }
+        let second = ctx
+            .nested
+            .call("receive", json!({"timeout_secs":0}))
+            .await?;
+        let pages = [first, second].map(|page| {
+            page["output"]
+                .as_str()
+                .unwrap()
+                .lines()
+                .filter_map(|line| {
+                    line.strip_prefix("notice ")?
+                        .split_once(' ')
+                        .map(|(id, _)| id.to_owned())
+                })
+                .collect::<Vec<_>>()
+        });
+        Ok(json!({"pages": pages}))
+    }
+}
+
+async fn mail_reader_team() -> Team {
+    use hya_bundle::{AgentRole, BundleCatalog};
+    use hya_engine::{AgentCatalog, RuntimeRegistry};
+
+    let agent = "mail-reader";
+    let fixture = support::test_catalog(&[(agent, AgentRole::Main, &[])]);
+    let mut bundle = (*fixture.bundles().bundles()[0]).clone();
+    let view = &mut bundle.agents[0].resource_view;
+    view.allow = vec!["harness:tool/wait".into(), "harness:tool/read_pages".into()];
+    view.aliases
+        .insert("receive".into(), "harness:tool/wait".into());
+    let bundles = BundleCatalog::from_prepared(&[bundle]).unwrap();
+    let catalog = Arc::new(AgentCatalog::new(Arc::new(bundles)).unwrap());
+    let tools = ToolRegistry::builtins();
+    tools.register(Arc::new(ReadPages)).unwrap();
+    team_with_runtime(
+        Default::default(),
+        Arc::new(RuntimeRegistry::new(tools, catalog)),
+        agent,
+    )
+    .await
+}
+
 #[tokio::test]
 async fn replaced_wait_result_leaves_mail_for_the_next_wait() {
-    let team = team().await;
-    let engine = (*team.engine)
-        .clone()
-        .with_hooks(Arc::new(super::hooks_seam::MaskFirstResult::default()));
-    run_wait_turn(&team, &engine, vec![wait_call(), wait_call()])
-        .await
-        .unwrap();
-    let events = engine.replay(team.root).await.unwrap();
-    let deliveries: Vec<_> = events
-        .iter()
-        .filter_map(|e| match &e.event {
-            Event::ToolResult { output, .. } if output == &json!({"masked": true}) => {
-                Some("masked")
-            }
-            Event::ToolResult { output, .. } => {
-                assert!(provider_wait_output(output).contains("direct notice"));
-                Some("delivered")
-            }
-            Event::MailConsumed { .. } => Some("ack"),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(deliveries, ["masked", "delivered", "ack"]);
+    for name in ["wait", "receive"] {
+        let team = if name == "wait" {
+            team().await
+        } else {
+            mail_reader_team().await
+        };
+        let call = || FakeStep::ToolCall {
+            name: name.into(),
+            input: json!({"timeout_secs": 0}),
+        };
+        let engine = (*team.engine)
+            .clone()
+            .with_hooks(Arc::new(super::hooks_seam::MaskFirstResult::default()));
+        run_wait_turn(&team, &engine, vec![call(), call()])
+            .await
+            .unwrap();
+        let events = engine.replay(team.root).await.unwrap();
+        let deliveries: Vec<_> = events
+            .iter()
+            .filter_map(|e| match &e.event {
+                Event::ToolResult { output, .. } if output == &json!({"masked": true}) => {
+                    Some("masked")
+                }
+                Event::ToolResult { output, .. } => {
+                    assert!(provider_wait_output(output).contains("direct notice"));
+                    Some("delivered")
+                }
+                Event::MailConsumed { .. } => Some("ack"),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(deliveries, ["masked", "delivered", "ack"]);
+    }
 }
 
 #[tokio::test]
 async fn wait_commits_mail_and_result_in_one_transaction() {
-    for reject in [Some("tool_result"), Some("mail_consumed"), None] {
-        let team = team().await;
-        if let Some(tag) = reject {
-            let mut tx = team.engine.store().begin_transaction().await.unwrap();
-            sqlx::query(&format!("CREATE TRIGGER reject_delivery BEFORE INSERT ON event_log WHEN json_extract(NEW.payload, '$.type') = '{tag}' BEGIN SELECT RAISE(ABORT, 'injected wait write failure'); END"))
+    for name in ["wait", "receive"] {
+        for reject in [Some("tool_result"), Some("mail_consumed"), None] {
+            let team = if name == "wait" {
+                team().await
+            } else {
+                mail_reader_team().await
+            };
+            if let Some(tag) = reject {
+                let mut tx = team.engine.store().begin_transaction().await.unwrap();
+                sqlx::query(&format!("CREATE TRIGGER reject_delivery BEFORE INSERT ON event_log WHEN json_extract(NEW.payload, '$.type') = '{tag}' BEGIN SELECT RAISE(ABORT, 'injected wait write failure'); END"))
                 .execute(&mut *tx).await.unwrap();
-            tx.commit().await.unwrap();
-        }
-        let result = run_wait_turn(&team, &team.engine, vec![wait_call()]).await;
-        let events = team.engine.replay(team.root).await.unwrap();
-        let delivered = events
-            .iter()
-            .filter_map(|e| match &e.event {
-                Event::ToolResult { output, .. } => {
-                    assert!(provider_wait_output(output).contains("direct notice"));
-                    Some("result")
-                }
-                Event::MailConsumed { through, .. } => {
-                    assert_eq!(*through, 1);
-                    Some("ack")
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        if reject.is_some() {
-            let error = result.unwrap_err().to_string();
-            assert!(error.contains("injected wait write failure"), "{error}");
-            assert!(delivered.is_empty(), "{reject:?}: {delivered:?}");
-        } else {
-            result.unwrap();
-            assert_eq!(delivered, ["result", "ack"]);
+                tx.commit().await.unwrap();
+            }
+            let result = run_wait_turn(
+                &team,
+                &team.engine,
+                vec![FakeStep::ToolCall {
+                    name: name.into(),
+                    input: json!({"timeout_secs": 0}),
+                }],
+            )
+            .await;
+            let events = team.engine.replay(team.root).await.unwrap();
+            let delivered = events
+                .iter()
+                .filter_map(|e| match &e.event {
+                    Event::ToolResult { output, .. } => {
+                        assert!(provider_wait_output(output).contains("direct notice"));
+                        Some("result")
+                    }
+                    Event::MailConsumed { through, .. } => {
+                        assert_eq!(*through, 1);
+                        Some("ack")
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if reject.is_some() {
+                let error = result.unwrap_err().to_string();
+                assert!(error.contains("injected wait write failure"), "{error}");
+                assert!(delivered.is_empty(), "{reject:?}: {delivered:?}");
+            } else {
+                result.unwrap();
+                assert_eq!(delivered, ["result", "ack"]);
+            }
         }
     }
+}
+
+#[tokio::test]
+async fn nested_wait_pages_commit_with_the_surviving_outer_result() {
+    let team = mail_reader_team().await;
+    let notices: Vec<_> = (0..10)
+        .map(|i| format!("notice {i} {}", "x".repeat(590)))
+        .collect();
+    let batch = [true, false].map(|fail| FakeStep::ToolCall {
+        name: "read_pages".into(),
+        input: json!({"fail":fail}),
+    });
+    let _lease = hold_lead_turn(&team);
+    let (reader, handle) = spawn_agent(&team, team.root, true, "mail-reader").await;
+    for notice in &notices {
+        team.engine
+            .store()
+            .append_harness_mail(team.root, &handle, notice.clone())
+            .await
+            .unwrap();
+    }
+    let cursor = team
+        .engine
+        .read_projection(team.root)
+        .await
+        .unwrap()
+        .team
+        .inboxes[&handle]
+        .len();
+    let mut bus = team.engine.bus().subscribe();
+    team.provider
+        .tool_batches
+        .lock()
+        .unwrap()
+        .insert(reader, batch.into());
+    team.provider.gate_members.store(false, Ordering::SeqCst);
+    team.provider.release(reader);
+    let events = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut events = Vec::new();
+        loop {
+            let e = bus.recv().await.unwrap();
+            let done = matches!(&e.event, Event::MailConsumed {handle: recipient, ..} if recipient == &handle);
+            if done || e.event.session() == Some(reader) {
+                events.push(e);
+            }
+            if done { return events; }
+        }
+    }).await.unwrap();
+    let deliveries: Vec<_> = events
+        .iter()
+        .filter_map(|e| match &e.event {
+            Event::ToolError { message_text, .. } => {
+                assert!(
+                    message_text.contains("discard first page"),
+                    "{message_text}"
+                );
+                Some("error")
+            }
+            Event::ToolResult { output, .. } => {
+                let pages = output["pages"].as_array().unwrap();
+                assert_eq!(pages.len(), 2);
+                let ids: Vec<_> = pages
+                    .iter()
+                    .flat_map(|page| {
+                        let ids = page.as_array().unwrap();
+                        assert!(!ids.is_empty());
+                        ids.iter()
+                            .map(|id| id.as_str().unwrap().parse::<usize>().unwrap())
+                    })
+                    .collect();
+                assert_eq!(ids, (0..notices.len()).collect::<Vec<_>>());
+                Some("result")
+            }
+            Event::MailConsumed { through, .. } => {
+                assert_eq!(usize::try_from(*through).unwrap(), cursor);
+                Some("ack")
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(deliveries, ["error", "result", "ack"]);
 }
 
 #[tokio::test]

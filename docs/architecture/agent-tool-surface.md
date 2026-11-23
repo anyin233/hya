@@ -444,8 +444,10 @@ stops immediately before the first deferred message. For example, ten
 600-character notices require multiple calls. On the final page the
 continuation hint and `more_mail` field are absent. Other tools in the same
 batch leave deferred mail for the next `wait`. The tool result and its
-inbox cursor commit together. If an after-hook replaces the wait output or
-the write fails, the undelivered mail remains unread.
+inbox cursor commit together, including when the tool is called by an alias.
+Nested waits in one program read successive pages. Their combined cursor
+commits with the outer tool result. If the outer call fails, an after-hook
+replaces its result, or the write fails, the mail remains unread.
 
 A shortened channel-backed preview gives the omitted character count and
 `read channel://<id>`. Reports with a readable parent DM give the same link.

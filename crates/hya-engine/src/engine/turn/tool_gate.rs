@@ -143,8 +143,7 @@ impl TurnToolGate<'_> {
         let mut file_capture = FileCapture::default();
         let nested_stamps = Arc::new(Mutex::new(BTreeMap::new()));
         let behind = hidden_behind(offered, engine.exclusive_tool.as_deref(), tc.name.as_str());
-        let is_wait = tc.name.as_str() == "wait";
-        let wait_ack = is_wait.then(hya_tool::WaitAckSlot::default);
+        let wait_ack = hya_tool::WaitAckSlot::default();
         let collect_tool = async {
             Ok::<_, CoreError>(match (behind, resources.resolve_tool(&tc.name)) {
                 (Some(exclusive), Some(_)) => (
@@ -201,7 +200,8 @@ impl TurnToolGate<'_> {
                                     .lifecycle
                                     .for_session_with_actor(session, actor_claim.copied())
                                     .with_channel_policy(channel_policy)
-                                    .with_report_latch(report_latch.clone()),
+                                    .with_report_latch(report_latch.clone())
+                                    .with_wait_ack(wait_ack.clone()),
                                 project_activity: engine.project_activity.for_session(session),
                                 session: Some(session),
                                 parent_session,
@@ -215,9 +215,6 @@ impl TurnToolGate<'_> {
                                 roots: workspace.roots.clone(),
                                 cancel: cancel.clone(),
                             };
-                            if let Some(slot) = &wait_ack {
-                                ctx.lifecycle = ctx.lifecycle.with_wait_ack(slot.clone());
-                            }
                             let nested = super::super::nested_tools::TurnNestedTools {
                                 engine: Arc::clone(
                                     nested_engine.get_or_insert_with(|| Arc::new(engine.clone())),
@@ -324,18 +321,15 @@ impl TurnToolGate<'_> {
         } else {
             result
         };
-        let intact_wait = is_wait && result.is_ok() && !was_hook_replaced && !cancel.is_cancelled();
-        let wait_ack = wait_ack
-            .filter(|_| intact_wait)
-            .and_then(|slot| slot.take());
+        let wait_state = wait_ack.take_state();
+        let wait_ack = if wait_state.saw_wait {
+            let intact = result.is_ok() && !was_hook_replaced && !cancel.is_cancelled();
+            *defer_steer = !intact || wait_state.more_mail;
+            wait_state.ack.filter(|_| intact)
+        } else {
+            None
+        };
         let mail_mark = engine.mail_mark(session);
-        if is_wait {
-            // Keep an undelivered page available to the next wait in this batch.
-            *defer_steer = !intact_wait
-                || result
-                    .as_ref()
-                    .is_ok_and(|output| output["metadata"]["more_mail"] == true);
-        }
         let (event, retains_artifact) = match result {
             Ok(mut output) => {
                 artifact_guard.remove_unowned_path(&mut output);

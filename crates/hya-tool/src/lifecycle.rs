@@ -690,25 +690,61 @@ pub struct WaitMailAck {
     pub consumed_incoming: bool,
 }
 
+/// Mail delivered by waits inside one outer tool call.
+#[derive(Debug, Default)]
+pub struct WaitAckState {
+    /// Cursor to append with the outer result.
+    pub ack: Option<WaitMailAck>,
+    /// Whether a wait returned, even when it found no mail.
+    pub saw_wait: bool,
+    /// Whether the last wait left another page unread.
+    pub more_mail: bool,
+}
+
 /// Handoff from the wait service to the owner of the tool-result transaction.
 #[derive(Clone, Debug, Default)]
-pub struct WaitAckSlot(Arc<std::sync::Mutex<Option<WaitMailAck>>>);
+pub struct WaitAckSlot(Arc<std::sync::Mutex<WaitAckState>>);
 
 impl WaitAckSlot {
-    /// Stage the acknowledgement for the page the wait is returning.
-    pub fn stage(&self, ack: WaitMailAck) {
-        *self
+    /// Inbox position already delivered within this tool call.
+    pub fn staged_through(&self) -> Option<usize> {
+        let state = self
             .0
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ack);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match &state.ack.as_ref()?.event {
+            hya_proto::Event::MailConsumed { through, .. } => {
+                Some(usize::try_from(*through).unwrap_or(usize::MAX))
+            }
+            _ => None,
+        }
     }
 
-    /// Claim the acknowledgement after the tool's final result is known.
-    pub fn take(&self) -> Option<WaitMailAck> {
-        self.0
+    /// Stage the latest page, keeping the observer watermark from the first page.
+    pub fn record(&self, more_mail: bool, ack: Option<WaitMailAck>) {
+        let mut state = self
+            .0
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.saw_wait = true;
+        state.more_mail = more_mail;
+        if let Some(mut ack) = ack {
+            if let Some(prev) = &state.ack {
+                ack.mark = prev.mark;
+                ack.consumed_incoming |= prev.consumed_incoming;
+            }
+            state.ack = Some(ack);
+        }
+    }
+
+    /// Claim all staged delivery once the outer tool's final result is known.
+    pub fn take_state(&self) -> WaitAckState {
+        std::mem::take(
+            &mut *self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 }
 
