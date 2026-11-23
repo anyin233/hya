@@ -49,7 +49,8 @@ pub const AGENT: &str = "kernel";
 pub const COMPLETION_CHECK: &str = "[hya] Completion check, sent once before this run ends. Compare the result with the request itself, not with your memory of it.
 1. Re-read the request. List what it states literally: paths and file names, exact strings and output formats, commands and flags, values and counts, and anything it says is unknown or must not be assumed.
 2. For each item, look at the result as it is now (the file on disk, the output of the real command) and compare it with the request's wording. Where the wording is exact, print the actual text and read it against the request's text, character for character. A program or pattern you wrote to do the comparison does not count, and neither does a substring or a summary. Where the request says a value is unknown, try the result with a value other than the one you can see.
-3. If something differs, fix it and check again. If everything already matches, change nothing.
+3. For any requirement where you computed or considered more than one value, design, or interpretation, check that the delivered result uses the candidate best supported by the task's own materials—not a convention or prior—and that you did not drop or revert a fix for a failure you demonstrated. Do not reopen a verified external action outside its documented workflow, and do not change a verified result on convention alone.
+4. If something differs, fix it and check again. If everything already matches, change nothing.
 Then give your final answer.";
 
 /// Whether a logged message is the shared completion check.
@@ -948,7 +949,13 @@ pub async fn drive(
             if failure.step_started {
                 emit.emit(
                     session,
-                    vec![step_finished(session, message, step, FinishReason::Error)],
+                    vec![step_finished(
+                        session,
+                        message,
+                        step,
+                        FinishReason::Error,
+                        Some(step_error_summary(&failure.error)),
+                    )],
                 )
                 .await?;
             }
@@ -998,7 +1005,7 @@ pub async fn drive(
         let notify_dropped = dropped.is_some() && !reasoning_notice_delivered && had_calls;
         emit.emit(
             session,
-            vec![step_finished(session, message, step, round.finish)],
+            vec![step_finished(session, message, step, round.finish, None)],
         )
         .await?;
         if round.finish == FinishReason::Cancelled {
@@ -1150,11 +1157,63 @@ fn tool_event(
     }
 }
 
-fn step_finished(session: SessionId, message: MessageId, step: u32, finish: FinishReason) -> Event {
+const STEP_ERROR_MAX_CHARS: usize = 512;
+
+fn step_error_summary(error: &CoreError) -> String {
+    let raw = error.to_string();
+    let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= STEP_ERROR_MAX_CHARS {
+        return collapsed;
+    }
+    let truncated: String = collapsed.chars().take(STEP_ERROR_MAX_CHARS - 1).collect();
+    format!("{truncated}…")
+}
+
+fn step_finished(
+    session: SessionId,
+    message: MessageId,
+    step: u32,
+    finish: FinishReason,
+    error: Option<String>,
+) -> Event {
     Event::StepFinished {
         session,
         message,
         step,
         finish,
+        error,
+    }
+}
+
+#[cfg(test)]
+mod step_error_tests {
+    use super::*;
+
+    #[test]
+    fn step_error_summary_collapses_whitespace_and_bounds_length() {
+        let short = CoreError::Provider(Arc::new(ProviderError::StreamInterrupted(
+            "line 1\n  line\t2".into(),
+        )));
+        assert_eq!(step_error_summary(&short), "http: line 1 line 2");
+        let long = CoreError::Provider(Arc::new(ProviderError::StreamInterrupted("x".repeat(700))));
+        let summary = step_error_summary(&long);
+        assert!(summary.ends_with('…'));
+        assert_eq!(summary.chars().count(), STEP_ERROR_MAX_CHARS);
+
+        // Exact boundary: 512 chars total ("http: " is 6 chars + 506 'a's) must not truncate.
+        let exact = CoreError::Provider(Arc::new(ProviderError::StreamInterrupted(
+            "a".repeat(STEP_ERROR_MAX_CHARS - 6),
+        )));
+        let exact_summary = step_error_summary(&exact);
+        assert!(!exact_summary.ends_with('…'));
+        assert_eq!(exact_summary.chars().count(), STEP_ERROR_MAX_CHARS);
+
+        // Multi-byte UTF-8 truncates cleanly on character boundaries.
+        let multibyte = CoreError::Provider(Arc::new(ProviderError::StreamInterrupted(
+            "中".repeat(600),
+        )));
+        let mb_summary = step_error_summary(&multibyte);
+        assert!(mb_summary.ends_with('…'));
+        assert_eq!(mb_summary.chars().count(), STEP_ERROR_MAX_CHARS);
     }
 }

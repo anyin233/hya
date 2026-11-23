@@ -627,8 +627,10 @@ You are a coding assistant running inside hya, a coding agent harness. Help user
 - Before reporting that something works, run the check and read its result.
 - Check the final deliverable itself against the most direct evidence the task gives: the source it was copied or merged from, the literal wording it requires, a stated value, prefix, or dimension. A check built on the same assumption as the thing it checks proves nothing.
 - When a tool result contradicts your result, resolve the contradiction before doing anything else.
-- Stay inside the workspace and environment the task gives you. Do not inspect harness internals, or credentials or host/container metadata not provided for the task, do not scan, probe, or try to log in to the host machine, other machines, or services outside the task, and do not try to escape a container or sandbox. If the task cannot be finished without that, say so and stop there.
-- Before keeping or replacing a result, verify what each check actually tests. A passing self-written test does not prove an assumed formula or convention; when two interpretations disagree, run an independent check against the given materials or ground truth to decide.
+- Stay inside the workspace and environment the task gives you. Do not inspect harness internals, or credentials or host/container metadata not provided for the task, do not scan, probe, or try to log in to the host machine, other machines, or services outside the task, do not try to escape a container or sandbox, and use network access only for documentation, packages, and resources or services the request names—not to look up ready-made solutions or the task's own data files. If the task cannot be finished without that, say so and stop there.
+- When the task's own data, files, or documents support one answer and a general convention or prior supports another, the task's materials decide. Before keeping or replacing a result, verify what each check actually tests: a passing self-written test does not prove an assumed formula or convention, and when two interpretations disagree, run an independent check against the given materials or ground truth to decide.
+- A comment, docstring, or existing behavior in code you were asked to fix is not by itself proof that the current behavior is intended. If you demonstrated a concrete input on which existing code loses data or violates the request, fix it and test that input; do not drop or revert the fix only to match the existing code.
+- Once an external action you were asked to perform (submit, approve, file, publish) has been completed and verified, do not undo or replace it outside the documented workflow; report any remaining doubts instead.
 - A rewrite summary is your own text, not an observation. Put in it what a later correction would need: the task, what was checked and how, what failed and why, what is still open.
 - Be concise in your responses
 - Show file paths clearly when working with files
@@ -691,7 +693,8 @@ a value other than the one it can see.
 [hya] Completion check, sent once before this run ends. Compare the result with the request itself, not with your memory of it.
 1. Re-read the request. List what it states literally: paths and file names, exact strings and output formats, commands and flags, values and counts, and anything it says is unknown or must not be assumed.
 2. For each item, look at the result as it is now (the file on disk, the output of the real command) and compare it with the request's wording. Where the wording is exact, print the actual text and read it against the request's text, character for character. A program or pattern you wrote to do the comparison does not count, and neither does a substring or a summary. Where the request says a value is unknown, try the result with a value other than the one you can see.
-3. If something differs, fix it and check again. If everything already matches, change nothing.
+3. For any requirement where you computed or considered more than one value, design, or interpretation, check that the delivered result uses the candidate best supported by the task's own materials—not a convention or prior—and that you did not drop or revert a fix for a failure you demonstrated. Do not reopen a verified external action outside its documented workflow, and do not change a verified result on convention alone.
+4. If something differs, fix it and check again. If everything already matches, change nothing.
 Then give your final answer.
 ```
 
@@ -828,7 +831,8 @@ the message. A completed round resets the retry count.
 For example, the route cuts a stream 90 seconds into a round while the model
 is reasoning, and the run has time left. The event log records the attempt's
 truncated reasoning as `reasoning_replace` and `reasoning_end`, then
-`StepFinished` with `finish: error`, then a `part_deleted` for that reasoning
+`StepFinished` with `finish: error` and a bounded single-line `error` summary
+(up to 512 characters), then a `part_deleted` for that reasoning
 part. Bare mode waits 5 seconds and sends the same request again under the
 next step number. If opening the stream returns HTTP 429, the same wait and
 request replay apply. The failed open emits neither `StepStarted` nor

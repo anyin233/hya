@@ -333,6 +333,7 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly message: MessageId
   readonly step: number
   readonly finish?: FinishReason
+  readonly error?: string | null
 }) |
 ({ readonly type: "text_start" } & {
   readonly session: SessionId
@@ -1227,7 +1228,7 @@ export function isEvent(value: unknown): value is Event {
     (isRecord(value) && value["type"] === "message_finished" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("role" in value && isRole(value["role"])) && ("finish" in value && isFinishReason(value["finish"])) && (value["tokens"] === undefined || (value["tokens"] === null || isTokenUsage(value["tokens"]))) && (value["cause"] === undefined || (value["cause"] === null || isFinishCause(value["cause"])))) ||
     (isRecord(value) && value["type"] === "part_deleted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"]))) ||
     (isRecord(value) && value["type"] === "step_started" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("step" in value && (typeof value["step"] === "number" && Number.isInteger(value["step"]) && value["step"] >= 0)) && (value["view"] === undefined || (value["view"] === null || isViewRef(value["view"])))) ||
-    (isRecord(value) && value["type"] === "step_finished" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("step" in value && (typeof value["step"] === "number" && Number.isInteger(value["step"]) && value["step"] >= 0)) && (value["finish"] === undefined || isFinishReason(value["finish"]))) ||
+    (isRecord(value) && value["type"] === "step_finished" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("step" in value && (typeof value["step"] === "number" && Number.isInteger(value["step"]) && value["step"] >= 0)) && (value["finish"] === undefined || isFinishReason(value["finish"])) && (value["error"] === undefined || (value["error"] === null || typeof value["error"] === "string"))) ||
     (isRecord(value) && value["type"] === "text_start" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"]))) ||
     (isRecord(value) && value["type"] === "text_delta" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"])) && ("delta" in value && typeof value["delta"] === "string")) ||
     (isRecord(value) && value["type"] === "text_replace" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"])) && ("text" in value && typeof value["text"] === "string")) ||
