@@ -7,7 +7,7 @@ import { useApp } from "../app/context"
 import { readOnlyStatus } from "../app/controller"
 import { historyEntry } from "../bridge"
 import { secretMask } from "../state/format"
-import { attachmentLabel, imageMentionPaths, pastedImagePath, type AttachmentPreview } from "../composer/attachments"
+import { attachmentLabel, imageMentionPaths, pastedImagePath, spacedImageMentions, type AttachmentPreview } from "../composer/attachments"
 import { escapeAction } from "../composer/escape"
 import { InputHistory } from "../composer/history"
 import { insertMention, mentionAt, type MentionToken } from "../composer/mention"
@@ -138,7 +138,7 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
   /** Refresh the pending-attachment row for the current text (debounced like `@file` lookups). */
   function updateAttachments(text: string): void {
     if (attachmentTimer) clearTimeout(attachmentTimer)
-    if (!imageMentionPaths(text).length) {
+    if (!imageMentionPaths(text).length && !spacedImageMentions(text).length) {
       attachmentTicket++
       setAttachments([])
       return
