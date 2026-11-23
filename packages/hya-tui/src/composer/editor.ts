@@ -103,3 +103,20 @@ export async function editText(text: string, options: EditTextOptions): Promise<
     rmSync(dir, { recursive: true, force: true })
   }
 }
+
+/** Edit the file at `path` in place in the external editor (`/config edit`); never throws. */
+export async function editFile(path: string, options: EditTextOptions): Promise<{ ok: true } | { ok: false; error: string }> {
+  const argv = editorCommand(options.env)
+  const name = basename(argv[0]!)
+  let status: number
+  options.suspend()
+  try {
+    status = await (options.spawn ?? spawnInherited)([...argv, path])
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    return { ok: false, error: code === "ENOENT" || /ENOENT|no such file/i.test(String(error)) ? `Editor ${name} not found` : `Editor ${name} failed: ${error instanceof Error ? error.message : String(error)}` }
+  } finally {
+    options.resume()
+  }
+  return status === 0 ? { ok: true } : { ok: false, error: `Editor ${name} exited with status ${status}` }
+}

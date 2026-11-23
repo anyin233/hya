@@ -6,6 +6,9 @@ import type { Tui } from "./harness"
 import { createSession, expect, hyaTui, initGitRepo, showStatusView, statusSessionId, test, textStep, toolStep, toolsStep, wideViewport } from "./hya"
 import { startProxy } from "./proxy"
 
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
+
 const spinner = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/
 const colors = { fg: "#e8edf3", muted: "#9caab9", warning: "#e5c07b", error: "#f07878" }
 

@@ -12,6 +12,9 @@ import { join } from "node:path"
 import type { Tui } from "./harness"
 import { statusSessionId, expect, hyaTui, test, textStep, type Backend } from "./hya"
 
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
+
 const accent = "#73c8e8"
 
 async function connected(term: Tui, backend: Backend): Promise<void> {

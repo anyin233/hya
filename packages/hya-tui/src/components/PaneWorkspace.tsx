@@ -12,6 +12,7 @@ import { paneRegistry } from "./paneRegistry"
 import { workingLineText } from "../state/activity"
 import { currentPrompt } from "../state/prompts"
 import { pendingLines } from "../state/format"
+import { statusLineShown } from "../state/statusline"
 export { jobsText } from "./paneRegistry"
 
 /** One stable mounted instance per id; tree edits change its bounds, never its parent. */
@@ -63,6 +64,12 @@ export function PaneWorkspace() {
   // New sidebar contributions become ordinary, selectable leaves. Closing one stays closed.
   const discoveredPanels = new Set<string>()
   createEffect(() => {
+    // Only the workspace structure has sidebars to add panels to (ADR-0036); they join it when it is turned on.
+    if (!store.state.structure.sidebar.enabled) {
+      // The saved tree comes back without the panels added this session: add them again then.
+      discoveredPanels.clear()
+      return
+    }
     for (const panel of extensionManager.panels().filter((entry) => entry.placement === "sidebar" && !entry.replaces)) {
       if (discoveredPanels.has(panel.key)) continue
       discoveredPanels.add(panel.key)
@@ -96,7 +103,7 @@ export function PaneWorkspace() {
     void store.state.draft; void store.state.secretEntry
     const prompt = currentPrompt(store.state)?.view, pending = pendingLines(store.state, size().width).length
     return (ui.composerHeight?.() ?? 3) + (prompt ? 4 + prompt.body.length + prompt.options.length : 0)
-      + (pending ? Math.min(3, pending) + 2 : 0) + (store.state.modeConfirm ? 1 : 0)
+      + (pending ? Math.min(3, pending) + 2 : 0) + (store.state.modeConfirm ? 1 : 0) + (statusLineShown(store.state, size().width) ? 1 : 0)
   }
   const rects = createMemo(() => { revision(); return layoutRects(visibleRoot(), { left: 0, top: 0, right: size().width, bottom: size().height }, minimum) })
   createEffect(() => {

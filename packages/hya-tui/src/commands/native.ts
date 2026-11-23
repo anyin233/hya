@@ -22,6 +22,7 @@ import { loadPreferences, preferencesPath } from "../prefs"
 import { CommandRegistry, matchValues, type ArgumentPosition, type CommandContext, type CommandInvocation, type CommandSpec, type Completion } from "./registry"
 import type { CompletionContext } from "../completion"
 import { keybindingsCommand } from "./keybindings"
+import { configCommand, enableSidebar, layoutNeedsWorkspace, setCommand } from "./config"
 
 /**
  * Session id completions (`/open`, `/resume`): a titled session shows as
@@ -369,6 +370,8 @@ const runEffort = (context: CommandContext, { args }: CommandInvocation): Promis
 export const nativeCommandSpecs: CommandSpec[] = [
   keybindingsCommand,
   subagentsCommand,
+  configCommand,
+  setCommand,
   {
     name: "/layout",
     description: "Edit workspace panes: split, insert, move, bubble, wrap, remove, assign, focus, resize, close, reload, reset, tree, or show",
@@ -411,6 +414,8 @@ export const nativeCommandSpecs: CommandSpec[] = [
     run: ({ store, actions }, { args }) => {
       const current = store.state.paneLayout
       const command = args[0] ?? "show"
+      // The layout tree belongs to the workspace structure (ADR-0036): elsewhere only show and focus work.
+      if (!store.state.structure.sidebar.enabled && command !== "show" && command !== "focus") throw new Error(layoutNeedsWorkspace)
       let next: PaneLayout = current
       let reloadedPath: string | undefined
       switch (command) {
@@ -837,9 +842,12 @@ export const nativeCommandSpecs: CommandSpec[] = [
     name: "/projects-sidebar",
     description: "Show or hide the left Projects sidebar. Without an argument it toggles what is visible now",
     argumentHint: "[on|off]",
-    run: ({ store }, { args }) => {
-      const visible = projectsSidebarVisible(store.state.projectsSidebar, store.state.columns)
-      store.setProjectsSidebar(parseSwitch(args[0], visible, "Usage: /projects-sidebar [on|off]") ? "open" : "closed")
+    run: ({ store, actions }, { args }) => {
+      const visible = store.state.structure.sidebar.enabled && projectsSidebarVisible(store.state.projectsSidebar, store.state.columns)
+      const shown = parseSwitch(args[0], visible, "Usage: /projects-sidebar [on|off]")
+      // A single-column preset has no sidebars: `on` turns the sidebar component on for this session (`/set sidebar on`).
+      if (shown && !store.state.structure.sidebar.enabled) enableSidebar(actions)
+      store.setProjectsSidebar(shown ? "open" : "closed")
       store.setStatus(`Projects sidebar ${projectsSidebarVisible(store.state.projectsSidebar, store.state.columns) ? "shown" : "hidden"}`)
     },
   },
@@ -946,8 +954,11 @@ export const nativeCommandSpecs: CommandSpec[] = [
     description: "Show or hide the sidebar",
     argumentHint: "[on|off]",
     complete: ({ words, current, head }) => words.length === 1 ? matchValues(head, current, switchValues) : [],
-    run: ({ store }, { args }) => {
-      const shown = parseSwitch(args[0], sidebarVisible(store.state.sidebar, store.state.columns), "Usage: /sidebar [on|off]")
+    run: ({ store, actions }, { args }) => {
+      const component = store.state.structure.sidebar.enabled
+      const shown = parseSwitch(args[0], component && sidebarVisible(store.state.sidebar, store.state.columns), "Usage: /sidebar [on|off]")
+      // A single-column preset: `on` turns the sidebar component on for this session (`/set sidebar on`).
+      if (shown && !component) enableSidebar(actions)
       if (shown && store.state.columns < layoutBreakpoints.sidebar) {
         store.setStatus(sidebarTooNarrowNotice)
         return

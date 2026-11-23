@@ -54,6 +54,7 @@ Everything needed to install, configure, operate, and extend `hya` day to day:
   - [Troubleshooting](troubleshooting.md) — Solutions for daemon locks, WebUI ports, Host allowlist (`403`), Relay diagnostics, and provider errors.
 - **Interactive Surfaces & Remote Access:**
   - [OpenTUI Frontend](tui.md) — Layout, Projects sidebar, `/key` Provider View, `/agent`, `/subagents`, `/workflow`, `/rules`, `/diff`, Vim mode, and keybindings.
+  - [TUI Structure (`tui.toml`)](tui-config.md) — Presets (`minimal`, `statusline`, `workspace`), the status line, `/config`, and `/set`.
   - [Browser-Rendered TUI (WebUI)](tui-web.md) — Running the TUI in browsers over a real PTY + xterm.js, plus the `tui-exp` and Playwright test harnesses.
   - [Secure Relay](relay.md) — End-to-end encrypted remote access with `hya proxy`, `hya serve --relay`, `hya --connect`, `hya bridge`, and `hya relay doctor`.
 - **Context, Skills, Workflows & Bundles:**

@@ -10,6 +10,9 @@
 import { Tui } from "./harness"
 import { api, expect, fakeModelRef, hangStep, hyaTui, statusSessionId, test, textStep, wideViewport, type Backend } from "./hya"
 
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
+
 test.use({ model: { steps: [hangStep(60_000), textStep("Spare."), textStep("Spare."), textStep("Spare.")] } })
 
 async function prompt(term: Tui, text: string): Promise<void> {

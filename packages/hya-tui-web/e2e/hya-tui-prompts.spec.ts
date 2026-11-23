@@ -13,6 +13,9 @@ import type { Tui } from "./harness"
 import { createSession, expect, hangStep, headlessTurn, hyaTui, showStatusView, statusSessionId, test, textStep, toolCardBlock, toolStep, wideViewport } from "./hya"
 import { startProxy } from "./proxy"
 
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
+
 const colors = { fg: "#e8edf3", muted: "#9caab9", focus: "#73c8e8", error: "#f07878", warning: "#e5c07b", add: "#a5d6a7", remove: "#f07878" }
 
 async function prompt(term: Tui, text: string): Promise<void> {

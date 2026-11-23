@@ -1,0 +1,67 @@
+/**
+ * TUI structure presets (ADR-0036, docs/tui-config.md): the built-in
+ * component settings that `tui.toml` selects with `preset` and overrides key
+ * by key. A preset is a full set of component values, so every lookup has a
+ * value; `tui.toml` layers only change what they name.
+ */
+
+/** Status line segments in their default order (docs/tui-config.md "Status line segments"). */
+export const statusSegments = ["model", "mode", "ctx", "connection", "agent", "cwd", "git", "tokens", "session"] as const
+export type StatusSegment = typeof statusSegments[number]
+
+/** What the status line shows by default, left to right. */
+export const defaultSegments: readonly StatusSegment[] = ["model", "mode", "cwd", "git", "ctx", "tokens"]
+
+/** The resolved structure the TUI draws. Field names match `tui.toml`. */
+export interface TuiStructure {
+  statusline: { enabled: boolean; segments: StatusSegment[]; placement: "below" | "band" }
+  composer: { style: "box" | "band"; border_info: StatusSegment[] }
+  sidebar: { enabled: boolean }
+}
+export type ComponentName = keyof TuiStructure
+
+/** Components whose `enabled` switch `/set <component> on|off` changes for the session. */
+export const switchableComponents = ["statusline", "sidebar"] as const satisfies readonly ComponentName[]
+
+export const builtinPresetNames = ["minimal", "statusline", "dock", "workspace"] as const
+export type BuiltinPreset = typeof builtinPresetNames[number]
+export const defaultPreset: BuiltinPreset = "statusline"
+
+/** Built-in presets this version draws; `dock` arrives with the dock components (p2 Phase 4). */
+export const availablePresets: readonly BuiltinPreset[] = ["minimal", "statusline", "workspace"]
+
+const base = (): TuiStructure => ({
+  statusline: { enabled: true, segments: [...defaultSegments], placement: "below" },
+  composer: { style: "box", border_info: [] },
+  sidebar: { enabled: false },
+})
+
+/** The full component values of a built-in preset. */
+export function builtinPreset(name: BuiltinPreset): TuiStructure {
+  const structure = base()
+  switch (name) {
+    case "minimal":
+      structure.statusline.enabled = false
+      structure.composer.border_info = ["model", "mode"]
+      break
+    case "statusline":
+    case "dock":
+      break
+    case "workspace":
+      structure.sidebar.enabled = true
+      break
+  }
+  return structure
+}
+
+export function isBuiltinPreset(name: string): name is BuiltinPreset {
+  return (builtinPresetNames as readonly string[]).includes(name)
+}
+
+/** One-line description per built-in preset (`/config`, `/set preset` completion, the template). */
+export const presetDescriptions: Record<BuiltinPreset, string> = {
+  minimal: "transcript and input; model and mode on the input border",
+  statusline: "transcript, input, and one status row below it (default)",
+  dock: "omp-style status band with todo and subagent rows (not in this version)",
+  workspace: "the tiled workspace: Projects, Sessions, Todos, Context sidebars and the layout tree",
+}

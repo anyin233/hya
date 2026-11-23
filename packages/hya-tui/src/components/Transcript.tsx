@@ -12,10 +12,14 @@
  *
  * A subagent's session (one with a parent) shows a one-line banner above the
  * messages, `Viewing subagent <agent> · Esc returns`; its input is read-only.
+ *
+ * The transcript starts with the startup notices (`tui.toml` warnings and
+ * one-time notices, app/structure.ts): they scroll away with the history and
+ * outlive session switches.
  */
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
-import { createEffect, createMemo, createSignal, on, onCleanup, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from "solid-js"
 import { useApp, type TranscriptScroller } from "../app/context"
 import { mainContent } from "../state/format"
 import { transcriptViews } from "../state/messages"
@@ -91,6 +95,13 @@ export function Transcript(props: { secondary?: boolean; scroller?: (scroller: T
         paddingTop={1}
         verticalScrollbarOptions={{ trackOptions: { backgroundColor: colors.bg, foregroundColor: colors.border } }}
       >
+        <Show when={!props.secondary && store.state.startupNotices.length > 0}>
+          <box width="100%" flexDirection="column" flexShrink={0} paddingBottom={1}>
+            <For each={store.state.startupNotices}>
+              {(line) => <text width="100%" wrapMode="word" fg={line.startsWith("[") ? colors.warning : colors.muted}>{line}</text>}
+            </For>
+          </box>
+        </Show>
         <Show when={empty()}>
           <text width="100%" fg={colors.muted}>{empty()}</text>
         </Show>

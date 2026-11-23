@@ -3,6 +3,9 @@ import { join } from "node:path"
 import { api, expect, hangStep, hyaTui, statusSessionId, test, textStep, toolStep, toolsStep, tuiMain } from "./hya"
 import type { Tui } from "./harness"
 
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
+
 async function command(term: Tui, text: string) {
   if (text.startsWith("/")) {
     await term.press("Control+x")

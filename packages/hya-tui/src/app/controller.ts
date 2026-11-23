@@ -100,7 +100,8 @@ import { askSessionLabel, currentModel, modelReference, otherAskNotice, webNotic
 import { childActivity, childSessionIds } from "../state/members"
 import { subagentRows } from "../state/subagents"
 import { editText } from "../composer/editor"
-import { loadPaneLayout, savePreferences } from "../prefs"
+import { loadPaneLayout, savePreferences, type TuiPreferences } from "../prefs"
+import type { StructureControl } from "./structure"
 import { notificationBody, notificationSequence, shouldNotify, type NotifyKind } from "../notify"
 import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
 import { askFrameRoute, globalAskRoute, treeSessionIds, type PromptChoice } from "../state/prompts"
@@ -206,6 +207,8 @@ export interface ControllerOptions {
   onScopeChanged?: () => void | Promise<void>
   /** Bundle TUI extension submit interceptors (extensions/manager.ts `interceptSubmit`): a prompt may be rewritten or blocked before it is sent. */
   interceptSubmit?: (text: string) => Promise<{ text: string } | { blocked: string }>
+  /** `tui.toml` and the session's `/set` (app/structure.ts); unset in tests: the store's structure stays. */
+  structure?: StructureControl
 }
 
 /** What the controller needs from the renderer (CliRenderer in app/run.tsx; a fake in tests). */
@@ -239,7 +242,7 @@ type FileRead = { size: number; data?: string } | { error: string }
 const fileLookupLimit = 50
 export const fileSuggestionLimit = 8
 
-export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, preferredPermissionMode, terminal, env = process.env, reconnect, find, onRestarted, refreshExtensions, probe = (url) => probeHealth(url, fetch, undefined, url.replace(/\/+$/, "") === client.baseUrl ? client.token : undefined), bridge: startRemoteBridge, home, onScopeChanged, interceptSubmit }: ControllerOptions) {
+export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, preferredPermissionMode, terminal, env = process.env, reconnect, find, onRestarted, refreshExtensions, probe = (url) => probeHealth(url, fetch, undefined, url.replace(/\/+$/, "") === client.baseUrl ? client.token : undefined), bridge: startRemoteBridge, home, onScopeChanged, interceptSubmit, structure }: ControllerOptions) {
   /** No `EnsureProjectForPath`; new sessions need a chosen Project: `--remote`, or connected through `/connect-remote`. */
   const sessionViews = new SessionViews(client)
   let remote = startedRemote
@@ -1056,6 +1059,8 @@ export function createController({ client, store, directory, remote: startedRemo
    * replacing it; components/Composer.tsx).
    */
   function focusProjects(): void {
+    // The single-column presets have no Projects pane: show the workspace for this session.
+    if (!store.state.structure.sidebar.enabled && structure) structure.setEnabled("sidebar", true)
     if (!paneLeaves(store.state.paneLayout.root).some((pane) => pane.kind === "projects")) {
       status("No Projects pane · /layout split left projects to add one")
       return
@@ -1124,6 +1129,21 @@ export function createController({ client, store, directory, remote: startedRemo
     await resumer.resume(root)
   }
 
+  /**
+   * Merge `patch` into `tui.json`. Only the `workspace` structure owns
+   * `paneLayout` (ADR-0036 D10): the chat column of the other presets is
+   * never written over the saved tree.
+   */
+  function savePreferencesPatch(patch: Partial<TuiPreferences>): void {
+    if (!preferencesPath) return
+    let next = patch
+    if ("paneLayout" in next && !store.state.structure.sidebar.enabled) {
+      const { paneLayout: _chat, ...rest } = next
+      next = rest
+    }
+    if (Object.keys(next).length) savePreferences(preferencesPath, next)
+  }
+
   const actions: AppActions = {
     reviewPending, refresh, refreshMessages, openSession, newSession, scheduleRefresh, openHelp, openEditor,
     newTemporarySession: (agent, model) => newSession(agent, model, { temporary: true }),
@@ -1148,7 +1168,8 @@ export function createController({ client, store, directory, remote: startedRemo
     resume: (id) => resumer.resume(id),
     openPicker,
     requestPermissionMode: (mode) => modes.request(mode),
-    savePreferences: (patch) => { if (preferencesPath) savePreferences(preferencesPath, patch) },
+    savePreferences: (patch) => savePreferencesPatch(patch),
+    structure,
     paneBounds: () => new Map([...ui.paneBounds ?? []].map(([id, read]) => [id, read()])),
     loadPaneLayout: () => {
       if (!preferencesPath) throw new Error("No TUI preferences path configured")
@@ -1855,7 +1876,7 @@ export function createController({ client, store, directory, remote: startedRemo
     fileExists,
     /** Pending `@path` image attachments of the composer's current text, for the pending-attachment row (components/Composer.tsx). */
     previewAttachments: (text: string) => loadAttachments(text, true),
-    complete: (input: string) => completeCommand(input, store.completionContext(), registry),
+    complete: (input: string) => completeCommand(input, { ...store.completionContext(), ...(structure ? { presets: structure.presets() } : {}) }, registry),
     commandEntries,
     modes,
     pickerKey,

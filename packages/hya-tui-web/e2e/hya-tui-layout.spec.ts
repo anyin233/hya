@@ -4,6 +4,9 @@
 import type { Tui } from "./harness"
 import { expect, hyaTui, statusSessionId, test, textStep, toolStep, wideViewport } from "./hya"
 
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
+
 const colors = { bg: "default", panel: "default", focus: "#73c8e8", border: "#405366", muted: "#9caab9" }
 const narrow = { width: 690, height: 640 }
 

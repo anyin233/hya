@@ -102,6 +102,9 @@ Options:
 Environment:
   HYA_TUI_CONFIG    TUI preferences file (theme, permission mode); default
                     $XDG_CONFIG_HOME/hya/tui.json, else ~/.config/hya/tui.json
+  HYA_TUI_TOML      TUI structure file (preset, status line, sidebars);
+                    default tui.toml next to HYA_TUI_CONFIG, else
+                    $XDG_CONFIG_HOME/hya/tui.toml, else ~/.config/hya/tui.toml
 `
 
 /** Parse the flags above; returns null for `--help`. */
