@@ -5,6 +5,8 @@
  * `/config edit` on a missing file), which never overwrites one.
  */
 import { switchableComponents } from "../config/presets"
+import { startupInput } from "../app/startupInput"
+import { startupLines } from "../state/startup"
 import type { AppActions, CommandContext, CommandSpec } from "./registry"
 import { matchValues } from "./registry"
 import { parseSwitch } from "../state/layout"
@@ -101,5 +103,17 @@ export const pasteCommand: CommandSpec = {
     const index = args[1] === undefined ? undefined : Number(args[1])
     if (!actions.expandChip?.(index)) throw new Error(index === undefined ? "No paste or file chip in the input" : `No paste or file chip ${index} in the input`)
     store.setStatus("Expanded the chip into text")
+  },
+}
+
+/** `/resources`: the full startup list again, at the end of the transcript (after `/reload`, too). */
+export const resourcesCommand: CommandSpec = {
+  name: "/resources",
+  description: "List the loaded context files, skills, commands, MCP servers, bundles, and TUI extensions, grouped by source",
+  run: ({ store }) => {
+    const settings = store.state.structure.startup
+    const lines = startupLines({ ...startupInput(store.state), notices: [] }, { resources: "full", quiet: false, sections: settings.sections }, Math.max(20, store.state.columns - 4))
+    store.setView("chat")
+    store.addTranscriptNotice(lines.length ? lines.map((line) => line.text).join("\n") : "Nothing loaded yet")
   },
 }

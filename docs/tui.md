@@ -1849,6 +1849,12 @@ still opens the full-panel view (same glyphs) for a longer list.
 
 ## Notices
 
+**Startup list.** The transcript starts with what was loaded — `[Skills]`,
+`[Slash commands]`, `[MCP]`, `[Bundles]`, `[Extensions]` — and any `tui.toml`
+warning, with problems such as a failed MCP server in the warning color; see
+[Startup list](tui-config.md#startup-list). `/resources` prints the full list
+again.
+
 **Compaction.** A `compactionApplied { untilSeq, strategy, message,
 foldedCount, manual }` frame renders as a muted transcript divider,
 `── context compacted · 12 messages · manual · local summary ──`: the number

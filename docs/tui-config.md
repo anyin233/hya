@@ -37,6 +37,8 @@ Sessions, Todos, and Context sidebars ([Layout](tui.md#layout)).
 
 | Component value | `minimal` | `statusline` | `workspace` |
 | --- | --- | --- | --- |
+| `startup.enabled` | `true` | `true` | `true` |
+| `startup.resources` | `"compact"` | `"compact"` | `"compact"` |
 | `statusline.enabled` | `false` | `true` | `true` |
 | `statusline.segments` | `["model", "mode", "cwd", "git", "ctx", "tokens"]` | same | same |
 | `statusline.placement` | `"below"` | `"below"` | `"below"` |
@@ -120,7 +122,8 @@ configured.
 | `/config edit` | Open `tui.toml` in `$VISUAL`/`$EDITOR` (writing the template first when it is missing), then reload. |
 | `/config init` | Write the commented template when the file does not exist; refuse otherwise. |
 | `/set preset <name>` | Use another preset for this session; the file is not written. A preset switch drops earlier `/set <component>` changes. |
-| `/set <statusline\|sidebar> on\|off` | Turn a component on or off for this session. |
+| `/set <startup\|statusline\|sidebar> on\|off` | Turn a component on or off for this session. |
+| `/resources` | Append the full startup list (every section, grouped by source, `none` for an empty one) to the transcript. |
 | `/sidebar`, `/projects-sidebar`, Ctrl+P | In a preset without sidebars, `on` (or a toggle) is `/set sidebar on`; in the workspace they keep their usual meaning ([Layout](tui.md#layout)). |
 
 None of these has a default shortcut, and all are slash commands, so they work
@@ -139,15 +142,48 @@ A configuration error never blocks startup.
 | A key or value of a later version (`placement = "band"`, `[startup]`, `[composer.attachments]`, `[theme]`, `[keys]`, …) | Ignored: `… is not supported in this version; ignored`. |
 | `version` above 1 | A warning; the keys this version knows still apply. |
 
-Warnings appear at the start of the transcript, under
+Warnings appear at the start of the transcript, in the startup list, under
 `[Config] <path> · N warnings · /config lists them`, and scroll away with the
-history; `/config` lists them all.
+history; `/config` lists them all. They show even with `startup.enabled = false`
+or `quiet = true`.
 
 **Upgrade notice.** A TUI that finds a saved `paneLayout` in `tui.json` and
 no `tui.toml` shows once, at the start of the transcript:
 `[Layout] The default layout is now statusline. For the sidebars, write
 preset = "workspace" in tui.toml …`. It records `"statusline-default"` in
 `tui.json` `seenNotices` and never switches the preset by itself.
+
+## Startup list
+
+The transcript starts with what this TUI and its backend loaded, one line per
+section, sorted by name and cut with `+N` at the width:
+
+```text
+ [Skills] agent-bundle-authoring, brainstorm, debug, +11
+ [Slash commands] /clear, /help, /init, /model, /review, /sessions, /workflow
+ [MCP] files, slack
+   slack: failed: MCP connection closed · /mcp to fix
+ [Bundles] hya/agent-channels, hya/base-tools, hya/code-mode (disabled), +9
+ [Extensions] hya/basic-tui-components
+```
+
+| Section | Source | Problems (warning color, shown with `quiet` too) |
+| --- | --- | --- |
+| `[Config]`, `[Layout]` | `tui.toml` warnings and the one-time default-change notice | Always |
+| `[Context]` | Context files the backend loaded (a later backend version) | — |
+| `[Skills]` | `Bootstrap.skills`; the full list groups them by source and skill directory | — |
+| `[Slash commands]` | Custom commands (`CommandSummary.source = command`) | — |
+| `[MCP]` | `GetMcpStatus`, asked again every 0.5 s while a server is still connecting, for at most 10 s; then once | A failed server, a server that needs a login |
+| `[Bundles]` | `ListBundles`; `(disabled)` and `(shadowed)` are marked, not problems | An unreadable bundle |
+| `[Extensions]` | The TUI extensions of this scope | A failed or blocked extension, extension warnings, an unreadable extension catalog |
+
+A section appears once its data arrived; an empty one has no line.
+`resources = "full"` lists each section grouped by source with versions and
+states, `sections` picks and orders the sections, and `quiet = true` keeps
+only the problems. The list scrolls away with the history and stays at the top
+of the transcript when you switch sessions. `/resources` prints the full list
+again at the end of the transcript, for example after `/reload`. It is display
+only: no event is written.
 
 ## Status line
 
@@ -188,6 +224,10 @@ and returns when the width or `/sidebar off` hides it.
 | Key | Type | Default (`statusline`) | Notes |
 | --- | --- | --- | --- |
 | `version` | integer | `1` | Reserved for migrations. |
+| `startup.enabled` | boolean | `true` | `false` shows only the `[Config]`/`[Layout]` notices. |
+| `startup.resources` | `"compact"` \| `"full"` | `"compact"` | One line per section, or grouped by source. |
+| `startup.sections` | array of section names | `["context", "skills", "commands", "mcp", "bundles", "extensions"]` | Which sections, in this order; `commands` is `[Slash commands]`. |
+| `startup.quiet` | boolean | `false` | Only problem items. |
 | `preset` | string | `"statusline"` | A built-in preset or a `[presets.*]` name. |
 | `presets.<name>.extends` | string | `"statusline"` | The preset this one starts from; at most 8 named presets per chain; no cycles. |
 | `presets.<name>.<component>` | table | — | Same keys as the top-level component table. |
@@ -201,7 +241,7 @@ and returns when the width or `/sidebar off` hides it.
 | `composer.paste.wrap` | boolean | `true` | Send paste and file chips as `<attachment>` blocks; `false` sends their raw text. |
 | `sidebar.enabled` | boolean | `false` | `true` draws the tiled workspace (the saved `paneLayout`, or the default tree). |
 
-Keys of later versions (`startup.*`, `todos.*`, `subagents.*`, `layout.*`,
+Keys of later versions (`todos.*`, `subagents.*`, `layout.*`,
 `transcript.*`, `sidebar.left`, `sidebar.right`, `sidebar.min_columns`,
 `composer.paste.image_resize`, `composer.attachments.*`) are recognized and
 ignored with "not supported in this version".
@@ -245,6 +285,8 @@ are refused there with `The layout tree belongs to the workspace preset`;
 | `packages/hya-tui/src/config/presets.ts` | `TuiStructure`, `StatusSegment`, `builtinPreset(name)`, `availablePresets`, `defaultPreset`. |
 | `packages/hya-tui/src/config/tuiConfig.ts` | `tuiConfigPath(env)`, `loadTuiConfig(path)`, `resolveTuiConfig(raw, session)` → `{ preset, presetSource, chain, structure, sources, warnings }`, `tuiConfigTemplate()`, `initTuiConfig(path)`. Never throws on bad input. |
 | `packages/hya-tui/src/app/structure.ts` | `createStructureController({ store, path, preferencesPath, editFile })`: applies the structure, the start-of-transcript notices, and the pane tree to the store; `setPreset`, `setEnabled`, `reload`, `init`, `edit`, `describe`. |
+| `packages/hya-tui/src/state/startup.ts` | `startupLines(input, { resources, sections, quiet }, width)` → `{ text, tone }[]`; `compactLine`, `skillGroup`. Pure. |
+| `packages/hya-tui/src/components/StartupBlock.tsx` | The startup list at the start of the transcript. |
 | `packages/hya-tui/src/state/statusline.ts` | `statusPart(state, id)`, `fitStatusLine(parts, columns)`, `statusLineShown(state, columns)`, `borderInfoText(...)`. Pure. |
 | `packages/hya-tui/src/components/StatusLine.tsx` | The status row, drawn by the message pane below the input. |
 

@@ -242,6 +242,10 @@ const helpMaxRows = 40
 /** One attachment file read: its size and (within the per-file cap) its base64 bytes, or why it could not be read. */
 type FileRead = { size: number; data?: string } | { error: string }
 
+/** How long the startup list waits for MCP servers that are still connecting, and how often it asks. */
+const mcpSettleMs = 10_000
+const mcpPollMs = 500
+
 /** Paths requested per `@file` lookup; the best `fileSuggestionLimit` are shown. */
 const fileLookupLimit = 50
 export const fileSuggestionLimit = 8
@@ -1453,6 +1457,28 @@ export function createController({ client, store, directory, remote: startedRemo
     starting = startOnce().finally(() => { starting = undefined })
     return starting
   }
+  /**
+   * The startup list's bundles and MCP servers (state/startup.ts). MCP has no
+   * push for connection changes: poll `GetMcpStatus` while a server is still
+   * connecting, at most `mcpSettleMs`. Failures leave the sections out.
+   */
+  async function loadStartupResources(): Promise<void> {
+    const attempt = async <T>(read: () => Promise<T>): Promise<T | undefined> => {
+      try { return await read() } catch { return undefined }
+    }
+    const bundles = attempt(() => client.listBundles()).then((rows) => { if (rows) store.setBundles(rows) })
+    const deadline = Date.now() + mcpSettleMs
+    for (;;) {
+      const servers = await attempt(() => client.getMcpStatus())
+      if (!servers) break
+      store.setMcpServers(servers)
+      if (!servers.some((server) => server.state === "MCP_SERVER_STATE_DESIRED") || Date.now() >= deadline) break
+      await Bun.sleep(mcpPollMs)
+    }
+    await bundles
+    store.setStartupReady(true)
+  }
+
   async function startOnce(): Promise<void> {
     unsubscribeFocus = terminal?.onFocusChange?.((focused) => store.setFocused(focused))
     try {
@@ -1474,6 +1500,7 @@ export function createController({ client, store, directory, remote: startedRemo
       await refresh()
       if (ensured) activateProject(ensured)
       void refreshVcs()
+      void loadStartupResources()
       startGlobalStream()
       const target = initialSessionId(store.state.sessions, startup, store.state.activeProjectId)
       const resumeId = startup.resume?.id

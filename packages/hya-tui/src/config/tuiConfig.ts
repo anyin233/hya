@@ -22,7 +22,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import {
   availablePresets, builtinPreset, builtinPresetNames, defaultPreset, isBuiltinPreset, presetDescriptions,
-  statusSegments, switchableComponents, type BuiltinPreset, type ComponentName, type StatusSegment, type TuiStructure,
+  startupSections, statusSegments, switchableComponents, type BuiltinPreset, type ComponentName, type TuiStructure,
 } from "./presets"
 
 /** Points the TUI at another `tui.toml`. */
@@ -139,7 +139,12 @@ const oneOf = (values: readonly string[], later: readonly string[] = []): Rule =
   later: (value) => later.includes(value as string),
 })
 
+const sectionList: Rule = {
+  read: (value) => Array.isArray(value) && value.every((item) => typeof item === "string") ? value : undefined,
+  expected: `an array of section names (${startupSections.join(", ")})`,
+}
 const rules: { [Component in ComponentName]: Record<keyof TuiStructure[Component] & string, Rule | TableRule> } = {
+  startup: { enabled: bool, resources: oneOf(["compact", "full"]), sections: sectionList, quiet: bool },
   statusline: { enabled: bool, segments: segmentList, placement: oneOf(["below", "band"], ["band"]) },
   composer: {
     style: oneOf(["box", "band"], ["band"]),
@@ -150,12 +155,13 @@ const rules: { [Component in ComponentName]: Record<keyof TuiStructure[Component
 }
 /** Keys of a known component that a later version reads. */
 const laterKeys: Record<ComponentName, readonly string[]> = {
+  startup: [],
   statusline: [],
   composer: ["attachments"],
   sidebar: ["left", "right", "min_columns"],
 }
 /** Component tables a later version reads (startup list, dock rows, layout tree). */
-const laterComponents = ["startup", "todos", "subagents", "layout", "transcript"] as const
+const laterComponents = ["todos", "subagents", "layout", "transcript"] as const
 /** Reserved tables (ADR-0036 D9). */
 const reservedTables = ["theme", "keys"] as const
 const componentNames = Object.keys(rules) as ComponentName[]
@@ -203,11 +209,13 @@ function applyTable(
       warnings.push(notSupported(`${name} = ${JSON.stringify(read)}`))
       continue
     }
-    if (rule === segmentList) {
+    if (rule === segmentList || rule === sectionList) {
+      const known: readonly string[] = rule === segmentList ? statusSegments : startupSections
+      const noun = rule === segmentList ? "segment" : "section"
       const names = read as string[]
-      const unknown = names.filter((segment) => !(statusSegments as readonly string[]).includes(segment))
-      if (unknown.length) warnings.push(`${name}: unknown segment${unknown.length === 1 ? "" : "s"} ${unknown.join(", ")}; ignored`)
-      target[key] = [...new Set(names.filter((segment) => !unknown.includes(segment)))] as StatusSegment[]
+      const unknown = names.filter((item) => !known.includes(item))
+      if (unknown.length) warnings.push(`${name}: unknown ${noun}${unknown.length === 1 ? "" : "s"} ${unknown.join(", ")}; ignored`)
+      target[key] = [...new Set(names.filter((item) => !unknown.includes(item)))]
     } else {
       target[key] = read
     }
@@ -357,6 +365,13 @@ ${presets}
 # statusline = { enabled = true, segments = ["model", "mode", "ctx"] }
 
 # Top-level tables override the preset in effect.
+[startup]
+# The list of what was loaded, at the start of the transcript; problems always show.
+# enabled = true
+# resources = "compact"   # compact: one line per section; full: grouped by source
+# sections = ["context", "skills", "commands", "mcp", "bundles", "extensions"]
+# quiet = false           # true: only problems
+
 [statusline]
 # enabled = true
 # Segments, left to right: ${statusSegments.join(", ")}
