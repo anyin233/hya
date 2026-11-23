@@ -86,6 +86,8 @@ import {
   imageMentionPaths,
   maxAttachmentBytes,
   mimeForPath,
+  spacedImageError,
+  spacedImageMentions,
   validateAttachmentBytes,
   type AttachmentPreview,
 } from "../composer/attachments"
@@ -1217,7 +1219,8 @@ export function createController({ client, store, directory, remote: startedRemo
    */
   async function loadAttachments(text: string, preview = false): Promise<AttachmentPreview[]> {
     const paths = imageMentionPaths(text)
-    if (!paths.length) return []
+    const spaced = spacedImageMentions(text).filter((item) => !paths.includes(item.path))
+    if (!paths.length && !spaced.length) return []
     const workdir = (store.state.selected?.workdir || directory).replace(/\/+$/, "")
     const sizes: number[] = []
     const previews: AttachmentPreview[] = []
@@ -1245,6 +1248,11 @@ export function createController({ client, store, directory, remote: startedRemo
       } catch (error) {
         previews.push({ path, name, error: String(error) })
       }
+    }
+    // `@/tmp/shot 1.png` without quotes names `/tmp/shot`: when the joined path is an
+    // existing image, say so and refuse to send rather than silently attaching nothing.
+    for (const item of spaced) {
+      if (await fileExists(item.path).catch(() => false)) previews.push({ path: item.path, name: attachmentName(item.path), error: spacedImageError(item.path) })
     }
     return previews
   }

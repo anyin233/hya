@@ -2343,12 +2343,17 @@ Type `@` and at least one character (at the start of the input or after a
 space) to see up to 8 files and directories under `--dir` whose relative
 path contains the text. The list is a `Files` box above the input; the
 selected row is marked `▸` in the focus color. Up/Down move the selection;
-Tab or Enter replaces the `@text` token with `@<relative path>` and a space;
-Esc closes the list until you edit the token again. The lookup runs 120 ms
+Tab or Enter replaces the `@text` token with `@<relative path>` and a space
+(`@"<relative path>"` when the path has a space, a quote, or a backslash, with
+`"` and `\` escaped by a backslash); Esc closes the list until you edit the
+token again. The lookup runs 120 ms
 after the last keystroke. Matching is case-sensitive (the server's glob), and
 the best matches come first: file name starts with the text, then file name
 contains it, then only the path does; shorter paths first. The separate
 command input does not resolve file references.
+
+A reference ends at the first space unless it is quoted: `@"shots/shot 1.png"`
+names `shots/shot 1.png`, while `@shots/shot 1.png` names `shots/shot`.
 
 The reference is plain text: the prompt carries `@src/main.rs` as typed. For
 most files nothing else happens — the agent reads the file with its tools if
@@ -2364,13 +2369,22 @@ alongside the prompt text (`PromptTurn.attachments`,
 [Prompt attachments](protocol/README.md#prompt-attachments-images)); the
 `@path` text itself stays in the prompt unchanged, since it is useful context
 for the model and the server never reads it back from disk. Referencing the
-same image twice sends it once.
+same image twice sends it once. `PromptAttachment.path` carries the path
+without its quotes (`shots/shot 1.png` for `@"shots/shot 1.png"`).
 
 Pasting a path to an image file — a terminal pastes a file dragged into the
 window as its path, quoted or with escaped spaces when it has spaces — inserts
-an `@path ` mention instead of the raw text, so it is treated exactly like a
-typed reference; an ordinary text paste (prose, a path to a non-image file, a
-path that does not exist) is inserted as-is.
+an `@path ` mention instead of the raw text (`@"path" ` when the path has a
+space, as in a macOS screenshot name), so it is treated exactly like a typed
+reference; an ordinary text paste (prose, a path to a non-image file, a path
+that does not exist) is inserted as-is.
+
+An unquoted reference that stops at a space before an image name, such as
+`@shots/shot 1.png`, is not sent as `shots/shot`: when `shots/shot 1.png` is an
+existing file, its row reads `[image] shot 1.png · has a space, so the mention
+stops before it; write @"shots/shot 1.png"` in the warning color, and Enter
+refuses to send until you quote it. Up to four following words on the same
+line are joined, stopping at another `@` word.
 
 Before you press Enter, every pending image reference in the input shows as
 its own row above the composer: `[image] shot.png · 240 KB`, or `[image]

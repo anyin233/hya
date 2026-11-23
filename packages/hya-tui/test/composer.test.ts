@@ -111,6 +111,10 @@ test("inserting a mention keeps the @ and adds one trailing space", () => {
   expect(insertMention("see @ma now", { start: 4, end: 7, query: "ma" }, "main.ts")).toEqual({ text: "see @main.ts now", cursor: 12 })
 })
 
+test("inserting a mention with a space quotes it, so the whole path is read back", () => {
+  expect(insertMention("@sh", { start: 0, end: 3, query: "sh" }, "shots/shot 1.png")).toEqual({ text: '@"shots/shot 1.png" ', cursor: 20 })
+})
+
 test("file queries become FindFiles globs and results rank by name", () => {
   expect(findPattern("main")).toBe("**/*main*")
   expect(findPattern("src/ma")).toBe("**/*src/ma*")
