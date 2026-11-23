@@ -1,4 +1,4 @@
-//! Unix process groups for file-backed Bash calls.
+//! Unix process group supervision for Bash calls.
 
 use std::io::{self, PipeReader, Read as _};
 use std::os::fd::AsRawFd as _;
@@ -27,14 +27,84 @@ pub enum GroupOutcome {
     Yielded(u32),
 }
 
+/// Tracks the original group until none of its members can do more work.
+pub struct ProcessGroup {
+    pgid: u32,
+    #[cfg(target_os = "linux")]
+    quiet_scan: Option<(Vec<(u32, u64)>, std::time::Instant)>,
+}
+
+impl ProcessGroup {
+    /// Start tracking a freshly spawned group leader.
+    pub fn new(pgid: u32) -> Self {
+        Self {
+            pgid,
+            #[cfg(target_os = "linux")]
+            quiet_scan: None,
+        }
+    }
+
+    /// On Linux keep the leader waitable to reserve its PGID. Other Unix systems
+    /// must reap it before a signal-zero probe can observe the group's absence.
+    pub fn finished(
+        &mut self,
+        _try_reap: impl FnOnce() -> io::Result<Option<ExitStatus>>,
+    ) -> io::Result<bool> {
+        #[cfg(target_os = "linux")]
+        {
+            // SAFETY: waitid fills a zeroed siginfo_t; WNOWAIT keeps the leader's PID reserved.
+            let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+            if unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    self.pgid,
+                    &mut info,
+                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                )
+            } < 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            // SAFETY: si_pid is the child PID for this waitid result, or zero if still running.
+            if unsafe { info.si_pid() } != self.pgid as libc::pid_t {
+                return Ok(false);
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        if _try_reap()?.is_none() {
+            return Ok(false);
+        }
+        self.members_quiet()
+    }
+
+    fn members_quiet(&mut self) -> io::Result<bool> {
+        #[cfg(target_os = "linux")]
+        {
+            // A fork can move the last live member past a directory iterator.
+            // Keep the leader waitable until two polls agree on the identities left behind.
+            let Some(zombies) = group_zombies(std::path::Path::new("/proc"), self.pgid)? else {
+                self.quiet_scan = None;
+                return Ok(false);
+            };
+            if let Some((previous, since)) = &self.quiet_scan
+                && previous == &zombies
+            {
+                return Ok(since.elapsed() >= POLL_INTERVAL);
+            }
+            self.quiet_scan = Some((zombies, std::time::Instant::now()));
+            Ok(false)
+        }
+        #[cfg(not(target_os = "linux"))]
+        Ok(!signal_group(self.pgid, 0)?)
+    }
+}
+
 /// A shell in its own process group. Budgeted calls keep the leader waitable
 /// until the group finishes, so its PGID cannot be reused during supervision.
 pub struct BudgetGroup {
     child: Child,
-    pgid: u32,
     sentinel: Option<AsyncFd<PipeReader>>,
-    #[cfg(target_os = "linux")]
-    quiet_scan: Option<(Vec<(u32, u64)>, tokio::time::Instant)>,
+    monitor: ProcessGroup,
 }
 
 impl BudgetGroup {
@@ -69,10 +139,8 @@ impl BudgetGroup {
             .ok_or_else(|| io::Error::other("spawned Bash has no PID"))?;
         Ok(Self {
             child,
-            pgid,
+            monitor: ProcessGroup::new(pgid),
             sentinel,
-            #[cfg(target_os = "linux")]
-            quiet_scan: None,
         })
     }
 
@@ -117,14 +185,14 @@ impl BudgetGroup {
                     group.stop().await?;
                     Ok(GroupOutcome::Stopped)
                 } else {
-                    Ok(GroupOutcome::Yielded(group.pgid))
+                    Ok(GroupOutcome::Yielded(group.monitor.pgid))
                 }
             }
             .await;
             let yielded = matches!(foreground, Ok(GroupOutcome::Yielded(_)));
             let _ = reply.send(foreground);
             if yielded && let Err(error) = group.supervise(exit, cancel, shutdown, end).await {
-                eprintln!("record Bash exit for group {}: {error}", group.pgid);
+                eprintln!("record Bash exit for group {}: {error}", group.monitor.pgid);
             }
         });
         let outcome = result.await.map_err(io::Error::other)?;
@@ -138,54 +206,17 @@ impl BudgetGroup {
         Ok(())
     }
 
-    fn exited(&mut self) -> io::Result<bool> {
-        // SAFETY: waitid fills a zeroed siginfo_t; WNOWAIT keeps the leader's PID reserved.
-        let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
-        if unsafe {
-            libc::waitid(
-                libc::P_PID,
-                self.pgid,
-                &mut info,
-                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-            )
-        } < 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: si_pid is the child PID for this waitid result, or zero if still running.
-        if unsafe { info.si_pid() } != self.pgid as libc::pid_t {
-            return Ok(false);
-        }
-        #[cfg(target_os = "linux")]
-        {
-            // A fork can move the last live member past a directory iterator.
-            // Keep the leader waitable until two polls agree on the identities left behind.
-            let Some(zombies) = group_zombies(std::path::Path::new("/proc"), self.pgid)? else {
-                self.quiet_scan = None;
-                return Ok(false);
-            };
-            if let Some((previous, since)) = &self.quiet_scan
-                && previous == &zombies
-            {
-                return Ok(since.elapsed() >= POLL_INTERVAL);
-            }
-            self.quiet_scan = Some((zombies, tokio::time::Instant::now()));
-            Ok(false)
-        }
-        #[cfg(not(target_os = "linux"))]
-        Ok(true)
-    }
-
     /// Wait for completion and reap the leader.
     async fn wait_for_group(&mut self) -> io::Result<ExitStatus> {
         if let Some(sentinel) = &self.sentinel {
             sentinel
                 .async_io(tokio::io::Interest::READABLE, Self::eof)
                 .await?;
-            while !self.exited()? {
+            while !self.monitor.finished(|| self.child.try_wait())? {
                 tokio::time::sleep(POLL_INTERVAL).await;
             }
         }
+        self.sentinel = None;
         self.child.wait().await
     }
 
@@ -196,16 +227,17 @@ impl BudgetGroup {
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(None),
                 result => result?,
             }
-            if !self.exited()? {
+            if !self.monitor.finished(|| self.child.try_wait())? {
                 return Ok(None);
             }
         }
+        self.sentinel = None;
         self.child.try_wait()
     }
 
     fn kill(&self) -> io::Result<()> {
-        if self.child.id().is_some() {
-            kill_group(self.pgid)?;
+        if self.sentinel.is_some() || self.child.id().is_some() {
+            kill_group(self.monitor.pgid)?;
         }
         Ok(())
     }
@@ -213,13 +245,14 @@ impl BudgetGroup {
     /// Kill group members and reap the shell. A writer outside the group can stay open.
     async fn stop(&mut self) -> io::Result<()> {
         loop {
-            self.kill()?;
-            if self.exited()? {
+            kill_group(self.monitor.pgid)?;
+            if self.monitor.finished(|| self.child.try_wait())? {
                 break;
             }
             tokio::time::sleep(POLL_INTERVAL).await;
         }
         self.child.wait().await?;
+        self.sentinel = None;
         Ok(())
     }
 
@@ -263,16 +296,22 @@ impl Drop for BudgetGroup {
 
 /// Send SIGKILL to a shell's process group. Returns false once the group is absent.
 pub fn kill_group(pgid: u32) -> io::Result<bool> {
+    signal_group(pgid, libc::SIGKILL)
+}
+
+fn signal_group(pgid: u32, signal: libc::c_int) -> io::Result<bool> {
     let pgid = libc::pid_t::try_from(pgid)
         .ok()
         .filter(|&id| id > 0)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid Bash process group"))?;
     // SAFETY: the positive PGID designates the group created for this shell.
-    if unsafe { libc::killpg(pgid, libc::SIGKILL) } == 0 {
+    if unsafe { libc::killpg(pgid, signal) } == 0 {
         return Ok(true);
     }
     let error = io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ESRCH) {
+    if signal == 0 && error.raw_os_error() == Some(libc::EPERM) {
+        Ok(true)
+    } else if error.raw_os_error() == Some(libc::ESRCH) {
         Ok(false)
     } else {
         Err(error)
@@ -283,17 +322,8 @@ pub fn kill_group(pgid: u32) -> io::Result<bool> {
 /// Runs on a blocking worker. A descendant can fork concurrently with SIGKILL.
 pub fn finish_group_termination(pgid: u32) -> io::Result<()> {
     let until = std::time::Instant::now() + Duration::from_secs(2);
-    #[cfg(target_os = "linux")]
-    let mut previous = None;
-    while kill_group(pgid)? {
-        #[cfg(target_os = "linux")]
-        {
-            let zombies = group_zombies(std::path::Path::new("/proc"), pgid)?;
-            if zombies.is_some() && zombies == previous {
-                break;
-            }
-            previous = zombies;
-        }
+    let mut group = ProcessGroup::new(pgid);
+    while kill_group(pgid)? && !group.members_quiet()? {
         if std::time::Instant::now() >= until {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,

@@ -1070,6 +1070,11 @@ restore prompt for the next start.
 
 Bash closes admission before draining. A pipe or PTY command already running
 is supervised through cleanup even when a second signal interrupts its caller.
+On Unix, a foreground Bash call waits for same-group descendants even if the
+shell has exited and those descendants closed their output. For example,
+`(sleep 1 0<&- 1>&- 2>&-) & exit 7` waits for the sleep and returns the
+shell's exit code of 7. A writer that starts a separate session gets a bounded
+output drain once the original group finishes.
 
 The turn drain waits at most **5 s** (`DRAIN_DEADLINE`) for cancelled turns to
 close themselves, then closes any still-open message itself; store exit drain
