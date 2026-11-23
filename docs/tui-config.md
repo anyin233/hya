@@ -42,6 +42,9 @@ Sessions, Todos, and Context sidebars ([Layout](tui.md#layout)).
 | `statusline.placement` | `"below"` | `"below"` | `"below"` |
 | `composer.style` | `"box"` | `"box"` | `"box"` |
 | `composer.border_info` | `["model", "mode"]` | `[]` | `[]` |
+| `composer.paste.collapse_lines` | `10` | `10` | `10` |
+| `composer.paste.collapse_chars` | `1000` | `1000` | `1000` |
+| `composer.paste.wrap` | `true` | `true` | `true` |
 | `sidebar.enabled` | `false` | `false` | `true` |
 
 Bundle TUI panels with `placement: "sidebar"` join the workspace tree; in the
@@ -62,6 +65,9 @@ Change one component of the default:
 ```toml
 [statusline]
 segments = ["model", "mode", "cwd", "git", "ctx"]
+
+[composer.paste]
+collapse_lines = 20     # fold pastes longer than 20 lines into a chip
 ```
 
 Define your own preset on top of a built-in one:
@@ -130,7 +136,7 @@ A configuration error never blocks startup.
 | TOML syntax error | The whole file is ignored (`Ignored <path> (line N): <error>; using the statusline preset`). |
 | Unknown key, wrong type, unknown segment | That item is ignored with a warning; the lower layer's value stays. |
 | Unknown preset, `extends` cycle, more than 8 presets in a chain, a `[presets.*]` named like a built-in | The default preset with a warning. |
-| A key or value of a later version (`placement = "band"`, `[startup]`, `[composer.paste]`, `[theme]`, `[keys]`, …) | Ignored: `… is not supported in this version; ignored`. |
+| A key or value of a later version (`placement = "band"`, `[startup]`, `[composer.attachments]`, `[theme]`, `[keys]`, …) | Ignored: `… is not supported in this version; ignored`. |
 | `version` above 1 | A warning; the keys this version knows still apply. |
 
 Warnings appear at the start of the transcript, under
@@ -190,12 +196,15 @@ and returns when the width or `/sidebar off` hides it.
 | `statusline.placement` | `"below"` \| `"band"` | `"below"` | `"band"` is reserved for a later version. |
 | `composer.style` | `"box"` \| `"band"` | `"box"` | `"band"` is reserved for a later version. |
 | `composer.border_info` | array of segment names | `[]` | |
+| `composer.paste.collapse_lines` | integer ≥ 0 | `10` | A text paste of more lines becomes a paste chip ([Paste and attachments](tui.md#paste-and-attachments)); `0` never folds. |
+| `composer.paste.collapse_chars` | integer ≥ 1 | `1000` | Or of more characters. |
+| `composer.paste.wrap` | boolean | `true` | Send paste and file chips as `<attachment>` blocks; `false` sends their raw text. |
 | `sidebar.enabled` | boolean | `false` | `true` draws the tiled workspace (the saved `paneLayout`, or the default tree). |
 
 Keys of later versions (`startup.*`, `todos.*`, `subagents.*`, `layout.*`,
 `transcript.*`, `sidebar.left`, `sidebar.right`, `sidebar.min_columns`,
-`composer.paste.*`, `composer.attachments.*`) are recognized and ignored with
-"not supported in this version".
+`composer.paste.image_resize`, `composer.attachments.*`) are recognized and
+ignored with "not supported in this version".
 
 ### Reserved tables
 

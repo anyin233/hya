@@ -40,7 +40,7 @@ test("built-ins: hya, one light theme, and two more dark themes, each defining e
   for (const theme of list) {
     expect(theme.label.length).toBeGreaterThan(0)
     expect(theme.description.length).toBeGreaterThan(0)
-    for (const group of ["colors", "toolColors", "diffColors", "syntaxColors"] as const) {
+    for (const group of ["colors", "toolColors", "diffColors", "syntaxColors", "attachColors"] as const) {
       expect(Object.keys(theme[group]).sort()).toEqual(Object.keys(reference[group]).sort())
       for (const [key, value] of Object.entries(theme[group])) {
         if (group === "colors" && (key === "bg" || key === "panel")) expect(value).toMatchObject({ intent: "default" })

@@ -15,9 +15,10 @@ import { hooked } from "../extensions/renderTree"
  * Markdown renderable instead of rebuilding it.
  */
 import { TextAttributes } from "@opentui/core"
-import { createMemo, For, Match, Show, Switch, type JSX } from "solid-js"
+import { createMemo, createSignal, For, Match, Show, Switch, type JSX } from "solid-js"
 import { useApp } from "../app/context"
 import { formatBytes } from "../composer/attachments"
+import { foldAttachments, foldedAttachments } from "../composer/chips"
 import { taskChildStatus, taskLinks, type TaskMemberLink, type ChildStatus } from "../state/members"
 import { waitingKind } from "../state/prompts"
 import { messageBlockGap, reasoningExpanded, reasoningLabel, toolExpanded, type Block, type MessageView } from "../state/messages"
@@ -78,7 +79,11 @@ function attachmentText(block: Extract<Block, { kind: "attachment" }>): string {
 }
 
 function UserMessage(props: { view: MessageView }) {
-  const text = () => props.view.blocks.map((block) => (block.kind === "text" ? block.text : "")).filter(Boolean).join("\n")
+  const raw = () => props.view.blocks.map((block) => (block.kind === "text" ? block.text : "")).filter(Boolean).join("\n")
+  // Pasted text and files sent as `<attachment>` blocks show folded (`[paste #1 · 150 lines]`); a click shows them whole.
+  const [unfolded, setUnfolded] = createSignal(false)
+  const folds = createMemo(() => foldedAttachments(raw()).length > 0)
+  const text = () => folds() && !unfolded() ? foldAttachments(raw()) : raw()
   const attachments = () => props.view.blocks.filter((block): block is Extract<Block, { kind: "attachment" }> => block.kind === "attachment")
   return (
     <box
@@ -91,7 +96,7 @@ function UserMessage(props: { view: MessageView }) {
       paddingLeft={1}
       paddingRight={1}
     >
-      <box width="100%" flexDirection="row">
+      <box width="100%" flexDirection="row" onMouseDown={() => { if (folds()) setUnfolded(!unfolded()) }}>
         <text flexGrow={1} wrapMode="word" fg={props.view.queued ? colors.muted : colors.fg}>{text()}</text>
         <Show when={props.view.queued}>
           <text flexShrink={0} fg={colors.muted}> queued</text>
