@@ -473,6 +473,8 @@ waits for live group members that closed the sentinel, including children
 launched with Python’s `subprocess.Popen`. Zombie descendants count as exited.
 Cancellation, budget expiry, or exec shutdown kills a yielded group. Exec waits
 for its supervisor to reap the shell and publish the exit code before returning.
+During termination, Bash sends its last group signal while the leader’s PID is
+still reserved, including for pipe and PTY calls.
 The notice gives quoted commands
 to inspect output or stop the group. At the end-of-budget cap Bash kills the
 group and returns `timedOut: true`. An exhausted budget skips the spawn.

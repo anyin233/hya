@@ -934,23 +934,18 @@ async fn terminate_pipe_group(
     process_group: &mut Option<u32>,
     finish_group: fn(u32) -> io::Result<()>,
 ) -> Result<(), ToolError> {
-    let Some(pgid) = *process_group else {
+    let Some(pgid) = process_group.filter(|_| child.id().is_some()) else {
+        *process_group = None;
         return reap_pipe_child(child).await;
     };
     hya_tool::process_group::kill_group(pgid)?;
-    let quiesce = async {
-        tokio::task::spawn_blocking(move || finish_group(pgid))
-            .await
-            .map_err(io::Error::other)?
-    };
-    #[cfg(target_os = "linux")]
-    let quiet = quiesce.await;
+    let quiet = tokio::task::spawn_blocking(move || finish_group(pgid))
+        .await
+        .map_err(io::Error::other)?;
     // Releasing the leader's PID ends ownership. Even a failed quiescence
     // check must leave the outer error handler with no group to signal.
     *process_group = None;
     reap_pipe_child(child).await?;
-    #[cfg(not(target_os = "linux"))]
-    let quiet = quiesce.await;
     quiet?;
     Ok(())
 }
@@ -1031,12 +1026,7 @@ fn run_pty_blocking(
         let cancelled = cancel.is_cancelled() || shutdown.is_cancelled();
         if cancelled || deadline.is_some_and(|at| Instant::now() >= at) {
             if completion.is_none() {
-                // Non-Linux group supervision can outlive the leader. Explicit
-                // cancellation still terminates that group while it is monitored.
-                let mut target = pinned_group.take();
-                #[cfg(not(target_os = "linux"))]
-                target.get_or_insert(pgid);
-                terminate_pty_child(&mut child, &mut target)?;
+                terminate_pty_child(&mut child, &mut pinned_group)?;
                 drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
             }
             completion = Some(if cancelled {
@@ -1161,14 +1151,11 @@ fn terminate_pty_child(
         return Ok(());
     };
     hya_tool::process_group::kill_group(pgid)?;
-    #[cfg(target_os = "linux")]
     let quiet = hya_tool::process_group::finish_group_termination(pgid);
     *process_group = None;
     child
         .wait()
         .map_err(|error| contextual_io("reap Bash PTY process", error))?;
-    #[cfg(not(target_os = "linux"))]
-    let quiet = hya_tool::process_group::finish_group_termination(pgid);
     quiet?;
     Ok(())
 }
@@ -1506,7 +1493,7 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     #[tokio::test]
     async fn failed_quiescence_reaps_and_releases_the_pipe_group() {
         let mut child = tokio::process::Command::new("sleep")
@@ -1515,7 +1502,20 @@ mod tests {
             .spawn()
             .unwrap();
         let mut group = child.id();
-        let error = terminate_pipe_group(&mut child, &mut group, |_| {
+        let error = terminate_pipe_group(&mut child, &mut group, |pgid| {
+            // SAFETY: WNOWAIT checks the worker still owns the waitable child.
+            let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+            assert_eq!(
+                unsafe {
+                    libc::waitid(
+                        libc::P_PID,
+                        pgid as libc::id_t,
+                        &mut info,
+                        libc::WEXITED | libc::WNOWAIT,
+                    )
+                },
+                0
+            );
             Err(io::Error::other("injected quiescence failure"))
         })
         .await
