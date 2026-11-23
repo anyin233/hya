@@ -87,3 +87,19 @@ export const setCommand: CommandSpec = {
     context.store.setStatus(`${target} ${enabled ? "on" : "off"} for this session · tui.toml unchanged`)
   },
 }
+
+const pasteUsage = "Usage: /paste expand [n]"
+
+/** `/paste expand [n]` (docs/tui.md "Paste and attachments"): a paste or file chip back to editable text. */
+export const pasteCommand: CommandSpec = {
+  name: "/paste",
+  description: "Expand a paste or file chip of the message input into editable text",
+  argumentHint: "expand [n]",
+  complete: ({ words, current, head }) => words.length === 1 ? matchValues(head, current, ["expand"]) : [],
+  run: ({ store, actions }, { args }) => {
+    if (args[0] !== "expand" || args.length > 2 || (args[1] !== undefined && !/^[1-9]\d*$/.test(args[1]))) throw new Error(pasteUsage)
+    const index = args[1] === undefined ? undefined : Number(args[1])
+    if (!actions.expandChip?.(index)) throw new Error(index === undefined ? "No paste or file chip in the input" : `No paste or file chip ${index} in the input`)
+    store.setStatus("Expanded the chip into text")
+  },
+}

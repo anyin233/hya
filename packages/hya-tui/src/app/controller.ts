@@ -85,6 +85,7 @@ import {
   exceedsTurnBudget,
   imageMentionPaths,
   maxAttachmentBytes,
+  maxTurnAttachmentBytes,
   mimeForPath,
   spacedImageError,
   spacedImageMentions,
@@ -92,6 +93,9 @@ import {
   type AttachmentPreview,
 } from "../composer/attachments"
 import { findPattern, rankPaths } from "../composer/mention"
+import { ChipTable } from "../composer/chips"
+import type { PastedPath } from "../composer/paths"
+import { resolvePastedPaths, type PasteResult } from "./paste"
 import { shellCommand } from "../composer/shell"
 import type { KeyLike } from "../keys/bindings"
 import { helpPickerHint, helpPickerRows } from "../commands"
@@ -1170,6 +1174,7 @@ export function createController({ client, store, directory, remote: startedRemo
     requestPermissionMode: (mode) => modes.request(mode),
     savePreferences: (patch) => savePreferencesPatch(patch),
     structure,
+    expandChip: (index) => ui.expandChip?.(index) ?? false,
     paneBounds: () => new Map([...ui.paneBounds ?? []].map(([id, read]) => [id, read()])),
     loadPaneLayout: () => {
       if (!preferencesPath) throw new Error("No TUI preferences path configured")
@@ -1184,6 +1189,23 @@ export function createController({ client, store, directory, remote: startedRemo
    * never looked up on the backend.
    */
   const localPastes = new Set<string>()
+
+  /** Paste and attachment chips of the composer (composer/chips.ts); kept for the process, so history entries keep their tokens. */
+  const chips = new ChipTable()
+
+  /** What pasted paths become (app/paste.ts): chips, mentions, or text with a notice. */
+  function pastePaths(paths: readonly PastedPath[]): Promise<PasteResult> {
+    return resolvePastedPaths(paths, {
+      chips,
+      remote,
+      workdir: store.state.selected?.workdir || directory,
+      roots: activeProject(store.state)?.roots ?? [],
+      existsOnBackend: (path) => {
+        const scope = backendScope(path)
+        return scope ? client.readFile(path, { directory: scope, maxBytes: 1 }).then(() => true, () => false) : Promise.resolve(false)
+      },
+    })
+  }
   /** Remote-mode previews per server + scope + path: typing re-runs the preview, the file is fetched once (cleared on submit). */
   const remotePreviews = new Map<string, Promise<FileRead>>()
   const remotePreviewLimit = 16
@@ -1340,21 +1362,30 @@ export function createController({ client, store, directory, remote: startedRemo
         prompt = intercepted.text
       }
       remotePreviews.clear()
+      // `@path` mentions are read from the text as typed: never from inside a pasted chip.
       const previews = await loadAttachments(prompt)
-      const failed = previews.filter((item) => item.error)
+      const chipErrors = chips.present(prompt).filter((chip) => chip.error)
+      const failed = [...previews.filter((item) => item.error), ...chipErrors.map((chip) => ({ name: chip.name ?? chip.token, error: chip.error }))]
       if (failed.length) {
         status(`Not sent · ${failed.map((item) => `${item.name}: ${item.error}`).join(" · ")}`)
         return
       }
-      if (previews.length && currentModel(store.state)?.imageInput === false) {
+      const expanded = chips.expand(prompt, { wrap: store.state.structure.composer.paste.wrap })
+      const images = [...expanded.images.map((item) => ({ name: item.name, mime: item.mime, data: item.data, path: item.path })), ...previews.map((item) => ({ name: item.name, mime: item.mime ?? "", data: item.data ?? "", path: item.path }))]
+      if (images.length && currentModel(store.state)?.imageInput === false) {
         status(`Not sent · ${modelReference(store.state.selected!)} does not accept image attachments`)
         return
       }
-      const attachments: PromptAttachment[] = previews.map((item) => ({ name: item.name, mime: item.mime, data: item.data ?? "", path: item.path }))
+      const total = expanded.chips.reduce((sum, chip) => sum + (chip.image?.size ?? 0), 0) + previews.reduce((sum, item) => sum + (item.size ?? 0), 0)
+      if (total > maxTurnAttachmentBytes) {
+        status("Not sent · attachments over 20 MiB for this turn")
+        return
+      }
+      const attachments: PromptAttachment[] = images
       store.followTranscript()
       // Subscribe before CreateTurn, so no frame of the new turn is missed.
       await Promise.race([streamReady, Bun.sleep(streamWaitMs)])
-      await turns.submit(prompt, attachments.length ? { attachments } : {})
+      await turns.submit(expanded.text, attachments.length ? { attachments } : {})
     } catch (error) {
       // The refusal already says what to do.
       if (!(error instanceof NoProjectError)) status(`Error: ${String(error)}`)
@@ -1874,6 +1905,9 @@ export function createController({ client, store, directory, remote: startedRemo
     answer,
     findFiles,
     fileExists,
+    /** The composer's chip table (composer/chips.ts). */
+    chips,
+    pastePaths,
     /** Pending `@path` image attachments of the composer's current text, for the pending-attachment row (components/Composer.tsx). */
     previewAttachments: (text: string) => loadAttachments(text, true),
     complete: (input: string) => completeCommand(input, { ...store.completionContext(), ...(structure ? { presets: structure.presets() } : {}) }, registry),

@@ -61,6 +61,17 @@ export interface ThemeDiffColors {
   context: string
 }
 
+/**
+ * Identity colors of the composer's chips and attachment rows
+ * (composer/chips.ts): a paste, a file, and an image token and its row share
+ * one color, distinct from the focus color.
+ */
+export interface ThemeAttachColors {
+  paste: string
+  file: string
+  image: string
+}
+
 /** Token colors for Markdown and highlighted code blocks (tree-sitter capture names in `syntaxStylesFor`). */
 export interface ThemeSyntaxColors {
   keyword: string
@@ -86,6 +97,7 @@ export interface ThemeDefinition {
   toolColors: ThemeToolColors
   diffColors: ThemeDiffColors
   syntaxColors: ThemeSyntaxColors
+  attachColors: ThemeAttachColors
 }
 
 /** An opaque default-color fill clears overlays without setting a terminal RGB background. */
@@ -102,6 +114,7 @@ export const themes = {
     toolColors: { done: "#a5d6a7" },
     diffColors: { add: "#a5d6a7", remove: "#f07878", hunk: "#e8edf3", context: "#9caab9" },
     syntaxColors: { keyword: "#c792ea", string: "#d6bb8d", number: "#d6bb8d", comment: "#7a8a9c", function: "#e8edf3", type: "#e8edf3", operator: "#e8edf3", inlineCode: "#d6bb8d" },
+    attachColors: { paste: "#c3a6f0", file: "#7fd1c4", image: "#f0a6c8" },
   },
   light: {
     name: "light",
@@ -112,6 +125,7 @@ export const themes = {
     toolColors: { done: "#2e7d32" },
     diffColors: { add: "#2e7d32", remove: "#c23b3b", hunk: "#1f2933", context: "#5b6b7b" },
     syntaxColors: { keyword: "#8839c9", string: "#805f20", number: "#805f20", comment: "#6a7a8a", function: "#1f2933", type: "#1f2933", operator: "#1f2933", inlineCode: "#805f20" },
+    attachColors: { paste: "#6a4bb5", file: "#1d7f73", image: "#b0407a" },
   },
   contrast: {
     name: "contrast",
@@ -122,6 +136,7 @@ export const themes = {
     toolColors: { done: "#5cff7a" },
     diffColors: { add: "#5cff7a", remove: "#ff5c5c", hunk: "#ffffff", context: "#cccccc" },
     syntaxColors: { keyword: "#ff79ff", string: "#ffe6a7", number: "#ffe6a7", comment: "#a8a8a8", function: "#ffffff", type: "#ffffff", operator: "#ffffff", inlineCode: "#ffe6a7" },
+    attachColors: { paste: "#d7b8ff", file: "#5cffe0", image: "#ff9ed8" },
   },
   ember: {
     name: "ember",
@@ -132,6 +147,7 @@ export const themes = {
     toolColors: { done: "#a9c77a" },
     diffColors: { add: "#a9c77a", remove: "#e8665a", hunk: "#f1e6d8", context: "#b3a393" },
     syntaxColors: { keyword: "#c8a6dd", string: "#d7c28a", number: "#d7c28a", comment: "#85766a", function: "#f1e6d8", type: "#f1e6d8", operator: "#f1e6d8", inlineCode: "#d7c28a" },
+    attachColors: { paste: "#c8a6dd", file: "#8fc9b0", image: "#e8a0a0" },
   },
 } satisfies Record<string, ThemeDefinition>
 
@@ -149,6 +165,7 @@ const [colorStore, setColors] = createStore<ThemeColors>({ ...themes.hya.colors 
 const [toolStore, setToolColors] = createStore<ThemeToolColors>({ ...themes.hya.toolColors })
 const [diffStore, setDiffColors] = createStore<ThemeDiffColors>({ ...themes.hya.diffColors })
 const [syntaxStore, setSyntaxColors] = createStore<ThemeSyntaxColors>({ ...themes.hya.syntaxColors })
+const [attachStore, setAttachColors] = createStore<ThemeAttachColors>({ ...themes.hya.attachColors })
 
 /** The base UI colors of the theme in effect (reactive). */
 export const colors: Readonly<ThemeColors> = colorStore
@@ -158,6 +175,8 @@ export const toolColors: Readonly<ThemeToolColors> = toolStore
 export const diffColors: Readonly<ThemeDiffColors> = diffStore
 /** Syntax token colors of the theme in effect (reactive). */
 export const syntaxColors: Readonly<ThemeSyntaxColors> = syntaxStore
+/** Chip and attachment-row identity colors of the theme in effect (reactive). */
+export const attachColors: Readonly<ThemeAttachColors> = attachStore
 
 /** Name of the theme in effect (reactive). */
 export function themeName(): string {
@@ -179,6 +198,7 @@ export function setTheme(next: string): boolean {
     setToolColors({ ...theme.toolColors })
     setDiffColors({ ...theme.diffColors })
     setSyntaxColors({ ...theme.syntaxColors })
+    setAttachColors({ ...theme.attachColors })
     setName(theme.name)
   })
   return true

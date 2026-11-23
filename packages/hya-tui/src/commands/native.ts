@@ -22,7 +22,7 @@ import { loadPreferences, preferencesPath } from "../prefs"
 import { CommandRegistry, matchValues, type ArgumentPosition, type CommandContext, type CommandInvocation, type CommandSpec, type Completion } from "./registry"
 import type { CompletionContext } from "../completion"
 import { keybindingsCommand } from "./keybindings"
-import { configCommand, enableSidebar, layoutNeedsWorkspace, setCommand } from "./config"
+import { configCommand, enableSidebar, layoutNeedsWorkspace, pasteCommand, setCommand } from "./config"
 
 /**
  * Session id completions (`/open`, `/resume`): a titled session shows as
@@ -372,6 +372,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
   subagentsCommand,
   configCommand,
   setCommand,
+  pasteCommand,
   {
     name: "/layout",
     description: "Edit workspace panes: split, insert, move, bubble, wrap, remove, assign, focus, resize, close, reload, reset, tree, or show",

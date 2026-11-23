@@ -8,9 +8,9 @@
  */
 import { batch } from "solid-js"
 import { homedir } from "node:os"
-import { builtinPresetNames, defaultPreset, presetDescriptions, statusSegments, switchableComponents, type ComponentName, type TuiStructure } from "../config/presets"
+import { builtinPresetNames, defaultPreset, presetDescriptions, statusSegments, switchableComponents, type TuiStructure } from "../config/presets"
 import {
-  initTuiConfig, loadTuiConfig, presetNames, resolveTuiConfig,
+  initTuiConfig, loadTuiConfig, presetNames, resolveTuiConfig, structureEntries,
   type LoadedTuiConfig, type ResolvedTuiConfig, type SessionOverrides,
 } from "../config/tuiConfig"
 import { loadPreferences, savePreferences } from "../prefs"
@@ -150,13 +150,9 @@ export function createStructureController({ store, path, preferencesPath, editFi
         `Presets   ${presetNames(loaded.raw).join(", ")}`,
         "",
       ]
-      const width = Math.max(...(Object.keys(structure) as ComponentName[]).flatMap((component) => Object.keys(structure[component]).map((key) => `${component}.${key}`.length)))
-      for (const component of Object.keys(structure) as ComponentName[]) {
-        for (const [key, value] of Object.entries(structure[component])) {
-          const name = `${component}.${key}`
-          rows.push(`${name.padEnd(width + 2)}${tomlValue(value).padEnd(40)} ${current.sources[name] ?? ""}`)
-        }
-      }
+      const entries = structureEntries(structure)
+      const width = Math.max(...entries.map(([name]) => name.length))
+      for (const [name, value] of entries) rows.push(`${name.padEnd(width + 2)}${tomlValue(value).padEnd(40)} ${current.sources[name] ?? ""}`)
       const all = warnings()
       rows.push("", all.length ? `Warnings (${all.length})` : "Warnings  none", ...all.map((warning) => `  ${warning}`))
       rows.push(

@@ -105,6 +105,10 @@ test("bad items are ignored one by one; later-version keys say so; the rest appl
     'style = "fancy"',
     "[composer.paste]",
     "collapse_lines = 5",
+    "collapse_chars = 0",
+    "image_resize = false",
+    "[composer.attachments]",
+    'style = "cards"',
     "[startup]",
     "quiet = true",
     "[keys.workspace]",
@@ -121,8 +125,13 @@ test("bad items are ignored one by one; later-version keys say so; the rest appl
     'statusline.placement = "band" is not supported in this version; ignored',
     "statusline.segments: unknown segment nope; ignored",
     'composer.style: expected "box" or "band"; ignored',
-    "composer.paste is not supported in this version; ignored",
+    "composer.paste.collapse_chars: expected an integer ≥ 1; ignored",
+    "composer.paste.image_resize is not supported in this version; ignored",
+    "composer.attachments is not supported in this version; ignored",
   ])
+  expect(resolved.structure.composer.paste).toEqual({ collapse_lines: 5, collapse_chars: 1000, wrap: true })
+  expect(resolved.sources["composer.paste.collapse_lines"]).toBe("tui.toml")
+  expect(resolved.sources["composer.paste.wrap"]).toBe("preset statusline")
 })
 
 test("the session layer wins over tui.toml; a session preset starts its own values", () => {

@@ -25,6 +25,8 @@ export interface UiHandles {
   composerHistory?: InputHistory
   commandHistory?: InputHistory
   composerHeight?: () => number
+  /** Expand the `index`-th (1-based; default the first) paste or file chip of the message input into its text (`/paste expand`); `false` when there is none. */
+  expandChip?: (index?: number) => boolean
   composerInput?: { text: string; cursor: number }
   commandInput?: { text: string; active: boolean; originSidebar: boolean }
 }

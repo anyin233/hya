@@ -12,10 +12,20 @@ export type StatusSegment = typeof statusSegments[number]
 /** What the status line shows by default, left to right. */
 export const defaultSegments: readonly StatusSegment[] = ["model", "mode", "cwd", "git", "ctx", "tokens"]
 
+/** `[composer.paste]`: when a text paste folds into a chip, and how chips are sent (composer/chips.ts). */
+export interface PasteSettings {
+  /** More lines than this fold into a chip; 0 never folds. */
+  collapse_lines: number
+  /** Or more characters than this. */
+  collapse_chars: number
+  /** Send pastes and files as `<attachment>` blocks (true) or as raw text. */
+  wrap: boolean
+}
+
 /** The resolved structure the TUI draws. Field names match `tui.toml`. */
 export interface TuiStructure {
   statusline: { enabled: boolean; segments: StatusSegment[]; placement: "below" | "band" }
-  composer: { style: "box" | "band"; border_info: StatusSegment[] }
+  composer: { style: "box" | "band"; border_info: StatusSegment[]; paste: PasteSettings }
   sidebar: { enabled: boolean }
 }
 export type ComponentName = keyof TuiStructure
@@ -32,7 +42,7 @@ export const availablePresets: readonly BuiltinPreset[] = ["minimal", "statuslin
 
 const base = (): TuiStructure => ({
   statusline: { enabled: true, segments: [...defaultSegments], placement: "below" },
-  composer: { style: "box", border_info: [] },
+  composer: { style: "box", border_info: [], paste: { collapse_lines: 10, collapse_chars: 1000, wrap: true } },
   sidebar: { enabled: false },
 })
 

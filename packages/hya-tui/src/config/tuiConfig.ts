@@ -120,27 +120,38 @@ type Rule = {
   /** A value this version does not draw yet (`placement = "band"` before the dock). */
   later?(value: unknown): boolean
 }
+/** A nested table (`[composer.paste]`): its keys merge one by one like a component's. */
+type TableRule = { table: Record<string, Rule>; laterKeys?: readonly string[] }
+const isTableRule = (rule: Rule | TableRule): rule is TableRule => "table" in rule
 
 const bool: Rule = { read: (value) => typeof value === "boolean" ? value : undefined, expected: "true or false" }
 const segmentList: Rule = {
   read: (value) => Array.isArray(value) && value.every((item) => typeof item === "string") ? value : undefined,
   expected: `an array of segment names (${statusSegments.join(", ")})`,
 }
+const integer = (min: number, max = Number.MAX_SAFE_INTEGER): Rule => ({
+  read: (value) => Number.isInteger(value) && (value as number) >= min && (value as number) <= max ? value : undefined,
+  expected: max === Number.MAX_SAFE_INTEGER ? `an integer ≥ ${min}` : `an integer from ${min} to ${max}`,
+})
 const oneOf = (values: readonly string[], later: readonly string[] = []): Rule => ({
   read: (value) => typeof value === "string" && values.includes(value) ? value : undefined,
   expected: values.map((value) => JSON.stringify(value)).join(" or "),
   later: (value) => later.includes(value as string),
 })
 
-const rules: { [Component in ComponentName]: Record<keyof TuiStructure[Component] & string, Rule> } = {
+const rules: { [Component in ComponentName]: Record<keyof TuiStructure[Component] & string, Rule | TableRule> } = {
   statusline: { enabled: bool, segments: segmentList, placement: oneOf(["below", "band"], ["band"]) },
-  composer: { style: oneOf(["box", "band"], ["band"]), border_info: segmentList },
+  composer: {
+    style: oneOf(["box", "band"], ["band"]),
+    border_info: segmentList,
+    paste: { table: { collapse_lines: integer(0), collapse_chars: integer(1), wrap: bool }, laterKeys: ["image_resize"] },
+  },
   sidebar: { enabled: bool },
 }
 /** Keys of a known component that a later version reads. */
 const laterKeys: Record<ComponentName, readonly string[]> = {
   statusline: [],
-  composer: ["paste", "attachments"],
+  composer: ["attachments"],
   sidebar: ["left", "right", "min_columns"],
 }
 /** Component tables a later version reads (startup list, dock rows, layout tree). */
@@ -160,13 +171,27 @@ function applyComponent(
     warnings.push(`${prefix}${component} must be a table; ignored`)
     return
   }
-  const target = structure[component] as unknown as Record<string, unknown>
-  const componentRules = rules[component] as Record<string, Rule>
+  applyTable(
+    structure[component] as unknown as Record<string, unknown>, rules[component] as Record<string, Rule | TableRule>, laterKeys[component],
+    sources, warnings, table, layer, `${prefix}${component}`, component,
+  )
+}
+
+/** Apply `table` onto `target` key by key; nested tables recurse. */
+function applyTable(
+  target: Record<string, unknown>, tableRules: Record<string, Rule | TableRule>, later: readonly string[],
+  sources: Record<string, string>, warnings: string[], table: Record<string, unknown>, layer: string, prefix: string, path: string,
+): void {
   for (const [key, value] of Object.entries(table)) {
-    const name = `${prefix}${component}.${key}`
-    const rule = componentRules[key]
+    const name = `${prefix}.${key}`
+    const rule = tableRules[key]
     if (!rule) {
-      warnings.push(laterKeys[component].includes(key) ? notSupported(name) : `Unknown key ${name}; ignored`)
+      warnings.push(later.includes(key) ? notSupported(name) : `Unknown key ${name}; ignored`)
+      continue
+    }
+    if (isTableRule(rule)) {
+      if (!isTable(value)) warnings.push(`${name} must be a table; ignored`)
+      else applyTable(target[key] as Record<string, unknown>, rule.table, rule.laterKeys ?? [], sources, warnings, value, layer, name, `${path}.${key}`)
       continue
     }
     const read = rule.read(value)
@@ -186,7 +211,7 @@ function applyComponent(
     } else {
       target[key] = read
     }
-    sources[`${component}.${key}`] = layer
+    sources[`${path}.${key}`] = layer
   }
 }
 
@@ -251,12 +276,22 @@ function applyPresetLayer(structure: TuiStructure, sources: Record<string, strin
   }
 }
 
+/** `component.key` (and `component.table.key`) → value, for sources and `/config`. */
+export function structureEntries(structure: TuiStructure): [string, unknown][] {
+  const entries: [string, unknown][] = []
+  const walk = (value: Record<string, unknown>, prefix: string) => {
+    for (const [key, item] of Object.entries(value)) {
+      if (isTable(item)) walk(item, `${prefix}.${key}`)
+      else entries.push([`${prefix}.${key}`, item])
+    }
+  }
+  for (const component of componentNames) walk(structure[component] as unknown as Record<string, unknown>, component)
+  return entries
+}
+
 function seed(name: BuiltinPreset): { structure: TuiStructure; sources: Record<string, string> } {
   const structure = builtinPreset(name)
-  const sources: Record<string, string> = {}
-  for (const component of componentNames) {
-    for (const key of Object.keys(structure[component])) sources[`${component}.${key}`] = `preset ${name}`
-  }
+  const sources = Object.fromEntries(structureEntries(structure).map(([key]) => [key, `preset ${name}`]))
   return { structure, sources }
 }
 
@@ -332,6 +367,13 @@ ${presets}
 # style = "box"
 # Segments written on the input border (the minimal preset uses ["model", "mode"]).
 # border_info = []
+
+[composer.paste]
+# A text paste longer than this many lines, or characters, becomes a chip; 0 never folds.
+# collapse_lines = 10
+# collapse_chars = 1000
+# Send pastes and files as <attachment> blocks (false: their raw text).
+# wrap = true
 
 [sidebar]
 # true draws the tiled workspace (Projects, Sessions, Todos, Context).

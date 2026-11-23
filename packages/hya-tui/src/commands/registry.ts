@@ -68,6 +68,8 @@ export interface AppActions {
   loadPaneLayout(): { layout: PaneLayout; path: string }
   /** `tui.toml` and `/set` (app/structure.ts): `/config`, `/set`, `/sidebar`; unset in tests without one. */
   structure?: StructureControl
+  /** `/paste expand [n]`: replace the n-th paste or file chip of the message input with its text; `false` when there is none. */
+  expandChip?(index?: number): boolean
   paneBounds?(): ReadonlyMap<string, Rect>
   /** Copy `text` to the system clipboard with OSC 52; `false` when the terminal does not accept it. */
   copyText(text: string): boolean

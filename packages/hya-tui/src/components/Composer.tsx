@@ -2,12 +2,16 @@ import { extensionManager, type HookTree } from "../extensions/manager"
 import { RenderTree } from "../extensions/renderTree"
 import type { RenderNode } from "../extensions/wire"
 import type { BoxRenderable, KeyEvent, PasteEvent, TextareaRenderable } from "@opentui/core"
-import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from "solid-js"
 import { useApp } from "../app/context"
 import { readOnlyStatus } from "../app/controller"
 import { historyEntry } from "../bridge"
 import { secretMask } from "../state/format"
-import { attachmentLabel, imageMentionPaths, pastedImagePath, spacedImageMentions, type AttachmentPreview } from "../composer/attachments"
+import { imageMentionPaths, spacedImageMentions, type AttachmentPreview } from "../composer/attachments"
+import { chipRows, maxAttachmentRows, type ChipRow } from "../composer/chipRows"
+import { foldsPaste, sanitizePaste } from "../composer/chips"
+import { pastedPaths } from "../composer/paths"
+import { attachColors } from "../theme"
 import { escapeAction } from "../composer/escape"
 import { InputHistory } from "../composer/history"
 import { insertMention, mentionAt, type MentionToken } from "../composer/mention"
@@ -94,6 +98,12 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
   const [menu, setMenu] = createSignal<FileMenu | undefined>()
   /** Pending `@path` image attachments of the current text (composer/attachments.ts), shown above the input; an `error` entry blocks submit. */
   const [attachments, setAttachments] = createSignal<AttachmentPreview[]>([])
+  /** Why a pasted path stayed text (app/paste.ts); cleared by the next edit after it. */
+  const [pasteNotice, setPasteNotice] = createSignal<string | undefined>()
+  /** A paste still resolving paths (file reads): Enter waits for it, so the chip is sent. */
+  let pendingPaste: Promise<void> | undefined
+  /** Chips and pending `@path` images, one row each, at most `maxAttachmentRows` (+N more). */
+  const rowsAbove = createMemo((): ChipRow[] => chipRows(controller.chips.present(value()), attachments(), maxAttachmentRows))
   const history = ui.composerHistory ??= new InputHistory()
   const quitGuard = createQuitGuard()
   /**
@@ -234,6 +244,7 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
   function sync(): void {
     if (!editor) return
     const text = editor.plainText
+    if (pasteNotice() && !pendingPaste && text !== value()) setPasteNotice(undefined)
     setValue(text)
     store.setDraft(text.length > 0)
     ui.composerInput = { text, cursor: editor.cursorOffset }
@@ -248,6 +259,11 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
 
   function submit(): void {
     if (!editor || overlayViewOpen()) return
+    // A paste and Enter in one read: send once the paste's chips are in the input.
+    if (pendingPaste) {
+      void pendingPaste.then(submit)
+      return
+    }
     const text = editor.plainText
     if (!text.trim()) return
     if (readOnly()) {
@@ -541,6 +557,17 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
         return
       }
     }
+    // Backspace right after a chip's token, or Delete right before one, removes the whole token.
+    if (editor && !key.ctrl && !key.meta && !key.shift && (key.name === "backspace" || key.name === "delete")) {
+      const text = editor.plainText
+      const span = key.name === "backspace" ? controller.chips.tokenEndingAt(text, editor.cursorOffset) : controller.chips.tokenStartingAt(text, editor.cursorOffset)
+      if (span) {
+        consume()
+        editor.replaceText(text.slice(0, span.start) + text.slice(span.end))
+        editor.cursorOffset = span.start
+        return
+      }
+    }
     if (arrow(key, consume)) return
     // The editor's text, not the `value()` mirror: it can lag one render behind fast typing (`a?` must type `?`).
     const action = resolveBinding(key, { composerEmpty: !(editor?.plainText ?? value()) })
@@ -683,34 +710,63 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
     if (pane) ui.paneInputs?.get(pane.id)?.onPaste?.(event)
   }
 
+  /** Insert `text` at the cursor, with one space after it unless one follows already. */
+  function insertAtCursor(text: string): void {
+    if (!editor || !text) return
+    const after = editor.plainText.slice(editor.cursorOffset, editor.cursorOffset + 1)
+    editor.insertText(/^\s/.test(after) && text.endsWith(" ") ? text.slice(0, -1) : text)
+  }
+
+  /**
+   * A paste into the message input (docs/tui.md "Paste and attachments"):
+   * paths become chips or `@path` mentions (app/paste.ts), a long text a paste
+   * chip (`[composer.paste]`), anything else is inserted cleaned.
+   */
   const onEditorPaste = (event: PasteEvent) => {
-    const cleaned = new TextDecoder().decode(event.bytes).replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/\r\n?/g, "\n")
-    // A terminal pastes a file dragged into the window as its path (quoted or
-    // escaped when it has spaces): turn it into an `@path ` mention instead
-    // of raw text when the path exists, so it resolves like a typed mention.
-    const candidate = pastedImagePath(cleaned)
-    if (candidate && editor) {
-      const cursor = editor.cursorOffset
-      const token: MentionToken = { start: cursor, end: cursor, query: "" }
-      void controller.fileExists(candidate).then((exists) => {
-        if (!editor) return
-        if (exists) {
-          const next = insertMention(editor.plainText, token, candidate)
-          replace(next.text, next.cursor)
-        } else {
-          editor.insertText(cleaned)
-        }
-      })
+    const cleaned = sanitizePaste(new TextDecoder().decode(event.bytes))
+    if (!cleaned || !editor) return
+    const paths = pastedPaths(cleaned)
+    if (paths) {
+      const work = controller.pastePaths(paths).then((result) => {
+        insertAtCursor(result.insert)
+        setPasteNotice(result.notices.length ? result.notices.join(" · ") : undefined)
+      }).catch((error: unknown) => {
+        editor?.insertText(cleaned)
+        setPasteNotice(`Paste failed: ${error instanceof Error ? error.message : String(error)}`)
+      }).finally(() => { if (pendingPaste === work) pendingPaste = undefined })
+      pendingPaste = work
       return
     }
-    editor?.insertText(cleaned)
+    if (foldsPaste(cleaned, store.state.structure.composer.paste)) {
+      insertAtCursor(`${controller.chips.addPaste(cleaned).token} `)
+      return
+    }
+    editor.insertText(cleaned)
   }
+
+  /** Replace a paste or file chip's token with its text, so it can be edited (`/paste expand`, a click on its row). */
+  function expandChip(id: number): boolean {
+    const chip = controller.chips.get(id)
+    if (!editor || !chip || chip.kind === "image" || chip.text === undefined) return false
+    const text = editor.plainText
+    const at = text.indexOf(chip.token)
+    if (at < 0) return false
+    editor.replaceText(text.slice(0, at) + chip.text + text.slice(at + chip.token.length))
+    editor.cursorOffset = at + chip.text.length
+    return true
+  }
+  ui.expandChip = (index) => {
+    const expandable = controller.chips.present(editor?.plainText ?? "").filter((chip) => chip.kind !== "image")
+    const chip = index === undefined ? expandable[0] : expandable[index - 1]
+    return chip ? expandChip(chip.id) : false
+  }
+  onCleanup(() => { ui.expandChip = undefined })
 
   const workspaceInput = { onKey: onWorkspaceKey, onPaste: onWorkspacePaste }
   const editorInput = { onKey: onEditorKey, onPaste: onEditorPaste }
   ui.workspaceInput = workspaceInput
   const composerHeight = () => (store.state.secretEntry ? 4 : rows() + 2)
-    + (menu() ? menu()!.items.length + 3 : 0) + attachments().length + (props.decorationRows?.() ?? 0)
+    + (menu() ? menu()!.items.length + 3 : 0) + rowsAbove().length + (pasteNotice() ? 1 : 0) + (props.decorationRows?.() ?? 0)
   ui.composerHeight = composerHeight
   queueMicrotask(() => ui.invalidateLayout?.())
   let editorPaneId: string | undefined
@@ -742,11 +798,19 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
           </box>
         )}
       </Show>
-      <Show when={attachments().length > 0}>
+      <Show when={rowsAbove().length > 0 || pasteNotice()}>
         <box width="100%" flexShrink={0} flexDirection="column">
-          <For each={attachments()}>
-            {(item) => <text height={1} wrapMode="none" fg={item.error ? colors.warning : colors.muted}>{attachmentLabel(item)}</text>}
+          <For each={rowsAbove()}>
+            {(row) => (
+              <text height={1} wrapMode="none" onMouseDown={() => { if (row.chip !== undefined) expandChip(row.chip) }}>
+                <span style={{ fg: row.error ? colors.warning : row.kind ? attachColors[row.kind] : colors.muted, bold: true }}>{row.tag}</span>
+                <span style={{ fg: row.error ? colors.warning : colors.muted }}>{row.detail ? ` ${row.detail}` : ""}</span>
+              </text>
+            )}
           </For>
+          <Show when={pasteNotice()}>
+            {(notice) => <text height={1} wrapMode="none" fg={colors.warning}>{notice()}</text>}
+          </Show>
         </box>
       </Show>
       <Show when={store.state.secretEntry}>
