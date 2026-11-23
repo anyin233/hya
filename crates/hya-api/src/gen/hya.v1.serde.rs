@@ -1744,6 +1744,9 @@ impl serde::Serialize for Bootstrap {
         if !self.sessions_cursor.is_empty() {
             len += 1;
         }
+        if !self.context_files.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.Bootstrap", len)?;
         if let Some(v) = self.location.as_ref() {
             struct_ser.serialize_field("location", v)?;
@@ -1781,6 +1784,9 @@ impl serde::Serialize for Bootstrap {
         if !self.sessions_cursor.is_empty() {
             struct_ser.serialize_field("sessionsCursor", &self.sessions_cursor)?;
         }
+        if !self.context_files.is_empty() {
+            struct_ser.serialize_field("contextFiles", &self.context_files)?;
+        }
         struct_ser.end()
     }
 }
@@ -1806,6 +1812,8 @@ impl<'de> serde::Deserialize<'de> for Bootstrap {
             "formatterAvailable",
             "sessions_cursor",
             "sessionsCursor",
+            "context_files",
+            "contextFiles",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1822,6 +1830,7 @@ impl<'de> serde::Deserialize<'de> for Bootstrap {
             SavedRules,
             FormatterAvailable,
             SessionsCursor,
+            ContextFiles,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1855,6 +1864,7 @@ impl<'de> serde::Deserialize<'de> for Bootstrap {
                             "savedRules" | "saved_rules" => Ok(GeneratedField::SavedRules),
                             "formatterAvailable" | "formatter_available" => Ok(GeneratedField::FormatterAvailable),
                             "sessionsCursor" | "sessions_cursor" => Ok(GeneratedField::SessionsCursor),
+                            "contextFiles" | "context_files" => Ok(GeneratedField::ContextFiles),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1886,6 +1896,7 @@ impl<'de> serde::Deserialize<'de> for Bootstrap {
                 let mut saved_rules__ = None;
                 let mut formatter_available__ = None;
                 let mut sessions_cursor__ = None;
+                let mut context_files__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Location => {
@@ -1960,6 +1971,12 @@ impl<'de> serde::Deserialize<'de> for Bootstrap {
                             }
                             sessions_cursor__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::ContextFiles => {
+                            if context_files__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("contextFiles"));
+                            }
+                            context_files__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(Bootstrap {
@@ -1975,6 +1992,7 @@ impl<'de> serde::Deserialize<'de> for Bootstrap {
                     saved_rules: saved_rules__.unwrap_or_default(),
                     formatter_available: formatter_available__.unwrap_or_default(),
                     sessions_cursor: sessions_cursor__.unwrap_or_default(),
+                    context_files: context_files__.unwrap_or_default(),
                 })
             }
         }
@@ -4674,6 +4692,135 @@ impl<'de> serde::Deserialize<'de> for ConnectRelayResponse {
             }
         }
         deserializer.deserialize_struct("hya.v1.ConnectRelayResponse", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ContextFile {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.path.is_empty() {
+            len += 1;
+        }
+        if !self.scope.is_empty() {
+            len += 1;
+        }
+        if self.bytes != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.ContextFile", len)?;
+        if !self.path.is_empty() {
+            struct_ser.serialize_field("path", &self.path)?;
+        }
+        if !self.scope.is_empty() {
+            struct_ser.serialize_field("scope", &self.scope)?;
+        }
+        if self.bytes != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("bytes", ToString::to_string(&self.bytes).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ContextFile {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "path",
+            "scope",
+            "bytes",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Path,
+            Scope,
+            Bytes,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "path" => Ok(GeneratedField::Path),
+                            "scope" => Ok(GeneratedField::Scope),
+                            "bytes" => Ok(GeneratedField::Bytes),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ContextFile;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.ContextFile")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ContextFile, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut path__ = None;
+                let mut scope__ = None;
+                let mut bytes__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Path => {
+                            if path__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("path"));
+                            }
+                            path__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Scope => {
+                            if scope__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("scope"));
+                            }
+                            scope__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Bytes => {
+                            if bytes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bytes"));
+                            }
+                            bytes__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(ContextFile {
+                    path: path__.unwrap_or_default(),
+                    scope: scope__.unwrap_or_default(),
+                    bytes: bytes__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.ContextFile", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for CreateConnectTokenRequest {

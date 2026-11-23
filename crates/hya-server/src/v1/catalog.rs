@@ -739,7 +739,7 @@ pub(crate) fn skill_rows(place: &CatalogPlace) -> Vec<pb::SkillSummary> {
         .map(|row| pb::SkillSummary {
             name: row.name.clone(),
             description: row.description.clone(),
-            source: "builtin".to_owned(),
+            source: row.source.to_owned(),
             content: row.content.clone(),
             location: row.location.clone(),
         })

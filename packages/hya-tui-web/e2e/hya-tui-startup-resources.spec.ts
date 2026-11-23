@@ -12,7 +12,7 @@ const input = "Message, !shell, or @file · / commands"
 const widthFor = (columns: number) => Math.ceil(columns * 8.43 + 15)
 
 async function startupRows(term: Tui): Promise<string[]> {
-  return (await term.lines()).filter((line) => /^\s*\[(Skills|Slash commands|MCP|Bundles|Extensions|Config)\]/.test(line)).map((line) => line.trim())
+  return (await term.lines()).filter((line) => /^\s*\[(Context|Skills|Slash commands|MCP|Bundles|Extensions|Config)\]/.test(line)).map((line) => line.trim())
 }
 
 test.describe("startup list", () => {
@@ -46,6 +46,17 @@ test.describe("startup list", () => {
     for (const row of await startupRows(term)) expect(row.length).toBeLessThanOrEqual(78)
     await term.waitForText(/\[Bundles\] .*, \+\d+/)
     await term.attach(testInfo, "startup-resumed-80")
+  })
+
+  test("[Context] names the AGENTS.md a session in the directory reads", async ({ tui, backend }) => {
+    await writeFile(join(backend.dir, "AGENTS.md"), "# Rules\nBe brief.\n")
+    const term = await tui(hyaTui(backend), { viewport: { width: widthFor(120), height: 640 } })
+    await term.waitForText(input)
+    await term.waitForText(/\[Context\] \S*work\/AGENTS\.md/)
+    await term.type("/resources")
+    await term.press("Enter")
+    await term.waitForText(/^\s+project\s*$/m)
+    await term.waitForText(/work\/AGENTS\.md · 18 B/)
   })
 
   test("/resources lists every section grouped by source", async ({ tui, backend }) => {

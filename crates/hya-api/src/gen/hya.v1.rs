@@ -1582,7 +1582,9 @@ pub struct SkillSummary {
     /// One-line description of what the skill does.
     #[prost(string, tag = "2")]
     pub description: ::prost::alloc::string::String,
-    /// Where the skill was discovered (`builtin`, `bundle`, `project`, ...).
+    /// Where the skill was discovered: `builtin` (compiled in), `bundle` (a
+    /// runtime resource), `project` (under the directory or a Project root), or
+    /// `user` (any other file, such as `~/.codex/skills`).
     #[prost(string, tag = "3")]
     pub source: ::prost::alloc::string::String,
     /// Full skill markdown body (frontmatter + content).
@@ -10744,6 +10746,25 @@ pub struct Bootstrap {
     /// Cursor for the session list; fetch sessions with `Session.List`.
     #[prost(string, tag = "12")]
     pub sessions_cursor: ::prost::alloc::string::String,
+    /// `AGENTS.md` files a full-mode session in this directory reads into its
+    /// initial context, parent first (from the directory up to `$HOME`).
+    /// Empty without a directory scope and with `hya serve --pure`.
+    #[prost(message, repeated, tag = "13")]
+    pub context_files: ::prost::alloc::vec::Vec<ContextFile>,
+}
+/// One context file (`AGENTS.md`) of `Bootstrap.context_files`.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ContextFile {
+    /// Absolute path on the backend machine.
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+    /// `project` (in the directory itself), `parent` (an ancestor directory),
+    /// or `user` (`$HOME/AGENTS.md`).
+    #[prost(string, tag = "2")]
+    pub scope: ::prost::alloc::string::String,
+    /// File size in bytes.
+    #[prost(uint64, tag = "3")]
+    pub bytes: u64,
 }
 /// Generated client implementations.
 pub mod process_client {

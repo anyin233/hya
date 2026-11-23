@@ -9,6 +9,7 @@
  */
 import type { BundleSummary, CommandSummary, McpServerStatus, SkillSummary } from "../client"
 import type { ExtensionInfo } from "../extensions/manager"
+import { formatBytes } from "../composer/attachments"
 
 export const startupSectionIds = ["context", "skills", "commands", "mcp", "bundles", "extensions"] as const
 export type StartupSectionId = typeof startupSectionIds[number]
@@ -16,8 +17,10 @@ export type StartupSectionId = typeof startupSectionIds[number]
 /** A context file the backend loaded into the system prompt (`Bootstrap.contextFiles`). */
 export interface ContextFileSummary {
   path: string
+  /** `project`, `parent`, or `user`. */
   scope?: string
-  bytes?: number
+  /** A uint64: a decimal string in protojson. */
+  bytes?: string | number
 }
 
 export interface StartupInput {
@@ -93,7 +96,7 @@ function sections(input: StartupInput, env: Record<string, string | undefined>):
   return {
     context: input.contextFiles ? {
       title: titles.context,
-      items: input.contextFiles.map((file) => ({ name: home(file.path, env), group: file.scope || "context", detail: file.bytes ? `${file.bytes} B` : undefined })),
+      items: input.contextFiles.map((file) => ({ name: home(file.path, env), group: file.scope || "context", ...(Number(file.bytes) > 0 ? { detail: formatBytes(Number(file.bytes)) } : {}) })),
       problems: [],
     } : undefined,
     skills: input.skills ? {

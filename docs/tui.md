@@ -3882,7 +3882,7 @@ string encoded 64-bit values, and the error envelope documented in the
 
 | Method and route | Request | Response read by the TUI |
 | --- | --- | --- |
-| `GET /v1/bootstrap?directory=<dir>` | No body | `Bootstrap` (`location`, `agents`, `models`, `interactions`) |
+| `GET /v1/bootstrap?directory=<dir>` | No body | `Bootstrap` (`location`, `agents`, `models`, `interactions`; `skills`, `commands`, and `contextFiles` feed the [startup list](tui-config.md#startup-list)) |
 | `GET /v1/sessions` | No body | `ListSessionsResponse.sessions: SessionInfo[]` (every session of the directory, subagent sessions included; `parent` nests them in the sidebar and the `/sessions` picker, `busy` marks `· running`, `timeUpdated` feeds the picker's relative time). Re-read with each child-session round (see [Subagents](#subagents)). |
 | `POST /v1/sessions` | `{agent: string, model: string, workdir: string}` | `CreateSessionResponse.session: SessionInfo` |
 | `GET /v1/sessions/{id}` | No body | `SessionInfo` (including `permissionMode`, read by `/status`; `parent`, which makes the view read-only; `members: MemberInfo[]`, the subagent rows the task cards link to; `usage: TokenUsage`, the metadata state's token total, re-read after `tokensRecorded`). For a child session: `busy` and `agent` for its task card. |

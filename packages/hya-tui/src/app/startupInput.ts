@@ -7,7 +7,7 @@ export function startupInput(state: AppState): StartupInput {
   const catalog = extensionManager.catalogStatus()
   return {
     notices: state.startupNotices,
-    ...(state.ready ? { skills: state.skills, commands: state.backendCommands } : {}),
+    ...(state.ready ? { skills: state.skills, commands: state.backendCommands, ...(state.contextFiles ? { contextFiles: state.contextFiles } : {}) } : {}),
     ...(state.startupReady ? { mcp: state.mcpServers, bundles: state.bundles } : {}),
     ...(catalog.loaded ? { extensions: extensionManager.list() } : {}),
     ...(catalog.error ? { extensionsError: catalog.error } : {}),

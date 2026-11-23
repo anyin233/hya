@@ -575,7 +575,9 @@ message SkillSummary {
   string name = 1;
   // One-line description of what the skill does.
   string description = 2;
-  // Where the skill was discovered (`builtin`, `bundle`, `project`, ...).
+  // Where the skill was discovered: `builtin` (compiled in), `bundle` (a
+  // runtime resource), `project` (under the directory or a Project root), or
+  // `user` (any other file, such as `~/.codex/skills`).
   string source = 3;
   // Full skill markdown body (frontmatter + content).
   string content = 4;
