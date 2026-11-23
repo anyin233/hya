@@ -114,7 +114,7 @@ test("pasted paths become image chips, mentions, file chips, or text with a noti
     expect(result.insert).toBe(`[image #1 shot 1.png] @notes.md [file #2 notes.md] '${join(outside, "blob.bin")}' [image #3 fake.png] '${join(root, "missing.txt")}' '${outside}' `)
     expect(chips.get(1)?.image?.mime).toBe("image/png")
     expect(chips.get(2)?.text).toBe("outside\nfile\n")
-    expect(chips.get(3)?.error).toBe("not a PNG, JPEG, GIF, or WebP image")
+    expect(chips.get(3)?.error).toBe("not an image this TUI can read")
     expect(result.notices).toEqual([
       "blob.bin: not a text file; pasted its path",
       expect.stringContaining("missing.txt: not found on this machine; pasted as text"),

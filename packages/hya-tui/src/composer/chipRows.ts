@@ -34,7 +34,8 @@ export function chipRow(chip: Chip): ChipRow {
     return { tag, kind: "file", chip: chip.id, detail: `${chip.name} · ${lines(text)} line${lines(text) === 1 ? "" : "s"} · ${formatBytes(Buffer.byteLength(text))}` }
   }
   if (chip.error) return { tag, kind: "image", error: true, detail: `${chip.name} · ${chip.error}` }
-  return { tag, kind: "image", detail: `${chip.name}${chip.image ? ` · ${formatBytes(chip.image.size)}` : ""}` }
+  const pixels = chip.image?.width && chip.image.height ? ` · ${chip.image.width}×${chip.image.height}` : ""
+  return { tag, kind: "image", detail: `${chip.name}${pixels}${chip.image ? ` · ${formatBytes(chip.image.size)}` : ""}` }
 }
 
 /** Chip rows then pending `@path` image rows, capped at `max` rows. */

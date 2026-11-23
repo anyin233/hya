@@ -983,6 +983,8 @@ leave more keys available for editing and personal bindings.
   exit and archive. Ctrl+D on empty input: exit and leave the session running.
 - Enter submits; Ctrl+J, Shift+Enter and Alt+Enter insert newlines. Text editing
   and view-local picker/prompt controls remain available.
+- Ctrl+V: paste from the system clipboard, an image first (`/paste` does the
+  same); see [Paste and attachments](#paste-and-attachments).
 
 Ctrl+Home/End, Ctrl+R/B/P/O/G, F4, global Shift+Tab mode cycling and the editor/undo/redo/fork
 Ctrl+X chords are unassigned. Use `/refresh`, `/sidebar`, `/projects-sidebar`,
@@ -2428,6 +2430,32 @@ A paste that mixes paths and prose is text. Only the message input makes
 chips: the command input, the concealed entries, pickers, and the Provider
 View take the cleaned text.
 
+**Images.** A pasted image file may also be BMP, TIFF, HEIC/HEIF, or AVIF: with
+`image_resize = true` (`[composer.paste]`, the default) it is converted to
+PNG, and an image over 10 MiB is scaled down (JPEG) until it fits, with
+`Bun.Image`; its row shows the size in pixels, `[image #1] shot.png · 1292×780
+· 240 KB`. With `image_resize = false` such an image is a chip with an error.
+
+**The system clipboard.** Ctrl+V, `/paste`, or a bracketed paste with nothing in
+it (what macOS terminals send for an image) read the system clipboard through
+OpenTUI's host clipboard: an image becomes an image chip named
+`clipboard-<hash>.png`, text is handled like a paste. `/paste raw` inserts the
+clipboard text as is, without a chip. In a browser (the WebUI), Ctrl+V is the
+browser's own paste. The clipboard is never read over SSH, where it would be
+the SSH host's, nor without a display server; the notice row says what to do
+instead:
+
+| You run | Text | Clipboard image | A file from your machine |
+| --- | --- | --- | --- |
+| `hya` in a local terminal | Terminal paste | Ctrl+V | Drag or paste its path |
+| `hya` after `ssh` | Terminal paste | Not readable: `The clipboard here belongs to the SSH host …` | Its path does not exist there: `… is on your machine, not on the SSH host · upload it in the WebUI, or copy it over with scp` |
+| The WebUI (browser, e.g. over an SSH port forward) | Browser paste | Not yet (a later version uploads it) | Not yet |
+| `hya --connect` on your machine, remote backend | Terminal paste | Ctrl+V | Read here: images and text files become chips |
+
+The SSH check is `SSH_CONNECTION`, `SSH_TTY`, or `SSH_CLIENT` in the TUI's
+environment. Terminals that send clipboard images through the terminal
+connection (kitty's OSC 5522) are not supported yet.
+
 **Chips.** A chip is one token of plain text in the input, followed by a space.
 Backspace right after the token (after the space, the second Backspace) or
 Delete right before it removes the whole token. Deleting a token drops its
@@ -2497,7 +2525,9 @@ frame appended to the message).
 `addImage`, `present`, `tokenEndingAt`, `tokenStartingAt`, `expand`;
 `foldsPaste`, `sanitizePaste`, `foldAttachments`), `composer/paths.ts`
 (`pastedPaths`, `sniffImage`), `app/paste.ts` (`resolvePastedPaths`), and
-`composer/chipRows.ts` (`chipRows`). Commands: `/paste expand [n]`.
+`composer/chipRows.ts` (`chipRows`), `composer/images.ts` (`prepareImage`),
+`composer/hostClipboard.ts` (`readClipboard`, `inSshSession`). Commands:
+`/paste [raw]`, `/paste expand [n]`; key action `pasteClipboard` (Ctrl+V).
 
 #### Remote files
 

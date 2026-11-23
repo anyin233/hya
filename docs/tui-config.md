@@ -47,6 +47,7 @@ Sessions, Todos, and Context sidebars ([Layout](tui.md#layout)).
 | `composer.paste.collapse_lines` | `10` | `10` | `10` |
 | `composer.paste.collapse_chars` | `1000` | `1000` | `1000` |
 | `composer.paste.wrap` | `true` | `true` | `true` |
+| `composer.paste.image_resize` | `true` | `true` | `true` |
 | `sidebar.enabled` | `false` | `false` | `true` |
 
 Bundle TUI panels with `placement: "sidebar"` join the workspace tree; in the
@@ -124,7 +125,7 @@ configured.
 | `/set preset <name>` | Use another preset for this session; the file is not written. A preset switch drops earlier `/set <component>` changes. |
 | `/set <startup\|statusline\|sidebar> on\|off` | Turn a component on or off for this session. |
 | `/resources` | Append the full startup list (every section, grouped by source, `none` for an empty one) to the transcript. |
-| `/sidebar`, `/projects-sidebar`, Ctrl+P | In a preset without sidebars, `on` (or a toggle) is `/set sidebar on`; in the workspace they keep their usual meaning ([Layout](tui.md#layout)). |
+| `/sidebar`, `/projects-sidebar` | In a preset without sidebars, `on` (or a toggle) is `/set sidebar on`; in the workspace they keep their usual meaning ([Layout](tui.md#layout)). |
 
 None of these has a default shortcut, and all are slash commands, so they work
 in the WebUI and in specs (`press()`).
@@ -239,12 +240,13 @@ and returns when the width or `/sidebar off` hides it.
 | `composer.paste.collapse_lines` | integer ≥ 0 | `10` | A text paste of more lines becomes a paste chip ([Paste and attachments](tui.md#paste-and-attachments)); `0` never folds. |
 | `composer.paste.collapse_chars` | integer ≥ 1 | `1000` | Or of more characters. |
 | `composer.paste.wrap` | boolean | `true` | Send paste and file chips as `<attachment>` blocks; `false` sends their raw text. |
+| `composer.paste.image_resize` | boolean | `true` | Convert a pasted image the server refuses (BMP, TIFF, HEIC, AVIF) to PNG and scale one over 10 MiB down (`Bun.Image`); `false` refuses them. |
 | `sidebar.enabled` | boolean | `false` | `true` draws the tiled workspace (the saved `paneLayout`, or the default tree). |
 
 Keys of later versions (`todos.*`, `subagents.*`, `layout.*`,
 `transcript.*`, `sidebar.left`, `sidebar.right`, `sidebar.min_columns`,
-`composer.paste.image_resize`, `composer.attachments.*`) are recognized and
-ignored with "not supported in this version".
+`composer.attachments.*`) are recognized and ignored with "not supported in
+this version".
 
 ### Reserved tables
 

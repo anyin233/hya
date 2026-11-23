@@ -22,6 +22,9 @@ export interface ChipImage {
   /** Standard base64 of the bytes. */
   data: string
   size: number
+  /** Pixels, when `Bun.Image` could read them (composer/images.ts). */
+  width?: number
+  height?: number
 }
 
 export interface Chip {

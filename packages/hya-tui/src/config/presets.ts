@@ -20,6 +20,8 @@ export interface PasteSettings {
   collapse_chars: number
   /** Send pastes and files as `<attachment>` blocks (true) or as raw text. */
   wrap: boolean
+  /** Convert an image type the server refuses to PNG, and scale one over 10 MiB down (composer/images.ts). */
+  image_resize: boolean
 }
 
 /** Sections of the startup list (state/startup.ts), in their default order. */
@@ -58,7 +60,7 @@ export const availablePresets: readonly BuiltinPreset[] = ["minimal", "statuslin
 const base = (): TuiStructure => ({
   startup: { enabled: true, resources: "compact", sections: [...startupSections], quiet: false },
   statusline: { enabled: true, segments: [...defaultSegments], placement: "below" },
-  composer: { style: "box", border_info: [], paste: { collapse_lines: 10, collapse_chars: 1000, wrap: true } },
+  composer: { style: "box", border_info: [], paste: { collapse_lines: 10, collapse_chars: 1000, wrap: true, image_resize: true } },
   sidebar: { enabled: false },
 })
 
