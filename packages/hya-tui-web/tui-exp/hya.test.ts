@@ -22,7 +22,8 @@ async function stopBackend(child: ChildProcess): Promise<void> {
   } finally { clearTimeout(timer) }
 }
 
-async function withHya(name: string, body: (terminal: PtyTerminal) => Promise<void>, steps?: Step[]): Promise<void> {
+/** `preset`: written to the isolated `tui.toml` (ADR-0036), e.g. `workspace` for the sidebars. */
+async function withHya(name: string, body: (terminal: PtyTerminal) => Promise<void>, steps?: Step[], preset?: string): Promise<void> {
   const output = join(outputRoot, name)
   await mkdir(output, { recursive: true })
   const root = await mkdtemp(join(tmpdir(), "hya-tui-exp-"))
@@ -38,6 +39,10 @@ async function withHya(name: string, body: (terminal: PtyTerminal) => Promise<vo
     child = startedBackend.child
     const backend = startedBackend.backend
     timings.backendSetupMs = performance.now() - started
+    if (preset) {
+      await mkdir(join(dirname(backend.dir), "config/hya"), { recursive: true })
+      await writeFile(join(dirname(backend.dir), "config/hya/tui.toml"), `preset = ${JSON.stringify(preset)}\n`)
+    }
     const launch = performance.now()
     terminal = PtyTerminal.launch(hyaTui(backend), {
       cols: 180, rows: 40,
@@ -103,7 +108,7 @@ test("real TUI: mouse focus routes typing and paste to Sessions and preserves th
     await terminal.type(" continues")
     await terminal.waitForText("preserved draft continues")
     expect(terminal.text()).not.toContain("leaked")
-  })
+  }, undefined, "workspace")
 })
 
 test("real TUI: partial streamed reply becomes one final answer", async () => {
