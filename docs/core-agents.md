@@ -90,7 +90,10 @@ their id, kind, version, digest, exported ids, and
 `immutable: true, installable: false`. They do not enter the installed bundle
 catalog and cannot be upgraded or uninstalled through public bundle commands.
 
-The scout, task worker and reviewer stay within their assigned workspace and task inputs, including during read-only inspection. Their briefs exclude credentials, harness internals and unrelated system paths.
+The scout, task worker and reviewer stay within their assigned workspace
+and task inputs, including during read-only inspection. Their scope excludes
+harness internals, unrelated system paths, or credentials not provided for
+the task. A credential provided for the assignment is an in-scope input.
 
 The `task` tool describes how to launch one
 call containing independent `tasks[]`, with shared `context` and per-member
