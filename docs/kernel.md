@@ -347,7 +347,9 @@ A call ends in one of four ways:
   `[exit code: N]`, including `[exit code: 0]` on success. A command killed
   by a signal reports `128 + signal`. Bash removes the call's directory
   when the captured output fits the limit.
-  With a time budget, Bash waits for the process group. Without a budget,
+  With a time budget, Bash waits for the original process group. A job that
+  detaches with `setsid()` can keep its file descriptors open after the call
+  returns. Without a budget,
   a job the command started with `&` keeps running when its shell exits.
   Redirect its output to a file of its own to keep it when Bash removes
   the directory.

@@ -2685,6 +2685,38 @@ async fn bash_budget_share_child() {
     assert_bash_yield(&result, &mut left, &format!("{waited} ({reason})")).await;
 }
 
+#[test]
+fn budgeted_bash_finishes_while_a_detached_writer_is_alive() {
+    run_bash_child("kernel::bash_detached_writer_child", "detached-writer");
+}
+
+#[tokio::test]
+async fn bash_detached_writer_child() {
+    if std::env::var("HYA_BASH_TEST").as_deref() != Ok("detached-writer") {
+        return;
+    }
+    let dir = std::env::temp_dir();
+    let daemon = PidFile(dir.join("daemon.pid"));
+    deadline::install(Duration::from_secs(180));
+    let bash = kernel::tools::builtin()
+        .into_iter()
+        .find(|tool| tool.name() == "bash")
+        .unwrap();
+    let ctx = tool_ctx(&dir, &CancellationToken::new());
+    let result = tokio::time::timeout(Duration::from_secs(5), bash.execute(&ctx, json!({
+        "command": "python3 -c 'import os,time; os.setsid(); time.sleep(30)' & echo $! > daemon.pid",
+        "timeout": 10
+    }))).await.expect("detached writer delayed Bash").unwrap();
+    assert_eq!(result["exit_code"], 0, "{result}");
+    let pid = std::fs::read_to_string(&daemon.0)
+        .unwrap()
+        .trim()
+        .parse::<libc::pid_t>()
+        .unwrap();
+    // SAFETY: query the session of this test's background process.
+    assert_eq!(unsafe { libc::getsid(pid) }, pid);
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn bash_waits_for_worker_threads_and_fork_handoffs() {
