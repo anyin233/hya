@@ -170,6 +170,32 @@ async fn wait_for_process_exit(pid: i32) {
     .expect("Bash process-group member survived cleanup guard");
 }
 
+/// An exited Linux leader stays waitable while descendants are supervised.
+#[cfg(unix)]
+async fn wait_for_leader_exit(leader: i32) {
+    #[cfg(target_os = "linux")]
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let stat = std::fs::read_to_string(format!("/proc/{leader}/stat"))
+                .expect("leader must remain waitable while its descendant lives");
+            if stat
+                .rsplit_once(')')
+                .unwrap()
+                .1
+                .trim_start()
+                .starts_with("Z ")
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    #[cfg(not(target_os = "linux"))]
+    wait_for_process_exit(leader).await;
+}
+
 #[test]
 fn bash_schema_is_closed_and_hides_the_shell_alias() {
     // Given
@@ -1135,9 +1161,9 @@ async fn bash_pty_timeout_kills_descendant_after_shell_exits() {
     });
     let child_pid = wait_for_pid(&child_pid_path).await;
     let shell_pid = wait_for_pid(&shell_pid_path).await;
-    wait_for_process_exit(shell_pid).await;
+    wait_for_leader_exit(shell_pid).await;
 
-    // When: the command deadline expires after the direct shell was reaped.
+    // When: the command deadline expires after the direct shell exits.
     let result = match tokio::time::timeout(Duration::from_secs(8), &mut task).await {
         Ok(joined) => joined
             .expect("timed-out PTY Bash task panicked")
@@ -1154,6 +1180,7 @@ async fn bash_pty_timeout_kills_descendant_after_shell_exits() {
     assert_eq!(result["metadata"]["pty"], true);
     assert_eq!(result["metadata"]["timedOut"], true);
     assert_eq!(result["metadata"]["exit"], Value::Null);
+    assert!(!process_is_alive(shell_pid), "shell was not reaped");
     wait_for_process_exit(child_pid).await;
 }
 
@@ -1183,9 +1210,9 @@ async fn bash_pty_cancellation_kills_descendant_after_shell_exits() {
     });
     let child_pid = wait_for_pid(&child_pid_path).await;
     let shell_pid = wait_for_pid(&shell_pid_path).await;
-    wait_for_process_exit(shell_pid).await;
+    wait_for_leader_exit(shell_pid).await;
 
-    // When: cancellation arrives after the direct shell was reaped.
+    // When: cancellation arrives after the direct shell exits.
     cancel.cancel();
     let result = match tokio::time::timeout(Duration::from_secs(5), &mut task).await {
         Ok(joined) => joined
@@ -1200,6 +1227,7 @@ async fn bash_pty_cancellation_kills_descendant_after_shell_exits() {
 
     // Then: cancellation is typed and the retained process-group member is gone.
     assert!(matches!(result, ToolError::Cancelled));
+    assert!(!process_is_alive(shell_pid), "shell was not reaped");
     wait_for_process_exit(child_pid).await;
 }
 
@@ -1562,27 +1590,7 @@ async fn native_bash_shutdown_child() {
     let leader = wait_for_pid(&cleanup.shell_pid).await;
     let descendant = wait_for_pid(&cleanup.daemon_pid).await;
     if exits_first {
-        #[cfg(target_os = "linux")]
-        tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                let stat = std::fs::read_to_string(format!("/proc/{leader}/stat"))
-                    .expect("leader must remain waitable while its descendant lives");
-                if stat
-                    .rsplit_once(')')
-                    .unwrap()
-                    .1
-                    .trim_start()
-                    .starts_with("Z ")
-                {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        #[cfg(not(target_os = "linux"))]
-        wait_for_process_exit(leader).await;
+        wait_for_leader_exit(leader).await;
         assert!(futures::poll!(&mut call).is_pending());
     }
     let mut first = Box::pin(deadline::shutdown_background_jobs());
