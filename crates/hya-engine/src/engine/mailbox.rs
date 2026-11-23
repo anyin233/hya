@@ -2319,6 +2319,7 @@ mod tests {
                     org.root,
                     hya_tool::WaitSpec::parse(&serde_json::json!({"timeout_secs": 0}), true)
                         .unwrap(),
+                    None,
                 )
                 .await
                 .unwrap();

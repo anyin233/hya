@@ -457,7 +457,7 @@ mod tests {
         let sibling = root.join("51");
         fs::create_dir(&sibling)?;
         fs::write(sibling.join("stat"), stat(51))?;
-        fs::set_permissions(&sibling, fs::Permissions::from_mode(0))?;
+        fs::set_permissions(&sibling, fs::Permissions::from_mode(0o000))?;
         let result = group_zombies(&root, 10);
         fs::set_permissions(&sibling, fs::Permissions::from_mode(0o700))?;
         fs::remove_dir_all(root)?;
