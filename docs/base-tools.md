@@ -181,15 +181,18 @@ If no matches were seen, the text before that note is
 its result object when traversal stops at the budget. Both incomplete keys
 are absent when traversal completes.
 
-### Path boundary
+### Edit anchor diagnostics
 
 Copy `LINE#HASH` anchors for `edit` from a `read`, `grep`, or `edit` tool
 result. For example, if `pos: "12#"` lacks its hash, `edit` returns
 `[E_BAD_REF]` and leaves the file untouched. For a readable regular text file
 up to 50 KiB, the diagnostic includes current anchors within two lines of up
-to three requested positions. Out-of-range positions report the visible line
-count. Otherwise the diagnostic contains only syntax guidance. Use
+to three requested positions. The diagnostic identifies the malformed reference
+by its line number and combines overlapping windows so each row appears once.
+Out-of-range positions report the visible line count. Otherwise the diagnostic contains only syntax guidance. Use
 `replace_text` with exact `oldText` and `newText` when working from shell output.
+
+### Path boundary
 
 The file tools (`read`, `write`, `edit`, `ls`, `glob`, `find`, `grep`,
 `apply_patch`, and `lsp`) may touch anything inside the session's workspace

@@ -412,9 +412,8 @@ fn bounded_reference(reference: &str) -> String {
         core = &core[marker_len..];
         core = core.trim_start();
     }
-    let Some((line, hash_part)) = core.split_once('#') else {
-        return "<invalid reference>".to_string();
-    };
+    let anchor = core.split_once(':').map_or(core, |(anchor, _)| anchor);
+    let (line, hash_part) = anchor.split_once('#').unwrap_or((anchor, ""));
     let line = line.trim();
     if line.is_empty() || !line.chars().all(|character| character.is_ascii_digit()) {
         return "<invalid reference>".to_string();
@@ -442,9 +441,9 @@ pub(crate) fn missing_hash_line(reference: &str) -> Option<usize> {
     number.parse().ok().filter(|line| *line > 0)
 }
 
-fn missing_hash_diagnostic(cause: &str, width: usize) -> String {
+fn missing_hash_diagnostic(bounded: &str, cause: &str, width: usize) -> String {
     format!(
-        "Invalid line reference: {cause}. No edits were applied. Copy LINE#HASH (e.g. {}) from read/grep/edit tool output. Shell sed/grep output carries no hashes.",
+        "Invalid line reference \"{bounded}\": {cause}. No edits were applied. Copy LINE#HASH (e.g. {}) from read/grep/edit tool output. Shell sed/grep output carries no hashes.",
         example_anchor(width)
     )
 }
@@ -471,14 +470,14 @@ fn diagnose_anchor(reference: &str, width: usize) -> String {
         );
     }
     if core.chars().all(|character| character.is_ascii_digit()) {
-        return missing_hash_diagnostic("missing hash", width);
+        return missing_hash_diagnostic(&bounded, "missing hash", width);
     }
     if let Some(index) = core.find(':')
         && core[..index]
             .chars()
             .all(|character| character.is_ascii_digit())
     {
-        return missing_hash_diagnostic("wrong separator, missing hash", width);
+        return missing_hash_diagnostic(&bounded, "wrong separator, missing hash", width);
     }
     if let Some((line, after_hash)) = core.split_once('#') {
         let line = line.trim();
@@ -498,7 +497,7 @@ fn diagnose_anchor(reference: &str, width: usize) -> String {
                 return format!("[E_BAD_REF] Line number must be >= 1, got 0 in \"{bounded}\".");
             }
             if hash.is_empty() {
-                return missing_hash_diagnostic("missing hash after #", width);
+                return missing_hash_diagnostic(&bounded, "missing hash after #", width);
             }
             if hash.len() != width {
                 if valid_hash_characters(hash)
@@ -588,7 +587,7 @@ pub(super) fn parse_anchor(reference: &str, width: usize) -> Result<Anchor, supe
     if hash.is_empty() {
         return Err(super::HashlineError::new(
             "E_BAD_REF",
-            missing_hash_diagnostic("missing hash after #", width),
+            missing_hash_diagnostic(&bounded, "missing hash after #", width),
         ));
     }
     if hash.len() != width {

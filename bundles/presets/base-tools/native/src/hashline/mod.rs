@@ -135,21 +135,35 @@ impl HashlineError {
     pub(super) fn with_current_anchors(mut self, text: &str, requested: &[usize]) -> Self {
         let text = hash::normalize_line_endings(text.strip_prefix('\u{feff}').unwrap_or(text));
         let lines = hash::visible_line_slices(&text);
+        let mut requested = requested.to_vec();
+        requested.sort_unstable();
+        let (visible, outside) =
+            requested.split_at(requested.partition_point(|&line| line <= lines.len()));
+        let mut windows: Vec<(usize, usize)> = Vec::new();
+        for &line in visible {
+            let start = line.saturating_sub(2).max(1);
+            let end = (line + 2).min(lines.len());
+            if let Some((_, previous_end)) = windows.last_mut()
+                && start <= *previous_end
+            {
+                *previous_end = end;
+            } else {
+                windows.push((start, end));
+            }
+        }
         let mut regions = Vec::new();
-        for &line in requested {
-            if line > lines.len() {
-                regions.push(format!(
-                    "File has {} visible lines; line {line} is out of range.",
-                    lines.len()
-                ));
-            } else if let Ok(rows) = hash::format_hashline_region_with_width(
-                &lines,
-                line.saturating_sub(2).max(1),
-                (line + 2).min(lines.len()),
-                DEFAULT_HASH_LENGTH,
-            ) {
+        for (start, end) in windows {
+            if let Ok(rows) =
+                hash::format_hashline_region_with_width(&lines, start, end, DEFAULT_HASH_LENGTH)
+            {
                 regions.push(rows);
             }
+        }
+        for line in outside {
+            regions.push(format!(
+                "File has {} visible lines; line {line} is out of range.",
+                lines.len()
+            ));
         }
         if !self.message.contains("No edits were applied.") {
             self.message.push_str(" No edits were applied.");
