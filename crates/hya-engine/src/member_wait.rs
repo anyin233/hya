@@ -157,7 +157,7 @@ pub(crate) async fn wait_for_members(
             &targets,
         )
         .await?;
-        let inbox = scan_inbox(
+        let mut inbox = scan_inbox(
             supervisor,
             root,
             &projection,
@@ -197,7 +197,41 @@ pub(crate) async fn wait_for_members(
             None
         };
         if let Some(woke_by) = woke_by {
+            let mut outcome = WaitOutcome {
+                woke_by,
+                finished: standing.finished,
+                already_finished: standing.already,
+                running: standing.running,
+                mail: inbox.mail,
+                more_mail: false,
+                waited_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            };
+            if !outcome.direct_mail_all_shown() {
+                // Prefix fit includes the continuation notice. Each received
+                // preview fits by itself, so every page advances the cursor.
+                outcome.more_mail = true;
+                let all = std::mem::take(&mut outcome.mail);
+                let mut fits = 1;
+                let mut overflow = all.len();
+                while fits + 1 < overflow {
+                    let mid = fits + (overflow - fits) / 2;
+                    outcome.mail.clear();
+                    outcome.mail.extend_from_slice(&all[..mid]);
+                    if outcome.direct_mail_all_shown() {
+                        fits = mid;
+                    } else {
+                        overflow = mid;
+                    }
+                }
+                outcome.mail = all;
+                outcome.mail.truncate(fits);
+                inbox.through = inbox.mail_indices[fits];
+            }
             if inbox.through > cursor {
+                let consumed_incoming = projection.team.inboxes[&caller_path]
+                    [cursor..inbox.through]
+                    .iter()
+                    .any(|index| projection.team.mail[*index].from != caller_path);
                 engine
                     .emit_for_actor(
                         actor_claim,
@@ -209,19 +243,12 @@ pub(crate) async fn wait_for_members(
                         },
                     )
                     .await?;
-                engine.notify_mail_consumed(caller, mark, inbox.consumed_incoming);
+                engine.notify_mail_consumed(caller, mark, consumed_incoming);
             }
             for (member, last) in &standing.stalled {
                 supervisor.record_wait_stall(caller, *member, *last);
             }
-            return Ok(WaitOutcome {
-                woke_by,
-                finished: standing.finished,
-                already_finished: standing.already,
-                running: standing.running,
-                mail: inbox.mail,
-                waited_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-            });
+            return Ok(outcome);
         }
         let recheck = (tokio::time::Instant::now() + RECHECK).min(deadline);
         loop {
@@ -466,12 +493,12 @@ async fn last_answer(
 struct InboxScan {
     /// New mail to return (channel-aware wait only).
     mail: Vec<WaitMail>,
+    /// Position of each returned message in the caller's raw inbox.
+    mail_indices: Vec<usize>,
     /// Inbox index this outcome delivers through (commit when past the
     /// cursor): everything for the channel-aware wait; for the member-only
     /// wait just the leading run of own posts and finished targets' reports.
     through: usize,
-    /// Whether that raw cursor range contains incoming work.
-    consumed_incoming: bool,
 }
 
 /// Split the caller's unread inbox into new mail, the report mail of
@@ -492,6 +519,7 @@ fn scan_inbox(
         .get(caller_path)
         .map_or(&[][..], Vec::as_slice);
     let mut mail = Vec::new();
+    let mut mail_indices = Vec::new();
     let mut through = cursor.min(inbox.len());
     let mut contiguous = true;
     for (index, mail_index) in inbox.iter().enumerate().skip(cursor) {
@@ -520,6 +548,7 @@ fn scan_inbox(
         if pending_report {
             continue;
         }
+        mail_indices.push(index);
         mail.push(WaitMail {
             from: message.from.clone(),
             channel: match &message.to {
@@ -532,16 +561,10 @@ fn scan_inbox(
     if wake_on_mail {
         through = through.max(inbox.len());
     }
-    let consumed_incoming = inbox
-        .iter()
-        .take(through)
-        .skip(cursor)
-        .map(|index| &projection.team.mail[*index])
-        .any(|message| message.from != caller_path);
     InboxScan {
         mail,
+        mail_indices,
         through,
-        consumed_incoming,
     }
 }
 

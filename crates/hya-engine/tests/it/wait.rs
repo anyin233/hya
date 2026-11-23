@@ -14,7 +14,7 @@ use crate::support;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -47,6 +47,7 @@ struct GateProvider {
     root: Mutex<Option<SessionId>>,
     gate_members: AtomicBool,
     gates: Mutex<HashMap<SessionId, Arc<Notify>>>,
+    wait_calls: AtomicUsize,
     /// Every turn's final answer; empty leaves a member idle without a report.
     answer: Mutex<String>,
 }
@@ -57,6 +58,7 @@ impl Default for GateProvider {
             root: Mutex::default(),
             gate_members: AtomicBool::default(),
             gates: Mutex::default(),
+            wait_calls: AtomicUsize::new(0),
             answer: Mutex::new("done with the unit".to_string()),
         }
     }
@@ -113,10 +115,23 @@ impl Provider for GateProvider {
         }
         let answer = self.answer.lock().unwrap().clone();
         let mut steps = Vec::new();
-        if !answer.is_empty() {
-            steps.push(FakeStep::Text(answer));
+        if !is_root
+            && self
+                .wait_calls
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .is_ok()
+        {
+            steps.push(FakeStep::ToolCall {
+                name: "wait".into(),
+                input: json!({"timeout_secs": 0}),
+            });
+            steps.push(FakeStep::Finish(FinishReason::ToolCalls));
+        } else {
+            if !answer.is_empty() {
+                steps.push(FakeStep::Text(answer));
+            }
+            steps.push(FakeStep::Finish(FinishReason::Stop));
         }
-        steps.push(FakeStep::Finish(FinishReason::Stop));
         let events = FakeProvider::materialize(&steps, session, message);
         Ok(Box::pin(stream::iter(
             events.into_iter().map(Ok::<Event, ProviderError>),
@@ -1041,10 +1056,12 @@ async fn with_channels_harness_mail_wakes_a_member_wait() {
         })
     };
     tokio::time::sleep(Duration::from_millis(100)).await;
+    let notice = format!("LEADER FAILED: {}", "界".repeat(5000));
+    let expected = format!("{}…", notice.chars().take(600).collect::<String>());
     let envelope = team
         .engine
         .store()
-        .append_harness_mail(team.root, &handle, "LEADER FAILED: wrap up".to_string())
+        .append_harness_mail(team.root, &handle, notice)
         .await
         .unwrap();
     team.engine.bus().publish(envelope);
@@ -1055,7 +1072,162 @@ async fn with_channels_harness_mail_wakes_a_member_wait() {
         .unwrap();
     assert_eq!(outcome.woke_by, WaitWake::Mail, "{outcome:?}");
     assert_eq!(outcome.mail[0].from, hya_proto::HARNESS_HANDLE);
-    assert!(outcome.mail[0].preview.contains("LEADER FAILED"));
+    assert_eq!(outcome.mail[0].preview, expected);
+    assert!(provider_wait_output(&outcome.to_tool_result()).contains(&expected));
+}
+
+/// Encode the completed tool part exactly as a Responses provider request.
+fn provider_wait_output(result: &serde_json::Value) -> String {
+    let message = hya_proto::Message::Assistant {
+        id: MessageId::new(),
+        agent: "hya-scout".into(),
+        model: "fake".into(),
+        parts: vec![hya_proto::Part::Tool {
+            id: hya_proto::PartId::new(),
+            call_id: hya_proto::ToolCallId::new(),
+            name: "wait".into(),
+            state: hya_proto::ToolPartState::Completed {
+                input: json!({}),
+                output: result.clone(),
+                time_ms: 0,
+            },
+            provider_data: None,
+        }],
+        finish: None,
+        tokens: None,
+        last_round: None,
+        last_step_start: Some(0),
+    };
+    let items = hya_provider::encode_input_items(&[message], false).unwrap();
+    assert_eq!(items[1]["type"], "function_call_output");
+    let text = items[1]["output"].as_str().unwrap();
+    assert!(text.chars().count() <= 4_500);
+    text.to_owned()
+}
+
+#[tokio::test]
+async fn direct_mail_survives_twenty_finished_subagent_reports() {
+    let team = team().await;
+    let _lead = hold_lead_turn(&team);
+    let (parent, handle) = spawn(&team, team.root, true).await;
+    let mut targets = Vec::new();
+    let mut bus = team.engine.bus().subscribe();
+    for _ in 0..20 {
+        let (child, path) = spawn(&team, parent, true).await;
+        team.supervisor
+            .submit_report(team.root, &path, ReportOutcome::Done, "r".repeat(3000))
+            .await
+            .unwrap();
+        team.provider.release(child);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !team
+                .engine
+                .read_projection(team.root)
+                .await
+                .unwrap()
+                .team
+                .archived
+                .contains_key(&path)
+            {
+                bus.recv().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        targets.push(path);
+    }
+    let notice = "LEADER FAILED: wrap up and report your work.";
+    team.engine
+        .store()
+        .append_harness_mail(team.root, &handle, notice.into())
+        .await
+        .unwrap();
+    let outcome = wait(
+        &team,
+        parent,
+        json!({"targets":targets, "timeout_secs":0}),
+        true,
+    )
+    .await;
+    assert_eq!(outcome.already_finished.len(), 20);
+    assert!(!outcome.more_mail);
+    assert!(provider_wait_output(&outcome.to_tool_result()).contains(notice));
+    team.provider.release(parent);
+}
+
+#[tokio::test]
+async fn direct_mail_pages_survive_tool_result_steering_and_provider_encoding() {
+    let team = team().await;
+    let _lead = hold_lead_turn(&team);
+    let (member, handle) = spawn(&team, team.root, true).await;
+    let notices: Vec<_> = (0..10)
+        .map(|i| format!("notice {i} {}!", "界".repeat(590)))
+        .collect();
+    for notice in &notices {
+        // Own channel posts occupy raw inbox indices but aren't returned as mail.
+        team.engine
+            .mail_send(
+                member,
+                MailEndpoint::Handle("^parent".into()),
+                MailKind::Message,
+                "progress".into(),
+            )
+            .await
+            .unwrap();
+        let envelope = team
+            .engine
+            .store()
+            .append_harness_mail(team.root, &handle, notice.clone())
+            .await
+            .unwrap();
+        team.engine.bus().publish(envelope);
+    }
+    let mut bus = team.engine.bus().subscribe();
+    team.provider.wait_calls.store(3, Ordering::SeqCst);
+    team.provider.gate_members.store(false, Ordering::SeqCst);
+    team.provider.release(member);
+    let mut delivered = 0;
+    for page in 0..3 {
+        let result = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match bus.recv().await.unwrap().event {
+                    Event::ToolResult {
+                        session, output, ..
+                    } if session == member => break output,
+                    Event::ToolError {
+                        session,
+                        message_text,
+                        ..
+                    } if session == member => panic!("{message_text}"),
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .expect("wait tool result");
+        let text = provider_wait_output(&result);
+        let rows = result["metadata"]["mail"].as_array();
+        if page == 2 {
+            assert!(rows.is_none(), "{result}");
+            assert_eq!(delivered, notices.len());
+            break;
+        }
+        let count = rows.unwrap().len();
+        assert!(count > 0);
+        for (index, notice) in notices.iter().enumerate() {
+            assert_eq!(notice.chars().count(), 600);
+            assert_eq!(
+                text.contains(notice),
+                (delivered..delivered + count).contains(&index)
+            );
+        }
+        delivered += count;
+        assert_eq!(
+            result["metadata"].get("more_mail"),
+            (page == 0).then_some(&serde_json::Value::Bool(true))
+        );
+        assert_eq!(text.contains("call `wait` again"), page == 0);
+    }
 }
 
 #[tokio::test]

@@ -341,7 +341,11 @@ impl TurnToolGate<'_> {
                 // and wakes the member for a new episode instead.
                 // Deadline notices use the same result tail and commit.
                 if !report_latch.is_set() {
-                    if let Some(notice) = steer.drain(engine).await? {
+                    // A paginated wait has already delivered this page. Leave the
+                    // rest behind its cursor for the next wait.
+                    let more_mail = tc.name.as_str() == "wait"
+                        && output["metadata"]["more_mail"].as_bool() == Some(true);
+                    if !more_mail && let Some(notice) = steer.drain(engine).await? {
                         append_steer_notice(&mut output, &notice);
                     }
                     if let Some(deadline) = hya_tool::deadline::current() {
