@@ -425,6 +425,25 @@ const LEADS: &[&str] = &[
     "let me ",
     "i'll now",
     "i will now",
+    "i'll start by ",
+    "i will start by ",
+    "i'll begin by ",
+    "i will begin by ",
+    "i'll first ",
+    "i will first ",
+    "first, i'll ",
+    "first i'll ",
+    "first, i will ",
+    "first i will ",
+    "first, let me ",
+    "first let me ",
+    "next i will ",
+    "next, i'll ",
+    "next, i will ",
+    "let's start by ",
+    "let's begin by ",
+    "先让我",
+    "我先",
     "现在我来",
     "现在我",
     "现在来",
@@ -454,7 +473,7 @@ fn announces_next_step(text: &str) -> bool {
         return false;
     };
     clauses(sentence).any(|clause| {
-        let clause = clause.trim_start().to_lowercase();
+        let clause = clause.trim_start().to_lowercase().replace('\u{2019}', "'");
         LEADS.iter().any(|lead| clause.starts_with(lead))
             && !NOT_LEADS.iter().any(|not| clause.starts_with(not))
     })
@@ -499,9 +518,12 @@ fn last_sentence(paragraph: &str) -> Option<&str> {
 }
 
 fn clauses(sentence: &str) -> impl Iterator<Item = &str> {
-    sentence
-        .split("**")
-        .flat_map(|part| part.split(['，', ',', '；', ';', '…', '—']))
+    sentence.split("**").flat_map(|part| {
+        std::iter::once(part).chain(
+            part.match_indices(['，', ',', '；', ';', '…', '—'])
+                .map(|(at, delimiter)| &part[at + delimiter.len()..]),
+        )
+    })
 }
 
 /// Whether any message after the `since` notice calls a tool: the one signal
@@ -595,6 +617,26 @@ mod tests {
             "handle": handle, "session": SessionId::new(), "status": status,
         }))
         .expect("roster fixture")
+    }
+
+    #[test]
+    fn imminent_starts_announce_work_but_completed_steps_do_not() {
+        for text in [
+            "I'll start by examining the Turtle file.",
+            "I’ll start by reading config.yaml.",
+            "I will begin by running tests.",
+            "First, I'll check the logs.",
+            "我先查看配置文件。",
+        ] {
+            assert!(announces_next_step(text), "{text}");
+        }
+        for text in [
+            "I started by examining the Turtle file and wrote the output.",
+            "First, I checked the logs; all tests pass.",
+            "Let me know if you need anything else.",
+        ] {
+            assert!(!announces_next_step(text), "{text}");
+        }
     }
 
     #[test]
