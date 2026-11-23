@@ -443,7 +443,12 @@ const LEADS: &[&str] = &[
     "let's start by ",
     "let's begin by ",
     "先让我",
-    "我先",
+    "我先来",
+    "我先看",
+    "我先查",
+    "我先检查",
+    "我先读",
+    "我先运行",
     "现在我来",
     "现在我",
     "现在来",
@@ -622,7 +627,7 @@ mod tests {
     #[test]
     fn imminent_starts_announce_work_but_completed_steps_do_not() {
         for text in [
-            "I'll start by examining the Turtle file.",
+            "I'll start by examining the config file.",
             "I’ll start by reading config.yaml.",
             "I will begin by running tests.",
             "First, I'll check the logs.",
@@ -631,7 +636,9 @@ mod tests {
             assert!(announces_next_step(text), "{text}");
         }
         for text in [
-            "I started by examining the Turtle file and wrote the output.",
+            "我先后运行了单元测试和集成测试，全部通过。",
+            "我先前已验证输出。",
+            "I started by examining the config file and wrote the output.",
             "First, I checked the logs; all tests pass.",
             "Let me know if you need anything else.",
         ] {
