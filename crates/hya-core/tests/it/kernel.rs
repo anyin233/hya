@@ -646,7 +646,7 @@ async fn last_answer(fx: &Fixture) -> Option<String> {
 
 #[tokio::test]
 async fn a_turn_with_thinking_only_gets_a_notice_and_another_round() {
-    let fx = fixture(
+    let fx = replaying_fixture(
         "empty-turn",
         FakeProvider::scripted_turns(vec![
             call("todo", json!({"ops": []})),
@@ -710,7 +710,10 @@ async fn a_turn_with_thinking_only_gets_a_notice_and_another_round() {
         request.messages.iter().any(|message| matches!(message, Message::User { parts, .. }
             if matches!(parts.as_slice(), [Part::Text { text, .. }] if text.starts_with(EMPTY_TURN))))
     };
-    assert!(sent_notice(&requests[2]));
+    assert!(
+        matches!(requests[2].messages.last(), Some(Message::User { parts, .. })
+        if matches!(parts.as_slice(), [Part::Text { text, .. }] if text.ends_with("Where your previous thinking left off:\na long thought")))
+    );
     assert!(
         !sent_notice(&requests[3]),
         "the answered notice leaves the request"
@@ -718,7 +721,7 @@ async fn a_turn_with_thinking_only_gets_a_notice_and_another_round() {
     for request in &requests[2..] {
         assert!(assistant_parts(request).any(|part| matches!(
             part,
-            Part::Reasoning { text, .. } if text == "a long thought"
+            Part::Reasoning { text, provider_data: Some(data), .. } if text == "a long thought" && data == &summary_item()
         )));
     }
 }

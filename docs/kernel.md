@@ -737,7 +737,11 @@ completion check, and runs another round:
 `{n}` is the output-token count the round reported. When the round reported
 no usage, the sentence `It ended after {n} output tokens.` is left out.
 
-In either mode, the notice arrives as the trailing user message for one request. It includes the same bounded reasoning excerpt as a deadline cut. The rescued step retains its transcript text and loses its provider replay metadata before that request.
+Completed empty-turn reasoning stays in history with its provider replay data
+intact. Each route can replay it according to its usual policy. In both modes
+the next request also carries the notice as its trailing user message, with
+the same bounded head-and-tail excerpt as a deadline cut. This gives endpoints
+that ignore reasoning before a user message the context for the next step.
 
 At most two empty turns in a row get this message. A third empty turn in a
 row ends the run as any answer without a tool call does, and `hya exec

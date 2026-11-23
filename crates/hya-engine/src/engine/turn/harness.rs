@@ -791,8 +791,7 @@ impl Harness for TurnHarness<'_> {
             return Ok(false);
         }
         self.empty_turns += 1;
-        let events =
-            kernel::empty_turn_events(self.session, self.message, parts, self.output_tokens);
+        let events = kernel::empty_turn_events(self.session, parts, self.output_tokens);
         self.engine
             .emit_batch_for_actor(self.actor_claim, self.session, events)
             .await?;
