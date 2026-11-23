@@ -285,8 +285,7 @@ pub struct WaitMail {
     /// Channel id it arrived on, when channel-addressed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
-    /// The message body, bounded (600 chars); the full history stays readable
-    /// with `read channel://<id>`.
+    /// The received body (at most 600 chars). Channel-addressed mail also has readable history.
     pub preview: String,
 }
 
@@ -314,6 +313,10 @@ pub struct WaitOutcome {
 struct PreviewBody<'a> {
     /// The member whose report this is (`None` for mail).
     member: Option<&'a str>,
+    mail_index: Option<usize>,
+    unrecoverable: bool,
+    chars: usize,
+    shown: usize,
     heading: String,
     text: &'a str,
     /// `read channel://<id>` target holding the full text, if readable.
@@ -323,65 +326,56 @@ struct PreviewBody<'a> {
 impl WaitOutcome {
     /// Tool result JSON: `{title, output, metadata}`.
     ///
-    /// The output is limited to [`WAIT_OUTPUT_BUDGET_CHARS`] characters. It leads with a compact header
-    /// — why the wait woke, one line per target (handle, state, outcome),
-    /// the still-running handles, and the new-mail count — then bounded
-    /// previews of every report and mail body, sharing what is left of the
-    /// budget; a cut preview ends with where the full text is readable
-    /// (`read channel://<DM id>`) when the caller can read it. `metadata`
-    /// carries the structured outcome without the bodies (`report_chars` and
-    /// `report_truncated` instead of the text).
+    /// Show member status and bounded previews. Direct mail has first claim on the
+    /// preview budget because consuming it advances the inbox cursor. Metadata keeps
+    /// every target and any direct message that could not be shown in full.
     #[must_use]
     pub fn to_tool_result(&self) -> Value {
-        let bodies = self.preview_bodies();
-        let lengths: Vec<usize> = bodies
+        let mut bodies = self.preview_bodies();
+        let direct_mail_need = bodies
             .iter()
-            .map(|body| body.text.chars().count())
-            .collect();
-        // Reserve space for headings and truncation notices before dividing the preview budget.
-        let empty = vec![0; bodies.len()];
+            .filter(|b| b.unrecoverable)
+            .map(|b| b.chars)
+            .sum::<usize>()
+            .min(WAIT_OUTPUT_BUDGET_CHARS);
         let mut reminder = self
             .finished
             .iter()
             .chain(&self.already_finished)
             .any(|member| member.state == WaitMemberState::Reported);
-        let members = self.finished.len() + self.already_finished.len() + self.running.len();
-        let mut visible = members;
-        let mut bare = self
-            .render_output(&bodies, &empty, reminder, visible)
-            .chars()
-            .count();
-        if reminder && bare > WAIT_OUTPUT_BUDGET_CHARS {
-            reminder = false;
-            bare = self
-                .render_output(&bodies, &empty, reminder, visible)
+        let mut visible = self.finished.len() + self.already_finished.len() + self.running.len();
+        // With zero characters shown, the rendered size reserves headings and cut notices.
+        let bare = loop {
+            let bare = self
+                .render_output(&bodies, reminder, visible)
                 .chars()
                 .count();
-        }
-        let mut included = bodies.len();
-        while bare > WAIT_OUTPUT_BUDGET_CHARS && included > 0 {
-            included -= 1;
-            bare = self
-                .render_output(&bodies[..included], &empty[..included], reminder, visible)
-                .chars()
-                .count();
-        }
-        // When member names appear twice, keep their structured rows first.
-        while bare > WAIT_OUTPUT_BUDGET_CHARS && visible > 0 {
-            visible -= 1;
-            bare = self
-                .render_output(&[], &[], reminder, visible)
-                .chars()
-                .count();
-        }
-        let bodies = &bodies[..included];
-        let lengths = &lengths[..included];
-        let budget = WAIT_OUTPUT_BUDGET_CHARS
-            .saturating_sub(bare)
-            .min(lengths.iter().sum());
-        let shown = water_fill(lengths, budget);
-        let output = self.render_output(bodies, &shown, reminder, visible);
-        self.result(output, bodies, &shown)
+            if bare + direct_mail_need <= WAIT_OUTPUT_BUDGET_CHARS {
+                break bare;
+            }
+            if reminder {
+                reminder = false;
+            } else if let Some(index) = bodies.iter().rposition(|b| !b.unrecoverable) {
+                bodies.remove(index);
+            } else if visible > 0 {
+                visible -= 1;
+            } else if bare > WAIT_OUTPUT_BUDGET_CHARS {
+                bodies.pop();
+            } else {
+                break bare;
+            }
+        };
+        let budget = WAIT_OUTPUT_BUDGET_CHARS.saturating_sub(bare);
+        let remaining = water_fill(
+            bodies.iter_mut().filter(|b| b.unrecoverable).collect(),
+            budget,
+        );
+        water_fill(
+            bodies.iter_mut().filter(|b| !b.unrecoverable).collect(),
+            remaining,
+        );
+        let output = self.render_output(&bodies, reminder, visible);
+        self.result(output, &bodies)
     }
 
     fn preview_bodies(&self) -> Vec<PreviewBody<'_>> {
@@ -397,19 +391,27 @@ impl WaitOutcome {
                 };
                 bodies.push(PreviewBody {
                     member: Some(member.handle.as_str()),
+                    mail_index: None,
+                    unrecoverable: false,
+                    shown: 0,
+                    chars: report.chars().count(),
                     heading,
                     text: report.as_str(),
                     channel: member.channel.as_deref(),
                 });
             }
         }
-        for mail in &self.mail {
+        for (index, mail) in self.mail.iter().enumerate() {
             let channel = mail
                 .channel
                 .as_ref()
                 .map_or(String::new(), |id| format!(" @{id}"));
             bodies.push(PreviewBody {
                 member: None,
+                mail_index: Some(index),
+                unrecoverable: mail.channel.is_none(),
+                chars: mail.preview.chars().count(),
+                shown: 0,
                 heading: format!("Mail from {}{channel}:", mail.from),
                 text: mail.preview.as_str(),
                 channel: mail.channel.as_deref(),
@@ -418,13 +420,7 @@ impl WaitOutcome {
         bodies
     }
 
-    fn render_output(
-        &self,
-        bodies: &[PreviewBody<'_>],
-        shown: &[usize],
-        reminder: bool,
-        visible: usize,
-    ) -> String {
+    fn render_output(&self, bodies: &[PreviewBody<'_>], reminder: bool, visible: usize) -> String {
         let mut lines = Vec::new();
         let headline = match self.woke_by {
             WaitWake::Members => "Subagents finished.",
@@ -500,26 +496,29 @@ impl WaitOutcome {
                 self.mail.len()
             ));
         }
-        for (body, &limit) in bodies.iter().zip(shown) {
+        for body in bodies {
             lines.push(String::new());
             lines.push(body.heading.clone());
-            let total = body.text.chars().count();
-            if limit >= total {
+            if body.shown >= body.chars {
                 lines.push(body.text.to_string());
                 continue;
             }
-            let cut: String = body.text.chars().take(limit).collect();
-            let omitted = total - limit;
-            let pointer = body.channel.map_or(String::new(), |id| {
-                format!("; full text: read channel://{id}")
-            });
+            let cut: String = body.text.chars().take(body.shown).collect();
+            let omitted = body.chars - body.shown;
+            let pointer = if body.unrecoverable {
+                "; full text in metadata.mail".to_string()
+            } else {
+                body.channel.map_or(String::new(), |id| {
+                    format!("; full text: read channel://{id}")
+                })
+            };
             lines.push(format!("{cut}\n[… {omitted} more chars{pointer}]"));
         }
 
         lines.join("\n")
     }
 
-    fn result(&self, output: String, bodies: &[PreviewBody<'_>], shown: &[usize]) -> Value {
+    fn result(&self, output: String, bodies: &[PreviewBody<'_>]) -> Value {
         let member_meta = |member: &WaitMember| {
             let mut meta = json!({
                 "handle": member.handle,
@@ -536,9 +535,8 @@ impl WaitOutcome {
                 let chars = report.chars().count();
                 let shown = bodies
                     .iter()
-                    .zip(shown)
-                    .find(|(body, _)| body.member == Some(member.handle.as_str()))
-                    .map_or(0, |(_, shown)| *shown);
+                    .find(|body| body.member == Some(member.handle.as_str()))
+                    .map_or(0, |body| body.shown);
                 meta["report_chars"] = json!(chars);
                 meta["report_truncated"] = json!(shown < chars);
             }
@@ -559,16 +557,27 @@ impl WaitOutcome {
             );
         }
         if !self.mail.is_empty() {
+            let mut shown = vec![0; self.mail.len()];
+            for body in bodies {
+                if let Some(index) = body.mail_index {
+                    shown[index] = body.shown;
+                }
+            }
             metadata["mail"] = json!(
                 self.mail
                     .iter()
-                    .map(|mail| {
+                    .zip(shown)
+                    .map(|(mail, shown)| {
+                        let chars = mail.preview.chars().count();
                         let mut meta = json!({
                             "from": mail.from,
-                            "chars": mail.preview.chars().count(),
+                            "chars": chars,
                         });
                         if let Some(channel) = &mail.channel {
                             meta["channel"] = json!(channel);
+                        } else if shown < chars {
+                            meta["truncated"] = json!(true);
+                            meta["body"] = json!(mail.preview);
                         }
                         meta
                     })
@@ -589,19 +598,15 @@ impl WaitOutcome {
     }
 }
 
-/// Split `budget` characters across bodies of `lengths`: short bodies are
-/// shown whole, and what they leave is shared equally by the longer ones.
-fn water_fill(lengths: &[usize], budget: usize) -> Vec<usize> {
-    let mut shown = vec![0; lengths.len()];
-    let mut order: Vec<usize> = (0..lengths.len()).collect();
-    order.sort_by_key(|&index| lengths[index]);
-    let mut remaining = budget;
-    for (position, &index) in order.iter().enumerate() {
-        let share = remaining / (order.len() - position);
-        shown[index] = lengths[index].min(share);
-        remaining -= shown[index];
+/// Show short bodies whole, share the rest equally, and return the unused budget.
+fn water_fill(mut bodies: Vec<&mut PreviewBody<'_>>, mut budget: usize) -> usize {
+    bodies.sort_by_key(|body| body.chars);
+    let count = bodies.len();
+    for (index, body) in bodies.into_iter().enumerate() {
+        body.shown = body.chars.min(budget / (count - index));
+        budget -= body.shown;
     }
-    shown
+    budget
 }
 
 fn state_label(state: WaitMemberState) -> &'static str {
@@ -1192,7 +1197,7 @@ mod tests {
     }
 
     #[test]
-    fn twenty_nested_members_keep_their_metadata_through_host_spilling() {
+    fn crowded_nested_reports_preserve_direct_harness_mail_through_host_spilling() {
         let finished = (0..20).map(|i| {
             let prefix = crate::sanitize_handle_prefix(&format!("integration-platform-worker-{i:02}"));
             let handle = format!(
@@ -1203,12 +1208,17 @@ mod tests {
                 ..member(&handle, WaitMemberState::Reported, Some(&"x".repeat(3000)))
             }
         }).collect();
+        let notice = "LEADER FAILED: your parent ended before collecting the results. Keep the completed work and report it to the user.";
         let outcome = WaitOutcome {
             woke_by: WaitWake::Members,
             finished,
             already_finished: vec![],
             running: vec![],
-            mail: vec![],
+            mail: vec![WaitMail {
+                from: "harness".into(),
+                channel: None,
+                preview: notice.into(),
+            }],
             waited_ms: 0,
         };
         let result = crate::cap_tool_output_spilling(
@@ -1220,6 +1230,11 @@ mod tests {
         assert_eq!(result["title"], "wait: members");
         let output = result["output"].as_str().unwrap();
         assert!(output.starts_with("Subagents finished."));
+        assert!(output.contains(notice));
+        assert_eq!(
+            result["metadata"]["mail"],
+            json!([{"from": "harness", "chars": notice.chars().count()}])
+        );
         assert!(output.chars().count() <= WAIT_OUTPUT_BUDGET_CHARS);
         assert!(result["metadata"].to_string().chars().count() > crate::MAX_TOOL_OUTPUT_CHARS);
         let rows = result["metadata"]["finished"].as_array().unwrap();
@@ -1228,6 +1243,47 @@ mod tests {
             assert_eq!(row["handle"], member.handle);
             assert_eq!(row["report_chars"], 3000);
             assert_eq!(row["report_truncated"], true);
+        }
+    }
+
+    #[test]
+    fn crowded_direct_mail_keeps_every_truncated_body_through_host_spilling() {
+        for count in [10, 100] {
+            let outcome = WaitOutcome {
+                woke_by: WaitWake::Mail,
+                finished: vec![],
+                already_finished: vec![],
+                running: vec![],
+                mail: (0..count)
+                    .map(|i| WaitMail {
+                        from: format!("sender-{i:03}"),
+                        channel: None,
+                        preview: format!("{i:03}{}!", "界".repeat(596)),
+                    })
+                    .collect(),
+                waited_ms: 0,
+            };
+            let result = crate::cap_tool_output_spilling(
+                outcome.to_tool_result(),
+                crate::ToolResultPolicy::SelfBudgeted,
+                &crate::handle::ArtifactStore::new(std::env::temp_dir()),
+                "wait",
+            );
+            let output = result["output"].as_str().unwrap();
+            assert!(output.chars().count() <= WAIT_OUTPUT_BUDGET_CHARS);
+            assert!(output.contains("; full text in metadata.mail"));
+            if count == 100 {
+                assert!(!output.contains("Mail from sender-099:"));
+            }
+            let mail = result["metadata"]["mail"].as_array().unwrap();
+            assert_eq!(mail.len(), outcome.mail.len());
+            for (entry, original) in mail.iter().zip(&outcome.mail) {
+                assert!(!output.contains(&original.preview));
+                assert_eq!(
+                    entry,
+                    &json!({"from":original.from, "chars":600, "truncated":true, "body":original.preview})
+                );
+            }
         }
     }
 

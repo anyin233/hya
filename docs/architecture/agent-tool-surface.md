@@ -431,15 +431,21 @@ Found two issues …
 
 The header has the reason it woke, one line per finished/already-finished
 target (handle, state, outcome), idle targets, the still-running handles, and
-the new-mail count. Every report (or archive note) and mail body then gets a
-preview. Short bodies are shown whole, and the budget left over is shared
-equally by the longer ones. A cut preview ends with the omitted size and,
-when the caller can read the full text, `read channel://<DM id>`. That is the
-parent's DM with the member, where the report mail lives, or the channel the
-mail came on. No pointer is printed when there is no such channel (for
-example, a grandchild's report mailed to its own parent).
+the new-mail count. Direct mail without a channel, including a `LEADER FAILED`
+notice from the harness, gets preview space first because the inbox cursor has
+advanced. Reports, archive notes, and channel-backed mail share the remaining
+space. Within each group short bodies are shown whole and longer ones share the
+rest equally. Reports appear before mail in the output.
 
-`metadata` carries the structure without the bodies:
+A shortened preview gives the omitted character count. For channel-backed mail
+and reports with a readable parent DM, it also gives `read channel://<id>`.
+A shortened direct message points to `metadata.mail`. If crowding shortens or
+entirely omits a direct message, its metadata entry includes `"truncated": true`
+and `body` with the exact received text. A direct message shown in full needs
+only `from` and `chars`. Channel-backed entries retain `from`, `channel`, and
+`chars`.
+
+Example metadata for a wait with channel-backed mail:
 
 ```json
 {"woke_by": "members", "waited_ms": 5210,
