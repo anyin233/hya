@@ -426,23 +426,34 @@ impl SessionEngine {
             .roster
             .get(&handle)
             .map_or(0, |entry| entry.resident_cursor);
-        let unread_self = projection
-            .team
-            .unread_incoming_mail(&handle, cursor)
-            .count();
+        let team = &projection.team;
+        let unread_indices: std::collections::HashSet<_> = team
+            .inboxes
+            .get(&handle)
+            .into_iter()
+            .flatten()
+            .skip(usize::try_from(cursor).unwrap_or(usize::MAX))
+            .copied()
+            .filter(|&index| team.mail[index].from != handle)
+            .collect();
         let mut rows = Vec::new();
         for (id, channel) in &projection.team.channels {
             let member = channel.members.contains(&handle);
             if !member {
                 continue;
             }
+            let unread = channel
+                .log
+                .iter()
+                .filter(|index| unread_indices.contains(*index))
+                .count();
             match channel.kind {
                 hya_proto::ChannelKind::Group => rows.push(hya_tool::ChannelRow {
                     id: id.clone(),
                     kind: hya_proto::ChannelKind::Group,
                     can_speak: channel.unit.as_deref() == Some(handle.as_str()),
                     peer: None,
-                    unread: unread_self,
+                    unread,
                 }),
                 hya_proto::ChannelKind::Dm => {
                     // Peer identity from membership; hide archived peers.
@@ -460,7 +471,7 @@ impl SessionEngine {
                             kind: hya_proto::ChannelKind::Dm,
                             can_speak: true,
                             peer,
-                            unread: unread_self,
+                            unread,
                         });
                     }
                 }
