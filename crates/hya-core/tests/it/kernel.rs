@@ -2294,7 +2294,9 @@ async fn large_image_result_stays_below_rewrite_pressure() {
             text("done"),
             text("checked"),
         ])
-        .with_max_context(8_000)
+        // The image and request overhead total about 6,400 tokens, between
+        // the 5,400-token checkpoint and the 7,200-token rewrite threshold.
+        .with_max_context(9_000)
         .with_tool_images(),
     )
     .await;
