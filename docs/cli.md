@@ -942,7 +942,10 @@ the session was last told the time.
 In either mode, the lead agent’s Final notice includes this instruction to
 preserve a checked deliverable as the time limit approaches.
 
-> If a delivered file already passes your checks, do not edit it in place — test any change on a copy first and replace the file only if the copy still passes. If a delivered file is unverified or failing, fix it directly and verify it now.
+> If a delivered file already passes your checks, do not edit it in place — test
+> any change on a copy first and replace the file only if the copy still passes.
+> If a delivered file is unverified, verify it now and fix it directly only if
+> it fails.
 
 Both modes use the same thresholds, measured in remaining time. WrapUp is
 `min(clamp(35% B, 300s, 3600s), 50% B)`, Final is

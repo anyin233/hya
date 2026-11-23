@@ -426,7 +426,11 @@ impl RunDeadline {
             (Stage::Final | Stage::Over, false) => format!(
                 "HEADLESS RUN — FINAL {left}s: {elapsed}s of {budget}s used. Write any missing \
                  deliverable now from the work you have, commit if the request asks for a \
-                 commit, then end your turn. If a delivered file already passes your checks, do not edit it in place — test any change on a copy first and replace the file only if the copy still passes. If a delivered file is unverified or failing, fix it directly and verify it now. Start only commands that finish well \
+                 commit, then end your turn. If a delivered file already passes your checks, \
+                 do not edit it in place — test any change on a copy first and replace the \
+                 file only if the copy still passes. If a delivered file is unverified, verify \
+                 it now and fix it directly only if it fails. Start only commands that finish \
+                 well \
                  within the time left."
             ),
             (Stage::Normal | Stage::WrapUp, true) => format!(
@@ -550,7 +554,10 @@ mod tests {
             deadline.notice(Stage::Final, false),
             "HEADLESS RUN — FINAL 40s: 0s of 40s used. Write any missing deliverable now from \
              the work you have, commit if the request asks for a commit, then end your turn. \
-             If a delivered file already passes your checks, do not edit it in place — test any change on a copy first and replace the file only if the copy still passes. If a delivered file is unverified or failing, fix it directly and verify it now. Start only commands that finish well within the time left."
+             If a delivered file already passes your checks, do not edit it in place — test \
+             any change on a copy first and replace the file only if the copy still passes. If \
+             a delivered file is unverified, verify it now and fix it directly only if it \
+             fails. Start only commands that finish well within the time left."
         );
         assert_eq!(
             deadline.notice(Stage::Final, true),

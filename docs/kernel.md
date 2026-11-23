@@ -84,7 +84,10 @@ Tool results keep their original payloads.
 The lead agent’s Final notice includes this instruction to preserve a checked
 deliverable as the time limit approaches.
 
-> If a delivered file already passes your checks, do not edit it in place — test any change on a copy first and replace the file only if the copy still passes. If a delivered file is unverified or failing, fix it directly and verify it now.
+> If a delivered file already passes your checks, do not edit it in place — test
+> any change on a copy first and replace the file only if the copy still passes.
+> If a delivered file is unverified, verify it now and fix it directly only if
+> it fails.
 
 ### Dropped-reasoning notice
 
@@ -198,8 +201,8 @@ With `--time-budget`, deadline notices otherwise reach the model only between
 rounds (bare mode) or on a tool result (full mode). A model step that streams
 nothing but reasoning has no such point: it could think past WrapUp and Final
 until the process is killed, without ever reading a notice. The kernel
-therefore stops a model stream at the run's next deadline stage while that
-stream has shown only reasoning, and continues the turn with a notice.
+interrupts a reasoning-only stream when its per-step wall-clock cap or the
+next stage checkpoint comes due, then continues the turn with a notice.
 
 The guard applies in bare and full mode alike whenever the run has a deadline
 (`hya_tool::deadline::current()`); there is nothing to configure. A round
@@ -243,15 +246,21 @@ request until that message records its next part:
 > call, so that step was stopped. Do not restart the deliberation: act on what
 > you have worked out, with the next tool call or your final answer.
 
-followed by the stage's own `HEADLESS RUN — TIME` or `FINAL` notice (the
-`report` text for an agent that delivers by `report`, as on a tool result),
-and, when the step had reasoned, its first 1,200 and last 2,000 characters (all text through 3,200) under "Where your
-thinking stopped", so a route that drops replayed reasoning still shows where
-the model was. The stage counts as told (`RunDeadline::mark_notified`), so
-the next round gets no second notice of that stage, nor a clock line in the
-same budget tenth, while the next stage is still announced as usual. Like the
-dropped-reasoning notice, it is sent as a user message, in the next request
-only, and an end continuation after a partless round replaces it.
+A stage cut includes the stage’s `HEADLESS RUN — TIME` or `FINAL` notice,
+with the `report` wording for a subagent. The stage counts as told, so the
+next round can still announce the next stage when it comes due.
+
+A per-step cap reached before a new stage sends the current clock with this
+notice:
+
+> [hya] Reasoning interrupted at budget checkpoint: your thinking-only step
+> reached its wall-clock cap and was stopped to keep the run moving. Act on
+> what you worked out with a concrete tool call now.
+
+Both cuts include the reasoning under “Where your thinking stopped”: all of
+it through 3,200 characters, otherwise the first 1,200 and last 2,000.
+The next request carries the notice as a user message. An end continuation
+after a partless round replaces the notice.
 
 The stopped step's reasoning stays in the transcript, but a reasoning block
 of that step that had already closed loses its replay data (a second
