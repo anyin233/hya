@@ -506,6 +506,7 @@ When changing a boundary, update the nearest docs page:
 | Goal/loop intelligence | [Goal and Loop Authoring](goal-loop-authoring.md) |
 | Agent process E2E / matrix | [Testing](testing/README.md), [Agent matrix](testing/agent-matrix.md) |
 | OpenTUI frontend | [OpenTUI frontend](tui.md) |
+| TUI structure presets, `tui.toml`, the status line | [TUI structure](tui-config.md) |
 | Browser-rendered TUI, WebUI host, TUI browser tests | [Browser-rendered TUI](tui-web.md) |
 | Documentation website, local serving, and Pages CI | [Documentation Website](docs-site.md) |
 | Standalone TUI extension SDK | [TUI Extension SDK](tui-extension-sdk.md) |

@@ -1007,6 +1007,30 @@ status is `No pending request in another session`. No wire contract changes.
 
 ## Layout
 
+The structure comes from `tui.toml` ([TUI structure](tui-config.md),
+ADR-0036). The default, `statusline`, is one column: the transcript, the
+running-turn line, the pending and prompt docks, the message input, and one
+status row below the input with the model, the permission mode, and the
+context occupancy:
+
+```text
+ ┃ your prompt
+ Assistant response
+
+ ◌ Working · Running bash
+┌──────────────────────────────────────────────┐
+│ Message                                      │
+└──────────────────────────────────────────────┘
+ gpt-6.1 · high · manual · hya · ⎇ main · ctx ━━─── 42%
+```
+
+`minimal` drops the status row and writes the model and mode on the input
+border. `workspace` is the tiled workspace below, with the sidebars, the
+layout tree, and the layout editor; write `preset = "workspace"` in
+`tui.toml`, or run `/set preset workspace` for one session. The rest of this
+section describes the workspace; the rules on boxes, prompts, pending
+requests, keys, and focus apply to every preset.
+
 Enclosing boxes identify selectable UI. Pending summaries, notifications,
 warning docks, transcript tool/task blocks, and passive extension containers are
 borderless. Headings, severity colors and text remain visible; a left gutter or
@@ -1031,6 +1055,11 @@ opens another session's request. For example:
 ```
 
 ### Conversation without headings
+
+ADR-0036 limits this rule to the `workspace` preset, whose Context pane shows
+the session facts: the other presets add the status row below the input (and
+the workspace adds it back while Context is hidden). No preset draws a session
+header, metadata bar, or footer instructions above the messages.
 
 Conversation starts directly with the transcript (or the explicitly selected
 models, Workflows, API, or help view). It has no session/model/server header,
@@ -1134,9 +1163,12 @@ same rule. `PaneFrame` reads `PaneDefinition.selectable` rather than accepting
 an independent border setting, so shared frames cannot draw passive borders. This separates message editing from viewing and provides the
 foundation for additional built-in panes and a future pane plugin interface.
 
-The default arrangement is Projects on the left; a conversation viewer,
-agent activity line, and message editor in the middle; and Sessions, Todos,
-and Context on the right. The viewer is passive and the editor is selectable.
+The workspace preset's arrangement (the default tree, until you edit it) is
+Projects on the left; a conversation viewer, agent activity line, and message
+editor in the middle; and Sessions, Todos, and Context on the right. The other
+presets draw the same middle column alone (`pane-6` conversation, `pane-7`
+activity, `pane-1` editor), never save it, and refuse `/layout` editing
+commands; `/layout show` and `/layout focus` still work. The viewer is passive and the editor is selectable.
 They read the same session projection. No additional stream or durable state
 model is created. The editor also holds the existing permission/question dock
 and pending-request controls.
@@ -1712,8 +1744,12 @@ interface TuiPreferences {
   extensionEnabled?: Record<string, boolean> // bundle TUI extensions by bundle id (/extensions enable|disable)
   extensionSandbox?: "required" | "best-effort" | "disabled" // OS sandbox of the extension host (/extensions sandbox)
   extensionTrusted?: Record<string, boolean> // bundle TUI extensions on the JIT tier (/extensions trust|untrust, /bundles t)
+  seenNotices?: string[]  // one-time notices already shown, e.g. "statusline-default" (tui-config.md)
 }
 ```
+
+The structure — the preset, the status line, the sidebars — is not here but
+in `tui.toml` ([TUI structure](tui-config.md)); the two files share no keys.
 
 - The file is read at start, before the first frame; `/layout reload` can
   explicitly reread only its layout using stricter failure handling. A missing file
@@ -1770,10 +1806,11 @@ While a streaming assistant message has no blocks yet, its header's `●`
 marker is the spinner too, so a slow first token still shows the turn is
 alive before the working line's own elapsed clock is very interesting.
 
-**Metadata.** The former metadata state and session header are not rendered in
-Conversation. Model, permission mode, directory, connection, and token/context
-information belong to explicit information views or user-selected monitoring
-panes. The existing Context pane can show usage when the backend reports it.
+**Metadata.** No session header is rendered above Conversation. The status
+row below the input ([Status line](tui-config.md#status-line)) shows the
+model, permission mode, directory, branch, connection, and token/context
+information; in the workspace preset the Context pane shows them while it is
+visible. `/status` keeps the full list.
 
 - **`ctx N%`** is the prompt the latest provider round sent against the
   context window of the model that served it (the rule in the protocol

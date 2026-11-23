@@ -3,6 +3,8 @@
  * `$HYA_TUI_CONFIG`, else `$XDG_CONFIG_HOME/hya/tui.json`, else
  * `~/.config/hya/tui.json`. The TUI reads it at start and `/layout reload`, and writes it
  * when a preference changes (`/theme`, `/vim`, `/permissions`, `/keybind`).
+ * It holds state that commands write; the structure the user writes lives in
+ * `tui.toml` (config/tuiConfig.ts, ADR-0036), and the two share no keys.
  *
  * - Missing file: no preferences, no warning.
  * - Unreadable or corrupt file (not a JSON object): no preferences, and a
@@ -41,6 +43,8 @@ export interface TuiPreferences {
   extensionSandbox?: SandboxPolicy
   /** Bundle TUI extensions by bundle id (`/extensions trust|untrust`): `true` runs one on the JIT tier, `false` keeps it in the VM; unset: first-party bundles of a local backend run on the JIT tier. */
   extensionTrusted?: Record<string, boolean>
+  /** One-time notices already shown (app/structure.ts), e.g. `statusline-default`. */
+  seenNotices?: string[]
 }
 
 type Validators = { [Key in keyof Required<TuiPreferences>]: (value: unknown) => value is TuiPreferences[Key] }
@@ -57,6 +61,7 @@ const validators: Validators = {
   extensionEnabled: (value): value is Record<string, boolean> => typeof value === "object" && value !== null && !Array.isArray(value) && Object.values(value).every((enabled) => typeof enabled === "boolean"),
   extensionSandbox: (value): value is SandboxPolicy => sandboxPolicies.includes(value as SandboxPolicy),
   extensionTrusted: (value): value is Record<string, boolean> => typeof value === "object" && value !== null && !Array.isArray(value) && Object.values(value).every((trusted) => typeof trusted === "boolean"),
+  seenNotices: (value): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string"),
 }
 
 /** The environment variable that points the TUI at another preferences file (tests, several profiles). */

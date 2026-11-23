@@ -17,6 +17,7 @@ import { initialVimState, vimKey, type VimResult } from "../composer/vim"
 import { composerKeyBindings, resolveBinding } from "../keys/bindings"
 import { isKeyDisabled, resolveCommandBinding } from "../keys/custom"
 import { layoutBreakpoints, projectsSidebarVisible, sidebarTooNarrowNotice } from "../state/layout"
+import { borderInfoText } from "../state/statusline"
 import { paneLeaves } from "../state/panes"
 import { subagentsWorking } from "../state/subagents"
 import { focusedPane, keyboardOwner } from "../state/focus"
@@ -80,6 +81,11 @@ interface FileMenu {
  */
 function BaseComposer(props: { width: number; decorationRows?: () => number }) {
   const { store, controller, ui } = useApp()
+  /** `composer.border_info` (ADR-0036; the minimal preset's model and mode) on the input's top border. */
+  const borderInfo = () => {
+    const segments = store.state.structure.composer.border_info
+    return segments.length ? borderInfoText(store.state, segments, Math.max(0, Math.floor(props.width) - 4)) || undefined : undefined
+  }
   const composerFocused = () => keyboardOwner(store.state, ui.command?.active() ?? false)
     === paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "composer")?.id
   let editor: TextareaRenderable | undefined
@@ -322,6 +328,10 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
     if (store.state.projectsFocus) {
       store.setProjectsFocus(false)
       store.setStatus("Projects sidebar unfocused · Alt+Arrow focuses panes")
+    } else if (!store.state.structure.sidebar.enabled) {
+      // A single-column preset: show the workspace for this session, then focus Projects.
+      controller.focusProjects()
+      store.setStatus("Projects sidebar shown, focused · /set sidebar off returns to the single column")
     } else {
       const projects = paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "projects")
       if (!projects) {
@@ -593,7 +603,9 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
         return
       case "toggleSidebar":
         consume()
-        if (store.state.columns < layoutBreakpoints.sidebar) store.setStatus(sidebarTooNarrowNotice)
+        // A single-column preset turns the sidebar component on first (`/sidebar on`, ADR-0036).
+        if (!store.state.structure.sidebar.enabled) void controller.submit("/sidebar on", "command")
+        else if (store.state.columns < layoutBreakpoints.sidebar) store.setStatus(sidebarTooNarrowNotice)
         else store.toggleSidebar()
         return
       case "toggleProjectsCapture":
@@ -751,7 +763,8 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
         flexShrink={0}
         border
         borderColor={composerFocused() ? colors.focus : colors.border}
-        titleColor={colors.heading} title={shell() ? "! shell" : undefined}
+        titleColor={shell() ? colors.heading : colors.muted} title={shell() ? "! shell" : borderInfo()}
+        titleAlignment={shell() ? "left" : "right"}
         backgroundColor={colors.panel}
         paddingX={1}
         visible={!store.state.secretEntry}

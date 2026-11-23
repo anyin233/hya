@@ -11,6 +11,9 @@ import { join } from "node:path"
 import type { Tui } from "./harness"
 import { expect, hangStep, hyaTui, wideViewport, test, textStep, toolStep } from "./hya"
 
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
+
 const warning = "#e5c07b"
 
 async function prompt(term: Tui, text: string): Promise<void> {

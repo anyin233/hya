@@ -6,6 +6,9 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { expect, hyaTui, test } from "./hya"
 
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
+
 const repo = fileURLToPath(new URL("../../..", import.meta.url))
 
 test("disk inspector package exposes discovery and an opt-in pane", async ({ tui, backend }, testInfo) => {

@@ -1,5 +1,8 @@
 import { expect, hyaTui, test, wideViewport } from "./hya"
 
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
+
 test.describe("hya TUI in the browser", () => {
   test("connects to the backend and lays out the main column and the sidebar", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: wideViewport })

@@ -1,6 +1,9 @@
 import type { Tui } from "./harness"
 import { expect, hyaTui, test } from "./hya"
 
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
+
 /** Count highlighted rectangles via their border corner, not text or pixels. */
 async function focusBoxes(term: Tui): Promise<{ row: number; col: number }[]> {
   return term.inspect((terminal, state) => {

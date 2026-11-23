@@ -49,6 +49,7 @@ import type { AgentsViewState } from "./agentsView"
 import type { DiffViewState } from "./diff"
 import { toggledProjectsSidebar, toggledSidebar, type SidebarMode } from "./layout"
 import { paneNodes, paneLeaves, defaultPaneLayout, normalizePaneFocus, type PaneLayout } from "./panes"
+import { builtinPreset, type TuiStructure } from "../config/presets"
 import { foldMember, foldMemberLifecycle, type ChildState } from "./members"
 import type { McpViewState } from "./mcp"
 import { mergeTranscript, TranscriptOverlay, type OverlayEffect } from "./overlay"
@@ -107,6 +108,15 @@ export interface AppState {
   readonly subagentSelection: string | undefined
   /** Local editable workspace inside the central panel; one passive conversation viewer and one selectable message editor. */
   readonly paneLayout: PaneLayout
+  /**
+   * The component structure in effect (`tui.toml`, ADR-0036; app/structure.ts).
+   * The store starts in the `workspace` structure that matches
+   * `defaultPaneLayout()`; app/run.tsx applies the configured one before the
+   * first frame.
+   */
+  readonly structure: TuiStructure
+  /** Lines at the start of the transcript that outlive session switches: `tui.toml` warnings and one-time notices. */
+  readonly startupNotices: readonly string[]
   readonly apiOutput: string
   readonly status: string
   /** The full-screen Provider View (`/key`, state/providers.ts), while open. */
@@ -330,6 +340,8 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     subagentsShowArchived: false,
     subagentSelection: undefined,
     paneLayout: defaultPaneLayout(),
+    structure: builtinPreset("workspace"),
+    startupNotices: [],
     apiOutput: "Use /api METHOD /v1/path [JSON object] to call any HTTP/JSON endpoint.\n\n" + operations(),
     status: startupStatus,
     providerView: undefined,
@@ -833,6 +845,8 @@ export function createAppStore() {
     },
     selectSubagent(id: string | undefined): void { set("subagentSelection", id) },
     setPaneLayout(layout: PaneLayout): void { set("paneLayout", normalizePaneFocus(layout)) },
+    setStructure(structure: TuiStructure): void { set("structure", structure) },
+    setStartupNotices(lines: readonly string[]): void { set("startupNotices", lines) },
     setStatus(text: string): void { set("status", text) },
     setApiOutput(text: string): void { set("apiOutput", text) },
 
