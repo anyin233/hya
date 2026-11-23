@@ -487,6 +487,52 @@ async fn terminal_takeover_archives_an_active_claim() {
 }
 
 #[tokio::test]
+async fn archive_activity_matches_member_outcome() {
+    for (status, expected) in [
+        (MemberRunStatus::Done, RosterStatus::Done),
+        (MemberRunStatus::Cancelled, RosterStatus::Failed),
+        (MemberRunStatus::Failed, RosterStatus::Failed),
+    ] {
+        let db = TempDb::new("archive-status");
+        let fixture = stop_fixture(db.path()).await;
+        let mut archive = orphan_archive(fixture.actor);
+        archive.member_status = status;
+        if status == MemberRunStatus::Done {
+            fixture
+                .store
+                .append_event(
+                    fixture.root,
+                    &Event::MailConsumed {
+                        session: fixture.root,
+                        handle: fixture.handle.clone(),
+                        through: 1,
+                    },
+                )
+                .await
+                .unwrap();
+            archive.check_gate = true;
+            archive.reason = hya_proto::ArchiveReason::Reported;
+            archive.report = Some((hya_proto::ReportOutcome::Done, "finished".into()));
+        }
+        let (outcome, events) = fixture
+            .store
+            .finalize_resident_archive(
+                hya_store::ResidentArchiveOwner::Claim(&fixture.claim),
+                fixture.root,
+                &fixture.handle,
+                archive,
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome, hya_store::ResidentArchiveOutcome::Committed);
+        assert!(events.iter().any(
+            |event| matches!(&event.event, Event::AgentActivityChanged { handle, status, .. }
+            if handle == &fixture.handle && *status == expected)
+        ));
+    }
+}
+
+#[tokio::test]
 async fn refused_report_commits_only_a_harness_notice() {
     for refusal in [
         "unread mail",

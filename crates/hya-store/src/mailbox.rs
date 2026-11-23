@@ -502,7 +502,13 @@ impl SessionStore {
             Event::AgentActivityChanged {
                 session: root,
                 handle: handle.to_string(),
-                status: RosterStatus::Failed,
+                status: match member_status {
+                    MemberRunStatus::Done => RosterStatus::Done,
+                    MemberRunStatus::Spawning
+                    | MemberRunStatus::Running
+                    | MemberRunStatus::Failed
+                    | MemberRunStatus::Cancelled => RosterStatus::Failed,
+                },
                 current_task: Some(reason.to_string()),
             },
         )
