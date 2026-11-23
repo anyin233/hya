@@ -205,13 +205,7 @@ impl BudgetGroup {
 
     fn kill(&self) -> io::Result<()> {
         if self.child.id().is_some() {
-            // SAFETY: the unreaped child pins this process group ID.
-            if unsafe { libc::killpg(self.pgid as libc::pid_t, libc::SIGKILL) } < 0 {
-                let error = io::Error::last_os_error();
-                if error.raw_os_error() != Some(libc::ESRCH) {
-                    return Err(error);
-                }
-            }
+            kill_group(self.pgid)?;
         }
         Ok(())
     }
@@ -265,6 +259,50 @@ impl Drop for BudgetGroup {
     fn drop(&mut self) {
         let _ = self.kill();
     }
+}
+
+/// Send SIGKILL to a shell's process group. Returns false once the group is absent.
+pub fn kill_group(pgid: u32) -> io::Result<bool> {
+    let pgid = libc::pid_t::try_from(pgid)
+        .ok()
+        .filter(|&id| id > 0)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid Bash process group"))?;
+    // SAFETY: the positive PGID designates the group created for this shell.
+    if unsafe { libc::killpg(pgid, libc::SIGKILL) } == 0 {
+        return Ok(true);
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(false)
+    } else {
+        Err(error)
+    }
+}
+
+/// Wait for a signalled group to become quiescent. Outside Linux, reap the leader first.
+/// Runs on a blocking worker. A descendant can fork concurrently with SIGKILL.
+pub fn finish_group_termination(pgid: u32) -> io::Result<()> {
+    let until = std::time::Instant::now() + Duration::from_secs(2);
+    #[cfg(target_os = "linux")]
+    let mut previous = None;
+    while kill_group(pgid)? {
+        #[cfg(target_os = "linux")]
+        {
+            let zombies = group_zombies(std::path::Path::new("/proc"), pgid)?;
+            if zombies.is_some() && zombies == previous {
+                break;
+            }
+            previous = zombies;
+        }
+        if std::time::Instant::now() >= until {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Bash process group still present after SIGKILL",
+            ));
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    Ok(())
 }
 
 /// Return the zombie process identities, or None if any member could still do work.
