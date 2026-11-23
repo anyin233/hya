@@ -72,11 +72,13 @@ history copy; a revival receipt reports one only when that call revived the
 recipient. A competing send that finds the episode already live reports the
 ordinary fan-out count. That copy
 does not count as unread mail or wake the sender, including after recovery.
-Each `list_channel` row counts incoming messages in that channel past the
-reader’s inbox cursor. A new DM increases the DM row alone; a subsequent
+Each `list_channel` row counts incoming messages in its channel log past the
+reader’s inbox cursor. A harness notice sent directly to a handle belongs to
+the inbox alone and adds nothing to any channel row. A new DM increases the DM row alone; a subsequent
 announcement increases the group row. A voluntary successful report records
 terminal roster activity `Done` before archival. Failed and cancelled members
-record `Failed`.
+record `Failed`. Repeating finalization with the same released claim and terminal
+roster entry succeeds without recording another event.
 Recovery retains raw cursor positions and resumes an admitted cancelled prompt
 once; an outgoing history copy by itself never creates work.
 

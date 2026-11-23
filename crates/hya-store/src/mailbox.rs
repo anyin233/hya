@@ -710,7 +710,7 @@ async fn released_resident_matches(
         || projection.team.roster.get(handle).is_some_and(|entry| {
             entry.session == claim.actor_id
                 && entry.mode == SubagentMode::Resident
-                && entry.status == RosterStatus::Failed
+                && matches!(entry.status, RosterStatus::Done | RosterStatus::Failed)
         }))
 }
 
