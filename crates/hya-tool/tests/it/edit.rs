@@ -1401,8 +1401,26 @@ async fn edit_missing_hash_returns_only_authorized_live_context() {
             error.contains("[E_BAD_REF]") && error.contains("No edits were applied."),
             "{error}"
         );
+        assert!(error.contains("\"1098#<missing>\""), "{error}");
+        assert!(!error.contains("copied"), "{error}");
         assert!(error.contains("1098#JB:beta"), "{error}");
     }
+    let mut overlapping = input(&target, "1098#");
+    overlapping["edits"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"op":"append", "pos":"1097:private hint", "lines":["changed"]}));
+    let error = tool
+        .execute(&ctx, overlapping)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("\"1098#<missing>\"") && !error.contains("private hint"));
+    let rows: Vec<_> = error
+        .lines()
+        .filter_map(|row| row.trim_start().split_once('#')?.0.parse::<usize>().ok())
+        .collect();
+    assert_eq!(rows, [1095, 1096, 1097, 1098, 1099, 1100]);
     let error = tool
         .execute(&ctx, input(&target, "9999#"))
         .await
