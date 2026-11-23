@@ -96,6 +96,9 @@ import { findPattern, rankPaths } from "../composer/mention"
 import { ChipTable } from "../composer/chips"
 import type { PastedPath } from "../composer/paths"
 import { resolvePastedPaths, type PasteResult } from "./paste"
+import { inSshSession, readClipboard, type ClipboardPaste } from "../composer/hostClipboard"
+import { prepareImage } from "../composer/images"
+import type { Chip } from "../composer/chips"
 import { shellCommand } from "../composer/shell"
 import type { KeyLike } from "../keys/bindings"
 import { helpPickerHint, helpPickerRows } from "../commands"
@@ -1179,6 +1182,7 @@ export function createController({ client, store, directory, remote: startedRemo
     savePreferences: (patch) => savePreferencesPatch(patch),
     structure,
     expandChip: (index) => ui.expandChip?.(index) ?? false,
+    pasteClipboard: (raw) => ui.pasteClipboard?.(raw) ?? Promise.resolve(false),
     paneBounds: () => new Map([...ui.paneBounds ?? []].map(([id, read]) => [id, read()])),
     loadPaneLayout: () => {
       if (!preferencesPath) throw new Error("No TUI preferences path configured")
@@ -1208,7 +1212,22 @@ export function createController({ client, store, directory, remote: startedRemo
         const scope = backendScope(path)
         return scope ? client.readFile(path, { directory: scope, maxBytes: 1 }).then(() => true, () => false) : Promise.resolve(false)
       },
+      resizeImages: store.state.structure.composer.paste.image_resize,
+      ssh: inSshSession(env),
     })
+  }
+
+  /** Ctrl+V, `/paste`, an empty bracketed paste: the system clipboard (composer/hostClipboard.ts); never over SSH. */
+  function clipboard(): Promise<ClipboardPaste> {
+    return readClipboard(env)
+  }
+
+  /** An image chip for clipboard bytes, named `clipboard-<hash>.<ext>`, converted or scaled when needed. */
+  async function clipboardImage(bytes: Uint8Array): Promise<Chip> {
+    const prepared = await prepareImage(bytes, { resize: store.state.structure.composer.paste.image_resize })
+    const hash = new Bun.CryptoHasher("sha256").update(bytes).digest("hex").slice(0, 8)
+    const extension = ({ "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" } as Record<string, string>)[prepared.image?.mime ?? ""] ?? "png"
+    return chips.addImage(`clipboard-${hash}.${extension}`, prepared.image, prepared.error)
   }
   /** Remote-mode previews per server + scope + path: typing re-runs the preview, the file is fetched once (cleared on submit). */
   const remotePreviews = new Map<string, Promise<FileRead>>()
@@ -1935,6 +1954,8 @@ export function createController({ client, store, directory, remote: startedRemo
     /** The composer's chip table (composer/chips.ts). */
     chips,
     pastePaths,
+    clipboard,
+    clipboardImage,
     /** Pending `@path` image attachments of the composer's current text, for the pending-attachment row (components/Composer.tsx). */
     previewAttachments: (text: string) => loadAttachments(text, true),
     complete: (input: string) => completeCommand(input, { ...store.completionContext(), ...(structure ? { presets: structure.presets() } : {}) }, registry),

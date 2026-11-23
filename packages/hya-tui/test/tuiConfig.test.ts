@@ -130,10 +130,9 @@ test("bad items are ignored one by one; later-version keys say so; the rest appl
     "statusline.segments: unknown segment nope; ignored",
     'composer.style: expected "box" or "band"; ignored',
     "composer.paste.collapse_chars: expected an integer ≥ 1; ignored",
-    "composer.paste.image_resize is not supported in this version; ignored",
     "composer.attachments is not supported in this version; ignored",
   ])
-  expect(resolved.structure.composer.paste).toEqual({ collapse_lines: 5, collapse_chars: 1000, wrap: true })
+  expect(resolved.structure.composer.paste).toEqual({ collapse_lines: 5, collapse_chars: 1000, wrap: true, image_resize: false })
   expect(resolved.structure.startup).toMatchObject({ quiet: true, sections: ["skills"] })
   expect(resolved.sources["composer.paste.collapse_lines"]).toBe("tui.toml")
   expect(resolved.sources["composer.paste.wrap"]).toBe("preset statusline")

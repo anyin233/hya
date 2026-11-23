@@ -90,15 +90,23 @@ export const setCommand: CommandSpec = {
   },
 }
 
-const pasteUsage = "Usage: /paste expand [n]"
+const pasteUsage = "Usage: /paste [raw] | /paste expand [n]"
 
-/** `/paste expand [n]` (docs/tui.md "Paste and attachments"): a paste or file chip back to editable text. */
+/**
+ * `/paste` (docs/tui.md "Paste and attachments"): the system clipboard into
+ * the message input, like Ctrl+V (`raw`: text as is, no chip); `expand [n]`
+ * turns a paste or file chip back into editable text.
+ */
 export const pasteCommand: CommandSpec = {
   name: "/paste",
-  description: "Expand a paste or file chip of the message input into editable text",
-  argumentHint: "expand [n]",
-  complete: ({ words, current, head }) => words.length === 1 ? matchValues(head, current, ["expand"]) : [],
-  run: ({ store, actions }, { args }) => {
+  description: "Paste the system clipboard (an image first, else text), raw text, or expand a paste or file chip into text",
+  argumentHint: "[raw] | expand [n]",
+  complete: ({ words, current, head }) => words.length === 1 ? matchValues(head, current, ["raw", "expand"]) : [],
+  run: async ({ store, actions }, { args }) => {
+    if (args.length === 0 || (args[0] === "raw" && args.length === 1)) {
+      if (!actions.pasteClipboard || !(await actions.pasteClipboard(args[0] === "raw"))) throw new Error("No message input to paste into")
+      return
+    }
     if (args[0] !== "expand" || args.length > 2 || (args[1] !== undefined && !/^[1-9]\d*$/.test(args[1]))) throw new Error(pasteUsage)
     const index = args[1] === undefined ? undefined : Number(args[1])
     if (!actions.expandChip?.(index)) throw new Error(index === undefined ? "No paste or file chip in the input" : `No paste or file chip ${index} in the input`)

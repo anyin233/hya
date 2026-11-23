@@ -149,7 +149,7 @@ const rules: { [Component in ComponentName]: Record<keyof TuiStructure[Component
   composer: {
     style: oneOf(["box", "band"], ["band"]),
     border_info: segmentList,
-    paste: { table: { collapse_lines: integer(0), collapse_chars: integer(1), wrap: bool }, laterKeys: ["image_resize"] },
+    paste: { table: { collapse_lines: integer(0), collapse_chars: integer(1), wrap: bool, image_resize: bool } },
   },
   sidebar: { enabled: bool },
 }
@@ -389,6 +389,8 @@ ${presets}
 # collapse_chars = 1000
 # Send pastes and files as <attachment> blocks (false: their raw text).
 # wrap = true
+# Convert BMP/TIFF/HEIC images to PNG and scale images over 10 MiB down.
+# image_resize = true
 
 [sidebar]
 # true draws the tiled workspace (Projects, Sessions, Todos, Context).

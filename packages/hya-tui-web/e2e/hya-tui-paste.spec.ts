@@ -125,3 +125,61 @@ test.describe("pasted paths", () => {
     expect(await inputRow(term, input)).toBeGreaterThan(0)
   })
 })
+
+/** A 2×2 24-bit BMP, which `image_resize` converts to PNG. */
+function bmpBytes(): Buffer {
+  const bytes = Buffer.alloc(54 + 16)
+  bytes.fill(0x7f, 54)
+  bytes.write("BM", 0, "latin1")
+  bytes.writeUInt32LE(bytes.length, 2)
+  bytes.writeUInt32LE(54, 10)
+  bytes.writeUInt32LE(40, 14)
+  bytes.writeInt32LE(2, 18)
+  bytes.writeInt32LE(2, 22)
+  bytes.writeUInt16LE(1, 26)
+  bytes.writeUInt16LE(24, 28)
+  bytes.writeUInt32LE(16, 34)
+  return bytes
+}
+
+test.describe("clipboard and SSH", () => {
+  test.use({ model: { steps: [textStep("got the bmp")] } })
+
+  test("Ctrl+V without a display server says so; the draft is untouched", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend), { env: { DISPLAY: "", WAYLAND_DISPLAY: "" } })
+    await term.waitForText(input)
+    await term.type("keep me")
+    await term.press("Control+v")
+    await term.waitForText(/No system clipboard here|The clipboard is empty/)
+    await term.waitForText("keep me")
+  })
+
+  test("over SSH, Ctrl+V and /paste explain the clipboard is the host's; a missing pasted path is on your machine", async ({ tui, backend }, testInfo) => {
+    const term = await tui(hyaTui(backend), { env: { SSH_CONNECTION: "10.0.0.2 50000 10.0.0.1 22" } })
+    await term.waitForText(input)
+    await term.press("Control+v")
+    await term.waitForText("The clipboard here belongs to the SSH host")
+    await term.type("x")
+    await expect.poll(() => term.find("belongs to the SSH host")).toBeNull()
+    await term.press("Control+x")
+    await term.type("/paste")
+    await term.press("Enter")
+    await term.waitForText("The clipboard here belongs to the SSH host")
+    await term.paste(" /Users/me/Desktop/shot.png")
+    await term.waitForText("/Users/me/Desktop/shot.png is on your machine, not on the SSH host")
+    await term.attach(testInfo, "ssh-hints")
+  })
+
+  test("a pasted BMP is converted to PNG and sent", async ({ tui, backend, fakeModel }) => {
+    await writeFile(join(backend.dir, "tiny.bmp"), bmpBytes())
+    const term = await tui(hyaTui(backend))
+    await term.waitForText(input)
+    await term.paste(`${backend.dir}/tiny.bmp`)
+    await term.waitForText("[image #1 tiny.bmp]")
+    await term.waitForText(/\[image #1\] tiny\.bmp · 2×2 · \d+ B/)
+    await term.press("Enter")
+    await term.waitForText("got the bmp", 20_000)
+    const content = userContent(fakeModel!.requests()) as { type?: string; image_url?: { url?: string } }[]
+    expect(content.find((part) => part.type === "image_url")?.image_url?.url).toMatch(/^data:image\/png;base64,/)
+  })
+})

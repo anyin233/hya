@@ -40,6 +40,7 @@ export type KeyAction =
   | "redo"
   | "fork"
   | "reviewPending"
+  | "pasteClipboard"
 
 /** The subset of OpenTUI's KeyEvent a binding looks at. */
 export interface KeyLike {
@@ -108,6 +109,12 @@ export const keyBindings: readonly KeyBinding[] = [
     label: "Ctrl+D",
     description: "On an empty input: quit and leave the session running on the backend (like /to-background); in a WebUI tab, close the tab instead. Otherwise delete the character under the cursor",
     matches: (key, context) => key.ctrl && !key.meta && !key.shift && key.name === "d" && context.composerEmpty === true,
+  },
+  {
+    action: "pasteClipboard",
+    label: "Ctrl+V",
+    description: "Paste from the system clipboard: an image becomes an image chip, else text (not over SSH; in a browser the browser's own paste applies)",
+    matches: (key) => key.ctrl && !key.meta && !key.shift && key.name === "v",
   },
   {
     action: "complete",

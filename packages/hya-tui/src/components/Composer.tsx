@@ -639,6 +639,10 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
         consume()
         toggleProjectsFocus()
         return
+      case "pasteClipboard":
+        consume()
+        if (!readOnly()) void pasteClipboard(false)
+        return
       case "toggleThinking":
         consume()
         store.setThinking(!store.state.thinking)
@@ -724,7 +728,18 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
    */
   const onEditorPaste = (event: PasteEvent) => {
     const cleaned = sanitizePaste(new TextDecoder().decode(event.bytes))
-    if (!cleaned || !editor) return
+    if (!editor) return
+    // An empty bracketed paste: a terminal that had only an image to paste (macOS). Read the clipboard.
+    if (!cleaned) {
+      void pasteClipboard(false)
+      return
+    }
+    pasteText(cleaned)
+  }
+
+  /** A cleaned text paste: paths, a paste chip, or the text itself. */
+  function pasteText(cleaned: string): void {
+    if (!editor) return
     const paths = pastedPaths(cleaned)
     if (paths) {
       const work = controller.pastePaths(paths).then((result) => {
@@ -743,6 +758,35 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
     }
     editor.insertText(cleaned)
   }
+
+  /**
+   * Ctrl+V, `/paste [raw]`, an empty bracketed paste: the system clipboard
+   * (composer/hostClipboard.ts). An image becomes an image chip; text is
+   * handled like a paste (`raw`: inserted as is). Over SSH or without a
+   * display server the notice row says what to do instead.
+   */
+  async function pasteClipboard(raw: boolean): Promise<boolean> {
+    if (!editor) return false
+    const work = (async () => {
+      const result = await controller.clipboard()
+      if (result.kind === "none") {
+        setPasteNotice(result.reason)
+        return
+      }
+      if (result.kind === "image" && !raw) {
+        insertAtCursor(`${(await controller.clipboardImage(result.bytes)).token} `)
+        return
+      }
+      const text = result.kind === "text" ? result.text : ""
+      if (raw) editor?.insertText(text.replace(/\r\n?/g, "\n"))
+      else if (sanitizePaste(text)) pasteText(sanitizePaste(text))
+    })().finally(() => { if (pendingPaste === work) pendingPaste = undefined })
+    pendingPaste = work
+    await work
+    return true
+  }
+  ui.pasteClipboard = pasteClipboard
+  onCleanup(() => { if (ui.pasteClipboard === pasteClipboard) ui.pasteClipboard = undefined })
 
   /** Replace a paste or file chip's token with its text, so it can be edited (`/paste expand`, a click on its row). */
   function expandChip(id: number): boolean {
