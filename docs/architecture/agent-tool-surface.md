@@ -442,7 +442,10 @@ When those direct previews cannot all fit in 4,500 characters, the channel-aware
 to `true`, and asks the model to call `wait` again. The durable inbox cursor
 stops immediately before the first deferred message. For example, ten
 600-character notices require multiple calls. On the final page the
-continuation hint and `more_mail` field are absent.
+continuation hint and `more_mail` field are absent. Other tools in the same
+batch leave deferred mail for the next `wait`. The tool result and its
+inbox cursor commit together. If an after-hook replaces the wait output or
+the write fails, the undelivered mail remains unread.
 
 A shortened channel-backed preview gives the omitted character count and
 `read channel://<id>`. Reports with a readable parent DM give the same link.

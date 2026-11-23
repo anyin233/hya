@@ -2297,7 +2297,7 @@ async fn unit_resident_mail_without_follow_up_is_not_delivered_after_idle_recove
 
 /// A durable direct mail to `main` from a peer handle (raw log append: the
 /// steer backlog reads the folded inbox).
-async fn mail_main_from_peer(engine: &SessionEngine, root: SessionId, body: &str) {
+pub(super) async fn mail_main_from_peer(engine: &SessionEngine, root: SessionId, body: &str) {
     engine
         .store()
         .append_event(

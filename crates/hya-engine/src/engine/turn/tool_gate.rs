@@ -46,6 +46,7 @@ pub(super) struct TurnToolGate<'a> {
     /// Engine handle for nested tool calls, cloned once per turn on first use.
     pub(super) nested_engine: &'a mut Option<Arc<SessionEngine>>,
     pub(super) steer: &'a mut SteerMailbox,
+    pub(super) defer_steer: bool,
     pub(super) parent_session: Option<SessionId>,
     /// Tool schemas the round's request offered.
     pub(super) offered: &'a [ToolSchema],
@@ -88,6 +89,7 @@ impl TurnToolGate<'_> {
             report_latch,
             ref mut nested_engine,
             ref mut steer,
+            ref mut defer_steer,
             parent_session,
             offered,
         } = self;
@@ -141,6 +143,8 @@ impl TurnToolGate<'_> {
         let mut file_capture = FileCapture::default();
         let nested_stamps = Arc::new(Mutex::new(BTreeMap::new()));
         let behind = hidden_behind(offered, engine.exclusive_tool.as_deref(), tc.name.as_str());
+        let is_wait = tc.name.as_str() == "wait";
+        let wait_ack = is_wait.then(hya_tool::WaitAckSlot::default);
         let collect_tool = async {
             Ok::<_, CoreError>(match (behind, resources.resolve_tool(&tc.name)) {
                 (Some(exclusive), Some(_)) => (
@@ -211,6 +215,9 @@ impl TurnToolGate<'_> {
                                 roots: workspace.roots.clone(),
                                 cancel: cancel.clone(),
                             };
+                            if let Some(slot) = &wait_ack {
+                                ctx.lifecycle = ctx.lifecycle.with_wait_ack(slot.clone());
+                            }
                             let nested = super::super::nested_tools::TurnNestedTools {
                                 engine: Arc::clone(
                                     nested_engine.get_or_insert_with(|| Arc::new(engine.clone())),
@@ -275,6 +282,7 @@ impl TurnToolGate<'_> {
             BashArtifactGuard::capture(tc.name.as_str(), result.as_ref().ok(), binding.workdir());
         let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         engine.validate_actor_claim(actor_claim).await?;
+        let mut was_hook_replaced = false;
         let result = if !cancel.is_cancelled()
             && !matches!(&result, Err(ToolError::Cancelled))
             && (engine.hooks.is_some() || activation_hooks.is_some())
@@ -307,6 +315,7 @@ impl TurnToolGate<'_> {
             if was_permission_err || native == original_native {
                 result
             } else {
+                was_hook_replaced = true;
                 match native {
                     ToolOutcomeNative::Ok { output, .. } => Ok(output),
                     ToolOutcomeNative::Err { message } => Err(ToolError::Other(message)),
@@ -315,7 +324,18 @@ impl TurnToolGate<'_> {
         } else {
             result
         };
+        let intact_wait = is_wait && result.is_ok() && !was_hook_replaced && !cancel.is_cancelled();
+        let wait_ack = wait_ack
+            .filter(|_| intact_wait)
+            .and_then(|slot| slot.take());
         let mail_mark = engine.mail_mark(session);
+        if is_wait {
+            // Keep an undelivered page available to the next wait in this batch.
+            *defer_steer = !intact_wait
+                || result
+                    .as_ref()
+                    .is_ok_and(|output| output["metadata"]["more_mail"] == true);
+        }
         let (event, retains_artifact) = match result {
             Ok(mut output) => {
                 artifact_guard.remove_unowned_path(&mut output);
@@ -341,11 +361,10 @@ impl TurnToolGate<'_> {
                 // and wakes the member for a new episode instead.
                 // Deadline notices use the same result tail and commit.
                 if !report_latch.is_set() {
-                    // A paginated wait has already delivered this page. Leave the
-                    // rest behind its cursor for the next wait.
-                    let more_mail = tc.name.as_str() == "wait"
-                        && output["metadata"]["more_mail"].as_bool() == Some(true);
-                    if !more_mail && let Some(notice) = steer.drain(engine).await? {
+                    if wait_ack.is_none()
+                        && !*defer_steer
+                        && let Some(notice) = steer.drain(engine).await?
+                    {
                         append_steer_notice(&mut output, &notice);
                     }
                     if let Some(deadline) = hya_tool::deadline::current() {
@@ -387,9 +406,13 @@ impl TurnToolGate<'_> {
                 )
             }
         };
-        let (acknowledgement, consumed_incoming) = steer
-            .take_acknowledgement()
-            .map_or((None, false), |(event, incoming)| (Some(event), incoming));
+        let (acknowledgement, mail_mark, consumed_incoming) = match wait_ack {
+            Some(ack) => (Some(ack.event), Some(ack.mark), ack.consumed_incoming),
+            None => {
+                let (event, incoming) = steer.take_acknowledgement().unzip();
+                (event, mail_mark, incoming.unwrap_or(false))
+            }
+        };
         let mut events = vec![event];
         events.extend(observation(
             session,
