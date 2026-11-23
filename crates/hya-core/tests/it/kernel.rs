@@ -143,9 +143,7 @@ async fn bare_deadline_notices_child() {
         assert!(text.contains("of 40s used. Write any missing deliverable"));
         assert!(
             text.ends_with(
-                "then end your turn. Do not edit a file you have already delivered in place: \
-                 if it needs a change, change a copy, run the check the file passed, and replace \
-                 the file only if the copy passes. Start only commands that finish well within \
+                "then end your turn. If a delivered file already passes your checks, do not edit it in place — test any change on a copy first and replace the file only if the copy still passes. If a delivered file is unverified or failing, fix it directly and verify it now. Start only commands that finish well within \
                  the time left."
             ),
             "{text}"

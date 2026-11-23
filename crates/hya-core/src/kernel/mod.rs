@@ -93,32 +93,85 @@ fn is_reasoning_dropped_notice(text: &str) -> bool {
     text.starts_with(REASONING_DROPPED_PREFIX)
 }
 
-/// Most characters of a cut step's reasoning that its notice quotes.
-const DEADLINE_CUT_REASONING_CHARS: usize = 1_200;
+/// Keep the premise and latest conclusion of a reasoning-only step.
+pub fn format_reasoning_excerpt(reasoning: &str) -> String {
+    const HEAD_CHARS: usize = 1_200;
+    const TAIL_CHARS: usize = 2_000;
+    let count = reasoning.chars().count();
+    if count <= HEAD_CHARS + TAIL_CHARS {
+        return reasoning.to_owned();
+    }
+    let head: String = reasoning.chars().take(HEAD_CHARS).collect();
+    let tail: String = reasoning.chars().skip(count - TAIL_CHARS).collect();
+    format!(
+        "{head}\n… [{} chars omitted] …\n{tail}",
+        count - HEAD_CHARS - TAIL_CHARS
+    )
+}
 
-/// The notice after a reasoning-only step was cut at a deadline stage
-/// (docs/kernel.md): the stage notice and the end of the cut reasoning.
-fn deadline_cut_notice(cut: &DeadlineCut, stage_notice: Option<String>) -> String {
-    let mut notice = format!(
-        "{} the run reached a deadline stage while your last step was still thinking, before \
+/// Preserve the step's thinking in a one-request notice and retire its replay metadata.
+pub fn empty_turn_events(
+    session: SessionId,
+    message: MessageId,
+    parts: &[PartProjection],
+    tokens: Option<u64>,
+) -> Vec<Event> {
+    let mut events = Vec::new();
+    let mut thoughts = Vec::new();
+    for part in parts {
+        if let PartProjection::Reasoning {
+            id,
+            text,
+            provider_data,
+            ..
+        } = part
+        {
+            if provider_data.is_some() {
+                events.push(Event::ReasoningEnd {
+                    session,
+                    message,
+                    part: *id,
+                    provider_data: None,
+                });
+            }
+            if !text.trim().is_empty() {
+                thoughts.push(text.trim());
+            }
+        }
+    }
+    let mut notice = empty_turn_notice(tokens);
+    if !thoughts.is_empty() {
+        notice.push_str("\n\nWhere your previous thinking left off:\n");
+        notice.push_str(&format_reasoning_excerpt(&thoughts.join("\n\n")));
+    }
+    events.extend(round::system_message_events(
+        session,
+        MessageId::new(),
+        notice,
+    ));
+    events
+}
+
+fn deadline_cut_notice(cut: &DeadlineCut, clock_or_stage: Option<String>) -> String {
+    let explanation = if cut.stage.is_some() {
+        "the run reached a deadline stage while your last step was still thinking, before \
          any answer or tool call, so that step was stopped. Do not restart the deliberation: \
-         act on what you have worked out, with the next tool call or your final answer.",
+         act on what you have worked out, with the next tool call or your final answer."
+    } else {
+        "your thinking-only step reached its wall-clock cap and was stopped to keep the run moving. \
+         Act on what you worked out with a concrete tool call now."
+    };
+    let mut notice = format!(
+        "{} {explanation}",
         hya_proto::context::REASONING_DEADLINE_NOTICE_PREFIX
     );
-    if let Some(stage_notice) = stage_notice {
+    if let Some(line) = clock_or_stage {
         notice.push_str("\n\n");
-        notice.push_str(&stage_notice);
+        notice.push_str(&line);
     }
-    let reasoning = cut.reasoning.trim();
-    if !reasoning.is_empty() {
-        let skip = reasoning
-            .chars()
-            .count()
-            .saturating_sub(DEADLINE_CUT_REASONING_CHARS);
-        let tail: String = reasoning.chars().skip(skip).collect();
-        notice.push_str("\n\nWhere your thinking stopped");
-        notice.push_str(if skip > 0 { " (its end):\n…" } else { ":\n" });
-        notice.push_str(&tail);
+    if !cut.reasoning.trim().is_empty() {
+        notice.push_str("\n\nWhere your thinking stopped:\n");
+        notice.push_str(&format_reasoning_excerpt(cut.reasoning.trim()));
     }
     notice
 }
@@ -585,25 +638,23 @@ impl Harness for Bare<'_> {
         } = *self.scope;
         let projection = store.read_projection_shared(session).await?;
         let messages = &projection.session.messages;
-        let answered = messages
+        let parts = messages
             .iter()
             .find(|row| row.id == message)
             .and_then(|row| row.parts.get(row.last_step_start.unwrap_or(0)..))
-            .unwrap_or_default()
-            .iter()
-            .any(
-                |part| matches!(part, PartProjection::Text { text, .. } if !text.trim().is_empty()),
-            );
+            .unwrap_or_default();
+        let answered = parts.iter().any(
+            |part| matches!(part, PartProjection::Text { text, .. } if !text.trim().is_empty()),
+        );
         if !answered {
             // Cancelled meanwhile: a logged notice would never be sent.
             if self.empty_turns == EMPTY_TURN_NOTICES || self.cancel.is_cancelled() {
                 return Ok(false);
             }
             self.empty_turns += 1;
-            let notice = empty_turn_notice(self.output_tokens);
             emit.emit(
                 session,
-                round::system_message_events(session, MessageId::new(), notice),
+                empty_turn_events(session, message, parts, self.output_tokens),
             )
             .await?;
             return Ok(true);
@@ -831,8 +882,10 @@ pub async fn drive(
             // Minted after any compaction marker of that rewrite, which
             // would otherwise leave the notice out of the request.
             let subagent = harness.deadline_subagent()?;
-            let stage_notice =
-                hya_tool::deadline::current().map(|deadline| deadline.notice(cut.stage, subagent));
+            let stage_notice = hya_tool::deadline::current().map(|deadline| match cut.stage {
+                Some(stage) => deadline.notice(stage, subagent),
+                None => deadline.clock_line(),
+            });
             emit.emit(
                 session,
                 round::system_message_events(
@@ -978,7 +1031,12 @@ pub async fn drive(
             // The cut's notice tells the stage, so the next round's own
             // stage notice or clock line would repeat it.
             if let Some(deadline) = hya_tool::deadline::current() {
-                deadline.mark_notified(session, cut.stage);
+                if let Some(stage) = cut.stage {
+                    deadline.mark_notified(session, stage);
+                } else {
+                    // The pending notice carries the clock for this budget tenth.
+                    let _ = deadline.take_clock(session);
+                }
             }
             pending_cut = Some(cut);
             prev = None;

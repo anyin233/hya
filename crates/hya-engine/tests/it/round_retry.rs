@@ -108,7 +108,12 @@ impl Provider for ScriptedProvider {
                         message,
                     )
                     .into_iter()
-                    .map(Ok),
+                    .map(|mut event| {
+                        if let Event::ReasoningEnd { provider_data, .. } = &mut event {
+                            *provider_data = Some(json!({"id": "prior-step"}));
+                        }
+                        Ok(event)
+                    }),
                 ),
                 Item::Text(text) => out.extend(
                     FakeProvider::materialize(&[FakeStep::Text(text.into())], session, message)
@@ -396,6 +401,7 @@ async fn only_reasoning_or_length_requests_empty_turn_rescue() -> Result<(), Cor
         (Item::EmptyReasoning, 1),
         (Item::Text(""), 1),
     ] {
+        let reasoning = matches!(first, Item::Reasoning);
         let (engine, agent, session, opens) =
             fixture(vec![vec![first], vec![Item::Text("rescued")]]).await;
         assert_eq!(
@@ -409,6 +415,15 @@ async fn only_reasoning_or_length_requests_empty_turn_rescue() -> Result<(), Cor
         let notices = projection.session.messages.iter().flat_map(|m| &m.parts).filter(|p|
             matches!(p, hya_proto::PartProjection::Text { text, .. } if kernel::is_empty_turn_notice(text))).count();
         assert_eq!(notices, expected - 1);
+        if reasoning {
+            let mut parts = projection
+                .session
+                .messages
+                .iter()
+                .flat_map(|row| &row.parts);
+            assert!(parts.clone().any(|part| matches!(part, hya_proto::PartProjection::Reasoning { text, provider_data: None, .. } if text == "thinking")));
+            assert!(parts.any(|part| matches!(part, hya_proto::PartProjection::Text { text, .. } if text.ends_with("Where your previous thinking left off:\nthinking"))));
+        }
     }
     Ok(())
 }

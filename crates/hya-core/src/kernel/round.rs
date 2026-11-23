@@ -44,8 +44,8 @@ pub struct Round {
 /// A reasoning-only stream stopped at a run-deadline stage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeadlineCut {
-    /// The stage the run had reached (`WrapUp` or `Final`).
-    pub stage: Stage,
+    /// The newly reached stage, or None for a step capped before its next stage.
+    pub stage: Option<Stage>,
     /// The reasoning the step streamed before the cut.
     pub reasoning: String,
 }
@@ -175,6 +175,12 @@ pub async fn collect(
     }
 }
 
+struct ReasoningTimer<'a> {
+    deadline: &'a RunDeadline,
+    stage: Option<Stage>,
+    sleep: Pin<Box<Sleep>>,
+}
+
 async fn drain(
     emit: &dyn Emit,
     complete: Option<&dyn CompleteText>,
@@ -186,7 +192,7 @@ async fn drain(
 ) -> Result<(), CoreError> {
     // Armed once, by the round's first reasoning: waiting for the first
     // byte is never cut, and a stream that keeps reasoning still meets it.
-    let mut checkpoint: Option<(&RunDeadline, Stage, Pin<Box<Sleep>>)> = None;
+    let mut checkpoint: Option<ReasoningTimer> = None;
     loop {
         let reasoning_only = !(drained.saw_text || drained.saw_tool_start);
         let item = tokio::select! {
@@ -198,10 +204,12 @@ async fn drain(
             // Ahead of the stream, so buffered chunks cannot hold off a
             // checkpoint that has passed.
             Some(stage) = async {
-                let (deadline, next, sleep) = checkpoint.as_mut()?;
+                let ReasoningTimer { deadline, stage: next, sleep } = checkpoint.as_mut()?;
                 sleep.await;
                 // A late wake can find the run past the stage it waited for.
-                Some(deadline.stage().max(*next).min(Stage::Final))
+                Some(next.map(|stage| deadline.stage().max(stage).min(Stage::Final)).or_else(|| {
+                    deadline.next_checkpoint(session).and_then(|(delay, stage)| delay.is_zero().then_some(stage))
+                }))
             }, if reasoning_only && checkpoint.is_some() => {
                 let reasoning = drained
                     .reasoned
@@ -304,9 +312,12 @@ async fn drain(
                     // A step that starts near or past the checkpoint gets the
                     // grace to finish thinking (docs/kernel.md).
                     checkpoint = hya_tool::deadline::current().and_then(|deadline| {
-                        let (delay, stage) = deadline.next_checkpoint(session)?;
-                        let wait = delay.max(deadline.reasoning_grace());
-                        Some((deadline, stage, Box::pin(tokio::time::sleep(wait))))
+                        let (wait, stage) = deadline.next_reasoning_cut(session)?;
+                        Some(ReasoningTimer {
+                            deadline,
+                            stage,
+                            sleep: Box::pin(tokio::time::sleep(wait)),
+                        })
                     });
                 }
                 drained.reasoning.append(part, &delta);

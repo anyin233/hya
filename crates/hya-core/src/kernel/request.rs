@@ -127,13 +127,12 @@ pub fn projection_to_messages(
 }
 
 /// A bare-mode notice sent only until the model answers it: a run-deadline
-/// stage or clock, the completion check, or the empty-turn notice.
+/// stage or clock, or the completion check.
 fn is_bare_transient_text(text: &str) -> bool {
     ["TIME: ", "FINAL ", "clock: "].iter().any(|kind| {
         text.strip_prefix("HEADLESS RUN — ")
             .is_some_and(|rest| rest.starts_with(kind))
     }) || super::is_completion_check(text)
-        || super::is_empty_turn_notice(text)
 }
 
 /// The dropped-reasoning notice or the notice after a reasoning-only step
@@ -143,7 +142,9 @@ fn is_kernel_notice_row(row: &MessageProjection) -> bool {
 }
 
 fn is_kernel_notice(text: &str) -> bool {
-    super::is_reasoning_dropped_notice(text) || text.starts_with(REASONING_DEADLINE_NOTICE_PREFIX)
+    super::is_empty_turn_notice(text)
+        || super::is_reasoning_dropped_notice(text)
+        || text.starts_with(REASONING_DEADLINE_NOTICE_PREFIX)
 }
 
 /// A notice that continues a run after a round without tool calls.
@@ -672,12 +673,16 @@ mod tests {
         };
         let cut = super::super::deadline_cut_notice(
             &super::super::DeadlineCut {
-                stage: hya_tool::deadline::Stage::WrapUp,
+                stage: Some(hya_tool::deadline::Stage::WrapUp),
                 reasoning: "so the parser needs one more case".to_string(),
             },
             Some("HEADLESS RUN — TIME: 1s of 2s used, 1s left.".to_string()),
         );
-        let notices = [super::super::REASONING_DROPPED_NOTICE.to_string(), cut];
+        let notices = [
+            super::super::REASONING_DROPPED_NOTICE.to_string(),
+            cut,
+            super::super::empty_turn_notice(Some(23)),
+        ];
         for ((agent, full), notice_text) in [(super::super::AGENT, false), ("build", true)]
             .into_iter()
             .flat_map(|mode| notices.iter().map(move |text| (mode, text)))
@@ -778,7 +783,7 @@ mod tests {
         };
         let notice_text = super::super::deadline_cut_notice(
             &super::super::DeadlineCut {
-                stage: hya_tool::deadline::Stage::WrapUp,
+                stage: Some(hya_tool::deadline::Stage::WrapUp),
                 reasoning: "half a plan".to_string(),
             },
             None,
@@ -920,7 +925,7 @@ mod tests {
         };
         let notice_text = super::super::deadline_cut_notice(
             &super::super::DeadlineCut {
-                stage: hya_tool::deadline::Stage::WrapUp,
+                stage: Some(hya_tool::deadline::Stage::WrapUp),
                 reasoning: "half a plan".to_string(),
             },
             None,
@@ -1031,25 +1036,23 @@ mod tests {
         }
     }
 
-    /// The deadline-cut notice quotes at most the last 1,200 characters of
-    /// the cut reasoning, whole characters only.
     #[test]
     fn deadline_cut_notice_quotes_the_end_of_long_reasoning() {
         let cut = |reasoning: String| {
             super::super::deadline_cut_notice(
                 &super::super::DeadlineCut {
-                    stage: hya_tool::deadline::Stage::Final,
+                    stage: Some(hya_tool::deadline::Stage::Final),
                     reasoning,
                 },
                 None,
             )
         };
-        let long = cut(format!("{} so write the file", "é".repeat(1_300)));
-        let Some((_, tail)) = long.split_once("Where your thinking stopped (its end):\n…") else {
-            panic!("no quoted tail: {long}");
-        };
-        assert_eq!(tail.chars().count(), 1_200);
-        assert!(tail.ends_with("é so write the file"), "{tail}");
+        let long = cut(format!("{}middle{}", "é".repeat(1_200), "終".repeat(2_000)));
+        assert!(long.ends_with(&format!(
+            "{}\n… [6 chars omitted] …\n{}",
+            "é".repeat(1_200),
+            "終".repeat(2_000)
+        )));
         let short = cut("  check the header  ".to_string());
         assert!(short.ends_with("Where your thinking stopped:\ncheck the header"));
         assert!(!cut(" \n".to_string()).contains("Where your thinking stopped"));
