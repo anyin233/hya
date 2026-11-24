@@ -42,6 +42,14 @@ Isolation per process:
 When MCP fixtures are present, the harness sets `HYA_DEFER_SIDEPLANES=0` so MCP
 tools are registered before the first prompt (default serve defers MCP attach).
 
+`BackendProcess::start(&spec)` and `backend.reopen()` use the same launch path.
+Use `env.reopen()` to keep the FakeLlm and SQLite state while restarting the
+backend and updating the harness client. Each launch waits up to 30 seconds
+for a complete stdout line of the form
+`hya server listening on http://127.0.0.1:<port>`. Both pipes are drained during
+and after startup. On a readiness failure the harness terminates the process
+group, reaps the backend and reports captured stderr with the relay link redacted.
+
 ## Scripting FakeLlm
 
 Each completion request pops one script step:
