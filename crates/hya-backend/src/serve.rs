@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use hya_server::AppState;
 
 use crate::cli_args::RelayFlags;
 use crate::{db_lock, serve_relay};
@@ -286,15 +285,9 @@ pub(crate) struct PreparedServer {
     pub(crate) extra_url: Option<String>,
     /// The HTTP router and the gRPC services over one server state.
     server: hya_server::Server,
-    /// Shared run registry, retained until shutdown has settled admitted turns.
-    state: AppState,
-    built: hya_app::BuiltSessionEngine,
-    /// The database lock; released (and the discovery file removed) only
-    /// after the server has drained and shut down.
+    runtime: hya_app::ServerRuntime,
+    /// Published discovery metadata, removed before releasing database ownership.
     lock: Option<db_lock::DbLock>,
-    /// Ends every live event stream (SSE and gRPC) when the shutdown
-    /// begins.
-    streams: hya_server::StreamShutdown,
     /// The relay host connector (joined by `--relay` or `hya serve relay
     /// connect`); left after the drain.
     pub(crate) relay: hya_server::RelayHost,
@@ -309,15 +302,12 @@ pub(crate) async fn serve_until(
         listener,
         extra,
         server,
-        state,
-        mut built,
+        runtime,
         lock,
-        streams,
         relay,
         ..
     } = prepared;
     let stop_request = lock.as_ref().map(db_lock::DbLock::stop_request_path);
-    let drain_runtime = built.drain(hya_proto::FinishCause::Shutdown);
     let stopping = tokio_util::sync::CancellationToken::new();
     let extra_served = extra.map(|listener| {
         let server = server.clone();
@@ -336,12 +326,8 @@ pub(crate) async fn serve_until(
                 .as_ref()
                 .and_then(|path| db_lock::take_stop_request(path, std::process::id()))
                 .map_or(hya_server::ShutdownReason::Signal, |notice| notice.reason);
-            streams.close(reason);
-            state.begin_shutdown();
-            stopping.cancel();
-            drain_runtime.await;
-            let result = state.stop_for_restart(hya_engine::DRAIN_DEADLINE).await;
-            let _ = drained.send(result);
+            runtime.drain(reason, || stopping.cancel()).await;
+            let _ = drained.send(runtime);
         })
         .await;
     let extra_result = match extra_served {
@@ -350,9 +336,11 @@ pub(crate) async fn serve_until(
     };
     relay.shutdown().await;
     drop(lock);
-    let shutdown_result = built.shutdown().await.context("shutdown spawn supervisor");
-    drop(built);
-    drain_result.await.context("receive drain result")??;
+    let mut runtime = drain_result.await.context("receive drain result")?;
+    let shutdown_result = runtime
+        .finish_shutdown()
+        .await
+        .context("shutdown spawn supervisor");
     extra_result?;
     shutdown_result
 }
@@ -361,14 +349,15 @@ pub(crate) async fn serve_until(
 /// when post-prepare startup (such as relay connect) fails.
 async fn shutdown_prepared(prepared: PreparedServer) {
     let PreparedServer {
-        mut built,
+        mut runtime,
         lock,
         relay,
         ..
     } = prepared;
     relay.shutdown().await;
     drop(lock);
-    if let Err(error) = built.shutdown().await {
+    runtime.drain(hya_server::ShutdownReason::Stop, || {}).await;
+    if let Err(error) = runtime.finish_shutdown().await {
         eprintln!("hya: shutdown after startup failure failed: {error:#}");
     }
 }
@@ -507,16 +496,13 @@ async fn prepare_server_with_store(
         lock.publish_with(&db_lock::connect_url(addr), &hosts.extra_hosts())
             .context("publish the server discovery file")?;
     }
-    let (built, state) = runtime.into_parts();
     Ok(PreparedServer {
         url: format!("http://{addr}"),
         listener,
         extra,
         extra_url,
-        streams: state.streams(),
-        state,
         server,
-        built,
+        runtime,
         lock,
         relay,
     })
@@ -598,7 +584,7 @@ mod runtime_owner_busy_tests {
         )
         .await
         .unwrap();
-        let store = prepared.built.engine().store().clone();
+        let store = prepared.runtime.app_state().engine.store().clone();
         // Force degradation before post-prepare teardown (e.g. relay failure) runs.
         std::fs::remove_file(&db).unwrap();
         let session = hya_proto::SessionId::new();
@@ -624,7 +610,7 @@ mod runtime_owner_busy_tests {
             ),
             "expected Unpersisted report after shutdown_prepared, got {report:?}"
         );
-        // BuiltSessionEngine::shutdown already emitted the once-per-store stderr line.
+        // Runtime finalization already emitted the once-per-store stderr line.
         assert!(
             line.is_empty(),
             "shutdown_prepared should already have consumed exit report: {}",
