@@ -13,6 +13,8 @@ workspace = true
 [dependencies]
 hya-version = { workspace = true }
 hya-bundle = { workspace = true }
+hya-context = { workspace = true }
+hya-tool-error = { workspace = true }
 hya-proto = { workspace = true }
 image = { workspace = true }
 serde = { workspace = true }

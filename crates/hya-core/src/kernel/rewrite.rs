@@ -2,12 +2,12 @@
 
 use std::sync::Arc;
 
+use hya_context::rewrite::{Pressure, RewriteCtx, Rewriter, ToolError};
+use hya_context::tokens::TokenAccounting;
 use hya_proto::context::{COMPACT_CONTEXT_MARKER, marker_goal};
 use hya_proto::{
     CompactionStrategy, Event, MessageId, Projection, Role, SessionId, StepCut, TodoItem,
 };
-use hya_tool::tokens::TokenAccounting;
-use hya_tool::{Pressure, RewriteCtx, Rewriter, ToolError};
 
 use super::request::{collect_text, compacted_messages, is_marker};
 use super::round::system_message_events;

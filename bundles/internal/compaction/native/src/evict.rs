@@ -275,7 +275,7 @@ mod tests {
             assistant_with_tool(&"OLD_OUTPUT_B".repeat(100)),
             assistant_with_tool(&"RECENT_OUTPUT".repeat(100)),
         ];
-        let accounting = hya_tool::tokens::TokenAccounting::default();
+        let accounting = hya_context::tokens::TokenAccounting::default();
         let before = accounting.estimate(&msgs);
 
         let evicted = evict(&mut msgs, 1, None);

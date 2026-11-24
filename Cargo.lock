@@ -1212,9 +1212,20 @@ name = "hya-compaction"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "hya-context",
  "hya-proto",
  "hya-tool",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "hya-context"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "hya-proto",
+ "hya-tool-error",
  "serde_json",
 ]
 
@@ -1226,6 +1237,7 @@ dependencies = [
  "base64 0.22.1",
  "futures",
  "hya-bundle",
+ "hya-context",
  "hya-proto",
  "hya-provider",
  "hya-store",
@@ -1279,6 +1291,7 @@ dependencies = [
  "hya-bundle",
  "hya-channel-tools",
  "hya-compaction",
+ "hya-context",
  "hya-core",
  "hya-extended-tools",
  "hya-network-tools",
@@ -1535,9 +1548,11 @@ dependencies = [
  "hya-base-tools",
  "hya-bundle",
  "hya-channel-tools",
+ "hya-context",
  "hya-extended-tools",
  "hya-network-tools",
  "hya-proto",
+ "hya-tool-error",
  "hya-version",
  "image",
  "libc",
@@ -1550,6 +1565,15 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "hya-tool-error"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

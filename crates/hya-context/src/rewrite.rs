@@ -12,7 +12,7 @@ use hya_proto::context::ReasoningReplayPolicy;
 use hya_proto::{Event, Message, MessageId, ModelRef, Projection, SessionId};
 use serde_json::Value;
 
-use crate::ToolError;
+pub use hya_tool_error::ToolError;
 
 /// A session's event log: the projection and batch appends.
 #[async_trait]

@@ -164,6 +164,7 @@ impl Generator {
         let mut paths = vec![
             root.join("crates/hya-plugin/src/messages.rs"),
             root.join("crates/hya-tool/src/permission.rs"),
+            root.join("crates/hya-tool-error/src/lib.rs"),
         ];
         // Resolve the domain types nested in Envelope, Message and ToolSchema too.
         for entry in std::fs::read_dir(root.join("crates/hya-proto/src"))? {

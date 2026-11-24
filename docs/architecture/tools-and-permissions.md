@@ -293,7 +293,7 @@ they are not rewritten or retried.
 
 `Action` serializes with `#[serde(rename_all = "lowercase")]` in saved-permission
 rows and rules
-([`permission.rs`](../../crates/hya-tool/src/permission.rs)): the variant name
+([`hya-tool-error`](../../crates/hya-tool-error/src/lib.rs)): the variant name
 is lowercased **without** inserting separators, so multi-word variants become a
 single token (for example `ExternalDirectory` → `externaldirectory`). Server
 persistence writes that serde string into the DB `action` column

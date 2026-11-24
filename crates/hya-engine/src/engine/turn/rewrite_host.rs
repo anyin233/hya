@@ -1,4 +1,4 @@
-//! Full mode's side of the rewrite contract (`hya_tool::rewrite`): the
+//! Full mode's side of the rewrite contract (`hya_context::rewrite`): the
 //! services the kernel's reduction and its extensions (the `hya/compaction`
 //! bundle) call back into.
 //!
@@ -10,10 +10,12 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
+use hya_context::rewrite::{
+    CompactionHooks, ModelHost, ModelWindow, SessionLog, ToolError, Transcript,
+};
 use hya_proto::{Event, Message, ModelRef, Projection, SessionId};
 use hya_provider::ProviderRouter;
 use hya_store::ActorClaim;
-use hya_tool::{CompactionHooks, ModelHost, ModelWindow, SessionLog, ToolError, Transcript};
 
 use super::super::summary::summary_messages;
 use super::super::{AgentSpec, SessionEngine};

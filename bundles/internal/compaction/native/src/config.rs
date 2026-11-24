@@ -1,7 +1,7 @@
 //! The host's compaction settings, as `RewriteCtx::config` carries them.
 
-use hya_tool::ToolError;
-use hya_tool::tokens::TokenAccountingMode;
+use hya_context::rewrite::ToolError;
+use hya_context::tokens::TokenAccountingMode;
 use serde::Deserialize;
 use serde_json::Value;
 

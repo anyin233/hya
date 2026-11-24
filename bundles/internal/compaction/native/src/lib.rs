@@ -11,7 +11,8 @@ mod ladder;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hya_tool::{RewriteCtx, Rewriter, Tool, ToolError};
+use hya_context::rewrite::{RewriteCtx, Rewriter, ToolError};
+use hya_tool::Tool;
 
 /// The `shake` and `remote` steps as a [`Rewriter`] extension.
 pub struct CompactionRewriter;
