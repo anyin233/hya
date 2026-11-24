@@ -216,7 +216,8 @@ built-in of that name. Every user-defined command expands its template
 `skill`, argument hint `[request]`, its body as `template`). `skill:` is a
 reserved namespace: a command file named `skill:<x>.md` is skipped (and
 reported in `diagnostics`), so a skill never overrides a command and a
-command never overrides a skill.
+command never overrides a skill. With `session`, the rows include the bundle
+and plugin skills that session's agent can load.
 
 Every row carries `scope`: `builtin` for the rows above, `project` or `user`
 for command files (`.hya/commands`, `~/.config/hya/commands`; see

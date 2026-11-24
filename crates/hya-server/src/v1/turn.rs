@@ -432,11 +432,14 @@ async fn create_turn(
             } else {
                 let place =
                     crate::support::catalog_place::CatalogPlace::for_session(&st, session).await?;
-                crate::support::command_catalog::expand_prompt(
+                crate::support::command_catalog::expand_session_prompt(
+                    &st,
+                    session,
                     &place,
                     &command.command,
                     &command.arguments,
                 )
+                .await
                 .unwrap_or_else(|| {
                     if command.arguments.trim().is_empty() {
                         format!("/{}", command.command)

@@ -690,8 +690,21 @@ async fn list_commands(
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Result<Json<pb::ListCommandsResponse>, V1Error> {
     let request: pb::ListCommandsRequest = super::query_request(&[], &query)?;
-    let place = catalog_scope(&st, &request.directory).await?;
-    let listing = crate::support::command_catalog::listing(&place);
+    // A session's own catalog (its workdir, Project, and agent's bundle
+    // skills) wins over the request directory.
+    let listing = match super::scope_session(&st, &request.session).await? {
+        Some(session) => {
+            let place = CatalogPlace::for_session(&st, session).await?;
+            let skills = crate::support::skill_catalog::session_listing(&st, session, &place)
+                .await
+                .skills;
+            crate::support::command_catalog::listing_with_skills(&place, skills)
+        }
+        None => {
+            let place = catalog_scope(&st, &request.directory).await?;
+            crate::support::command_catalog::listing(&place)
+        }
+    };
     let diagnostics = listing
         .diagnostics
         .iter()
@@ -738,8 +751,18 @@ async fn list_skills(
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Result<Json<pb::ListSkillsResponse>, V1Error> {
     let request: pb::ListSkillsRequest = super::query_request(&[], &query)?;
-    let place = catalog_scope(&st, &request.directory).await?;
-    let listing = crate::support::skill_catalog::listing(&place);
+    // What a session's agent can load (bundle and plugin skills included)
+    // wins over the request directory.
+    let listing = match super::scope_session(&st, &request.session).await? {
+        Some(session) => {
+            let place = CatalogPlace::for_session(&st, session).await?;
+            crate::support::skill_catalog::session_listing(&st, session, &place).await
+        }
+        None => {
+            let place = catalog_scope(&st, &request.directory).await?;
+            crate::support::skill_catalog::listing(&place)
+        }
+    };
     let diagnostics = listing
         .diagnostics
         .iter()
@@ -772,6 +795,7 @@ fn skill_summaries(rows: Vec<crate::support::skill_catalog::SkillInfo>) -> Vec<p
             content: row.content,
             location: row.location,
             disable_model_invocation: row.disable_model_invocation,
+            bundle_id: row.bundle_id.unwrap_or_default(),
         })
         .collect()
 }

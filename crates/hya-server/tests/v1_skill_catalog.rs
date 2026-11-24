@@ -1,7 +1,9 @@
 //! The skill catalog over v1: `ListSkills` reports the skill files it
 //! skipped or warns about (`diagnostics`) and `disable-model-invocation`;
-//! `ListCommands` reports the command files it skipped and where each
-//! command comes from (`scope`).
+//! with `session` it lists what that session's agent can load, bundle
+//! skills included, and `ListCommands` with `session` lists their
+//! `skill:<name>` rows; a `skill:<name>` command turn expands a bundle
+//! skill without a reference directory (it has none on disk).
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -21,7 +23,7 @@ use hya_provider::{
 use hya_server::{AppState, router};
 use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
-use serde_json::Value;
+use serde_json::{Value, json};
 use support::AgentFixture;
 use tower::ServiceExt;
 
@@ -209,5 +211,107 @@ async fn skill_listing_reports_diagnostics_and_manual_only_skills() {
             .any(|row| row["kind"] == "reserved"),
         "{commands}"
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_session_lists_and_runs_its_agents_bundle_skills() {
+    let app = app().await;
+    let dir = support::tempdir("skill-session");
+    write(
+        &dir,
+        ".hya/skills/local/SKILL.md",
+        "---\nname: local\ndescription: a project skill\n---\nlocal body\n",
+    );
+    let (status, body) = call(
+        &app,
+        Method::POST,
+        "/v1/sessions",
+        json!({ "agent": "helper", "model": "fake", "workdir": dir.to_string_lossy() }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let session = body["session"]["id"].as_str().unwrap().to_owned();
+
+    // The directory view has no bundle skill; the session's view has its agent's.
+    let (_, by_directory) = call(
+        &app,
+        Method::GET,
+        &format!("/v1/skills?directory={}", encode(&dir)),
+        Value::Null,
+    )
+    .await;
+    assert!(named(&by_directory, "skills", "helper-guide").is_none());
+    assert!(named(&by_directory, "skills", "local").is_some());
+    let (status, by_session) = call(
+        &app,
+        Method::GET,
+        &format!("/v1/skills?session={session}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{by_session}");
+    let guide = named(&by_session, "skills", "helper-guide").expect("bundle skill");
+    assert_eq!(guide["source"], "bundle");
+    assert_eq!(guide["bundleId"], "hya/server-tests-helper");
+    assert!(
+        named(&by_session, "skills", "local").is_some(),
+        "{by_session}"
+    );
+
+    let (_, commands) = call(
+        &app,
+        Method::GET,
+        &format!("/v1/commands?session={session}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(
+        named(&commands, "commands", "skill:helper-guide").unwrap()["scope"],
+        "bundle"
+    );
+
+    let (status, body) = call(
+        &app,
+        Method::POST,
+        &format!("/v1/sessions/{session}/turns"),
+        json!({ "command": { "command": "skill:helper-guide", "arguments": "go" } }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let turn = body["turn"]["id"].as_str().unwrap().to_owned();
+    let (status, body) = call(
+        &app,
+        Method::POST,
+        &format!("/v1/sessions/{session}/turns/{turn}/wait?timeoutMs=10000"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, messages) = call(
+        &app,
+        Method::GET,
+        &format!("/v1/sessions/{session}/messages"),
+        Value::Null,
+    )
+    .await;
+    let text = messages["messages"][0]["parts"][0]["text"]["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert_eq!(
+        text,
+        "<skill name=\"helper-guide\" location=\"bundle:hya/server-tests-helper/resources/skills/helper-guide.md\">\nhelper-guide body\n</skill>\n\ngo",
+        "{messages}"
+    );
+
+    let (status, body) = call(
+        &app,
+        Method::GET,
+        &format!("/v1/skills?session={}", SessionId::new()),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     let _ = std::fs::remove_dir_all(&dir);
 }

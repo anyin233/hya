@@ -137,6 +137,19 @@ As above, the first occurrence of a given skill `name` wins.
 
 ---
 
+## Bundle and plugin skills
+
+A bundle (`resources.skills`) or plugin can contribute skills too. They are
+selected per agent: an agent sees the bundle skills its resource view
+selects (a bundle agent only its own). `ListSkills` and `ListCommands` with a
+`session` list what that session's agent can load — its directory skills, the
+built-in ones, and its bundle skills (`source: "bundle"`, `bundleId:
+"<publisher>/<name>"` or `"plugin:<id>"`, `location: "bundle:…"`) — and the
+TUI asks with the open session, so `/skills` and the command menu show them
+(`/skill:<name>`, grouped under `bundle <id>`). A bundle skill has no
+directory on disk, so its `<skill>` block has no `References are relative
+to` line. Without a session the listing is the directory's: no bundle skills.
+
 ## Built-in fallback skills
 
 The trusted `hya/core-skills` Plugin owns the two built-in Skill files under

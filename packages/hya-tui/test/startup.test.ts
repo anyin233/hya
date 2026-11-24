@@ -96,7 +96,7 @@ test("a compact line ends in +N when the width runs out", () => {
 test("skill and command diagnostics and commands hidden by the TUI's own are problems", () => {
   const lines = startupLines({
     notices: [],
-    skills: [{ name: "guide", source: "project", location: "/w/.hya/skills/guide/SKILL.md" }],
+    skills: [{ name: "guide", source: "bundle", location: "bundle:me/kit/skills/guide/SKILL.md", bundleId: "me/kit" }],
     skillDiagnostics: [{ path: "/home/u/.codex/skills/x/SKILL.md", kind: "missing_description", message: "/home/u/.codex/skills/x/SKILL.md: no `description`; skipped" }],
     commands: [{ name: "status", source: "command", scope: "project" }],
     commandDiagnostics: [{ path: "/w/.hya/commands/skill:x.md", kind: "reserved", message: "/w/.hya/commands/skill:x.md: `/skill:x` is in the reserved skill namespace; skipped" }],
@@ -109,4 +109,5 @@ test("skill and command diagnostics and commands hidden by the TUI's own are pro
     "warning:   /w/.hya/commands/skill:x.md: `/skill:x` is in the reserved skill namespace; skipped",
     "warning:   /status: the TUI's own /status hides this project command; rename its file to run it",
   ])
+  expect(skillGroup({ name: "guide", source: "bundle", location: "bundle:me/kit/skills/guide/SKILL.md", bundleId: "me/kit" }, env)).toBe("bundle me/kit")
 })

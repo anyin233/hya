@@ -354,7 +354,8 @@ async function knownBackendCommand({ store, client }: CommandContext, name: stri
   if (store.state.backendCommands.some((command) => command.name === name)) return true
   let commands: CommandSummary[]
   try {
-    commands = await client.listCommands()
+    // The open session's catalog: its agent's bundle skills are commands too.
+    commands = await client.listCommands(store.state.selected?.id)
   } catch {
     return undefined
   }

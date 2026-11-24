@@ -442,3 +442,25 @@ for (const errors of [[], [{ bundleId: "acme/tools", message: "bad config" }]]) 
     expect(calls).toEqual([["http://backend/v1/bundles:refresh", "POST", { directory: "/work" }]])
   })
 }
+
+test("listSkills and listCommandCatalog name the session, keep the diagnostics, and fall back without the session on a 400 or 404", async () => {
+  const urls: string[] = []
+  const client = new HyaClient("http://h", "/w", async (input) => {
+    const url = String(input)
+    urls.push(url)
+    if (url.includes("session=hysec_old")) return Response.json({ error: { code: "invalid_argument", message: "unknown field session" } }, { status: 400 })
+    if (url.includes("session=hysec_gone")) return Response.json({ error: { code: "not_found", message: "session not found" } }, { status: 404 })
+    if (url.includes("/v1/skills")) return Response.json({ skills: [{ name: "guide", bundleId: "me/kit" }], diagnostics: [{ path: "/x", kind: "name", message: "/x: bad" }], page: {} })
+    return Response.json({ commands: [{ name: "skill:guide", source: "skill", scope: "bundle" }], diagnostics: [], page: {} })
+  })
+  expect(await client.listSkills("hysec_1")).toEqual({ skills: [{ name: "guide", bundleId: "me/kit" }], diagnostics: [{ path: "/x", kind: "name", message: "/x: bad" }] })
+  expect(urls.at(-1)).toBe("http://h/v1/skills?page.limit=500&session=hysec_1&directory=%2Fw")
+  expect((await client.listCommandCatalog("hysec_1")).commands[0]?.scope).toBe("bundle")
+  urls.length = 0
+  expect((await client.listSkills("hysec_old")).skills).toHaveLength(1)
+  expect(urls).toEqual(["http://h/v1/skills?page.limit=500&session=hysec_old&directory=%2Fw", "http://h/v1/skills?page.limit=500&directory=%2Fw"])
+  // A session deleted while it was open: the directory's catalog.
+  expect((await client.listCommandCatalog("hysec_gone")).commands).toHaveLength(1)
+  expect(urls.at(-1)).toBe("http://h/v1/commands?page.limit=500&directory=%2Fw")
+  expect(await client.refreshSessionContext("hysec_1")).toEqual({ pending: false })
+})

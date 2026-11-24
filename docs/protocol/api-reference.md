@@ -1521,6 +1521,7 @@ A provider after a change, applied live.
 |---|---|---|
 | `directory` (1) | `string` | Directory scope (absolute). Optional: empty lists the global view (no project sources). |
 | `page` (2) | `PageRequest` | Standard pagination controls. |
+| `session` (3) | `string` | List the catalog this session's command turns expand against instead: its recorded workdir, its Project's roots, and the `skill:<name>` rows of the bundle and plugin skills its agent can load. Wins over `directory`. `not_found` for an unknown session. |
 
 ### `CommandSummary`
 
@@ -1565,6 +1566,7 @@ A resource file a catalog skipped or warns about, for clients to show.
 |---|---|---|
 | `directory` (1) | `string` | Directory scope (absolute). Optional: empty lists the global view (no project sources). |
 | `page` (2) | `PageRequest` | Standard pagination controls. |
+| `session` (3) | `string` | List what this session's agent can load with the `skill` tool instead: the skills of its recorded workdir and Project roots, the built-in ones, and the bundle and plugin skills its agent selects. Wins over `directory`. `not_found` for an unknown session. |
 
 ### `SkillSummary`
 
@@ -1578,6 +1580,7 @@ One invocable skill.
 | `content` (4) | `string` | The skill's markdown body: the text after its frontmatter. |
 | `location` (5) | `string` | Where the skill file lives (`<built-in>` for compiled-in skills). |
 | `disable_model_invocation` (6) | `bool` | `disable-model-invocation: true` in its frontmatter: the model's skill index leaves it out; `/skill:<name>` still runs it. |
+| `bundle_id` (7) | `string` | The bundle or plugin that contributes it (`source: bundle`), e.g. `hya/alpha` or `plugin:toolbox`; empty otherwise. |
 
 ### `ListSkillsResponse`
 
