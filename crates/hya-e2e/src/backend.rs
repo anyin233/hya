@@ -1,12 +1,17 @@
 //! Spawn and tear down a real `hya serve` process.
 
+use std::io::{self, BufRead, BufReader};
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::error::E2eError;
+
+const READINESS_TIMEOUT: Duration = Duration::from_secs(30);
+const LISTEN_PREFIX: &str = "hya server listening on ";
 
 /// How long a backend gets to exit on its own after SIGTERM before the group is SIGKILLed.
 ///
@@ -95,23 +100,23 @@ pub struct BackendProcess {
     pub xdg_data_home: PathBuf,
     /// Path to the `hya` binary that was spawned.
     pub binary: PathBuf,
-    child: Child,
+    child: BackendChild,
     root: PathBuf,
-    /// Model reference passed to the backend process on startup/reopen.
+    serve: ServeOptions,
+}
+
+struct ServeOptions {
     model_ref: String,
-    /// Whether the backend process receives `--yolo`.
     yolo: bool,
-    /// Whether startup must eagerly connect configured sideplanes.
     has_mcp: bool,
-    /// Extra environment variables reapplied on reopen.
     env: Vec<(String, String)>,
-    /// Extra `hya serve` arguments reapplied on reopen.
-    serve_args: Vec<String>,
-    /// Every stderr line of the current child, in order.
+    args: Vec<String>,
+}
+
+struct BackendChild {
+    process: Child,
     stderr_lines: Arc<Mutex<Vec<String>>>,
-    /// Set once the child has been signalled and reaped, so `Drop` does not signal a pid
-    /// that the OS may already have handed to an unrelated process.
-    stopped: bool,
+    readers: Option<[JoinHandle<()>; 2]>,
 }
 
 impl BackendProcess {
@@ -218,78 +223,25 @@ permission:
         }
 
         let db = root.join("sessions.db");
-        let mut cmd = Command::new(&spec.binary);
-        if spec.yolo {
-            cmd.arg("--yolo");
-        }
-        cmd.arg("--model")
-            .arg(&model_ref)
-            .arg("--db")
-            .arg(&db)
-            .arg("serve")
-            .arg("--bind")
-            .arg("127.0.0.1:0")
-            .args(&spec.serve_args)
-            .current_dir(&project)
-            .env("HOME", &home)
-            .env("XDG_CONFIG_HOME", &xdg_config_home)
-            .env("XDG_DATA_HOME", &xdg_data_home)
-            .env("XDG_STATE_HOME", &xdg_state)
-            .env("XDG_CACHE_HOME", &xdg_cache)
-            .env_remove("HYA_MODEL")
-            .envs(spec.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-            // Lead its own process group so teardown can signal the whole tree (the backend
-            // spawns MCP/plugin children). A group signal without this would hit the test
-            // runner itself; a single-pid signal would orphan the grandchildren.
-            .process_group(0)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        // MCP connect is deferred by default; for process E2E we need tools in
-        // the registry before the first FakeLlm tool call or they stay unknown.
-        if !mcp.is_empty() {
-            cmd.env("HYA_DEFER_SIDEPLANES", "0");
-        }
-
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| E2eError::Backend(format!("spawn hya: {e}")))?;
-
-        let mut stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| E2eError::Backend("missing stdout".into()))?;
-        let url = wait_for_listen(&mut stdout, Duration::from_secs(30)).map_err(|e| {
-            let stderr = child
-                .stderr
-                .as_mut()
-                .map(|s| {
-                    let mut buf = String::new();
-                    let _ = std::io::Read::read_to_string(s, &mut buf);
-                    buf
-                })
-                .unwrap_or_default();
-            // Same graceful teardown as `Drop`: this child is a process-group leader and may
-            // already have spawned MCP children, so a single-pid SIGKILL would orphan them.
-            terminate_process_group(&mut child);
-            E2eError::Backend(format!("{e}; stderr={stderr}"))
-        })?;
-
-        {
-            use std::io::BufRead;
-            std::thread::spawn(move || {
-                for line in std::io::BufReader::new(stdout).lines() {
-                    match line {
-                        Ok(line) => eprintln!("[backend-out] {line}"),
-                        Err(_) => break,
-                    }
-                }
-            });
-        }
-        let stderr_lines = Arc::new(Mutex::new(Vec::new()));
-        if let Some(stderr) = child.stderr.take() {
-            forward_stderr(stderr, Arc::clone(&stderr_lines));
-        }
-
+        let serve = ServeOptions {
+            model_ref,
+            yolo: spec.yolo,
+            has_mcp: !mcp.is_empty(),
+            env: spec.env.clone(),
+            args: spec.serve_args.clone(),
+        };
+        let (url, child) = serve
+            .spawn(
+                &spec.binary,
+                &project,
+                &db,
+                &root,
+                &xdg_config_home,
+                &xdg_data_home,
+            )
+            .inspect_err(|_| {
+                let _ = std::fs::remove_dir_all(&root);
+            })?;
         Ok(Self {
             url,
             project,
@@ -299,13 +251,7 @@ permission:
             binary: spec.binary.clone(),
             child,
             root,
-            model_ref,
-            yolo: spec.yolo,
-            has_mcp: !mcp.is_empty(),
-            env: spec.env.clone(),
-            serve_args: spec.serve_args.clone(),
-            stderr_lines,
-            stopped: false,
+            serve,
         })
     }
 
@@ -314,74 +260,17 @@ permission:
     /// The FakeLlm remains owned by the surrounding [`E2eEnv`], so callers can
     /// compare replayed state without introducing another provider process.
     pub fn reopen(&mut self) -> Result<(), E2eError> {
-        let _ = self.shutdown();
-
-        let home = self.root.join("home");
-        let state = self.root.join("state");
-        let cache = self.root.join("cache");
-        let mut cmd = Command::new(&self.binary);
-        if self.yolo {
-            cmd.arg("--yolo");
-        }
-        cmd.arg("--model")
-            .arg(&self.model_ref)
-            .arg("--db")
-            .arg(&self.db)
-            .arg("serve")
-            .arg("--bind")
-            .arg("127.0.0.1:0")
-            .args(&self.serve_args)
-            .current_dir(&self.project)
-            .env("HOME", &home)
-            .env("XDG_CONFIG_HOME", &self.xdg_config_home)
-            .env("XDG_DATA_HOME", &self.xdg_data_home)
-            .env("XDG_STATE_HOME", &state)
-            .env("XDG_CACHE_HOME", &cache)
-            .env_remove("HYA_MODEL")
-            .envs(self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-            .process_group(0)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        if self.has_mcp {
-            cmd.env("HYA_DEFER_SIDEPLANES", "0");
-        }
-
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| E2eError::Backend(format!("reopen hya: {e}")))?;
-        let mut stdout = match child.stdout.take() {
-            Some(stdout) => stdout,
-            None => {
-                terminate_process_group(&mut child);
-                return Err(E2eError::Backend("reopen backend missing stdout".into()));
-            }
-        };
-        let url = match wait_for_listen(&mut stdout, Duration::from_secs(30)) {
-            Ok(url) => url,
-            Err(error) => {
-                let stderr = child
-                    .stderr
-                    .as_mut()
-                    .map(|stream| {
-                        let mut buf = String::new();
-                        let _ = std::io::Read::read_to_string(stream, &mut buf);
-                        buf
-                    })
-                    .unwrap_or_default();
-                terminate_process_group(&mut child);
-                return Err(E2eError::Backend(format!(
-                    "{error}; reopen stderr={stderr}"
-                )));
-            }
-        };
-        let stderr_lines = Arc::new(Mutex::new(Vec::new()));
-        if let Some(stderr) = child.stderr.take() {
-            forward_stderr(stderr, Arc::clone(&stderr_lines));
-        }
+        self.shutdown();
+        let (url, child) = self.serve.spawn(
+            &self.binary,
+            &self.project,
+            &self.db,
+            &self.root,
+            &self.xdg_config_home,
+            &self.xdg_data_home,
+        )?;
         self.child = child;
         self.url = url;
-        self.stderr_lines = stderr_lines;
-        self.stopped = false;
         Ok(())
     }
 
@@ -390,19 +279,15 @@ permission:
     /// `Drop` calls this too; it is public so a test can assert the status directly. A
     /// backend that returned from `main` reports `Some(0)`; one that died by signal reports
     /// `None` from `code()`, which is the discriminator for "atexit handlers did not run".
-    pub fn shutdown(&mut self) -> Option<std::process::ExitStatus> {
-        if self.stopped {
-            return None;
-        }
-        self.stopped = true;
-        terminate_process_group(&mut self.child)
+    pub fn shutdown(&mut self) -> Option<ExitStatus> {
+        self.child.shutdown(SHUTDOWN_GRACE)
     }
 
     /// OS pid of the backend (the leader of its process group), e.g. to deliver a
     /// signal while the test keeps observing clients.
     #[must_use]
     pub fn pid(&self) -> u32 {
-        self.child.id()
+        self.child.process.id()
     }
 
     /// Wait until the backend has written a stderr line starting with `prefix` and
@@ -410,7 +295,7 @@ permission:
     pub fn wait_stderr_line(&self, prefix: &str, timeout: Duration) -> Result<String, E2eError> {
         let deadline = Instant::now() + timeout;
         loop {
-            if let Ok(lines) = self.stderr_lines.lock()
+            if let Ok(lines) = self.child.stderr_lines.lock()
                 && let Some(line) = lines.iter().find(|line| line.starts_with(prefix))
             {
                 return Ok(line.clone());
@@ -463,8 +348,105 @@ impl Drop for BackendProcess {
     }
 }
 
-/// Stop a backend: SIGTERM the group, poll for exit up to [`SHUTDOWN_GRACE`], then SIGKILL
-/// the group unconditionally and reap. Returns the observed exit status.
+impl ServeOptions {
+    fn spawn(
+        &self,
+        binary: &Path,
+        project: &Path,
+        db: &Path,
+        root: &Path,
+        xdg_config_home: &Path,
+        xdg_data_home: &Path,
+    ) -> Result<(String, BackendChild), E2eError> {
+        let mut cmd = Command::new(binary);
+        if self.yolo {
+            cmd.arg("--yolo");
+        }
+        cmd.arg("--model")
+            .arg(&self.model_ref)
+            .arg("--db")
+            .arg(db)
+            .args(["serve", "--bind", "127.0.0.1:0"])
+            .args(&self.args)
+            .current_dir(project)
+            .env("HOME", root.join("home"))
+            .env("XDG_CONFIG_HOME", xdg_config_home)
+            .env("XDG_DATA_HOME", xdg_data_home)
+            .env("XDG_STATE_HOME", root.join("state"))
+            .env("XDG_CACHE_HOME", root.join("cache"))
+            .env_remove("HYA_MODEL")
+            .envs(self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        // Register fixture MCP tools before the first FakeLlm tool call.
+        if self.has_mcp {
+            cmd.env("HYA_DEFER_SIDEPLANES", "0");
+        }
+        BackendChild::spawn(&mut cmd, READINESS_TIMEOUT)
+    }
+}
+
+impl BackendChild {
+    fn spawn(cmd: &mut Command, timeout: Duration) -> Result<(String, Self), E2eError> {
+        // Own the process group so teardown reaches MCP and plugin children.
+        let mut process = cmd
+            .process_group(0)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| E2eError::Backend(format!("spawn hya: {error}")))?;
+        let deadline = Instant::now() + timeout;
+        let (Some(stdout), Some(stderr)) = (process.stdout.take(), process.stderr.take()) else {
+            terminate_process_group(&mut process, Duration::ZERO);
+            return Err(E2eError::Backend("missing piped backend output".into()));
+        };
+
+        let (ready, readiness) = mpsc::channel();
+        let stdout_reader = thread::spawn(move || forward_stdout(BufReader::new(stdout), ready));
+        let stderr_lines = Arc::new(Mutex::new(Vec::new()));
+        let stderr_reader = forward_stderr(stderr, Arc::clone(&stderr_lines));
+        let mut child = Self {
+            process,
+            stderr_lines,
+            readers: Some([stdout_reader, stderr_reader]),
+        };
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let error = match readiness.recv_timeout(remaining) {
+            Ok(Ok(url)) => return Ok((url, child)),
+            Ok(Err(error)) => format!("read backend stdout: {error}"),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                format!("timeout waiting for listen line after {timeout:?}")
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                "backend stdout closed before readiness".into()
+            }
+        };
+        child.shutdown(Duration::ZERO);
+        let stderr = child
+            .stderr_lines
+            .lock()
+            .map(|lines| {
+                lines
+                    .iter()
+                    .map(|line| redact_stderr(line))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        Err(E2eError::Backend(format!("{error}; stderr={stderr}")))
+    }
+
+    fn shutdown(&mut self, grace: Duration) -> Option<ExitStatus> {
+        let readers = self.readers.take()?;
+        let status = terminate_process_group(&mut self.process, grace);
+        for reader in readers {
+            let _ = reader.join();
+        }
+        status
+    }
+}
+
+/// Stop a backend: SIGTERM the group, poll for exit up to `grace`, then SIGKILL
+/// the group unconditionally and reap the backend.
 ///
 /// The graceful first step exists so the child runs its atexit handlers — that is what
 /// flushes LLVM `.profraw` data, and a SIGKILL'd backend contributes no coverage at all.
@@ -472,14 +454,14 @@ impl Drop for BackendProcess {
 /// no-orphan guarantee for a backend that ignores SIGTERM, and it also reaps anything the
 /// backend itself left behind in the group. This runs during panic unwinding too, so a
 /// failing scenario still tears its backend down.
-fn terminate_process_group(child: &mut Child) -> Option<std::process::ExitStatus> {
+fn terminate_process_group(child: &mut Child, grace: Duration) -> Option<ExitStatus> {
     // Signal the NEGATIVE pid to reach the whole group; the child was spawned with
     // `process_group(0)`, so this cannot reach the test runner.
     let pid = child.id() as libc::pid_t;
     unsafe {
         libc::kill(-pid, libc::SIGTERM);
     }
-    let deadline = Instant::now() + SHUTDOWN_GRACE;
+    let deadline = Instant::now() + grace;
     let mut status = None;
     loop {
         match child.try_wait() {
@@ -498,24 +480,28 @@ fn terminate_process_group(child: &mut Child) -> Option<std::process::ExitStatus
     status.or_else(|| child.wait().ok())
 }
 
-/// Echo the backend's stderr as `[backend] …` lines and keep a copy for
-/// [`BackendProcess::wait_stderr_line`]. A relay link is a credential: its line is
-/// kept but echoed redacted.
-fn forward_stderr(stderr: impl std::io::Read + Send + 'static, lines: Arc<Mutex<Vec<String>>>) {
-    std::thread::spawn(move || {
-        use std::io::BufRead;
-        for line in std::io::BufReader::new(stderr).lines() {
+// Keep the original link in memory for wait_stderr_line, but leave it out of logs and errors.
+fn redact_stderr(line: &str) -> &str {
+    if line.starts_with("hya relay link: ") {
+        "hya relay link: <redacted>"
+    } else {
+        line
+    }
+}
+
+fn forward_stderr(
+    stderr: impl io::Read + Send + 'static,
+    lines: Arc<Mutex<Vec<String>>>,
+) -> JoinHandle<()> {
+    thread::spawn(move || {
+        for line in BufReader::new(stderr).lines() {
             let Ok(line) = line else { break };
-            if line.starts_with("hya relay link: ") {
-                eprintln!("[backend] hya relay link: <redacted>");
-            } else {
-                eprintln!("[backend] {line}");
-            }
+            eprintln!("[backend] {}", redact_stderr(&line));
             if let Ok(mut lines) = lines.lock() {
                 lines.push(line);
             }
         }
-    });
+    })
 }
 
 fn render_mcp(mcp: &[McpFixture]) -> String {
@@ -574,47 +560,37 @@ fn temp_root(label: &str) -> Result<PathBuf, E2eError> {
     Ok(dir)
 }
 
-fn wait_for_listen(stdout: &mut impl std::io::Read, timeout: Duration) -> Result<String, E2eError> {
-    let start = Instant::now();
-    let mut buf = [0u8; 1024];
-    let mut acc = String::new();
+fn forward_stdout(mut stdout: impl BufRead, ready: mpsc::Sender<io::Result<String>>) {
+    let mut ready = Some(ready);
+    let mut buf = Vec::new();
     loop {
-        if start.elapsed() > timeout {
-            return Err(E2eError::Backend(format!(
-                "timeout waiting for listen line; got: {acc}"
-            )));
-        }
-        match std::io::Read::read(stdout, &mut buf) {
-            Ok(0) => {
-                return Err(E2eError::Backend(format!(
-                    "backend exited before readiness; output={acc}"
-                )));
-            }
-            Ok(n) => {
-                acc.push_str(&String::from_utf8_lossy(&buf[..n]));
-                if let Some(url) = parse_listen_url(&acc) {
-                    return Ok(url);
+        buf.clear();
+        match stdout.read_until(b'\n', &mut buf) {
+            Ok(0) => break,
+            Ok(_) => {
+                let text = String::from_utf8_lossy(&buf);
+                if let Some(line) = text.strip_suffix('\n')
+                    && let Some(url) = parse_listen_url(line.trim_end_matches('\r'))
+                    && let Some(ready) = ready.take()
+                {
+                    let _ = ready.send(Ok(url.to_owned()));
                 }
+                eprintln!("[backend-out] {}", text.trim_end_matches(['\r', '\n']));
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(20));
+            Err(error) => {
+                if let Some(ready) = ready {
+                    let _ = ready.send(Err(error));
+                }
+                break;
             }
-            Err(e) => return Err(E2eError::Backend(format!("read stdout: {e}"))),
         }
     }
 }
 
-fn parse_listen_url(text: &str) -> Option<String> {
-    for line in text.lines() {
-        if let Some(idx) = line.find("http://127.0.0.1:") {
-            let rest = &line[idx..];
-            let url: String = rest.chars().take_while(|c| c.is_ascii_graphic()).collect();
-            if url.starts_with("http://127.0.0.1:") {
-                return Some(url);
-            }
-        }
-    }
-    None
+fn parse_listen_url(line: &str) -> Option<&str> {
+    let url = line.strip_prefix(LISTEN_PREFIX)?;
+    let port = url.strip_prefix("http://127.0.0.1:")?.parse::<u16>().ok()?;
+    (port != 0).then_some(url)
 }
 
 /// Resolve the backend binary: `HYA_E2E_BACKEND_BIN` if set, else the workspace
@@ -731,6 +707,119 @@ pub fn materialize_public_bundle(dest_dir: &Path) -> Result<PathBuf, E2eError> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    struct FixtureDir(PathBuf);
+
+    impl Drop for FixtureDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn silent_backend_times_out_and_is_reaped() {
+        let fixture = FixtureDir(temp_root("hya-e2e-silent").unwrap());
+        let pid_file = fixture.0.join("pid");
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", "echo $$ > \"$1\"; exec sleep 10", "fixture"])
+            .arg(&pid_file);
+        let timeout = Duration::from_millis(500);
+        let started = Instant::now();
+
+        let Err(E2eError::Backend(error)) = BackendChild::spawn(&mut cmd, timeout) else {
+            panic!("silent child must fail readiness");
+        };
+        let elapsed = started.elapsed();
+
+        assert!(error.contains("timeout waiting for listen line"), "{error}");
+        assert!(
+            elapsed >= timeout && elapsed < Duration::from_secs(2),
+            "{elapsed:?}"
+        );
+        let pid: libc::pid_t = std::fs::read_to_string(pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        // SAFETY: `pid` is the fixture process ID; WNOHANG keeps this assertion bounded.
+        assert_eq!(
+            unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) },
+            -1
+        );
+        assert_eq!(
+            io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECHILD)
+        );
+    }
+
+    #[test]
+    fn stdout_waits_for_the_complete_listen_line_across_reads() {
+        let output =
+            b"probe at http://127.0.0.1:9\nhya server listening on http://127.0.0.1:12345\n";
+        let (ready, readiness) = mpsc::channel();
+        forward_stdout(BufReader::with_capacity(3, output.as_slice()), ready);
+
+        assert_eq!(
+            readiness.try_recv().unwrap().unwrap(),
+            "http://127.0.0.1:12345"
+        );
+        assert_eq!(
+            readiness.try_recv().unwrap_err(),
+            mpsc::TryRecvError::Disconnected
+        );
+    }
+
+    #[test]
+    fn reopen_replaces_stderr_and_keeps_draining_stdout() {
+        let fixture = FixtureDir(temp_root("hya-e2e-reopen").unwrap());
+        let binary = fixture.0.join("hya-fixture");
+        std::fs::write(
+            &binary,
+            r#"#!/bin/sh
+set -eu
+if [ -f "$HOME/started" ]; then
+    phase=reopen
+    port=12346
+else
+    : > "$HOME/started"
+    phase=start
+    port=12345
+fi
+printf 'hya server listening on http://127.0.0.1:%s\n' "$port"
+while [ ! -f "$HOME/check-stdout-$phase" ]; do sleep 0.01; done
+printf 'stdout after %s\n' "$phase"
+printf 'stderr after %s\n' "$phase" >&2
+exec sleep 10
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut backend =
+            BackendProcess::start(&BackendSpec::new(binary, "http://127.0.0.1:1")).unwrap();
+        assert_eq!(backend.url, "http://127.0.0.1:12345");
+        let home = backend.root.join("home");
+        std::fs::write(home.join("check-stdout-start"), "").unwrap();
+        let timeout = Duration::from_secs(5);
+        backend
+            .wait_stderr_line("stderr after start", timeout)
+            .unwrap();
+        let old_pid = backend.pid();
+
+        backend.reopen().unwrap();
+
+        assert_ne!(backend.pid(), old_pid);
+        assert_eq!(backend.url, "http://127.0.0.1:12346");
+        std::fs::write(home.join("check-stdout-reopen"), "").unwrap();
+        backend
+            .wait_stderr_line("stderr after reopen", timeout)
+            .unwrap();
+        assert!(
+            backend
+                .wait_stderr_line("stderr after start", Duration::ZERO)
+                .is_err()
+        );
+    }
 
     #[test]
     fn backend_bin_override_wins_over_the_workspace_debug_path() {
