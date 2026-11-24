@@ -1,9 +1,7 @@
 //! Rehearse the GitHub release workflow without creating or publishing a release.
 //!
-//! This command deliberately keeps the workflow as the packaging contract. It
-//! validates the YAML and embedded shell first, then executes the same locked
-//! build and asset layout in a temporary directory. No Git tag or provider
-//! request is needed for any step.
+//! Build locked release inputs and stage them through the same code as CI,
+//! then archive and smoke-test the installed layout in a temporary directory.
 
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -14,7 +12,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result, bail, ensure};
 
-const BUN_VERSION: &str = "1.4.2";
+use crate::first_party_release::StageOptions;
+use crate::release_staging::{
+    self, ARGUS_PACKAGE, BUN_ADAPTER_RUNTIME, BUN_VERSION, BunRuntime, CLAUDE_ADAPTER_RUNTIME,
+    PACKAGED_BUN, PACKAGED_RUNTIMES, TUI_RUNTIME, TUI_SDK_RUNTIME, TUI_WEB_RUNTIME, copy_file,
+    repo_root,
+};
+
 /// Highest text-lockfile version [`BUN_VERSION`] can read.
 const BUN_LOCKFILE_VERSION: u64 = 2;
 /// Targets the release matrix builds; a rehearsal runs on one of these hosts.
@@ -90,78 +94,6 @@ const NATIVE_BUNDLE_CRATES: [&str; 5] = [
     "hya-network-tools",
     "hya-channel-tools",
     "hya-compaction",
-];
-const BUN_ADAPTER: &str = "crates/hya-plugin-bun/adapter";
-const ARGUS_PACKAGE_SCRIPT: &str = "scripts/package-argus-example.sh";
-const PACKAGED_BUN: &str = "lib/hya/bin/bun";
-
-/// One Bun program the archive ships under `lib/hya` with production dependencies.
-struct BunRuntime {
-    /// Workspace directory the program is copied from.
-    source: &'static str,
-    /// Package-relative directory it is installed into.
-    destination: &'static str,
-    /// Top-level files copied as-is.
-    files: &'static [&'static str],
-    /// Directories copied recursively.
-    directories: &'static [&'static str],
-}
-
-/// The Bun extension adapter for `kind: bun` plugins.
-const BUN_ADAPTER_RUNTIME: BunRuntime = BunRuntime {
-    source: BUN_ADAPTER,
-    destination: "lib/hya/bun-adapter",
-    files: &["package.json", "bun.lock"],
-    directories: &["src"],
-};
-
-/// The Claude Code adapter for local imports and `kind: claude` plugins.
-const CLAUDE_ADAPTER_RUNTIME: BunRuntime = BunRuntime {
-    source: "crates/hya-plugin-claude/adapter",
-    destination: "lib/hya/claude-adapter",
-    files: &["package.json", "bun.lock"],
-    directories: &["src"],
-};
-
-/// The OpenTUI terminal UI bare `hya` runs.
-const TUI_RUNTIME: BunRuntime = BunRuntime {
-    source: "packages/hya-tui",
-    destination: "lib/hya/tui",
-    files: &[
-        "build.ts",
-        "package.json",
-        "bun.lock",
-        "bunfig.toml",
-        "tsconfig.json",
-        "frontend-version.ts",
-    ],
-    directories: &["src"],
-};
-
-/// The WebUI host that serves the TUI to the browser over a PTY.
-const TUI_WEB_RUNTIME: BunRuntime = BunRuntime {
-    source: "packages/hya-tui-web",
-    destination: "lib/hya/tui-web",
-    files: &["package.json", "bun.lock", "tsconfig.json"],
-    directories: &["src", "web"],
-};
-
-/// The TUI extension SDK: the shared extension host the TUI starts, and the
-/// QuickJS VM bundle TUI extensions run in.
-const TUI_SDK_RUNTIME: BunRuntime = BunRuntime {
-    source: "packages/hya-tui-sdk",
-    destination: "lib/hya/tui-sdk",
-    files: &["package.json", "bun.lock", "tsconfig.json"],
-    directories: &["src"],
-};
-
-/// Every Bun program in the release archive, in staging order.
-const PACKAGED_RUNTIMES: [&BunRuntime; 5] = [
-    &BUN_ADAPTER_RUNTIME,
-    &CLAUDE_ADAPTER_RUNTIME,
-    &TUI_SDK_RUNTIME,
-    &TUI_RUNTIME,
-    &TUI_WEB_RUNTIME,
 ];
 
 /// Production dependencies the staged TUI must contain (besides its native package).
@@ -278,10 +210,7 @@ impl Drop for ScratchDirectory {
 /// Returns an error when arguments, release metadata, or any release command
 /// fails. The command never performs a publishing action.
 ///
-/// The release workflow's own correctness (action pins, trigger tags, job
-/// structure, embedded shell) belongs to `actionlint` in the workflow and to a
-/// real trial release; this task checks only what CI cannot check cheaply: the
-/// aggregate version contract and the packaged layout.
+/// Workflow syntax is checked separately with `actionlint`.
 pub fn run(args: Vec<String>) -> Result<()> {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         print_usage();
@@ -291,8 +220,9 @@ pub fn run(args: Vec<String>) -> Result<()> {
     let root = repo_root()?;
     validate_release_metadata(&root, &options.version, &options.target)?;
     require_host_target(&options.target, &host_target(&root)?)?;
+    let bun = release_staging::release_bun()?;
     prepare_and_build(&root, &options.target)?;
-    rehearse_package(&root, &options.version, &options.target)?;
+    rehearse_package(&root, &options.version, &options.target, &bun)?;
 
     println!(
         "release-rehearsal: ok — version {}, target {}, no publish",
@@ -352,16 +282,6 @@ fn next_argument(args: &[String], index: &mut usize, option: &str) -> Result<Str
         "{option} requires a value, found `{value}`"
     );
     Ok(value.clone())
-}
-
-/// Return the workspace root from this crate's manifest directory.
-fn repo_root() -> Result<PathBuf> {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .parent()
-        .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .context("resolve workspace root from CARGO_MANIFEST_DIR")
 }
 
 /// Validate the semver, unified version files, and newest-only changelog contract.
@@ -549,15 +469,8 @@ fn is_release_tag(tag: &str) -> bool {
     !version.contains('+') && is_semver(version)
 }
 
-/// Check the pinned Bun (used by runtime packaging) and run the
-/// exact locked target release build.
+/// Run the locked target release builds.
 fn prepare_and_build(root: &Path, target: &str) -> Result<()> {
-    let bun_version = run_checked(OsStr::new("bun"), &arg_list(&["--version"]), root, &[], &[])?;
-    ensure!(
-        String::from_utf8_lossy(&bun_version.stdout).trim() == BUN_VERSION,
-        "Bun from PATH must report version {BUN_VERSION}"
-    );
-
     let args = vec![
         "build".to_owned(),
         "--release".to_owned(),
@@ -581,14 +494,12 @@ fn prepare_and_build(root: &Path, target: &str) -> Result<()> {
 }
 
 /// Reproduce the unified workflow archive, checksum, extraction, and smoke checks.
-fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
+fn rehearse_package(root: &Path, version: &str, target: &str, bun: &Path) -> Result<()> {
     let scratch = ScratchDirectory::create()?;
     let dist = scratch.path().join("dist");
     fs::create_dir_all(&dist).with_context(|| format!("create {}", dist.display()))?;
     let package_name = format!("{BINARY_NAME}-{version}-{target}");
     let package_root = dist.join(&package_name);
-    let bin = package_root.join("bin");
-    fs::create_dir_all(&bin).with_context(|| format!("create {}", bin.display()))?;
 
     let metadata = run_checked(
         OsStr::new("cargo"),
@@ -602,29 +513,19 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
         .as_str()
         .context("cargo metadata did not report a target directory")?;
     let release_inputs = Path::new(target_dir).join(target).join("release");
-    let backend_source = release_inputs.join("hya");
-    let backend_destination = bin.join("hya");
-    copy_file(&backend_source, &backend_destination)?;
-    set_executable(&backend_destination)?;
-    copy_file(&root.join("README.md"), &package_root.join("README.md"))?;
-    copy_file(
-        &root.join("THIRD_PARTY_NOTICES"),
-        &package_root.join("THIRD_PARTY_NOTICES"),
-    )?;
-    let packaged_bun = package_root.join(PACKAGED_BUN);
-    copy_file(&bun_on_path()?, &packaged_bun)?;
-    set_executable(&packaged_bun)?;
-
-    for runtime in PACKAGED_RUNTIMES {
-        let destination = package_root.join(runtime.destination);
-        stage_bun_runtime(root, runtime, &destination)?;
-        install_runtime_dependencies(runtime, &destination)?;
-    }
-
-    let example = package_root.join("examples/hya-argus-example.hyabundle");
-    fs::create_dir_all(example.parent().context("example archive has no parent")?)
-        .context("create example archive directory")?;
-    package_argus_example(root, &example)?;
+    let staged = release_staging::stage(
+        root,
+        &StageOptions {
+            version: version.to_owned(),
+            library_dir: release_inputs,
+            package_root: package_root.clone(),
+            target: Some(target.to_owned()),
+            assets: Some(dist.clone()),
+        },
+        bun,
+    )
+    .context("stage the release package")?;
+    let example = package_root.join(ARGUS_PACKAGE);
     run_checked(
         OsStr::new("7z"),
         &["t".to_owned(), example.display().to_string()],
@@ -647,14 +548,6 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
     .context("list packaged example archive")?;
     verify_example_listing(&String::from_utf8_lossy(&seven_zip_listing.stdout))?;
 
-    let staged = crate::first_party_release::stage(&crate::first_party_release::StageOptions {
-        version: version.to_owned(),
-        library_dir: release_inputs,
-        package_root: package_root.clone(),
-        target: Some(target.to_owned()),
-        assets: Some(dist.clone()),
-    })
-    .context("stage first-party bundles like the release workflow")?;
     let assets = staged
         .iter()
         .map(|bundle| {
@@ -731,57 +624,6 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
     Ok(())
 }
 
-/// Copy one Bun program's manifest files and source trees into the package.
-fn stage_bun_runtime(root: &Path, runtime: &BunRuntime, destination: &Path) -> Result<()> {
-    let source = root.join(runtime.source);
-    fs::create_dir_all(destination)
-        .with_context(|| format!("create packaged runtime {}", destination.display()))?;
-    for file in runtime.files {
-        copy_file(&source.join(file), &destination.join(file))?;
-    }
-    for directory in runtime.directories {
-        copy_directory_contents(&source.join(directory), &destination.join(directory))?;
-    }
-    Ok(())
-}
-
-/// Install production dependencies in one packaged Bun program.
-fn install_runtime_dependencies(runtime: &BunRuntime, destination: &Path) -> Result<()> {
-    run_checked(
-        OsStr::new("bun"),
-        &arg_list(&["install", "--frozen-lockfile", "--production"]),
-        destination,
-        &[],
-        &[],
-    )
-    .with_context(|| format!("install {} production dependencies", runtime.destination))?;
-    if runtime.source == TUI_RUNTIME.source {
-        run_checked(
-            OsStr::new("bun"),
-            &arg_list(&["run", "build"]),
-            destination,
-            &[],
-            &[],
-        )
-        .context("precompile the TUI JSX for startup")?;
-    }
-    Ok(())
-}
-
-/// Use the repository's package writer for the release's example bundle.
-fn package_argus_example(root: &Path, output: &Path) -> Result<()> {
-    let script = root.join(ARGUS_PACKAGE_SCRIPT);
-    let source = root.join("bundles/examples/argus-example");
-    let args = vec![
-        script.display().to_string(),
-        source.display().to_string(),
-        output.display().to_string(),
-    ];
-    run_checked(OsStr::new("bash"), &args, root, &[], &[])
-        .context("package Argus example with the release package writer")?;
-    Ok(())
-}
-
 /// Write SHA256SUMS for the archive and bundle assets, then verify it like CI.
 fn write_and_verify_checksums(
     dist: &Path,
@@ -846,6 +688,10 @@ fn verify_package_layout(package_root: &Path, target: &str) -> Result<()> {
         &["src/main.ts"],
         &[],
         &["@types/bun", "typescript"],
+    )?;
+    require_file(
+        &package_root.join(TUI_RUNTIME.destination).join("build.ts"),
+        "packaged TUI build entry point",
     )?;
     verify_tui_layout(package_root, target)?;
     for identity in hya_bundle::FIRST_PARTY_BUNDLES {
@@ -954,7 +800,7 @@ fn verify_archive_listing(
         "lib/hya/tui/dist/app.js",
         "lib/hya/tui-web/web/index.html",
         "lib/hya/tui-sdk/src/main.ts",
-        "examples/hya-argus-example.hyabundle",
+        ARGUS_PACKAGE,
     ] {
         require_listing_line(
             &listing,
@@ -1055,15 +901,6 @@ fn smoke_first_party_bundles(
         );
     }
     Ok(())
-}
-
-/// Find the pinned Bun on `PATH` ([`prepare_and_build`] checked its version).
-fn bun_on_path() -> Result<PathBuf> {
-    let path = std::env::var_os("PATH").context("PATH is not set")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join("bun"))
-        .find(|candidate| candidate.is_file())
-        .context("bun is not on PATH")
 }
 
 /// Install the unified archive with `scripts/hya-install.sh` from a `file://`
@@ -1489,66 +1326,6 @@ fn unresolved_imports(output: &str) -> String {
     } else {
         report.join("\n")
     }
-}
-
-/// Copy one source file and preserve a path-specific failure context.
-fn copy_file(source: &Path, destination: &Path) -> Result<()> {
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-    }
-    fs::copy(source, destination)
-        .with_context(|| format!("copy {} to {}", source.display(), destination.display()))?;
-    Ok(())
-}
-
-/// Recursively copy directory contents while rejecting symlinked release inputs.
-fn copy_directory_contents(source: &Path, destination: &Path) -> Result<()> {
-    fs::create_dir_all(destination).with_context(|| format!("create {}", destination.display()))?;
-    let entries = fs::read_dir(source)
-        .with_context(|| format!("read release source directory {}", source.display()))?;
-    for entry in entries {
-        let entry = entry.with_context(|| format!("read entry in {}", source.display()))?;
-        let source_path = entry.path();
-        let destination_path = destination.join(entry.file_name());
-        let metadata = fs::symlink_metadata(&source_path)
-            .with_context(|| format!("inspect {}", source_path.display()))?;
-        ensure!(
-            !metadata.file_type().is_symlink(),
-            "release source contains symlink {}",
-            source_path.display()
-        );
-        if metadata.is_dir() {
-            copy_directory_contents(&source_path, &destination_path)?;
-        } else if metadata.is_file() {
-            copy_file(&source_path, &destination_path)?;
-        } else {
-            bail!(
-                "release source contains unsupported path {}",
-                source_path.display()
-            );
-        }
-    }
-    Ok(())
-}
-
-/// Mark one packaged executable as user-runnable on Unix hosts.
-#[cfg(unix)]
-fn set_executable(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mut permissions = fs::metadata(path)
-        .with_context(|| format!("inspect executable {}", path.display()))?
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(path, permissions)
-        .with_context(|| format!("set executable permissions on {}", path.display()))?;
-    Ok(())
-}
-
-/// Keep release files unchanged on platforms without Unix mode bits.
-#[cfg(not(unix))]
-fn set_executable(_path: &Path) -> Result<()> {
-    Ok(())
 }
 
 /// Require a regular file at one release path.

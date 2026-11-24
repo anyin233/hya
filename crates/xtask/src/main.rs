@@ -14,6 +14,8 @@
 //!
 //! - `stage-first-party-bundles` — package the eleven trusted first-party
 //!   bundles for an installed layout and, optionally, as release assets.
+//! - `stage-release` — assemble a release package root from built inputs.
+//! - `stage-bun-programs` — stage the Bun programs for a source install.
 //! - `release-rehearsal` — validate and smoke the non-publishing release asset.
 //! - `gen-api` — regenerate the `hya.v1` contract crate and its docs from
 //!   `proto/hya/v1` (Rust codegen + API reference + OpenAPI).
@@ -32,6 +34,7 @@ mod lifecycle_bench;
 mod matrix_check;
 mod package_bundle;
 mod release_rehearsal;
+mod release_staging;
 mod startup_bench;
 
 fn main() {
@@ -44,6 +47,8 @@ fn main() {
         Some("package-native-tool-bundle") => package_bundle::run_native(args.collect()),
         Some("package-native-tool-library") => package_bundle::run_native_library(args.collect()),
         Some("stage-first-party-bundles") => first_party_release::run(args.collect()),
+        Some("stage-release") => release_staging::run(args.collect()),
+        Some("stage-bun-programs") => release_staging::run_bun_programs(args.collect()),
         Some("release-rehearsal") => release_rehearsal::run(args.collect()),
         Some("lifecycle-bench") => lifecycle_bench::run(args.collect()),
         Some("startup-bench") => startup_bench::run(args.collect()),
@@ -53,7 +58,7 @@ fn main() {
         Some("gen-plugin") => gen_plugin::run(args.collect()),
         _ => {
             eprintln!(
-                "usage: cargo xtask <startup-bench|lifecycle-bench|matrix-check|package-bundle|package-native-tool-bundle|package-native-tool-library|release-rehearsal|gen-api|gen-relay|gen-plugin>"
+                "usage: cargo xtask <startup-bench|lifecycle-bench|matrix-check|package-bundle|package-native-tool-bundle|package-native-tool-library|stage-first-party-bundles|stage-release|stage-bun-programs|release-rehearsal|gen-api|gen-relay|gen-plugin>"
             );
             Ok(())
         }

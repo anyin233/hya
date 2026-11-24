@@ -113,37 +113,15 @@ fi
 root_dir="$(dirname "$bin_dir")"
 lib_dir="$root_dir/lib/hya"
 bundles_dir="$root_dir/bundles"
-source_dir="$(pwd -P)"
-
-# Bun programs installed under lib/hya: name, source directory, top-level
-# files, and recursively copied directories (the release archive layout).
-lib_names=(bun-adapter claude-adapter tui tui-web tui-sdk)
-lib_sources=(
-  "$source_dir/crates/hya-plugin-bun/adapter"
-  "$source_dir/crates/hya-plugin-claude/adapter"
-  "$source_dir/packages/hya-tui"
-  "$source_dir/packages/hya-tui-web"
-  "$source_dir/packages/hya-tui-sdk"
-)
-lib_files=(
-  "package.json bun.lock"
-  "package.json bun.lock"
-  "package.json bun.lock bunfig.toml tsconfig.json frontend-version.ts"
-  "package.json bun.lock tsconfig.json"
-  "package.json bun.lock tsconfig.json"
-)
-lib_dirs=("src" "src" "src" "src web" "src")
-had_lib=(0 0 0 0 0)
-placed_lib=(0 0 0 0 0)
-
-lib_tmp() {
-  printf '%s\n' "$lib_dir/.$1.tmp.$$"
-}
+lib_names=()
+had_lib=()
+placed_lib=()
 
 lib_bak() {
   printf '%s\n' "$lib_dir/.$1.bak.$$"
 }
 
+tmp_programs="$lib_dir/.hya-programs.tmp.$$"
 tmp_backend="$bin_dir/.hya.tmp.$$"
 tmp_bundles="$bundles_dir/.hya-bundles.tmp.$$"
 bak_backend="$bin_dir/.hya.bak.$$"
@@ -157,10 +135,7 @@ placed_bundles=()
 cleanup_leftovers() {
   local name
   rm -f "$tmp_backend"
-  rm -rf "$tmp_bundles"
-  for name in "${lib_names[@]}"; do
-    rm -rf "$(lib_tmp "$name")"
-  done
+  rm -rf "${tmp_bundles:?}" "${tmp_programs:?}"
   if [[ "$install_complete" -eq 1 ]]; then
     rm -f "$bak_backend"
     rm -rf "$bak_bundles"
@@ -237,30 +212,11 @@ preflight_path() {
   fi
 }
 
-# Copy one lib/hya program into its temporary directory and install its
-# production dependencies there, so the live install is replaced by a rename.
-stage_lib() {
-  local index=$1 name=${lib_names[$1]} source=${lib_sources[$1]} tmp file dir
-  tmp=$(lib_tmp "$name")
-  run mkdir -p "$tmp"
-  for file in ${lib_files[$index]}; do
-    run cp "$source/$file" "$tmp/"
-  done
-  for dir in ${lib_dirs[$index]}; do
-    run mkdir -p "$tmp/$dir"
-    run cp -R "$source/$dir/." "$tmp/$dir/"
-  done
-  say "+ (cd $tmp && bun install --frozen-lockfile --production)"
-  if [[ "$dry_run" -eq 0 ]]; then
-    (cd "$tmp" && bun install --frozen-lockfile --production)
-  fi
-}
-
 trap on_error ERR INT TERM
 say "Installing hya to $bin_dir"
 say "Installing first-party bundles to $bundles_dir"
-say "Installing Bun and Claude adapters, TUI, WebUI host, and TUI SDK to $lib_dir/{bun-adapter,claude-adapter,tui,tui-web,tui-sdk}"
-say "Rollback backup paths: $bak_backend $bak_bundles $(lib_bak '{bun-adapter,claude-adapter,tui,tui-web,tui-sdk}')"
+say "Installing Bun programs to $lib_dir"
+say "Rollback backup paths: $bak_backend $bak_bundles $(lib_bak '<program>')"
 say "Permission preflight: $bin_dir $bundles_dir $lib_dir"
 preflight_path "$bin_dir"
 preflight_path "$bundles_dir"
@@ -272,10 +228,17 @@ run cargo build --locked ${profile_args[@]+"${profile_args[@]}"} "${tool_librari
 run mkdir -p "$bin_dir" "$lib_dir" "$bundles_dir"
 run install -m 0755 "$target_dir/hya" "$tmp_backend"
 run cargo run --locked -p xtask -- stage-first-party-bundles --library-dir "$target_dir" --package-root "$tmp_bundles"
-for index in "${!lib_names[@]}"; do
-  stage_lib "$index"
-done
-[[ "$dry_run" -ne 0 ]] || rollback_enabled=1
+run cargo run --locked -p xtask -- stage-bun-programs --package-root "$tmp_programs"
+if [[ "$dry_run" -eq 0 ]]; then
+  for program in "$tmp_programs"/lib/hya/*; do
+    lib_names+=("${program##*/}")
+    had_lib+=(0)
+    placed_lib+=(0)
+  done
+  rollback_enabled=1
+else
+  say "+ move staged programs in $tmp_programs/lib/hya to $lib_dir"
+fi
 if [[ -e "$bin_dir/hya" ]]; then
   had_backend=1
   run mv -f "$bin_dir/hya" "$bak_backend"
@@ -308,7 +271,7 @@ run mv -f "$tmp_backend" "$bin_dir/hya"
 for index in "${!lib_names[@]}"; do
   name=${lib_names[$index]}
   placed_lib[index]=1
-  run mv "$(lib_tmp "$name")" "$lib_dir/$name"
+  run mv "$tmp_programs/lib/hya/$name" "$lib_dir/$name"
 done
 
 verify_home="${TMPDIR:-/tmp}/hya-install-verify.$$"
