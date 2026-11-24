@@ -27,6 +27,7 @@ mod projection_cache;
 mod recovery;
 mod resident_claim;
 mod workflow;
+mod write_queue;
 
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::Write as _;
@@ -64,6 +65,12 @@ pub use project::{Project, ProjectSummary, normalize_project_path};
 pub use recovery::{INTERRUPTED_REASON, InterruptedTurnRecovery};
 pub use resident_claim::{EpisodeRegistration, RecoveredActorClaim, ResidentWorkPrompt};
 pub use workflow::{WorkflowAdmissionOutcome, WorkflowSelectionOutcome};
+pub use write_queue::{
+    EXIT_DRAIN_TIMEOUT, ExitDrainReport, OPEN_TIMEOUT, READ_TIMEOUT, StoreHealth, WRITE_TIMEOUT,
+};
+
+// A busy disk can delay both pool acquisition and release of SQLite locks.
+const FILE_POOL_WAIT_TIMEOUT: Duration = Duration::from_secs(300);
 
 struct RuntimeOwnerState {
     paths: Option<DatabasePaths>,
@@ -180,15 +187,27 @@ pub struct DatabasePaths {
 /// Resolve a plain database filename and all sidecars using one identity.
 /// Only `""` and `":memory:"` select memory. All database URIs are rejected:
 /// runtime writers must use a plain path with a canonical lock identity.
-pub fn database_paths(db: &str) -> std::io::Result<Option<DatabasePaths>> {
-    if db.is_empty() || db == ":memory:" {
-        return Ok(None);
-    }
+/// Validate only the lexical database argument form (`""`, `":memory:"`, or a
+/// plain filesystem path) without performing any filesystem syscalls.
+///
+/// # Errors
+/// Returns [`std::io::ErrorKind::InvalidInput`] for `file:` or `sqlite:` URIs.
+pub fn validate_database_arg(db: &str) -> std::io::Result<()> {
     if db.starts_with("file:") || db.starts_with("sqlite:") {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "database URIs are not supported; use a plain filesystem path or :memory:",
         ));
+    }
+    Ok(())
+}
+
+/// Canonical filesystem paths for `db`, or `None` for in-memory spellings
+/// (`""` and `":memory:"`).
+pub fn database_paths(db: &str) -> std::io::Result<Option<DatabasePaths>> {
+    validate_database_arg(db)?;
+    if db.is_empty() || db == ":memory:" {
+        return Ok(None);
     }
     let database = resolve_database_path(Path::new(db), &mut 40)?;
     let with = |suffix: &str| {
@@ -248,6 +267,42 @@ fn runtime_owner_lock_error(path: Option<&Path>, source: std::io::Error) -> Stor
     StoreError::RuntimeOwnerLock {
         path: path.map_or_else(|| PathBuf::from("<memory>"), Path::to_path_buf),
         source: Arc::new(source),
+    }
+}
+
+pub(crate) async fn run_on_detached_thread<F, T>(f: F) -> Result<T, StoreError>
+where
+    F: FnOnce() -> Result<T, StoreError> + Send + 'static,
+    T: Send + 'static,
+{
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("hya-store-io".into())
+        .spawn(move || {
+            let _ = tx.send(f());
+        })
+        .map_err(|err| StoreError::from(sqlx::Error::Io(err)))?;
+    rx.await
+        .unwrap_or_else(|_| Err(StoreError::from(sqlx::Error::WorkerCrashed)))
+}
+
+#[cfg(test)]
+static TEST_STALL_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn is_open_storage_fault(error: &StoreError) -> bool {
+    match error {
+        StoreError::RuntimeOwnerBusy | StoreError::UnsupportedDatabase => false,
+        StoreError::RuntimeOwnerLock { source, .. } => {
+            source.kind() != std::io::ErrorKind::InvalidInput
+        }
+        StoreError::Migrate(err) => match err.as_ref() {
+            sqlx::migrate::MigrateError::Execute(sqlx_err)
+            | sqlx::migrate::MigrateError::ExecuteMigration(sqlx_err, _) => {
+                error::is_sqlite_storage_fault(sqlx_err)
+            }
+            _ => false,
+        },
+        other => other.is_storage_fault(),
     }
 }
 
@@ -326,6 +381,12 @@ fn acquire_runtime_owner_lock(paths: &DatabasePaths) -> Result<RuntimeOwnerLock,
     }
 }
 
+#[derive(Clone, Debug)]
+struct MemoryFallbackInfo {
+    path: PathBuf,
+    reason: String,
+}
+
 /// SQLite-backed session event log, resident claims, and related tables.
 ///
 /// Construct with [`SessionStore::connect`] (file) or [`SessionStore::connect_memory`].
@@ -334,10 +395,15 @@ fn acquire_runtime_owner_lock(paths: &DatabasePaths) -> Result<RuntimeOwnerLock,
 /// snapshots) as a pure cache of that reducer, shared by every clone.
 #[derive(Clone)]
 pub struct SessionStore {
-    pool: sqlx::SqlitePool,
+    writer_pool: sqlx::SqlitePool,
+    read_pool: sqlx::SqlitePool,
+    write_queue: Option<write_queue::WriteQueue>,
+    read_timeout: Duration,
     runtime_owner: Arc<RuntimeOwnerState>,
     projections: Arc<ProjectionCache>,
     read_only: bool,
+    memory_fallback: Option<Arc<MemoryFallbackInfo>>,
+    exit_reported: Arc<std::sync::atomic::AtomicBool>,
     /// In-memory stores only: an idle connection that keeps the database
     /// alive. SQLite drops an in-memory database with its last connection,
     /// and the pool closes its one connection when a query future is dropped
@@ -378,61 +444,360 @@ impl SessionStore {
 
     /// Open a plain filesystem path (initialize the schema and enable WAL), or
     /// `""` / `":memory:"` with the keeper-backed in-memory mode.
-    /// This does not make the caller a runtime owner; runtime writers use
-    /// [`Self::connect_runtime`] and [`Self::claim_runtime_owner`].
-    /// Existing databases without the current baseline return [`StoreError::UnsupportedDatabase`].
+    ///
+    /// This does not acquire the exclusive runtime-owner lock and must not be
+    /// used to open a second concurrent appender on the same database file
+    /// (in-process sequence numbering assumes one appender process; a second
+    /// writer would trigger a foreign-writer conflict halt). Runtime writers
+    /// use [`Self::connect_runtime`] / [`Self::connect_runtime_or_memory`] and
+    /// [`Self::claim_runtime_owner`]. Existing databases without the current
+    /// baseline return [`StoreError::UnsupportedDatabase`].
     pub async fn connect(path: &str) -> Result<Self, StoreError> {
+        Self::connect_with_timeouts(path, WRITE_TIMEOUT, READ_TIMEOUT).await
+    }
+
+    fn writer_pool_options() -> SqlitePoolOptions {
+        use sqlx::TransactionManager as _;
+        SqlitePoolOptions::new()
+            .max_connections(1)
+            // Skip pre-acquire ping: cancelling a pending acquire mid-ping drops the popped
+            // `Floating<Idle>` handle and closes the sole writer (triggering WAL checkpoint if
+            // no readers are open). `after_release` and sqlx's release ping validate on drop.
+            .test_before_acquire(false)
+            // Closing the last connection of a WAL database checkpoints under an exclusive lock.
+            .max_lifetime(None)
+            .idle_timeout(None)
+            // Discard a pooled writer connection if SQLite auto-rolled back (e.g. SQLITE_FULL)
+            // while sqlx's worker still considers a transaction open.
+            .after_release(|conn, _| {
+                Box::pin(async move {
+                    use sqlx::Connection as _;
+                    if <sqlx::Sqlite as sqlx::Database>::TransactionManager::get_transaction_depth(
+                        conn,
+                    ) == 0
+                    {
+                        return Ok(true);
+                    }
+                    // Flush queued worker commands (async `Transaction::drop` rollbacks
+                    // and any `Command::Begin` from a cancelled `begin_with`).
+                    conn.ping().await?;
+                    if <sqlx::Sqlite as sqlx::Database>::TransactionManager::get_transaction_depth(
+                        conn,
+                    ) == 0
+                    {
+                        return Ok(true);
+                    }
+                    // Roll back an open transaction left by a cancelled `begin_with` without
+                    // closing the pinned writer; if SQLite already auto-rolled back (e.g.
+                    // ENOSPC), `ROLLBACK` fails and we discard the poisoned connection.
+                    Ok(
+                        <sqlx::Sqlite as sqlx::Database>::TransactionManager::rollback(conn)
+                            .await
+                            .is_ok(),
+                    )
+                })
+            })
+    }
+
+    /// Current durability health of this store (`Healthy` or `Degraded`).
+    #[must_use]
+    pub fn health(&self) -> StoreHealth {
+        match &self.write_queue {
+            Some(queue) => queue.health(),
+            None => StoreHealth::Healthy,
+        }
+    }
+
+    /// Configured bound for fallback-guarded reads (`READ_TIMEOUT` in production).
+    #[must_use]
+    pub fn read_timeout(&self) -> Duration {
+        self.read_timeout
+    }
+
+    /// Test-only helper to open a store with custom synchronous write and fallback read bounds.
+    #[doc(hidden)]
+    pub async fn connect_with_timeouts(
+        path: &str,
+        write_timeout: Duration,
+        read_timeout: Duration,
+    ) -> Result<Self, StoreError> {
         let paths = database_paths(path)
             .map_err(|source| runtime_owner_lock_error(Some(Path::new(path)), source))?;
         match paths {
-            Some(paths) => Self::connect_file(paths, None).await,
+            Some(paths) => Self::connect_file(paths, None, write_timeout, read_timeout).await,
             None => Self::connect_memory().await,
         }
+    }
+
+    /// Test-only helper to open a store with custom synchronous write and read bounds.
+    #[doc(hidden)]
+    pub async fn connect_with_write_timeout(
+        path: &str,
+        timeout: Duration,
+    ) -> Result<Self, StoreError> {
+        Self::connect_with_timeouts(path, timeout, timeout).await
     }
 
     async fn connect_file(
         paths: DatabasePaths,
         lock: Option<RuntimeOwnerLock>,
+        write_timeout: Duration,
+        read_timeout: Duration,
     ) -> Result<Self, StoreError> {
-        let opts = SqliteConnectOptions::new()
+        let writer_opts = SqliteConnectOptions::new()
             .filename(&paths.database)
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
-            .busy_timeout(Duration::from_secs(5))
+            .busy_timeout(FILE_POOL_WAIT_TIMEOUT)
             .foreign_keys(true);
-        let pool_options = SqlitePoolOptions::new().max_connections(8);
+        let writer_pool_options =
+            Self::writer_pool_options().acquire_timeout(FILE_POOL_WAIT_TIMEOUT);
         #[cfg(feature = "lifecycle-bench")]
-        let pool_options =
-            pool_options.after_connect(|connection, _| Box::pin(bench::install(connection)));
-        let pool = pool_options.connect_with(opts).await?;
-        Self::migrate(&pool).await?;
+        let writer_pool_options =
+            writer_pool_options.after_connect(|connection, _| Box::pin(bench::install(connection)));
+        let writer_pool = writer_pool_options.connect_with(writer_opts).await?;
+        Self::migrate(&writer_pool).await?;
+
+        let read_opts = SqliteConnectOptions::new()
+            .filename(&paths.database)
+            .read_only(true)
+            .create_if_missing(false)
+            .busy_timeout(FILE_POOL_WAIT_TIMEOUT);
+        let read_pool_options = SqlitePoolOptions::new()
+            .max_connections(4)
+            .acquire_timeout(FILE_POOL_WAIT_TIMEOUT)
+            // Closing the last connection of a WAL database checkpoints under an exclusive lock.
+            .max_lifetime(None)
+            .idle_timeout(None);
+        #[cfg(feature = "lifecycle-bench")]
+        let read_pool_options =
+            read_pool_options.after_connect(|connection, _| Box::pin(bench::install(connection)));
+        let read_pool = read_pool_options.connect_lazy_with(read_opts);
+
+        let projections = Arc::new(ProjectionCache::new());
+        let write_queue = write_queue::WriteQueue::start(
+            paths.database.clone(),
+            writer_pool.clone(),
+            Arc::clone(&projections),
+            write_timeout,
+        )
+        .await?;
         let runtime_owner = RuntimeOwnerState::file(paths);
         *runtime_owner
             .pending_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = lock;
         Ok(Self {
-            pool,
+            writer_pool,
+            read_pool,
+            write_queue: Some(write_queue),
+            read_timeout,
             runtime_owner: Arc::new(runtime_owner),
-            projections: Arc::new(ProjectionCache::new()),
+            projections,
             read_only: false,
+            memory_fallback: None,
+            exit_reported: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             _memory_keeper: None,
         })
     }
 
-    /// Reserve runtime ownership before SQLite initialization, then transfer the
-    /// lock to the first `claim_runtime_owner` call on the returned store.
+    /// Reserve runtime ownership before SQLite initialization with [`OPEN_TIMEOUT`],
+    /// then transfer the lock to the first `claim_runtime_owner` call on the
+    /// returned store. Fails on timeout or error without falling back to memory.
     pub async fn connect_runtime(path: &str) -> Result<Self, StoreError> {
-        let paths = database_paths(path)
-            .map_err(|source| runtime_owner_lock_error(Some(Path::new(path)), source))?;
-        match paths {
-            Some(paths) => {
-                let lock = acquire_runtime_owner_lock(&paths)?;
-                Self::connect_file(paths, Some(lock)).await
-            }
-            None => Self::connect_memory().await,
+        Self::connect_runtime_bounded(path, OPEN_TIMEOUT, WRITE_TIMEOUT, READ_TIMEOUT)
+            .await
+            .map_err(|(error, _)| error)
+    }
+
+    async fn connect_runtime_bounded(
+        path: &str,
+        open_timeout: Duration,
+        write_timeout: Duration,
+        read_timeout: Duration,
+    ) -> Result<Self, (StoreError, PathBuf)> {
+        let fallback_path = PathBuf::from(path);
+        if let Err(source) = validate_database_arg(path) {
+            return Err((
+                runtime_owner_lock_error(Some(Path::new(path)), source),
+                fallback_path,
+            ));
         }
+        if path.is_empty() || path == ":memory:" {
+            return Self::connect_memory()
+                .await
+                .map_err(|err| (err, fallback_path));
+        }
+        let path_owned = path.to_string();
+        let resolved_slot = Arc::new(Mutex::new(None));
+        let resolved_for_thread = Arc::clone(&resolved_slot);
+        let opened = tokio::time::timeout(open_timeout, async move {
+            let (paths, lock) = run_on_detached_thread(move || {
+                #[cfg(test)]
+                if TEST_STALL_OPEN.load(std::sync::atomic::Ordering::Acquire) {
+                    std::thread::park();
+                }
+                let paths = database_paths(&path_owned).map_err(|source| {
+                    runtime_owner_lock_error(Some(Path::new(&path_owned)), source)
+                })?;
+                let Some(paths) = paths else {
+                    return Err(runtime_owner_lock_error(
+                        Some(Path::new(&path_owned)),
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "expected file-backed database path",
+                        ),
+                    ));
+                };
+                *resolved_for_thread
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some(paths.database.clone());
+                let lock = acquire_runtime_owner_lock(&paths)?;
+                Ok((paths, lock))
+            })
+            .await?;
+            Self::connect_file(paths, Some(lock), write_timeout, read_timeout).await
+        })
+        .await;
+        let report_path = resolved_slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+            .unwrap_or(fallback_path);
+        match opened {
+            Ok(Ok(store)) => Ok(store),
+            Ok(Err(err)) => Err((err, report_path)),
+            Err(_) => Err((
+                StoreError::StorageTimeout {
+                    operation: "open",
+                    timeout: open_timeout,
+                },
+                report_path,
+            )),
+        }
+    }
+
+    /// Open a runtime store with [`OPEN_TIMEOUT`], falling back to an in-memory
+    /// store when opening exceeds the bound or fails with a storage fault.
+    ///
+    /// [`StoreError::RuntimeOwnerBusy`], [`StoreError::UnsupportedDatabase`],
+    /// and invalid path/URI or symlink-lock errors always propagate rather than
+    /// falling back to memory.
+    pub async fn connect_runtime_or_memory(path: &str) -> Result<Self, StoreError> {
+        Self::connect_runtime_or_memory_with_timeouts(
+            path,
+            OPEN_TIMEOUT,
+            WRITE_TIMEOUT,
+            READ_TIMEOUT,
+        )
+        .await
+    }
+
+    /// Test-only helper to open a runtime store or fall back to memory with
+    /// custom open, synchronous write, and fallback read bounds.
+    #[doc(hidden)]
+    pub async fn connect_runtime_or_memory_with_timeouts(
+        path: &str,
+        open_timeout: Duration,
+        write_timeout: Duration,
+        read_timeout: Duration,
+    ) -> Result<Self, StoreError> {
+        match Self::connect_runtime_bounded(path, open_timeout, write_timeout, read_timeout).await {
+            Ok(store) => Ok(store),
+            Err((error, _)) if !is_open_storage_fault(&error) => Err(error),
+            Err((error, report_path)) => {
+                Self::connect_memory_fallback(report_path, error.to_string(), read_timeout).await
+            }
+        }
+    }
+
+    async fn connect_memory_fallback(
+        path: PathBuf,
+        reason: String,
+        read_timeout: Duration,
+    ) -> Result<Self, StoreError> {
+        let mut store = Self::connect_memory().await?;
+        store.read_timeout = read_timeout;
+        store.memory_fallback = Some(Arc::new(MemoryFallbackInfo {
+            path,
+            reason: reason.replace(['\n', '\r'], " ").trim().to_string(),
+        }));
+        Ok(store)
+    }
+
+    /// Requested path and open failure reason when this store fell back to memory.
+    #[must_use]
+    pub fn memory_fallback(&self) -> Option<(&Path, &str)> {
+        self.memory_fallback
+            .as_deref()
+            .map(|info| (info.path.as_path(), info.reason.as_str()))
+    }
+
+    /// Wait up to `timeout` for any queued appends to flush to disk and return
+    /// an [`ExitDrainReport`] describing the store's final durability status.
+    /// Returns immediately when the writer is halted or the store is an
+    /// in-memory fallback.
+    pub async fn drain_for_exit(&self, timeout: Duration) -> ExitDrainReport {
+        if let Some(info) = &self.memory_fallback {
+            let event_totals = sqlx::query_as::<_, (i64, i64)>(
+                "SELECT COUNT(*), COALESCE(SUM(LENGTH(CAST(payload AS BLOB))), 0) FROM event_log",
+            )
+            .fetch_one(&self.read_pool)
+            .await
+            .ok();
+            let blob_bytes =
+                sqlx::query_scalar::<_, i64>("SELECT COALESCE(SUM(size), 0) FROM file_blob")
+                    .fetch_one(&self.read_pool)
+                    .await
+                    .ok()
+                    .and_then(|v| u64::try_from(v).ok());
+            let events = event_totals
+                .as_ref()
+                .and_then(|(count, _)| u64::try_from(*count).ok());
+            let bytes = event_totals
+                .and_then(|(_, ev_bytes)| u64::try_from(ev_bytes).ok())
+                .zip(blob_bytes)
+                .map(|(e, b)| e.saturating_add(b));
+            return ExitDrainReport::InMemoryFallback {
+                path: info.path.clone(),
+                events,
+                bytes,
+                reason: info.reason.clone(),
+            };
+        }
+        if let Some(queue) = &self.write_queue {
+            return queue.drain_for_exit(timeout).await;
+        }
+        ExitDrainReport::Clean
+    }
+
+    /// Drain pending appends up to `timeout` and write at most one durability
+    /// status line to `out` per store instance when the run degraded, left
+    /// unpersisted data, or ran in memory.
+    pub async fn drain_and_report_exit_to(
+        &self,
+        timeout: Duration,
+        mut out: impl std::io::Write,
+    ) -> ExitDrainReport {
+        let report = self.drain_for_exit(timeout).await;
+        if let Some(line) = report.format_stderr_line()
+            && !self
+                .exit_reported
+                .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            let _ = writeln!(out, "{line}");
+        }
+        report
+    }
+
+    /// Drain pending appends up to `timeout` and emit at most one durability
+    /// status line to stderr when the run degraded, left unpersisted data, or
+    /// ran in memory.
+    pub async fn drain_and_report_exit(&self, timeout: Duration) -> ExitDrainReport {
+        self.drain_and_report_exit_to(timeout, std::io::stderr())
+            .await
     }
 
     /// Open an existing database read-only, without initialization or ownership.
@@ -447,16 +812,25 @@ impl SessionStore {
             .filename(&paths.database)
             .read_only(true)
             .create_if_missing(false)
-            .busy_timeout(Duration::from_secs(5));
+            .busy_timeout(FILE_POOL_WAIT_TIMEOUT);
         let pool = SqlitePoolOptions::new()
             .max_connections(8)
+            .acquire_timeout(FILE_POOL_WAIT_TIMEOUT)
+            // Closing the last connection of a WAL database checkpoints under an exclusive lock.
+            .max_lifetime(None)
+            .idle_timeout(None)
             .connect_with(opts)
             .await?;
         Ok(Self {
-            pool,
+            writer_pool: pool.clone(),
+            read_pool: pool,
+            write_queue: None,
+            read_timeout: READ_TIMEOUT,
             runtime_owner: Arc::new(RuntimeOwnerState::memory()),
             projections: Arc::new(ProjectionCache::new()),
             read_only: true,
+            memory_fallback: None,
+            exit_reported: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             _memory_keeper: None,
         })
     }
@@ -469,16 +843,18 @@ impl SessionStore {
             .foreign_keys(true)
             .busy_timeout(Duration::from_secs(5));
         let keeper = sqlx::ConnectOptions::connect(&opts).await?;
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(opts)
-            .await?;
+        let pool = Self::writer_pool_options().connect_with(opts).await?;
         Self::migrate(&pool).await?;
         Ok(Self {
-            pool,
+            writer_pool: pool.clone(),
+            read_pool: pool,
+            write_queue: None,
+            read_timeout: READ_TIMEOUT,
             runtime_owner: Arc::new(RuntimeOwnerState::memory()),
             projections: Arc::new(ProjectionCache::new()),
             read_only: false,
+            memory_fallback: None,
+            exit_reported: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             _memory_keeper: Some(Arc::new(Mutex::new(keeper))),
         })
     }
@@ -545,10 +921,19 @@ impl SessionStore {
 
     /// Begin a writer transaction for composing event appends with auxiliary rows.
     /// Publish appended envelopes only after committing the returned transaction.
-    pub async fn begin_transaction(
-        &self,
-    ) -> Result<sqlx::Transaction<'_, sqlx::Sqlite>, StoreError> {
-        Ok(self.pool.begin_with("BEGIN IMMEDIATE").await?)
+    pub async fn begin_transaction(&self) -> Result<StoreTransaction<'_>, StoreError> {
+        let (tx, guard) = if let Some(queue) = &self.write_queue {
+            let (tx, guard) = queue.acquire_raw_transaction().await?;
+            (tx, Some(guard))
+        } else {
+            (self.writer_pool.begin_with("BEGIN IMMEDIATE").await?, None)
+        };
+        Ok(StoreTransaction {
+            tx,
+            committed_events: Vec::new(),
+            guard,
+            _marker: std::marker::PhantomData,
+        })
     }
 
     /// Append one domain event to the session log; returns the assigned sequence.
@@ -557,9 +942,10 @@ impl SessionStore {
         session: SessionId,
         event: &Event,
     ) -> Result<(EventSeq, i64), StoreError> {
-        let mut tx = self.pool.begin().await?;
-        let envelope = append_event_in_transaction(&mut tx, session, event.clone()).await?;
-        tx.commit().await?;
+        let mut envelopes = self.append_events(session, vec![event.clone()]).await?;
+        let envelope = envelopes
+            .pop()
+            .ok_or_else(|| StoreError::from(sqlx::Error::RowNotFound))?;
         Ok((envelope.seq, envelope.ts_millis))
     }
 
@@ -569,6 +955,10 @@ impl SessionStore {
         session: SessionId,
         events: Vec<Event>,
     ) -> Result<Vec<Envelope>, StoreError> {
+        if let Some(queue) = &self.write_queue {
+            let batch = events.into_iter().map(|ev| (session, ev)).collect();
+            return queue.submit(Vec::new(), batch).await;
+        }
         let mut tx = self.begin_transaction().await?;
         let mut envelopes = Vec::with_capacity(events.len());
         for event in events {
@@ -580,25 +970,103 @@ impl SessionStore {
 
     /// Load all envelopes for a session in sequence order (payload JSON decoded to `Event`).
     pub async fn replay(&self, session: SessionId) -> Result<Vec<Envelope>, StoreError> {
-        let key = session.storage_key();
-        let rows =
-            sqlx::query("SELECT seq, ts, payload FROM event_log WHERE session_id = ? ORDER BY seq")
-                .bind(key)
-                .fetch_all(&self.pool)
+        self.replay_page(session, 0, 0).await
+    }
+
+    /// Replay a root and all its descendants in durable global sequence order,
+    /// including acknowledged writes still waiting for SQLite.
+    pub async fn replay_tree(&self, root: SessionId) -> Result<Vec<Envelope>, StoreError> {
+        // Capture the queue first: a concurrent flush can overlap the SELECT,
+        // but cannot remove an envelope from both snapshots.
+        let queued = self
+            .write_queue
+            .as_ref()
+            .map(|q| q.acknowledged_batches())
+            .unwrap_or_default();
+        let (rows, mut known_sessions) = self
+            .run_read_bounded("replay_tree", async {
+                let mut read = self.read_pool_checked()?.begin().await?;
+                let rows = sqlx::query(
+                    "WITH RECURSIVE tree(id) AS (
+                SELECT ? UNION SELECT s.id FROM session s JOIN tree t ON s.parent_id = t.id
+            ) SELECT seq, session_id, ts, payload FROM event_log
+              WHERE session_id IN (SELECT id FROM tree) ORDER BY seq",
+                )
+                .bind(root.storage_key())
+                .fetch_all(&mut *read)
                 .await?;
-        let mut out = Vec::with_capacity(rows.len());
-        for r in rows {
-            let seq: i64 = r.try_get("seq")?;
-            let ts: i64 = r.try_get("ts")?;
-            let payload: String = r.try_get("payload")?;
-            let event = decode_event(&payload, session, seq)?;
-            out.push(Envelope {
+                let creates: std::collections::HashSet<_> = queued
+                    .iter()
+                    .flat_map(|batch| &batch.events)
+                    .filter_map(|(_, envelope, _)| match envelope.event {
+                        Event::SessionCreated { session, .. } => Some(session),
+                        _ => None,
+                    })
+                    .collect();
+                let mut known = std::collections::HashSet::new();
+                // Read both tables at one snapshot even if the queue flushes meanwhile.
+                let ids: Vec<_> = creates.into_iter().collect();
+                for chunk in ids.chunks(500) {
+                    let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+                        "SELECT id FROM session WHERE id IN (",
+                    );
+                    let mut values = query.separated(",");
+                    for id in chunk {
+                        values.push_bind(id.storage_key());
+                    }
+                    query.push(")");
+                    for key in query
+                        .build_query_scalar::<Vec<u8>>()
+                        .fetch_all(&mut *read)
+                        .await?
+                    {
+                        known.insert(decode_session_key(&key)?);
+                    }
+                }
+                read.commit().await?;
+                Ok((rows, known))
+            })
+            .await?;
+        let mut sessions = std::collections::HashSet::from([root]);
+        let mut envelopes = Vec::with_capacity(rows.len());
+        for row in rows {
+            let session = decode_session_key(row.try_get::<&[u8], _>("session_id")?)?;
+            let seq: i64 = row.try_get("seq")?;
+            sessions.insert(session);
+            envelopes.push(Envelope {
                 seq: EventSeq(seq.max(0) as u64),
-                ts_millis: ts,
-                event,
+                ts_millis: row.try_get("ts")?,
+                event: decode_event(row.try_get("payload")?, session, seq)?,
             });
         }
-        Ok(out)
+        if !queued.is_empty() {
+            // Queued creates are in submission order, with parents before
+            // children (the session table enforces the parent foreign key).
+            for batch in &queued {
+                for (_, envelope, _) in &batch.events {
+                    if let Event::SessionCreated {
+                        session, parent, ..
+                    } = &envelope.event
+                        && known_sessions.insert(*session)
+                        && parent.is_some_and(|id| sessions.contains(&id))
+                    {
+                        sessions.insert(*session);
+                    }
+                }
+            }
+            for batch in queued {
+                envelopes.extend(
+                    batch
+                        .events
+                        .iter()
+                        .filter(|(session, _, _)| sessions.contains(session))
+                        .map(|(_, envelope, _)| envelope.clone()),
+                );
+            }
+            envelopes.sort_unstable_by_key(|env| env.seq);
+            envelopes.dedup_by_key(|env| env.seq);
+        }
+        Ok(envelopes)
     }
 
     /// Read a sequence page without decoding the preceding event log.
@@ -609,25 +1077,44 @@ impl SessionStore {
         after: u64,
         limit: u32,
     ) -> Result<Vec<Envelope>, StoreError> {
-        let rows = sqlx::query(
+        let queued_tail = self
+            .write_queue
+            .as_ref()
+            .map(|q| q.queued_envelopes_for(session, after));
+        let query = sqlx::query(
             "SELECT seq, ts, payload FROM event_log WHERE session_id = ? AND seq > ? ORDER BY seq LIMIT ?",
         )
         .bind(session.storage_key())
         .bind(i64::try_from(after).unwrap_or(i64::MAX))
-        .bind(if limit == 0 { -1 } else { i64::from(limit) })
-        .fetch_all(&self.pool)
-        .await?;
-        rows.into_iter()
-            .map(|row| {
-                let seq: i64 = row.try_get("seq")?;
-                let payload: String = row.try_get("payload")?;
-                Ok(Envelope {
-                    seq: EventSeq(seq.max(0) as u64),
-                    ts_millis: row.try_get("ts")?,
-                    event: decode_event(&payload, session, seq)?,
-                })
+        .bind(if limit == 0 { -1 } else { i64::from(limit) });
+        let rows = self
+            .run_read_bounded("replay_page", async {
+                query
+                    .fetch_all(self.read_pool_checked()?)
+                    .await
+                    .map_err(StoreError::from)
             })
-            .collect()
+            .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let seq: i64 = row.try_get("seq")?;
+            let payload: String = row.try_get("payload")?;
+            out.push(Envelope {
+                seq: EventSeq(seq.max(0) as u64),
+                ts_millis: row.try_get("ts")?,
+                event: decode_event(&payload, session, seq)?,
+            });
+        }
+        if let Some(tail) = queued_tail {
+            let disk_max = out.last().map_or(after, |env| env.seq.0);
+            for env in tail.into_iter().filter(|env| env.seq.0 > disk_max) {
+                if limit > 0 && out.len() >= limit as usize {
+                    break;
+                }
+                out.push(env);
+            }
+        }
+        Ok(out)
     }
 
     /// Return whether the event log contains a Session without replaying it.
@@ -635,11 +1122,36 @@ impl SessionStore {
     /// # Errors
     /// Returns SQLite failures.
     pub async fn session_exists(&self, session: SessionId) -> Result<bool, StoreError> {
+        if self
+            .write_queue
+            .as_ref()
+            .is_some_and(|queue| queue.has_queued_event(session))
+        {
+            return Ok(true);
+        }
+        let cached_exists = || {
+            self.projections
+                .get(session)
+                .is_some_and(|base| base.projection.session.id.is_some())
+        };
+        if self
+            .write_queue
+            .as_ref()
+            .is_some_and(write_queue::WriteQueue::is_degraded)
+            && cached_exists()
+        {
+            return Ok(true);
+        }
+        let pool = match self.read_pool_checked() {
+            Ok(pool) => pool,
+            Err(StoreError::StoreDegraded { .. }) if cached_exists() => return Ok(true),
+            Err(error) => return Err(error),
+        };
         let exists = sqlx::query_scalar::<_, i64>(
             "SELECT EXISTS(SELECT 1 FROM event_log WHERE session_id = ? LIMIT 1)",
         )
         .bind(session.storage_key())
-        .fetch_one(&self.pool)
+        .fetch_one(pool)
         .await?;
         Ok(exists != 0)
     }
@@ -670,7 +1182,7 @@ impl SessionStore {
         last_seq: Option<EventSeq>,
     ) -> Result<bool, StoreError> {
         let key = session.storage_key();
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_transaction().await?;
         // The event log goes first: its conditional delete is the check (and
         // takes the write lock), so the cascade below only goes with it.
         let result = match last_seq {
@@ -792,49 +1304,202 @@ impl SessionStore {
         self.cached_projection(session).await.map(drop)
     }
 
-    /// Fold through the cache: cached base (in-process, else the durable
-    /// snapshot) plus the events after it; persist a durable snapshot once
-    /// enough events were folded since the last one.
-    async fn cached_projection(&self, session: SessionId) -> Result<Arc<Projection>, StoreError> {
-        let mut conn = self.pool.acquire().await?;
-        let base = match self.projections.get(session) {
+    async fn load_prepared_projection(
+        &self,
+        session: SessionId,
+        base_override: Option<projection_cache::Base>,
+    ) -> Result<(projection_cache::PreparedFold, u64, u64), StoreError> {
+        let mut conn = self.read_pool_checked()?.acquire().await?;
+        let base = match base_override {
             Some(base) => Some(base),
-            None => projection_cache::load_snapshot(&mut conn, session)
-                .await?
-                .map(|projection| projection_cache::Base {
-                    persisted_seq: projection.last_seq,
-                    unpersisted: 0,
-                    projection: Arc::new(projection),
-                }),
+            None => match self.projections.get(session) {
+                Some(base) => Some(base),
+                None => projection_cache::load_snapshot(&mut conn, session)
+                    .await?
+                    .map(|projection| projection_cache::Base {
+                        persisted_seq: projection.last_seq,
+                        unpersisted: 0,
+                        projection: Arc::new(projection),
+                    }),
+            },
         };
         let (persisted_seq, unpersisted) = base
             .as_ref()
             .map_or((0, 0), |base| (base.persisted_seq, base.unpersisted));
         let prepared =
             projection_cache::fold(&mut conn, session, base.map(|base| base.projection)).await?;
-        let (folded, persisted_seq, unpersisted) =
-            self.projections
-                .advance(session, prepared, persisted_seq, unpersisted);
-        let last_seq = folded.projection.last_seq;
-        if last_seq == 0 {
-            return Ok(folded.projection);
+        Ok((prepared, persisted_seq, unpersisted))
+    }
+
+    async fn run_bounded<F, T>(
+        &self,
+        operation: &'static str,
+        bounded: bool,
+        fut: F,
+    ) -> Result<T, StoreError>
+    where
+        F: std::future::Future<Output = Result<T, StoreError>>,
+    {
+        match &self.write_queue {
+            Some(queue) if bounded => {
+                write_queue::run_with_timeout(operation, queue.write_timeout(), fut).await
+            }
+            _ => fut.await,
         }
-        if !self.read_only
+    }
+
+    pub(crate) fn read_pool_checked(&self) -> Result<&sqlx::SqlitePool, StoreError> {
+        if let Some(queue) = &self.write_queue {
+            queue.check_disk_readable()?;
+        }
+        Ok(&self.read_pool)
+    }
+
+    pub(crate) async fn run_read_bounded<F, T>(
+        &self,
+        operation: &'static str,
+        fut: F,
+    ) -> Result<T, StoreError>
+    where
+        F: std::future::Future<Output = Result<T, StoreError>>,
+    {
+        let degraded = self
+            .write_queue
+            .as_ref()
+            .is_some_and(write_queue::WriteQueue::is_degraded);
+        self.run_bounded(operation, degraded, fut).await
+    }
+
+    async fn fold_once_with_queue(
+        &self,
+        queue: &write_queue::WriteQueue,
+        session: SessionId,
+        base_override: Option<projection_cache::Base>,
+        timeout: Option<Duration>,
+    ) -> Result<write_queue::FoldOutcome, StoreError> {
+        let snapshot = queue.begin_fold(session);
+        let limit = timeout.or_else(|| snapshot.was_degraded.then(|| queue.write_timeout()));
+        let load = self.load_prepared_projection(session, base_override);
+        let (prepared, p, u) = match limit {
+            Some(limit) => write_queue::run_with_timeout("read_projection", limit, load).await?,
+            None => load.await?,
+        };
+        Ok(queue.finish_fold(session, snapshot, prepared, p, u))
+    }
+
+    /// Fold through the cache: cached base (in-process, else the durable
+    /// snapshot) plus the events after it; persist a durable snapshot once
+    /// enough events were folded since the last one.
+    async fn cached_projection(&self, session: SessionId) -> Result<Arc<Projection>, StoreError> {
+        let (projection, persisted_seq, unpersisted, allow_snapshot) = match &self.write_queue {
+            None => {
+                let (prepared, p, u) = self.load_prepared_projection(session, None).await?;
+                let (folded, p, u) = self.projections.advance(session, prepared, p, u, &[]);
+                (folded.projection, p, u, true)
+            }
+            Some(queue) => {
+                if queue.is_degraded()
+                    && let Some(base) = self.projections.get(session)
+                {
+                    return Ok(base.projection);
+                }
+                let outcome = match self.fold_once_with_queue(queue, session, None, None).await {
+                    Ok(cached @ write_queue::FoldOutcome::Cached { .. }) => cached,
+                    Ok(write_queue::FoldOutcome::Uncached {
+                        folded,
+                        persisted_seq,
+                        unpersisted,
+                    }) => {
+                        if queue.is_degraded()
+                            && let Some(base) = self.projections.get(session)
+                        {
+                            return Ok(base.projection);
+                        }
+                        let first_projection = Arc::clone(&folded.projection);
+                        match self
+                            .fold_once_with_queue(
+                                queue,
+                                session,
+                                Some(projection_cache::Base {
+                                    projection: folded.projection,
+                                    persisted_seq,
+                                    unpersisted,
+                                }),
+                                Some(self.read_timeout),
+                            )
+                            .await
+                        {
+                            Ok(outcome) => outcome,
+                            Err(error) if error.is_storage_fault() => {
+                                return Ok(first_projection);
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    }
+                    Err(error @ StoreError::StoreDegraded { .. }) => {
+                        if let Some(base) = self.projections.get(session) {
+                            return Ok(base.projection);
+                        }
+                        return Err(error);
+                    }
+                    Err(error) => return Err(error),
+                };
+                match outcome {
+                    write_queue::FoldOutcome::Cached {
+                        folded,
+                        persisted_seq,
+                        unpersisted,
+                        allow_snapshot,
+                    } => (
+                        folded.projection,
+                        persisted_seq,
+                        unpersisted,
+                        allow_snapshot,
+                    ),
+                    write_queue::FoldOutcome::Uncached { folded, .. } => {
+                        (folded.projection, 0, 0, false)
+                    }
+                }
+            }
+        };
+        let last_seq = projection.last_seq;
+        if allow_snapshot
+            && !self.read_only
             && last_seq > persisted_seq
             && unpersisted >= self.projections.snapshot_interval()
         {
-            // Best effort: a failed write only means a later read folds more.
-            match projection_cache::persist_snapshot(&mut conn, session, &folded.projection).await {
-                Ok(()) => {
-                    self.projections
-                        .put(session, Arc::clone(&folded.projection), last_seq, 0);
+            match projection.encode_snapshot() {
+                Ok(payload) => {
+                    if let Some(mut wconn) = self.writer_pool.try_acquire() {
+                        // Best effort: a busy writer or failed write only means a later read folds more.
+                        let persist_res = self
+                            .run_bounded(
+                                "persist_snapshot",
+                                true,
+                                projection_cache::persist_snapshot(
+                                    &mut wconn, session, last_seq, payload,
+                                ),
+                            )
+                            .await;
+                        match persist_res {
+                            Ok(()) => {
+                                self.projections.mark_persisted(session, last_seq);
+                            }
+                            Err(error) => {
+                                tracing::debug!(
+                                    %session,
+                                    "projection snapshot not persisted: {error}"
+                                );
+                            }
+                        }
+                    }
                 }
                 Err(error) => {
-                    tracing::debug!(%session, "projection snapshot not persisted: {error}");
+                    tracing::debug!(%session, "projection snapshot not encoded: {error}");
                 }
             }
         }
-        Ok(folded.projection)
+        Ok(projection)
     }
 
     /// Sessions present in the event log, newest-updated first.
@@ -843,7 +1508,7 @@ impl SessionStore {
             "SELECT session_id, MIN(ts) AS started, MAX(ts) AS updated, COUNT(*) AS n \
              FROM event_log GROUP BY session_id ORDER BY updated DESC, session_id DESC",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.read_pool_checked()?)
         .await?;
         session_infos(rows)
     }
@@ -865,7 +1530,7 @@ impl SessionStore {
              GROUP BY e.session_id ORDER BY updated DESC, e.session_id DESC",
         )
         .bind(project.to_string())
-        .fetch_all(&self.pool)
+        .fetch_all(self.read_pool_checked()?)
         .await?;
         session_infos(rows)
     }
@@ -893,7 +1558,7 @@ impl SessionStore {
         .bind(exclude.map(|s| s.storage_key()))
         .bind(since_millis)
         .bind(limit)
-        .fetch_all(&self.pool)
+        .fetch_all(self.read_pool_checked()?)
         .await?;
         session_infos(rows)
     }
@@ -938,7 +1603,7 @@ impl SessionStore {
         .bind(exclude.map(|s| s.storage_key()))
         .bind(exclude.map(|s| s.storage_key()))
         .bind(limit)
-        .fetch_all(&self.pool)
+        .fetch_all(self.read_pool_checked()?)
         .await?;
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
@@ -966,7 +1631,7 @@ impl SessionStore {
              FROM event_log WHERE session_id = ?",
         )
         .bind(session.storage_key())
-        .fetch_one(&self.pool)
+        .fetch_one(self.read_pool_checked()?)
         .await?;
         let n: i64 = row.try_get("n")?;
         if n == 0 {
@@ -981,17 +1646,12 @@ impl SessionStore {
     }
 }
 
-/// Append one event inside an existing writer transaction.
-pub async fn append_event_in_transaction(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    session: SessionId,
-    event: Event,
-) -> Result<Envelope, StoreError> {
+pub(crate) fn validate_event_for_append(event: &Event) -> Result<(), StoreError> {
     if let Event::MailSent {
         from,
         to: hya_proto::MailEndpoint::Handle(handle),
         ..
-    } = &event
+    } = event
         && from != hya_proto::scope::HARNESS_HANDLE
     {
         return Err(StoreError::MailAuthorizationRejected {
@@ -1000,19 +1660,40 @@ pub async fn append_event_in_transaction(
             reason: "agent mail must target a channel".into(),
         });
     }
-    let ts_millis = now_millis();
-    let payload = serde_json::to_string(&event)?;
-    let row = sqlx::query(
-        "INSERT INTO event_log (session_id, payload, ts) VALUES (?, ?, ?) RETURNING seq",
+    Ok(())
+}
+
+pub(crate) async fn insert_event_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    session: SessionId,
+    event: &Event,
+    fixed: Option<(u64, i64, &str)>,
+) -> Result<(EventSeq, i64), StoreError> {
+    let owned_payload;
+    let (expected, ts_millis, payload) = match fixed {
+        Some((seq, ts, payload)) => {
+            let exp = i64::try_from(seq).map_err(|_| {
+                StoreError::from(sqlx::Error::Protocol("sequence exceeds i64 range".into()))
+            })?;
+            (Some(exp), ts, payload)
+        }
+        None => {
+            validate_event_for_append(event)?;
+            owned_payload = serde_json::to_string(event)?;
+            (None, now_millis(), owned_payload.as_str())
+        }
+    };
+    let seq: i64 = sqlx::query_scalar(
+        "INSERT INTO event_log (seq, session_id, payload, ts) VALUES (?, ?, ?, ?) RETURNING seq",
     )
+    .bind(expected)
     .bind(session.storage_key())
     .bind(payload)
     .bind(ts_millis)
     .fetch_one(&mut **tx)
     .await?;
-    let seq: i64 = row.try_get("seq")?;
-    materialize::materialize_event_side_tables(tx, session, &event, ts_millis).await?;
-    match &event {
+    materialize::materialize_event_side_tables(tx, session, event, ts_millis).await?;
+    match event {
         Event::MessageStarted {
             role: hya_proto::Role::Assistant,
             ..
@@ -1032,13 +1713,13 @@ pub async fn append_event_in_transaction(
             let base = projection_cache::load_snapshot(tx, session)
                 .await?
                 .map(Arc::new);
-            let projection = projection_cache::fold(tx, session, base)
+            let proj = projection_cache::fold(tx, session, base)
                 .await?
                 .finish()
                 .projection;
-            if projection.session.id.is_some()
-                && projection.session.parent.is_none()
-                && !projection.session.is_archived()
+            if proj.session.id.is_some()
+                && proj.session.parent.is_none()
+                && !proj.session.is_archived()
             {
                 sqlx::query(
                     "INSERT INTO pending_resume (session_id, message_id, created_at) VALUES (?, ?, ?) \
@@ -1054,11 +1735,106 @@ pub async fn append_event_in_transaction(
         }
         _ => {}
     }
-    Ok(Envelope {
-        seq: EventSeq(seq.max(0) as u64),
+    Ok((EventSeq(seq.max(0) as u64), ts_millis))
+}
+
+/// Active writer database transaction synchronized with the append queue.
+pub struct StoreTransaction<'a> {
+    tx: sqlx::Transaction<'static, sqlx::Sqlite>,
+    committed_events: Vec<(SessionId, Envelope)>,
+    guard: Option<write_queue::RawTxGuard>,
+    _marker: std::marker::PhantomData<&'a ()>,
+}
+
+impl std::fmt::Debug for StoreTransaction<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoreTransaction")
+            .field("committed_events", &self.committed_events.len())
+            .field("queued", &self.guard.is_some())
+            .finish()
+    }
+}
+
+impl std::ops::Deref for StoreTransaction<'_> {
+    type Target = sqlx::SqliteConnection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.tx
+    }
+}
+
+impl std::ops::DerefMut for StoreTransaction<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.tx
+    }
+}
+
+impl<'a> StoreTransaction<'a> {
+    pub(crate) fn inner_mut(&mut self) -> &mut sqlx::Transaction<'static, sqlx::Sqlite> {
+        &mut self.tx
+    }
+
+    pub(crate) fn record_event(&mut self, session: SessionId, envelope: Envelope) {
+        if let Some(guard) = &mut self.guard {
+            guard.record_event(session, envelope.seq.0);
+        }
+        self.committed_events.push((session, envelope));
+    }
+
+    /// Commit the transaction and publish its appended events into the queue and warm cache.
+    ///
+    /// Resolves `tx.commit()` and releases the raw-transaction guard inside a spawned task so
+    /// cancelling the caller's future never releases the guard while SQLite COMMIT is in flight.
+    pub async fn commit(self) -> Result<(), StoreError> {
+        let Self {
+            tx,
+            committed_events,
+            mut guard,
+            ..
+        } = self;
+        let Some(guard) = guard.take() else {
+            tx.commit().await?;
+            return Ok(());
+        };
+        let handle = tokio::spawn(async move {
+            match tx.commit().await {
+                Ok(()) => {
+                    guard.finish_commit(&committed_events);
+                    Ok(())
+                }
+                Err(error) => {
+                    drop(guard);
+                    Err(StoreError::from(error))
+                }
+            }
+        });
+        handle.await.map_err(|err| {
+            StoreError::from(sqlx::Error::Protocol(format!("commit task failed: {err}")))
+        })?
+    }
+
+    /// Roll back the transaction and release the append-queue barrier without updating cache state.
+    pub async fn rollback(mut self) -> Result<(), StoreError> {
+        self.tx.rollback().await?;
+        drop(self.guard.take());
+        Ok(())
+    }
+}
+
+/// Append one event inside an existing writer transaction.
+pub async fn append_event_in_transaction(
+    tx: &mut StoreTransaction<'_>,
+    session: SessionId,
+    event: Event,
+) -> Result<Envelope, StoreError> {
+    let (seq, ts_millis) = insert_event_in_tx(tx.inner_mut(), session, &event, None).await?;
+    let envelope = Envelope {
+        seq,
         ts_millis,
         event,
-    })
+    };
+    tx.record_event(session, envelope.clone());
+    Ok(envelope)
 }
 
 /// Fold one Session log inside an existing writer transaction.
@@ -1068,7 +1844,7 @@ pub async fn append_event_in_transaction(
 /// written back to the cache.
 pub(crate) async fn replay_projection(
     cache: &ProjectionCache,
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    tx: &mut StoreTransaction<'_>,
     session: SessionId,
 ) -> Result<Arc<Projection>, StoreError> {
     let base = projection_cache::transaction_base(cache, tx, session).await?;
@@ -1116,6 +1892,15 @@ pub(crate) fn decode_event(
     })
 }
 
+/// Serialize unit tests in this binary that open file-backed `SessionStore`s
+/// so `lifecycle-bench`'s process-wide SQLite trace counters observe only the
+/// benchmark test's own statements.
+#[cfg(test)]
+pub(crate) async fn file_store_test_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    LOCK.lock().await
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod event_contract_tests {
@@ -1141,11 +1926,94 @@ mod event_contract_tests {
                     .await
                     .unwrap();
                 for _ in 0..3 {
-                    store.pool.acquire().await.unwrap().close().await.unwrap();
+                    store
+                        .writer_pool
+                        .acquire()
+                        .await
+                        .unwrap()
+                        .close()
+                        .await
+                        .unwrap();
                     assert_eq!(store.replay(session).await.unwrap().len(), 1);
                 }
             }
         }
+    }
+
+    #[tokio::test]
+    async fn tree_replay_merges_persisted_and_queued_descendants()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let _guard = file_store_test_lock().await;
+        let dir = std::env::temp_dir().join(format!("hya-tree-{}", SessionId::new()));
+        std::fs::create_dir(&dir)?;
+        let db = dir.join("tree.db");
+        let store = SessionStore::connect_with_timeouts(
+            db.to_str().ok_or("invalid db path")?,
+            Duration::from_millis(100),
+            Duration::from_secs(2),
+        )
+        .await?;
+        let (root, child, grandchild, other) = (
+            SessionId::new(),
+            SessionId::new(),
+            SessionId::new(),
+            SessionId::new(),
+        );
+        let created = |session, parent| Event::SessionCreated {
+            session,
+            parent,
+            agent: "build".into(),
+            model: "fake".into(),
+            workdir: ".".into(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        };
+        store.append_event(root, &created(root, None)).await?;
+        store.append_event(other, &created(other, None)).await?;
+        let held = store.writer_pool.begin_with("BEGIN IMMEDIATE").await?;
+        let queued_root = SessionId::new();
+        store
+            .append_event(queued_root, &created(queued_root, None))
+            .await?;
+        for (session, parent) in [
+            (child, root),
+            (grandchild, child),
+            (other, root),
+            (queued_root, child),
+        ] {
+            store
+                .append_event(session, &created(session, Some(parent)))
+                .await?;
+        }
+        store
+            .append_event(
+                other,
+                &Event::SessionTitled {
+                    session: other,
+                    title: "elsewhere".into(),
+                },
+            )
+            .await?;
+        assert!(matches!(store.health(), StoreHealth::Degraded { .. }));
+        let queued = store.replay_tree(root).await?;
+        assert_eq!(
+            queued
+                .iter()
+                .filter_map(|env| env.event.session())
+                .collect::<Vec<_>>(),
+            vec![root, child, grandchild]
+        );
+        assert!(queued.windows(2).all(|pair| pair[0].seq < pair[1].seq));
+        held.rollback().await?;
+        let report = store.drain_for_exit(Duration::from_secs(5)).await;
+        assert!(matches!(report, ExitDrainReport::Recovered { .. }));
+        assert_eq!(
+            serde_json::to_value(store.replay_tree(root).await?)?,
+            serde_json::to_value(queued)?
+        );
+        drop(store);
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
     }
 
     #[tokio::test]
@@ -1188,7 +2056,7 @@ mod event_contract_tests {
         }
         sqlx::query("UPDATE event_log SET payload = 'invalid' WHERE seq = ?")
             .bind(all[0].seq.0 as i64)
-            .execute(&store.pool)
+            .execute(&store.writer_pool)
             .await
             .unwrap();
         assert_eq!(
@@ -1234,7 +2102,7 @@ mod event_contract_tests {
         let unrelated_actor = SessionId::new();
         for (actor, owner) in [(missing_actor, root), (unrelated_actor, other)] {
             sqlx::query("INSERT INTO resident_actor_claim (actor_id, root_session_id, epoch, owner_run_id, state) VALUES (?, ?, 1, randomblob(16), 'active')")
-                .bind(actor.storage_key()).bind(owner.storage_key()).execute(&store.pool).await.unwrap();
+                .bind(actor.storage_key()).bind(owner.storage_key()).execute(&store.writer_pool).await.unwrap();
         }
         let seq = store.replay(root).await.unwrap().last().unwrap().seq;
         assert!(
@@ -1293,14 +2161,14 @@ mod event_contract_tests {
             ] {
                 sqlx::query(sql)
                     .bind(session.storage_key())
-                    .execute(&store.pool)
+                    .execute(&store.writer_pool)
                     .await
                     .unwrap();
             }
             sqlx::query("INSERT INTO resident_actor_claim (actor_id, root_session_id, epoch, owner_run_id, state) VALUES (?, ?, 1, randomblob(16), 'active')")
                 .bind(session.storage_key())
                 .bind(parent.unwrap_or(session).storage_key())
-                .execute(&store.pool).await.unwrap();
+                .execute(&store.writer_pool).await.unwrap();
         }
         for sql in [
             "INSERT INTO project VALUES ('project', 'Project', 1, 1, 0)",
@@ -1311,16 +2179,16 @@ mod event_contract_tests {
             "INSERT INTO model_effort_preference VALUES ('fake', 'fake', 'high', 1)",
             "INSERT INTO agent_effort_preference VALUES ('build', 'high', 1)",
         ] {
-            sqlx::query(sql).execute(&store.pool).await.unwrap();
+            sqlx::query(sql).execute(&store.writer_pool).await.unwrap();
         }
         // A late failure must roll back the event and auxiliary deletes too.
         sqlx::query("CREATE TRIGGER reject_delete BEFORE DELETE ON session BEGIN SELECT RAISE(ABORT, 'delete blocked'); END")
-            .execute(&store.pool).await.unwrap();
+            .execute(&store.writer_pool).await.unwrap();
         assert!(store.delete_session(root).await.is_err());
         assert_eq!(store.replay(root).await.unwrap().len(), 2);
         assert!(store.file_blob(child, "hash").await.unwrap().is_some());
         sqlx::query("DROP TRIGGER reject_delete")
-            .execute(&store.pool)
+            .execute(&store.writer_pool)
             .await
             .unwrap();
         assert!(store.delete_session(root).await.unwrap());
@@ -1337,7 +2205,7 @@ mod event_contract_tests {
                 let count: i64 =
                     sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE {column} = ?"))
                         .bind(session.storage_key())
-                        .fetch_one(&store.pool)
+                        .fetch_one(&store.read_pool)
                         .await
                         .unwrap();
                 assert_eq!(count, 0, "{table} retains {session}");
@@ -1345,7 +2213,7 @@ mod event_contract_tests {
             let count: i64 =
                 sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE {column} = ?"))
                     .bind(other.storage_key())
-                    .fetch_one(&store.pool)
+                    .fetch_one(&store.read_pool)
                     .await
                     .unwrap();
             assert!(count > 0, "{table} lost unrelated state");
@@ -1359,7 +2227,7 @@ mod event_contract_tests {
             "agent_effort_preference",
         ] {
             let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
-                .fetch_one(&store.pool)
+                .fetch_one(&store.read_pool)
                 .await
                 .unwrap();
             assert_eq!(
@@ -1379,7 +2247,7 @@ mod event_contract_tests {
             .bind(format!(
                 r#"{{"type":"future_event","session":"{session}"}}"#
             ))
-            .execute(&store.pool)
+            .execute(&store.writer_pool)
             .await
             .unwrap()
             .last_insert_rowid();
@@ -1408,12 +2276,341 @@ mod event_contract_tests {
             .to_vec();
         sqlx::query("INSERT INTO event_log (session_id, ts, payload) VALUES (?, 1, '{}')")
             .bind(key)
-            .execute(&store.pool)
+            .execute(&store.writer_pool)
             .await
             .unwrap();
         let error = store.list_sessions().await.unwrap_err();
         assert!(matches!(error, StoreError::SessionKeyData(_)), "{error}");
         assert!(error.to_string().contains("hysec_"), "{error}");
         assert!(decode_session_key(&[0xff; 16]).is_err());
+    }
+
+    #[tokio::test]
+    async fn sqlite_pools_disable_lifetime_and_idle_retirement() {
+        let _guard = file_store_test_lock().await;
+        let dir = std::env::temp_dir().join(format!(
+            "hya-store-pool-opts-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("sessions.db");
+        let rw = SessionStore::connect(db.to_str().unwrap()).await.unwrap();
+        assert_eq!(rw.writer_pool.options().get_max_connections(), 1);
+        assert!(!rw.writer_pool.options().get_test_before_acquire());
+        assert_eq!(rw.writer_pool.options().get_max_lifetime(), None);
+        assert_eq!(rw.writer_pool.options().get_idle_timeout(), None);
+        assert_eq!(rw.read_pool.options().get_max_lifetime(), None);
+        assert_eq!(rw.read_pool.options().get_idle_timeout(), None);
+
+        let ro = SessionStore::connect_read_only(db.to_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(ro.read_pool.options().get_max_lifetime(), None);
+        assert_eq!(ro.read_pool.options().get_idle_timeout(), None);
+
+        let mem = SessionStore::connect_memory().await.unwrap();
+        assert!(!mem.writer_pool.options().get_test_before_acquire());
+        assert_eq!(mem.writer_pool.options().get_max_lifetime(), None);
+        assert_eq!(mem.writer_pool.options().get_idle_timeout(), None);
+
+        ro.read_pool.close().await;
+        rw.writer_pool.close().await;
+        rw.read_pool.close().await;
+        drop(ro);
+        drop(rw);
+        drop(mem);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn snapshot_persist_skips_without_waiting_when_writer_is_busy() {
+        let _guard = file_store_test_lock().await;
+        let dir = std::env::temp_dir().join(format!(
+            "hya-store-snapshot-try-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("sessions.db");
+        let store = SessionStore::connect(db.to_str().unwrap())
+            .await
+            .unwrap()
+            .with_projection_snapshot_interval(1);
+        let session = SessionId::new();
+        store
+            .append_event(
+                session,
+                &Event::SessionCreated {
+                    session,
+                    parent: None,
+                    agent: hya_proto::AgentName::new("build"),
+                    model: hya_proto::ModelRef::new("fake"),
+                    workdir: "/tmp".into(),
+                    project: None,
+                    kind: hya_proto::SessionKind::Project,
+                },
+            )
+            .await
+            .unwrap();
+
+        let tx = store.begin_transaction().await.unwrap();
+        let started = std::time::Instant::now();
+        for _ in 0..3 {
+            let proj = store.read_projection(session).await.unwrap();
+            assert_eq!(proj.last_seq, 1);
+        }
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "busy writer must not delay snapshot reads (elapsed={:?})",
+            started.elapsed()
+        );
+        let count_busy: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM projection_snapshot")
+            .fetch_one(&store.read_pool)
+            .await
+            .unwrap();
+        assert_eq!(count_busy, 0);
+
+        drop(tx);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while store.writer_pool.num_idle() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("writer connection returns to idle");
+
+        let proj = store.read_projection(session).await.unwrap();
+        assert_eq!(proj.last_seq, 1);
+        let count_idle: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM projection_snapshot")
+            .fetch_one(&store.read_pool)
+            .await
+            .unwrap();
+        assert_eq!(count_idle, 1);
+
+        store.writer_pool.close().await;
+        store.read_pool.close().await;
+        drop(store);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn writer_and_read_pools_are_strictly_separated() {
+        let _guard = file_store_test_lock().await;
+        let dir = std::env::temp_dir().join(format!(
+            "hya-store-pool-split-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("sessions.db");
+        let store = SessionStore::connect(db.to_str().unwrap()).await.unwrap();
+        assert_eq!(store.writer_pool.options().get_max_connections(), 1);
+        assert_eq!(store.read_pool.options().get_max_connections(), 4);
+        assert!(!store.writer_pool.options().get_test_before_acquire());
+
+        let session = SessionId::new();
+        store
+            .append_event(
+                session,
+                &Event::SessionCreated {
+                    session,
+                    parent: None,
+                    agent: hya_proto::AgentName::new("build"),
+                    model: hya_proto::ModelRef::new("fake"),
+                    workdir: "/tmp".into(),
+                    project: None,
+                    kind: hya_proto::SessionKind::Project,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store.read_pool.size(),
+            0,
+            "writes must never touch the lazy read pool"
+        );
+        assert_eq!(store.writer_pool.size(), 1);
+
+        let tx = store.begin_transaction().await.unwrap();
+        assert!(
+            store.writer_pool.try_acquire().is_none(),
+            "sole writer connection must be occupied while tx is held"
+        );
+        let deadline = Duration::from_millis(500);
+        assert_eq!(
+            tokio::time::timeout(deadline, store.replay(session))
+                .await
+                .unwrap()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            tokio::time::timeout(deadline, store.list_sessions())
+                .await
+                .unwrap()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            tokio::time::timeout(deadline, store.session_exists(session))
+                .await
+                .unwrap()
+                .unwrap()
+        );
+        assert_eq!(
+            tokio::time::timeout(deadline, store.read_projection(session))
+                .await
+                .unwrap()
+                .unwrap()
+                .last_seq,
+            1
+        );
+        assert!(
+            store.read_pool.size() >= 1,
+            "reads must execute on read_pool"
+        );
+        let ro_write_err =
+            sqlx::query("INSERT INTO event_log (session_id, ts, payload) VALUES (?, 1, '{}')")
+                .bind(session.storage_key())
+                .execute(&store.read_pool)
+                .await
+                .unwrap_err();
+        assert!(
+            ro_write_err.to_string().contains("readonly"),
+            "read_pool must reject writes: {ro_write_err}"
+        );
+
+        tx.rollback().await.unwrap();
+        store.writer_pool.close().await;
+        store.read_pool.close().await;
+        drop(store);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn migration_script_storage_fault_is_classified() {
+        let io = sqlx::Error::Io(std::io::Error::other("injected EIO"));
+        let err = StoreError::from(sqlx::migrate::MigrateError::ExecuteMigration(io, 1));
+        assert!(is_open_storage_fault(&err), "{err}");
+    }
+
+    #[test]
+    fn commit_task_panic_maps_to_non_storage_error() {
+        let err = StoreError::from(sqlx::Error::Protocol(
+            "commit task failed: task panicked".into(),
+        ));
+        assert!(!err.is_storage_fault(), "{err}");
+    }
+
+    #[test]
+    fn is_open_storage_fault_classifies_migration_arms() {
+        let io_exec = StoreError::from(sqlx::migrate::MigrateError::Execute(sqlx::Error::Io(
+            std::io::Error::other("injected EIO"),
+        )));
+        let io_script = StoreError::from(sqlx::migrate::MigrateError::ExecuteMigration(
+            sqlx::Error::Io(std::io::Error::other("injected script EIO")),
+            1,
+        ));
+        let non_storage_exec = StoreError::from(sqlx::migrate::MigrateError::Execute(
+            sqlx::Error::Protocol("bad migration SQL".into()),
+        ));
+        let non_storage_script = StoreError::from(sqlx::migrate::MigrateError::ExecuteMigration(
+            sqlx::Error::Protocol("bad script SQL".into()),
+            1,
+        ));
+        let missing = StoreError::from(sqlx::migrate::MigrateError::VersionMissing(1));
+
+        assert!(is_open_storage_fault(&io_exec), "{io_exec}");
+        assert!(is_open_storage_fault(&io_script), "{io_script}");
+        assert!(!is_open_storage_fault(&non_storage_exec));
+        assert!(!is_open_storage_fault(&non_storage_script));
+        assert!(!is_open_storage_fault(&missing));
+    }
+
+    #[test]
+    fn validate_database_arg_is_lexical_and_rejects_uris() {
+        assert!(validate_database_arg("").is_ok());
+        assert!(validate_database_arg(":memory:").is_ok());
+        assert!(validate_database_arg("/nonexistent/unlikely/path/hya.db").is_ok());
+        assert_eq!(
+            validate_database_arg("file:hya.db").unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            validate_database_arg("sqlite:hya.db").unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+    }
+
+    #[test]
+    fn stalled_filesystem_open_times_out_and_exits_runtime_promptly() {
+        if std::env::var_os("HYA_TEST_STALLED_OPEN_CHILD").is_none() {
+            let started = std::time::Instant::now();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "event_contract_tests::stalled_filesystem_open_times_out_and_exits_runtime_promptly",
+                    "--nocapture",
+                ])
+                .env("HYA_TEST_STALLED_OPEN_CHILD", "1")
+                .output()
+                .unwrap();
+            let elapsed = started.elapsed();
+            assert!(
+                output.status.success(),
+                "stalled open child failed: stdout={} stderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                elapsed < Duration::from_secs(4),
+                "process exit hung waiting on stalled open thread ({elapsed:?})"
+            );
+            return;
+        }
+
+        TEST_STALL_OPEN.store(true, std::sync::atomic::Ordering::Release);
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let bound = Duration::from_millis(120);
+        rt.block_on(async {
+            let strict_res = SessionStore::connect_runtime_bounded(
+                "/tmp/stalled-strict.db",
+                bound,
+                WRITE_TIMEOUT,
+                READ_TIMEOUT,
+            )
+            .await;
+            assert!(matches!(
+                strict_res,
+                Err((
+                    StoreError::StorageTimeout {
+                        operation: "open",
+                        ..
+                    },
+                    _
+                ))
+            ));
+
+            let fallback = SessionStore::connect_runtime_or_memory_with_timeouts(
+                "/tmp/stalled-fallback.db",
+                bound,
+                WRITE_TIMEOUT,
+                READ_TIMEOUT,
+            )
+            .await
+            .unwrap();
+            let (path, reason) = fallback.memory_fallback().unwrap();
+            assert_eq!(path, Path::new("/tmp/stalled-fallback.db"));
+            assert!(reason.contains("timeout"), "{reason}");
+        });
+        drop(rt);
+        TEST_STALL_OPEN.store(false, std::sync::atomic::Ordering::Release);
     }
 }

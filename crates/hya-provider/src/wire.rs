@@ -1,8 +1,8 @@
 //! Shared helpers for encoding stored tool parts into provider wire formats.
 
-use std::collections::HashSet;
-
-use hya_proto::{Message, Part, PartId, ToolCallId, ToolPartState};
+pub(crate) use hya_proto::context::ToolImageReplay as ToolImages;
+use hya_proto::context::{tool_attachment_limit_notice, tool_result_text};
+use hya_proto::{PartId, ToolCallId, ToolPartState};
 use serde_json::Value;
 
 pub(crate) fn tool_input(state: &ToolPartState) -> &Value {
@@ -23,60 +23,6 @@ pub(crate) struct ToolResult<'a> {
     pub(crate) images: Vec<(&'a str, &'a str)>,
 }
 
-/// Tool-result image data (data URL length, about the base64 length) one
-/// request carries.
-pub(crate) const MAX_REQUEST_IMAGE_BYTES: usize = 16 * 1024 * 1024;
-
-/// Which tool-result images one request sends.
-pub(crate) struct ToolImages<'a> {
-    /// The request's model accepts image input (`Capabilities::image_input ==
-    /// Some(true)`) on a protocol that carries tool-result images.
-    send: bool,
-    /// Images older than the newest ones that fit [`MAX_REQUEST_IMAGE_BYTES`],
-    /// as (tool part, index among its image attachments).
-    aged_out: HashSet<(&'a PartId, usize)>,
-}
-
-impl<'a> ToolImages<'a> {
-    /// Plan the images of a request over `messages`. Walking from the newest
-    /// image back, images are kept until the next would exceed the budget;
-    /// it and every older image are aged out. The plan depends only on the
-    /// history, so a later request differs only in the images that newer ones
-    /// pushed out.
-    pub(crate) fn new(messages: &'a [Message], send: bool) -> Self {
-        let mut aged_out = HashSet::new();
-        if send {
-            let mut used = 0usize;
-            let parts = messages
-                .iter()
-                .rev()
-                .filter_map(|message| match message {
-                    Message::Assistant { parts, .. } => Some(parts),
-                    Message::User { .. } | Message::System { .. } => None,
-                })
-                .flat_map(|parts| parts.iter().rev());
-            for part in parts {
-                let Part::Tool {
-                    id,
-                    state: ToolPartState::Completed { output, .. },
-                    ..
-                } = part
-                else {
-                    continue;
-                };
-                let images: Vec<_> = attached_images(output).collect();
-                for (index, (_, data)) in images.iter().enumerate().rev() {
-                    used = used.saturating_add(data.len());
-                    if used > MAX_REQUEST_IMAGE_BYTES {
-                        aged_out.insert((id, index));
-                    }
-                }
-            }
-        }
-        Self { send, aged_out }
-    }
-}
-
 /// Render the stored tool result of tool part `part` for one request.
 ///
 /// The stored result is model-independent: an image attachment either goes
@@ -91,32 +37,19 @@ pub(crate) fn tool_result<'a>(
 ) -> ToolResult<'a> {
     let (text, is_error) = match state {
         ToolPartState::Completed { output, .. } => {
-            let mut text = value_to_text(output);
+            let mut text = tool_result_text(output).into_owned();
             let mut sent = Vec::new();
-            for (index, (mime, data)) in attached_images(output).enumerate() {
-                if images.aged_out.contains(&(part, index)) {
-                    text.push_str(&format!(
-                        "\n\n[The image attached to this result ({mime}) is no longer attached: \
-                         newer images fill this request's image budget. Read the file again to \
-                         see it.]"
-                    ));
-                } else if images.send && crate::media::image_url(mime, data).is_ok() {
-                    sent.push((mime, data));
+            for (mime, data, notice) in images.attachments(part, output, |mime, data| {
+                crate::media::image_url(mime, data).is_ok()
+            }) {
+                if let Some(notice) = notice {
+                    text.push_str(&notice);
                 } else {
-                    text.push_str(&format!(
-                        "\n\n[The image attached to this result ({mime}) is not shown to you. \
-                         Inspect it with a program instead (an image library, OCR, a conversion \
-                         to text).]"
-                    ));
+                    sent.push((mime, data));
                 }
             }
-            // The tool-result cap drops an attachment over its size budget
-            // and records that here.
-            if output.pointer("/metadata/attachmentsTruncated") == Some(&Value::Bool(true)) {
-                text.push_str(
-                    "\n\n[An attachment of this result was dropped by the size limit and is not \
-                     shown to you. Inspect the file with a program instead.]",
-                );
+            if let Some(notice) = tool_attachment_limit_notice(output) {
+                text.push_str(notice);
             }
             return ToolResult {
                 text,
@@ -138,32 +71,6 @@ pub(crate) fn tool_result<'a>(
     }
 }
 
-/// Image attachments (`{"mime": "image/…", "url": …}`) of a tool result.
-fn attached_images(output: &Value) -> impl Iterator<Item = (&str, &str)> {
-    output
-        .get("attachments")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|attachment| {
-            let mime = attachment.get("mime")?.as_str()?;
-            let data = attachment.get("url")?.as_str()?;
-            mime.starts_with("image/").then_some((mime, data))
-        })
-}
-
-fn value_to_text(value: &Value) -> String {
-    match value {
-        Value::Object(fields) => fields
-            .get("output")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| value.to_string()),
-        Value::String(text) => text.clone(),
-        _ => value.to_string(),
-    }
-}
-
 fn error_value_to_text(message: &str, value: Option<&Value>) -> String {
     match value {
         Some(Value::Array(_) | Value::Object(_)) => value
@@ -174,6 +81,19 @@ fn error_value_to_text(message: &str, value: Option<&Value>) -> String {
         None => message.to_string(),
     }
 }
+
+/// Key of the input a decoder records for a tool call whose argument text is
+/// not valid JSON: `{"invalid_json_arguments": {"text": <raw>, "error": <parser error>}}`.
+const INVALID_ARGUMENTS: &str = "invalid_json_arguments";
+
+/// The parser error of a tool call whose recorded input is the marker for
+/// argument text that was not valid JSON; `None` for any other input. A model
+/// that sends the marker shape itself as its arguments is rejected the same way.
+#[must_use]
+pub fn invalid_tool_arguments(input: &Value) -> Option<&str> {
+    input.get(INVALID_ARGUMENTS)?.get("error")?.as_str()
+}
+
 pub(crate) struct ToolAsm {
     pub(crate) part: PartId,
     pub(crate) call: ToolCallId,
@@ -181,6 +101,7 @@ pub(crate) struct ToolAsm {
     pub(crate) args: String,
     pub(crate) started: bool,
     pub(crate) requested: bool,
+    pub(crate) provider_data: Option<Value>,
 }
 
 impl ToolAsm {
@@ -192,11 +113,32 @@ impl ToolAsm {
             args: String::new(),
             started: false,
             requested: false,
+            provider_data: None,
         }
     }
+
+    pub(crate) fn set_provider_field(&mut self, key: &str, value: Value) {
+        let map = self
+            .provider_data
+            .get_or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if let Some(obj) = map.as_object_mut() {
+            obj.insert(key.to_string(), value);
+        }
+    }
+    /// The call's input. Argument text that is not valid JSON becomes the
+    /// [`invalid_tool_arguments`] marker, so the call is recorded and fails at
+    /// dispatch instead of failing the round; empty text stays a decode error.
     pub(crate) fn input(&self) -> Result<Value, crate::ProviderError> {
-        serde_json::from_str(&self.args)
-            .map_err(|e| crate::ProviderError::Decode(format!("tool {} arguments: {e}", self.name)))
+        match serde_json::from_str(&self.args) {
+            Ok(input) => Ok(input),
+            Err(error) if self.args.is_empty() => Err(crate::ProviderError::Decode(format!(
+                "tool {} arguments: {error}",
+                self.name
+            ))),
+            Err(error) => Ok(serde_json::json!({
+                INVALID_ARGUMENTS: {"text": self.args, "error": error.to_string()}
+            })),
+        }
     }
 
     pub(crate) fn delta(
@@ -218,6 +160,22 @@ impl ToolAsm {
 }
 
 /// Walk user text and media in order; each protocol supplies its wire blocks.
+pub(crate) fn wire_tool_call_id<'a>(
+    call_id: &ToolCallId,
+    provider_data: Option<&'a Value>,
+    same_model: bool,
+) -> std::borrow::Cow<'a, str> {
+    if same_model
+        && let Some(upstream) = provider_data
+            .and_then(|data| data.get("call_id"))
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+    {
+        return std::borrow::Cow::Borrowed(upstream);
+    }
+    std::borrow::Cow::Owned(call_id.to_string())
+}
+
 pub(crate) fn user_content(
     parts: &[hya_proto::Part],
     text_block: impl Fn(&str) -> Value,
@@ -295,12 +253,65 @@ mod tests {
         }
     }
 
-    #[test]
-    fn truncated_tool_arguments_are_rejected() {
+    /// Render `state` as the newest round's only result.
+    fn newest(state: &ToolPartState, send: bool) -> ToolResult<'_> {
+        let id = PartId::new();
+        let messages = [hya_proto::Message::Assistant {
+            id: hya_proto::MessageId::new(),
+            agent: "agent".into(),
+            model: "model".into(),
+            parts: vec![hya_proto::Part::Tool {
+                id,
+                call_id: ToolCallId::new(),
+                name: "read".into(),
+                state: state.clone(),
+                provider_data: None,
+            }],
+            finish: None,
+            tokens: None,
+            last_round: None,
+            last_step_start: Some(0),
+        }];
+        tool_result(&id, state, &ToolImages::new(&messages, send))
+    }
+
+    fn asm(args: &str) -> ToolAsm {
         let mut tool = ToolAsm::new();
         tool.name = "read".into();
-        tool.args = "{\"path\":".into();
-        assert!(tool.input().is_err());
+        tool.args = args.into();
+        tool
+    }
+
+    #[test]
+    fn argument_text_that_is_not_json_becomes_the_marker() {
+        for (args, error) in [
+            (
+                "{\"path\":\"a",
+                "EOF while parsing a string at line 1 column 10",
+            ),
+            (
+                "{\"path\":\"a\"}}",
+                "trailing characters at line 1 column 13",
+            ),
+        ] {
+            let input = asm(args).input().unwrap();
+            assert_eq!(invalid_tool_arguments(&input), Some(error), "{input}");
+            assert_eq!(input[INVALID_ARGUMENTS]["text"], args);
+        }
+    }
+
+    #[test]
+    fn valid_and_empty_argument_text_keep_their_decoding() {
+        for (args, input) in [
+            ("{\"path\":\"a\"}", json!({"path": "a"})),
+            ("[1]", json!([1])),
+            ("null", Value::Null),
+        ] {
+            let decoded = asm(args).input().unwrap();
+            assert_eq!(decoded, input);
+            assert_eq!(invalid_tool_arguments(&decoded), None);
+        }
+        assert!(asm("").input().is_err());
     }
 
     #[test]
@@ -346,14 +357,14 @@ mod tests {
     fn an_image_goes_with_the_result_only_to_a_model_that_takes_images() {
         let state = image_result("data:image/png;base64,aGVsbG8=", json!({}));
 
-        let shown = tool_result(&PartId::new(), &state, &ToolImages::new(&[], true));
+        let shown = newest(&state, true);
         assert_eq!(shown.text, "Image file (image/png, 5 bytes).");
         assert_eq!(
             shown.images,
             vec![("image/png", "data:image/png;base64,aGVsbG8=")]
         );
 
-        let hidden = tool_result(&PartId::new(), &state, &ToolImages::new(&[], false));
+        let hidden = newest(&state, false);
         assert!(hidden.images.is_empty());
         assert!(
             hidden.text.starts_with("Image file (image/png, 5 bytes).")
@@ -366,7 +377,7 @@ mod tests {
     #[test]
     fn an_image_the_media_check_rejects_is_described_as_not_shown() {
         let state = image_result("data:image/jpeg;base64,aGVsbG8=", json!({}));
-        let result = tool_result(&PartId::new(), &state, &ToolImages::new(&[], true));
+        let result = newest(&state, true);
         assert!(result.images.is_empty());
         assert!(
             result.text.contains("is not shown to you"),

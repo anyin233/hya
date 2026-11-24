@@ -2,9 +2,11 @@
 //!
 //! One [`BundleCapability`] backs one capability lease: either a bundle tool
 //! call (any process kind — `rust`, `bun`, or `claude`) or an `api/request`
-//! bundle API request. Every operation is read-only or permission-checked
-//! (`tool.call` runs a tool of the calling agent's view through the engine's
-//! nested plane, authorized like a model call of that tool),
+//! bundle API request. Every operation is read-only (apart from the workspace
+//! observation `workspace.state` appends, as a model round would) or
+//! permission-checked (`tool.call` runs a tool of the calling agent's view
+//! through the engine's nested plane, authorized like a model call of that
+//! tool),
 //! and the lease is bound to (connection, session-or-none, call) and revoked
 //! when the reply arrives.
 
@@ -262,7 +264,11 @@ impl HostCapabilityHandler for BundleCapability {
                 if params != json!({}) {
                     return Err(rpc_error(codes::INVALID_PARAMS, "expected empty params"));
                 }
-                let state = hya_engine::engine::workspace_state(&ctx.workdir).await;
+                let state = ctx
+                    .nested
+                    .workspace_state()
+                    .await
+                    .map_err(|error| rpc_error(codes::INTERNAL_ERROR, error.to_string()))?;
                 Ok(json!({ "state": state }))
             }
             "tools.list" => {

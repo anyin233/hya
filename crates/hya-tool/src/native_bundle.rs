@@ -241,7 +241,7 @@ pub unsafe fn with_runtime_v1(
     }
 }
 
-/// Read the host's run deadline from this bundle's copy of `hya-tool`.
+/// Share the host's run deadline and unbudgeted job registry with this bundle.
 ///
 /// Native libraries export a C wrapper that calls this function; the host
 /// calls it once, right after loading the library.
@@ -252,20 +252,21 @@ pub unsafe fn with_runtime_v1(
 /// build; it lives for the process.
 pub unsafe fn share_deadline_v1(cell: *const libc::c_void) {
     // SAFETY: the checked host passes its 'static cell of the same layout.
-    crate::deadline::adopt(unsafe { &*cell.cast() });
+    crate::deadline::adopt(unsafe { &*cell.cast::<crate::deadline::ProcessDeadline>() });
 }
 
 /// Digest of the lockstep Rust ABI required by first-party bundle libraries.
 ///
 /// Bundle libraries call this from their own linked copy of `hya-tool` before
 /// the host transfers a `Vec<Arc<dyn Tool>>` or `Vec<Arc<dyn Rewriter>>`
-/// through a registration symbol. It covers every source file whose types
-/// cross the boundary.
+/// through a registration symbol. It covers the compiler and every source
+/// file whose types cross the boundary.
 #[must_use]
 pub fn abi_digest_v1() -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(b"hya.tool.native-bundle-abi/v1");
     hash.update(hya_version::BACKEND_VERSION.as_bytes());
+    hash.update(hya_version::RUSTC.as_bytes());
     hash.update(std::env::consts::OS.as_bytes());
     hash.update(std::env::consts::ARCH.as_bytes());
     hash.update(std::mem::size_of::<ToolCtx>().to_be_bytes());
@@ -277,6 +278,7 @@ pub fn abi_digest_v1() -> [u8; 32] {
     hash.update(std::mem::align_of::<tokio::runtime::Handle>().to_be_bytes());
     hash.update(include_bytes!("tool.rs"));
     hash.update(include_bytes!("deadline.rs"));
+    hash.update(include_bytes!("lifecycle.rs"));
     hash.update(include_bytes!("rewrite.rs"));
     hash.update(include_bytes!("tokens.rs"));
     hash.finalize().into()
@@ -394,21 +396,61 @@ fn native_package_directory(parent: &std::path::Path) -> std::path::PathBuf {
 #[cfg(unix)]
 #[derive(Debug, PartialEq, Eq)]
 enum LibrarySource {
-    Local(std::path::PathBuf),
+    /// Libraries left by a Cargo build, the most likely match first.
+    Local(Vec<std::path::PathBuf>),
     Package(std::path::PathBuf),
+}
+
+/// Libraries Cargo built for `stem` in its per-unit build directory, newest first.
+///
+/// Cargo 1.100 dropped the shared `deps/` directory: each build unit writes to
+/// `build/<package>/<unit>/out/`, so one package has one library per feature
+/// set it was built with. An uplifted binary sits beside `build/`; a test
+/// binary sits inside its own unit of it.
+#[cfg(unix)]
+fn build_unit_libraries(
+    parent: &std::path::Path,
+    filename: &str,
+    stem: &str,
+) -> Vec<std::path::PathBuf> {
+    let package = stem.replace('_', "-");
+    let units = [
+        Some(parent.join("build")),
+        parent.ancestors().nth(3).map(Into::into),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|build: &std::path::PathBuf| build.ends_with("build"))
+    .find_map(|build| std::fs::read_dir(build.join(&package)).ok());
+    let mut libraries = units
+        .into_iter()
+        .flatten()
+        .filter_map(|unit| {
+            let library = unit.ok()?.path().join("out").join(filename);
+            let modified = library.metadata().ok()?.modified().ok()?;
+            Some((modified, library))
+        })
+        .collect::<Vec<_>>();
+    libraries.sort_by(|left, right| right.cmp(left));
+    libraries.into_iter().map(|(_, library)| library).collect()
 }
 
 /// Choose the lockstep library to load for one family.
 ///
-/// A Cargo build places the library it just linked in `deps/` (and may uplift
-/// a copy beside the executable). That library always matches the running
-/// host, while a package staged under `bundles/` can be stale and is costly to
-/// verify in unoptimized builds. Installed layouts carry no adjacent library,
-/// so they load the verified package beside `bin/`.
+/// A Cargo build leaves the library it just linked in `deps/` or in a build
+/// unit (and may uplift a copy beside the executable). That library matches
+/// the running host, while a package staged under `bundles/` can be stale and
+/// is costly to verify in unoptimized builds. Installed layouts carry no
+/// adjacent library, so they load the verified package beside `bin/`.
 #[cfg(unix)]
 fn library_source(parent: &std::path::Path, filename: &str, stem: &str) -> Option<LibrarySource> {
-    let candidates = [parent.join("deps").join(filename), parent.join(filename)];
-    if let Some(local) = candidates.into_iter().find(|path| path.is_file()) {
+    let mut local = [parent.join("deps").join(filename), parent.join(filename)]
+        .into_iter()
+        .filter(|path| path.is_file())
+        .take(1)
+        .collect::<Vec<_>>();
+    local.extend(build_unit_libraries(parent, filename, stem));
+    if !local.is_empty() {
         return Some(LibrarySource::Local(local));
     }
     let package =
@@ -428,21 +470,32 @@ fn open_library(stem: &str) -> Result<usize, String> {
         stem,
         std::env::consts::DLL_SUFFIX
     );
+    let record = |source: &std::path::Path| {
+        LIBRARY_SOURCES
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(stem.to_string(), source.to_path_buf());
+    };
     match library_source(parent, &filename, stem) {
-        Some(LibrarySource::Local(path)) => {
-            LIBRARY_SOURCES
-                .get_or_init(|| Mutex::new(HashMap::new()))
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert(stem.to_string(), path.clone());
-            load_checked(stem, &path)
+        Some(LibrarySource::Local(libraries)) => {
+            // A stale library (another compiler or source revision, such as
+            // one an older Cargo left in `deps/`) fails the ABI check; the one
+            // built with this executable is among the rest.
+            let mut failures = Vec::new();
+            for library in &libraries {
+                match load_checked(stem, library) {
+                    Ok(handle) => {
+                        record(library);
+                        return Ok(handle);
+                    }
+                    Err(error) => failures.push(error),
+                }
+            }
+            Err(failures.join("; "))
         }
         Some(LibrarySource::Package(package)) => {
-            LIBRARY_SOURCES
-                .get_or_init(|| Mutex::new(HashMap::new()))
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert(stem.to_string(), package.clone());
+            record(&package);
             let extracted = extract_packaged_library(parent, &package, stem, &filename)?;
             load_extracted(stem, &extracted)
         }
@@ -814,7 +867,7 @@ mod tests {
         for parent in [debug.clone(), debug.join("deps")] {
             assert_eq!(
                 super::library_source(&parent, "libhya_demo_tools.so", "hya_demo_tools"),
-                Some(super::LibrarySource::Local(fresh.clone())),
+                Some(super::LibrarySource::Local(vec![fresh.clone()])),
                 "{}",
                 parent.display()
             );
@@ -841,6 +894,35 @@ mod tests {
     }
 
     #[test]
+    fn cargo_build_units_are_found_from_binaries_and_tests_newest_first() -> std::io::Result<()> {
+        let root =
+            std::env::temp_dir().join(format!("hya-native-library-units-{}", std::process::id()));
+        let debug = root.join("target/debug");
+        let unit = |name: &str, age: u64| -> std::io::Result<std::path::PathBuf> {
+            let out = debug.join("build/hya-demo-tools").join(name).join("out");
+            std::fs::create_dir_all(&out)?;
+            let library = out.join("libhya_demo_tools.so");
+            std::fs::File::create(&library)?
+                .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(age))?;
+            Ok(library)
+        };
+        let old = unit("1111", 60)?;
+        let new = unit("2222", 0)?;
+        let test_binary = debug.join("build/hya-demo/3333/out");
+        std::fs::create_dir_all(&test_binary)?;
+
+        for parent in [debug.clone(), test_binary] {
+            assert_eq!(
+                super::library_source(&parent, "libhya_demo_tools.so", "hya_demo_tools"),
+                Some(super::LibrarySource::Local(vec![new.clone(), old.clone()])),
+                "{}",
+                parent.display()
+            );
+        }
+        std::fs::remove_dir_all(root)
+    }
+
+    #[test]
     fn extracted_library_copy_is_removed_after_loading() -> Result<(), String> {
         let executable = std::env::current_exe().map_err(|error| error.to_string())?;
         let deps = executable.parent().ok_or("test binary has no parent")?;
@@ -855,7 +937,12 @@ mod tests {
         ));
         std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
         let extracted = directory.join(&filename);
-        std::fs::copy(deps.join(&filename), &extracted).map_err(|error| error.to_string())?;
+        let Some(super::LibrarySource::Local(built)) =
+            super::library_source(deps, &filename, "hya_network_tools")
+        else {
+            return Err("cargo test builds the network tools library".into());
+        };
+        std::fs::copy(&built[0], &extracted).map_err(|error| error.to_string())?;
 
         let handle = super::load_extracted("hya_network_tools", &extracted)?;
         super::symbol(handle, b"hya_tool_bundle_register_v1\0")?;

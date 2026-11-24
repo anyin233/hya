@@ -63,7 +63,7 @@ impl SessionStore {
                 ));
             }
         };
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.begin_transaction().await?;
         if let Some(claim) = actor_claim {
             fence_actor_claim(&mut tx, claim).await?;
         }
@@ -117,7 +117,7 @@ impl SessionStore {
                 "selection requires a matching WorkflowSelected event".to_string(),
             ));
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.begin_transaction().await?;
         if let Some(claim) = actor_claim {
             fence_actor_claim(&mut tx, claim).await?;
         }
@@ -156,7 +156,7 @@ impl SessionStore {
         reason: &str,
     ) -> Result<Vec<Envelope>, StoreError> {
         self.require_runtime_owner(current_owner)?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.begin_transaction().await?;
         // Only Sessions that ever started a Workflow can be nonterminal. Scanning
         // every idle Session's full event_log dominated cold listen on large DBs.
         // serde writes the `type` tag first, so the LIKE prefix rejects almost
@@ -206,7 +206,7 @@ impl SessionStore {
 
 /// Read one Session log inside an existing writer transaction.
 async fn replay_workflow_events(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    tx: &mut crate::StoreTransaction<'_>,
     session: hya_proto::SessionId,
 ) -> Result<Vec<Envelope>, StoreError> {
     let rows =

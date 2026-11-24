@@ -69,6 +69,7 @@ impl AnthropicDecoder {
                     call: block.tool.call,
                     name: ToolName::new(block.tool.name),
                     input,
+                    provider_data: block.tool.provider_data,
                 });
             }
         }
@@ -91,6 +92,39 @@ impl AnthropicDecoder {
     fn record_usage(&mut self, usage: &Value) {
         self.usage.merge(anthropic_usage(usage));
     }
+
+    fn warn_input_transformations(&self, value: &Value) {
+        let Some(entries) = value
+            .pointer("/message/input_transformations")
+            .or_else(|| value.get("input_transformations"))
+            .and_then(Value::as_array)
+        else {
+            return;
+        };
+        let reasons: Vec<&str> = entries
+            .iter()
+            .filter_map(|entry| {
+                let action = entry.get("action").and_then(Value::as_str);
+                let dropped = matches!(action, Some("removed" | "dropped" | "drop_block"));
+                let kind = entry.get("type").and_then(Value::as_str);
+                let thinking = matches!(kind, Some("thinking" | "redacted_thinking") | None);
+                (dropped && thinking).then(|| {
+                    entry
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unspecified")
+                })
+            })
+            .collect();
+        if !reasons.is_empty() {
+            tracing::warn!(
+                session = %self.session,
+                dropped = reasons.len(),
+                reasons = %reasons.join(", "),
+                "anthropic upstream dropped thinking blocks from input"
+            );
+        }
+    }
 }
 
 impl Decoder for AnthropicDecoder {
@@ -104,6 +138,7 @@ impl Decoder for AnthropicDecoder {
         let mut out = Vec::new();
         match value.get("type").and_then(Value::as_str) {
             Some("message_start") => {
+                self.warn_input_transformations(&value);
                 if let Some(usage) = value.pointer("/message/usage") {
                     self.record_usage(usage);
                 }
@@ -191,16 +226,27 @@ impl Decoder for AnthropicDecoder {
                             .and_then(Value::as_str)
                             .unwrap_or_default()
                             .to_string();
+                        let mut tool = ToolAsm {
+                            part,
+                            call,
+                            name: name.clone(),
+                            ..ToolAsm::new()
+                        };
+                        if let Some(upstream_id) = cb
+                            .and_then(|c| c.get("id"))
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                        {
+                            tool.set_provider_field(
+                                "call_id",
+                                Value::String(upstream_id.to_string()),
+                            );
+                        }
                         self.blocks.insert(
                             index,
                             Block {
                                 kind: BlockKind::Tool,
-                                tool: ToolAsm {
-                                    part,
-                                    call,
-                                    name: name.clone(),
-                                    ..ToolAsm::new()
-                                },
+                                tool,
                                 signature: None,
                                 redacted_data: None,
                             },
@@ -247,10 +293,15 @@ impl Decoder for AnthropicDecoder {
                             }
                         }
                         Some("signature_delta") => {
-                            block.signature = delta
+                            if let Some(chunk) = delta
                                 .and_then(|d| d.get("signature"))
                                 .and_then(Value::as_str)
-                                .map(str::to_owned);
+                            {
+                                block
+                                    .signature
+                                    .get_or_insert_with(String::new)
+                                    .push_str(chunk);
+                            }
                         }
                         Some("input_json_delta") => {
                             if let Some(pj) = delta
@@ -295,6 +346,7 @@ impl Decoder for AnthropicDecoder {
                 }
             }
             Some("message_delta") => {
+                self.warn_input_transformations(&value);
                 if let Some(stop) = value.pointer("/delta/stop_reason").and_then(Value::as_str) {
                     self.stop_reason = Some(stop.to_string());
                 }

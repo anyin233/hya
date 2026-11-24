@@ -168,14 +168,14 @@ preferred model plus ordered fallback candidates and per-candidate reasoning.
 | `turn_binding_recorded` | `session`, `message`, `generation: ConfigGeneration`, `system_sha256: String`, `tools_sha256: String` | Fold: `config_generation` on that message (the latest one wins). Engine emits it after `MessageStarted{Assistant}` and before any provider call, so the immutable runtime snapshot identity is durable first. `system_sha256` and `tools_sha256` are lowercase hex SHA-256 digests of the system prompt text and of the JSON-serialized tool schema list the turn's requests send (before `chat.params`); only the digests are logged, not the texts. A round whose prompt or tools differ from the last recorded digests (a mid-turn rebind) emits the event again. Shell turns, forks, and logs written before the fields carry empty strings. |
 | `user_prompt_context_recorded` | `session`, `message`, `files: Vec<Value>`, `agents: Vec<Value>` | Fold: prompt `@file` / `@agent` attachment metadata, and prompt images: one `files` entry `{type: "image_attachment", part, name, mime, size, blob, path?}` per image, where `blob` is the sha256 of the bytes in the session's `file_blob` table (the bytes never ride on the event). An image prompt appends it in the same transaction as the user message, between `text_end` and `message_finished`. Engine **emits nothing** when both vectors are empty. v1: `partsAdded` with one `AttachmentPart` per image (no other entries map). |
 | `message_finished` | `session`, `message`, `role`, `finish: FinishReason`, `tokens: Option<TokenUsage>`, `cause: Option<FinishCause>` | Fold: finish + cause + tokens. `tokens` is the legacy sum of the message's rounds and is only set on a normal finish. Engine force-emits this with `error` or `cancelled` (and `tokens: None`) on turn failure, cancel, drain, sidecar loss, or crash recovery so clients never wait forever after `message_started` (see [End-event invariant](#end-event-invariant)); `cause` says why (omitted when the model ended the message, and absent in logs written before 0.41.0). Billed rounds of such a message are still counted through `usage_recorded`. For a message with no `usage_recorded` record (a legacy log) a non-zero `tokens` is folded once into `SessionProjection.usage` under model `unattributed`, except in forked sessions, whose copied messages carry the source's sums. |
-| `part_deleted` | `session`, `message`, `part: PartId` | Fold: removes that part from the message |
+| `part_deleted` | `session`, `message`, `part: PartId` | Fold: removes that part from the message. Appended by `delete_part`, and by bare mode for each part of a failed round attempt once it selects a retry, before the wait ([When a bare round fails](../kernel.md#when-a-bare-round-fails)). v1: `partDeleted`. |
 
 #### Step markers (provider rounds)
 
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
 | `step_started` | `session`, `message`, `step: u32`, optional `view: ViewRef` | Fold: records the message's current step part offset. The reducer ignores `view`. |
-| `step_finished` | `session`, `message`, `step: u32`, `finish: FinishReason` | **no-op**. `finish` defaults to `stop` when replaying older logs that lacked the field (`#[serde(default = "default_step_finish_reason")]`). |
+| `step_finished` | `session`, `message`, `step: u32`, `finish: FinishReason`, optional `error: String` | **no-op**. `finish` defaults to `stop` when replaying older logs that lacked the field (`#[serde(default = "default_step_finish_reason")]`). When a started provider step fails mid-stream (`finish: error`), `error` carries a single-line summary of the failure bounded to 512 characters; omitted on normal finishes and older logs. |
 
 One pair marks one provider stream round inside an assistant message. The
 round's billed usage and serving model are recorded separately by
@@ -206,9 +206,8 @@ One record per provider call that reported usage:
   that delivered usage and then failed, or a round of a message that later
   ended `cancelled`/`error`, is still recorded.
 - `purpose: title` — automatic title generation.
-- `purpose: compaction` — summarizer calls: the compaction ladder's
-  `summarize`/`handoff` rungs, `/compact` (`summarize_session`), and the
-  terminal handoff document.
+- `purpose: compaction` — summarizer calls: the terminal handoff document.
+  Logs may also carry records of removed summarizing reductions.
 
 Side calls (`title`, `compaction`) omit `message` and `step` and never create
 transcript messages. `UsagePurpose` is `turn` \| `title` \| `compaction`; an
@@ -251,7 +250,7 @@ snapshot (without provider data), preserving partial thinking for replay.
 | --- | --- | --- | --- |
 | `tool_input_start` | `session`, `message`, `part`, `call: ToolCallId`, `name: ToolName` | → `Pending { input: null }` | Fold: push tool part |
 | `tool_input_delta` | `session`, `message`, `part`, `call`, `name`, `delta: String` | (unchanged) | **live-only**, never persisted; `tool_call_requested` stores the complete input |
-| `tool_call_requested` | `session`, `message`, `part`, `call`, `name`, `input: Value` | → `Running { input }` | Fold: upsert running tool. Turn loop collects these into the round's `tool_calls` list. |
+| `tool_call_requested` | `session`, `message`, `part`, `call`, `name`, `input: Value`, optional `provider_data: Value` | → `Running { input }` | Fold: upsert running tool and retain optional `provider_data` (such as upstream `call_id` or signature fields). Turn loop collects these into the round's `tool_calls` list. Argument text that was not valid JSON is recorded as `{"invalid_json_arguments": {"text", "error"}}`; the turn loop answers that call with a `tool_error` and runs no tool ([kernel](../kernel.md#tool-calls-whose-arguments-are-not-valid-json)). |
 | `tool_result` | `session`, `message`, `part`, `call`, `output: Value`, `time_ms: u64` | → `Completed { input, output, time_ms }` | Fold |
 | `tool_error` | `session`, `message`, `part`, `call`, `message_text: String`, `value: Option<Value>` | → `Error { input, message, value }` | Fold. Engine commonly sets `value` to `{ "error": { "type": "...", "message": "..." } }`. |
 | `tool_part_updated` | `session`, `message`, `part`, `state: ToolPartState` | → given state | Fold: direct overwrite (fork/copy and out-of-band progress) |
@@ -345,7 +344,7 @@ while only the reviving mail is owed to the new episode. See the
 
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
-| `context_compacted` | `session`, summary `message`, `strategy`, `from_message`, `to_message`, `folded_count`, `input_tokens_est`, `threshold`, optional `step_cut { through_part, kept_head }` | Moves the summary `message` row to the fold boundary: right after `to_message`, or, with `step_cut`, right before `kept_head`, and sets `to_message`'s `MessageProjection.folded_parts` to the parts through `through_part` (reducer version 9). Requests start at the latest marker and skip a message's `folded_parts`; the projection keeps every message and part. A `step_cut` fold cuts inside the turn's in-flight assistant message at a step boundary (see [compaction](../compaction.md#in-flight-turns)); logs without the field fold whole messages, as before. The system message carries summary output and the range points to the folded log entries. A manual compaction (`CompactSession` / `SummarizeSession`) records `strategy: local_summarizer` over the whole window it summarized, with `threshold: 0` (no threshold tripped); v1 maps it to `compactionApplied { manual: true }`. |
+| `context_compacted` | `session`, summary `message`, `strategy`, `from_message`, `to_message`, `folded_count`, `input_tokens_est`, `threshold`, optional `step_cut { through_part, kept_head }` | Moves the summary `message` row to the fold boundary: right after `to_message`, or, with `step_cut`, right before `kept_head`, and sets `to_message`'s `MessageProjection.folded_parts` to the parts through `through_part` (reducer version 9). Requests start at the latest marker and skip a message's `folded_parts`; the projection keeps every message and part. A `step_cut` fold cuts inside the turn's in-flight assistant message at a step boundary (see [compaction](../compaction.md#in-flight-turns)); logs without the field fold whole messages, as before. The system message carries summary output and the range points to the folded log entries. A manual compaction (`CompactSession` / `SummarizeSession`) records `strategy: native` or `strategy: rewrite` with `threshold: 0` (no threshold tripped); v1 maps it to `compactionApplied { manual: true }`. Older logs carry manual `local_summarizer` folds. |
 | `todos_updated` | `session`, `todos: [TodoItem { id, content, status }]` | Fold: `SessionProjection.todos` = the full list. Appended by the kernel in the same transaction as a `todo` call's `tool_result` when the list changes. Reads and unchanged lists append only their tool result. The reducer also recovers historical todo lists from tool results with `metadata.todos` and retains the allocated numeric id in its durable snapshot (reducer version 10). |
 | `session_forked` | `session`, `source`, optional `before_message` | Fold: `SessionProjection.forked_from = source`, `forked_before = before_message` (the source-log user message the copy stopped before; `None` for a head fork, which copies every visible message). Records a fork edge separate from subagent `SessionCreated.parent`. Copied messages receive fresh ids; their copied `tokens` never count toward the fork's `usage`. v1: `SessionInfo.forkedFrom`. |
 | `context_evicted` | `session`, `evicted_parts`, `parts: [EvictedPart { part, notice }]`, `tokens_before`, `tokens_after`, `threshold` | Fold: sets `PartProjection::Tool.eviction_notice = notice` on each listed tool part; `state` keeps the full output. Model requests send the notice (artifact handle included) instead of the output; v1 clients see the full output. Logs before `parts` fold nothing. |
@@ -665,7 +664,9 @@ Projection {
 | --- | --- |
 | `text` | `id`, `text` |
 | `reasoning` | `id`, `text`, `reason?`, `provider_data?` |
-| `tool` | `id`, `call`, `name`, `state` |
+| `tool` | `id`, `call`, `name`, `state`, `eviction_notice?`, `provider_data?` |
+
+Both `Part::Tool` and `PartProjection::Tool` omit `provider_data` on the wire when `None` (`#[serde(default, skip_serializing_if = "Option::is_none")]`), so logs written before this field decode cleanly. Later `tool_result` and `tool_error` updates leave an existing `provider_data` intact.
 
 `Part::Media` exists on the **model-facing** `Message` / `Part` value types
 (for provider request building) but has **no** `PartProjection` counterpart.

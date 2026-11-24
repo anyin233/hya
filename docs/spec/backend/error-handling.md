@@ -150,7 +150,7 @@
   `E_INVALID_PATCH`, `E_CAPACITY`, `E_OUTPUT_LIMIT`, `E_INTERNAL`, and
   `E_BAD_READ`. Preserve the code and bounded recovery hints in
   `ToolError::Input("[E_...] ...")`; never include file contents in a hint, log,
-  or error payload.
+  or error payload except for the bounded missing-hash context described in [Tool-family presets](../../base-tools.md), which requires read authorization.
 - A stale Edit may recover only through exact context-3/fuzz-0 replay of the
   complete request against bounded Session/workdir/target snapshots. A
   conflict, missing history, or shifted live content retains the original
@@ -256,7 +256,7 @@
 - Write/Bash tests assert closed schemas, result-cap shape preservation, Bash
   timeout/clamp/zero/cancel/nonzero/PTY/truncation/artifact behavior, and that
   environment values are absent from every result and diagnostic.
-- `crates/hya-tool/tests/task.rs` and app admission tests assert `description`
+- `crates/hya-tool/tests/it/task.rs` and app admission tests assert `description`
   is absent from both nested schemas, blank normalization has no unsupported
   error or child-side-effect, and non-empty direct input has the typed rejection
   with no admission mutation.

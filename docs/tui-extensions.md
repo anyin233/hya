@@ -375,7 +375,7 @@ bundles stay in the VM).
 | `packages/hya-tui-sdk` | Authoring SDK, the extension VM (`src/host.ts`), and the shared host (`src/main.ts`, `src/worker.ts`; JIT tier `src/jitThread.ts`, `src/jitWorker.ts`). |
 | `packages/hya-tui/src/extensions/` | Host: `install.ts` (verify, cache), `sandbox.ts` (OS sandbox plan and probe), `confine.ts` (self-confining launcher), `hostChannel.ts` (JSON-RPC to the shared host), `files.ts` (`api.fs` service), `wire.ts` (validation), `manager.ts` (lifecycle and contributions), `context.ts`, `renderTree.tsx`, `Host.tsx`. |
 
-Tests: `cargo test -p hya-bundle --test tui`, the hya-server catalog test,
+Tests: `cargo test -p hya-bundle --test it tui::`, the hya-server catalog test,
 `packages/hya-tui-sdk` `bun test` (the VM: no ambient APIs, deadline, memory
 cap, import rules), `packages/hya-tui` `bun test test/extensions.test.ts` (real
 SDK and Bun processes, including the OS launcher where it can confine), and the

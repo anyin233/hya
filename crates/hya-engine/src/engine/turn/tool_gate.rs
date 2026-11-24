@@ -36,7 +36,6 @@ pub(super) struct TurnToolGate<'a> {
     pub(super) resources: &'a Arc<CompiledResourceView>,
     pub(super) agents: &'a Arc<[AgentDef]>,
     pub(super) agent: &'a AgentSpec,
-    pub(super) depth: u32,
     pub(super) external_dirs: &'a [PathBuf],
     pub(super) workspace: &'a SessionWorkspace,
     pub(super) actor_claim: Option<&'a ActorClaim>,
@@ -47,9 +46,28 @@ pub(super) struct TurnToolGate<'a> {
     /// Engine handle for nested tool calls, cloned once per turn on first use.
     pub(super) nested_engine: &'a mut Option<Arc<SessionEngine>>,
     pub(super) steer: &'a mut SteerMailbox,
+    pub(super) defer_steer: bool,
     pub(super) parent_session: Option<SessionId>,
     /// Tool schemas the round's request offered.
     pub(super) offered: &'a [ToolSchema],
+}
+
+/// Whether a turn's agent delivers by `report`, so its deadline notices
+/// take the text for that.
+pub(super) fn can_report(
+    engine: &SessionEngine,
+    binding: &TurnBinding,
+    agent: &AgentSpec,
+    parent_session: Option<SessionId>,
+    offered: &[ToolSchema],
+) -> Result<bool, CoreError> {
+    let policy = crate::ChannelPolicy::from_binding(binding)
+        .map_err(CoreError::bundle)?
+        .snapshot_for(agent.name.as_str());
+    Ok(parent_session.is_some()
+        && engine.lifecycle.is_connected()
+        && crate::lifecycle::report_allowed(policy)
+        && offered.iter().any(|tool| tool.name.as_str() == "report"))
 }
 
 impl TurnToolGate<'_> {
@@ -63,7 +81,6 @@ impl TurnToolGate<'_> {
             resources,
             agents,
             agent: live_agent,
-            depth,
             external_dirs,
             workspace,
             actor_claim,
@@ -72,6 +89,7 @@ impl TurnToolGate<'_> {
             report_latch,
             ref mut nested_engine,
             ref mut steer,
+            ref mut defer_steer,
             parent_session,
             offered,
         } = self;
@@ -124,13 +142,8 @@ impl TurnToolGate<'_> {
         let started = std::time::Instant::now();
         let mut file_capture = FileCapture::default();
         let nested_stamps = Arc::new(Mutex::new(BTreeMap::new()));
-        let behind = hidden_behind(
-            resources,
-            depth,
-            engine.exclusive_tool.as_deref(),
-            engine.interaction.is_available(),
-            tc.name.as_str(),
-        );
+        let behind = hidden_behind(offered, engine.exclusive_tool.as_deref(), tc.name.as_str());
+        let wait_ack = hya_tool::WaitAckSlot::default();
         let collect_tool = async {
             Ok::<_, CoreError>(match (behind, resources.resolve_tool(&tc.name)) {
                 (Some(exclusive), Some(_)) => (
@@ -187,7 +200,8 @@ impl TurnToolGate<'_> {
                                     .lifecycle
                                     .for_session_with_actor(session, actor_claim.copied())
                                     .with_channel_policy(channel_policy)
-                                    .with_report_latch(report_latch.clone()),
+                                    .with_report_latch(report_latch.clone())
+                                    .with_wait_ack(wait_ack.clone()),
                                 project_activity: engine.project_activity.for_session(session),
                                 session: Some(session),
                                 parent_session,
@@ -265,6 +279,7 @@ impl TurnToolGate<'_> {
             BashArtifactGuard::capture(tc.name.as_str(), result.as_ref().ok(), binding.workdir());
         let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         engine.validate_actor_claim(actor_claim).await?;
+        let mut was_hook_replaced = false;
         let result = if !cancel.is_cancelled()
             && !matches!(&result, Err(ToolError::Cancelled))
             && (engine.hooks.is_some() || activation_hooks.is_some())
@@ -297,6 +312,7 @@ impl TurnToolGate<'_> {
             if was_permission_err || native == original_native {
                 result
             } else {
+                was_hook_replaced = true;
                 match native {
                     ToolOutcomeNative::Ok { output, .. } => Ok(output),
                     ToolOutcomeNative::Err { message } => Err(ToolError::Other(message)),
@@ -304,6 +320,14 @@ impl TurnToolGate<'_> {
             }
         } else {
             result
+        };
+        let wait_state = wait_ack.take_state();
+        let wait_ack = if wait_state.saw_wait {
+            let intact = result.is_ok() && !was_hook_replaced && !cancel.is_cancelled();
+            *defer_steer = !intact || wait_state.more_mail;
+            wait_state.ack.filter(|_| intact)
+        } else {
+            None
         };
         let mail_mark = engine.mail_mark(session);
         let (event, retains_artifact) = match result {
@@ -331,18 +355,16 @@ impl TurnToolGate<'_> {
                 // and wakes the member for a new episode instead.
                 // Deadline notices use the same result tail and commit.
                 if !report_latch.is_set() {
-                    if let Some(notice) = steer.drain(engine).await? {
+                    if wait_ack.is_none()
+                        && !*defer_steer
+                        && let Some(notice) = steer.drain(engine).await?
+                    {
                         append_steer_notice(&mut output, &notice);
                     }
                     if let Some(deadline) = hya_tool::deadline::current() {
                         if let Some(stage) = deadline.take_notice(session) {
-                            let policy = crate::ChannelPolicy::from_binding(binding)
-                                .map_err(CoreError::bundle)?
-                                .snapshot_for(live_agent.name.as_str());
-                            let can_report = parent_session.is_some()
-                                && engine.lifecycle.is_connected()
-                                && crate::lifecycle::report_allowed(policy)
-                                && offered.iter().any(|tool| tool.name.as_str() == "report");
+                            let can_report =
+                                can_report(engine, binding, live_agent, parent_session, offered)?;
                             let notice = deadline.notice(stage, can_report);
                             append_steer_notice(&mut output, &format!("\n\n{notice}"));
                         } else if let Some(clock) = deadline.take_clock(session) {
@@ -378,9 +400,13 @@ impl TurnToolGate<'_> {
                 )
             }
         };
-        let (acknowledgement, consumed_incoming) = steer
-            .take_acknowledgement()
-            .map_or((None, false), |(event, incoming)| (Some(event), incoming));
+        let (acknowledgement, mail_mark, consumed_incoming) = match wait_ack {
+            Some(ack) => (Some(ack.event), Some(ack.mark), ack.consumed_incoming),
+            None => {
+                let (event, incoming) = steer.take_acknowledgement().unzip();
+                (event, mail_mark, incoming.unwrap_or(false))
+            }
+        };
         let mut events = vec![event];
         events.extend(observation(
             session,

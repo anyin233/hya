@@ -8,8 +8,13 @@
 //! the host's cell ([`crate::native_bundle::share_deadline_v1`]).
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock, PoisonError};
-use std::time::{Duration, Instant};
+use std::sync::{LazyLock, Mutex, OnceLock, PoisonError};
+use std::time::Duration;
+
+// Tokio's clock, so a paused test runtime moves the stages with its timers.
+use tokio::sync::oneshot;
+use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 
 use hya_proto::SessionId;
 
@@ -35,6 +40,21 @@ pub struct RunDeadline {
     start: Instant,
     budget: Duration,
     notified: Mutex<HashMap<SessionId, Told>>,
+    background: BackgroundJobs,
+}
+
+#[derive(Debug, Default)]
+struct BackgroundJobs {
+    shutdown: CancellationToken,
+    state: Mutex<JobState>,
+    // Keep the in-flight batch across concurrent or interrupted shutdown calls.
+    draining: tokio::sync::Mutex<Vec<oneshot::Receiver<()>>>,
+}
+
+#[derive(Debug, Default)]
+struct JobState {
+    closed: bool,
+    jobs: Vec<oneshot::Receiver<()>>,
 }
 
 /// The stage a session was last told of, and the tenth of the budget that
@@ -52,9 +72,15 @@ impl Told {
     };
 }
 
-static DEADLINE: OnceLock<RunDeadline> = OnceLock::new();
+#[derive(Default)]
+pub(crate) struct ProcessDeadline {
+    deadline: OnceLock<RunDeadline>,
+    unbudgeted: BackgroundJobs,
+}
+
+static DEADLINE: LazyLock<ProcessDeadline> = LazyLock::new(ProcessDeadline::default);
 /// In a native bundle's copy of this crate: the host's [`DEADLINE`].
-static HOST: OnceLock<&'static OnceLock<RunDeadline>> = OnceLock::new();
+static HOST: OnceLock<&'static ProcessDeadline> = OnceLock::new();
 
 /// Start the run's clock with `budget`.
 ///
@@ -62,7 +88,8 @@ static HOST: OnceLock<&'static OnceLock<RunDeadline>> = OnceLock::new();
 /// When called a second time: one process runs one budgeted run.
 pub fn install(budget: Duration) {
     assert!(
-        DEADLINE
+        host()
+            .deadline
             .set(RunDeadline::new(Instant::now(), budget))
             .is_ok(),
         "run deadline installed twice"
@@ -72,16 +99,34 @@ pub fn install(budget: Duration) {
 /// The run's deadline, when it has a budget.
 #[must_use]
 pub fn current() -> Option<&'static RunDeadline> {
-    HOST.get().copied().unwrap_or(&DEADLINE).get()
+    host().deadline.get()
+}
+
+/// Close Bash admission and wait for foreground and yielded jobs before leaving exec.
+pub async fn shutdown_background_jobs() {
+    if let Some(deadline) = current() {
+        tokio::join!(
+            deadline.shutdown_background_jobs(),
+            host().unbudgeted.shutdown()
+        );
+    } else {
+        host().unbudgeted.shutdown().await;
+    }
+}
+
+/// Dropping the supervisor's sender closes its completion receiver.
+#[must_use]
+pub struct BackgroundJobGuard {
+    _completion: oneshot::Sender<()>,
 }
 
 /// This copy's cell, for the loader to hand to a bundle.
-pub(crate) fn cell() -> &'static OnceLock<RunDeadline> {
+pub(crate) fn cell() -> &'static ProcessDeadline {
     &DEADLINE
 }
 
 /// Read the host's cell from now on (in a bundle's copy, once at load).
-pub(crate) fn adopt(host: &'static OnceLock<RunDeadline>) {
+pub(crate) fn adopt(host: &'static ProcessDeadline) {
     assert!(HOST.set(host).is_ok(), "host deadline adopted twice");
 }
 
@@ -89,13 +134,69 @@ fn clamp_secs(value: f64, low: f64, high: f64) -> Duration {
     Duration::from_secs_f64(value.clamp(low, high))
 }
 
+fn host() -> &'static ProcessDeadline {
+    HOST.get().copied().unwrap_or_else(cell)
+}
+
+/// Admit a shell before spawning it. Keep the guard until its cleanup completes.
+///
+/// # Errors
+/// Returns [`crate::ToolError::Cancelled`] once shutdown closes admission.
+pub fn register_job(
+    deadline: Option<&RunDeadline>,
+) -> Result<(CancellationToken, BackgroundJobGuard), crate::ToolError> {
+    deadline
+        .map_or(&host().unbudgeted, |d| &d.background)
+        .register()
+}
+
+impl BackgroundJobs {
+    fn register(&self) -> Result<(CancellationToken, BackgroundJobGuard), crate::ToolError> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.closed {
+            return Err(crate::ToolError::Cancelled);
+        }
+        let (tx, rx) = oneshot::channel();
+        state
+            .jobs
+            .retain_mut(|job| matches!(job.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
+        state.jobs.push(rx);
+        Ok((
+            self.shutdown.clone(),
+            BackgroundJobGuard { _completion: tx },
+        ))
+    }
+
+    async fn shutdown(&self) {
+        let mut batch = self.draining.lock().await;
+        {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            state.closed = true;
+            self.shutdown.cancel();
+            batch.append(&mut state.jobs);
+        }
+        while let Some(job) = batch.last_mut() {
+            let _ = job.await;
+            batch.pop();
+        }
+    }
+}
+
 impl RunDeadline {
-    fn new(start: Instant, budget: Duration) -> Self {
+    /// Measure a run's budget from the supplied clock instant.
+    #[must_use]
+    pub fn new(start: Instant, budget: Duration) -> Self {
         Self {
             start,
             budget,
             notified: Mutex::new(HashMap::new()),
+            background: BackgroundJobs::default(),
         }
+    }
+
+    /// Stop and join yielded jobs before exiting.
+    pub async fn shutdown_background_jobs(&self) {
+        self.background.shutdown().await;
     }
 
     /// The whole budget.
@@ -139,6 +240,34 @@ impl RunDeadline {
         clamp_secs(0.05 * self.budget.as_secs_f64(), 30.0, 120.0)
     }
 
+    /// Least time a model step that has started reasoning gets before a
+    /// checkpoint may cut it: about a short step, and at most half of what is
+    /// left before [`Stage::Over`].
+    #[must_use]
+    pub fn reasoning_grace(&self) -> Duration {
+        clamp_secs(0.03 * self.budget.as_secs_f64(), 15.0, 30.0)
+            .min(self.remaining().saturating_sub(self.grace()) / 2)
+    }
+
+    /// Maximum time a single step may spend only reasoning.
+    #[must_use]
+    pub fn reasoning_step_cap(&self) -> Duration {
+        clamp_secs(0.30 * self.remaining().as_secs_f64(), 90.0, 420.0).max(self.reasoning_grace())
+    }
+
+    /// Wait from the first reasoning delta until a stage or the per-step cap.
+    #[must_use]
+    pub fn next_reasoning_cut(&self, session: SessionId) -> Option<(Duration, Option<Stage>)> {
+        let (delay, stage) = self.next_checkpoint(session)?;
+        let stage_wait = delay.max(self.reasoning_grace());
+        let cap = self.reasoning_step_cap();
+        Some(if stage_wait <= cap {
+            (stage_wait, Some(stage))
+        } else {
+            (cap, None)
+        })
+    }
+
     /// The stage now.
     #[must_use]
     pub fn stage(&self) -> Stage {
@@ -174,6 +303,35 @@ impl RunDeadline {
             Some(requested) if requested <= limit => (requested, false),
             _ => (limit, true),
         }
+    }
+
+    /// The next stage `session` has not been told of, and how long until it
+    /// starts (zero once it has); `None` once it was told of
+    /// [`Stage::Final`]. A model stream that has shown only reasoning is cut
+    /// at this point.
+    #[must_use]
+    pub fn next_checkpoint(&self, session: SessionId) -> Option<(Duration, Stage)> {
+        let told = self
+            .notified
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&session)
+            .map_or(Stage::Normal, |told| told.stage);
+        if told >= Stage::Final {
+            return None;
+        }
+        let now = self.stage().min(Stage::Final);
+        if now > told {
+            return Some((Duration::ZERO, now));
+        }
+        let (window, stage) =
+            if told == Stage::Normal && self.wrap_up_window() > self.final_window() {
+                (self.wrap_up_window(), Stage::WrapUp)
+            } else {
+                (self.final_window(), Stage::Final)
+            };
+        let at = self.budget.saturating_sub(window);
+        Some((at.saturating_sub(self.elapsed()), stage))
     }
 
     /// The stage to announce to `session` now, at most once per stage per
@@ -216,13 +374,19 @@ impl RunDeadline {
         let told = notified.entry(session).or_insert(Told::START);
         (told.tenth < tenth).then(|| {
             told.tenth = tenth;
-            format!(
-                "HEADLESS RUN — clock: {}s of {}s used, {}s left.",
-                self.elapsed().as_secs(),
-                self.budget.as_secs(),
-                self.remaining().as_secs()
-            )
+            self.clock_line()
         })
+    }
+
+    /// Current elapsed and remaining time for a budget notice.
+    #[must_use]
+    pub fn clock_line(&self) -> String {
+        format!(
+            "HEADLESS RUN — clock: {}s of {}s used, {}s left.",
+            self.elapsed().as_secs(),
+            self.budget.as_secs(),
+            self.remaining().as_secs()
+        )
     }
 
     /// Whole tenths of the budget used so far.
@@ -237,7 +401,7 @@ impl RunDeadline {
         format!(
             "HEADLESS RUN — time budget: {}s wall clock for this whole run; at the limit the \
              process is killed and only files on disk count. Put a working deliverable in place \
-             early. Tool results report the clock as the run goes.",
+             early. Watch for deadline notices as the run goes.",
             self.budget.as_secs()
         )
     }
@@ -256,13 +420,18 @@ impl RunDeadline {
                 "HEADLESS RUN — TIME: {elapsed}s of {budget}s used, {left}s left. At the limit \
                  the run is killed and only files on disk count. Stop exploring and polishing: \
                  make sure every requested deliverable exists at its requested path and passes \
-                 the request's own checks, then finish. Give long commands a timeout well under \
-                 the time left."
+                 the request's own checks, then finish. Start only commands that finish well \
+                 within the time left."
             ),
             (Stage::Final | Stage::Over, false) => format!(
-                "HEADLESS RUN — FINAL {left}s: write any missing deliverable now from the work \
-                 you have, commit if the request asks for a commit, then end your turn. Start \
-                 only commands that finish well within the time left."
+                "HEADLESS RUN — FINAL {left}s: {elapsed}s of {budget}s used. Write any missing \
+                 deliverable now from the work you have, commit if the request asks for a \
+                 commit, then end your turn. If a delivered file already passes your checks, \
+                 do not edit it in place — test any change on a copy first and replace the \
+                 file only if the copy still passes. If a delivered file is unverified, verify \
+                 it now and fix it directly only if it fails. Start only commands that finish \
+                 well \
+                 within the time left."
             ),
             (Stage::Normal | Stage::WrapUp, true) => format!(
                 "HEADLESS RUN — TIME: {elapsed}s of {budget}s used, {left}s left in the whole \
@@ -372,6 +541,114 @@ mod tests {
         let member = session();
         wrap_up.mark_notified(member, Stage::WrapUp);
         assert_eq!(wrap_up.take_clock(member), None);
+    }
+
+    #[test]
+    fn final_notice_text_for_lead_and_subagent() {
+        // Before the clock starts, elapsed time is zero for both notices.
+        let deadline = RunDeadline::new(
+            Instant::now() + Duration::from_secs(3600),
+            Duration::from_secs(40),
+        );
+        assert_eq!(
+            deadline.notice(Stage::Final, false),
+            "HEADLESS RUN — FINAL 40s: 0s of 40s used. Write any missing deliverable now from \
+             the work you have, commit if the request asks for a commit, then end your turn. \
+             If a delivered file already passes your checks, do not edit it in place — test \
+             any change on a copy first and replace the file only if the copy still passes. If \
+             a delivered file is unverified, verify it now and fix it directly only if it \
+             fails. Start only commands that finish well within the time left."
+        );
+        assert_eq!(
+            deadline.notice(Stage::Final, true),
+            "HEADLESS RUN — FINAL 40s: call `report` now with what you have."
+        );
+    }
+
+    /// D5: the next checkpoint follows what the session was told, and
+    /// nothing follows a Final notice.
+    #[tokio::test(start_paused = true)]
+    async fn reasoning_step_cap_leaves_the_next_stage_due() {
+        let deadline = started(900, 0);
+        let session = session();
+        assert_eq!(
+            deadline.next_reasoning_cut(session),
+            Some((Duration::from_secs(270), None))
+        );
+        tokio::time::advance(Duration::from_secs(585)).await;
+        assert_eq!(deadline.take_notice(session), Some(Stage::WrapUp));
+        assert_eq!(
+            deadline.next_reasoning_cut(session),
+            Some((Duration::from_millis(94_500), None))
+        );
+        deadline.mark_notified(session, Stage::Final);
+        assert_eq!(deadline.next_reasoning_cut(session), None);
+    }
+
+    #[test]
+    fn d5_next_checkpoint_follows_what_was_told() {
+        // B = 900: WrapUp at 585 s used, Final at 792 s.
+        let lead = session();
+        let early = started(900, 100);
+        let (delay, stage) = early.next_checkpoint(lead).expect("not told of Final");
+        assert_eq!(stage, Stage::WrapUp);
+        assert!((484..=485).contains(&delay.as_secs()), "{delay:?}");
+        let wrap_up = started(900, 600);
+        assert_eq!(
+            wrap_up.next_checkpoint(lead),
+            Some((Duration::ZERO, Stage::WrapUp)),
+            "a stage nobody announced is due now"
+        );
+        wrap_up.mark_notified(lead, Stage::WrapUp);
+        let (delay, stage) = wrap_up.next_checkpoint(lead).expect("not told of Final");
+        assert_eq!(stage, Stage::Final);
+        assert!((191..=192).contains(&delay.as_secs()), "{delay:?}");
+        // Told of WrapUp early, as a lead continuation notice does.
+        let member = session();
+        early.mark_notified(member, Stage::WrapUp);
+        assert_eq!(
+            early.next_checkpoint(member).map(|(_, stage)| stage),
+            Some(Stage::Final)
+        );
+        // A stream that ran from Normal past Final reports Final; so does Over.
+        assert_eq!(
+            started(900, 800).next_checkpoint(session()),
+            Some((Duration::ZERO, Stage::Final))
+        );
+        assert_eq!(
+            started(900, 890).next_checkpoint(session()),
+            Some((Duration::ZERO, Stage::Final))
+        );
+        // A budget whose WrapUp window is not wider than Final's goes to Final.
+        // B = 150: WrapUp 75 s, Final 90 s.
+        let (delay, stage) = started(150, 0)
+            .next_checkpoint(session())
+            .expect("not told of Final");
+        assert_eq!(stage, Stage::Final);
+        assert!((59..=60).contains(&delay.as_secs()), "{delay:?}");
+        wrap_up.mark_notified(lead, Stage::Final);
+        assert_eq!(wrap_up.next_checkpoint(lead), None);
+        let over = started(900, 890);
+        over.mark_notified(member, Stage::Final);
+        assert_eq!(over.next_checkpoint(member), None);
+    }
+
+    /// D6: the reasoning grace is 3 % of the budget within 15–30 s, and at
+    /// most half of what is left before Over.
+    #[test]
+    fn d6_reasoning_grace_follows_budget_and_time_left() {
+        let grace = |budget, elapsed| started(budget, elapsed).reasoning_grace().as_millis();
+        // B = 900: 27 s early, at WrapUp and at Final; G = 45 s.
+        assert_eq!(grace(900, 0), 27_000);
+        assert_eq!(grace(900, 585), 27_000);
+        assert_eq!(grace(900, 792), 27_000);
+        // R = 50: (50 - 45) / 2.
+        assert!((2_499..=2_500).contains(&grace(900, 850)));
+        assert_eq!(grace(900, 860), 0, "Over");
+        assert_eq!(grace(1800, 0), 30_000);
+        assert_eq!(grace(28800, 0), 30_000);
+        // B = 30 starts in Over: no grace.
+        assert_eq!(grace(30, 0), 0);
     }
 
     /// D3: once per stage per session, and only upward.

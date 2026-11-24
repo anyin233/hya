@@ -13,7 +13,7 @@ the same API real frontends consume.
 | `src/backend.rs` | Temp dirs, `config.yaml`, MCP/skill/bundle fixtures, spawn `hya serve` on `127.0.0.1:0` |
 | `src/fake_llm.rs` | Queue of `ScriptStep::Text` / `ToolCalls` over SSE `/v1/chat/completions` |
 | `src/scenario.rs` | `E2eEnv` / `E2eEnvBuilder`, HTTP helpers, permission/question auto-reply, tree helpers |
-| `tests/p01_*.rs` … `p20_*.rs` | One scenario family per file (`p01`–`p20`, including `p12_context_api` through `p20_model_catalog_discovery`); run alone with `cargo test -p hya-e2e --test pNN_…` (two digits, e.g. `p20_model_catalog_discovery`) |
+| `tests/it/pNN_*.rs` | One scenario family per module of the single `it` test binary (`tests/it/main.rs`); run one alone with `cargo test -p hya-e2e --test it pNN_…::` (two digits, e.g. `p20_model_catalog_discovery::`) |
 | `matrix.toml` | Machine-readable PR-matrix registry (IDs → paths) |
 
 ## Building an environment
@@ -88,7 +88,7 @@ Mailbox delivery only reaches **resident** teammates (`task` with
 `resident: true`): `hya-engine::resident` injects a handle's unread inbox into its
 next turn as `[mail from <handle>] <body>` user prompts. There is no mailbox HTTP
 route, so the recipient's own next request is the only delivery oracle — see
-`crates/hya-e2e/tests/p16_swarm_mailbox.rs`.
+`crates/hya-e2e/tests/it/p16_swarm_mailbox.rs`.
 
 Helpers:
 
@@ -154,12 +154,12 @@ Harness pieces the relay file uses:
 
 ```sh
 cargo build -p hya-backend --bin hya
-cargo test -p hya-e2e --test p38_relay -- --test-threads=1
+cargo test -p hya-e2e --test it p38_relay:: -- --test-threads=1
 ```
 
 The three scenarios take about a second together. Real intermediaries (nginx,
 Cloudflare Tunnel, Caddy, Tailscale) are not part of this suite; the in-process
-conformance suite (`crates/hya-relay/tests/conformance.rs`) covers hop
+conformance suite (`crates/hya-relay/tests/it/conformance.rs`) covers hop
 behavior.
 
 ## Oracle rules (do not weaken)
@@ -199,18 +199,18 @@ Install requires a path ending in `.hyabundle` — use
 ```sh
 cargo build -p hya-backend --bin hya
 cargo test -p hya-e2e -- --test-threads=1
-cargo test -p hya-e2e --test p03_permissions -- --nocapture
-cargo test -p hya-e2e --test p38_relay -- --test-threads=1
+cargo test -p hya-e2e --test it p03_permissions:: -- --nocapture
+cargo test -p hya-e2e --test it p38_relay:: -- --test-threads=1
 cargo clippy -p hya-e2e --all-targets -- -D warnings
 ```
 
 `--test-threads=1` avoids port/process contention across concurrent backends.
-Locally, run the scenario files for the surface you changed (`--test pNN_…`);
+Locally, run the scenario modules for the surface you changed (`--test it pNN_…::`);
 the whole-crate run is the CI gate.
 
 ## Related
 
 - Scenario inventory: [agent-matrix.md](agent-matrix.md)
 - CI workflow gate: [`../../.github/workflows/ci.yml`](../../.github/workflows/ci.yml)
-- In-process authority for nested spawn: `crates/hya-app/tests/nested_spawn_tree.rs`
-- Bundle CLI unit coverage: `crates/hya-backend/tests/bundle_cli.rs`
+- In-process authority for nested spawn: `crates/hya-app/tests/it/nested_spawn_tree.rs`
+- Bundle CLI unit coverage: `crates/hya-backend/tests/it/bundle_cli.rs`

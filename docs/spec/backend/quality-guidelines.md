@@ -132,7 +132,7 @@ Ok(Json(response))
 
 ### 6. Tests Required
 
-- Route tests (`crates/hya-server/tests/v1_api.rs`) assert the Interaction
+- Route tests (`crates/hya-server/tests/it/v1_api.rs`) assert the Interaction
   field sets, type/session filters, duplicate `applied: false`, and
   unknown-id `not_found`.
 - Stream tests assert `permissionRequested`/`questionRequested`/
@@ -905,27 +905,26 @@ visible and fail closed.
   recent assistant message. After any request-local edit (tool-output eviction,
   message rewriting) that number is stale: re-measuring reports no saving.
   Carry one running count and apply each reduction as a delta instead.
-- The compaction ladder (`hya/compaction`) measures the request first and then
-  folds the cut it planned, never re-deriving the decision from a transcript it
-  has already edited.
+- The `shake` step (`hya/compaction`) lowers the kernel's figure by what it
+  freed. Only once a reduction changed the log does the kernel re-measure,
+  then from a local estimate of the re-read projection, never from the stale
+  reported usage.
 - Reductions never rewrite logged content. Tool-output eviction appends its
   notices in `ContextEvicted`, so the event log stays a sufficient statistic
   for offline reconstruction (see 0.34.15) and for the next request.
-- Thresholds scale to `Capabilities::max_context` when advertised; a route with
-  no window keeps the configured flat threshold. Clamp resolved thresholds to a
-  floor — a near-zero threshold compacts every turn, which is worse than never.
+- The threshold is 80% of `Capabilities::max_context`; a route with no window
+  reduces nothing.
 
 ### 3. Validation & Error Matrix
 
-- Re-measuring after eviction -> saving invisible, summarizer runs anyway.
-- No floor on a scaled threshold -> compact-every-turn loop on a small window.
-- Trusting an out-of-range `context_fraction` -> nonsense threshold.
+- Re-measuring after eviction with the stale reported usage -> saving
+  invisible, the kernel rewrites anyway.
 - Eviction inside `keep_recent` -> the agent loses the result it just fetched.
 
 ### 4. Good/Base/Bad Cases
 
 - Good: eviction alone drops under the threshold, `ContextEvicted` is recorded,
-  no summarizer call, and the log still holds the full tool output.
+  no kernel rewrite, and the log still holds the full tool output.
 - Base: a route reporting no usage falls back to `chars / 4` with behaviour
   identical to before.
 - Bad: testing eviction within a single turn. Every tool part of one turn lands
@@ -934,9 +933,8 @@ visible and fail closed.
 
 ### 5. Tests Required
 
-- A table test over the threshold resolver, including the clamp and bad input.
 - A regression proving unchanged behaviour when no usage is reported.
-- A cross-turn test that eviction alone avoids the summarizer.
+- A cross-turn test that eviction alone avoids the kernel rewrite.
 - A test that the event log retains full tool output after an evicted turn.
 
 ---

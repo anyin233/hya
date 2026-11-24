@@ -2,8 +2,7 @@ use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read as _, Seek as _, Write as _};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
@@ -14,7 +13,8 @@ use hya_proto::{ToolName, ToolSchema};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::io::AsyncReadExt;
-use tokio::process::{Child, ChildStderr, ChildStdout};
+use tokio::process::Child;
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
@@ -27,9 +27,6 @@ const DEFAULT_TIMEOUT_SECONDS: f64 = 300.0;
 const MIN_TIMEOUT_SECONDS: f64 = 1.0;
 const MAX_TIMEOUT_SECONDS: f64 = 3600.0;
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;
-const CONTROL_RUNNING: u8 = 0;
-const CONTROL_CANCELLED: u8 = 1;
-const CONTROL_TIMED_OUT: u8 = 2;
 const PIPE_BUFFER_BYTES: usize = 8192;
 const FINAL_DRAIN_BYTES: usize = 1024 * 1024;
 const POST_KILL_DRAIN_GRACE: Duration = Duration::from_millis(100);
@@ -61,6 +58,8 @@ struct TimeoutSettings {
     seconds: f64,
     duration: Option<Duration>,
     clamped: bool,
+    budget_tenth_capped: bool,
+    default_wait: bool,
     /// Whole seconds the run had left when its deadline shortened the timeout.
     deadline_left: Option<u64>,
 }
@@ -68,29 +67,48 @@ struct TimeoutSettings {
 impl TimeoutSettings {
     /// Shorten the timeout to what a budgeted run has left (see
     /// [`RunDeadline::cap`]); no timeout is capped too.
-    fn capped_by(self, deadline: Option<&RunDeadline>) -> Self {
+    fn capped_by(mut self, deadline: Option<&RunDeadline>) -> Self {
         let Some(deadline) = deadline else {
             return self;
         };
-        let (duration, capped) = deadline.cap(self.duration);
-        if !capped {
-            return self;
+        let requested = self.duration;
+        let tenth =
+            (deadline.budget() / 10).max(Duration::from_secs(hya_tool::deadline::MIN_TOOL_SECS));
+        if requested.is_none_or(|wait| wait > tenth) {
+            self.duration = Some(tenth);
+            self.seconds = tenth.as_secs_f64();
+            self.budget_tenth_capped = true;
+            self.clamped = false;
         }
-        Self {
-            seconds: duration.as_secs_f64().round(),
-            duration: Some(duration),
-            clamped: false,
-            deadline_left: Some(deadline.remaining().as_secs()),
+        // Compare both caps against the original request so the end cap wins a tie.
+        let (end, _) = deadline.cap(None);
+        let left = deadline.remaining();
+        let end = end.min(left);
+        if self.duration.is_none_or(|wait| end <= wait) {
+            self.duration = Some(end);
+            self.seconds = end.as_secs_f64().round();
+            self.deadline_left = Some(left.as_secs());
+            self.budget_tenth_capped = false;
+            self.clamped = false;
         }
+        self
     }
 }
 
 /// Completion state retained for a structured Bash result.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 enum Completion {
     Finished(Option<i32>),
     TimedOut,
     Cancelled,
+    #[cfg(unix)]
+    NotStarted,
+    #[cfg(unix)]
+    StillRunning {
+        pgid: u32,
+        output_path: PathBuf,
+        exit_path: PathBuf,
+    },
 }
 
 /// Captured bytes and the armed owner of an optional complete artifact.
@@ -99,6 +117,8 @@ struct OutputCapture {
     output_path: Option<PathBuf>,
     artifact_root: PathBuf,
     artifact_owner: Option<ArtifactOwner>,
+    #[cfg(unix)]
+    job: Option<Job>,
 }
 
 /// Own one staged Bash output artifact until a successful result publishes it.
@@ -306,6 +326,8 @@ impl OutputSink {
             output_path,
             artifact_root: self.artifact_root,
             artifact_owner,
+            #[cfg(unix)]
+            job: None,
         })
     }
 }
@@ -343,7 +365,7 @@ impl Tool for ShellTool {
                     "timeout": {
                         "type": "number",
                         "minimum": 0,
-                        "description": "Timeout in seconds. Defaults to 300 seconds; finite values are clamped to 1-3600 seconds, and 0 disables the deadline."
+                        "description": "Timeout in seconds. Defaults to 300 seconds; finite values are clamped to 1-3600 seconds, and 0 disables the requested timeout. Under a run time budget, waits are capped at budget/10 (minimum 5 seconds). On Unix a non-PTY command still running then yields stillRunning with live output and exit paths; the end-of-budget cap stops it."
                     },
                     "cwd": { "type": "string" },
                     "pty": { "type": "boolean" }
@@ -369,7 +391,7 @@ impl Tool for ShellTool {
             pty,
         } = serde_json::from_value(input)
             .map_err(|error| ToolError::Input(format!("invalid Bash input: {error}")))?;
-        let timeout = timeout_settings(timeout)?.capped_by(hya_tool::deadline::current());
+        let timeout = timeout_settings(timeout)?;
         if ctx.cancel.is_cancelled() {
             return Err(ToolError::Cancelled);
         }
@@ -383,6 +405,30 @@ impl Tool for ShellTool {
 
         let started = Instant::now();
         let artifact_root = normalize(&absolutize(&ctx.workdir)).join(".hya/tool-output");
+        let deadline = hya_tool::deadline::current();
+        let timeout = timeout.capped_by(deadline);
+        #[cfg(unix)]
+        if !pty && let Some(deadline) = deadline {
+            let captured = execute_budgeted_file(
+                &command,
+                env,
+                &cwd,
+                artifact_root,
+                timeout,
+                deadline,
+                &ctx.cancel,
+            )
+            .await?;
+            return shape_result(
+                command,
+                cwd,
+                false,
+                timeout,
+                started.elapsed(),
+                captured,
+                &ctx.cancel,
+            );
+        }
         let captured = if pty {
             #[cfg(unix)]
             {
@@ -392,6 +438,7 @@ impl Tool for ShellTool {
                     cwd.clone(),
                     artifact_root,
                     timeout,
+                    deadline,
                     ctx.cancel.clone(),
                 )
                 .await?
@@ -409,6 +456,7 @@ impl Tool for ShellTool {
                 cwd.clone(),
                 artifact_root,
                 timeout,
+                deadline,
                 ctx.cancel.clone(),
             )
             .await?
@@ -439,6 +487,8 @@ fn timeout_settings(requested: Option<f64>) -> Result<TimeoutSettings, ToolError
             seconds: DEFAULT_TIMEOUT_SECONDS,
             duration: Some(Duration::from_secs(300)),
             clamped: false,
+            budget_tenth_capped: false,
+            default_wait: true,
             deadline_left: None,
         });
     };
@@ -452,6 +502,8 @@ fn timeout_settings(requested: Option<f64>) -> Result<TimeoutSettings, ToolError
             seconds: 0.0,
             duration: None,
             clamped: false,
+            budget_tenth_capped: false,
+            default_wait: false,
             deadline_left: None,
         });
     }
@@ -460,6 +512,8 @@ fn timeout_settings(requested: Option<f64>) -> Result<TimeoutSettings, ToolError
         seconds,
         duration: Some(Duration::from_secs_f64(seconds)),
         clamped: seconds != requested,
+        budget_tenth_capped: false,
+        default_wait: false,
         deadline_left: None,
     })
 }
@@ -468,6 +522,124 @@ fn timeout_settings(requested: Option<f64>) -> Result<TimeoutSettings, ToolError
 fn resolve_cwd(ctx: &ToolCtx, requested: Option<&str>) -> PathBuf {
     let base = normalize(&absolutize(&ctx.workdir));
     requested.map_or_else(|| base.clone(), |path| resolve_file(&base, path))
+}
+
+#[cfg(unix)]
+struct Job {
+    cancel: Option<CancellationToken>,
+    dir: Option<PathBuf>,
+}
+
+#[cfg(unix)]
+impl Drop for Job {
+    fn drop(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            cancel.cancel();
+        }
+        if let Some(dir) = self.dir.take() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
+#[cfg(unix)]
+async fn execute_budgeted_file(
+    command: &str,
+    env: BTreeMap<String, String>,
+    cwd: &Path,
+    artifact_root: PathBuf,
+    timeout: TimeoutSettings,
+    deadline: &RunDeadline,
+    cancel: &CancellationToken,
+) -> Result<CapturedRun, ToolError> {
+    use std::os::unix::ffi::OsStringExt as _;
+    use std::process::Stdio;
+
+    let mut sink = OutputSink::new(artifact_root);
+    let mut template = std::env::temp_dir()
+        .join("hya-bash-XXXXXX")
+        .into_os_string()
+        .into_vec();
+    template.push(0);
+    // SAFETY: writable NUL-terminated template with the six required trailing Xs.
+    if unsafe { libc::mkdtemp(template.as_mut_ptr().cast()) }.is_null() {
+        return Err(io::Error::last_os_error().into());
+    }
+    template.pop();
+    let dir = PathBuf::from(std::ffi::OsString::from_vec(template));
+    let mut job = Job {
+        cancel: None,
+        dir: Some(dir.clone()),
+    };
+    let path = dir.join("output");
+    let file = OpenOptions::new()
+        .append(true)
+        .create_new(true)
+        .open(&path)?;
+    let left = deadline.remaining();
+    if left.is_zero() {
+        return Ok(CapturedRun {
+            completion: Completion::NotStarted,
+            output: sink.finish()?,
+        });
+    }
+    let wait = timeout.duration.unwrap_or(left);
+    let timer = tokio::time::sleep(wait.min(left));
+    let mut process = tokio::process::Command::new("bash");
+    process
+        .arg("-c")
+        .arg(command)
+        .current_dir(cwd)
+        .env("PYTHONUNBUFFERED", "1")
+        .envs(env)
+        .stdin(Stdio::null())
+        .stdout(file.try_clone()?)
+        .stderr(file);
+    use hya_tool::process_group::{BudgetGroup, GroupOutcome};
+    let exit_path = dir.join("exit_code");
+    let cancel = cancel.child_token();
+    job.cancel = Some(cancel.clone());
+    let completion = match BudgetGroup::run(
+        process,
+        Some(deadline),
+        &cancel,
+        timer,
+        timeout.deadline_left.is_some() || left < wait,
+        exit_path.clone(),
+    )
+    .await?
+    {
+        GroupOutcome::Finished(status) => Completion::Finished(status.code()),
+        GroupOutcome::Stopped => Completion::TimedOut,
+        GroupOutcome::Yielded(pgid) => Completion::StillRunning {
+            pgid,
+            output_path: path.clone(),
+            exit_path,
+        },
+    };
+    let mut file = File::open(&path)?;
+    let output = if matches!(completion, Completion::StillRunning { .. }) {
+        let mut output = sink.finish()?;
+        let len = file.metadata()?.len();
+        file.take(len.min(MAX_OUTPUT_BYTES as u64))
+            .read_to_end(&mut output.inline)?;
+        if len > MAX_OUTPUT_BYTES as u64 {
+            output.output_path = Some(path);
+        }
+        output.job = Some(job);
+        output
+    } else {
+        let mut buf = [0; PIPE_BUFFER_BYTES];
+        loop {
+            let count = file.read(&mut buf)?;
+            if count == 0 {
+                break;
+            }
+            sink.push(&buf[..count])?;
+        }
+        sink.finish()?
+    };
+    Ok(CapturedRun { completion, output })
 }
 
 /// Capture pipe output concurrently while waiting for the process.
@@ -483,6 +655,7 @@ async fn execute_pipes(
     cwd: PathBuf,
     artifact_root: PathBuf,
     timeout: TimeoutSettings,
+    deadline: Option<&RunDeadline>,
     cancel: CancellationToken,
 ) -> Result<CapturedRun, ToolError> {
     let mut process = tokio::process::Command::new("bash");
@@ -492,47 +665,50 @@ async fn execute_pipes(
         .current_dir(&cwd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .env("PYTHONUNBUFFERED", "1")
         .envs(env);
     #[cfg(unix)]
     process.process_group(0);
+    let (shutdown, registration) = hya_tool::deadline::register_job(deadline)?;
+    if cancel.is_cancelled() || shutdown.is_cancelled() {
+        return Err(ToolError::Cancelled);
+    }
     let mut child = process
         .spawn()
         .map_err(|error| contextual_io("spawn Bash process", error))?;
-    let process_group = child.id();
-    let mut stdout = child.stdout.take().ok_or_else(|| {
-        contextual_io(
-            "capture Bash stdout",
-            io::Error::other("stdout pipe was not attached"),
+    let mut process_group = child.id();
+    let worker_cancel = cancel.child_token();
+    let _abandoned = worker_cancel.clone().drop_guard();
+    let (reply, result) = oneshot::channel();
+    tokio::spawn(async move {
+        let _registration = registration;
+        let mut sink = OutputSink::new(artifact_root);
+        let captured = match capture_pipes(
+            &mut child,
+            &mut process_group,
+            &mut sink,
+            timeout.duration,
+            &worker_cancel,
+            &shutdown,
         )
-    })?;
-    let mut stderr = child.stderr.take().ok_or_else(|| {
-        contextual_io(
-            "capture Bash stderr",
-            io::Error::other("stderr pipe was not attached"),
-        )
-    })?;
-    let mut sink = OutputSink::new(artifact_root);
-    let completion = match capture_pipes(
-        &mut child,
-        process_group,
-        &mut stdout,
-        &mut stderr,
-        &mut sink,
-        timeout.duration,
-        &cancel,
-    )
-    .await
-    {
-        Ok(completion) => completion,
-        Err(error) => {
-            let cleanup = terminate_pipe_child(&mut child, process_group).await;
-            return Err(with_cleanup_error(error, cleanup));
-        }
-    };
-    let output = sink
-        .finish()
-        .map_err(|error| contextual_io("finish Bash output capture", error))?;
-    Ok(CapturedRun { completion, output })
+        .await
+        {
+            Ok(completion) => sink
+                .finish()
+                .map(|output| CapturedRun { completion, output })
+                .map_err(|error| contextual_io("finish Bash output capture", error)),
+            Err(error) => {
+                // Outside Linux the group poll may already have reaped the leader.
+                if child.id().is_none() {
+                    process_group = None;
+                }
+                let cleanup = terminate_pipe_child(&mut child, &mut process_group).await;
+                Err(with_cleanup_error(error, cleanup))
+            }
+        };
+        let _ = reply.send(captured);
+    });
+    result.await.map_err(io::Error::other)?
 }
 
 /// Drain both pipes after reaping, bounding capture of foreign-session writers.
@@ -541,152 +717,98 @@ async fn execute_pipes(
 /// Returns contextual errors for pipe reads, child waits, or process cleanup.
 async fn capture_pipes(
     child: &mut Child,
-    process_group: Option<u32>,
-    stdout: &mut ChildStdout,
-    stderr: &mut ChildStderr,
+    process_group: &mut Option<u32>,
     sink: &mut OutputSink,
     timeout: Option<Duration>,
     cancel: &CancellationToken,
+    shutdown: &CancellationToken,
 ) -> Result<Completion, ToolError> {
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other("missing Bash stdout pipe"))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| io::Error::other("missing Bash stderr pipe"))?;
     let mut deadline = timeout.and_then(|duration| Instant::now().checked_add(duration));
     let mut drain_cutoff = None;
     let mut stdout_done = false;
     let mut stderr_done = false;
     let mut reaped = false;
     let mut completion = None;
-    let mut cancellation_seen = false;
+    let mut terminated = false;
     let mut stdout_buffer = [0_u8; PIPE_BUFFER_BYTES];
     let mut stderr_buffer = [0_u8; PIPE_BUFFER_BYTES];
 
+    #[cfg(unix)]
+    let mut group = hya_tool::process_group::ProcessGroup::new(
+        process_group.ok_or_else(|| io::Error::other("spawned Bash has no PID"))?,
+    );
+    #[cfg(unix)]
+    let mut poll = tokio::time::interval(Duration::from_millis(15));
     loop {
+        if !terminated {
+            let cancelled = cancel.is_cancelled() || shutdown.is_cancelled();
+            if cancelled || deadline.is_some_and(|at| Instant::now() >= at) {
+                terminate_pipe_child(child, process_group).await?;
+                reaped = true;
+                terminated = true;
+                completion = Some(if cancelled {
+                    Completion::Cancelled
+                } else {
+                    Completion::TimedOut
+                });
+                deadline = None;
+                drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
+            }
+        }
         if reaped && stdout_done && stderr_done {
             break;
         }
         if drain_cutoff.is_some_and(|at| Instant::now() >= at) {
-            drain_ready_pipe(stdout, sink)
+            drain_ready_pipe(&mut stdout, sink)
                 .await
                 .map_err(|error| contextual_io("drain Bash stdout", error))?;
-            drain_ready_pipe(stderr, sink)
+            drain_ready_pipe(&mut stderr, sink)
                 .await
                 .map_err(|error| contextual_io("drain Bash stderr", error))?;
             break;
         }
-        #[cfg(unix)]
-        if reaped && drain_cutoff.is_none() && !process_group_alive(process_group) {
-            drain_cutoff = Some(Instant::now() + ORPHAN_PIPE_GRACE);
-        }
-        if !reaped {
-            if cancel.is_cancelled() {
-                terminate_pipe_child(child, process_group).await?;
-                reaped = true;
-                completion = Some(Completion::Cancelled);
-                cancellation_seen = true;
-                deadline = None;
-                drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
-                continue;
-            }
-            if deadline.is_some_and(|at| Instant::now() >= at) {
-                terminate_pipe_child(child, process_group).await?;
-                reaped = true;
-                completion = Some(Completion::TimedOut);
-                deadline = None;
-                drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
-                continue;
-            }
-        } else {
-            if !cancellation_seen && cancel.is_cancelled() {
-                terminate_pipe_process_group(process_group)?;
-                completion = Some(Completion::Cancelled);
-                cancellation_seen = true;
-                deadline = None;
-                drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
-            }
-            if deadline.is_some_and(|at| Instant::now() >= at) {
-                terminate_pipe_process_group(process_group)?;
-                completion = Some(Completion::TimedOut);
-                deadline = None;
-                drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
-            }
-        }
-
-        if !reaped {
-            tokio::select! {
-                biased;
-                _ = cancel.cancelled(), if !cancellation_seen => {
-                    terminate_pipe_child(child, process_group).await?;
-                    reaped = true;
-                    completion = Some(Completion::Cancelled);
-                    cancellation_seen = true;
-                    deadline = None;
-                    drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
+        let wait = async {
+            #[cfg(unix)]
+            {
+                poll.tick().await;
+                if !group.finished(|| child.try_wait())? {
+                    return Ok(None);
                 }
-                _ = wait_for_deadline(deadline) => {
-                    terminate_pipe_child(child, process_group).await?;
+            }
+            child.wait().await.map(Some)
+        };
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled(), if !terminated => {}
+            _ = shutdown.cancelled(), if !terminated => {}
+            _ = wait_for_deadline(deadline) => {}
+            _ = wait_for_deadline(drain_cutoff) => {}
+            result = wait, if !reaped => {
+                if let Some(status) = result.map_err(|error| contextual_io("wait for Bash process group", error))? {
                     reaped = true;
-                    completion = Some(Completion::TimedOut);
-                    deadline = None;
-                    drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
-                }
-                result = child.wait() => {
-                    let status = result.map_err(|error| contextual_io("wait for Bash process", error))?;
-                    reaped = true;
+                    *process_group = None;
                     completion = Some(Completion::Finished(status.code()));
-                }
-                result = stdout.read(&mut stdout_buffer), if !stdout_done => {
-                    let count = result.map_err(|error| contextual_io("read Bash stdout", error))?;
-                    if count == 0 {
-                        stdout_done = true;
-                    } else {
-                        sink.push(&stdout_buffer[..count])
-                            .map_err(|error| contextual_io("capture Bash stdout", error))?;
-                    }
-                }
-                result = stderr.read(&mut stderr_buffer), if !stderr_done => {
-                    let count = result.map_err(|error| contextual_io("read Bash stderr", error))?;
-                    if count == 0 {
-                        stderr_done = true;
-                    } else {
-                        sink.push(&stderr_buffer[..count])
-                            .map_err(|error| contextual_io("capture Bash stderr", error))?;
-                    }
+                    #[cfg(unix)]
+                    { drain_cutoff = Some(Instant::now() + ORPHAN_PIPE_GRACE); }
                 }
             }
-        } else {
-            tokio::select! {
-                biased;
-                _ = wait_for_deadline(drain_cutoff) => {},
-                _ = tokio::time::sleep(Duration::from_millis(100)), if cfg!(unix) && drain_cutoff.is_none() => {}
-                _ = cancel.cancelled(), if !cancellation_seen => {
-                    terminate_pipe_process_group(process_group)?;
-                    completion = Some(Completion::Cancelled);
-                    cancellation_seen = true;
-                    deadline = None;
-                    drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
-                }
-                _ = wait_for_deadline(deadline) => {
-                    terminate_pipe_process_group(process_group)?;
-                    completion = Some(Completion::TimedOut);
-                    deadline = None;
-                    drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
-                }
-                result = stdout.read(&mut stdout_buffer), if !stdout_done => {
-                    let count = result.map_err(|error| contextual_io("read Bash stdout", error))?;
-                    if count == 0 {
-                        stdout_done = true;
-                    } else {
-                        sink.push(&stdout_buffer[..count])
-                            .map_err(|error| contextual_io("capture Bash stdout", error))?;
-                    }
-                }
-                result = stderr.read(&mut stderr_buffer), if !stderr_done => {
-                    let count = result.map_err(|error| contextual_io("read Bash stderr", error))?;
-                    if count == 0 {
-                        stderr_done = true;
-                    } else {
-                        sink.push(&stderr_buffer[..count])
-                            .map_err(|error| contextual_io("capture Bash stderr", error))?;
-                    }
-                }
+            result = stdout.read(&mut stdout_buffer), if !stdout_done => {
+                let count = result.map_err(|error| contextual_io("read Bash stdout", error))?;
+                stdout_done = count == 0;
+                sink.push(&stdout_buffer[..count]).map_err(|error| contextual_io("capture Bash stdout", error))?;
+            }
+            result = stderr.read(&mut stderr_buffer), if !stderr_done => {
+                let count = result.map_err(|error| contextual_io("read Bash stderr", error))?;
+                stderr_done = count == 0;
+                sink.push(&stderr_buffer[..count]).map_err(|error| contextual_io("capture Bash stderr", error))?;
             }
         }
     }
@@ -773,51 +895,58 @@ async fn wait_for_deadline(deadline: Option<Instant>) {
 /// Returns a contextual tool error if the group cannot be terminated or reaped.
 async fn terminate_pipe_child(
     child: &mut Child,
-    process_group: Option<u32>,
+    process_group: &mut Option<u32>,
 ) -> Result<(), ToolError> {
-    terminate_pipe_process_group(process_group)?;
-    #[cfg(not(unix))]
-    child
-        .kill()
-        .await
-        .map_err(|error| contextual_io("terminate Bash process", error))?;
-    child
-        .wait()
-        .await
-        .map(|_| ())
-        .map_err(|error| contextual_io("reap Bash process", error))
-}
-
-/// Terminate a non-PTY process group even after its direct shell was reaped.
-///
-/// # Errors
-/// Returns a contextual tool error when the process group cannot be signalled.
-fn terminate_pipe_process_group(process_group: Option<u32>) -> Result<(), ToolError> {
     #[cfg(unix)]
-    if let Some(pid) = process_group {
-        let pid = libc::pid_t::try_from(pid).map_err(|_| {
-            contextual_io(
-                "terminate Bash process group",
-                io::Error::new(io::ErrorKind::InvalidInput, "child pid does not fit pid_t"),
-            )
-        })?;
-        let group = pid.checked_neg().ok_or_else(|| {
-            contextual_io(
-                "terminate Bash process group",
-                io::Error::new(io::ErrorKind::InvalidInput, "child pid cannot be negated"),
-            )
-        })?;
-        // SAFETY: the process was spawned by this adapter with its own group.
-        let result = unsafe { libc::kill(group, libc::SIGKILL) };
-        if result < 0 {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::ESRCH) {
-                return Err(contextual_io("terminate Bash process group", error));
-            }
-        }
+    {
+        terminate_pipe_group(
+            child,
+            process_group,
+            hya_tool::process_group::finish_group_termination,
+        )
+        .await
     }
     #[cfg(not(unix))]
-    let _ = process_group;
+    {
+        if process_group.is_some() {
+            child
+                .start_kill()
+                .map_err(|error| contextual_io("terminate Bash process", error))?;
+            *process_group = None;
+        }
+        reap_pipe_child(child).await
+    }
+}
+
+async fn reap_pipe_child(child: &mut Child) -> Result<(), ToolError> {
+    if child.id().is_some() {
+        child
+            .wait()
+            .await
+            .map_err(|error| contextual_io("reap Bash process", error))?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn terminate_pipe_group(
+    child: &mut Child,
+    process_group: &mut Option<u32>,
+    finish_group: fn(u32) -> io::Result<()>,
+) -> Result<(), ToolError> {
+    let Some(pgid) = process_group.filter(|_| child.id().is_some()) else {
+        *process_group = None;
+        return reap_pipe_child(child).await;
+    };
+    hya_tool::process_group::kill_group(pgid)?;
+    let quiet = tokio::task::spawn_blocking(move || finish_group(pgid))
+        .await
+        .map_err(io::Error::other)?;
+    // Releasing the leader's PID ends ownership. Even a failed quiescence
+    // check must leave the outer error handler with no group to signal.
+    *process_group = None;
+    reap_pipe_child(child).await?;
+    quiet?;
     Ok(())
 }
 
@@ -829,29 +958,29 @@ async fn execute_pty(
     cwd: PathBuf,
     artifact_root: PathBuf,
     timeout: TimeoutSettings,
+    deadline: Option<&RunDeadline>,
     cancel: CancellationToken,
 ) -> Result<CapturedRun, ToolError> {
-    let control = Arc::new(AtomicU8::new(CONTROL_RUNNING));
-    let worker_control = Arc::clone(&control);
-    let worker = tokio::task::spawn_blocking(move || {
+    let (shutdown, registration) = hya_tool::deadline::register_job(deadline)?;
+    if cancel.is_cancelled() || shutdown.is_cancelled() {
+        return Err(ToolError::Cancelled);
+    }
+    let worker_cancel = cancel.child_token();
+    let _abandoned = worker_cancel.clone().drop_guard();
+    tokio::task::spawn_blocking(move || {
+        let _registration = registration;
         run_pty_blocking(
             command,
             env,
             cwd,
             artifact_root,
             timeout.duration,
-            worker_control,
+            worker_cancel,
+            shutdown,
         )
-    });
-    let mut worker = Box::pin(worker);
-    let result = tokio::select! {
-        result = &mut worker => result,
-        _ = cancel.cancelled() => {
-            control.store(CONTROL_CANCELLED, Ordering::Release);
-            (&mut worker).await
-        }
-    };
-    result.map_err(|error| ToolError::Other(format!("Bash PTY worker failed: {error}")))?
+    })
+    .await
+    .map_err(|error| ToolError::Other(format!("Bash PTY worker failed: {error}")))?
 }
 
 /// Spawn and capture a PTY child while polling its nonblocking master.
@@ -862,91 +991,80 @@ fn run_pty_blocking(
     cwd: PathBuf,
     artifact_root: PathBuf,
     timeout: Option<Duration>,
-    control: Arc<AtomicU8>,
+    cancel: CancellationToken,
+    shutdown: CancellationToken,
 ) -> Result<CapturedRun, ToolError> {
     use pty_process::blocking::{Command, open};
     use std::os::fd::AsRawFd;
 
     let mut sink = OutputSink::new(artifact_root);
-    if control.load(Ordering::Acquire) == CONTROL_CANCELLED {
-        let output = sink
-            .finish()
-            .map_err(|error| contextual_io("finish Bash PTY output", error))?;
-        return Ok(CapturedRun {
-            completion: Completion::Cancelled,
-            output,
-        });
-    }
     let deadline = timeout.and_then(|duration| Instant::now().checked_add(duration));
     let (mut master, pts) =
         open().map_err(|error| ToolError::Other(format!("Bash PTY setup failed: {error}")))?;
     set_nonblocking(master.as_raw_fd())
         .map_err(|error| contextual_io("set Bash PTY master nonblocking", error))?;
+    if cancel.is_cancelled() || shutdown.is_cancelled() {
+        return Err(ToolError::Cancelled);
+    }
     let mut child = Command::new("bash")
         .arg("-c")
         .arg(&command)
         .current_dir(&cwd)
+        .env("PYTHONUNBUFFERED", "1")
         .envs(env)
         .spawn(pts)
         .map_err(|error| ToolError::Other(format!("spawn Bash PTY process: {error}")))?;
-    let process_group = child.id();
+    let pgid = child.id();
+    let mut group = hya_tool::process_group::ProcessGroup::new(pgid);
 
     let mut buffer = [0_u8; PIPE_BUFFER_BYTES];
-    let mut leader_reaped = false;
-    let mut group_terminated = false;
+    let mut pinned_group = Some(pgid);
     let mut drain_cutoff = None;
     let mut eof = false;
     let mut completion = None;
     loop {
-        let requested = control.load(Ordering::Acquire);
-        if requested == CONTROL_CANCELLED {
-            if !group_terminated {
-                terminate_pty_child(&mut child, Some(process_group), leader_reaped)?;
-                group_terminated = true;
+        let cancelled = cancel.is_cancelled() || shutdown.is_cancelled();
+        if cancelled || deadline.is_some_and(|at| Instant::now() >= at) {
+            if completion.is_none() {
+                terminate_pty_child(&mut child, &mut pinned_group)?;
                 drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
-                leader_reaped = true;
             }
-            completion = Some(Completion::Cancelled);
-        } else if requested == CONTROL_TIMED_OUT || deadline.is_some_and(|at| Instant::now() >= at)
-        {
-            control.store(CONTROL_TIMED_OUT, Ordering::Release);
-            if !group_terminated {
-                terminate_pty_child(&mut child, Some(process_group), leader_reaped)?;
-                group_terminated = true;
-                drain_cutoff = Some(Instant::now() + POST_KILL_DRAIN_GRACE);
-                leader_reaped = true;
-            }
-            completion = Some(Completion::TimedOut);
-        }
-
-        if !leader_reaped {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    leader_reaped = true;
-                    completion.get_or_insert(Completion::Finished(status.code()));
+            completion = Some(if cancelled {
+                Completion::Cancelled
+            } else {
+                Completion::TimedOut
+            });
+        } else if completion.is_none() {
+            match group.finished(|| {
+                let status = child.try_wait()?;
+                if status.is_some() {
+                    pinned_group = None;
                 }
-                Ok(None) => {}
+                Ok(status)
+            }) {
+                Ok(true) => {
+                    pinned_group = None;
+                    let status = child
+                        .wait()
+                        .map_err(|error| contextual_io("reap Bash PTY process", error))?;
+                    completion = Some(Completion::Finished(status.code()));
+                    drain_cutoff = Some(Instant::now() + ORPHAN_PIPE_GRACE);
+                }
+                Ok(false) => {}
                 Err(error) => {
-                    let wait_error = contextual_io("poll Bash PTY process", error);
-                    let cleanup = terminate_pty_child(&mut child, Some(process_group), false);
+                    let wait_error = contextual_io("poll Bash PTY process group", error);
+                    let cleanup = terminate_pty_child(&mut child, &mut pinned_group);
                     return Err(with_cleanup_error(wait_error, cleanup));
                 }
             }
         }
-
-        // A PTY master may report EIO/HUP when the leader exits even though a
-        // descendant still owns the slave.  EOF is terminal only after the
-        // saved process group is absent.
-        if leader_reaped && !process_group_alive(Some(process_group)) {
-            if eof {
-                break;
-            }
-            drain_cutoff.get_or_insert_with(|| Instant::now() + ORPHAN_PIPE_GRACE);
+        if completion.is_some() && eof {
+            break;
         }
         if drain_cutoff.is_some_and(|at| Instant::now() >= at) {
             if let Err(error) = drain_ready_fd(master.as_raw_fd(), &mut sink) {
                 let drain_error = contextual_io("drain Bash PTY output", error);
-                let cleanup = terminate_pty_child(&mut child, Some(process_group), leader_reaped);
+                let cleanup = terminate_pty_child(&mut child, &mut pinned_group);
                 return Err(with_cleanup_error(drain_error, cleanup));
             }
             break;
@@ -968,7 +1086,7 @@ fn run_pty_blocking(
                 continue;
             }
             let poll_error = contextual_io("poll Bash PTY master", error);
-            let cleanup = terminate_pty_child(&mut child, Some(process_group), leader_reaped);
+            let cleanup = terminate_pty_child(&mut child, &mut pinned_group);
             return Err(with_cleanup_error(poll_error, cleanup));
         }
         if polled == 0 {
@@ -979,8 +1097,7 @@ fn run_pty_blocking(
             Ok(count) => {
                 if let Err(error) = sink.push(&buffer[..count]) {
                     let capture_error = contextual_io("capture Bash PTY output", error);
-                    let cleanup =
-                        terminate_pty_child(&mut child, Some(process_group), leader_reaped);
+                    let cleanup = terminate_pty_child(&mut child, &mut pinned_group);
                     return Err(with_cleanup_error(capture_error, cleanup));
                 }
             }
@@ -992,16 +1109,10 @@ fn run_pty_blocking(
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
             Err(error) => {
                 let read_error = contextual_io("read Bash PTY master", error);
-                let cleanup = terminate_pty_child(&mut child, Some(process_group), leader_reaped);
+                let cleanup = terminate_pty_child(&mut child, &mut pinned_group);
                 return Err(with_cleanup_error(read_error, cleanup));
             }
         }
-    }
-    if !leader_reaped {
-        let status = child
-            .wait()
-            .map_err(|error| contextual_io("reap Bash PTY process", error))?;
-        completion.get_or_insert(Completion::Finished(status.code()));
     }
     // Close the master after EOF or the final drain grace.
     drop(master);
@@ -1034,49 +1145,23 @@ fn set_nonblocking(fd: std::os::fd::RawFd) -> io::Result<()> {
 #[cfg(unix)]
 fn terminate_pty_child(
     child: &mut std::process::Child,
-    process_group: Option<u32>,
-    leader_reaped: bool,
+    process_group: &mut Option<u32>,
 ) -> Result<(), ToolError> {
-    terminate_pty_process_group(process_group)?;
-    if !leader_reaped {
-        child
-            .wait()
-            .map(|_| ())
-            .map_err(|error| contextual_io("reap Bash PTY process", error))?;
-    }
+    let Some(pgid) = *process_group else {
+        return Ok(());
+    };
+    hya_tool::process_group::kill_group(pgid)?;
+    let quiet = hya_tool::process_group::finish_group_termination(pgid);
+    *process_group = None;
+    child
+        .wait()
+        .map_err(|error| contextual_io("reap Bash PTY process", error))?;
+    quiet?;
     Ok(())
 }
 
-/// Terminate the process group that owns a PTY slave.
-#[cfg(unix)]
-fn terminate_pty_process_group(process_group: Option<u32>) -> Result<(), ToolError> {
-    let Some(pid) = process_group else {
-        return Ok(());
-    };
-    let pid = libc::pid_t::try_from(pid).map_err(|_| {
-        contextual_io(
-            "terminate Bash PTY process group",
-            io::Error::new(io::ErrorKind::InvalidInput, "child pid does not fit pid_t"),
-        )
-    })?;
-    let group = pid.checked_neg().ok_or_else(|| {
-        contextual_io(
-            "terminate Bash PTY process group",
-            io::Error::new(io::ErrorKind::InvalidInput, "child pid cannot be negated"),
-        )
-    })?;
-    // SAFETY: pty-process makes this child a session/process-group leader.
-    let result = unsafe { libc::kill(group, libc::SIGKILL) };
-    if result < 0 {
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::ESRCH) {
-            return Err(contextual_io("terminate Bash PTY process group", error));
-        }
-    }
-    Ok(())
-}
 /// Return whether any member remains in the saved process group.
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 fn process_group_alive(process_group: Option<u32>) -> bool {
     let Some(process_group) = process_group else {
         return false;
@@ -1112,7 +1197,7 @@ fn shape_result(
     let timed_out = matches!(captured.completion, Completion::TimedOut);
     let exit = match captured.completion {
         Completion::Finished(code) => code,
-        Completion::TimedOut | Completion::Cancelled => None,
+        _ => None,
     };
     let mut output_path = captured.output.output_path.clone();
     let mut displayed_output_path = output_path
@@ -1121,36 +1206,55 @@ fn shape_result(
         .transpose()?;
     let mut truncated = output_path.is_some();
     let signaled = matches!(captured.completion, Completion::Finished(None));
-    let mut prefix = shell_notice_prefix(
-        timeout,
-        displayed_output_path.as_deref(),
-        timed_out,
-        exit,
-        signaled,
-    );
-
-    // Measure the untruncated lossy preview first.  Rendering applies the
-    // inline cap, so measuring its result would hide a late spill condition.
+    let mut metadata = Map::new();
+    let mut notice = String::new();
+    #[cfg(unix)]
+    match &captured.completion {
+        Completion::StillRunning { pgid, output_path, exit_path } => {
+            let out = validate_output_path(output_path)?;
+            let exit = validate_output_path(exit_path)?;
+            metadata.insert("stillRunning".into(), json!(true));
+            metadata.insert("pgid".into(), json!(pgid));
+            metadata.insert("outputPath".into(), json!(out));
+            metadata.insert("exitPath".into(), json!(exit));
+            let reason = if timeout.budget_tenth_capped { "budget/10" } else if timeout.default_wait { "default 300s" } else { "requested timeout" };
+            let quote = |p: &str| format!("'{}'", p.replace('\'', r"'\''"));
+            let (out, exit) = (quote(&out), quote(&exit));
+            notice = format!("<shell_metadata>\nWaited {} seconds ({reason}). Process group {pgid} is still running. Read live output with tail -n 20 {out}, read its exit code with cat {exit}, or stop it with kill -- -{pgid}.\n</shell_metadata>\n\n", timeout.seconds);
+        }
+        Completion::NotStarted => notice = "<shell_metadata>\nCommand not started because the run budget expired.\n</shell_metadata>\n\n".into(),
+        _ => {}
+    }
+    let prefix_for = |path: Option<&str>| {
+        format!(
+            "{notice}{}",
+            shell_notice_prefix(timeout, path, timed_out, exit, signaled)
+        )
+    };
+    let mut prefix = prefix_for(displayed_output_path.as_deref());
     if shell_output_len(&prefix, &captured.output.inline) > MAX_OUTPUT_BYTES
         && output_path.is_none()
     {
-        captured
-            .output
-            .spill_inline()
-            .map_err(|error| contextual_io("spill Bash output capture", error))?;
-        output_path = captured.output.output_path.clone();
+        #[cfg(unix)]
+        if let Completion::StillRunning {
+            output_path: path, ..
+        } = &captured.completion
+        {
+            output_path = Some(path.clone());
+        }
+        if output_path.is_none() {
+            captured
+                .output
+                .spill_inline()
+                .map_err(|error| contextual_io("spill Bash output capture", error))?;
+            output_path = captured.output.output_path.clone();
+        }
         displayed_output_path = output_path
             .as_deref()
             .map(validate_output_path)
             .transpose()?;
-        truncated = output_path.is_some();
-        prefix = shell_notice_prefix(
-            timeout,
-            displayed_output_path.as_deref(),
-            timed_out,
-            exit,
-            signaled,
-        );
+        truncated = true;
+        prefix = prefix_for(displayed_output_path.as_deref());
     }
     let output = render_shell_output(
         &prefix,
@@ -1158,7 +1262,8 @@ fn shape_result(
         displayed_output_path.as_deref(),
     );
 
-    let mut metadata = Map::new();
+    #[cfg(unix)]
+    let timed_out = timed_out || matches!(captured.completion, Completion::NotStarted);
     metadata.insert("exit".to_string(), json!(exit));
     metadata.insert("timedOut".to_string(), json!(timed_out));
     metadata.insert("truncated".to_string(), json!(truncated));
@@ -1185,6 +1290,11 @@ fn shape_result(
     });
     if cancel.is_cancelled() {
         return Err(ToolError::Cancelled);
+    }
+    #[cfg(unix)]
+    if let Some(job) = &mut captured.output.job {
+        job.cancel = None;
+        job.dir = None;
     }
     captured.output.disarm_artifact();
     Ok(result)
@@ -1383,6 +1493,41 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn failed_quiescence_reaps_and_releases_the_pipe_group() {
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("60")
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let mut group = child.id();
+        let error = terminate_pipe_group(&mut child, &mut group, |pgid| {
+            // SAFETY: WNOWAIT checks the worker still owns the waitable child.
+            let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+            assert_eq!(
+                unsafe {
+                    libc::waitid(
+                        libc::P_PID,
+                        pgid as libc::id_t,
+                        &mut info,
+                        libc::WEXITED | libc::WNOWAIT,
+                    )
+                },
+                0
+            );
+            Err(io::Error::other("injected quiescence failure"))
+        })
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("injected quiescence failure"));
+        assert_eq!(child.id(), None);
+        assert_eq!(group, None);
+        terminate_pipe_group(&mut child, &mut group, |_| panic!("released group"))
+            .await
+            .unwrap();
+    }
+
     #[test]
     fn spilled_output_preview_keeps_unique_tail_marker() {
         let path = std::env::temp_dir().join(format!("hya-shell-test-{}.txt", std::process::id()));
@@ -1412,6 +1557,8 @@ mod tests {
             seconds: 155.0,
             duration: Some(Duration::from_secs(155)),
             clamped: false,
+            budget_tenth_capped: false,
+            default_wait: false,
             deadline_left: Some(200),
         };
         let prefix = shell_notice_prefix(timeout, None, true, None, false);
@@ -1419,6 +1566,248 @@ mod tests {
             "<shell_metadata>\nTimeout shortened to 155 seconds: the run ends in 200 seconds."
         ));
         assert!(prefix.contains("terminated the command after 155 seconds"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn explicit_five_seconds_ties_end_cap() -> Result<(), ToolError> {
+        let deadline = RunDeadline::new(tokio::time::Instant::now(), Duration::from_secs(8));
+        let settings = timeout_settings(Some(5.0))?.capped_by(Some(&deadline));
+        assert_eq!(settings.deadline_left, Some(8));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn budgeted_shell_waits_for_background_output() -> Result<(), ToolError> {
+        let cwd = Path::new(".");
+        let deadline = RunDeadline::new(tokio::time::Instant::now(), Duration::from_secs(60));
+        let run = execute_budgeted_file(
+            "(sleep 0.2; echo bg-ok) &",
+            BTreeMap::new(),
+            cwd,
+            cwd.into(),
+            timeout_settings(Some(2.0))?,
+            &deadline,
+            &CancellationToken::new(),
+        )
+        .await?;
+        assert!(matches!(run.completion, Completion::Finished(Some(0))));
+        assert_eq!(run.output.inline, b"bg-ok\n");
+        let run = execute_budgeted_file(
+            "sleep .1 & exit 7",
+            BTreeMap::new(),
+            cwd,
+            cwd.into(),
+            timeout_settings(Some(1.0))?,
+            &deadline,
+            &CancellationToken::new(),
+        )
+        .await?;
+        assert!(matches!(run.completion, Completion::Finished(Some(7))));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn budgeted_shell_finishes_while_a_detached_writer_is_alive() -> Result<(), ToolError> {
+        let cwd = Path::new(".");
+        let deadline = RunDeadline::new(tokio::time::Instant::now(), Duration::from_secs(180));
+        let started = Instant::now();
+        let run = execute_budgeted_file(
+            "python3 -c 'import os,time; os.setsid(); time.sleep(30)' & echo $!",
+            BTreeMap::new(),
+            cwd,
+            cwd.into(),
+            timeout_settings(Some(10.0))?,
+            &deadline,
+            &CancellationToken::new(),
+        )
+        .await?;
+        let pid = String::from_utf8_lossy(&run.output.inline)
+            .trim()
+            .parse::<libc::pid_t>()
+            .map_err(io::Error::other)?;
+        assert!(pid > 0);
+        // SAFETY: query and stop the specific background child printed by Bash.
+        let session = unsafe { libc::getsid(pid) };
+        let killed = unsafe { libc::kill(pid, libc::SIGKILL) };
+        assert_eq!(session, pid);
+        assert_eq!(killed, 0);
+        assert!(matches!(run.completion, Completion::Finished(Some(0))));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn budgeted_shell_tracks_descendants_that_close_inherited_fds() -> Result<(), ToolError> {
+        let cwd = Path::new(".");
+        for (seconds, cancel_job) in [("0.25", false), ("60", true), ("60", false)] {
+            let deadline = RunDeadline::new(tokio::time::Instant::now(), Duration::from_secs(180));
+            let cancel = CancellationToken::new();
+            let command = format!(
+                r#"python3 -c 'import subprocess; print(subprocess.Popen(["sleep", "{seconds}"]).pid)'"#
+            );
+            let timeout = timeout_settings(Some(1.0))?;
+            let run = execute_budgeted_file(
+                &command,
+                BTreeMap::new(),
+                cwd,
+                cwd.into(),
+                timeout,
+                &deadline,
+                &cancel,
+            )
+            .await?;
+            let pid = String::from_utf8_lossy(&run.output.inline)
+                .trim()
+                .parse::<u32>()
+                .map_err(io::Error::other)?;
+            if seconds == "60" {
+                let result = shape_result(
+                    command,
+                    cwd.into(),
+                    false,
+                    timeout,
+                    Duration::ZERO,
+                    run,
+                    &cancel,
+                )?;
+                let meta = &result["metadata"];
+                assert_eq!(meta["stillRunning"], true);
+                assert!(Path::new(&format!("/proc/{pid}")).exists());
+                let exit = Path::new(
+                    meta["exitPath"]
+                        .as_str()
+                        .ok_or(io::Error::other("missing exitPath"))?,
+                );
+                if cancel_job {
+                    cancel.cancel();
+                    tokio::time::timeout(Duration::from_secs(3), async {
+                        while !exit.exists() {
+                            tokio::time::sleep(Duration::from_millis(15)).await;
+                        }
+                    })
+                    .await
+                    .map_err(io::Error::other)?;
+                }
+                deadline.shutdown_background_jobs().await;
+                assert_eq!(std::fs::read_to_string(exit)?, "137\n");
+                std::fs::remove_dir_all(
+                    exit.parent()
+                        .ok_or(io::Error::other("missing job directory"))?,
+                )?;
+            } else {
+                assert!(matches!(run.completion, Completion::Finished(Some(0))));
+            }
+            match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+                Ok(stat) => assert!(stat.rsplit_once(')').is_some_and(|(_, fields)| matches!(
+                    fields.split_whitespace().next(),
+                    Some("Z" | "X" | "x")
+                ))),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn yielded_groups_stop_on_cancel_or_deadline() -> Result<(), ToolError> {
+        for (command, trigger) in [
+            ("sleep 60", "cancel"),
+            ("echo started; (sleep 60) &", "deadline"),
+            ("sleep 60", "shutdown"),
+        ] {
+            let cancel = CancellationToken::new();
+            let cwd = Path::new(".");
+            let deadline = RunDeadline::new(tokio::time::Instant::now(), Duration::from_secs(2));
+            let mut timeout = timeout_settings(Some(1.0))?;
+            timeout.duration = Some(Duration::from_millis(100));
+            let run = execute_budgeted_file(
+                command,
+                BTreeMap::new(),
+                cwd,
+                cwd.into(),
+                timeout,
+                &deadline,
+                &cancel,
+            )
+            .await?;
+            let result = shape_result(
+                command.into(),
+                cwd.into(),
+                false,
+                timeout,
+                Duration::ZERO,
+                run,
+                &cancel,
+            )?;
+            let meta = &result["metadata"];
+            assert_eq!(meta["stillRunning"], true);
+            let pgid = meta["pgid"]
+                .as_u64()
+                .ok_or(io::Error::other("missing pgid"))? as u32;
+            assert!(process_group_alive(Some(pgid)));
+            let path = Path::new(
+                meta["exitPath"]
+                    .as_str()
+                    .ok_or(io::Error::other("missing exitPath"))?,
+            );
+            let output = std::fs::read_to_string(
+                meta["outputPath"]
+                    .as_str()
+                    .ok_or(io::Error::other("missing outputPath"))?,
+            )?;
+            if trigger == "shutdown" {
+                deadline.shutdown_background_jobs().await;
+                assert!(path.is_file());
+                assert!(!process_group_alive(Some(pgid)));
+            } else if trigger == "cancel" {
+                cancel.cancel();
+            } else {
+                assert_eq!(output, "started\n");
+            }
+            tokio::time::timeout(Duration::from_secs(4), async {
+                while !path.exists() {
+                    tokio::time::sleep(Duration::from_millis(15)).await;
+                }
+            })
+            .await
+            .map_err(|e| contextual_io("wait for group termination", e))?;
+            assert_eq!(std::fs::read_to_string(path)?.trim(), "137");
+            std::fs::remove_dir_all(path.parent().ok_or(io::Error::other("missing job dir"))?)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn completed_budgeted_spill_is_an_owned_artifact() -> Result<(), ToolError> {
+        let root = std::env::temp_dir().join(format!("hya-budget-spill-{}", std::process::id()));
+        let deadline = RunDeadline::new(tokio::time::Instant::now(), Duration::from_secs(60));
+        let run = execute_budgeted_file(
+            "head -c 60000 /dev/zero",
+            BTreeMap::new(),
+            Path::new("."),
+            root.clone(),
+            timeout_settings(None)?,
+            &deadline,
+            &CancellationToken::new(),
+        )
+        .await?;
+        assert!(matches!(run.completion, Completion::Finished(Some(0))));
+        let path = run
+            .output
+            .output_path
+            .as_ref()
+            .ok_or(io::Error::other("missing spill"))?;
+        assert_eq!(path.parent(), Some(root.as_path()));
+        assert_eq!(std::fs::read(path)?, vec![0; 60000]);
+        drop(run);
+        std::fs::remove_dir(root)?;
+        Ok(())
     }
 
     #[test]

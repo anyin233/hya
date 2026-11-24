@@ -348,8 +348,8 @@ test.describe("/compact", () => {
     await term.waitForText("▸ /compact")
     await term.press("Enter")
     await term.attach(testInfo, "compacting")
-    // A manual compaction is always `local_summarizer`, shown in words (docs/protocol/README.md "Compaction").
-    await term.waitForText(/context compacted.*local summary/, 20_000)
+    // A manual compaction is a kernel Rewrite, shown in words (docs/protocol/README.md "Compaction").
+    await term.waitForText(/context compacted.*rewrite/, 20_000)
   })
 })
 

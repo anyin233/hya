@@ -89,7 +89,7 @@ fall back to `hya-task`.
 | `subagent_type` | Agent id — the only way to choose the agent (also per member); empty/omitted normalizes to `"hya-task"`. It also names the member: the handle leaf is `<subagent_type>-<operator>`, where the resolved agent id is sanitized (lowercased; other characters → `-`; at most 32 characters) and the harness appends one random operator name (`"subagent_type": "hya-scout"` → `main/hya-scout-suzuran`; omitted → `main/hya-task-amiya`). |
 | `category` | Logical model-category override. |
 | `model` | Concrete provider/model override (wins over category). A `#level` suffix (`anthropic/claude-sonnet-4-5#low`) sets the child's thinking effort. |
-| `effort` | Thinking effort for this spawn (also per member): `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, as the child's model accepts. Wins over a `model` suffix and over the agent's default effort (`list_agents` shows it). A level the child's model does not accept fails the call with `INVALID_EFFORT: \`<level>\` for \`<model>\`` and spawns nothing. The result names the child's model, suffix included: `<task id="…" model="provider/model#level" state="…">`. |
+| `effort` | Omit to use the explicit model suffix or, without a suffix, the child's default shown by `list_agents`. For a per-spawn or per-member override the effort levels are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, as the child's model accepts. Wins over a `model` suffix and over the agent's default effort (`list_agents` shows it). A level the child's model does not accept fails the call with `INVALID_EFFORT: \`<level>\` for \`<model>\`` and spawns nothing. The result names the child's model, suffix included: `<task id="…" model="provider/model#level" state="…">`. |
 | `command` | Optional command that triggered the task. |
 | `inline_agent` | Request-scoped overlay. Published fields are `name`, `prompt`, `category`, and `model`; nested `description` is not advertised. |
 | `context` | Optional string prepended to each prompt, separated by two newlines; shared goal, interfaces and constraints. Works in single and batch forms. |
@@ -403,11 +403,13 @@ call never returns the same news twice:
 When several apply at one evaluation the order is `members`, `mail`,
 `stalled`, `nothing_to_wait_for`, `timeout`.
 
-**Result shape and budget.** The result is `{title, output, metadata}`, and
-the wait budgets it itself: the whole envelope, serialized, stays within
-`WAIT_RESULT_BUDGET` = 4500 characters, under the generic 5000-character tool
-output cap, so the cap never cuts it and `metadata` always arrives intact.
-`output` always starts with a compact header, then the previews:
+**Result shape and budget.** Both versions of `wait` return `{title, output, metadata}`
+with `ToolResultPolicy::SelfBudgeted`. The tool limits `output` to 4,500
+characters (`WAIT_OUTPUT_BUDGET_CHARS`) by shortening report and mail previews
+and condensing trailing member lines. An omitted report has `report_truncated: true`.
+The host passes the object through intact. Its `finished`, `already_finished`,
+and `running` metadata arrays retain every target even when their serialized
+size exceeds the generic 5,000-character spill threshold.
 
 ```text
 Subagents finished.
@@ -429,15 +431,30 @@ Found two issues …
 
 The header has the reason it woke, one line per finished/already-finished
 target (handle, state, outcome), idle targets, the still-running handles, and
-the new-mail count. Every report (or archive note) and mail body then gets a
-preview. Short bodies are shown whole, and the budget left over is shared
-equally by the longer ones. A cut preview ends with the omitted size and,
-when the caller can read the full text, `read channel://<DM id>`. That is the
-parent's DM with the member, where the report mail lives, or the channel the
-mail came on. No pointer is printed when there is no such channel (for
-example, a grandchild's report mailed to its own parent).
+the new-mail count. Direct mail without a channel, including a `LEADER FAILED`
+notice from the harness, gets space first. Each direct message's received
+preview (up to 600 characters plus an ellipsis for longer bodies) appears
+verbatim in the model-visible `output`. Reports, archive notes, and
+channel-backed mail share the remaining space. Reports appear before mail.
 
-`metadata` carries the structure without the bodies:
+When those direct previews cannot all fit in 4,500 characters, the channel-aware
+`wait` returns the largest leading page that fits, sets `metadata.more_mail`
+to `true`, and asks the model to call `wait` again. The durable inbox cursor
+stops immediately before the first deferred message. For example, ten
+600-character notices require multiple calls. On the final page the
+continuation hint and `more_mail` field are absent. Other tools in the same
+batch leave deferred mail for the next `wait`. The tool result and its
+inbox cursor commit together, including when the tool is called by an alias.
+Nested waits in one program read successive pages. Their combined cursor
+commits with the outer tool result. If the outer call fails, an after-hook
+replaces its result, or the write fails, the mail remains unread.
+
+A shortened channel-backed preview gives the omitted character count and
+`read channel://<id>`. Reports with a readable parent DM give the same link.
+Each delivered mail has a metadata entry with `from`, `chars`, and, for
+channel-backed mail, `channel`.
+
+Example metadata for a wait with channel-backed mail:
 
 ```json
 {"woke_by": "members", "waited_ms": 5210,
@@ -459,6 +476,9 @@ in-progress text is never surfaced as a report. `channel` is the DM holding
 the report, present only when the caller is the target's parent. A mail
 entry's `chars` is the length of its body as received (at most 600, the
 `[NEW MAIL]` bound).
+When either `finished` or `already_finished` includes a reported member, `output`
+reminds the caller that the member was automatically archived when the reminder fits alongside all member rows and metadata. Calling `archive`
+on that member is unnecessary.
 `already_finished` and `mail` are omitted when empty. The wait runs inside the
 caller's turn and is woken through the engine bus (team-lifecycle events on the
 root or caller log), never by a resident wake of the caller — that would queue
@@ -481,7 +501,7 @@ each message previewed in `output` (the body is bounded to 600 chars like the
 chars}`. Mail is **new** only past the caller's durable inbox
 cursor — the same `MailConsumed` cursor in-turn steering and resident wakes
 use — and a wait that returns commits the cursor through the mail it
-accounted for: the channel-aware wait through the whole inbox, the
+accounted for: the channel-aware wait through the returned page, the
 member-only wait through the leading run of report mails of targets it
 reported `finished`. So a returned message is never returned by a later
 `wait`, never repeated in a `[NEW MAIL]` notice, and never re-injected by a
@@ -539,6 +559,9 @@ intentional compatibility, not a second command surface.
 [crates/hya-tool/src/tool.rs](../../crates/hya-tool/src/tool.rs))
 
 ### Webfetch
+
+The tool is enabled by default. Setting `tools.webfetch.enabled: false` removes
+`webfetch` and its `fetch` alias from the engine registry at startup.
 
 Parameters: `url` (http/https only), `format` = `text` | `markdown` (default) |
 `html`, and `timeout` in seconds — default 30 s, clamped to a maximum of 120 s.
@@ -607,8 +630,9 @@ applies an advertisement-only filter:
   No flag, config key, RPC, or tool argument changes: for example,
   `hya exec "summarize this repo"` offers neither human-answer tool, while a
   session attached through the TUI/server can still ask questions.
-- `apply_patch` is never advertised. It remains registered for hidden `patch`
-  dispatch.
+- `apply_patch` is advertised to GPT-family models only (the round's model;
+  see [Tool-family presets](../base-tools.md)). Hidden `patch` dispatch works
+  for every model.
 - enabled `websearch` is advertised to every model provider.
 - `report` is never advertised to the root (depth 0); `task`, `list_agents`,
   `workflow`, `search_agent`, and `archive` are not advertised at the depth
@@ -620,7 +644,8 @@ harness-allocated [coordination tools](#coordination-tools-allocated-at-startup)
 
 The tools remain registered even when their schemas are filtered from the
 request. File mutation on the model-facing path is the hashline `write`/`edit`
-pair, not the Codex-style `apply_patch` envelope.
+pair for every model, plus the Codex-style `apply_patch` envelope for
+GPT-family models.
 ([`hya_engine::advertise_tool`](../../crates/hya-engine/src/engine/turn/messages.rs))
 
 ### Websearch provider independence
@@ -1127,9 +1152,15 @@ The turn loop connects a plane for every model tool call:
     `ToolError::Cancelled` when the caller is cancelled;
   - it runs no `tool.execute.before`/`after` hooks and emits no
     `tool_call_requested`, `tool_result`, or `tool_error` event.
+- `workspace_state()` backs the `workspace.state` host capability: it
+  reconciles the session's workspace record with its native watch under the
+  turn's actor claim, counting the stamps of earlier nested calls as known,
+  and returns `"<session>:<file revision>"`, or `None` without a native watch
+  ([Workspace file observations](../kernel.md#workspace-file-observations)).
 
 Outside the turn loop (tests, direct tool use) a context carries
-`NestedToolPlane::disconnected()`, which lists nothing and fails every call.
+`NestedToolPlane::disconnected()`, which lists nothing, fails every call, and
+has no workspace state.
 
 `SessionEngine::with_exclusive_tool(Some(name))` makes such a tool the only
 one a model is offered: for every agent whose offered tools include `name`,
@@ -1146,6 +1177,7 @@ An agent that is not offered `name` is unaffected. [Code mode](../code-mode.md) 
 pub trait NestedTools: Send + Sync {
     fn list(&self) -> Vec<hya_proto::ToolSchema>;
     async fn call(&self, name: &str, input: serde_json::Value) -> Result<serde_json::Value, ToolError>;
+    async fn workspace_state(&self) -> Result<Option<String>, ToolError>;
 }
 
 impl NestedToolPlane {
@@ -1154,6 +1186,7 @@ impl NestedToolPlane {
     pub fn is_connected(&self) -> bool;
     pub fn list(&self) -> Vec<hya_proto::ToolSchema>;                 // empty when disconnected
     pub async fn call(&self, name: &str, input: Value) -> Result<Value, ToolError>;
+    pub async fn workspace_state(&self) -> Result<Option<String>, ToolError>; // None when disconnected
 }
 ```
 

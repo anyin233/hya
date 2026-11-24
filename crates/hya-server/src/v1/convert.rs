@@ -838,6 +838,10 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             undone: true,
             files: files.iter().map(reverted_file).collect(),
         }),
+        Event::PartDeleted { message, part, .. } => P::PartDeleted(pb::PartDeleted {
+            message: message.to_string(),
+            part: part.to_string(),
+        }),
         Event::UserPromptContextRecorded { message, files, .. } => {
             let parts = attachment_parts(files);
             if parts.is_empty() {
@@ -899,6 +903,29 @@ mod tests {
                 cause,
             },
         }
+    }
+
+    #[test]
+    fn part_deleted_reaches_the_wire() {
+        let (message, part) = (MessageId::new(), hya_proto::PartId::new());
+        let event = stream_event(&Envelope {
+            seq: EventSeq(7),
+            ts_millis: 1,
+            event: Event::PartDeleted {
+                session: SessionId::new(),
+                message,
+                part,
+            },
+        })
+        .unwrap();
+        assert_eq!(event.seq, 7);
+        assert_eq!(
+            event.payload,
+            Some(pb::stream_event::Payload::PartDeleted(pb::PartDeleted {
+                message: message.to_string(),
+                part: part.to_string(),
+            }))
+        );
     }
 
     #[test]

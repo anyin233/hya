@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use thiserror::Error;
 
@@ -225,6 +226,44 @@ pub enum StoreError {
     /// Corrupt `project` / `project_root` row data.
     #[error("project data: {0}")]
     ProjectData(String),
+    /// A bounded storage operation exceeded its timeout while the store was degraded or stalled.
+    #[error("storage timeout during {operation} after {timeout:?}")]
+    StorageTimeout {
+        /// Bounded operation name.
+        operation: &'static str,
+        /// Configured wait timeout.
+        timeout: Duration,
+    },
+    /// Operation refused because the write queue is degraded or halted.
+    #[error("store is degraded: {reason}")]
+    StoreDegraded {
+        /// First fault or timeout reason recorded on the store.
+        reason: String,
+    },
+}
+
+pub(crate) fn is_sqlite_storage_fault(err: &sqlx::Error) -> bool {
+    match err {
+        sqlx::Error::PoolTimedOut | sqlx::Error::Io(_) | sqlx::Error::WorkerCrashed => true,
+        sqlx::Error::Database(db) => db
+            .code()
+            .and_then(|c| c.parse::<u32>().ok())
+            .is_some_and(|c| matches!(c & 0xff, 3 | 5 | 6 | 8 | 10 | 11 | 13 | 14 | 15 | 26)),
+        _ => false,
+    }
+}
+
+impl StoreError {
+    /// Whether this error is a transient storage, locking, or timeout fault
+    /// rather than a constraint, decoding, or domain failure.
+    #[must_use]
+    pub fn is_storage_fault(&self) -> bool {
+        match self {
+            Self::StorageTimeout { .. } | Self::StoreDegraded { .. } => true,
+            Self::Sqlite(err) => is_sqlite_storage_fault(err.as_ref()),
+            _ => false,
+        }
+    }
 }
 
 impl From<sqlx::Error> for StoreError {

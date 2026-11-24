@@ -41,6 +41,14 @@ The registry holds 25 canonical names. Two families export `wait` and the
 registry installs it once. The model also receives the kernel's
 [`todo` and `rewrite` tools](kernel.md#built-in-tools).
 
+`write` and `edit` are offered to every model. `apply_patch` is offered only
+to a GPT-family model, in addition to `write` and `edit`: one whose id, after
+its last `/` and without a `#variant` suffix, lowercased, starts with `gpt` or
+contains `codex`. `openai/gpt-5.5` and `x/y/gpt-6.2-sol#high` get it;
+`anthropic/claude-opus-5-5` and `glm-5.3` do not. The choice follows each
+round's model, so a model change inside a turn changes the tool list. A call
+through the hidden `patch` alias dispatches to `apply_patch` for every model.
+
 `ask_user` is the canonical name for the requested `ask` function; `question` remains its hidden alias. The
 user-assigned `lsp` and `task` tools belong to the extended family.
 
@@ -104,8 +112,11 @@ copies are deleted after loading; verified cache copies can be reused. The
 loaded library stays mapped for the process lifetime.
 `builtin_bundle_origin(name)` returns the identity for a loaded native tool.
 Cargo builds load the library Cargo just linked instead: a library in the
-executable's `deps/` directory wins, then one beside the executable. A package
-staged under `target/debug/bundles/` is used only when neither exists, so a
+executable's `deps/` directory wins, then one beside the executable, then the
+libraries in Cargo's per-unit build directory
+(`build/<package>/<unit>/out/`, the layout of Cargo 1.100 and later), newest
+first; a library that fails the ABI check is skipped for the next one. A package
+staged under `target/debug/bundles/` is used only when none exists, so a
 stale package cannot shadow a fresh build or slow backend startup with full
 package verification. The Rust ABI is not stable across independent builds;
 build the backend and library from the same workspace and toolchain.
@@ -122,7 +133,7 @@ process, timer, and HTTP operations use the bundle's reactor.
 
 ### Bash process completion
 
-`bash` captures stdout and stderr through pipes by default; `pty: true` attaches
+`bash` captures stdout and stderr through pipes in unbudgeted runs by default; `pty: true` attaches
 both streams to a real terminal. A daemon that calls `setsid()` can retain those
 output descriptors after the command exits. Both capture modes bound the final
 drain so such a daemon cannot hang the tool or turn a successful command into a
@@ -169,6 +180,17 @@ If no matches were seen, the text before that note is
 `No files found in the part searched`. `find` adds `"incomplete": true` to
 its result object when traversal stops at the budget. Both incomplete keys
 are absent when traversal completes.
+
+### Edit anchor diagnostics
+
+Copy `LINE#HASH` anchors for `edit` from a `read`, `grep`, or `edit` tool
+result. For example, if `pos: "12#"` lacks its hash, `edit` returns
+`[E_BAD_REF]` and leaves the file untouched. For a readable regular text file
+up to 50 KiB, the diagnostic includes current anchors within two lines of up
+to three requested positions. The diagnostic identifies the malformed reference
+by its line number and combines overlapping windows so each row appears once.
+Out-of-range positions report the visible line count. Otherwise the diagnostic contains only syntax guidance. Use
+`replace_text` with exact `oldText` and `newText` when working from shell output.
 
 ### Path boundary
 
@@ -234,7 +256,28 @@ tools:
       - { name: legacy_read, visibility: hidden }
     # optional: replace another family's same-named tool when both load
     # overrides: hya/extended-tools
+    # optional: the tool's line in the system prompt's <tools> list
+    prompt: read a file
+# optional: replaces the kernel prompt's file-operations rule
+file_operations_rule:
+  text: Use the file tools, not shell commands, to list, find, and search files
+  tools: [ls, glob, find, grep]
 ```
+
+`prompt` (optional, one non-empty line) is the text after `- <name>: ` in
+the `<tools>` list of the full-mode [system prompt](kernel.md#system-prompt);
+a tool without it is not listed there. When two families export a name, the
+overriding entry's line is used. The kernel names (`read`, `write`, `edit`,
+`bash`) carry no line: the kernel prompt already describes them. Every other
+first-party tool offered to models has one; for example extended-tools
+declares `{ name: task, ..., prompt: start subagents on independent tasks }`.
+
+`file_operations_rule` (optional) replaces the kernel's rule
+`Use bash for file operations like ls, rg, find` in a round that offers at
+least one of its `tools`, which must be canonical names of the same family.
+`text` is one non-empty line. `hya/base-tools` declares it for `ls`, `glob`,
+`find`, and `grep`. `hya_tool::tool_prompt(name)` and
+`hya_tool::file_operations_rule(offered)` read both keys.
 
 `permission` is one of `read_only`, `task`, `tool`, `command`, or `mcp`. It
 controls invocation defaults: read-only and task calls default to allow,
@@ -328,7 +371,9 @@ package must have one library named `runtime`; its exported C symbols are
 `hya_tool_bundle_with_runtime_v1(*const c_void, unsafe extern "C" fn(*mut c_void), *mut c_void)` and
 `hya_tool_bundle_share_deadline_v1(*const c_void)`.
 The host checks the 32-byte ABI digest before sharing its deadline cell or calling `register`, and the
-library remains mapped for the process lifetime. The runtime callback polls
+library remains mapped for the process lifetime. The digest covers the hya version, the compiler
+(`rustc -V`), the platform, and the sources and sizes of the types that cross the boundary, so a
+library left by another toolchain is rejected instead of loaded. The runtime callback polls
 one tool future synchronously while the bundle's Tokio runtime is entered.
 Calls with an existing host runtime stay on their original task, preserving
 task-local admission context. Calls without one use a temporary joined worker.
@@ -368,7 +413,7 @@ fixture in a disposable layout (Linux):
 
 ```sh
 CARGO_BUILD_JOBS=8 cargo build --locked -p hya-tool --examples
-CARGO_BUILD_JOBS=8 cargo test --locked -p hya-tool --test native_replacement
+CARGO_BUILD_JOBS=8 cargo test --locked -p hya-tool --test it native_replacement::
 ```
 
 The test copies its host into a private directory and installs the replacement
@@ -385,8 +430,10 @@ For deployment, package the replacement library with
 identity and declarations. Use the expected filename
 `libhya_<family>_tools.so` (`.dylib` on macOS). Discovery, in order, is
 `<executable-directory>/deps/<filename>`, then
-`<executable-directory>/<filename>`, then the family's `.hyabundle` under
-`bundles/` in the executable directory (or its parent for `bin/` and `deps/`).
+`<executable-directory>/<filename>`, then Cargo's build units
+(`build/<package>/<unit>/out/<filename>`, newest first), then the family's
+`.hyabundle` under `bundles/` in the executable directory (or its parent for
+`bin/` and `deps/`).
 All families selected by the registry must be present. Libraries are cached by
 family for the process lifetime, so restart the host to select new bytes.
 
@@ -416,22 +463,36 @@ Verified bytes use the disposable native cache described in
 ## Budgeted Bash timeouts
 
 An in-process `hya exec --time-budget 900 "implement the change"` installs a
-wall-clock deadline shared with the native Bash library. Bash keeps the normal
-300-second default, `timeout: 0` disables its requested timeout, and positive
-values clamp to `1..=3600` seconds. With a run budget, all of these are additionally
-capped to `max(remaining - grace, 5s)` by `RunDeadline::cap`. A shorter requested
-timeout is preserved. This changes only the execution timeout; the fixed 200 ms
-orphan grace, 100 ms post-kill drain and bounded final drain still apply.
+wall-clock deadline shared with the native Bash library. The default wait is
+300 seconds. Positive requests clamp to 1–3600 seconds and zero disables the
+requested timeout. A budget caps each wait at one tenth of the original budget
+(minimum five seconds) and reserves time for the next step. The end-of-budget
+cap takes precedence on ties and sets `metadata.deadlineCapped: true`.
+`metadata.timeoutSeconds` records the effective wait.
 
-A capped result retains `{title, output, metadata}`. `metadata.timeoutSeconds`
-is the effective rounded limit (`number`), `metadata.deadlineCapped: true`
-(`boolean`, omitted when not shortened) survives the host output cap, and
-`output` includes a `<shell_metadata>` explanation naming the limit and seconds
-remaining. `timeoutClamped: true` continues to describe ordinary argument
-clamping when the run deadline did not replace it. For example, with 200 seconds
-left in a 900-second run, a 300-second request runs for about 155 seconds,
-reserving the 45-second guard. Member `wait` uses the same cap; its existing
-request and response fields are unchanged.
+On Unix, budgeted non-PTY Bash writes both streams directly to a private
+temporary file. For example, in a 900-second run, `{"command":"make","timeout":300}`
+waits up to 90 seconds. If the command is still running at the ordinary wait
+limit, the result has `metadata.stillRunning: true`, `timedOut: false`,
+`exit: null`, numeric `pgid`, and string `outputPath` and `exitPath`.
+Shutdown closes admission before starting its drain. Calls that arrive after
+closure return a cancellation before spawning Bash. For an admitted command
+the drain waits for process cleanup and, if it yielded, publication of its exit file.
+Read the output while the command runs. The exit file appears atomically when
+the shell and its supervised group finish. A process that starts a new session
+with `setsid()` can keep inherited file descriptors open after Bash returns.
+On Linux, Bash waits for live group members even when they close their
+inherited descriptors. Zombie descendants count as exited.
+Cancellation, budget expiry, or exec shutdown kills a yielded group. Exec waits
+for its supervisor to reap the shell and publish the exit code before returning.
+During termination, Bash sends its last group signal while the leader’s PID is
+still reserved, including for pipe and PTY calls.
+The notice gives quoted commands
+to inspect output or stop the group. At the end-of-budget cap Bash kills the
+group and returns `timedOut: true`. An exhausted budget skips the spawn.
+For a completed or timed-out command whose output exceeds 50 KiB, `metadata.outputPath` points to the full capture under `.hya/tool-output/`.
+PTY waits terminate the group on timeout. All Bash modes set
+`PYTHONUNBUFFERED=1` before applying explicit `env` overrides.
 
 ## Output limit audit
 
@@ -453,7 +514,7 @@ and artifact spill; coding results use its structured field/envelope bounds.
 
 | Tool | Own limit before the host pass |
 | --- | --- |
-| `read` | File/directory text fitted to 50 KiB; file default 2,000 lines. An image whose attachment would exceed the host's 2 MiB attachment budget (a file over about 1.5 MiB) is not attached; the text says so and suggests downscaling or cropping it with a program. Titles, paths, PDF attachments and channel-read data are not all bounded by this text limit. |
+| `read` | File/directory text fitted to 50 KiB; file default 2,000 lines. PNG, JPEG, GIF and WebP must decode before attachment. A malformed image returns an explanation with the usual title, output and metadata fields. An image whose attachment would exceed the host's 2 MiB attachment budget (a file over about 1.5 MiB) is not attached; the text says so and suggests downscaling or cropping it with a program. Titles, paths, PDF attachments and channel-read data are not all bounded by this text limit. |
 | `write` | Output and display text each 50 KiB; diagnostic text has row limits but raw diagnostic metadata does not; title/path and the whole envelope have no equivalent cap. |
 | `edit` | Output and patch each 50 KiB; fallback text only included when at most 50 KiB. Raw diagnostic metadata and title/path still need host bounds. |
 | `grep` | Output and serialized display budgets 50 KiB; match limit at most 200, context at most five, display at most 4,096 rows; warnings at most 16 / 4,096 bytes total. Host row and envelope limits differ. |

@@ -99,7 +99,7 @@ mod tests {
             WHEN json_extract(NEW.payload, '$.type') = 'message_finished' \
             BEGIN SELECT RAISE(ABORT, 'test failure'); END",
         )
-        .execute(&store.pool)
+        .execute(&store.writer_pool)
         .await
         .unwrap();
         let result = store
@@ -127,7 +127,7 @@ mod tests {
         assert!(result.is_err());
         assert!(store.replay(session).await.unwrap().is_empty());
         let open: i64 = sqlx::query_scalar("SELECT count(*) FROM open_assistant_message")
-            .fetch_one(&store.pool)
+            .fetch_one(&store.read_pool)
             .await
             .unwrap();
         assert_eq!(open, 0);
@@ -154,7 +154,7 @@ mod tests {
             .await
             .unwrap();
         let sessions: i64 = sqlx::query_scalar("SELECT count(*) FROM session")
-            .fetch_one(&store.pool)
+            .fetch_one(&store.read_pool)
             .await
             .unwrap();
         assert_eq!(
@@ -205,7 +205,7 @@ mod tests {
         ] {
             let row = sqlx::query("SELECT project_id, kind FROM session WHERE id = ?")
                 .bind(session.storage_key())
-                .fetch_one(&store.pool)
+                .fetch_one(&store.read_pool)
                 .await
                 .unwrap();
             assert_eq!(

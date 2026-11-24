@@ -153,7 +153,6 @@ impl PermissionRequests {
 
     /// Pending-plane bridge retained for the interaction event stream.
     #[allow(dead_code)]
-    #[allow(dead_code)]
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<Value> {
         self.events.subscribe()
     }
@@ -171,7 +170,6 @@ impl PermissionRequests {
 
     /// Pending-plane bridge retained for the interaction event stream.
     #[allow(dead_code)]
-    #[allow(dead_code)]
     pub(crate) async fn list(&self) -> Vec<PermissionRequestView> {
         self.inner
             .lock()
@@ -182,7 +180,6 @@ impl PermissionRequests {
     }
 
     /// Pending-plane bridge retained for the interaction event stream.
-    #[allow(dead_code)]
     #[allow(dead_code)]
     pub(crate) async fn list_legacy(&self) -> Vec<LegacyPermissionRequestView> {
         self.inner
@@ -776,7 +773,7 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "../../tests/support/mod.rs"]
+#[path = "../../tests/it/support/mod.rs"]
 mod shutdown_test_support;
 
 #[cfg(test)]

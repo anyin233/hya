@@ -333,6 +333,7 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly message: MessageId
   readonly step: number
   readonly finish?: FinishReason
+  readonly error?: string | null
 }) |
 ({ readonly type: "text_start" } & {
   readonly session: SessionId
@@ -402,6 +403,7 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly call: ToolCallId
   readonly name: ToolName
   readonly input: unknown
+  readonly provider_data?: unknown | null
 }) |
 ({ readonly type: "tool_result" } & {
   readonly session: SessionId
@@ -724,6 +726,7 @@ export type Message = ({ readonly role: "user" } & {
   readonly agent: AgentName
   readonly model: ModelRef
   readonly parts: ReadonlyArray<Part>
+  readonly last_step_start?: number | null
   readonly last_round?: TokenUsage | null
   readonly finish?: FinishReason | null
   readonly tokens?: TokenUsage | null
@@ -795,6 +798,7 @@ export type Part = ({ readonly type: "text" } & {
   readonly call_id: ToolCallId
   readonly name: ToolName
   readonly state: ToolPartState
+  readonly provider_data?: unknown | null
 })
 
 export type PartId = string
@@ -1224,7 +1228,7 @@ export function isEvent(value: unknown): value is Event {
     (isRecord(value) && value["type"] === "message_finished" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("role" in value && isRole(value["role"])) && ("finish" in value && isFinishReason(value["finish"])) && (value["tokens"] === undefined || (value["tokens"] === null || isTokenUsage(value["tokens"]))) && (value["cause"] === undefined || (value["cause"] === null || isFinishCause(value["cause"])))) ||
     (isRecord(value) && value["type"] === "part_deleted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"]))) ||
     (isRecord(value) && value["type"] === "step_started" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("step" in value && (typeof value["step"] === "number" && Number.isInteger(value["step"]) && value["step"] >= 0)) && (value["view"] === undefined || (value["view"] === null || isViewRef(value["view"])))) ||
-    (isRecord(value) && value["type"] === "step_finished" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("step" in value && (typeof value["step"] === "number" && Number.isInteger(value["step"]) && value["step"] >= 0)) && (value["finish"] === undefined || isFinishReason(value["finish"]))) ||
+    (isRecord(value) && value["type"] === "step_finished" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("step" in value && (typeof value["step"] === "number" && Number.isInteger(value["step"]) && value["step"] >= 0)) && (value["finish"] === undefined || isFinishReason(value["finish"])) && (value["error"] === undefined || (value["error"] === null || typeof value["error"] === "string"))) ||
     (isRecord(value) && value["type"] === "text_start" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"]))) ||
     (isRecord(value) && value["type"] === "text_delta" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"])) && ("delta" in value && typeof value["delta"] === "string")) ||
     (isRecord(value) && value["type"] === "text_replace" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"])) && ("text" in value && typeof value["text"] === "string")) ||
@@ -1235,7 +1239,7 @@ export function isEvent(value: unknown): value is Event {
     (isRecord(value) && value["type"] === "reasoning_replace" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"])) && ("text" in value && typeof value["text"] === "string")) ||
     (isRecord(value) && value["type"] === "tool_input_start" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"])) && ("call" in value && isToolCallId(value["call"])) && ("name" in value && isToolName(value["name"]))) ||
     (isRecord(value) && value["type"] === "tool_input_delta" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"])) && ("call" in value && isToolCallId(value["call"])) && ("name" in value && isToolName(value["name"])) && ("delta" in value && typeof value["delta"] === "string")) ||
-    (isRecord(value) && value["type"] === "tool_call_requested" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"])) && ("call" in value && isToolCallId(value["call"])) && ("name" in value && isToolName(value["name"])) && ("input" in value && true)) ||
+    (isRecord(value) && value["type"] === "tool_call_requested" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"])) && ("call" in value && isToolCallId(value["call"])) && ("name" in value && isToolName(value["name"])) && ("input" in value && true) && (value["provider_data"] === undefined || (value["provider_data"] === null || true))) ||
     (isRecord(value) && value["type"] === "tool_result" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"])) && ("call" in value && isToolCallId(value["call"])) && ("output" in value && true) && ("time_ms" in value && (typeof value["time_ms"] === "number" && Number.isInteger(value["time_ms"]) && value["time_ms"] >= 0))) ||
     (isRecord(value) && value["type"] === "tool_error" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"])) && ("call" in value && isToolCallId(value["call"])) && ("message_text" in value && typeof value["message_text"] === "string") && (value["value"] === undefined || (value["value"] === null || true))) ||
     (isRecord(value) && value["type"] === "tool_part_updated" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"])) && ("state" in value && isToolPartState(value["state"]))) ||
@@ -1379,7 +1383,7 @@ export function isMemberRunStatus(value: unknown): value is MemberRunStatus {
 
 export function isMessage(value: unknown): value is Message {
   return (isRecord(value) && value["role"] === "user" && isRecord(value) && ("id" in value && isMessageId(value["id"])) && ("parts" in value && (Array.isArray(value["parts"]) && value["parts"].every((item: unknown) => isPart(item))))) ||
-    (isRecord(value) && value["role"] === "assistant" && isRecord(value) && ("id" in value && isMessageId(value["id"])) && ("agent" in value && isAgentName(value["agent"])) && ("model" in value && isModelRef(value["model"])) && ("parts" in value && (Array.isArray(value["parts"]) && value["parts"].every((item: unknown) => isPart(item)))) && (value["last_round"] === undefined || (value["last_round"] === null || isTokenUsage(value["last_round"]))) && (value["finish"] === undefined || (value["finish"] === null || isFinishReason(value["finish"]))) && (value["tokens"] === undefined || (value["tokens"] === null || isTokenUsage(value["tokens"])))) ||
+    (isRecord(value) && value["role"] === "assistant" && isRecord(value) && ("id" in value && isMessageId(value["id"])) && ("agent" in value && isAgentName(value["agent"])) && ("model" in value && isModelRef(value["model"])) && ("parts" in value && (Array.isArray(value["parts"]) && value["parts"].every((item: unknown) => isPart(item)))) && (value["last_step_start"] === undefined || (value["last_step_start"] === null || (typeof value["last_step_start"] === "number" && Number.isInteger(value["last_step_start"]) && value["last_step_start"] >= 0))) && (value["last_round"] === undefined || (value["last_round"] === null || isTokenUsage(value["last_round"]))) && (value["finish"] === undefined || (value["finish"] === null || isFinishReason(value["finish"]))) && (value["tokens"] === undefined || (value["tokens"] === null || isTokenUsage(value["tokens"])))) ||
     (isRecord(value) && value["role"] === "system" && isRecord(value) && ("id" in value && isMessageId(value["id"])) && ("content" in value && typeof value["content"] === "string"))
 }
 
@@ -1422,7 +1426,7 @@ export function isPart(value: unknown): value is Part {
   return (isRecord(value) && value["type"] === "text" && isRecord(value) && ("id" in value && isPartId(value["id"])) && ("text" in value && typeof value["text"] === "string")) ||
     (isRecord(value) && value["type"] === "reasoning" && isRecord(value) && ("id" in value && isPartId(value["id"])) && ("text" in value && typeof value["text"] === "string") && (value["provider_data"] === undefined || (value["provider_data"] === null || true))) ||
     (isRecord(value) && value["type"] === "media" && isRecord(value) && ("id" in value && isPartId(value["id"])) && ("media_type" in value && typeof value["media_type"] === "string") && ("data" in value && typeof value["data"] === "string") && (value["filename"] === undefined || (value["filename"] === null || typeof value["filename"] === "string"))) ||
-    (isRecord(value) && value["type"] === "tool" && isRecord(value) && ("id" in value && isPartId(value["id"])) && ("call_id" in value && isToolCallId(value["call_id"])) && ("name" in value && isToolName(value["name"])) && ("state" in value && isToolPartState(value["state"])))
+    (isRecord(value) && value["type"] === "tool" && isRecord(value) && ("id" in value && isPartId(value["id"])) && ("call_id" in value && isToolCallId(value["call_id"])) && ("name" in value && isToolName(value["name"])) && ("state" in value && isToolPartState(value["state"])) && (value["provider_data"] === undefined || (value["provider_data"] === null || true)))
 }
 
 export function isPartId(value: unknown): value is PartId { return typeof value === "string" }

@@ -86,8 +86,10 @@ repaired, not rewritten.
 
 `agents.run` can start any agent the calling agent may spawn with `task`. With
 the optional [`hya-extra/orchestrator`](extra-bundles.md) bundle installed that
-includes its specialised workers; an `orchestrator-scout` answer on an
-unchanged work tree is remembered and reused without a model call.
+includes its specialised workers; an `orchestrator-scout` answer is remembered
+and reused without a model call while the session's
+[workspace state](plugin-protocol.md#request-scoped-host-capabilities) is
+unchanged, within that session only.
 
 `models.classify` needs a judge in the bundle's configuration file
 (`<hya config dir>/bundles/hya%2Fcode-mode/config.yml`, see
@@ -110,7 +112,8 @@ In `only` mode the model cannot see the other tools' schemas, so the engine
 appends them to the description of `code-mode__run` in each request: one
 section per hidden tool with its name, description and argument schema. The
 team quick reference in the system prompt, which teaches only offered tools,
-is absent in this mode.
+is absent in this mode, and the [kernel prompt](kernel.md#system-prompt) at
+its start lists only `rewrite` and `todo`.
 
 ## Interface
 
@@ -145,7 +148,7 @@ through recorded calls; it is not a security boundary.
 | `tools.<name>(args)` | Call a tool of the agent's view. `<name>` is the tool name with every character that is not valid in a JavaScript identifier replaced by `_`. Resolves to the tool's raw output value; rejects with an `Error` carrying the tool's error text. |
 | `ALL_TOOLS` | `{name, description}[]` of every callable tool, fetched once before the script starts. |
 | `describeTool(name)` | `{name, description, input_schema}` or `undefined`. |
-| `agents.run({agent, prompt, description?, result?, model?, effort?, timeout_secs?, cache?})` | Start one worker agent and wait for its report, through hya's own `task`, `wait` and channel `read`. Resolves to `{handle, session, status, report, result}`; `status` is `done`, `failed`, `cancelled` or `timeout`. `result` maps field names to descriptions; the worker is told to end its report with a `RESULT: {...}` line, which comes back parsed (or `null`). `timeout_secs` defaults to 600 (at most 1800); a worker that runs out is archived. An `orchestrator-scout` answer on an unchanged work tree is remembered (`cached: true` on reuse) unless `cache: false`. |
+| `agents.run({agent, prompt, description?, result?, model?, effort?, timeout_secs?, cache?})` | Start one worker agent and wait for its report, through hya's own `task`, `wait` and channel `read`. Resolves to `{handle, session, status, report, result}`; `status` is `done`, `failed`, `cancelled` or `timeout`. `result` maps field names to descriptions; the worker is told to end its report with a `RESULT: {...}` line, which comes back parsed (or `null`). `timeout_secs` defaults to 600 (at most 1800); a worker that runs out is archived. An `orchestrator-scout` answer is remembered within the session while its workspace state is unchanged (`cached: true` on reuse) unless `cache: false`. |
 | `models.classify({state, questions})` | Ask the configured judge typed questions (`bool`, `choice`, `score`) about `state`; resolves to `{answers}`. Rejects when no judge is configured. |
 | `text(value)` | Add an item to the output (a string as is, another value as JSON). |
 | `console.log(...)` | Add a line to a console block after the output. |

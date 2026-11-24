@@ -128,8 +128,9 @@ the plugin connection.
 explicit (or implicit JavaScript) `extensions.process` receives one on every
 `tool/call` — whatever its kind (`rust`, `bun`, or `claude`) — and on every
 `api/request`. Configured plugins (`plugins:` / `plugin.toml`) never do. This
-is safe to extend beyond Rust because every operation is read-only or
-permission-checked, the token is bound to one connection + session + call, and
+is safe to extend beyond Rust because every operation is read-only (apart
+from the workspace observation `workspace.state` records, which a model round
+would record too) or permission-checked, the token is bound to one connection + session + call, and
 it dies with the reply; the bundle process already runs with the user's OS
 privileges. An API request gets only read-only operations, so the lease grants
 it no authority beyond reading data about its session; this holds for write
@@ -146,7 +147,7 @@ Operations (`method` values):
 | `context.describe` | yes | yes | yes | `{}` | Tool call: `{ "request": "tool_call", "session", "parent_session" (nullable), "workdir", "source_tool_call_id", "operation_id" }`. API request: `{ "request": "api", "api", "scope": "session" \| "global", "session" (session scope only), "call" }` |
 | `permission.assert` | yes | no (`-32001`) | no (`-32001`) | `{ "action", "resource" }` | `{}`, or `-32002` on denial |
 | `session.usage` | yes | yes | no (`-32001`: no session) | `{ "scope"?: "session" \| "tree" \| "root" }` (default `tree`; `root` is tool-call only, `-32602` for an API request) | Usage report (below) |
-| `workspace.state` | yes | no (`-32001`) | no (`-32001`) | `{}` | `{ "state": "<64 lowercase hex>" }` or `{ "state": null }` |
+| `workspace.state` | yes | no (`-32001`) | no (`-32001`) | `{}` | `{ "state": "<session id>:<file revision>" }` or `{ "state": null }` |
 | `tools.list` | yes | no (`-32001`) | no (`-32001`) | `{}` | `{ "tools": [{ "name", "description", "input_schema" }] }` |
 | `tool.call` | yes | no (`-32001`) | no (`-32001`) | `{ "name": string, "input": object }` | `{ "output": <the tool's output value> }`; `-32002` on permission denial, `-32003` on any other failure |
 
@@ -156,44 +157,40 @@ or `{ "kind": "any" }`. It returns `{}` on success, `-32002` on permission
 denial, and `-32602` for malformed params. An unsupported operation returns
 `-32601`. The host applies the active call's permission snapshot.
 
-`workspace.state` is a read-only identity of the Git work tree containing the
-calling session's working directory: its location and its content. A bundle
+`workspace.state` is a revision of the calling session's workspace record
+(W, the session's `FilesObserved` and `FilesChanged` events; see
+[Workspace file observations](kernel.md#workspace-file-observations)). A bundle
 can compare it before and after an observation, then reuse the answer while
-the identity stays equal. Send empty params on the tool call's lease:
+the value stays equal. Send empty params on the tool call's lease:
 
 ```json
 {"jsonrpc":"2.0","id":43,"method":"host/capability","params":{"capability":"<host_capability>","session":"<session-id>","call":"<call-id>","method":"workspace.state","params":{}}}
-{"jsonrpc":"2.0","id":43,"result":{"state":"<64 lowercase hex>"}}
+{"jsonrpc":"2.0","id":43,"result":{"state":"<session-id>:42"}}
 ```
 
-The value is lowercase hexadecimal SHA-256 over these bytes, in order:
+The host first reconciles W with the native watch of the session's working
+directory, as it does before each model round, and appends any change it
+observes to the session log (`FilesObserved` with `external: true`). Files the
+calling tool observed through nested calls count as known, so the tool's own
+reads and writes are not reported as outside changes. The value is then the
+session id and the number of the session's `FilesObserved` and `FilesChanged`
+events. Treat it as opaque and compare it only for equality. Two equal values
+mean W recorded no change in between: no file under the working directory was
+created, changed or removed, apart from the paths W excludes (Git internals,
+`.hya/local`, `.hya/tool-output` and hya's own database files). A nested call
+that changes a file appends `FilesChanged` and so changes the value.
 
-1. The output of `git rev-parse --show-toplevel`, including its trailing
-   newline. An answer about one checkout can name absolute paths in it, so
-   the same content in another work tree is another state.
-2. The output of `git rev-parse HEAD^{tree}`, including its trailing newline,
-   or the literal bytes `none` on an unborn branch (no commit).
-3. The NUL-delimited output of
-   `git status --porcelain=v1 -z --untracked-files=all` from the work tree root,
-   excluding paths under top-level `.hya/`. Git's pathspec exclusion
-   `:(top,exclude).hya/**` applies before rename detection; a rename across
-   that boundary appears as an addition or deletion on the included side.
-4. For every status-listed path that currently names a regular file, in
-   status order: the raw path bytes, a NUL byte, and the 32-byte SHA-256 digest
-   of the file's bytes. A rename lists its destination before its source.
+The value is scoped to the session: a value from another session never
+equals it, so a cached answer is reused within one session only.
 
-Ignored untracked files and `.hya/` status entries/file hashes do not
-contribute. The HEAD tree remains the Git tree identity, independent of commit
-message, author, or date. Equal values imply the same work tree location,
-tree, status, and listed regular-file contents (subject to SHA-256 collision resistance). States with
-the same file bytes can still differ when the Git index differs; such changes
-conservatively prevent reuse.
-
-The result is `{ "state": null }` outside a Git work tree, if any Git call
-fails or exceeds its 10-second limit, or if a listed file cannot be read.
-These cases do not return a JSON-RPC error; a null identity cannot validate a
-cached answer. Non-empty params return `-32602`. API-request grants return
-`-32001`, including session-scoped API requests.
+The result is `{ "state": null }` when the working directory has no native
+watch (operating systems other than Linux, or a watch that could not be
+installed), because W then cannot see new files, and when the tool runs
+without a turn (a bundle tool called through `tool.call`). These cases do not
+return a JSON-RPC error; a null value cannot validate a cached answer. A
+failure to append the observation returns `-32603`. Non-empty params return
+`-32602`. API-request grants return `-32001`, including session-scoped API
+requests.
 
 `tools.list` and `tool.call` reach the calling agent's other tools through the
 engine's nested tool plane
@@ -662,8 +659,8 @@ and the failure is logged.
 
 | Wire name | Params (camelCase) | Outcome |
 | --- | --- | --- |
-| `compaction.before` | `{session, trigger, messagesTokenEstimate}`; `trigger` is `"overflow"` or `"proactive"` | `proceed` \| `skip{reason}` \| `replace{instructions}` — `replace` swaps the summarizer instructions; `skip` is honored only for proactive compaction and is demoted to `proceed` when compaction is overflow-forced |
-| `compaction.after` | `{session, summaryTokens}` | notification |
+| `compaction.before` | `{session, trigger, messagesTokenEstimate}`; `trigger` is `"overflow"` (the request is over 80% of the window) | `proceed` \| `skip{reason}` \| `replace{instructions}` — accepted and ignored: an overflow cannot be skipped, and no summarizer prompt exists to replace |
+| `compaction.after` | `{session, summaryTokens}`: the committed marker's estimated tokens, after the kernel's Rewrite or a `remote` fold | notification |
 | `session.start` | `{session}` | notification |
 | `session.end` | `{session}` | notification |
 | `agent.spawn` | `{parent, child}` | notification |

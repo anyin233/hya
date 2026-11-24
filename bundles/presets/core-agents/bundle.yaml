@@ -48,12 +48,6 @@ agents:
         - harness:tool/write
         - harness:tool/edit
         - harness:tool/apply_patch
-  - id: hya-compaction
-    role: subagent
-    prompt: prompts/hya-compaction.md
-  - id: hya-summary
-    role: subagent
-    prompt: prompts/hya-summary.md
   - id: hya-title
     role: subagent
     prompt: prompts/hya-title.md
