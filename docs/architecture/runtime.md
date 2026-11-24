@@ -4,6 +4,13 @@ The runtime lives in [`../../crates/hya-engine`](../../crates/hya-engine). Its
 central type is `SessionEngine` in
 [`engine.rs`](../../crates/hya-engine/src/engine.rs).
 
+The façade constructs the engine and wires its runtime planes. Provider and
+reasoning policy lives in [engine/models.rs](../../crates/hya-engine/src/engine/models.rs),
+event persistence and fan-out in [engine/events.rs](../../crates/hya-engine/src/engine/events.rs),
+and session creation and deletion in [engine/session_state.rs](../../crates/hya-engine/src/engine/session_state.rs).
+The façade re-exports public types such as `AgentSpec`, `CreateSession`,
+and the bound spawn and Workflow senders.
+
 ## `SessionEngine`
 
 `SessionEngine` owns:
@@ -53,7 +60,7 @@ dispatches to global hooks (`HookDispatcher::dispatch_event`), then activation
 ### `AgentSpec`
 
 `AgentSpec` is the resolved agent for one turn
-([`crates/hya-engine/src/engine.rs`](../../crates/hya-engine/src/engine.rs)). It is
+([engine/agent_binding.rs](../../crates/hya-engine/src/engine/agent_binding.rs)). It is
 what a `TurnBinding`'s agent resolution produces and what the server holds as
 its process-level default for new sessions:
 
@@ -127,7 +134,7 @@ pub trait RuntimeCatalogRefresh: Send + Sync {
 }
 ```
 
-**Return contract** (rustdoc at `engine.rs`):
+The return contract is documented in [engine/scope_binding.rs](../../crates/hya-engine/src/engine/scope_binding.rs).
 
 | Result | Meaning |
 | --- | --- |

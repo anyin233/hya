@@ -5,6 +5,8 @@
 //! Interrupting a subagent needs nothing here: `CancelTurn` on its session
 //! is [`SessionEngine::cancel_user_turn`], which stops its subtree.
 
+use std::sync::Arc;
+
 use hya_proto::{MailEndpoint, MailKind, SessionId, scope};
 use hya_tool::{ArchiveReceipt, MailReceipt};
 
@@ -101,5 +103,122 @@ impl SessionEngine {
             ));
         }
         Ok(root)
+    }
+}
+
+/// Episode lifecycle control for the engine's resident supervisor.
+/// Mail revival calls the supervisor's transactional install path directly.
+#[async_trait::async_trait]
+pub trait ArchiveReviver: Send + Sync {
+    /// End every episode under `root`, await its result, then reconcile orphan
+    /// claims. The episode owners publish their own terminal events.
+    async fn teardown_root(&self, root: SessionId) -> Result<(), CoreError>;
+
+    /// Whether an episode owns this member's turns. Clients steer it with mail.
+    fn has_episode(&self, _session: SessionId) -> bool {
+        false
+    }
+
+    /// Serialize an orphan terminal write with registration and revival.
+    /// A live episode must run its own ending instead.
+    async fn reconcile_orphan(
+        &self,
+        root: SessionId,
+        handle: &str,
+        archive: hya_store::ResidentArchive,
+    ) -> Result<hya_store::ResidentArchiveOutcome, CoreError> {
+        let _ = (root, handle, archive);
+        Err(CoreError::Invalid(
+            "resident orphan has no supervisor".into(),
+        ))
+    }
+
+    /// Archive `target` (a handle or session id) on behalf of `caller`, as
+    /// the `archive` tool does: cancel its turn, archive live descendants
+    /// first, then the target itself.
+    ///
+    /// # Errors
+    /// [`CoreError::Invalid`] when the target cannot be archived by `caller`,
+    /// or when this reviver does not supervise residents.
+    async fn archive_member(
+        &self,
+        caller: SessionId,
+        target: &str,
+        reason: &str,
+    ) -> Result<hya_tool::ArchiveReceipt, CoreError> {
+        let _ = (caller, target, reason);
+        Err(CoreError::Invalid(
+            "subagents are not supervised by this process".to_string(),
+        ))
+    }
+
+    /// Archive `target` (a handle or session id) on team `root` for the user,
+    /// as [`archive_member`](Self::archive_member) does for the lead, but
+    /// recorded as archived by the user, not by its parent.
+    ///
+    /// # Errors
+    /// As [`archive_member`](Self::archive_member).
+    async fn archive_member_for_user(
+        &self,
+        root: SessionId,
+        target: &str,
+    ) -> Result<hya_tool::ArchiveReceipt, CoreError> {
+        self.archive_member(root, target, "requested by the user")
+            .await
+    }
+
+    /// The user cancelled `session`'s turn: stop `session` and every live
+    /// subagent below it, so the harness starts none of their turns (mail
+    /// wakes, quiescence synthesis) until the user acts on them again.
+    /// Returns the stopped sessions, `session` included when it is
+    /// supervised; the caller cancels their in-flight turns.
+    fn stop_for_user(&self, session: SessionId) -> Vec<SessionId> {
+        let _ = session;
+        Vec::new()
+    }
+
+    /// The user acted on `session` again (a prompt or a steer): lift a
+    /// [`stop_for_user`](Self::stop_for_user) from it and its subtree.
+    fn resume_for_user(&self, session: SessionId) {
+        let _ = session;
+    }
+
+    /// Whether the user stopped the live member at `handle` on team `root`.
+    fn stopped_by_user(&self, root: SessionId, handle: &str) -> bool {
+        let _ = (root, handle);
+        false
+    }
+
+    /// Whether the user stopped `session`'s own slot (see
+    /// [`stop_for_user`](Self::stop_for_user)).
+    fn session_stopped_by_user(&self, session: SessionId) -> bool {
+        let _ = session;
+        false
+    }
+}
+
+impl SessionEngine {
+    /// Wire the archive-revival seam on a shared engine. Idempotent; the
+    /// resident supervisor calls this from its own start.
+    pub fn set_reviver(&self, reviver: std::sync::Weak<crate::resident::ResidentSupervisor>) {
+        match self.reviver.write() {
+            Ok(mut slot) => *slot = Some(reviver),
+            Err(poisoned) => *poisoned.into_inner() = Some(reviver),
+        }
+    }
+
+    /// The installed archive reviver, if any.
+    #[must_use]
+    pub fn archive_reviver(&self) -> Option<Arc<dyn ArchiveReviver>> {
+        self.resident_supervisor()
+            .map(|supervisor| supervisor as Arc<dyn ArchiveReviver>)
+    }
+
+    pub(crate) fn resident_supervisor(&self) -> Option<Arc<crate::resident::ResidentSupervisor>> {
+        self.reviver
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
     }
 }
