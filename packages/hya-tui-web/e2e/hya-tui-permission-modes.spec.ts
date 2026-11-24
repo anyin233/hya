@@ -9,7 +9,7 @@
 import { readFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import type { Tui } from "./harness"
-import { createSession, expectStatus, approverBundle, expect, hyaTui, statusSessionId, test, textStep, toolCardBlock, toolStep, type Backend } from "./hya"
+import { api, createSession, expectStatus, approverBundle, expect, hyaTui, statusSessionId, test, textStep, toolCardBlock, toolStep, type Backend } from "./hya"
 
 const colors = { fg: "#e8edf3", muted: "#9caab9", focus: "#73c8e8", error: "#f07878", warning: "#e5c07b" }
 const narrow = { width: 690, height: 640 }
@@ -26,11 +26,6 @@ async function at(term: Tui, needle: string) {
   return found!
 }
 
-/** Create a session with `/new` and wait until it is open. */
-async function newSession(term: Tui): Promise<void> {
-  await createSession(term)
-}
-
 /** Esc closes the picker; wait for it, so the next keys are not read as Alt+key after a lone ESC. */
 async function closePicker(term: Tui): Promise<void> {
   await term.press("Escape")
@@ -41,11 +36,10 @@ async function promptGone(term: Tui): Promise<void> {
   await expect.poll(async () => /asked by /.test(await term.text()), { timeout: 20_000 }).toBe(false)
 }
 
-/** `permissionMode` of the backend's only top-level session. */
-async function backendMode(backend: Backend): Promise<string | undefined> {
-  const response = await fetch(`${backend.url}/v1/sessions`)
-  const body = await response.json() as { sessions?: { parent?: string; permissionMode?: string }[] }
-  return body.sessions?.find((session) => !session.parent)?.permissionMode
+/** Read the mode of the session under test. */
+async function backendMode(backend: Backend, sessionId: string): Promise<string> {
+  const session = await api<{ permissionMode: string }>(backend, "GET", `/v1/sessions/${sessionId}`)
+  return session.permissionMode
 }
 
 test.describe("Permission command switching", () => {
@@ -62,7 +56,7 @@ test.describe("Permission command switching", () => {
 
   test("/permissions asks before yolo; confirmed yolo runs bash without a prompt; manual asks again", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
-    await newSession(term)
+    const sessionId = await createSession(term)
 
     // Shift+Tab reaches the TUI through xterm.js (CSI Z) and asks first.
     await prompt(term, "/permissions yolo")
@@ -73,14 +67,14 @@ test.describe("Permission command switching", () => {
     // Esc keeps manual.
     await term.press("Escape")
     await expect.poll(() => term.find(confirmLine)).toBeNull()
-    expect(await backendMode(backend)).toBe("manual")
+    expect(await backendMode(backend, sessionId)).toBe("manual")
 
     // Shift+Tab again, Enter confirms.
     await prompt(term, "/permissions yolo")
     await term.waitForText(confirmLine)
     await term.press("Enter")
     await expectStatus(term, "Mode", "yolo")
-    await expect.poll(() => backendMode(backend)).toBe("yolo")
+    await expect.poll(() => backendMode(backend, sessionId)).toBe("yolo")
 
     // Under yolo the bash call runs at once: no prompt.
     await prompt(term, "run it under yolo")
@@ -91,7 +85,7 @@ test.describe("Permission command switching", () => {
     // Shift+Tab back to manual (no confirmation needed); the next bash asks.
     await prompt(term, "/permissions manual")
     await expectStatus(term, "Mode", "manual")
-    await expect.poll(() => backendMode(backend)).toBe("manual")
+    await expect.poll(() => backendMode(backend, sessionId)).toBe("manual")
     await prompt(term, "run it under manual")
     await term.waitForText("asked by hya-main", 20_000)
     // The prompt's hint row names the mode.
@@ -112,7 +106,7 @@ test.describe("yolo with a pending ask", () => {
 
   test("switching to yolo closes the pending bash prompt and the tool completes", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
-    await newSession(term)
+    await createSession(term)
     await prompt(term, "run the command")
     await term.waitForText("asked by hya-main", 20_000)
     await term.waitForText(toolCardBlock("◌", "bash", '"command":"echo pending-ask"', "awaiting approval"))
@@ -133,7 +127,7 @@ test.describe("yolo with a pending ask", () => {
 test.describe("/permissions picker", () => {
   test("lists the modes with sources, filters, selects, and gives the focus back to the input", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
-    await newSession(term)
+    const sessionId = await createSession(term)
     await prompt(term, "/permissions")
     await term.waitForText("Permission mode")
     await term.waitForText(/▸ ● Manual\s+\[builtin\]\s+Ask the user before actions/)
@@ -171,7 +165,7 @@ test.describe("/permissions picker", () => {
     await term.waitForText(confirmLine)
     await term.press("Enter")
     await expectStatus(term, "Mode", "yolo")
-    await expect.poll(() => backendMode(backend)).toBe("yolo")
+    await expect.poll(() => backendMode(backend, sessionId)).toBe("yolo")
 
     // Reopened, the current mode is marked; `/permissions manual` switches directly.
     await prompt(term, "/permissions")
@@ -179,12 +173,12 @@ test.describe("/permissions picker", () => {
     await closePicker(term)
     await prompt(term, "/permissions manual")
     await expectStatus(term, "Mode", "manual")
-    await expect.poll(() => backendMode(backend)).toBe("manual")
+    await expect.poll(() => backendMode(backend, sessionId)).toBe("manual")
   })
 
   test("Shift+Tab moves up in the open command menu instead of switching the mode", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await newSession(term)
+    await createSession(term)
     await term.type("/")
     await term.waitForText("Commands")
     await term.press("Shift+Tab")
@@ -196,7 +190,7 @@ test.describe("/permissions picker", () => {
 
   test("fits about 80 columns", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { viewport: narrow })
-    await newSession(term)
+    await createSession(term)
     const { cols } = await term.size()
     expect(cols).toBeLessThanOrEqual(84)
     await prompt(term, "/permissions")
@@ -223,7 +217,8 @@ test.describe("before a session exists", () => {
     await expect.poll(() => term.find(confirmLine)).toBeNull()
     await prompt(term, "hello")
     await term.waitForText("No live provider is available", 20_000)
-    await expect.poll(() => backendMode(backend)).toBe("yolo")
+    const { sessions } = await api<{ sessions: { permissionMode: string }[] }>(backend, "GET", "/v1/sessions")
+    expect(sessions.map((session) => session.permissionMode)).toEqual(["yolo"])
     await expectStatus(term, "Mode", "yolo")
   })
 })
@@ -239,7 +234,7 @@ test("the last chosen permission mode becomes the default for new sessions and a
   }
 
   const first = await tui(hyaTui(backend))
-  await statusSessionId(first)
+  const firstId = await statusSessionId(first)
   await expectStatus(first, "Mode", "manual")
   await prompt(first, "/permissions yolo")
   await first.waitForText(confirmLine)
@@ -247,24 +242,24 @@ test("the last chosen permission mode becomes the default for new sessions and a
   await expectStatus(first, "Mode", "yolo")
   await expect.poll(savedMode).toBe("yolo")
 
-  await createSession(first)
+  const firstNewId = await createSession(first, { previousId: firstId })
   await expectStatus(first, "Mode", "yolo")
-  await expect.poll(() => backendMode(backend)).toBe("yolo")
+  await expect.poll(() => backendMode(backend, firstNewId)).toBe("yolo")
   await prompt(first, "/exit")
   await first.waitForExit()
 
   // A plain launch creates a fresh session; it must use the saved default.
   const second = await tui(hyaTui(backend))
-  await statusSessionId(second)
+  const secondId = await statusSessionId(second)
   await expectStatus(second, "Mode", "yolo")
-  await expect.poll(() => backendMode(backend)).toBe("yolo")
+  await expect.poll(() => backendMode(backend, secondId)).toBe("yolo")
 
   await prompt(second, "/permissions manual")
   await expectStatus(second, "Mode", "manual")
   await expect.poll(savedMode).toBe("manual")
-  await createSession(second)
+  const secondNewId = await createSession(second, { previousId: secondId })
   await expectStatus(second, "Mode", "manual")
-  await expect.poll(() => backendMode(backend)).toBe("manual")
+  await expect.poll(() => backendMode(backend, secondNewId)).toBe("manual")
 })
 
 test.describe("bundle permission mode", () => {
@@ -289,7 +284,10 @@ test.describe("bundle permission mode", () => {
 
   test("the picker lists the bundle's mode with its source; when active its approver decides", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
-    await newSession(term)
+    // Keep the startup session present while a different session changes mode.
+    const startupSessionId = await statusSessionId(term)
+    await api(backend, "PATCH", `/v1/sessions/${startupSessionId}`, { title: "Startup session" })
+    const activeSessionId = await createSession(term, { previousId: startupSessionId })
     await prompt(term, "/permissions")
     await term.waitForText(/Echo only\s+\[e2e\/approver\]\s+Approve echo commands/, 20_000)
     await term.waitForText("3 of 3")
@@ -298,7 +296,8 @@ test.describe("bundle permission mode", () => {
     await term.press("Enter")
     // A bundle mode needs no confirmation; /status names its mode ID.
     await expectStatus(term, "Mode", "e2e/approver/echo-only")
-    await expect.poll(() => backendMode(backend)).toBe("e2e/approver/echo-only")
+    expect(await backendMode(backend, activeSessionId)).toBe("e2e/approver/echo-only")
+    expect(await backendMode(backend, startupSessionId)).toBe("manual")
 
     // The approver allows the echo command: no prompt.
     await prompt(term, "echo something")
@@ -324,7 +323,7 @@ test.describe("bundle permission mode", () => {
 test.describe("!command shell turns never ask", () => {
   test("the user's own !command runs unprompted in manual and in yolo", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
-    await newSession(term)
+    await createSession(term)
 
     // Manual: the user typed the command, so it runs without a prompt.
     await prompt(term, "!echo manual-shell")
