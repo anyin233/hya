@@ -77,7 +77,7 @@
  * `/resume` and `--resume` unarchive and open one (app/resume.ts).
  */
 import { SessionViews } from "./sessionViews"
-import { HttpError, type HyaClient, type Interaction, type MessageInfo, type ProjectInfo, type PromptAttachment, type SessionInfo, type SkillListing, type StreamEvent, type StreamFrame } from "../client"
+import { HttpError, type HyaClient, type Interaction, type MessageInfo, type ProjectInfo, type PromptAttachment, type CommandSummary, type SessionInfo, type SkillListing, type StreamEvent, type StreamFrame } from "../client"
 import { completeCommand } from "../completion"
 import { createCommandRegistry, mergeCommandEntries, openModelPicker, selectAgent, toBackground, type AppActions, type CommandEntry, type CommandRegistry } from "../commands"
 import {
@@ -342,16 +342,29 @@ export function createController({ client, store, directory, remote: startedRemo
    * them (`/reload-skills`, `/reload-commands`, the Skills view's `r`).
    */
   async function readSkills(): Promise<SkillListing> {
-    const [listing, commands] = await Promise.all([client.listSkills(), client.listCommands()])
+    const [listing] = await Promise.all([client.listSkills(), readCommands()])
     store.setSkills(listing)
-    store.setBackendCommands(commands)
     return listing
+  }
+
+  /** `ListCommands` (with its diagnostics) into the store. */
+  async function readCommands(): Promise<CommandSummary[]> {
+    const listing = client.listCommandCatalog
+      ? await client.listCommandCatalog()
+      : { commands: await client.listCommands(), diagnostics: [] }
+    store.setBackendCommands(listing.commands)
+    store.setCommandDiagnostics(listing.diagnostics)
+    return listing.commands
   }
 
   async function refresh(): Promise<void> {
     const [sessions, interactions, models, agents, workflows, providers, commands, permissionModes, projects, skills] = await Promise.all([
       client.listSessions(), client.listInteractions(), client.listModels(), client.listAgents(), client.listWorkflows(),
-      client.listProviders(), client.listCommands(),
+      client.listProviders(),
+      // The command catalog with its diagnostics.
+      client.listCommandCatalog
+        ? client.listCommandCatalog().then((listing) => { store.setCommandDiagnostics(listing.diagnostics); return listing.commands })
+        : client.listCommands(),
       // Optional: the Shift+Tab cycle falls back to the built-ins without it.
       client.listPermissionModes().catch(() => undefined),
       // Optional: a failed read keeps the rows read before.
@@ -1145,6 +1158,7 @@ export function createController({ client, store, directory, remote: startedRemo
   const reloader = createReloader({
     store, client, structure, preferencesPath, refreshExtensions, reloadTui,
     readSkills: () => readSkills(),
+    readCommands: () => readCommands(),
   })
   const skills = createSkillsController({
     store,

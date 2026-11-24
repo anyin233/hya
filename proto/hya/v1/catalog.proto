@@ -555,6 +555,12 @@ message CommandSummary {
   string model = 9;
   // Whether the command runs as a detached subtask.
   optional bool subtask = 10;
+  // Where it is defined: `builtin` (the client-side rows and the
+  // `hya/core-commands` templates), `project` (`.hya/commands` of the
+  // directory or a Project root), `user` (`~/.config/hya/commands`); a
+  // skill row carries its `SkillSummary.source` (`project`, `user`,
+  // `bundle`, `builtin`).
+  string scope = 11;
 }
 
 message ListCommandsResponse {
@@ -562,6 +568,9 @@ message ListCommandsResponse {
   repeated CommandSummary commands = 1;
   // Pagination outcome.
   PageInfo page = 2;
+  // Command files the catalog skipped or warns about (the same list on
+  // every page).
+  repeated CatalogDiagnostic diagnostics = 3;
 }
 
 // A resource file a catalog skipped or warns about, for clients to show.
@@ -573,8 +582,9 @@ message CatalogDiagnostic {
   // `collision` (a skill of the same name was found first; this one is not
   // listed), `name` (breaks the Agent Skills naming rule: lowercase
   // letters, digits, and single hyphens, at most 64 characters), or
-  // `description_length` (over 1024 characters). Only `name` and
-  // `description_length` leave the skill listed.
+  // `description_length` (over 1024 characters); for a command `reserved`
+  // (named `skill:…`) or `invalid` (frontmatter that does not parse).
+  // Only `name` and `description_length` leave the skill listed.
   string kind = 2;
   // One line for a person.
   string message = 3;

@@ -31,6 +31,10 @@ export interface StartupInput {
   /** Skill files the catalog skipped or warns about (`[Skills]` problems). */
   skillDiagnostics?: readonly CatalogDiagnostic[]
   commands?: readonly CommandSummary[]
+  /** Command files the catalog skipped (`[Slash commands]` problems). */
+  commandDiagnostics?: readonly CatalogDiagnostic[]
+  /** Backend commands a local command of the same name hides (`[Slash commands]` problems). */
+  shadowedCommands?: readonly CommandSummary[]
   mcp?: readonly McpServerStatus[]
   bundles?: readonly BundleSummary[]
   extensions?: readonly ExtensionInfo[]
@@ -108,8 +112,11 @@ function sections(input: StartupInput, env: Record<string, string | undefined>):
     } : undefined,
     commands: input.commands ? {
       title: titles.commands,
-      items: input.commands.filter((command) => (command.source ?? "command") === "command").map((command) => ({ name: `/${command.name.replace(/^\//, "")}`, group: "commands", detail: command.description })),
-      problems: [],
+      items: input.commands.filter((command) => (command.source ?? "command") === "command").map((command) => ({ name: `/${command.name.replace(/^\//, "")}`, group: command.scope && command.scope !== "builtin" ? `${command.scope} commands` : "commands", detail: command.description })),
+      problems: [
+        ...(input.commandDiagnostics ?? []).map((diagnostic) => home(diagnostic.message, env)),
+        ...(input.shadowedCommands ?? []).map((command) => `/${command.name}: the TUI's own /${command.name} hides this ${command.scope ? `${command.scope} ` : ""}command; rename its file to run it`),
+      ],
     } : undefined,
     mcp: input.mcp ? {
       title: titles.mcp,

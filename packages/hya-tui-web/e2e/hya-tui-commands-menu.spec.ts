@@ -336,7 +336,7 @@ test.describe("skill commands", () => {
     await term.waitForText("▸ /skill:greet")
     const menu = (await box(term, "Commands"))!
     const row = menu.rows.find((line) => line.includes("/skill:greet"))!
-    expect(row).toContain("[skill]")
+    expect(row).toContain("[skill · project]")
   })
 
   test("an unknown command is refused with a hint and never reaches the agent", async ({ tui, backend }) => {

@@ -15,7 +15,7 @@
  * A failing target does not stop the next one; each says what it did. A
  * running turn keeps its binding: what changed applies from the next turn.
  */
-import type { HyaClient, SkillListing } from "../client"
+import type { CommandSummary, HyaClient, SkillListing } from "../client"
 import { customKeybindings, setCustomKeybindings } from "../keys/custom"
 import { extensionManager } from "../extensions/manager"
 import { loadPreferences } from "../prefs"
@@ -38,13 +38,15 @@ export interface ReloaderOptions {
   refreshExtensions?: () => Promise<void>
   /** `ListSkills` and `ListCommands` into the store (app/controller.ts `readSkills`). */
   readSkills: () => Promise<SkillListing>
+  /** `ListCommands` with its diagnostics into the store (app/controller.ts `readCommands`); else a plain `listCommands`. */
+  readCommands?: () => Promise<CommandSummary[]>
   /** Restart the TUI process through its supervisor; absent without one. */
   reloadTui?: () => void
 }
 
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? "" : "s"}`
 
-export function createReloader({ store, client, structure, preferencesPath, refreshExtensions, readSkills, reloadTui }: ReloaderOptions) {
+export function createReloader({ store, client, structure, preferencesPath, refreshExtensions, readSkills, readCommands, reloadTui }: ReloaderOptions) {
   const ok = (target: ReloadTarget, text: string): ReloadOutcome => ({ target, ok: true, text })
   const failed = (target: ReloadTarget, text: string): ReloadOutcome => ({ target, ok: false, text })
 
@@ -105,8 +107,8 @@ export function createReloader({ store, client, structure, preferencesPath, refr
         return failedNames.length ? failed(target, `MCP (${summary}: ${failedNames.join(", ")}; /mcp to fix)`) : ok(target, `MCP (${summary})`)
       }
       case "commands": {
-        const commands = await client.listCommands()
-        store.setBackendCommands(commands)
+        const commands = readCommands ? await readCommands() : await client.listCommands()
+        if (!readCommands) store.setBackendCommands(commands)
         return ok(target, plural(commands.filter((command) => command.source !== "skill").length, "command"))
       }
       case "skills": {

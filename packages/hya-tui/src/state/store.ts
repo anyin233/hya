@@ -37,6 +37,7 @@ import type {
   ProviderSummary,
   SavedRule,
   SessionInfo,
+  CatalogDiagnostic,
   SkillDiagnostic,
   SkillListing,
   SkillSummary,
@@ -125,6 +126,8 @@ export interface AppState {
   readonly skills: readonly SkillSummary[]
   /** `ListSkillsResponse.diagnostics`: skill files skipped or warned about (the startup list's `[Skills]` problems, the Skills view). */
   readonly skillDiagnostics: readonly SkillDiagnostic[]
+  /** `ListCommandsResponse.diagnostics`: command files skipped (reserved `skill:` names, broken frontmatter). */
+  readonly commandDiagnostics: readonly CatalogDiagnostic[]
   /** The Skills view (`/skills`; state/skills.ts), when open. */
   readonly skillsView: SkillsViewState | undefined
   /** `Bootstrap.contextFiles`, the startup list's `[Context]`; `undefined` before the bootstrap. */
@@ -358,6 +361,7 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     startupNotices: [],
     skills: [],
     skillDiagnostics: [],
+    commandDiagnostics: [],
     skillsView: undefined,
     contextFiles: undefined,
     startupReady: false,
@@ -1020,6 +1024,8 @@ export function createAppStore() {
 
     /** `ListCommands` rows (the command menu's backend entries, `/skill:*` included), re-read alone by `/reload-commands` and an unknown command. */
     setBackendCommands(commands: CommandSummary[]): void { set("backendCommands", commands) },
+    /** `ListCommandsResponse.diagnostics`: command files the catalog skipped (the startup list's `[Slash commands]` problems). */
+    setCommandDiagnostics(diagnostics: CatalogDiagnostic[]): void { set("commandDiagnostics", diagnostics) },
     /** `ListSkills` rows and diagnostics (the startup list's `[Skills]`, `/skills`), re-read by `/reload-skills` and the Skills view. */
     setSkills(listing: SkillListing): void {
       batch(() => {

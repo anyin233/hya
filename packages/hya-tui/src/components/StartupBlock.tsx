@@ -17,7 +17,7 @@ import { colors } from "../theme"
 const toneColor = (tone: LineTone): string => tone === "warning" ? colors.warning : tone === "heading" ? colors.heading : colors.muted
 
 export function StartupBlock() {
-  const { store } = useApp()
+  const { store, controller } = useApp()
   const [width, setWidth] = createSignal(80)
   let box: BoxRenderable | undefined
   const lines = createMemo(() => {
@@ -25,7 +25,7 @@ export function StartupBlock() {
     const notices = store.state.startupNotices
     // Off: only the notices about the configuration itself.
     if (!settings.enabled) return startupLines({ notices }, { ...settings, sections: [] }, width())
-    return startupLines(startupInput(store.state), settings, width())
+    return startupLines(startupInput(store.state, controller.registry.names()), settings, width())
   })
   return (
     <Show when={lines().length > 0}>

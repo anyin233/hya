@@ -3479,6 +3479,9 @@ impl serde::Serialize for CommandSummary {
         if self.subtask.is_some() {
             len += 1;
         }
+        if !self.scope.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.CommandSummary", len)?;
         if !self.name.is_empty() {
             struct_ser.serialize_field("name", &self.name)?;
@@ -3507,6 +3510,9 @@ impl serde::Serialize for CommandSummary {
         if let Some(v) = self.subtask.as_ref() {
             struct_ser.serialize_field("subtask", v)?;
         }
+        if !self.scope.is_empty() {
+            struct_ser.serialize_field("scope", &self.scope)?;
+        }
         struct_ser.end()
     }
 }
@@ -3527,6 +3533,7 @@ impl<'de> serde::Deserialize<'de> for CommandSummary {
             "agent",
             "model",
             "subtask",
+            "scope",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -3540,6 +3547,7 @@ impl<'de> serde::Deserialize<'de> for CommandSummary {
             Agent,
             Model,
             Subtask,
+            Scope,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -3570,6 +3578,7 @@ impl<'de> serde::Deserialize<'de> for CommandSummary {
                             "agent" => Ok(GeneratedField::Agent),
                             "model" => Ok(GeneratedField::Model),
                             "subtask" => Ok(GeneratedField::Subtask),
+                            "scope" => Ok(GeneratedField::Scope),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -3598,6 +3607,7 @@ impl<'de> serde::Deserialize<'de> for CommandSummary {
                 let mut agent__ = None;
                 let mut model__ = None;
                 let mut subtask__ = None;
+                let mut scope__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Name => {
@@ -3654,6 +3664,12 @@ impl<'de> serde::Deserialize<'de> for CommandSummary {
                             }
                             subtask__ = map_.next_value()?;
                         }
+                        GeneratedField::Scope => {
+                            if scope__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("scope"));
+                            }
+                            scope__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(CommandSummary {
@@ -3666,6 +3682,7 @@ impl<'de> serde::Deserialize<'de> for CommandSummary {
                     agent: agent__.unwrap_or_default(),
                     model: model__.unwrap_or_default(),
                     subtask: subtask__,
+                    scope: scope__.unwrap_or_default(),
                 })
             }
         }
@@ -13202,12 +13219,18 @@ impl serde::Serialize for ListCommandsResponse {
         if self.page.is_some() {
             len += 1;
         }
+        if !self.diagnostics.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.ListCommandsResponse", len)?;
         if !self.commands.is_empty() {
             struct_ser.serialize_field("commands", &self.commands)?;
         }
         if let Some(v) = self.page.as_ref() {
             struct_ser.serialize_field("page", v)?;
+        }
+        if !self.diagnostics.is_empty() {
+            struct_ser.serialize_field("diagnostics", &self.diagnostics)?;
         }
         struct_ser.end()
     }
@@ -13221,12 +13244,14 @@ impl<'de> serde::Deserialize<'de> for ListCommandsResponse {
         const FIELDS: &[&str] = &[
             "commands",
             "page",
+            "diagnostics",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Commands,
             Page,
+            Diagnostics,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -13250,6 +13275,7 @@ impl<'de> serde::Deserialize<'de> for ListCommandsResponse {
                         match value {
                             "commands" => Ok(GeneratedField::Commands),
                             "page" => Ok(GeneratedField::Page),
+                            "diagnostics" => Ok(GeneratedField::Diagnostics),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -13271,6 +13297,7 @@ impl<'de> serde::Deserialize<'de> for ListCommandsResponse {
             {
                 let mut commands__ = None;
                 let mut page__ = None;
+                let mut diagnostics__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Commands => {
@@ -13285,11 +13312,18 @@ impl<'de> serde::Deserialize<'de> for ListCommandsResponse {
                             }
                             page__ = map_.next_value()?;
                         }
+                        GeneratedField::Diagnostics => {
+                            if diagnostics__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("diagnostics"));
+                            }
+                            diagnostics__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(ListCommandsResponse {
                     commands: commands__.unwrap_or_default(),
                     page: page__,
+                    diagnostics: diagnostics__.unwrap_or_default(),
                 })
             }
         }

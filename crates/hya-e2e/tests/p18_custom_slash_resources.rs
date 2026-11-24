@@ -885,11 +885,8 @@ async fn custom_slash_catalog_and_routes_expand_all_supported_sources() {
             "\"hello world\" tail",
             "QUOTES=\"hello world\" tail|hello world|tail",
         ),
-        (
-            "unclosed",
-            "\"open value",
-            "UNCLOSED=open value|\"open value",
-        ),
+        // pi quoting: a quote with no closing match is plain text.
+        ("unclosed", "\"open value", "UNCLOSED=\"open|\"open value"),
         ("empty", "", "EMPTY=||"),
         (
             "positions",
