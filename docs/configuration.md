@@ -1878,7 +1878,7 @@ config-declared (and directory-manifest) plugins only.
 Each plugin declaring the ChatParams hook can rewrite the outgoing completion
 request before dispatch. The wire form exposes `model`, `system`, `messages`,
 `tools`, `temperature`, `max_output_tokens`, `reasoning`, and `headers`
-([`dispatcher.rs`](../crates/hya-plugin/src/dispatcher.rs)). `headers` become
+([`hooks.rs`](../crates/hya-app/src/plugin_adapter/hooks.rs)). `headers` become
 per-request extra HTTP headers merged over the route’s auth headers. A
 plugin-supplied `reasoning` string that fails to parse as a `ReasoningEffort`
 leaves the **original** effort in place rather than clearing it. The params also

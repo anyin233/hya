@@ -425,7 +425,7 @@ async fn built_session_engine_shutdown_drains_supervisor() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn shutdown_stops_plugin_and_mcp_sources_retained_by_retired_bindings() {
+async fn shutdown_stops_sources_retained_by_a_plugin_tool_and_a_retired_mcp_binding() {
     let _env = StableEnvGuard::new();
     let root = tempdir();
     let plugin_pid = root.join("plugin.pid");
@@ -474,13 +474,25 @@ async fn shutdown_stops_plugin_and_mcp_sources_retained_by_retired_bindings() {
     .unwrap();
     let engine = built.engine();
     let runtime = engine.runtime_registry();
-    let binding = runtime.bind_turn(&root).unwrap();
-    assert!(binding.resolve_tool("owned__plugin_ping").is_some());
-    assert!(binding.resolve_tool("mcp__owned__ping").is_some());
+    let plugin_tool = runtime
+        .bind_turn(&root)
+        .unwrap()
+        .resolve_tool("owned__plugin_ping")
+        .unwrap();
     runtime
         .refresh(|candidate| {
             candidate.remove_sources(&std::collections::BTreeSet::from([
                 hya_engine::RuntimeSourceId::plugin("owned"),
+            ]));
+            Ok(())
+        })
+        .unwrap();
+    let mcp_binding = runtime.bind_turn(&root).unwrap();
+    assert!(mcp_binding.resolve_tool("owned__plugin_ping").is_none());
+    assert!(mcp_binding.resolve_tool("mcp__owned__ping").is_some());
+    runtime
+        .refresh(|candidate| {
+            candidate.remove_sources(&std::collections::BTreeSet::from([
                 hya_engine::RuntimeSourceId::mcp("owned"),
             ]));
             Ok(())
@@ -504,14 +516,16 @@ async fn shutdown_stops_plugin_and_mcp_sources_retained_by_retired_bindings() {
         Rule::new(Action::Mcp, "*", Mode::Allow),
     ]));
     ctx.permission = permission;
-    for tool in ["owned__plugin_ping", "mcp__owned__ping"] {
-        let result = binding
-            .resolve_tool(tool)
-            .unwrap()
-            .tool
-            .execute(&ctx, json!({}))
-            .await;
-        assert!(result.is_err(), "retained {tool} must stay closed");
+    for tool in [
+        plugin_tool,
+        mcp_binding.resolve_tool("mcp__owned__ping").unwrap(),
+    ] {
+        let result = tool.tool.execute(&ctx, json!({})).await;
+        assert!(
+            result.is_err(),
+            "retained {} must stay closed",
+            tool.tool.name()
+        );
     }
     tokio::time::timeout(std::time::Duration::from_secs(5), built.shutdown())
         .await

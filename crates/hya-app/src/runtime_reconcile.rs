@@ -15,10 +15,12 @@ use hya_plugin::PreparedPlugin;
 use hya_plugin::config::PluginSpec;
 use hya_plugin::messages::{PluginContributionSet, SkillContribution};
 use hya_proto::ConfigGeneration;
-use hya_tool::{NamedTool, SkillCatalogEntry, Tool, ToolPermission, parse_skill};
+use hya_tool::{SkillCatalogEntry, Tool, ToolPermission, parse_skill};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+
+use crate::plugin_adapter::PluginHostAdapter;
 
 pub(crate) type SourceId = RuntimeSourceId;
 
@@ -609,8 +611,9 @@ fn digest_static_bundle_skills(bundle_id: &str, skills: &[RuntimeSourceSkill]) -
 }
 
 /// Prepare one dynamic plugin source through the same Skill parser and source view.
-pub(crate) fn prepared_plugin_source(
+fn prepared_plugin_source(
     plugin: PreparedPlugin,
+    owner: Arc<PluginHostAdapter>,
 ) -> Result<PreparedSource, ReconcileError> {
     let id = SourceId::plugin(plugin.id());
     let contributions = plugin.contributions();
@@ -652,14 +655,11 @@ pub(crate) fn prepared_plugin_source(
         .map(|tool| {
             let local_name = tool.name().to_string();
             let qualified = format!("{}__{local_name}", plugin.id());
-            let exposed: Arc<dyn Tool> = Arc::new(NamedTool::new(qualified, tool));
+            let exposed = owner.named_tool(qualified, tool);
             PreparedExport::tool(local_name, Vec::new(), exposed, ToolPermission::Tool)
         })
         .collect();
-    Ok(
-        PreparedSource::new(id, declaration_digest, plugin.runtime_owner(), exports)
-            .with_skills(skills),
-    )
+    Ok(PreparedSource::new(id, declaration_digest, owner, exports).with_skills(skills))
 }
 
 /// The host is retained only by its published source, alongside its tools.
@@ -670,9 +670,10 @@ pub(crate) fn prepared_plugin_host(
         ReconcileError::InvalidPrepared("plugin host has no prepared plugin".into())
     })?;
     let has_hooks = !plugin.contributions().hooks.is_empty();
-    let mut source = prepared_plugin_source(plugin)?;
+    let owner = Arc::new(PluginHostAdapter::new(Arc::new(host)));
+    let mut source = prepared_plugin_source(plugin, owner.clone())?;
     if has_hooks {
-        source.hooks = Some(Arc::new(host));
+        source.hooks = Some(owner);
     }
     Ok(source)
 }

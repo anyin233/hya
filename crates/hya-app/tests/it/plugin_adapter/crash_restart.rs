@@ -3,8 +3,11 @@
 //! respawns it, and exceeding the restart budget (>3 in the window) moves it to
 //! `Disabled`.
 
+use std::sync::Arc;
+
 use std::collections::BTreeMap;
 
+use hya_app::plugin_adapter::PluginHostAdapter;
 use hya_engine::hooks::{HookDispatcher, ToolExecuteBeforeInput};
 use hya_plugin::config::PluginSpec;
 use hya_plugin::messages::{HostInfo, PluginKindWire};
@@ -37,8 +40,8 @@ for line in sys.stdin:
     vec!["python3".to_string(), "-c".to_string(), script.to_string()]
 }
 
-async fn poke(host: &PluginHost) {
-    let _ = host
+async fn poke(adapter: &PluginHostAdapter) {
+    let _ = adapter
         .tool_execute_before(ToolExecuteBeforeInput {
             session: SessionId::new(),
             message: MessageId::new(),
@@ -68,20 +71,22 @@ async fn crash_marks_dead_then_respawns_then_disables() {
         },
     )
     .await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(
         host.plugin_status("crasher").await,
         Some(PluginStatus::Alive),
         "fresh plugin is alive"
     );
 
-    poke(&host).await;
+    poke(&adapter).await;
     assert_eq!(
         host.plugin_status("crasher").await,
         Some(PluginStatus::Dead),
         "a crash mid-call marks the plugin dead"
     );
 
-    poke(&host).await;
+    poke(&adapter).await;
     assert_eq!(
         host.plugin_status("crasher").await,
         Some(PluginStatus::Dead),
@@ -90,7 +95,7 @@ async fn crash_marks_dead_then_respawns_then_disables() {
 
     let mut disabled = false;
     for _ in 0..10 {
-        poke(&host).await;
+        poke(&adapter).await;
         if host.plugin_status("crasher").await == Some(PluginStatus::Disabled) {
             disabled = true;
             break;

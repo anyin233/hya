@@ -10,18 +10,41 @@
 //! and the lease is bound to (connection, session-or-none, call) and revoked
 //! when the reply arrives.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hya_engine::{HostSessionReads, UsageScope};
 use hya_proto::{SessionId, ToolCallId};
 use hya_tool::{Action, Resource, ToolCtx, ToolError};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::client::HostCapabilityHandler;
 use crate::protocol::{JsonRpcError, codes};
 
+/// Scope sent to the host when a bundle requests session usage.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionUsageScope {
+    /// Only the bound session.
+    Session,
+    /// The bound session and all its descendants.
+    #[default]
+    Tree,
+    /// The whole tree rooted at the bound session's lineage root.
+    Root,
+}
+
+/// Read and serialize a usage report for the session and scope authorized by a lease.
+pub type SessionUsageReader = Arc<
+    dyn Fn(
+            SessionId,
+            SessionUsageScope,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, String>> + Send>>
+        + Send
+        + Sync,
+>;
 /// What a lease was minted for.
 enum Grant {
     /// A bundle tool call: its full tool context (permission plane, workdir).
@@ -37,25 +60,24 @@ enum Grant {
 
 pub(crate) struct BundleCapability {
     grant: Grant,
-    reads: Option<Arc<dyn HostSessionReads>>,
+    reads: Option<SessionUsageReader>,
 }
 
 impl BundleCapability {
     /// Capability for one bundle tool call.
-    pub(crate) fn tool_call(ctx: &ToolCtx, reads: Option<Arc<dyn HostSessionReads>>) -> Self {
+    pub(crate) fn tool_call(ctx: &ToolCtx, reads: Option<SessionUsageReader>) -> Self {
         Self {
             grant: Grant::ToolCall(Box::new(ctx.clone())),
             reads,
         }
     }
 
-    /// Capability for one `api/request` (the synthetic `call` is set by the
-    /// client when it mints the lease; the grant only reports it).
+    /// Capability for one `api/request` and its synthetic call id.
     pub(crate) fn api(
         api: &str,
         session: Option<SessionId>,
         call: ToolCallId,
-        reads: Option<Arc<dyn HostSessionReads>>,
+        reads: Option<SessionUsageReader>,
     ) -> Self {
         Self {
             grant: Grant::Api {
@@ -84,7 +106,7 @@ impl BundleCapability {
                 )
             })?,
             Grant::Api { session, .. } => {
-                if request.scope == UsageScope::Root {
+                if request.scope == SessionUsageScope::Root {
                     return Err(rpc_error(
                         codes::INVALID_PARAMS,
                         "an API request may read only its session: scope `root` is not available",
@@ -104,11 +126,9 @@ impl BundleCapability {
                 "session.usage is unavailable in this host",
             )
         })?;
-        let report = reads
-            .session_usage(session, request.scope)
+        reads(session, request.scope)
             .await
-            .map_err(|error| rpc_error(codes::INTERNAL_ERROR, error.to_string()))?;
-        serde_json::to_value(report).map_err(|error| rpc_error(codes::INTERNAL_ERROR, error))
+            .map_err(|error| rpc_error(codes::INTERNAL_ERROR, error))
     }
 }
 
@@ -153,7 +173,7 @@ async fn nested_tool_call(ctx: &ToolCtx, params: Value) -> Result<Value, JsonRpc
 #[serde(deny_unknown_fields)]
 struct SessionUsageParams {
     #[serde(default)]
-    scope: UsageScope,
+    scope: SessionUsageScope,
 }
 
 #[derive(Deserialize)]

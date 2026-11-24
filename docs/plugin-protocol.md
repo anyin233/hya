@@ -17,7 +17,7 @@ Sources:
 [`crates/hya-plugin/src/messages.rs`](../crates/hya-plugin/src/messages.rs),
 [`crates/hya-plugin/src/client.rs`](../crates/hya-plugin/src/client.rs),
 [`crates/hya-plugin/src/host.rs`](../crates/hya-plugin/src/host.rs),
-[`crates/hya-plugin/src/dispatcher.rs`](../crates/hya-plugin/src/dispatcher.rs).
+[`crates/hya-app/src/plugin_adapter/hooks.rs`](../crates/hya-app/src/plugin_adapter/hooks.rs).
 
 Configuration of plugins (YAML / `plugin.toml`) is covered in
 [Configuration](configuration.md). Compat/OpenCode JS plugins use this same wire
@@ -791,7 +791,7 @@ Claude launcher), and `launch: ProcessLaunch`:
 | `Bundle { root: PathBuf, activation: None }` | Private root, cleared environment plus `env`, bounded stderr, strict timeouts | Same restart budget and complete-declaration drift check |
 | `Bundle { root, activation: Some(ActivationMetadata) }` | Private activation directory, same isolation | Report loss to the session supervisor; never transparently respawn session state |
 
-`PluginHost::connect(spec, host: HostInfo, reads: Option<Arc<dyn HostSessionReads>>)`
+`PluginHost::connect(spec, host: HostInfo, reads: Option<SessionUsageReader>)`
 returns `Result<PluginHost, PluginError>`. `connect_all_observed(specs, host)`
 returns the ordered host and a per-id failure map. `PreparedPlugin::tool(local,
 canonical)` returns `Option<Arc<dyn Tool>>` for an exported tool under a view's
@@ -810,6 +810,26 @@ returns `Result<Option<Arc<dyn HookDispatcher>>, BundleError>`: no selected hook
 produce `None`; otherwise the retained dispatcher is filtered by `hook_refs`.
 `PreparedPlugin::loss_token() -> Option<CancellationToken>` supplies the private
 activation's transport-loss signal to its session supervisor.
+
+Rust hosts wrap an `Arc<PluginHost>` in `hya_app::plugin_adapter::PluginHostAdapter::new`
+when they need `HookDispatcher`, `RuntimeSourceOwner`, or `BundleApiProvider`.
+For a generation-owned bundle process with a store, use
+`Some(hya_app::plugin_adapter::session_usage_reader(reads))` in `connect`,
+where `reads: Arc<dyn HostSessionReads>`. The following example connects the process and wraps it.
+
+```rust,ignore
+let reader = hya_app::plugin_adapter::session_usage_reader(reads);
+let host = Arc::new(PluginHost::connect(spec, host_info, Some(reader)).await?);
+let hooks = Arc::new(hya_app::plugin_adapter::PluginHostAdapter::new(host));
+```
+
+`SessionUsageReader` is an async callable taking `(SessionId, SessionUsageScope)`
+and returning `Result<serde_json::Value, String>`. The plugin host resolves
+session and scope from the capability lease before calling it. The scopes are
+`session`, `tree` (default), and `root`. Only tool calls can select `root`.
+For direct wire calls, `PluginHost::request_api(ApiRequestParams)` returns
+`Result<ApiRequestResult, String>` and `PluginHost::permission_approve(PermissionApproveParams)`
+returns `Option<Decision>`. Engine-typed callers use the app adapter.
 
 These are host interfaces, with no new manifest/config fields or wire methods.
 Private activations still send the existing `activation_id: String` and
@@ -983,7 +1003,7 @@ with `Child::wait` on the active runtime, without spawning a kill utility.
 
 ### Activation process adapter
 
-`hya_plugin::activation` owns private activation process startup and lifetime.
+`hya_app::runtime::sidecar` owns private activation startup and lifetime.
 It creates the activation directory, connects through `PluginHost`, terminates a
 process whose exports fail validation, and returns a core `SidecarHandle` with
 the selected tools/hooks and the process loss token. Shutdown and termination
@@ -1005,7 +1025,7 @@ configuration-file environment in `launch`, then validates and binds that
 catalog's tool/hook selections in `bind`. The plugin adapter retains the sole
 connection owner. No new command, configuration key, or wire message is needed.
 
-The captured-resource helpers now live in `hya_app::runtime::sidecar`.
+The same module provides these captured-resource helpers.
 `materialize_bundle_sidecar_resources(&TurnBinding, &str, &Path) -> Result<Vec<PathBuf>, CoreError>`,
 `bind_bundle_sidecar_tools(&TurnBinding, &str, &PreparedPlugin) -> Result<Arc<[ResolvedTool]>, CoreError>`,
 and `validate_bundle_sidecar_hooks(&TurnBinding, &str, &[HookRegistration]) -> Result<(), CoreError>`.

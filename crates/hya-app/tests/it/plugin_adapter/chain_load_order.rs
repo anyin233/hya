@@ -3,8 +3,11 @@
 //! handshake-completion order. The first-loaded plugin handshakes slowly; if the
 //! host ordered by completion the tags would invert.
 
+use std::sync::Arc;
+
 use std::collections::BTreeMap;
 
+use hya_app::plugin_adapter::PluginHostAdapter;
 use hya_engine::hooks::{HookDispatcher, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome};
 use hya_plugin::PluginHost;
 use hya_plugin::config::PluginSpec;
@@ -73,6 +76,8 @@ async fn chain_folds_in_load_order_not_handshake_order() {
         },
     )
     .await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 2, "both fixtures must connect");
     assert_eq!(
         host.contributions()
@@ -82,7 +87,7 @@ async fn chain_folds_in_load_order_not_handshake_order() {
         vec!["first", "second"]
     );
 
-    let outcome = host
+    let outcome = adapter
         .tool_execute_before(ToolExecuteBeforeInput {
             session: SessionId::new(),
             message: MessageId::new(),

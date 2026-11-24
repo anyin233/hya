@@ -3,8 +3,11 @@
 //! deadline must fail safe — the chain vetoes so the engine emits a `ToolError`
 //! rather than running the tool with an unchecked guard.
 
+use std::sync::Arc;
+
 use std::collections::BTreeMap;
 
+use hya_app::plugin_adapter::PluginHostAdapter;
 use hya_engine::hooks::{HookDispatcher, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome};
 use hya_plugin::PluginHost;
 use hya_plugin::config::PluginSpec;
@@ -57,9 +60,11 @@ async fn tool_before_safe_timeout_vetoes() {
         },
     )
     .await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 1, "fixture must connect");
 
-    let outcome = host
+    let outcome = adapter
         .tool_execute_before(ToolExecuteBeforeInput {
             session: SessionId::new(),
             message: MessageId::new(),

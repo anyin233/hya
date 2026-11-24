@@ -3,8 +3,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::sync::Arc;
+
 use std::collections::BTreeMap;
 
+use hya_app::plugin_adapter::PluginHostAdapter;
 use hya_engine::hooks::{HookDispatcher, PermissionApproveInput};
 use hya_plugin::PluginHost;
 use hya_plugin::config::PluginSpec;
@@ -126,17 +129,23 @@ async fn permission_approve_params_reach_plugin_and_answers_map() {
                  and p['root_session'] != p['session'] \
                  else {'outcome': 'reject', 'feedback': 'mode ' + p['mode'] + ' says no'})";
     let host = PluginHost::connect_all(vec![plugin("approver", Some(reply))], host_info()).await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 1, "fixture must connect");
 
     assert_eq!(
-        host.permission_approve(input(Action::Bash, Resource::Command("ls".into())))
+        adapter
+            .permission_approve(input(Action::Bash, Resource::Command("ls".into())))
             .await,
         Some(Decision::AllowOnce)
     );
     // Through the engine-facing dispatcher trait as well.
     assert_eq!(
-        HookDispatcher::permission_approve(&host, input(Action::Edit, Resource::Path("x".into())))
-            .await,
+        HookDispatcher::permission_approve(
+            &adapter,
+            input(Action::Edit, Resource::Path("x".into()))
+        )
+        .await,
         Some(Decision::Reject {
             feedback: Some("mode careful says no".to_string())
         })
@@ -153,9 +162,12 @@ async fn permission_approve_defer_and_failures_fall_through() {
         ("malformed", Some("{'outcome': 'maybe'}")),
     ] {
         let host = PluginHost::connect_all(vec![plugin(id, reply)], host_info()).await;
+        let host = Arc::new(host);
+        let adapter = PluginHostAdapter::new(host.clone());
         assert_eq!(host.len(), 1, "fixture {id} must connect");
         assert_eq!(
-            host.permission_approve(input(Action::Bash, Resource::Command("ls".into())))
+            adapter
+                .permission_approve(input(Action::Bash, Resource::Command("ls".into())))
                 .await,
             None,
             "{id}"

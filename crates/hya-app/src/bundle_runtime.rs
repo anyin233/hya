@@ -17,6 +17,7 @@ use hya_tool::{NamedTool, Tool, ToolPermission};
 use sha2::{Digest, Sha256};
 
 use crate::bundle_config::BundleConfigLocation;
+use crate::plugin_adapter::{PluginHostAdapter, session_usage_reader};
 use crate::runtime_reconcile::{bundle_schema_claims, prepared_bundle_skill_exports};
 
 #[derive(Clone)]
@@ -454,9 +455,13 @@ pub(crate) async fn prepare_source(
                 launch: Default::default(),
             };
             let host = Arc::new(
-                PluginHost::connect(spec.in_bundle(root.0.clone()), crate::host_info(), reads)
-                    .await
-                    .map_err(|error| invalid("start bundle process", error))?,
+                PluginHost::connect(
+                    spec.in_bundle(root.0.clone()),
+                    crate::host_info(),
+                    reads.map(session_usage_reader),
+                )
+                .await
+                .map_err(|error| invalid("start bundle process", error))?,
             );
             let tools = host.tools();
             let declared = bundle
@@ -504,8 +509,9 @@ pub(crate) async fn prepare_source(
                     "bundle `{id}` process API endpoints differ from declared apis: expected {declared_apis:?}, got {actual_apis:?}"
                 )));
             }
+            let adapter = Arc::new(PluginHostAdapter::new(host.clone()));
             if !apis.is_empty() {
-                api_provider = Some(host.clone());
+                api_provider = Some(adapter.clone());
             }
             for (_, set) in host.contributions() {
                 if !set.workspace_adapters.is_empty() {
@@ -545,7 +551,7 @@ pub(crate) async fn prepare_source(
             for plugin in host.prepared_plugins() {
                 declaration.update(plugin.canonical_declaration());
             }
-            hooks = Some(host.clone());
+            hooks = Some(adapter);
             owner._host = Some(host);
         }
         for resource in bundle.mcp() {

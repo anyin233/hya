@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use hya_app::plugin_adapter::PluginHostAdapter;
 use hya_engine::completion::PluginGoalEvaluator;
 use hya_engine::hooks::{GoalEvaluateReply, HookDispatcher};
 use hya_engine::{CoreError, GoalEvaluator, Verdict};
@@ -82,13 +83,15 @@ for line in sys.stdin:
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
 "#;
     let host = PluginHost::connect_all(vec![spec("judge", script)], host_info()).await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 1, "fixture must connect");
     assert!(
-        HookDispatcher::has_goal_evaluate(&host),
+        HookDispatcher::has_goal_evaluate(&adapter),
         "a host with a registered goal.evaluate provider must probe true"
     );
 
-    let reply = host
+    let reply = adapter
         .goal_evaluate("tests pass", "[User] worker output")
         .await;
     match reply {
@@ -105,8 +108,10 @@ for line in sys.stdin:
 #[tokio::test]
 async fn goal_evaluate_without_registration_errors_and_probe_is_false() {
     let host = PluginHost::connect_all(Vec::new(), host_info()).await;
-    assert!(!HookDispatcher::has_goal_evaluate(&host));
-    let reply = host.goal_evaluate("condition", "transcript").await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
+    assert!(!HookDispatcher::has_goal_evaluate(&adapter));
+    let reply = adapter.goal_evaluate("condition", "transcript").await;
     match reply {
         Err(CoreError::Invalid(message)) => {
             assert!(
@@ -145,9 +150,11 @@ for line in sys.stdin:
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
 "#;
     let host = PluginHost::connect_all(vec![spec("sloppy", script)], host_info()).await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 1, "fixture must connect");
 
-    let reply = host.goal_evaluate("condition", "transcript").await;
+    let reply = adapter.goal_evaluate("condition", "transcript").await;
     match reply {
         Ok(GoalEvaluateReply::Malformed) => {}
         other => panic!("expected Malformed, got {other:?}"),
@@ -205,9 +212,11 @@ for line in sys.stdin:
         host_info(),
     )
     .await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 2, "both fixtures must connect");
 
-    let reply = host.goal_evaluate("condition", "transcript").await;
+    let reply = adapter.goal_evaluate("condition", "transcript").await;
     match reply {
         Ok(GoalEvaluateReply::Verdict { met: false, reason }) => {
             assert_eq!(reason, "not yet");
@@ -246,7 +255,7 @@ for line in sys.stdin:
         Arc::new(PluginHost::connect_all(vec![spec("poison-adapter", poison)], host_info()).await);
     assert_eq!(host.len(), 1, "fixture must connect");
 
-    let dispatcher: Arc<dyn HookDispatcher> = host.clone();
+    let dispatcher: Arc<dyn HookDispatcher> = Arc::new(PluginHostAdapter::new(host));
     let evaluator = PluginGoalEvaluator::new(dispatcher);
     let verdict = evaluator.evaluate("condition", "transcript").await;
     match verdict {
@@ -297,9 +306,11 @@ for line in sys.stdin:
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
 "#;
     let host = PluginHost::connect_all(vec![spec("loop-brain", script)], host_info()).await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 1, "fixture must connect");
 
-    let verdict = host
+    let verdict = adapter
         .loop_verify("green build", "[User] work")
         .await
         .unwrap();
@@ -309,7 +320,7 @@ for line in sys.stdin:
     assert_eq!(verdict.iteration_summary, "edited main.rs");
     assert_eq!(verdict.reason, "close");
 
-    let output = host
+    let output = adapter
         .loop_plan(
             "green build",
             &["first attempt".to_string()],

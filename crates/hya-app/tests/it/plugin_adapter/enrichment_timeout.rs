@@ -2,8 +2,11 @@
 //! Phase 5: a `chat.params` plugin that misses its deadline must
 //! fail open — the engine keeps the original `CompletionRequest`, no error.
 
+use std::sync::Arc;
+
 use std::collections::BTreeMap;
 
+use hya_app::plugin_adapter::PluginHostAdapter;
 use hya_engine::hooks::{ChatParamsInput, ChatParamsOutcome, HookDispatcher};
 use hya_plugin::PluginHost;
 use hya_plugin::config::PluginSpec;
@@ -58,6 +61,8 @@ async fn chat_params_open_timeout_keeps_original_request() {
         },
     )
     .await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 1, "fixture must connect");
 
     let original = CompletionRequest {
@@ -70,7 +75,7 @@ async fn chat_params_open_timeout_keeps_original_request() {
         reasoning: None,
         headers: Default::default(),
     };
-    let ChatParamsOutcome::Continue { request } = host
+    let ChatParamsOutcome::Continue { request } = adapter
         .chat_params(ChatParamsInput {
             session: SessionId::new(),
             root_session: SessionId::new(),
