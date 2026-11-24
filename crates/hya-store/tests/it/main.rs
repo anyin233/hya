@@ -2,7 +2,6 @@
 
 mod agent_effort_preference;
 mod agent_model_preference;
-mod bundle_registry;
 mod file_blob;
 mod handoff_resume;
 mod interrupted_recovery;

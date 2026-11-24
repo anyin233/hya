@@ -5,13 +5,13 @@ use std::path::{Path, PathBuf};
 use anyhow::Context as _;
 use clap::{Args, Subcommand};
 use hya_app::bundle_admin::{self, InstallTarget, Removed, SelfCheck};
+use hya_app::bundle_registry::{
+    BundleInstallAction, BundleInstallPlan, BundleRegistry, BundleRegistryError,
+    BundleRegistryRecord, NamespaceInstallPolicy,
+};
 use hya_app::project_bundles::{ProjectBundle, find_project_bundle, plan_project_install};
 use hya_bundle::{Bundle, PreparedCatalog, PublicPackageInspection};
 use hya_server::BundleListing;
-use hya_store::{
-    BundleInstallAction, BundleInstallPlan, BundleRegistry, BundleRegistryRecord,
-    NamespaceInstallPolicy, StoreError,
-};
 
 /// Where a bundle command reads or writes: `--user` (the installed-bundle
 /// registry, the default for install/remove/verify) or `--project`
@@ -520,7 +520,7 @@ async fn preview_install(
                     .iter()
                     .find(|agent| reserved.contains(&agent.id.as_str()))
                 {
-                    return Err(StoreError::BundleAgentIdReserved {
+                    return Err(BundleRegistryError::BundleAgentIdReserved {
                         bundle_id: incoming.identity().id.clone(),
                         agent_id: agent.id.as_str().to_string(),
                     }
@@ -884,7 +884,7 @@ async fn search(query: &str, filter: Option<Scope>) -> anyhow::Result<()> {
 
 async fn info(bundle_id: &str, filter: Option<Scope>) -> anyhow::Result<()> {
     let not_found = || -> anyhow::Error {
-        StoreError::BundleNotFound {
+        BundleRegistryError::BundleNotFound {
             bundle_id: bundle_id.to_string(),
         }
         .into()
@@ -1035,7 +1035,7 @@ fn info_first_party(bundle_id: &str) -> anyhow::Result<()> {
         );
         return Ok(());
     }
-    Err(StoreError::BundleNotFound {
+    Err(BundleRegistryError::BundleNotFound {
         bundle_id: bundle_id.to_string(),
     }
     .into())
@@ -1102,7 +1102,7 @@ async fn schema(name: &str, filter: Option<Scope>) -> anyhow::Result<()> {
         return Ok(());
     }
     let not_found = || -> anyhow::Error {
-        StoreError::BundleNotFound {
+        BundleRegistryError::BundleNotFound {
             bundle_id: name.to_string(),
         }
         .into()

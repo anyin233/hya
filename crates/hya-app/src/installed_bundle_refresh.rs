@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::bundle_registry::{BundleRegistry, BundleRegistryRecord};
 use async_trait::async_trait;
 use hya_bundle::{BundleCatalog, PreparedBundleSchemas, PreparedCatalog};
 use hya_engine::{
@@ -10,7 +11,6 @@ use hya_engine::{
     RuntimeSourceKind, ScopeKey,
 };
 use hya_plugin::{PluginContributionSet, SkillContribution};
-use hya_store::{BundleRegistry, BundleRegistryRecord};
 use sha2::Digest as _;
 use tokio::sync::{Mutex, OnceCell};
 
@@ -482,8 +482,9 @@ impl InstalledBundleRefresh {
             let registry = self
                 .registry
                 .get_or_try_init(|| async { BundleRegistry::connect(path).await })
-                .await?;
-            Some(registry.generation().await?)
+                .await
+                .map_err(CoreError::bundle)?;
+            Some(registry.generation().await.map_err(CoreError::bundle)?)
         };
         let mut applied_generation = self.applied_generation.lock().await;
         let registry_changed = !self.initialized.load(Ordering::Acquire)
@@ -500,7 +501,7 @@ impl InstalledBundleRefresh {
         }
 
         let snapshot = match &self.registry.get() {
-            Some(registry) => Some(registry.snapshot().await?),
+            Some(registry) => Some(registry.snapshot().await.map_err(CoreError::bundle)?),
             None => None,
         };
         let mut installed = Vec::with_capacity(
@@ -509,7 +510,10 @@ impl InstalledBundleRefresh {
                 .map_or(0, |snapshot| snapshot.bundles.len()),
         );
         let mut disabled = match &self.registry.get() {
-            Some(registry) => registry.disabled_bundle_ids().await?,
+            Some(registry) => registry
+                .disabled_bundle_ids()
+                .await
+                .map_err(CoreError::bundle)?,
             None => BTreeSet::new(),
         };
         if !self.code_mode {

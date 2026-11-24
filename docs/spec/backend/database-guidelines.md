@@ -60,7 +60,7 @@
   `crates/hya-store/migrations/`. Existing schemas without its checksum fail at
   open with `StoreError::UnsupportedDatabase`; never upgrade the old baseline.
 - `BundleRegistry` embeds its separate migrations from
-  `crates/hya-store/bundle_migrations`; migration tests use a `BundleRegistry`
+  `crates/hya-app/bundle_migrations`; migration tests use a `BundleRegistry`
   temp DB.
 - Keep `session` as the placement/parent index. Capacity belongs to active
   claims, indexed by `(root_session_id, state)`.

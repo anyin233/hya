@@ -203,13 +203,14 @@ async fn registry_with_old_and_current_bundles(
         .output()?;
     assert_success("install fixture", &install);
     let registry_path = data_root.join("hya/bundles/registry.sqlite3");
-    let registry = hya_store::BundleRegistry::connect(&registry_path.to_string_lossy()).await?;
+    let registry =
+        hya_app::bundle_registry::BundleRegistry::connect(&registry_path.to_string_lossy()).await?;
     let prepared = hya_bundle::prepare_package(workflow_bundle_source())?;
     registry
         .install(
             &[],
-            hya_store::NamespaceInstallPolicy::DenyConflicts,
-            hya_store::BundleInstallCandidate {
+            hya_app::bundle_registry::NamespaceInstallPolicy::DenyConflicts,
+            hya_app::bundle_registry::BundleInstallCandidate {
                 source_digest: [0x67; 32],
                 prepared_digest: prepared.digest().to_owned(),
                 prepared_bytes: prepared.bytes().to_vec(),
@@ -416,7 +417,7 @@ async fn live_reinstall_preserves_disabled_and_uninstall_clears_it()
     let daemon = BundleDaemon::start(&root)?;
     assert_success("disable", &daemon.command(&["disable", BUNDLE_ID])?);
     corrupt_registry_row(&root, BUNDLE_ID)?;
-    let registry = hya_store::BundleRegistry::connect(
+    let registry = hya_app::bundle_registry::BundleRegistry::connect(
         &root.join("hya/bundles/registry.sqlite3").to_string_lossy(),
     )
     .await?;
@@ -438,7 +439,7 @@ async fn live_reinstall_preserves_disabled_and_uninstall_clears_it()
 async fn live_refresh_skips_disabled_unreadable_rows() -> Result<(), Box<dyn std::error::Error>> {
     let root = unique_data_root()?;
     registry_with_old_and_current_bundles(&root).await?;
-    let registry = hya_store::BundleRegistry::connect(
+    let registry = hya_app::bundle_registry::BundleRegistry::connect(
         &root.join("hya/bundles/registry.sqlite3").to_string_lossy(),
     )
     .await?;
@@ -527,7 +528,7 @@ async fn bundle_remove_deletes_an_unreadable_registry_row() -> Result<(), Box<dy
         .args(["bundle", "remove", "-y", BUNDLE_ID])
         .output()?;
     assert_success("remove unreadable row", &output);
-    let registry = hya_store::BundleRegistry::connect(
+    let registry = hya_app::bundle_registry::BundleRegistry::connect(
         &data_root
             .join("hya/bundles/registry.sqlite3")
             .to_string_lossy(),
@@ -551,7 +552,7 @@ async fn bundle_install_overwrite_replaces_an_unreadable_row_with_the_same_packa
         .arg(package)
         .output()?;
     assert_success("overwrite unreadable row", &output);
-    let registry = hya_store::BundleRegistry::connect(
+    let registry = hya_app::bundle_registry::BundleRegistry::connect(
         &data_root
             .join("hya/bundles/registry.sqlite3")
             .to_string_lossy(),
@@ -685,7 +686,7 @@ async fn private_format_is_rejected_without_mutating_registry()
 
     fs::create_dir_all(&registry_dir)?;
     let registry_path_string = registry_path.to_string_lossy().into_owned();
-    let registry = hya_store::BundleRegistry::connect(&registry_path_string).await?;
+    let registry = hya_app::bundle_registry::BundleRegistry::connect(&registry_path_string).await?;
     let before = registry.snapshot().await?;
     assert_eq!(before.generation, 0);
     assert!(before.bundles.is_empty());
@@ -1030,12 +1031,12 @@ You are the resource info lead.
         ],
     ))?;
     let registry_path_string = registry_path.to_string_lossy().into_owned();
-    let registry = hya_store::BundleRegistry::connect(&registry_path_string).await?;
+    let registry = hya_app::bundle_registry::BundleRegistry::connect(&registry_path_string).await?;
     let installed = registry
         .install(
             &[],
-            hya_store::NamespaceInstallPolicy::DenyConflicts,
-            hya_store::BundleInstallCandidate {
+            hya_app::bundle_registry::NamespaceInstallPolicy::DenyConflicts,
+            hya_app::bundle_registry::BundleInstallCandidate {
                 source_digest: [0x52; 32],
                 prepared_digest: prepared.digest().to_owned(),
                 prepared_bytes: prepared.bytes().to_vec(),
@@ -1045,7 +1046,7 @@ You are the resource info lead.
         .await?;
     assert_eq!(
         installed,
-        hya_store::BundleInstallOutcome::Installed { generation: 1 }
+        hya_app::bundle_registry::BundleInstallOutcome::Installed { generation: 1 }
     );
     drop(registry);
 
@@ -1081,12 +1082,12 @@ async fn workflow_bundle_list_and_info_show_kind_workflow_and_agents()
     let registry_path = registry_parent.join("registry.sqlite3");
     let prepared = hya_bundle::prepare_package(workflow_bundle_source())?;
     let registry_path_string = registry_path.to_string_lossy().into_owned();
-    let registry = hya_store::BundleRegistry::connect(&registry_path_string).await?;
+    let registry = hya_app::bundle_registry::BundleRegistry::connect(&registry_path_string).await?;
     registry
         .install(
             &[],
-            hya_store::NamespaceInstallPolicy::DenyConflicts,
-            hya_store::BundleInstallCandidate {
+            hya_app::bundle_registry::NamespaceInstallPolicy::DenyConflicts,
+            hya_app::bundle_registry::BundleInstallCandidate {
                 source_digest: [0x63; 32],
                 prepared_digest: prepared.digest().to_owned(),
                 prepared_bytes: prepared.bytes().to_vec(),
@@ -1151,7 +1152,7 @@ async fn public_bun_bundle_install_publishes_resources_atomically()
 
     let registry_path = data_root.join("hya/bundles/registry.sqlite3");
     let registry_path_string = registry_path.to_string_lossy().into_owned();
-    let registry = hya_store::BundleRegistry::connect(&registry_path_string).await?;
+    let registry = hya_app::bundle_registry::BundleRegistry::connect(&registry_path_string).await?;
     let snapshot = registry.snapshot().await?;
     assert_eq!(snapshot.generation, 1);
     assert_eq!(snapshot.bundles.len(), 1);

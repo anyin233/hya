@@ -7,11 +7,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use hya_app::bundle_registry::{
+    BundleInstallCandidate, BundleInstallOutcome, BundleRegistry, NamespaceInstallPolicy,
+};
 use hya_bundle::{BundleSource, SourceFile, prepare_package};
 use hya_engine::{CreateSession, EventBus, RuntimeRegistry, RuntimeSourceId, SessionEngine};
 use hya_proto::{AgentName, ModelRef};
 use hya_provider::ProviderRouter;
-use hya_store::{BundleInstallCandidate, BundleInstallOutcome, BundleRegistry, SessionStore};
+use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, ToolCtx, ToolRegistry};
 
 fn temp_path(suffix: &str) -> PathBuf {
@@ -206,7 +209,7 @@ async fn installed_generation_refresh_publishes_only_for_new_root_bindings() {
     let outcome = registry
         .install(
             &[],
-            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            NamespaceInstallPolicy::DenyConflicts,
             BundleInstallCandidate {
                 source_digest: [0x42; 32],
                 prepared_digest: installed.digest().to_owned(),
@@ -293,7 +296,7 @@ async fn installed_plugin_refresh_and_uninstall_preserve_old_binding_snapshot() 
     registry
         .install(
             &[],
-            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            NamespaceInstallPolicy::DenyConflicts,
             BundleInstallCandidate {
                 source_digest: [0x53; 32],
                 prepared_digest: prepared.digest().to_owned(),
@@ -375,7 +378,7 @@ async fn installed_goal_loop_override_uninstall_restores_first_party_prompt() {
     registry
         .install(
             &[],
-            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            NamespaceInstallPolicy::DenyConflicts,
             BundleInstallCandidate {
                 source_digest: [0x77; 32],
                 prepared_digest: prepared.digest().to_string(),
@@ -452,7 +455,7 @@ async fn installed_workflow_refresh_publishes_workflow_and_agent_atomically_and_
     registry
         .install(
             &[],
-            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            NamespaceInstallPolicy::DenyConflicts,
             BundleInstallCandidate {
                 source_digest: [0x43; 32],
                 prepared_digest: installed.digest().to_owned(),
@@ -571,7 +574,7 @@ async fn installed_bundle_schema_declarations_publish_scheme_claims() {
     registry
         .install(
             &[],
-            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            NamespaceInstallPolicy::DenyConflicts,
             BundleInstallCandidate {
                 source_digest: [0x44; 32],
                 prepared_digest: installed.digest().to_owned(),
@@ -660,7 +663,7 @@ resources:
     registry
         .install(
             &[],
-            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            NamespaceInstallPolicy::DenyConflicts,
             BundleInstallCandidate {
                 source_digest: [0x61; 32],
                 prepared_digest: prepared.digest().to_string(),
@@ -728,7 +731,7 @@ for line in sys.stdin:
     registry
         .install(
             &[],
-            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            NamespaceInstallPolicy::DenyConflicts,
             BundleInstallCandidate {
                 source_digest: [0x71; 32],
                 prepared_digest: prepared.digest().into(),
@@ -770,7 +773,7 @@ extensions:
     registry
         .install(
             &[],
-            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            NamespaceInstallPolicy::DenyConflicts,
             BundleInstallCandidate {
                 source_digest: [0x72; 32],
                 prepared_digest: invalid.digest().into(),
@@ -791,7 +794,7 @@ extensions:
     registry
         .install(
             &[],
-            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            NamespaceInstallPolicy::DenyConflicts,
             BundleInstallCandidate {
                 source_digest: [0x75; 32],
                 prepared_digest: healthy.digest().into(),
@@ -849,7 +852,7 @@ extensions:
     registry
         .install(
             &[],
-            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            NamespaceInstallPolicy::DenyConflicts,
             BundleInstallCandidate {
                 source_digest: [0x76; 32],
                 prepared_digest: prepared.digest().into(),
@@ -909,7 +912,7 @@ for line in sys.stdin:
     registry
         .install(
             &[],
-            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            NamespaceInstallPolicy::DenyConflicts,
             BundleInstallCandidate {
                 source_digest: [0x73; 32],
                 prepared_digest: prepared.digest().into(),
@@ -994,7 +997,7 @@ resources:
     registry
         .install(
             &[],
-            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            NamespaceInstallPolicy::DenyConflicts,
             BundleInstallCandidate {
                 source_digest: [0x63; 32],
                 prepared_digest: prepared.digest().to_string(),
@@ -1068,7 +1071,7 @@ async fn old_install_record_is_reported_after_publishing_readable_sources() {
     registry
         .install(
             &[],
-            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            NamespaceInstallPolicy::DenyConflicts,
             BundleInstallCandidate {
                 source_digest: [0x42; 32],
                 prepared_digest: prepared.digest().to_owned(),

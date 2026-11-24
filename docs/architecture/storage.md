@@ -656,9 +656,11 @@ grants](tools-and-permissions.md#saved-grants).
 
 ## Bundle registry database
 
-A **second** SQLite file, separate from the session/event database. Schema and
-migrations live under
-[`crates/hya-store/bundle_migrations/`](../../crates/hya-store/bundle_migrations/).
+The user bundle registry lives in a separate SQLite file and stores the
+installed catalog and generation independently of sessions. Rust callers use
+`hya_app::bundle_registry`; bundle failures use `BundleRegistryError`. Schema
+and migrations live under
+[`crates/hya-app/bundle_migrations/`](../../crates/hya-app/bundle_migrations/).
 (CLI path for the file is documented in `docs/cli.md` —
 `$XDG_DATA_HOME/hya/bundles/registry.sqlite3`.)
 
@@ -675,7 +677,7 @@ migrations live under
 | --- | --- | --- |
 | Journal | WAL | WAL |
 | Synchronous | **Normal** | **Full** |
-| Busy timeout | **300 seconds** | **Zero** (contention fails fast as `StoreError::BundleRegistryBusy`) |
+| Busy timeout | **300 seconds** | **Zero** (contention fails fast as `BundleRegistryError::BundleRegistryBusy`) |
 | Pool acquire timeout | **300 seconds** | **300 seconds** |
 | Pool max | 1 writer + 4 readers (lazy) | 8 |
 | Foreign keys | on | on |
@@ -696,15 +698,19 @@ SQLite or migration error.
 
 | Method | Result |
 | --- | --- |
-| `connect(path: &str)` | `Result<BundleRegistry, StoreError>`; opens/migrates with bounded setup-lock retries |
+| `connect(path: &str)` | `Result<BundleRegistry, BundleRegistryError>`; opens/migrates with bounded setup-lock retries |
 | `generation()` | Current registry generation |
-| `snapshot()` | `BundleRegistrySnapshot { generation, bundles: Vec<BundleRegistryRecord> }` |
-| `install_inspection(...)` | Install from a package inspection (public only; private → `PrivateActivationUnsupported`) |
-| `install(...)` | `BundleInstallOutcome`: `Installed` / `Replaced` / `Unchanged` (each with generation) |
+| `snapshot()` | `BundleRegistrySnapshot` with `generation`, readable `bundles`, and `unreadable` rows |
+| `plan_install(reserved_agent_ids, policy, candidate)` | `BundleInstallPlan` with `action` and displaced bundle ids. Leaves the registry unchanged. |
+| `install(reserved_agent_ids, policy, candidate)` | `BundleInstallOutcome` (`Installed`, `Replaced`, or `Unchanged`, with generation) |
 | `uninstall(...)` | `BundleUninstallOutcome::Removed { generation }` |
 
 `BundleRegistryRecord` fields: `bundle_id`, `version`, `publisher`,
 `source_digest`, `prepared_digest`, `prepared_bytes`, `installed_at`.
+
+For example, `hya bundle install ./example.hyabundle --user --yes` validates
+and installs the package in this registry. `hya bundle list --user` reads its
+current bindings and reports unreadable installed rows with a reinstall hint.
 
 ## Errors
 
@@ -719,13 +725,6 @@ SQLite or migration error.
 | `EventDecode` | Stored event decode failed; includes session, sequence and JSON source |
 | `SessionKeyData` | Stored key is not a valid `hysec_` text key |
 | `Json` | Event/payload JSON (de)serialization |
-| `Bundle` | `hya-bundle` prepare/catalog error |
-| `BundleRegistryData` | Invalid registry generation or install candidate shape |
-| `BundleRegistryCorrupt` | Stored prepared catalog bytes fail decode/validation |
-| `BundleRegistryBusy` | Writer contention with zero busy timeout |
-| `BundleNotFound` | Uninstall/lookup of missing bundle |
-| `BundleContentConflict` | Same version, different content on install |
-| `BundleAgentIdReserved` | Bundle declares a reserved built-in agent id |
 | `ActorAlreadyClaimed` | Resident actor claim held by another owner |
 | `StaleActorClaim` | Epoch/owner no longer current |
 | `ActorClaimUnavailable` | No recoverable active claim |

@@ -1,4 +1,4 @@
-//! Store-layer failures: SQLite, migrations, JSON, admission, bundles, and claims.
+//! Store-layer failures: SQLite, migrations, JSON, admission, and claims.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use hya_proto::{ProjectId, SessionId};
 
-/// All errors returned by [`crate::SessionStore`] and [`crate::BundleRegistry`].
+/// All errors returned by [`crate::SessionStore`].
 #[derive(Clone, Error, Debug)]
 pub enum StoreError {
     /// Underlying sqlx/SQLite I/O or query error.
@@ -39,72 +39,6 @@ pub enum StoreError {
     /// A stored session key is not a current `hysec_` text key.
     #[error("session key data: {0}")]
     SessionKeyData(String),
-    /// Prepared-bundle / catalog validation failure from `hya-bundle`.
-    #[error("bundle: {0}")]
-    Bundle(#[from] hya_bundle::BundleError),
-    /// Malformed or inconsistent installed-bundle registry row data.
-    #[error("bundle registry data: {0}")]
-    BundleRegistryData(String),
-    /// Stored prepared catalog bytes for an installed bundle fail re-decode.
-    #[error("BUNDLE_REGISTRY_CORRUPT: bundle {bundle_id} stored prepared catalog is corrupt")]
-    BundleRegistryCorrupt {
-        /// Bundle identity that failed validation.
-        bundle_id: String,
-    },
-    /// Another writer holds the registry lock (`BEGIN IMMEDIATE` busy/locked).
-    #[error("BUNDLE_REGISTRY_BUSY: bundle registry writer is busy")]
-    BundleRegistryBusy,
-    /// Uninstall or lookup named a bundle that is not installed.
-    #[error("BUNDLE_NOT_FOUND: bundle {bundle_id} is not installed")]
-    BundleNotFound {
-        /// Requested bundle id.
-        bundle_id: String,
-    },
-    /// Same version string already installed with a different content digest.
-    #[error("BUNDLE_CONTENT_CONFLICT: bundle {bundle_id} version {version} has different content")]
-    BundleContentConflict {
-        /// Conflicting bundle id.
-        bundle_id: String,
-        /// Version that already exists with different bytes.
-        version: String,
-    },
-    /// Another installed bundle already owns the incoming namespace.
-    #[error(
-        "NAMESPACE_CONFLICT: namespace {namespace} is owned by {existing_bundle_id}; \
-         incoming bundle {incoming_bundle_id} requires an explicit overwrite"
-    )]
-    NamespaceConflict {
-        /// Contested namespace.
-        namespace: String,
-        /// Bundle id that currently owns the namespace.
-        existing_bundle_id: String,
-        /// Bundle id that tried to claim it.
-        incoming_bundle_id: String,
-    },
-    /// The incoming bundle version is lower than the installed one.
-    #[error(
-        "BUNDLE_DOWNGRADE_REQUIRED: bundle {bundle_id} is installed at {installed_version}; \
-         installing {incoming_version} requires an explicit overwrite"
-    )]
-    BundleDowngradeRequired {
-        /// Bundle id.
-        bundle_id: String,
-        /// Currently installed version.
-        installed_version: String,
-        /// Lower incoming version.
-        incoming_version: String,
-    },
-    /// An install candidate claims an agent id reserved by a built-in agent.
-    #[error(
-        "BUNDLE_AGENT_ID_RESERVED: bundle {bundle_id} declares agent {agent_id}, \
-         which is a reserved built-in agent id"
-    )]
-    BundleAgentIdReserved {
-        /// Bundle that tried to claim the id.
-        bundle_id: String,
-        /// Reserved built-in agent id.
-        agent_id: String,
-    },
     /// Registering or reviving members would exceed the root's live capacity.
     #[error(
         "spawn admission overloaded for root {root}: live {live} + requested {requested} exceeds {limit}"

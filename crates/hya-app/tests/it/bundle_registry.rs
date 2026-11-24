@@ -3,11 +3,11 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hya_bundle::{BundleError, BundleSource, SourceFile, prepare_package};
-use hya_store::{
+use hya_app::bundle_registry::{
     BundleInstallAction, BundleInstallCandidate, BundleInstallOutcome, BundleRegistry,
-    BundleUninstallOutcome, NamespaceInstallPolicy, StoreError,
+    BundleRegistryError, BundleUninstallOutcome, NamespaceInstallPolicy,
 };
+use hya_bundle::{BundleError, BundleSource, SourceFile, prepare_package};
 use sqlx::{Connection, SqliteConnection};
 
 fn temp_db() -> String {
@@ -170,7 +170,7 @@ async fn workflow_bundle_reserved_agent_preserves_empty_registry() {
         .await;
     assert!(matches!(
         rejected,
-        Err(StoreError::BundleAgentIdReserved { ref agent_id, .. })
+        Err(BundleRegistryError::BundleAgentIdReserved { ref agent_id, .. })
             if agent_id == "workflow-reviewer"
     ));
     let snapshot = registry.snapshot().await;
@@ -374,7 +374,7 @@ async fn same_version_different_source_digest_is_content_conflict_without_mutati
         .await;
     assert!(matches!(
         second,
-        Err(StoreError::BundleContentConflict {
+        Err(BundleRegistryError::BundleContentConflict {
             bundle_id,
             version,
         }) if bundle_id == "hya/installed-package" && version == "1.0.0"
@@ -518,7 +518,7 @@ You are the conflicting lead.
         .await;
     assert!(matches!(
         replacement,
-        Err(StoreError::Bundle(BundleError::DuplicateStableAgentId { stable_id }))
+        Err(BundleRegistryError::Bundle(BundleError::DuplicateStableAgentId { stable_id }))
             if stable_id == "installed-package-lead"
     ));
 
@@ -565,7 +565,7 @@ async fn reserved_builtin_agent_id_is_rejected_and_registry_is_unchanged() {
         .await;
     assert!(matches!(
         install,
-        Err(StoreError::BundleAgentIdReserved { ref agent_id, .. })
+        Err(BundleRegistryError::BundleAgentIdReserved { ref agent_id, .. })
             if agent_id == "installed-package-lead"
     ));
 
@@ -631,7 +631,10 @@ async fn writer_busy_fails_immediately_without_registry_mutation() {
     let Ok(_) = rollback else {
         panic!("writer lock rollback failed: {rollback:?}");
     };
-    assert!(matches!(install, Err(StoreError::BundleRegistryBusy)));
+    assert!(matches!(
+        install,
+        Err(BundleRegistryError::BundleRegistryBusy)
+    ));
 
     let snapshot = registry.snapshot().await;
     let Ok(snapshot) = snapshot else {
@@ -698,7 +701,7 @@ async fn uninstall_unknown_bundle_is_typed_not_found_without_generation_change()
     let uninstall = registry.uninstall("hya/not-installed").await;
     assert!(matches!(
         uninstall,
-        Err(StoreError::BundleNotFound { bundle_id }) if bundle_id == "hya/not-installed"
+        Err(BundleRegistryError::BundleNotFound { bundle_id }) if bundle_id == "hya/not-installed"
     ));
 
     let snapshot = registry.snapshot().await;
@@ -722,7 +725,7 @@ async fn uninstall_of_a_never_installed_bundle_is_typed_not_found() {
     let uninstall = registry.uninstall("hya/builtin-only").await;
     assert!(matches!(
         uninstall,
-        Err(StoreError::BundleNotFound { bundle_id }) if bundle_id == "hya/builtin-only"
+        Err(BundleRegistryError::BundleNotFound { bundle_id }) if bundle_id == "hya/builtin-only"
     ));
 
     let snapshot = registry.snapshot().await;
@@ -783,7 +786,7 @@ async fn same_bundle_upgrade_installs_but_downgrade_requires_overwrite() {
     let Err(err) = result else {
         panic!("downgrade must require explicit overwrite");
     };
-    let StoreError::BundleDowngradeRequired {
+    let BundleRegistryError::BundleDowngradeRequired {
         bundle_id,
         installed_version,
         incoming_version,
@@ -822,7 +825,7 @@ async fn cross_bundle_namespace_conflict_requires_explicit_overwrite() {
     let Err(err) = result else {
         panic!("namespace conflict must be reported");
     };
-    let StoreError::NamespaceConflict {
+    let BundleRegistryError::NamespaceConflict {
         namespace,
         existing_bundle_id,
         incoming_bundle_id,
@@ -926,14 +929,14 @@ async fn plan_install_reports_the_install_outcome_without_mutation() {
     let v0 = namespaced_candidate("hya/plan", Some("plan"), "0.9.0", [9_u8; 32]);
     assert!(matches!(
         registry.plan_install(&[], deny, &v0).await,
-        Err(StoreError::BundleDowngradeRequired { .. })
+        Err(BundleRegistryError::BundleDowngradeRequired { .. })
     ));
     assert!(registry.plan_install(&[], overwrite, &v0).await.is_ok());
 
     let rival = namespaced_candidate("hya/rival", Some("plan"), "1.0.0", [10_u8; 32]);
     assert!(matches!(
         registry.plan_install(&[], deny, &rival).await,
-        Err(StoreError::NamespaceConflict { .. })
+        Err(BundleRegistryError::NamespaceConflict { .. })
     ));
     let plan = registry
         .plan_install(&[], overwrite, &rival)
@@ -944,7 +947,7 @@ async fn plan_install_reports_the_install_outcome_without_mutation() {
 
     assert!(matches!(
         registry.plan_install(&["hya/plan-lead"], deny, &v2).await,
-        Err(StoreError::BundleAgentIdReserved { .. })
+        Err(BundleRegistryError::BundleAgentIdReserved { .. })
     ));
 
     let snapshot = registry

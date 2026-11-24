@@ -1,13 +1,103 @@
 //! Durable installed-bundle registry (separate SQLite DB from the session store).
 
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use hya_bundle::{Bundle, BundleCatalog, PreparedCatalog};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{Row, Sqlite, Transaction};
 
-use crate::StoreError;
+const FILE_POOL_WAIT_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Failures from the installed-bundle registry and shared bundle install policy.
+#[derive(Clone, thiserror::Error, Debug)]
+pub enum BundleRegistryError {
+    /// Underlying sqlx/SQLite I/O or query error.
+    #[error("sqlite: {0}")]
+    Sqlite(#[source] Arc<sqlx::Error>),
+    /// Migration runner failure while applying `migrations/`.
+    #[error("migrate: {0}")]
+    Migrate(#[source] Arc<sqlx::migrate::MigrateError>),
+    /// Prepared-bundle / catalog validation failure from `hya-bundle`.
+    #[error("bundle: {0}")]
+    Bundle(#[from] hya_bundle::BundleError),
+    /// Malformed or inconsistent installed-bundle registry row data.
+    #[error("bundle registry data: {0}")]
+    BundleRegistryData(String),
+    /// Stored prepared catalog bytes for an installed bundle fail re-decode.
+    #[error("BUNDLE_REGISTRY_CORRUPT: bundle {bundle_id} stored prepared catalog is corrupt")]
+    BundleRegistryCorrupt {
+        /// Bundle identity that failed validation.
+        bundle_id: String,
+    },
+    /// Another writer holds the registry lock (`BEGIN IMMEDIATE` busy/locked).
+    #[error("BUNDLE_REGISTRY_BUSY: bundle registry writer is busy")]
+    BundleRegistryBusy,
+    /// Uninstall or lookup named a bundle that is not installed.
+    #[error("BUNDLE_NOT_FOUND: bundle {bundle_id} is not installed")]
+    BundleNotFound {
+        /// Requested bundle id.
+        bundle_id: String,
+    },
+    /// Same version string already installed with a different content digest.
+    #[error("BUNDLE_CONTENT_CONFLICT: bundle {bundle_id} version {version} has different content")]
+    BundleContentConflict {
+        /// Conflicting bundle id.
+        bundle_id: String,
+        /// Version that already exists with different bytes.
+        version: String,
+    },
+    /// Another installed bundle already owns the incoming namespace.
+    #[error(
+        "NAMESPACE_CONFLICT: namespace {namespace} is owned by {existing_bundle_id}; \
+         incoming bundle {incoming_bundle_id} requires an explicit overwrite"
+    )]
+    NamespaceConflict {
+        /// Contested namespace.
+        namespace: String,
+        /// Bundle id that currently owns the namespace.
+        existing_bundle_id: String,
+        /// Bundle id that tried to claim it.
+        incoming_bundle_id: String,
+    },
+    /// The incoming bundle version is lower than the installed one.
+    #[error(
+        "BUNDLE_DOWNGRADE_REQUIRED: bundle {bundle_id} is installed at {installed_version}; \
+         installing {incoming_version} requires an explicit overwrite"
+    )]
+    BundleDowngradeRequired {
+        /// Bundle id.
+        bundle_id: String,
+        /// Currently installed version.
+        installed_version: String,
+        /// Lower incoming version.
+        incoming_version: String,
+    },
+    /// An install candidate claims an agent id reserved by a built-in agent.
+    #[error(
+        "BUNDLE_AGENT_ID_RESERVED: bundle {bundle_id} declares agent {agent_id}, \
+         which is a reserved built-in agent id"
+    )]
+    BundleAgentIdReserved {
+        /// Bundle that tried to claim the id.
+        bundle_id: String,
+        /// Reserved built-in agent id.
+        agent_id: String,
+    },
+}
+
+impl From<sqlx::Error> for BundleRegistryError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Sqlite(Arc::new(error))
+    }
+}
+
+impl From<sqlx::migrate::MigrateError> for BundleRegistryError {
+    fn from(error: sqlx::migrate::MigrateError) -> Self {
+        Self::Migrate(Arc::new(error))
+    }
+}
 
 /// SQLite registry of installed bundles and generation counter.
 #[derive(Clone, Debug)]
@@ -182,7 +272,7 @@ impl BundleRegistry {
     /// Open or create the registry database at `path` and run migrations (synchronous=Full).
     /// Connection setup retries transient SQLite locks for up to five seconds;
     /// registry mutations retain their zero busy timeout.
-    pub async fn connect(path: &str) -> Result<Self, StoreError> {
+    pub async fn connect(path: &str) -> Result<Self, BundleRegistryError> {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             match Self::connect_once(path).await {
@@ -194,7 +284,7 @@ impl BundleRegistry {
         }
     }
 
-    async fn connect_once(path: &str) -> Result<Self, StoreError> {
+    async fn connect_once(path: &str) -> Result<Self, BundleRegistryError> {
         let options = SqliteConnectOptions::from_str(&format!("sqlite://{path}"))?
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
@@ -203,7 +293,7 @@ impl BundleRegistry {
             .busy_timeout(Duration::ZERO);
         let pool = SqlitePoolOptions::new()
             .max_connections(8)
-            .acquire_timeout(crate::FILE_POOL_WAIT_TIMEOUT)
+            .acquire_timeout(FILE_POOL_WAIT_TIMEOUT)
             // Closing the last connection of a WAL database checkpoints under an exclusive lock.
             .max_lifetime(None)
             .idle_timeout(None)
@@ -217,7 +307,7 @@ impl BundleRegistry {
     }
 
     /// Read the current registry generation singleton.
-    pub async fn generation(&self) -> Result<u64, StoreError> {
+    pub async fn generation(&self) -> Result<u64, BundleRegistryError> {
         let row =
             sqlx::query("SELECT generation FROM bundle_registry_generation WHERE singleton = 1")
                 .fetch_one(&self.pool)
@@ -228,14 +318,14 @@ impl BundleRegistry {
     /// Return the ids disabled for every catalog scope.
     pub async fn disabled_bundle_ids(
         &self,
-    ) -> Result<std::collections::BTreeSet<String>, StoreError> {
+    ) -> Result<std::collections::BTreeSet<String>, BundleRegistryError> {
         let rows = sqlx::query("SELECT bundle_id FROM bundle_disabled ORDER BY bundle_id")
             .fetch_all(&self.pool)
             .await?;
         rows.into_iter()
             .map(|row| {
                 row.try_get::<String, _>("bundle_id")
-                    .map_err(StoreError::from)
+                    .map_err(BundleRegistryError::from)
             })
             .collect()
     }
@@ -245,7 +335,7 @@ impl BundleRegistry {
         &self,
         bundle_id: &str,
         enabled: bool,
-    ) -> Result<u64, StoreError> {
+    ) -> Result<u64, BundleRegistryError> {
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let current =
             sqlx::query("SELECT generation FROM bundle_registry_generation WHERE singleton = 1")
@@ -277,7 +367,7 @@ impl BundleRegistry {
     }
 
     /// Transactional snapshot of generation + all installed bundle rows.
-    pub async fn snapshot(&self) -> Result<BundleRegistrySnapshot, StoreError> {
+    pub async fn snapshot(&self) -> Result<BundleRegistrySnapshot, BundleRegistryError> {
         let mut transaction = self.pool.begin().await?;
         let snapshot = Self::snapshot_from_transaction(&mut transaction).await?;
         transaction.commit().await?;
@@ -295,7 +385,7 @@ impl BundleRegistry {
         reserved_agent_ids: &[&str],
         policy: NamespaceInstallPolicy,
         candidate: BundleInstallCandidate,
-    ) -> Result<BundleInstallOutcome, StoreError> {
+    ) -> Result<BundleInstallOutcome, BundleRegistryError> {
         let incoming = decode_candidate(reserved_agent_ids, &candidate)?;
         let BundleInstallCandidate {
             source_digest,
@@ -314,9 +404,9 @@ impl BundleRegistry {
             .await
             .map_err(|error| {
                 if is_sqlite_busy_or_locked(&error) {
-                    StoreError::BundleRegistryBusy
+                    BundleRegistryError::BundleRegistryBusy
                 } else {
-                    StoreError::from(error)
+                    BundleRegistryError::from(error)
                 }
             })?;
         let snapshot = Self::snapshot_from_transaction(&mut transaction).await?;
@@ -358,7 +448,7 @@ impl BundleRegistry {
                 .execute(&mut *transaction)
                 .await?;
                 if replaced.rows_affected() != 1 {
-                    return Err(StoreError::BundleRegistryData(
+                    return Err(BundleRegistryError::BundleRegistryData(
                         "bundle registry replacement row is missing".to_string(),
                     ));
                 }
@@ -398,7 +488,7 @@ impl BundleRegistry {
         reserved_agent_ids: &[&str],
         policy: NamespaceInstallPolicy,
         candidate: &BundleInstallCandidate,
-    ) -> Result<BundleInstallPlan, StoreError> {
+    ) -> Result<BundleInstallPlan, BundleRegistryError> {
         let incoming = decode_candidate(reserved_agent_ids, candidate)?;
         let mut transaction = self.pool.begin().await?;
         let snapshot = Self::snapshot_from_transaction(&mut transaction).await?;
@@ -407,16 +497,19 @@ impl BundleRegistry {
     }
 
     /// Remove an installed bundle after re-validating the remaining catalog.
-    pub async fn uninstall(&self, bundle_id: &str) -> Result<BundleUninstallOutcome, StoreError> {
+    pub async fn uninstall(
+        &self,
+        bundle_id: &str,
+    ) -> Result<BundleUninstallOutcome, BundleRegistryError> {
         let mut transaction = self
             .pool
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(|error| {
                 if is_sqlite_busy_or_locked(&error) {
-                    StoreError::BundleRegistryBusy
+                    BundleRegistryError::BundleRegistryBusy
                 } else {
-                    StoreError::from(error)
+                    BundleRegistryError::from(error)
                 }
             })?;
         let snapshot = Self::snapshot_from_transaction(&mut transaction).await?;
@@ -429,7 +522,7 @@ impl BundleRegistry {
                 .iter()
                 .any(|row| row.bundle_id == bundle_id)
         {
-            let missing = StoreError::BundleNotFound {
+            let missing = BundleRegistryError::BundleNotFound {
                 bundle_id: bundle_id.to_string(),
             };
             return refuse(transaction, missing).await;
@@ -453,7 +546,7 @@ impl BundleRegistry {
             .execute(&mut *transaction)
             .await?;
         if deleted.rows_affected() != 1 {
-            return Err(StoreError::BundleRegistryData(
+            return Err(BundleRegistryError::BundleRegistryData(
                 "bundle registry uninstall row is missing".to_string(),
             ));
         }
@@ -468,7 +561,7 @@ impl BundleRegistry {
 
     async fn snapshot_from_transaction(
         transaction: &mut Transaction<'_, Sqlite>,
-    ) -> Result<LoadedBundleRegistrySnapshot, StoreError> {
+    ) -> Result<LoadedBundleRegistrySnapshot, BundleRegistryError> {
         let generation_row =
             sqlx::query("SELECT generation FROM bundle_registry_generation WHERE singleton = 1")
                 .fetch_one(&mut **transaction)
@@ -488,7 +581,7 @@ impl BundleRegistry {
             let bundle_id: String = row.try_get("bundle_id")?;
             let source_digest: Vec<u8> = row.try_get("source_digest")?;
             let source_digest: [u8; 32] = source_digest.try_into().map_err(|digest: Vec<u8>| {
-                StoreError::BundleRegistryData(format!(
+                BundleRegistryError::BundleRegistryData(format!(
                     "bundle `{bundle_id}` source digest has {} bytes, expected 32",
                     digest.len()
                 ))
@@ -538,7 +631,7 @@ impl BundleRegistry {
         })
     }
 
-    async fn migrate(pool: &sqlx::SqlitePool) -> Result<(), StoreError> {
+    async fn migrate(pool: &sqlx::SqlitePool) -> Result<(), BundleRegistryError> {
         // SQLite's sqlx migration lock is a no-op. Reserve the writer before
         // reading migration history so concurrent openers cannot apply the
         // same version from stale history. Individual migrations use savepoints.
@@ -556,16 +649,16 @@ impl BundleRegistry {
 fn decode_candidate(
     reserved_agent_ids: &[&str],
     candidate: &BundleInstallCandidate,
-) -> Result<Bundle, StoreError> {
+) -> Result<Bundle, BundleRegistryError> {
     let prepared = PreparedCatalog::decode(&candidate.prepared_bytes, &candidate.prepared_digest)?;
     let [incoming] = prepared.bundles() else {
-        return Err(StoreError::BundleRegistryData(
+        return Err(BundleRegistryError::BundleRegistryData(
             "install candidate must contain exactly one mutable installed bundle".to_string(),
         ));
     };
     for agent in incoming.agents() {
         if reserved_agent_ids.contains(&agent.id.as_str()) {
-            return Err(StoreError::BundleAgentIdReserved {
+            return Err(BundleRegistryError::BundleAgentIdReserved {
                 bundle_id: incoming.identity().id.clone(),
                 agent_id: agent.id.as_str().to_string(),
             });
@@ -582,7 +675,7 @@ fn plan_install(
     policy: NamespaceInstallPolicy,
     incoming: Bundle,
     source_digest: [u8; 32],
-) -> Result<BundleInstallPlan, StoreError> {
+) -> Result<BundleInstallPlan, BundleRegistryError> {
     let identity = incoming.identity();
     let bundle_id = identity.id.clone();
     let version = identity.version.clone();
@@ -600,7 +693,7 @@ fn plan_install(
         && is_downgrade(&version, &loaded.record.version)
         && policy == NamespaceInstallPolicy::DenyConflicts
     {
-        return Err(StoreError::BundleDowngradeRequired {
+        return Err(BundleRegistryError::BundleDowngradeRequired {
             bundle_id,
             installed_version: loaded.record.version.clone(),
             incoming_version: version,
@@ -618,7 +711,7 @@ fn plan_install(
         .map(|loaded| loaded.record.bundle_id.clone())
         .collect();
     if !displaced.is_empty() && policy == NamespaceInstallPolicy::DenyConflicts {
-        return Err(StoreError::NamespaceConflict {
+        return Err(BundleRegistryError::NamespaceConflict {
             namespace: incoming_namespace,
             existing_bundle_id: displaced[0].clone(),
             incoming_bundle_id: bundle_id,
@@ -658,7 +751,7 @@ fn plan_install(
             BundleInstallAction::Unchanged
         }
         Some(loaded) if loaded.record.version == version => {
-            return Err(StoreError::BundleContentConflict { bundle_id, version });
+            return Err(BundleRegistryError::BundleContentConflict { bundle_id, version });
         }
         Some(loaded) => BundleInstallAction::Replace {
             installed_version: loaded.record.version.clone(),
@@ -667,21 +760,23 @@ fn plan_install(
     Ok(BundleInstallPlan { action, displaced })
 }
 
-fn decode_generation(generation: i64) -> Result<u64, StoreError> {
+fn decode_generation(generation: i64) -> Result<u64, BundleRegistryError> {
     u64::try_from(generation).map_err(|_| {
-        StoreError::BundleRegistryData(format!("invalid bundle registry generation `{generation}`"))
+        BundleRegistryError::BundleRegistryData(format!(
+            "invalid bundle registry generation `{generation}`"
+        ))
     })
 }
 
 async fn advance_generation(
     transaction: &mut Transaction<'_, Sqlite>,
     current_generation: u64,
-) -> Result<u64, StoreError> {
+) -> Result<u64, BundleRegistryError> {
     let generation = current_generation.checked_add(1).ok_or_else(|| {
-        StoreError::BundleRegistryData("bundle registry generation overflow".to_string())
+        BundleRegistryError::BundleRegistryData("bundle registry generation overflow".to_string())
     })?;
     let stored_generation = i64::try_from(generation).map_err(|_| {
-        StoreError::BundleRegistryData(
+        BundleRegistryError::BundleRegistryData(
             "bundle registry generation exceeds SQLite range".to_string(),
         )
     })?;
@@ -691,7 +786,7 @@ async fn advance_generation(
             .execute(&mut **transaction)
             .await?;
     if updated.rows_affected() != 1 {
-        return Err(StoreError::BundleRegistryData(
+        return Err(BundleRegistryError::BundleRegistryData(
             "bundle registry generation row is missing".to_string(),
         ));
     }
@@ -705,16 +800,16 @@ async fn advance_generation(
 /// example `install --overwrite`) would fail as `BundleRegistryBusy`.
 async fn refuse<T>(
     transaction: Transaction<'_, Sqlite>,
-    refused: StoreError,
-) -> Result<T, StoreError> {
+    refused: BundleRegistryError,
+) -> Result<T, BundleRegistryError> {
     transaction.rollback().await?;
     Err(refused)
 }
 
-fn setup_busy(error: &StoreError) -> bool {
+fn setup_busy(error: &BundleRegistryError) -> bool {
     match error {
-        StoreError::Sqlite(error) => is_sqlite_busy_or_locked(error),
-        StoreError::Migrate(error) => match error.as_ref() {
+        BundleRegistryError::Sqlite(error) => is_sqlite_busy_or_locked(error),
+        BundleRegistryError::Migrate(error) => match error.as_ref() {
             sqlx::migrate::MigrateError::Execute(error)
             | sqlx::migrate::MigrateError::ExecuteMigration(error, _) => {
                 is_sqlite_busy_or_locked(error)
@@ -824,7 +919,7 @@ mod disabled_tests {
         let registry = BundleRegistry::connect(&path.to_string_lossy()).await?;
         assert_eq!(
             registry.pool.options().get_acquire_timeout(),
-            crate::FILE_POOL_WAIT_TIMEOUT
+            FILE_POOL_WAIT_TIMEOUT
         );
         assert_eq!(registry.pool.options().get_max_lifetime(), None);
         assert_eq!(registry.pool.options().get_idle_timeout(), None);

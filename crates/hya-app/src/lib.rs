@@ -16,6 +16,8 @@ mod bare;
 /// Per-bundle `config.yml` location, environment contract, and scope resolver.
 pub mod bundle_admin;
 pub mod bundle_config;
+/// SQLite registry and install types for user bundles.
+pub mod bundle_registry;
 mod bundle_runtime;
 /// `config.yaml` load, first-run bootstrap, and Compat import.
 pub mod config;

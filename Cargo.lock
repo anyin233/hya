@@ -1094,8 +1094,10 @@ dependencies = [
  "hya-version",
  "hya-workflow",
  "libc",
+ "libsqlite3-sys",
  "rand_core 0.9.5",
  "reqwest",
+ "semver",
  "serde",
  "serde_json",
  "serde_norway",
@@ -1528,11 +1530,9 @@ name = "hya-store"
 version = "0.0.0"
 dependencies = [
  "futures",
- "hya-bundle",
  "hya-proto",
  "libc",
  "libsqlite3-sys",
- "semver",
  "serde_json",
  "sqlx",
  "thiserror 1.0.69",

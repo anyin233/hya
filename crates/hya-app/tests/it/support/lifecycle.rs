@@ -1123,14 +1123,14 @@ export default {
     .unwrap();
     let path = hya_app::bundle_registry_path();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let registry = hya_store::BundleRegistry::connect(path.to_str().unwrap())
+    let registry = hya_app::bundle_registry::BundleRegistry::connect(path.to_str().unwrap())
         .await
         .unwrap();
     registry
         .install(
             &[],
-            hya_store::NamespaceInstallPolicy::DenyConflicts,
-            hya_store::BundleInstallCandidate {
+            hya_app::bundle_registry::NamespaceInstallPolicy::DenyConflicts,
+            hya_app::bundle_registry::BundleInstallCandidate {
                 source_digest: [53; 32],
                 prepared_digest: prepared.digest().to_string(),
                 prepared_bytes: prepared.bytes().to_vec(),
