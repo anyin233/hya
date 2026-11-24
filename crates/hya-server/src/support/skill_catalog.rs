@@ -1,5 +1,6 @@
 use hya_tool::{
-    SkillCatalogOrigin, discover_skills_for_roots_with_builtins, discover_user_skills_with_builtins,
+    SkillCatalogEntry, SkillCatalogOrigin, SkillDiagnostic,
+    discover_skills_for_roots_with_diagnostics, discover_user_skills_with_diagnostics,
 };
 use std::path::{Path, PathBuf};
 
@@ -13,7 +14,7 @@ pub(crate) struct SkillInfo {
     pub(crate) description: String,
     pub(crate) location: String,
     /// The skill's own directory, the base of its relative references;
-    /// `None` for a built-in skill (no filesystem base).
+    /// `None` for a built-in or bundle skill (no filesystem base).
     #[serde(skip)]
     pub(crate) dir: Option<String>,
     /// The catalog path (`embedded:hya/core-skills/skill/<name>/SKILL.md`
@@ -23,6 +24,15 @@ pub(crate) struct SkillInfo {
     pub(crate) content: String,
     /// `builtin`, `project`, `user`, or `bundle` (`SkillSummary.source`).
     pub(crate) source: &'static str,
+    /// `disable-model-invocation: true`: out of the model's skill index.
+    pub(crate) disable_model_invocation: bool,
+}
+
+/// A place's skills and the diagnostics of the skill files it skipped or
+/// warns about.
+pub(crate) struct SkillListing {
+    pub(crate) skills: Vec<SkillInfo>,
+    pub(crate) diagnostics: Vec<SkillDiagnostic>,
 }
 
 /// Where a discovered skill comes from: compiled in (`builtin`), a runtime
@@ -48,41 +58,55 @@ pub(crate) fn skill_source(
     }
 }
 
+/// One catalog entry as listed at `place`.
+pub(crate) fn info(skill: SkillCatalogEntry, place: &CatalogPlace) -> SkillInfo {
+    let path = skill.path.to_string_lossy().into_owned();
+    let location = match skill.origin {
+        SkillCatalogOrigin::Embedded => "<built-in>".to_string(),
+        SkillCatalogOrigin::Filesystem | SkillCatalogOrigin::Virtual => path.clone(),
+    };
+    let source = skill_source(skill.origin, &skill.path, place.workdir(), place.roots());
+    // Only a real directory is a base for relative references.
+    let dir = match skill.origin {
+        SkillCatalogOrigin::Filesystem if skill.dir.is_absolute() => {
+            Some(skill.dir.to_string_lossy().into_owned())
+        }
+        _ => None,
+    };
+    SkillInfo {
+        name: skill.name,
+        description: skill.description,
+        location,
+        dir,
+        path,
+        content: skill.content,
+        source,
+        disable_model_invocation: skill.disable_model_invocation,
+    }
+}
+
 /// Skills visible at `place`: its directory first, then each Project root
 /// in order (first wins); the global view lists user skills and builtins.
-pub(crate) fn list(place: &CatalogPlace) -> Vec<SkillInfo> {
-    place
+/// With the diagnostics of the skill files skipped or warned about.
+pub(crate) fn listing(place: &CatalogPlace) -> SkillListing {
+    let discovery = place
         .workdir()
-        .map_or_else(discover_user_skills_with_builtins, |workdir| {
-            discover_skills_for_roots_with_builtins(workdir, place.roots())
-        })
-        .into_iter()
-        .map(|skill| {
-            let location = match skill.origin {
-                SkillCatalogOrigin::Embedded => "<built-in>".to_string(),
-                SkillCatalogOrigin::Filesystem | SkillCatalogOrigin::Virtual => {
-                    skill.path.to_string_lossy().into_owned()
-                }
-            };
-            let source = skill_source(skill.origin, &skill.path, place.workdir(), place.roots());
-            let dir = match skill.origin {
-                SkillCatalogOrigin::Embedded => None,
-                SkillCatalogOrigin::Filesystem | SkillCatalogOrigin::Virtual => {
-                    (!skill.dir.as_os_str().is_empty())
-                        .then(|| skill.dir.to_string_lossy().into_owned())
-                }
-            };
-            SkillInfo {
-                name: skill.name,
-                description: skill.description,
-                location,
-                dir,
-                path: skill.path.to_string_lossy().into_owned(),
-                content: skill.content,
-                source,
-            }
-        })
-        .collect()
+        .map_or_else(discover_user_skills_with_diagnostics, |workdir| {
+            discover_skills_for_roots_with_diagnostics(workdir, place.roots())
+        });
+    SkillListing {
+        skills: discovery
+            .skills
+            .into_iter()
+            .map(|skill| info(skill, place))
+            .collect(),
+        diagnostics: discovery.diagnostics,
+    }
+}
+
+/// [`listing`] without the diagnostics.
+pub(crate) fn list(place: &CatalogPlace) -> Vec<SkillInfo> {
+    listing(place).skills
 }
 
 #[cfg(test)]

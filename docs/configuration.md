@@ -2129,8 +2129,9 @@ replaces the built-in `/review`.
 ## Skills
 
 Skill discovery (ten-directory first-wins search path), `SKILL.md` frontmatter
-(`name`, `description`, `allowed-tools`, `model`, `disable`, `license`), silent
-skip rules, and built-in fallback skills are documented in
+(`name`, `description`, `allowed-tools`, `model`, `disable`,
+`disable-model-invocation`, `license`), the diagnostics of skipped files,
+`/skill:<name>`, and built-in fallback skills are documented in
 [Skills](skills.md).
 
 ## Project Context (`AGENTS.md`)

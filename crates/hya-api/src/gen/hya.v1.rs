@@ -1566,6 +1566,25 @@ pub struct ListCommandsResponse {
     #[prost(message, optional, tag = "2")]
     pub page: ::core::option::Option<PageInfo>,
 }
+/// A resource file a catalog skipped or warns about, for clients to show.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CatalogDiagnostic {
+    /// The file it is about.
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+    /// What is wrong: for a skill `invalid` (no or unclosed frontmatter, YAML
+    /// that does not parse), `missing_name`, `missing_description`,
+    /// `collision` (a skill of the same name was found first; this one is not
+    /// listed), `name` (breaks the Agent Skills naming rule: lowercase
+    /// letters, digits, and single hyphens, at most 64 characters), or
+    /// `description_length` (over 1024 characters). Only `name` and
+    /// `description_length` leave the skill listed.
+    #[prost(string, tag = "2")]
+    pub kind: ::prost::alloc::string::String,
+    /// One line for a person.
+    #[prost(string, tag = "3")]
+    pub message: ::prost::alloc::string::String,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListSkillsRequest {
     /// Directory scope (absolute). Optional:
@@ -1597,6 +1616,10 @@ pub struct SkillSummary {
     /// Where the skill file lives (`<built-in>` for compiled-in skills).
     #[prost(string, tag = "5")]
     pub location: ::prost::alloc::string::String,
+    /// `disable-model-invocation: true` in its frontmatter: the model's skill
+    /// index leaves it out; `/skill:<name>` still runs it.
+    #[prost(bool, tag = "6")]
+    pub disable_model_invocation: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListSkillsResponse {
@@ -1606,6 +1629,10 @@ pub struct ListSkillsResponse {
     /// Pagination outcome.
     #[prost(message, optional, tag = "2")]
     pub page: ::core::option::Option<PageInfo>,
+    /// Skill files the catalog skipped or warns about (the same list on every
+    /// page).
+    #[prost(message, repeated, tag = "3")]
+    pub diagnostics: ::prost::alloc::vec::Vec<CatalogDiagnostic>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListToolsRequest {

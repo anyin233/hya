@@ -564,6 +564,22 @@ message ListCommandsResponse {
   PageInfo page = 2;
 }
 
+// A resource file a catalog skipped or warns about, for clients to show.
+message CatalogDiagnostic {
+  // The file it is about.
+  string path = 1;
+  // What is wrong: for a skill `invalid` (no or unclosed frontmatter, YAML
+  // that does not parse), `missing_name`, `missing_description`,
+  // `collision` (a skill of the same name was found first; this one is not
+  // listed), `name` (breaks the Agent Skills naming rule: lowercase
+  // letters, digits, and single hyphens, at most 64 characters), or
+  // `description_length` (over 1024 characters). Only `name` and
+  // `description_length` leave the skill listed.
+  string kind = 2;
+  // One line for a person.
+  string message = 3;
+}
+
 message ListSkillsRequest {
   // Directory scope (absolute). Optional:
   // empty lists the global view (no project sources).
@@ -587,6 +603,9 @@ message SkillSummary {
   string content = 4;
   // Where the skill file lives (`<built-in>` for compiled-in skills).
   string location = 5;
+  // `disable-model-invocation: true` in its frontmatter: the model's skill
+  // index leaves it out; `/skill:<name>` still runs it.
+  bool disable_model_invocation = 6;
 }
 
 message ListSkillsResponse {
@@ -594,6 +613,9 @@ message ListSkillsResponse {
   repeated SkillSummary skills = 1;
   // Pagination outcome.
   PageInfo page = 2;
+  // Skill files the catalog skipped or warns about (the same list on every
+  // page).
+  repeated CatalogDiagnostic diagnostics = 3;
 }
 
 message ListToolsRequest {

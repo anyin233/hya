@@ -52,12 +52,13 @@ export function SkillsView() {
           if (open().filtering || open().filter) rows += 1
           return rows
         }
+        const diagnostics = () => store.state.skillDiagnostics
         const lines = () => skillsViewLines(open(), skills())
         const shown = (): SkillsViewLine[] => {
           const all = lines()
           const at = Math.max(0, all.findIndex((line) => line.kind === "skill" && line.skill.name === open().skill))
-          // border (2), the count line, the header, and the footer.
-          const visible = Math.max(3, size().height - 4 - footerRows())
+          // border (2), the count line, the header, the diagnostics, and the footer.
+          const visible = Math.max(3, size().height - 4 - Math.min(diagnostics().length, 3) - footerRows())
           const window = pickerWindow(all.length, at, visible)
           return all.slice(window.start, window.end)
         }
@@ -94,7 +95,7 @@ export function SkillsView() {
                     <>
                       <text height={1} flexShrink={0} wrapMode="none">
                         <b style={{ fg: colors.heading }}>{row().name}</b>
-                        <span style={{ fg: colors.muted }}>{` · ${skillSourceText(row())}`}</span>
+                        <span style={{ fg: colors.muted }}>{` · ${skillSourceText(row())}${row().disableModelInvocation ? " · only /skill:" + row().name : ""}`}</span>
                       </text>
                       <text height={1} flexShrink={0} wrapMode="none" fg={colors.muted}>{skillLocationText(row())}</text>
                       <text width="100%" flexShrink={0} wrapMode="word" fg={colors.fg}>{row().description ?? ""}</text>
@@ -112,7 +113,10 @@ export function SkillsView() {
                 </Show>
               }
             >
-              <text height={1} flexShrink={0} wrapMode="none" fg={colors.fg}>{`${skillsCountLine(skills())} · ${scope()} · /reload-skills applies edits to this session`}</text>
+              <text height={1} flexShrink={0} wrapMode="none" fg={colors.fg}>{`${skillsCountLine(skills(), diagnostics())} · ${scope()} · /reload-skills applies edits to this session`}</text>
+              <For each={diagnostics().slice(0, 3)}>
+                {(diagnostic) => <text height={1} flexShrink={0} wrapMode="none" fg={colors.warning}>{`! ${diagnostic.message}`}</text>}
+              </For>
               <text height={1} flexShrink={0} wrapMode="none" fg={colors.muted}>{`  ${skillHeaderLine(lineWidth(), skills())}`}</text>
               <box flexGrow={1} flexDirection="column">
                 <For each={shown()}>

@@ -19,6 +19,12 @@ export interface CommandEntry {
   source: CommandSource
 }
 
+/** What the menu lists besides the local commands. */
+export interface MergeOptions {
+  /** `false` (`tui.toml` `[commands] skill_commands = false`): no `/skill:*` rows; typing one still runs it. */
+  skillCommands?: boolean
+}
+
 /** A selectable row in the command pane, regardless of argument depth. */
 export interface CommandSuggestion {
   label: string
@@ -36,7 +42,7 @@ export const commandSuggestionLimit = 12
  * (local takes precedence — the local command is what actually runs, since
  * the registry checks its own names before falling back to the backend).
  */
-export function mergeCommandEntries(local: CommandSpec[], backend: CommandSummary[]): CommandEntry[] {
+export function mergeCommandEntries(local: CommandSpec[], backend: CommandSummary[], options: MergeOptions = {}): CommandEntry[] {
   const byName = new Map<string, CommandEntry>()
   for (const spec of local) {
     byName.set(spec.name, { name: spec.name, description: spec.description, argumentHint: spec.argumentHint, source: "local" })
@@ -44,11 +50,13 @@ export function mergeCommandEntries(local: CommandSpec[], backend: CommandSummar
   for (const command of backend) {
     const name = `/${command.name}`
     if (byName.has(name)) continue
+    const source = command.source === "skill" ? "skill" : "command"
+    if (source === "skill" && options.skillCommands === false) continue
     byName.set(name, {
       name,
       description: command.description ?? "",
       ...(command.argumentHint ? { argumentHint: command.argumentHint } : {}),
-      source: command.source === "skill" ? "skill" : "command",
+      source,
     })
   }
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name))

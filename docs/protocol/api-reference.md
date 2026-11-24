@@ -1546,6 +1546,16 @@ One slash-command entry.
 | `commands` (1) | `repeated CommandSummary` | Commands visible in this directory. |
 | `page` (2) | `PageInfo` | Pagination outcome. |
 
+### `CatalogDiagnostic`
+
+A resource file a catalog skipped or warns about, for clients to show.
+
+| Field | Type | Description |
+|---|---|---|
+| `path` (1) | `string` | The file it is about. |
+| `kind` (2) | `string` | What is wrong: for a skill `invalid` (no or unclosed frontmatter, YAML that does not parse), `missing_name`, `missing_description`, `collision` (a skill of the same name was found first; this one is not listed), `name` (breaks the Agent Skills naming rule: lowercase letters, digits, and single hyphens, at most 64 characters), or `description_length` (over 1024 characters). Only `name` and `description_length` leave the skill listed. |
+| `message` (3) | `string` | One line for a person. |
+
 ### `ListSkillsRequest`
 
 
@@ -1565,6 +1575,7 @@ One invocable skill.
 | `source` (3) | `string` | Where the skill was discovered: `builtin` (compiled in), `bundle` (a runtime resource), `project` (under the directory or a Project root), or `user` (any other file, such as `~/.codex/skills`). |
 | `content` (4) | `string` | The skill's markdown body: the text after its frontmatter. |
 | `location` (5) | `string` | Where the skill file lives (`<built-in>` for compiled-in skills). |
+| `disable_model_invocation` (6) | `bool` | `disable-model-invocation: true` in its frontmatter: the model's skill index leaves it out; `/skill:<name>` still runs it. |
 
 ### `ListSkillsResponse`
 
@@ -1573,6 +1584,7 @@ One invocable skill.
 |---|---|---|
 | `skills` (1) | `repeated SkillSummary` | Skills visible in this directory. |
 | `page` (2) | `PageInfo` | Pagination outcome. |
+| `diagnostics` (3) | `repeated CatalogDiagnostic` | Skill files the catalog skipped or warns about (the same list on every page). |
 
 ### `ListToolsRequest`
 

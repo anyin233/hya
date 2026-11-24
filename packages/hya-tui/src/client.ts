@@ -440,6 +440,26 @@ export interface SkillSummary {
   location?: string
   /** The body after the frontmatter (the Skills view's details). */
   content?: string
+  /** `disable-model-invocation: true`: left out of the model's skill index; only `/skill:<name>` runs it. */
+  disableModelInvocation?: boolean
+}
+
+/** `CatalogDiagnostic` of `ListSkillsResponse`: a skill file the catalog skipped or warns about. */
+export interface SkillDiagnostic {
+  /** The file it is about. */
+  path?: string
+  /** `invalid`, `missing_name`, `missing_description`, `collision`, `name`, or `description_length`. */
+  kind?: string
+  message: string
+}
+
+/** `CatalogDiagnostic`: a file a catalog skipped or warns about. */
+export type CatalogDiagnostic = SkillDiagnostic
+
+/** `ListSkills`: the skills of the scope, and the catalog's diagnostics. */
+export interface SkillListing {
+  skills: SkillSummary[]
+  diagnostics: SkillDiagnostic[]
 }
 
 export interface CommandSummary {
@@ -944,9 +964,32 @@ export class HyaClient {
     return this.listAll("/v1/commands", "commands", "", true)
   }
 
-  /** `ListSkills` (`GET /v1/skills`) of the client's scope: every page. */
-  async listSkills(): Promise<SkillSummary[]> {
-    return this.listAll("/v1/skills", "skills", "", true)
+  /** Every page of a scoped catalog list (`skills`), with the diagnostics of its first page. */
+  private async catalogPages<T>(path: string, field: string): Promise<{ rows: T[]; diagnostics: CatalogDiagnostic[] }> {
+    const rows: T[] = []
+    let diagnostics: CatalogDiagnostic[] | undefined
+    let cursor = ""
+    for (let pageNumber = 0; pageNumber < 100; pageNumber++) {
+      const query = `page.limit=500${cursor ? `&page.cursor=${encodeURIComponent(cursor)}` : ""}`
+      const result = await this.request<Record<string, unknown> & { diagnostics?: CatalogDiagnostic[]; page?: PageInfo }>("GET", this.scoped(`${path}?${query}`))
+      const pageRows = result[field]
+      if (Array.isArray(pageRows)) rows.push(...pageRows as T[])
+      diagnostics ??= result.diagnostics ?? []
+      if (!result.page?.hasMore) return { rows, diagnostics }
+      if (!result.page.nextCursor || result.page.nextCursor === cursor) throw new Error("Server returned an invalid page cursor")
+      cursor = result.page.nextCursor
+    }
+    throw new Error("Too many result pages")
+  }
+
+  /**
+   * `ListSkills` (`GET /v1/skills`) of the client's scope: every page of
+   * skills and the diagnostics (repeated on each page; the first one is
+   * kept).
+   */
+  async listSkills(): Promise<SkillListing> {
+    const { rows, diagnostics } = await this.catalogPages<SkillSummary>("/v1/skills", "skills")
+    return { skills: rows, diagnostics }
   }
 
   /** `SetProviderAuth` (`PUT /v1/auth/{id}`): save a key (applies live); `discovery` when the model list was fetched too. */

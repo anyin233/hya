@@ -54,6 +54,7 @@ pub(super) fn test_runtime_registry(
                             path,
                             dir,
                             origin: hya_tool::SkillCatalogOrigin::Virtual,
+                            disable_model_invocation: false,
                         },
                     )
                 })

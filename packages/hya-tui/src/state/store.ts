@@ -37,6 +37,8 @@ import type {
   ProviderSummary,
   SavedRule,
   SessionInfo,
+  SkillDiagnostic,
+  SkillListing,
   SkillSummary,
   TodoItem,
   TokenUsage,
@@ -121,6 +123,8 @@ export interface AppState {
   readonly startupNotices: readonly string[]
   /** `Bootstrap.skills`, then `ListSkills`: the startup list's `[Skills]` (state/startup.ts) and the Skills view. */
   readonly skills: readonly SkillSummary[]
+  /** `ListSkillsResponse.diagnostics`: skill files skipped or warned about (the startup list's `[Skills]` problems, the Skills view). */
+  readonly skillDiagnostics: readonly SkillDiagnostic[]
   /** The Skills view (`/skills`; state/skills.ts), when open. */
   readonly skillsView: SkillsViewState | undefined
   /** `Bootstrap.contextFiles`, the startup list's `[Context]`; `undefined` before the bootstrap. */
@@ -353,6 +357,7 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     structure: builtinPreset("workspace"),
     startupNotices: [],
     skills: [],
+    skillDiagnostics: [],
     skillsView: undefined,
     contextFiles: undefined,
     startupReady: false,
@@ -1015,8 +1020,13 @@ export function createAppStore() {
 
     /** `ListCommands` rows (the command menu's backend entries, `/skill:*` included), re-read alone by `/reload-commands` and an unknown command. */
     setBackendCommands(commands: CommandSummary[]): void { set("backendCommands", commands) },
-    /** `ListSkills` rows (the startup list's `[Skills]`, `/skills`), re-read by `/reload-skills` and the Skills view. */
-    setSkills(skills: SkillSummary[]): void { set("skills", skills) },
+    /** `ListSkills` rows and diagnostics (the startup list's `[Skills]`, `/skills`), re-read by `/reload-skills` and the Skills view. */
+    setSkills(listing: SkillListing): void {
+      batch(() => {
+        set("skills", listing.skills)
+        set("skillDiagnostics", listing.diagnostics)
+      })
+    },
     /** Open, update, or (`undefined`) close the Skills view (`/skills`). */
     setSkillsView(view: SkillsViewState | undefined): void { set("skillsView", view) },
 

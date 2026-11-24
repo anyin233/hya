@@ -116,11 +116,15 @@ pub use rewrite::{
 };
 pub use skill::{SkillError, SkillInfo, SkillPlane};
 pub use skill_catalog::{
-    ParsedSkill, SkillCatalogEntry, SkillCatalogOrigin, builtin_skills, core_skills_preset_bytes,
-    discover_skills, discover_skills_for_roots_with_builtins, discover_skills_from_dirs,
-    discover_skills_with_builtins, discover_user_skills_with_builtins, is_embedded_skill,
-    merge_skill_catalog, parse_skill, skill_dirs_for, skill_dirs_for_workdir, skills_section,
-    user_skill_dirs,
+    MAX_SKILL_DESCRIPTION_CHARS, MAX_SKILL_NAME_CHARS, ParsedSkill, SkillCatalogEntry,
+    SkillCatalogOrigin, SkillDiagnostic, SkillDiagnosticKind, SkillDiscovery, SkillParseError,
+    builtin_skills, core_skills_preset_bytes, discover_skills,
+    discover_skills_for_roots_with_builtins, discover_skills_for_roots_with_diagnostics,
+    discover_skills_from_dirs, discover_skills_from_dirs_with_diagnostics,
+    discover_skills_with_builtins, discover_user_skills_with_builtins,
+    discover_user_skills_with_diagnostics, is_embedded_skill, merge_skill_catalog, parse_skill,
+    parse_skill_checked, skill_dirs_for, skill_dirs_for_workdir, skill_name_problem,
+    skills_section, user_skill_dirs,
 };
 pub use spawn::{
     HANDLE_PREFIX_MAX_LEN, InlineAgent, MemberOutcome, SpawnError, SpawnMember, SpawnRequest,

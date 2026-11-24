@@ -19,6 +19,7 @@ test("the built-in presets differ only in the components ADR-0036 lists", () => 
     statusline: { enabled: true, segments: [...defaultSegments], placement: "below" },
     composer: { style: "box", border_info: [], paste: { collapse_lines: 10, collapse_chars: 1000, wrap: true, image_resize: true } },
     sidebar: { enabled: false },
+    commands: { skill_commands: true },
   })
   expect(defaultSegments).toEqual(["model", "mode", "cwd", "git", "ctx", "tokens"])
   expect(builtinPreset("minimal").statusline.enabled).toBe(false)
